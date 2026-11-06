@@ -51,6 +51,7 @@ import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugi
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
+import { ContactDetails } from "./src/singles/contact-details";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
 import { RelatedLinks } from "./src/singles/related-links";
@@ -182,6 +183,9 @@ export default defineConfig({
     // related item the editor cannot read; registered for the e2e run only, by
     // the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [RelatedLinks] : []),
+    // A Single with a field the public may not read, for the browser test of
+    // the editor marking a bound value a visitor will not see.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ContactDetails] : []),
   ],
   fieldGroups: [
     Seo,
