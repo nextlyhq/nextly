@@ -33,7 +33,7 @@ vi.mock("@admin/components/features/auth-login", () => ({
 
 import { BrandingProvider } from "@admin/context/providers/BrandingProvider";
 
-import LoginPage from "./login";
+import LoginPage from "../(auth)/login";
 
 const BLOCK = "@acme/a/admin#LoginBlock";
 registerComponent(BLOCK, ((props: { context?: unknown }) => (

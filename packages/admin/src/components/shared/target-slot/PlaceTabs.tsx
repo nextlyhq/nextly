@@ -53,13 +53,24 @@ export function PlaceTabs<P extends AdminPlaceId>({
       : delivered.flatMap(item =>
           "builtIn" in item || item.kind !== "tab" ? [] : [item]
         );
+  // A chosen tab no longer delivered is let go of, rather than only not
+  // shown: kept, it would take the page away again the moment it came back.
+  // Set while rendering, as React's derived-state pattern allows.
+  if (chosen !== CONTENT_TAB && !tabs.some(tab => tab.id === chosen)) {
+    setChosen(CONTENT_TAB);
+  }
   const shown = tabs.some(tab => tab.id === chosen) ? chosen : CONTENT_TAB;
   return (
     <>
       {context === null || tabs.length === 0 ? null : (
         <Tabs value={shown} onValueChange={setChosen}>
           <TabsList scrollable>
-            <TabsTrigger value={CONTENT_TAB}>{contentLabel}</TabsTrigger>
+            {/* The page's content is not one of the strip's panels, since
+                wrapping it in one would change the page with no tab or
+                remount it when a tab arrives, so this tab names no panel. */}
+            <TabsTrigger value={CONTENT_TAB} aria-controls={undefined}>
+              {contentLabel}
+            </TabsTrigger>
             {tabs.map(tab => (
               <TabsTrigger key={tab.id} value={tab.id}>
                 {tab.label}
