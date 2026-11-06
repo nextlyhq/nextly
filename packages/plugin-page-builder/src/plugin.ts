@@ -249,9 +249,9 @@ import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
-  slotHolderReader,
+  templateHolderReader,
   type TemplateGuardSetup,
-} from "./templates/template-slot";
+} from "./templates/template-guard";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
@@ -1684,7 +1684,7 @@ export const pageBuilder = (
             throw error;
           }
         },
-        holderOf: slotHolderReader(ctx.services.ownCollections, templates),
+        holderOf: templateHolderReader(ctx.services.ownCollections, templates),
       };
       registerTemplateGuard(ctx, templateGuard);
 

@@ -148,7 +148,7 @@ describe.each(getConfiguredTestDialects())(
       return found.items.length;
     }
 
-    it("gives a collection its template as a draft, holding its place", async () => {
+    it("gives a collection its template as a draft", async () => {
       const t = await boot();
       const { cookie } = await holding(t, TEMPLATE_AUTHOR);
 
@@ -165,7 +165,7 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
       });
       const row = await stored(t, item.template?.id ?? "");
-      expect(row.slotKey).toBe("base:posts");
+      expect(row.collection).toBe("posts");
       expect(row.status).toBe("draft");
       expect(row.content).toMatchObject({ kind: "template", nodes: [] });
     });
@@ -240,7 +240,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await templateCount(t)).toBe(1);
     });
 
-    it("keeps the place whatever the template's state, and frees it when the template is deleted", async () => {
+    it("keeps the collection's one template whatever its state, and frees the collection when it is deleted", async () => {
       const t = await boot();
       const { cookie } = await holding(t, TEMPLATE_AUTHOR);
       const first = await act(cookie, {
@@ -250,7 +250,7 @@ describe.each(getConfiguredTestDialects())(
         (first.body.item as TemplateActionResult).template?.id ?? "";
       expect((await stored(t, firstId)).status).toBe("published");
 
-      // Unpublished, it still holds the place: a second is refused.
+      // Unpublished, it is still the collection's template: a second is refused.
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id: firstId,
@@ -262,8 +262,7 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(refused.status).toBe(409);
 
-      // The collection it draws cannot be moved, so the place cannot be
-      // left empty by a rename.
+      // The collection it draws cannot be moved while that collection exists.
       let thrown: unknown;
       try {
         await t.nextly.update({
@@ -363,6 +362,20 @@ describe.each(getConfiguredTestDialects())(
         template: { collection: "posts", status: "draft" },
       });
       expect(await templateCount(t)).toBe(0);
+
+      // A dry run of an action the site would refuse answers the refusal.
+      const dryRefused = await act(cookie, {
+        action: { kind: "create-template", collection: "notes" },
+        dryRun: true,
+      });
+      expect(dryRefused.status).toBe(200);
+      expect(dryRefused.body.item).toMatchObject({
+        dryRun: true,
+        refusals: [
+          'The collection "notes" has no text field named "slug", so its entries ' +
+            "have no address to be served at. Add one, then give it a template.",
+        ],
+      });
 
       const id = await created(t, TEMPLATES_SLUG, {
         title: "Post page",

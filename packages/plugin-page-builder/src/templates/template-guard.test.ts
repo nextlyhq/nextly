@@ -1,7 +1,7 @@
 /**
  * The templates guard, judged one write at a time with its lookups stubbed:
- * the place a new template holds, the collections that may have one, the
- * refusal naming the template already there, and a place that never moves.
+ * the collections that may have a template, the refusal naming the template
+ * already there, and a collection that does not move while it exists.
  *
  * That the unique index refuses a second template when two creates race past
  * the guard is a property of the database, proved on every dialect by
@@ -11,11 +11,10 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  baseSlotKey,
   guardWrite,
   templateCollectionProblem,
   type TemplateGuardSetup,
-} from "./template-slot";
+} from "./template-guard";
 
 const POSTS = {
   slug: "posts",
@@ -56,24 +55,15 @@ function messagesOf(error: NextlyError): string[] {
 }
 
 describe("a new template", () => {
-  it("holds its collection's place", async () => {
+  it("is let through for a collection that may have one and has none", async () => {
+    const holderOf = vi.fn(async () => null);
     const data: Record<string, unknown> = {
       title: "Post",
       collection: "posts",
     };
-    await guardWrite(setup(), { operation: "create", data });
-    expect(data.slotKey).toBe("base:posts");
-    expect(baseSlotKey("posts")).toBe("base:posts");
-  });
-
-  it("takes the place from its collection, whatever a client sent for it", async () => {
-    const data: Record<string, unknown> = {
-      title: "Post",
-      collection: "posts",
-      slotKey: "base:elsewhere",
-    };
-    await guardWrite(setup(), { operation: "create", data });
-    expect(data.slotKey).toBe("base:posts");
+    await guardWrite(setup({ holderOf }), { operation: "create", data });
+    expect(holderOf).toHaveBeenCalledWith("posts");
+    expect(data).toEqual({ title: "Post", collection: "posts" });
   });
 
   it("is refused for a collection that already has one, naming it by title for a reader", async () => {
@@ -126,17 +116,12 @@ describe("a new template", () => {
 
   it("leaves the second template to the index inside a caller's transaction", async () => {
     const holderOf = vi.fn(async () => ({ id: "t1", title: "Post page" }));
-    const data: Record<string, unknown> = {
-      title: "Post",
-      collection: "posts",
-    };
     await guardWrite(setup({ holderOf }), {
       operation: "create",
-      data,
+      data: { title: "Post", collection: "posts" },
       executor: {},
     });
     expect(holderOf).not.toHaveBeenCalled();
-    expect(data.slotKey).toBe("base:posts");
   });
 });
 
@@ -201,39 +186,64 @@ describe("which collections may have a template", () => {
 });
 
 describe("a saved template", () => {
-  it("keeps its place: a value sent for it is dropped", async () => {
-    const data: Record<string, unknown> = {
-      title: "Renamed",
-      slotKey: "base:other",
-    };
-    await guardWrite(setup(), {
-      operation: "update",
-      data,
-      originalData: { collection: "posts", slotKey: "base:posts" },
-    });
-    expect(data).toEqual({ title: "Renamed" });
+  it("is let through when it leaves its collection alone", async () => {
+    const holderOf = vi.fn(async () => null);
+    for (const data of [{ title: "Renamed" }, { collection: "posts" }]) {
+      await guardWrite(setup({ holderOf }), {
+        operation: "update",
+        data,
+        originalData: { id: "t1", collection: "posts" },
+      });
+    }
+    expect(holderOf).not.toHaveBeenCalled();
   });
 
-  it("keeps its collection", async () => {
+  it("keeps its collection while that collection exists", async () => {
     const error = await refusalOf(() =>
       guardWrite(setup(), {
         operation: "update",
         data: { collection: "articles" },
-        originalData: { collection: "posts" },
+        originalData: { id: "t1", collection: "posts" },
       })
     );
     expect(messagesOf(error)).toEqual([
-      "A template's collection cannot be changed. Create a template for the other collection instead.",
+      "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead.",
     ]);
   });
 
-  it("accepts its own collection sent back unchanged", async () => {
-    const data: Record<string, unknown> = { collection: "posts", title: "T" };
-    await guardWrite(setup(), {
+  it("may be pointed at another collection once its own is gone, judged as a new one", async () => {
+    // `old-posts` was renamed to `posts`: the template it drew is repaired,
+    // and is not named as its own rival.
+    const holderOf = vi.fn(async () => ({ id: "t1", title: "Post page" }));
+    await guardWrite(setup({ holderOf }), {
       operation: "update",
-      data,
-      originalData: { collection: "posts" },
+      data: { collection: "posts" },
+      originalData: { id: "t1", collection: "old-posts" },
     });
-    expect(data).toEqual({ collection: "posts", title: "T" });
+    expect(holderOf).toHaveBeenCalledWith("posts");
+
+    // Another template already draws the new collection: refused, naming it.
+    const taken = await refusalOf(() =>
+      guardWrite(
+        setup({ holderOf: async () => ({ id: "t2", title: "Other" }) }),
+        {
+          operation: "update",
+          data: { collection: "posts" },
+          originalData: { id: "t1", collection: "old-posts" },
+        }
+      )
+    );
+    expect(NextlyError.isConflict(taken)).toBe(true);
+    expect(taken.publicMessage).toContain("(t2)");
+
+    // And it may not be pointed at one that cannot have a template.
+    const refused = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "update",
+        data: { collection: "pages" },
+        originalData: { id: "t1", collection: "old-posts" },
+      })
+    );
+    expect(NextlyError.isValidation(refused)).toBe(true);
   });
 });

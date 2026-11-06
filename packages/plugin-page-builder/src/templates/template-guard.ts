@@ -1,45 +1,38 @@
 /**
- * One template per collection: the place each template holds, which
- * collections may have one, and the guard that keeps a second out.
+ * One template per collection: which collections may have one, and the
+ * guard that keeps a second out and names the first.
  *
- * A template holds a place among templates, stored in its slot field: a
- * collection's own template holds `base:<collection>`. The field is unique, so
- * the database refuses a second template in a place on every dialect and
- * under concurrent writes, whichever path the write takes. The place is fixed
- * when the template is created and never moves, so publishing, unpublishing,
- * a working draft's promotion and a restore cannot change it: a collection
- * holds one base template document whatever its state, and a second can be
- * neither created nor, therefore, published. A new design for a live template
- * is that template's working draft.
+ * The `collection` field is unique, so the database itself refuses a second
+ * template for a collection, on every dialect, under concurrent writes, and
+ * whatever a hook running after this guard does to the data: the invariant
+ * lives in the index over the value stored, not in anything a hook computes.
+ * It holds whatever a template's state, so publishing, unpublishing, a
+ * working draft's promotion and a restore cannot make two: a collection has
+ * one template document, and a new design for a live template is that
+ * template's working draft.
  *
- * The guard below sets the place and, before the database is asked, finds the
- * template already holding it, so the refusal names it. Two creates racing
- * past that read both reach the index, and the one that loses is refused
- * there, with the database's own duplicate error; the template route reads
- * the holder again and names it.
+ * The guard below judges a new template's collection and, before the
+ * database is asked, finds the template already drawing it, so the refusal
+ * names it. Two creates racing past that read both reach the index, and the
+ * one that loses is refused there with the database's own duplicate error;
+ * the template route reads the holder again and names it.
  *
- * @module templates/template-slot
+ * @module templates/template-guard
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-import {
-  TEMPLATE_COLLECTION_FIELD,
-  TEMPLATE_SLOT_FIELD,
-} from "../collections/templates";
+import { TEMPLATE_COLLECTION_FIELD } from "../collections/templates";
 
-/** The place a collection's own template holds. */
-export function baseSlotKey(collection: string): string {
-  return `base:${collection}`;
-}
-
-/** The template holding a place, as a refusal names it. */
+/** The template drawing a collection, as a refusal names it. */
 export interface TemplateHolder {
   readonly id: string;
   readonly title: string;
 }
 
-/** The template holding `slot`, read as the system, or `null`. */
-export type SlotHolderRead = (slot: string) => Promise<TemplateHolder | null>;
+/** The template drawing `collection`, read as the system, or `null`. */
+export type TemplateHolderRead = (
+  collection: string
+) => Promise<TemplateHolder | null>;
 
 /** The part of the plugin's own reads the holder lookup makes. */
 export interface OwnTemplateReads {
@@ -55,16 +48,16 @@ export interface OwnTemplateReads {
 
 /**
  * The holder lookup over the plugin's own reads: hook-free and as the system,
- * so a site's read hook cannot hide the template that holds the place, and
+ * so a site's read hook cannot hide the template that draws a collection, and
  * every state of it is seen, a draft included.
  */
-export function slotHolderReader(
+export function templateHolderReader(
   own: OwnTemplateReads,
   templatesCollection: string
-): SlotHolderRead {
-  return async slot => {
+): TemplateHolderRead {
+  return async collection => {
     const found = await own.listEntries(templatesCollection, {
-      where: { [TEMPLATE_SLOT_FIELD]: { equals: slot } },
+      where: { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
       pagination: { limit: 1 },
       depth: 0,
     });
@@ -183,7 +176,7 @@ export interface TemplateGuardSetup {
   /** The page builder's own collections, by their resolved slugs. */
   readonly ownCollections: () => ReadonlySet<string>;
   readonly readCollection: CollectionRecordRead;
-  readonly holderOf: SlotHolderRead;
+  readonly holderOf: TemplateHolderRead;
 }
 
 /** The parts of a `beforeChange` hook context the guard reads. */
@@ -211,8 +204,8 @@ export interface TemplateGuardHooks {
  * Register the guard on the templates collection.
  *
  * `beforeChange`, which runs after every `beforeCreate` and `beforeUpdate`
- * hook and after validation, still before the write: the place it sets is the
- * one written, and nothing after it can change the collection it was set from.
+ * hook and after validation, still before the write. A hook running later
+ * can still change the data; the unique index is what holds regardless.
  */
 export function registerTemplateGuard(
   ctx: TemplateGuardHooks,
@@ -225,34 +218,62 @@ export function registerTemplateGuard(
   );
 }
 
-/** Judge one write to a template: set its place, or refuse it. */
+/** Judge one write to a template's collection, refusing it or letting it through. */
 export async function guardWrite(
   setup: TemplateGuardSetup,
   context: GuardContext
 ): Promise<void> {
   const data = recordOf(context.data);
   if (data === null) return;
+  const collection = data[TEMPLATE_COLLECTION_FIELD];
 
   if (context.operation !== "create") {
-    // The place never moves, so a value a write sends for it is dropped
-    // rather than stored: a restore of an old version, or a client that sent
-    // the field back, writes the place the template already holds.
-    delete data[TEMPLATE_SLOT_FIELD];
-    const before = recordOf(context.originalData)?.[TEMPLATE_COLLECTION_FIELD];
+    const original = recordOf(context.originalData);
+    const before = original?.[TEMPLATE_COLLECTION_FIELD];
     if (
-      Object.prototype.hasOwnProperty.call(data, TEMPLATE_COLLECTION_FIELD) &&
-      data[TEMPLATE_COLLECTION_FIELD] !== before
+      !Object.prototype.hasOwnProperty.call(data, TEMPLATE_COLLECTION_FIELD) ||
+      collection === before
+    ) {
+      return;
+    }
+    // A template keeps the collection it draws. The one exception is a
+    // template whose collection no longer exists under its name, renamed or
+    // deleted: it may be pointed at another, judged as a new template's
+    // collection is, so a rename never strands its design.
+    if (
+      typeof before === "string" &&
+      (await setup.readCollection(before)) !== null
     ) {
       throw templateCollectionRefusal(
-        "A template's collection cannot be changed. Create a template for the other collection instead."
+        "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead."
       );
     }
+    const id = original?.id;
+    await judgeCollection(
+      setup,
+      context,
+      collection,
+      typeof id === "string" ? id : null
+    );
     return;
   }
 
-  const collection = data[TEMPLATE_COLLECTION_FIELD];
+  await judgeCollection(setup, context, collection, null);
+}
+
+/**
+ * Judge the collection a template is to draw: one that may have a template,
+ * and that no other template draws. `self` is the template being written, so
+ * it is never named as its own rival.
+ */
+async function judgeCollection(
+  setup: TemplateGuardSetup,
+  context: GuardContext,
+  collection: unknown,
+  self: string | null
+): Promise<void> {
   // A missing or empty value is the field's own `required` check's to refuse,
-  // which has already run; nothing here can name a place for it.
+  // which has already run.
   if (typeof collection !== "string" || collection === "") return;
 
   const problem = await templateCollectionProblem(
@@ -262,15 +283,12 @@ export async function guardWrite(
   );
   if (problem !== null) throw templateCollectionRefusal(problem);
 
-  const slot = baseSlotKey(collection);
-  data[TEMPLATE_SLOT_FIELD] = slot;
-
   // Inside a caller's transaction the read would take a second connection,
   // which on a small pool can wait for the one that transaction holds. The
   // index still refuses a second template there; the refusal is only unnamed.
   if (context.executor !== undefined) return;
-  const holder = await setup.holderOf(slot);
-  if (holder === null) return;
+  const holder = await setup.holderOf(collection);
+  if (holder === null || holder.id === self) return;
   throw await secondTemplateRefusal(collection, holder, id =>
     mayReadAsWriter(context, setup.templatesCollection, id)
   );

@@ -19,17 +19,11 @@ import { blocks } from "../fields/blocksHelper";
 export const TEMPLATES_SLUG = "templates";
 
 /**
- * The field naming the collection a template renders. Read by the guard that
- * keeps one template per collection, and by everything that finds a
- * collection's template.
+ * The field naming the collection a template renders. Unique, so a
+ * collection has one template: read by the guard that names the template
+ * already there, and by everything that finds a collection's template.
  */
 export const TEMPLATE_COLLECTION_FIELD = "collection";
-
-/**
- * The field holding the template's place among templates: one unique value
- * per place, so the database itself refuses a second template in it.
- */
-export const TEMPLATE_SLOT_FIELD = "slotKey";
 
 /** The blocks field holding the template's design. */
 export const TEMPLATE_CONTENT_FIELD = "content";
@@ -44,23 +38,14 @@ export function templatesCollection(): CollectionConfig {
         name: TEMPLATE_COLLECTION_FIELD,
         label: "Collection",
         required: true,
+        // The guard that holds under concurrent writes, on every dialect,
+        // whichever path the write takes and whatever a hook does after the
+        // plugin's: the database refuses a second template for a collection.
+        unique: true,
         admin: {
           description:
-            "The collection whose entries this template draws. It cannot be changed once the template exists.",
+            "The collection whose entries this template draws. A collection has one template, and it cannot be changed once the template exists.",
         },
-      }),
-      // Written by the plugin on create, never by a person: the place this
-      // template holds, `base:<collection>` for a collection's template. The
-      // unique index on it is the guard that holds under concurrent writes,
-      // on every dialect, whichever path the write takes; the hook that sets
-      // it only names the template already there. It carries no field access
-      // rule, since a promotion of a working draft re-judges every field's
-      // write access and would put a denied value back.
-      text({
-        name: TEMPLATE_SLOT_FIELD,
-        label: "Slot",
-        unique: true,
-        admin: { hidden: true },
       }),
       blocks({
         name: TEMPLATE_CONTENT_FIELD,

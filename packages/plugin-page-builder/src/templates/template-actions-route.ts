@@ -57,12 +57,11 @@ import {
   type TemplateSummary,
 } from "./template-actions-contract";
 import {
-  baseSlotKey,
   secondTemplateRefusal,
   templateCollectionProblem,
   type MayReadTemplate,
   type TemplateGuardSetup,
-} from "./template-slot";
+} from "./template-guard";
 
 /**
  * The request around the action. The action itself is parsed by the
@@ -134,33 +133,40 @@ async function createTemplate(
     ...(publishes ? ([["publish", templates]] as const) : []),
   ]);
 
+  const title = action.title ?? (await defaultTitle(ctx, action.collection));
+  const asked: TemplateSummary = {
+    title,
+    collection: action.collection,
+    status: publishes ? "published" : "draft",
+  };
+
+  // The guard's own questions, asked up front so an apply refuses before
+  // writing, and a dry run answers them as refusals rather than as an error.
+  const mayRead = mayReadAsCaller(ctx, templates);
   const problem = await templateCollectionProblem(
     action.collection,
     guard.readCollection,
     guard.ownCollections()
   );
-  if (problem !== null) throw refusedAction([problem]);
-
-  const slot = baseSlotKey(action.collection);
-  const mayRead = mayReadAsCaller(ctx, templates);
-  const held = await guard.holderOf(slot);
-  if (held !== null) {
-    throw await secondTemplateRefusal(action.collection, held, mayRead);
+  const held =
+    problem === null ? await guard.holderOf(action.collection) : null;
+  const refusal =
+    problem !== null
+      ? refusedAction([problem])
+      : held === null
+        ? null
+        : await secondTemplateRefusal(action.collection, held, mayRead);
+  if (refusal !== null) {
+    if (!dryRun) throw refusal;
+    return dryRunAnswer("create-template", asked, refusalMessages(refusal), by);
   }
 
-  const title = action.title ?? (await defaultTitle(ctx, action.collection));
   const data = {
     title,
     [TEMPLATE_COLLECTION_FIELD]: action.collection,
     [TEMPLATE_CONTENT_FIELD]: emptyBlockDocument(["template"]),
     ...(publishes ? { status: "published" } : {}),
   };
-  const summary = (id?: string): TemplateSummary => ({
-    ...(id === undefined ? {} : { id }),
-    title,
-    collection: action.collection,
-    status: publishes ? "published" : "draft",
-  });
 
   if (dryRun) {
     const collections = ctx.services.collections;
@@ -172,7 +178,14 @@ async function createTemplate(
           context: { [JUDGEMENT_CONTEXT]: true },
         })
     );
-    return judgedAnswer("create-template", judged, summary(), by);
+    return judged.refusal === null
+      ? dryRunAnswer(
+          "create-template",
+          summaryOf(judged.written.item, asked),
+          [],
+          by
+        )
+      : dryRunAnswer("create-template", asked, judged.refusal.messages, by);
   }
 
   let created: { item: unknown };
@@ -187,7 +200,7 @@ async function createTemplate(
     // index, and the one that loses is refused there with no name. The
     // winner has committed by then, so it is read and named.
     if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-    const winner = await guard.holderOf(slot);
+    const winner = await guard.holderOf(action.collection);
     if (winner === null) throw error;
     throw await secondTemplateRefusal(action.collection, winner, mayRead);
   }
@@ -196,7 +209,7 @@ async function createTemplate(
     item: {
       dryRun: false,
       kind: "create-template",
-      template: summary(idOf(created.item)),
+      template: summaryOf(created.item, asked),
       refusals: [],
       by,
     },
@@ -231,15 +244,11 @@ async function publishTemplate(
       logContext: { reason: "template-action-missing-template" },
     });
   }
-  const summary: TemplateSummary = {
-    id: action.id,
-    title: typeof row.title === "string" ? row.title : "",
-    collection:
-      typeof row[TEMPLATE_COLLECTION_FIELD] === "string"
-        ? row[TEMPLATE_COLLECTION_FIELD]
-        : "",
+  const asked = summaryOf(row, {
+    title: "",
+    collection: "",
     status: "published",
-  };
+  });
   // Status alone, so the write is a publish and is judged by the publish
   // right rather than as an edit, and promotes the working draft as the
   // editor's Publish does. It carries the version it was read at, so a save
@@ -255,35 +264,80 @@ async function publishTemplate(
           context: { [JUDGEMENT_CONTEXT]: true },
         })
     );
-    return judgedAnswer("publish-template", judged, summary, by);
+    return judged.refusal === null
+      ? dryRunAnswer(
+          "publish-template",
+          summaryOf(judged.written.item, asked),
+          [],
+          by
+        )
+      : dryRunAnswer("publish-template", asked, judged.refusal.messages, by);
   }
-  await collections.updateEntry(templates, action.id, data, asCaller(ctx));
+  const published = await collections.updateEntry(
+    templates,
+    action.id,
+    data,
+    asCaller(ctx)
+  );
   return {
     message: "The template was published.",
     item: {
       dryRun: false,
       kind: "publish-template",
-      template: summary,
+      template: summaryOf(published.item, asked),
       refusals: [],
       by,
     },
   };
 }
 
-/** A dry run's answer, from the judged write. */
-function judgedAnswer(
+/** A dry run's answer: the template as it would be stored, or why not. */
+function dryRunAnswer(
   kind: TemplateAction["kind"],
-  judged: Awaited<ReturnType<typeof judgeInTransaction>>,
   template: TemplateSummary,
+  refusals: readonly string[],
   by: TemplateActionResult["by"]
 ): ActionAnswer<TemplateActionResult> {
-  const refusals = judged.refusal === null ? [] : judged.refusal.messages;
   return {
     message:
       refusals.length === 0
         ? "Nothing was written: this is what the action would do."
         : "Nothing was written: the site would refuse this action.",
     item: { dryRun: true, kind, template, refusals, by },
+  };
+}
+
+/** Every message a refusal carries, in the words it gave them. */
+function refusalMessages(error: NextlyError): string[] {
+  const listed = recordOf(error.publicData)?.errors;
+  const messages = Array.isArray(listed)
+    ? listed
+        .map(item => recordOf(item)?.message)
+        .filter((message): message is string => typeof message === "string")
+    : [];
+  return messages.length > 0 ? messages : [error.publicMessage];
+}
+
+/**
+ * A template as the write stored it, or would have: its row's own values
+ * where it has them, after every hook, and what was asked where it has not.
+ */
+function summaryOf(row: unknown, asked: TemplateSummary): TemplateSummary {
+  const stored = recordOf(row);
+  const id = idOf(stored);
+  const title = stored?.title;
+  const collection = stored?.[TEMPLATE_COLLECTION_FIELD];
+  const status = stored?.status;
+  return {
+    ...(id === undefined
+      ? asked.id === undefined
+        ? {}
+        : { id: asked.id }
+      : { id }),
+    title: typeof title === "string" ? title : asked.title,
+    collection: typeof collection === "string" ? collection : asked.collection,
+    status:
+      status === "published" || status === "draft" ? status : asked.status,
   };
 }
 
