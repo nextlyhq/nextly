@@ -68,6 +68,7 @@ import {
   resolvedCallerGrants,
   type CallerGrants,
 } from "../../shared/lib/field-level-registry";
+import type { UserContext } from "../collections/services/collection-types";
 import type { ContentEventActor } from "../content-events/actor";
 import {
   contentEventKind,
@@ -75,6 +76,7 @@ import {
   type ContentEventKind,
 } from "../content-events/kinds";
 import { recordContentEvent } from "../content-events/record";
+import type { LiveFieldGroupReadPass } from "../field-groups/live-read-access";
 import { configuredLocales } from "../i18n/configured-locales";
 import { readDocumentRevision } from "../versions/stale-version";
 import {
@@ -89,13 +91,19 @@ import {
   primaryStep,
 } from "./define-workflow";
 import { entryWriteAllowed, isEntryWrite } from "./entry-gate";
-import { changedFields, hiddenFrom, possibleApprovers } from "./hidden-changes";
+import {
+  changedFields,
+  hiddenFrom,
+  possibleApprovers,
+  readerOf,
+} from "./hidden-changes";
 import { holderAnswer, readPerson, type HolderAnswer } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import {
   documentTableOf,
+  fieldGroupReadPassOf,
   partVersionOn,
-  shownVersionOn,
+  shownContentOn,
   type DocumentTable,
 } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
@@ -674,12 +682,20 @@ interface StepContext {
    * and for a caller that is no person (refused as such inside).
    */
   approver: StepApprover | null;
+  /**
+   * The field-group read pass a read of the collection makes, built before the transaction, for
+   * judging what an approval covers; undefined for a step that approves nothing, or where no field
+   * group declares a read rule.
+   */
+  fieldGroupPass: LiveFieldGroupReadPass | undefined;
 }
 
 /** A person approving, as the hidden-field check reads them. */
 interface StepApprover {
   id: string;
   name: string | null;
+  /** The person as a document read hands them to access rules (`readerOf`). */
+  user: UserContext;
   grants: () => Promise<CallerGrants>;
 }
 
@@ -782,21 +798,39 @@ async function prepareStep(
     allowedOn: await partsAllowed(input, parts, action, caller, slug),
     liveOn: await livePartsOf(adapter, input.document, parts),
     approves: allowsPublish(workflow, step.to),
-    approver: await approverOf(input, caller, allowsPublish(workflow, step.to)),
+    approver: await approverOf(
+      adapter,
+      input,
+      caller,
+      allowsPublish(workflow, step.to)
+    ),
+    fieldGroupPass: allowsPublish(workflow, step.to)
+      ? await fieldGroupReadPassOf(table)
+      : undefined,
   };
 }
 
 /** The person approving, with their grants resolved, or null where the step approves nothing. */
 async function approverOf(
+  adapter: DrizzleAdapter,
   input: TakeStepInput,
   caller: ResolvedCaller,
   approves: boolean
 ): Promise<StepApprover | null> {
   if (!approves || input.caller.kind !== "user") return null;
+  const user = await readerOf(adapter, input.caller.userId);
+  // A person the canonical resolver cannot act as (gone, or deactivated) approves nothing:
+  // judging them by a thinner copy of who they are could read fields a real read withholds.
+  if (user === null) {
+    throw NextlyError.forbidden({
+      logContext: { refusal: "workflow-approver-unresolvable" },
+    });
+  }
   return {
     id: input.caller.userId,
     name: caller.event.kind === "person" ? caller.event.name : null,
-    grants: await resolvedCallerGrants({ id: input.caller.userId }),
+    user,
+    grants: await resolvedCallerGrants(user),
   };
 }
 
@@ -980,9 +1014,12 @@ async function readRecorded(
 ): Promise<Map<string | null, VersionRow | undefined>> {
   const recorded = new Map<string | null, VersionRow | undefined>();
   for (const entry of movable) {
+    // What the part shows now, shared values written since through another language included:
+    // the content the hidden-field check judges and the approval's digest covers, so both match
+    // what a later save is compared with.
     recorded.set(
       entry.part,
-      await shownVersionOn(tx, c.input.document, entry.part)
+      await shownContentOn(tx, c.input.document, c.table, entry.part)
     );
   }
   const unrecorded = movable.filter(entry => !recorded.get(entry.part));
@@ -1190,8 +1227,9 @@ async function hiddenInPart(
     c.input.document,
     shown.snapshot,
     changed,
-    approver,
-    approver.grants
+    approver.user,
+    approver.grants,
+    c.fieldGroupPass
   );
   return { changed, hidden };
 }
@@ -1358,6 +1396,7 @@ async function hiddenFieldsForbidden(
       action: c.action,
       parts: hidden.parts,
       excluded: new Set(hidden.excluded),
+      fieldGroupPass: c.fieldGroupPass,
     }),
   };
   return NextlyError.forbidden({

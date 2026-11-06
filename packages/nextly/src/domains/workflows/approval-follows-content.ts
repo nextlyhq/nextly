@@ -42,7 +42,6 @@ import {
 import { liveColumnNames } from "../schema/pipeline/diff/introspect-live";
 import { lockDocument } from "../versions/history-locks";
 import { snapshotRecord } from "../versions/shared-publish-base";
-import { documentSystemKeys } from "../versions/snapshot-system-keys";
 import {
   VersionsRepository,
   type VersionRef,
@@ -64,6 +63,7 @@ import {
   type ReviewState,
   type ReviewStatesDb,
 } from "./review-state-repository";
+import { sharedValuesOf } from "./shared-values";
 import type { Workflow } from "./types";
 import {
   enteredReviewSlot,
@@ -161,15 +161,8 @@ function sharedOverlay(
   const translated = save.inPlaceTranslated;
   if (part === null || part === save.locale) return null;
   if (translated === null || saved === undefined) return null;
-  const left = new Set([
-    ...translated,
-    ...documentSystemKeys(entityOf(document)),
-  ]);
-  return Object.fromEntries(
-    Object.entries(snapshotRecord(saved.snapshot)).filter(
-      ([key]) => !left.has(key)
-    )
-  );
+  // The same reading of a snapshot's shared values a step approving the part uses.
+  return sharedValuesOf(document, saved.snapshot, translated);
 }
 
 /** A part's content now, and the version it is read from. */
