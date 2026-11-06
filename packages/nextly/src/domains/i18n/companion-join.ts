@@ -102,6 +102,12 @@ export interface PopulateCompanionArgs {
    */
   statusValues?: readonly string[];
   /**
+   * Also take each translation row's version counter, for a read whose version comes out of this
+   * statement rather than one of its own: the translation table's runtime model does not declare
+   * it, so it is named here. The rows read are then returned with it.
+   */
+  withRevisions?: boolean;
+  /**
    * Whether the companion table is physically there, resolved by the caller.
    *
    * This module used to answer that itself by running the join and catching the failure, which is
@@ -130,9 +136,9 @@ export interface PopulateCompanionArgs {
  */
 export async function populateCompanionFields(
   args: PopulateCompanionArgs
-): Promise<void> {
+): Promise<Record<string, unknown>[] | undefined> {
   const { rows, localeChain, ...shared } = args;
-  await populateCompanionFieldsByLanguage({
+  return populateCompanionFieldsByLanguage({
     ...shared,
     byLanguage: [{ rows, localeChain }],
   });
@@ -153,15 +159,15 @@ export async function populateCompanionFieldsByLanguage(
       localeChain: string[];
     }[];
   }
-): Promise<void> {
+): Promise<Record<string, unknown>[] | undefined> {
   const { db, companionTable, localizedFields } = args;
   const idKey = args.idKey ?? "id";
   // Not ready means there is nothing to join to, so the main table's values stand.
-  if (args.readiness !== "ready") return;
+  if (args.readiness !== "ready") return undefined;
   const languages = args.byLanguage.filter(
     language => language.rows.length > 0 && language.localeChain.length > 0
   );
-  if (localizedFields.length === 0 || languages.length === 0) return;
+  if (localizedFields.length === 0 || languages.length === 0) return undefined;
 
   // Every read first, then every row filled: a read that fails leaves no
   // row half translated. One row per entry and the union of the chains, so
@@ -180,8 +186,9 @@ export async function populateCompanionFieldsByLanguage(
     idKey,
     locales: [...new Set(languages.flatMap(language => language.localeChain))],
     maxParams: args.maxParams,
+    withRevisions: args.withRevisions,
   });
-  if (companionRows === undefined) return;
+  if (companionRows === undefined) return undefined;
 
   for (const language of languages) {
     fillCompanionFields({
@@ -193,6 +200,7 @@ export async function populateCompanionFieldsByLanguage(
       companionRows,
     });
   }
+  return companionRows;
 }
 
 /** How many values one companion read may bind. */
@@ -218,6 +226,8 @@ async function readCompanionRows(
     rows: Record<string, unknown>[];
     idKey: string;
     locales: string[];
+    /** See {@link PopulateCompanionArgs.withRevisions}. */
+    withRevisions?: boolean;
   }
 ): Promise<Record<string, unknown>[] | undefined> {
   const ids = args.rows
@@ -235,19 +245,32 @@ async function readCompanionRows(
   const idRun = bounded
     ? Math.max(1, limit - localeRun)
     : Number.MAX_SAFE_INTEGER;
+  // The counter, when asked for, beside the row the runtime model describes.
+  const projection = args.withRevisions
+    ? {
+        translation: args.companionTable,
+        revision: sql`${args.companionTable}.${sql.identifier(DOCUMENT_REVISION_COLUMN)}`,
+      }
+    : undefined;
   const rows: Record<string, unknown>[] = [];
   for (const locales of batches(args.locales, localeRun)) {
     for (const run of batches(ids, idRun)) {
+      const read = await args.db
+        .select(projection)
+        .from(args.companionTable)
+        .where(
+          and(
+            inArray(table._parent as never, run),
+            inLocaleChain(table, locales)
+          )
+        );
       rows.push(
-        ...(await args.db
-          .select()
-          .from(args.companionTable)
-          .where(
-            and(
-              inArray(table._parent as never, run),
-              inLocaleChain(table, locales)
-            )
-          ))
+        ...(projection
+          ? read.map(result => ({
+              ...(result.translation as Record<string, unknown>),
+              [DOCUMENT_REVISION_COLUMN]: result.revision,
+            }))
+          : read)
       );
     }
   }

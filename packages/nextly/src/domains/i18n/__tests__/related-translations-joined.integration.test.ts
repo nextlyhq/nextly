@@ -115,6 +115,30 @@ describe.each(getConfiguredTestDialects())(
       for (const sql of statements) expect(sql).toMatch(/left join/i);
     });
 
+    // A list page reads its translations table once: the version counters come with the content
+    // when the language chain holds every language the version names, as a detail read's do.
+    it("reads a list page's translations once, its version counters with its content", async () => {
+      const { t, articleId } = await bootSite(dialect);
+      const list = () =>
+        t.nextly.find({ collection: "articles", limit: 20, depth: 0 });
+      await list();
+
+      const translationReads = (await statementsOf(dialect, list)).filter(sql =>
+        /dc_articles_locales/i.test(sql)
+      );
+      expect(translationReads).toHaveLength(1);
+      const listed = (await list()) as {
+        items: { id: string; _rev?: string }[];
+      };
+      const detail = (await t.nextly.findByID({
+        collection: "articles",
+        id: articleId,
+      })) as { _rev?: string };
+      expect(listed.items.find(item => item.id === articleId)?._rev).toBe(
+        detail._rev
+      );
+    });
+
     it("answers the values each translation holds", async () => {
       const { t, articleId } = await bootSite(dialect);
       const article = (await t.nextly.findByID({
