@@ -6,8 +6,11 @@
  * The canvas draws a page's bound props from sources read as the person
  * editing, who may read fields a visitor may not. A binding to such a field
  * falls back on the published page, so the author is told on the block itself:
- * a small "Visitors won't see this" badge above its top-right corner, with the
- * field and what a visitor sees instead in a tooltip.
+ * the block is outlined in a faint amber dash, and a small "Visitors won't see
+ * this" badge sits on that outline's top-right edge, a tab of it, with the
+ * field and what a visitor sees instead in a tooltip. The outline is what makes
+ * the badge plainly this block's: on blocks stacked tight, a badge alone above
+ * a block reads as the mark of the one above it.
  *
  * Which bindings those are is the host's question, answered by the engine's
  * `visitorUnreadableBindings` (the published page's own binding check, with the
@@ -20,10 +23,11 @@
  *
  * Placed as `empty-container-appender.tsx` places its controls: the block's
  * element found by its id, measured through `canvasContentRect` and placed in
- * the chrome's coordinates, so it lands right at any zoom. Above the block's
- * box, never over the page's content; inside the box's top corner only when
- * the block starts at the top of what is on screen, where nothing above it is
- * drawn, as the canvas's other tags do.
+ * the chrome's coordinates, so it lands right at any zoom. The outline runs
+ * just outside the block's box, as the selection ring does, and the badge
+ * above it, so neither covers the block's own content; the badge goes inside
+ * the outline's top corner only when the block starts at the top of what is
+ * on screen, where nothing above it is drawn, as the canvas's other tags do.
  *
  * @module visitor-unreadable-badges
  */
@@ -31,6 +35,7 @@
 import type { VisitorUnreadableBinding } from "@nextlyhq/blocks-engine";
 import { EyeOff } from "lucide-react";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -43,6 +48,7 @@ import {
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
+import type { Rect } from "./geometry";
 import {
   canvasContentRect,
   clippedByAncestorRect,
@@ -53,17 +59,24 @@ import {
 /** The badge's words: what the author needs to know, at a glance. */
 const VISITOR_UNREADABLE_WORDS = "Visitors won't see this";
 
-/** The badge's height, with the gap between it and the block's box. */
-const BADGE_ROOM_PX = 26;
-/** The gap between the badge and the block's box. */
-const BADGE_GAP_PX = 4;
+/**
+ * How far outside the block's box its dashed outline runs: as far as the
+ * selection ring, so the outline never covers the block's own content.
+ */
+const OUTLINE_OUTSET_PX = 2;
+/** The badge's height, as the stylesheet draws it. */
+const BADGE_HEIGHT_PX = 22;
 
-/** Where one badge is drawn, in the chrome's coordinates. */
+/** Where one block's mark is drawn, in the chrome's coordinates. */
 interface BadgePlace {
-  /** The block box's right edge, which the badge's right edge lines up with. */
-  readonly right: number;
+  /** The dashed outline around the block, just outside its box. */
+  readonly outline: Rect;
+  /** The badge's top; its right edge is the outline's right edge. */
   readonly top: number;
-  /** Drawn inside the box's top corner: no room above it on screen. */
+  /**
+   * Drawn inside the outline's top corner: no room above it on screen.
+   * Otherwise the badge sits on the outline's top edge, a tab of it.
+   */
   readonly inside: boolean;
 }
 
@@ -133,10 +146,18 @@ export function VisitorUnreadableBadges({
       }
       const box = space.place(canvasContentRect(target, space.root));
       if (box.width === 0 && box.height === 0) continue;
-      const inside = box.y - onScreen.y < BADGE_ROOM_PX;
+      const outline: Rect = {
+        x: box.x - OUTLINE_OUTSET_PX,
+        y: box.y - OUTLINE_OUTSET_PX,
+        width: box.width + OUTLINE_OUTSET_PX * 2,
+        height: box.height + OUTLINE_OUTSET_PX * 2,
+      };
+      const inside = outline.y - onScreen.y < BADGE_HEIGHT_PX;
       next.set(id, {
-        right: box.x + box.width,
-        top: inside ? box.y + BADGE_GAP_PX : box.y - BADGE_ROOM_PX,
+        outline,
+        // Sitting on the outline's top edge, its border shared with the
+        // outline's, so the two read as one mark of this block.
+        top: inside ? outline.y : outline.y - BADGE_HEIGHT_PX + 1,
         inside,
       });
     }
@@ -176,51 +197,66 @@ export function VisitorUnreadableBadges({
         const place = places.get(id);
         if (place === undefined) return null;
         const tipId = `${idPrefix}-tip-${String(index)}`;
+        const { outline } = place;
         return (
-          <div
-            key={id}
-            className="nx-visitor-unreadable__badge"
-            data-inside={place.inside ? "" : undefined}
-            data-dismissed={dismissed === id ? "" : undefined}
-            style={{ left: place.right, top: place.top }}
-            onMouseLeave={() => {
-              if (dismissed === id) setDismissed(null);
-            }}
-          >
-            <button
-              type="button"
-              className="nx-visitor-unreadable__button"
-              aria-describedby={tipId}
-              onClick={() => onSelect?.(id)}
-              onBlur={() => {
+          <Fragment key={id}>
+            {/* The block itself, outlined in the badge's amber, so at rest
+                the badge plainly belongs to this block and not the one
+                above it. Drawn only: the badge says it in words. */}
+            <div
+              className="nx-visitor-unreadable__outline"
+              aria-hidden="true"
+              style={{
+                left: outline.x,
+                top: outline.y,
+                width: outline.width,
+                height: outline.height,
+              }}
+            />
+            <div
+              className="nx-visitor-unreadable__badge"
+              data-inside={place.inside ? "" : undefined}
+              data-dismissed={dismissed === id ? "" : undefined}
+              style={{ left: outline.x + outline.width, top: place.top }}
+              onMouseLeave={() => {
                 if (dismissed === id) setDismissed(null);
               }}
-              onKeyDown={event => {
-                // Put the tooltip away without moving focus or the pointer.
-                if (event.key === "Escape" && dismissed !== id) {
-                  event.stopPropagation();
-                  setDismissed(id);
-                }
-              }}
             >
-              <EyeOff size={12} aria-hidden="true" />
-              <span>{VISITOR_UNREADABLE_WORDS}</span>
-            </button>
-            <span
-              id={tipId}
-              role="tooltip"
-              className="nx-visitor-unreadable__tip"
-            >
-              {bindings.map(binding => (
-                <span
-                  key={binding.prop}
-                  className="nx-visitor-unreadable__line"
-                >
-                  {visitorUnreadableSentence(binding)}
-                </span>
-              ))}
-            </span>
-          </div>
+              <button
+                type="button"
+                className="nx-visitor-unreadable__button"
+                aria-describedby={tipId}
+                onClick={() => onSelect?.(id)}
+                onBlur={() => {
+                  if (dismissed === id) setDismissed(null);
+                }}
+                onKeyDown={event => {
+                  // Put the tooltip away without moving focus or the pointer.
+                  if (event.key === "Escape" && dismissed !== id) {
+                    event.stopPropagation();
+                    setDismissed(id);
+                  }
+                }}
+              >
+                <EyeOff size={12} aria-hidden="true" />
+                <span>{VISITOR_UNREADABLE_WORDS}</span>
+              </button>
+              <span
+                id={tipId}
+                role="tooltip"
+                className="nx-visitor-unreadable__tip"
+              >
+                {bindings.map(binding => (
+                  <span
+                    key={binding.prop}
+                    className="nx-visitor-unreadable__line"
+                  >
+                    {visitorUnreadableSentence(binding)}
+                  </span>
+                ))}
+              </span>
+            </div>
+          </Fragment>
         );
       })}
     </div>

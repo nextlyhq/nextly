@@ -4,9 +4,10 @@
  * A page binds two headings to the `contact-details` Single: one to `phone`,
  * which the public may read, and one to `internalNote`, which it may not. The
  * published page shows the second one's fallback, so the editor says so: a
- * "Visitors won't see this" badge on that block alone, which a keyboard
- * reaches and whose tooltip names the field and the fallback, and the same
- * words in the inspector under the bound prop.
+ * faint amber outline on that block alone, with a "Visitors won't see this"
+ * badge on its edge, which a keyboard reaches and whose tooltip names the
+ * field and the fallback, and the same words in the inspector under the
+ * bound prop.
  *
  * @module tests/builder-private-binding-mark.spec
  */
@@ -103,9 +104,25 @@ test.describe("a bound value a visitor will not see", () => {
       throw new Error("[e2e] The heading or its badge has no box.");
     }
     expect(placed.y + placed.height).toBeLessThanOrEqual(heading.y + 0.5);
+    // The block itself is outlined, just outside its box, and the badge sits
+    // on that outline's top-right edge: at rest, the mark is plainly this
+    // block's and not the one above it.
+    const outlines = page.locator(".nx-visitor-unreadable__outline");
+    await expect(outlines).toHaveCount(1);
+    const outline = await outlines.boundingBox();
+    if (outline === null) throw new Error("[e2e] The outline has no box.");
+    expect(outline.x).toBeLessThanOrEqual(heading.x);
+    expect(outline.y).toBeLessThanOrEqual(heading.y);
+    expect(outline.x + outline.width).toBeGreaterThanOrEqual(
+      heading.x + heading.width
+    );
+    expect(outline.y + outline.height).toBeGreaterThanOrEqual(
+      heading.y + heading.height
+    );
     expect(
-      Math.abs(placed.x + placed.width - (heading.x + heading.width))
-    ).toBeLessThan(2);
+      Math.abs(placed.x + placed.width - (outline.x + outline.width))
+    ).toBeLessThan(1);
+    expect(Math.abs(placed.y + placed.height - outline.y)).toBeLessThan(2);
 
     // A keyboard reaches it, and its tooltip says why on focus, not only on
     // hover; Escape puts the tooltip away without moving focus.
