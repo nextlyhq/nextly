@@ -259,7 +259,11 @@ import {
   usageTableOf,
   usageTableRows,
 } from "./usage-index-tables";
-import { variableRoutes, variablesInUseCheck } from "./variables-routes";
+import {
+  variableRemovalChecks,
+  variableRoutes,
+  variablesInUseCheck,
+} from "./variables-routes";
 import { variantUseRoute } from "./variant-use-route";
 import { SINGLE_HOOK_NAMESPACE } from "./write-target";
 
@@ -1855,6 +1859,8 @@ export const pageBuilder = (
       // since the write's author is not a caller this can ask.
       variablesInUse = variablesInUseCheck({
         usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+        // The block types the pages are rendered with, read per check.
+        blocks: allBlocks,
         documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
         limits: opts.limits ?? DEFAULT_LIMITS,
         pathOf: () => "tokens",
@@ -2429,9 +2435,12 @@ export const pageBuilder = (
         ...variableRoutes({
           defaults: configStyle,
           usage: ctx => usageSourceOf(ctx.self.collections, tokenUsageIndex),
+          // A block type's own default styles are a use, read per request.
+          blocks: allBlocks,
           inUse: (ctx, readNamed) =>
-            variablesInUseCheck({
+            variableRemovalChecks({
               usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+              blocks: allBlocks,
               documents: async () =>
                 storedDocumentsOf(ctx, await bootedNextly()),
               limits: opts.limits ?? DEFAULT_LIMITS,

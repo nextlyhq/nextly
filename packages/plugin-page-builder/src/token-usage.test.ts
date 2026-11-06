@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { deriveUsageRows, reconcileUsage } from "./class-usage-reconcile";
 import {
+  blockDefaultsUsing,
   sharedStylesUsing,
   tokenUsageIndex,
   tokenUsageOf,
@@ -237,5 +238,42 @@ describe("which shared styles use a variable", () => {
         { id: "c-hero", name: "hero" },
       ],
     });
+  });
+});
+
+describe("the block types whose own default styles name a variable", () => {
+  it("finds a reference in a structured value under any state, by type order, named by the editor's label", () => {
+    const blocks = [
+      {
+        name: "acme/card",
+        baseStyles: {
+          hover: { md: { boxShadow: { color: { $token: "color.brand" } } } },
+        },
+      },
+      {
+        name: "acme/button",
+        editor: { label: "Call to action" },
+        baseStyles: at({ color: { $token: "color.brand" } }),
+      },
+      { name: "acme/plain", baseStyles: at({ color: "#fff" }) },
+      { name: "acme/bare" },
+    ];
+    const using = blockDefaultsUsing(blocks, new Set(["color.brand", "x"]));
+    expect(using.get("color.brand")).toEqual([
+      { type: "acme/button", label: "Call to action" },
+      { type: "acme/card", label: "Card" },
+    ]);
+    // Only the identities asked about, and none no block names.
+    expect([...using.keys()]).toEqual(["color.brand"]);
+  });
+
+  it("skips a reference too long to name a variable, as every other walk does", () => {
+    const long = "t".repeat(MAX_TOKEN_NAME_LENGTH + 1);
+    expect(
+      blockDefaultsUsing(
+        [{ name: "acme/x", baseStyles: at({ color: { $token: long } }) }],
+        new Set([long])
+      ).size
+    ).toBe(0);
   });
 });

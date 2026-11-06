@@ -15,12 +15,15 @@
  * `settings.styles`, which the compiler emits as well. Each style value is
  * walked by `style-token-refs`, the walk an export carries variables by. A
  * variable named only inside a shared style is the shared style's use, read
- * from the site style rather than from any document.
+ * from the site style rather than from any document; one named by a block
+ * type's own default styles (`baseStyles`) is that block type's, read from
+ * the block registry.
  *
  * @module token-usage
  */
 import {
   MAX_TOKEN_NAME_LENGTH,
+  blockLabelFrom,
   isPlainRecord,
   selectNodes,
   type DocumentLimits,
@@ -149,6 +152,41 @@ export function sharedStylesUsing(
     for (const identity of variablesIn(entry.styles)) {
       if (!identities.has(identity)) continue;
       using.set(identity, [...(using.get(identity) ?? []), style]);
+    }
+  }
+  return using;
+}
+
+/** A registered block type, as far as its own default styles go. */
+export interface BlockTypeDefaults {
+  readonly name: string;
+  readonly baseStyles?: unknown;
+  readonly editor?: { readonly label?: string };
+}
+
+/**
+ * The registered block types whose own default styles name each variable
+ * asked about, by identity, in type order: a type's `baseStyles` is laid
+ * under every instance of it on every page that places one, so removing the
+ * variable changes all of them whether or not any page does yet. Each type is
+ * named by the label the editor shows it by.
+ */
+export function blockDefaultsUsing(
+  blocks: readonly BlockTypeDefaults[],
+  identities: ReadonlySet<string>
+): ReadonlyMap<string, readonly { type: string; label: string }[]> {
+  const using = new Map<string, { type: string; label: string }[]>();
+  const sorted = [...blocks].sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  );
+  for (const block of sorted) {
+    const named = {
+      type: block.name,
+      label: blockLabelFrom(block.name, block),
+    };
+    for (const identity of variablesIn(block.baseStyles)) {
+      if (!identities.has(identity)) continue;
+      using.set(identity, [...(using.get(identity) ?? []), named]);
     }
   }
   return using;
