@@ -18,6 +18,7 @@ import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
   SITE_BREAKPOINTS_ROUTE_PATH,
+  SITE_SETTINGS_ROUTE_PATH,
   siteBreakpointRemovalStatusPath,
   type SiteBreakpointRemoval,
   type SiteBreakpointRemovalRead,
@@ -26,6 +27,7 @@ import {
   type SiteBreakpointsDryRun,
   type SiteBreakpointsRequest,
   type SiteBreakpointsSaved,
+  type SiteSettingsRead,
 } from "../library-contract";
 
 /** A mutation route's answer: its message and the item it carries. */
@@ -108,4 +110,19 @@ export async function readBreakpointRemoval(
     throw new Error("The site did not say where the removal stands.");
   }
   return read.removal;
+}
+
+/**
+ * The removals the Site tab's read reports now, read alone: an open Settings
+ * asks this to learn of a removal another tab started. `undefined` where the
+ * read reports none, or answered nothing.
+ */
+export async function readSiteRemovals(): Promise<
+  readonly SiteBreakpointRemovalStatus[] | undefined
+> {
+  const read = await readPluginRoute<SiteSettingsRead>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: SITE_SETTINGS_ROUTE_PATH,
+  });
+  return read?.removals;
 }

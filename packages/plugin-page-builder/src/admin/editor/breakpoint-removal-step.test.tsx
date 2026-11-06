@@ -51,6 +51,8 @@ let statusRead: () => Promise<{
 }>;
 /** The paths the status was read at. */
 const statusAsked: string[] = [];
+/** What the settings read answers when the watch asks it alone. */
+let removalsThere: () => Promise<SiteSettingsRead> = async () => siteRead;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: () => ({
@@ -61,6 +63,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     refetch,
   }),
   readPluginRoute: async ({ path }: { path: string }) => {
+    // The tab's own read, asked alone by the watch for another tab's removal.
+    if (path === "/site/settings") return removalsThere();
     statusAsked.push(path);
     return statusRead();
   },
@@ -82,6 +86,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 const { SettingsDialog } = await import("./settings-dialog");
 const { RemovalStepPanel } = await import("./breakpoint-removal-step");
+const { WATCH_MS } = await import("./use-breakpoint-removal");
 
 const none = (): PlaceCount => ({
   documents: 0,
@@ -186,6 +191,12 @@ function stepOf(state: string): HTMLElement {
   return found;
 }
 
+/**
+ * Let the reads a timer started answer. A real timeout: `waitFor` polls with
+ * the `setInterval` a test of the watch has faked.
+ */
+const settled = () => new Promise(resolve => setTimeout(resolve, 20));
+
 /** The writes of one kind. */
 const sent = (kind: "dryRun" | "confirmRemoval") =>
   writes.filter(write => write.body[kind] === true);
@@ -205,6 +216,7 @@ beforeEach(() => {
   carryOnAnswers = [];
   statusRead = reads([]);
   statusAsked.length = 0;
+  removalsThere = async () => siteRead;
   refetch.mockClear();
   writer.mockClear();
   refresh.mockClear();
@@ -538,11 +550,75 @@ describe("removing a breakpoint in Settings", () => {
     expect(statusAsked).toEqual(["/site/breakpoints/removal?runId=run-1"]);
   });
 
-  it("takes the last call's count when the run's status can't be read, never done", async () => {
-    confirmAnswer = saved(true, 1);
+  it("follows on, never saying done, while the run's status can't be read", async () => {
+    confirmAnswer = saved(true, 0);
+    let failing = true;
     statusRead = async () => {
-      throw new Error("offline");
+      if (failing) throw new Error("offline");
+      return {
+        removal: {
+          runId: "run-1",
+          labels: ["Mobile"],
+          open: false,
+          left: 1,
+          waitingOnDrafts: false,
+        },
+      };
     };
+    let carried: (value: unknown) => void = () => {};
+    carryOnAnswers = [() => new Promise(resolve => (carried = resolve))];
+    show();
+    await removeMobile();
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove Mobile and its styles",
+      })
+    );
+    // The save said finished, with nothing left in its call; the status could
+    // not be read, so it is followed on rather than called done.
+    expect(
+      await screen.findByRole(
+        "heading",
+        { name: "Removing Mobile's styles" },
+        { timeout: 8000 }
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("Mobile was removed")).toBeNull();
+    failing = false;
+    await waitFor(() => expect(carryOnAnswers).toHaveLength(0), {
+      timeout: 8000,
+    });
+    carried({
+      message: "Done.",
+      item: { runId: "run-1", finished: true, left: 0 },
+    });
+    // The run's own status decides: it left one, which this call did not.
+    expect(
+      await screen.findByText(
+        "Mobile was removed, except from 1 entry it couldn't change"
+      )
+    ).toBeTruthy();
+  }, 20_000);
+
+  it("follows a run its status finds opened again until it is done", async () => {
+    // The save did not finish: the tab's own loop carries it on.
+    confirmAnswer = saved(false);
+    const statuses = [
+      {
+        runId: "run-1",
+        labels: ["Mobile"],
+        open: true,
+        left: 0,
+        waitingOnDrafts: false,
+      },
+      null,
+    ];
+    statusRead = async () => ({ removal: statuses.shift() ?? null });
+    const finished = async () => ({
+      message: "Done.",
+      item: { runId: "run-1", finished: true, left: 0 },
+    });
+    carryOnAnswers = [finished, finished];
     show();
     await removeMobile();
     await userEvent.click(
@@ -551,11 +627,58 @@ describe("removing a breakpoint in Settings", () => {
       })
     );
     expect(
-      await screen.findByText(
-        "Mobile was removed, except from 1 entry it couldn't change"
-      )
+      await screen.findByText("Mobile was removed", {}, { timeout: 5000 })
     ).toBeTruthy();
-    expect(screen.queryByText("Mobile was removed")).toBeNull();
+    // Called again after the first call's status found the run open again.
+    expect(
+      writes.filter(write => write.path === "/site/breakpoints/removal")
+    ).toHaveLength(2);
+  }, 10_000);
+
+  it("cannot cancel a removal it found nothing stored for once its save is out", async () => {
+    dryRunAnswer = dryRun({
+      ...mobile(),
+      documents: { named: [], unnamed: 0 },
+    });
+    confirmAnswer = () => new Promise(() => {});
+    show();
+    await removeMobile();
+    await waitFor(() => expect(sent("confirmRemoval")).toHaveLength(1));
+    const cancel = within(stepOf("checking")).getByRole("button", {
+      name: "Cancel",
+    });
+    expect(cancel).toHaveProperty("disabled", true);
+  });
+
+  it("looks for a removal another tab started while Settings stays open", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      show();
+      await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+      refetch.mockClear();
+      // Nothing new: the read is not asked again.
+      vi.advanceTimersByTime(WATCH_MS);
+      await settled();
+      expect(refetch).not.toHaveBeenCalled();
+      // Another tab opens a removal.
+      removalsThere = async () => ({
+        ...siteRead,
+        removals: [
+          {
+            runId: "run-5",
+            labels: ["Mobile"],
+            open: true,
+            left: 0,
+            waitingOnDrafts: false,
+          },
+        ],
+      });
+      vi.advanceTimersByTime(WATCH_MS);
+      await settled();
+      expect(refetch).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lets a removal opened elsewhere outrank this tab's finished one", async () => {
