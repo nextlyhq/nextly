@@ -19,6 +19,7 @@
  * @module list-query-model
  */
 import {
+  LIST_KIND_OPS,
   LIST_LIMIT_MAX,
   LIST_LIMIT_MIN,
   listSortText,
@@ -58,18 +59,6 @@ export interface OperatorChoice {
   readonly label: string;
 }
 
-const IS: OperatorChoice = { key: "equals", op: "equals", label: "is" };
-const IS_NOT: OperatorChoice = {
-  key: "not_equals",
-  op: "not_equals",
-  label: "is not",
-};
-const ANY_OF: OperatorChoice = { key: "in", op: "in", label: "is any of" };
-const NONE_OF: OperatorChoice = {
-  key: "not_in",
-  op: "not_in",
-  label: "is none of",
-};
 const HAS_VALUE: OperatorChoice = {
   key: "exists:true",
   op: "exists",
@@ -83,57 +72,61 @@ const IS_EMPTY: OperatorChoice = {
   label: "is empty",
 };
 
+/** What each operator but `exists` is called, as a number's order is worded. */
+const OPERATOR_LABELS: Readonly<
+  Record<Exclude<ListFilterOp, "exists">, string>
+> = {
+  equals: "is",
+  not_equals: "is not",
+  contains: "contains",
+  in: "is any of",
+  not_in: "is none of",
+  greater_than: "is more than",
+  greater_than_equal: "is at least",
+  less_than: "is less than",
+  less_than_equal: "is at most",
+};
+
+/** A date's order, worded as days: "is after", "is on or before". */
+const DATE_LABELS: Readonly<Partial<Record<ListFilterOp, string>>> = {
+  greater_than: "is after",
+  greater_than_equal: "is on or after",
+  less_than: "is before",
+  less_than_equal: "is on or before",
+};
+
+/** The choices for a field of `kind`: the engine's operators, each worded. */
+function choicesFor(kind: ListFieldKind): readonly OperatorChoice[] {
+  return LIST_KIND_OPS[kind].flatMap(op =>
+    op === "exists"
+      ? [HAS_VALUE, IS_EMPTY]
+      : [
+          {
+            key: op,
+            op,
+            label:
+              (kind === "date" ? DATE_LABELS[op] : undefined) ??
+              OPERATOR_LABELS[op],
+          },
+        ]
+  );
+}
+
 /**
- * The operators offered for a field of each kind, in menu order. Contains is
- * never offered on a date, a number, a choice or a relation, and before or
- * after never on text. A date has no "is" until a day can be compared for
- * equality whatever time the field holds.
+ * The operators offered for a field of each kind, in menu order: exactly
+ * the engine's `LIST_KIND_OPS`, which the save judges a row by, so the menu
+ * never offers a row the save refuses. `exists` is offered both ways, as
+ * "has a value" and "is empty".
  */
 export const OPERATORS: Readonly<
   Record<ListFieldKind, readonly OperatorChoice[]>
 > = {
-  text: [
-    IS,
-    IS_NOT,
-    { key: "contains", op: "contains", label: "contains" },
-    ANY_OF,
-    NONE_OF,
-    HAS_VALUE,
-    IS_EMPTY,
-  ],
-  number: [
-    IS,
-    IS_NOT,
-    { key: "greater_than", op: "greater_than", label: "is more than" },
-    {
-      key: "greater_than_equal",
-      op: "greater_than_equal",
-      label: "is at least",
-    },
-    { key: "less_than", op: "less_than", label: "is less than" },
-    { key: "less_than_equal", op: "less_than_equal", label: "is at most" },
-    HAS_VALUE,
-    IS_EMPTY,
-  ],
-  date: [
-    { key: "greater_than", op: "greater_than", label: "is after" },
-    {
-      key: "greater_than_equal",
-      op: "greater_than_equal",
-      label: "is on or after",
-    },
-    { key: "less_than", op: "less_than", label: "is before" },
-    {
-      key: "less_than_equal",
-      op: "less_than_equal",
-      label: "is on or before",
-    },
-    HAS_VALUE,
-    IS_EMPTY,
-  ],
-  choice: [IS, IS_NOT, ANY_OF, NONE_OF, HAS_VALUE, IS_EMPTY],
-  boolean: [IS],
-  entry: [IS, IS_NOT, ANY_OF, NONE_OF, HAS_VALUE, IS_EMPTY],
+  text: choicesFor("text"),
+  number: choicesFor("number"),
+  date: choicesFor("date"),
+  choice: choicesFor("choice"),
+  boolean: choicesFor("boolean"),
+  entry: choicesFor("entry"),
 };
 
 /** The menu key a stored row's operator is listed under. */

@@ -4,7 +4,11 @@
  * as one sentence, when a row is complete enough to store, and the bounds of
  * how many entries show.
  */
-import { readListQuery } from "@nextlyhq/blocks-engine";
+import {
+  LIST_FIELD_KINDS,
+  LIST_KIND_OPS,
+  readListQuery,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -107,24 +111,11 @@ describe("the operators offered for a field", () => {
     ).toBe(false);
   });
 
-  it("offers only operators the engine's filter rows take", () => {
-    for (const choices of Object.values(OPERATORS)) {
-      for (const choice of choices) {
-        const value =
-          choice.op === "exists"
-            ? choice.exists
-            : choice.op === "in" || choice.op === "not_in"
-              ? ["a"]
-              : choice.op === "contains" ||
-                  choice.op === "equals" ||
-                  choice.op === "not_equals"
-                ? "a"
-                : 1;
-        expect(
-          readListQuery({ filters: [{ field: "f", op: choice.op, value }] })
-            .problems
-        ).toEqual([]);
-      }
+  it("offers exactly the operators the engine's judgement takes, for each kind", () => {
+    for (const kind of LIST_FIELD_KINDS) {
+      expect([...new Set(OPERATORS[kind].map(choice => choice.op))]).toEqual(
+        LIST_KIND_OPS[kind]
+      );
     }
   });
 });
