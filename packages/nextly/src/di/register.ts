@@ -215,6 +215,7 @@ import {
   rateLimitProxyWarning,
   unkeyedAuthRouteWarnings,
 } from "../plugins/routes/route-options";
+import { boundActionsOf } from "../plugins/routes/action-binding";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
@@ -4811,13 +4812,20 @@ async function initializePlugins(
   const routeRegistry = getPluginRouteRegistry();
   routeRegistry.clear();
   if (collectedRoutes.length > 0) {
-    const contextByPlugin = new Map(
-      teardown.map(t => [t.plugin.name, t.context])
-    );
+    const byPlugin = new Map(teardown.map(t => [t.plugin.name, t]));
+    const registeredPlugins = teardown.map(t => t.plugin);
     for (const collected of collectedRoutes) {
-      const context = contextByPlugin.get(collected.pluginName);
-      if (context) {
-        routeRegistry.register(collected.pluginName, collected.route, context);
+      const entry = byPlugin.get(collected.pluginName);
+      if (entry) {
+        // The declared actions that run the route, read from the definition
+        // it was collected from, so a plugin list rewritten after boot cannot
+        // make a bound route read as unbound.
+        routeRegistry.register(
+          collected.pluginName,
+          collected.route,
+          entry.context,
+          boundActionsOf(entry.plugin, collected.route, registeredPlugins)
+        );
       }
     }
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);

@@ -538,6 +538,38 @@ describe("contributedAdminContributions", () => {
     });
   });
 
+  it("refuses an action that runs a public route, which has no caller to judge", () => {
+    const action = {
+      id: "acme-support.a",
+      kind: "rowAction",
+      place: "collection.list",
+      label: "A",
+      action: { run: { method: "POST", path: "/open" } },
+    };
+    expect(
+      refusalOf(() =>
+        contributedAdminContributions([
+          plugin("@acme/support", [action], {
+            contributes: {
+              admin: { contributions: [action] as AdminContribution[] },
+              routes: [
+                {
+                  method: "POST",
+                  path: "/open",
+                  handler: () => new Response(),
+                  public: true,
+                },
+              ],
+            },
+          }),
+        ])
+      )
+    ).toMatchObject({
+      reason: "admin-contribution-invalid",
+      logMessage: expect.stringContaining("a public route"),
+    });
+  });
+
   it("takes a permission computed from the plugin's names", () => {
     expect(
       contributedAdminContributions([
