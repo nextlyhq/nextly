@@ -41,3 +41,5 @@ A production start still names the rules left in the retired `access_rules`
 column of the registry tables, which this release no longer enforces, and
 still refuses a database laid out for the other choice of
 `experimental.perLanguageStorage`.
+
+A dry run names each file from the project folder with `/` between its parts on every operating system, Windows included.
