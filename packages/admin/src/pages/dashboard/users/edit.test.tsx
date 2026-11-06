@@ -24,23 +24,25 @@ const SIGNED_IN = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 
 // Hoisted with the module mocks that read them.
-const { state, roles, fields, logout, navigateTo, mutate, meta } = vi.hoisted(() => ({
-  state: {
-    editedId: "11111111-1111-4111-8111-111111111111",
-    users: {} as Record<string, Record<string, unknown>>,
-  },
-  // Stable across renders, as a query cache returns them: a fresh object on
-  // every render re-runs the page's form reset on every render.
-  roles: { items: [] },
-  fields: { fields: [] },
-  logout: vi.fn(),
-  navigateTo: vi.fn(),
-  mutate: vi.fn((_vars: unknown, opts: { onSuccess: () => void }) =>
-    opts.onSuccess()
-  ),
-  // What the admin metadata delivers to the page's place, set per case.
-  meta: { contributions: undefined as AdminContributionsMeta | undefined },
-}));
+const { state, roles, fields, logout, navigateTo, mutate, meta } = vi.hoisted(
+  () => ({
+    state: {
+      editedId: "11111111-1111-4111-8111-111111111111",
+      users: {} as Record<string, Record<string, unknown>>,
+    },
+    // Stable across renders, as a query cache returns them: a fresh object on
+    // every render re-runs the page's form reset on every render.
+    roles: { items: [] },
+    fields: { fields: [] },
+    logout: vi.fn(),
+    navigateTo: vi.fn(),
+    mutate: vi.fn((_vars: unknown, opts: { onSuccess: () => void }) =>
+      opts.onSuccess()
+    ),
+    // What the admin metadata delivers to the page's place, set per case.
+    meta: { contributions: undefined as AdminContributionsMeta | undefined },
+  })
+);
 
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   ...(await importOriginal<
@@ -221,9 +223,7 @@ describe("EditUserPage's place", () => {
     // did before the place: nothing wraps it.
     expect(screen.queryByRole("tablist")).toBeNull();
     const header = screen.getByRole("heading", { name: "Edit User" });
-    expect(card(container).previousElementSibling?.contains(header)).toBe(
-      true
-    );
+    expect(card(container).previousElementSibling?.contains(header)).toBe(true);
   });
 
   it("draws a block after the card, told who is looking and at whom", () => {

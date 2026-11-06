@@ -55,11 +55,11 @@ import {
   effectiveEntryStatus,
 } from "@admin/components/features/entries/EntryForm/entry-address";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
-import { EntryFormPlace } from "@admin/components/features/entries/EntryForm/EntryFormPlace";
 import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "@admin/components/features/entries/EntryForm/EntryFormContext";
+import { EntryFormPlace } from "@admin/components/features/entries/EntryForm/EntryFormPlace";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";

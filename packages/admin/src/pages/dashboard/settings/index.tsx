@@ -293,63 +293,63 @@ const SettingsGeneralPage: React.FC = () => {
           context={placeContext}
           builtIns={{
             content: (
-            <Form {...form}>
-              <form
-                onSubmit={e => {
-                  void form.handleSubmit(onSubmit)(e);
-                }}
-              >
-                <SettingsLayout
-                  title="General Settings"
-                  description="Manage your application and configuration"
+              <Form {...form}>
+                <form
+                  onSubmit={e => {
+                    void form.handleSubmit(onSubmit)(e);
+                  }}
                 >
-                  {isLoading ? (
-                    <GeneralSettingsSkeleton />
-                  ) : (
-                    // ── Section: Locale & Formatting ──
-                    <SettingsSection label="Locale & Formatting">
-                      <SettingSelect
-                        control={form.control}
-                        name="timezone"
-                        label="Timezone"
-                        description="Time zone used across the admin and email notifications."
-                        placeholder="Select a timezone"
-                        options={TIMEZONE_OPTIONS}
-                        disabled={isLoading || !mayUpdate}
-                      />
+                  <SettingsLayout
+                    title="General Settings"
+                    description="Manage your application and configuration"
+                  >
+                    {isLoading ? (
+                      <GeneralSettingsSkeleton />
+                    ) : (
+                      // ── Section: Locale & Formatting ──
+                      <SettingsSection label="Locale & Formatting">
+                        <SettingSelect
+                          control={form.control}
+                          name="timezone"
+                          label="Timezone"
+                          description="Time zone used across the admin and email notifications."
+                          placeholder="Select a timezone"
+                          options={TIMEZONE_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
 
-                      <SettingSelect
-                        control={form.control}
-                        name="dateFormat"
-                        label="Date Format"
-                        description="How dates appear in lists and detail pages."
-                        placeholder="Select a date format"
-                        options={DATE_FORMAT_OPTIONS}
-                        disabled={isLoading || !mayUpdate}
-                      />
+                        <SettingSelect
+                          control={form.control}
+                          name="dateFormat"
+                          label="Date Format"
+                          description="How dates appear in lists and detail pages."
+                          placeholder="Select a date format"
+                          options={DATE_FORMAT_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
 
-                      <SettingSelect
-                        control={form.control}
-                        name="timeFormat"
-                        label="Time Format"
-                        description="12-hour vs 24-hour clock."
-                        placeholder="Select a time format"
-                        options={TIME_FORMAT_OPTIONS}
-                        disabled={isLoading || !mayUpdate}
-                      />
-                    </SettingsSection>
-                  )}
-
-                  <FormActions dirty={form.formState.isDirty}>
-                    {mayUpdate && (
-                      <Button type="submit" disabled={isPending || isLoading}>
-                        {isPending ? "Saving…" : "Save Changes"}
-                      </Button>
+                        <SettingSelect
+                          control={form.control}
+                          name="timeFormat"
+                          label="Time Format"
+                          description="12-hour vs 24-hour clock."
+                          placeholder="Select a time format"
+                          options={TIME_FORMAT_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
+                      </SettingsSection>
                     )}
-                  </FormActions>
-                </SettingsLayout>
-              </form>
-            </Form>
+
+                    <FormActions dirty={form.formState.isDirty}>
+                      {mayUpdate && (
+                        <Button type="submit" disabled={isPending || isLoading}>
+                          {isPending ? "Saving…" : "Save Changes"}
+                        </Button>
+                      )}
+                    </FormActions>
+                  </SettingsLayout>
+                </form>
+              </Form>
             ),
           }}
         />

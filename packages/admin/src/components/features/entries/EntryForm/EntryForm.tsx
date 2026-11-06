@@ -107,11 +107,11 @@ import {
 } from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
-import { EntryFormPlace } from "./EntryFormPlace";
 import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "./EntryFormContext";
+import { EntryFormPlace } from "./EntryFormPlace";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";

@@ -35,7 +35,7 @@ function catalogueBuiltIns(
 ): readonly DeliveredAdminEntry[] {
   if (!Object.hasOwn(CORE_ADMIN_PLACES, place)) return [];
   const builtIns: Partial<Record<PlaceKind, readonly string[]>> =
-    CORE_ADMIN_PLACES[place as keyof typeof CORE_ADMIN_PLACES].builtIns;
+    CORE_ADMIN_PLACES[place].builtIns;
   return (builtIns[kind] ?? []).map(name => ({ builtIn: name }));
 }
 
