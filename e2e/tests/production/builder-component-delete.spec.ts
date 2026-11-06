@@ -317,7 +317,7 @@ test.describe("Delete component", () => {
 
     await gotoAdmin(page, "/collections/components");
     const row = page.getByRole("row", { name: new RegExp(listed.title) });
-    await row.getByRole("button", { name: "Row actions" }).click();
+    await row.getByRole("button", { name: "Row actions", exact: true }).click();
     await expect(
       page.getByRole("menuitem", { name: "Delete component…" })
     ).toBeVisible();
