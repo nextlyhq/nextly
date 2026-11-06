@@ -263,6 +263,14 @@ describe("what is refused", () => {
     ).toContain(`a link with rel "shortcut" isn't allowed`);
   });
 
+  it("refuses a link that would load more than one thing", () => {
+    expect(
+      refusalsOf(
+        '<link rel="icon stylesheet" href="https://cdn.example/a.css">'
+      ).join(" ")
+    ).toContain("a link may load one thing, not icon and stylesheet");
+  });
+
   it("refuses text outside an element", () => {
     expect(refusalsOf("hello <script>a()</script>")).toEqual([
       "Text outside an element isn't allowed.",

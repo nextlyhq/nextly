@@ -174,6 +174,16 @@ export function siteCodeLinkRelations(rel: string | undefined): string[] {
     .filter(token => token !== "");
 }
 
+/** The relations under which a link fetches something of its own. */
+const LOADING_RELS: ReadonlySet<string> = new Set([
+  "stylesheet",
+  "icon",
+  "apple-touch-icon",
+  "modulepreload",
+  "manifest",
+  "preload",
+]);
+
 /** What a preload may load: the destinations the CSP check judges. */
 const PRELOAD_DESTINATIONS: ReadonlySet<string> = new Set([
   "script",
@@ -280,6 +290,12 @@ function linkProblem(attrs: SiteCodeAttrs): string | undefined {
     return `a link with rel "${attrs.rel ?? ""}" isn't allowed`;
   }
   if (attrs.href === undefined) return "a link needs an href";
+  // One link, one load: a browser fetches once for each loading relation,
+  // and each is judged by its own directive.
+  const loading = relations.filter(relation => LOADING_RELS.has(relation));
+  if (loading.length > 1) {
+    return `a link may load one thing, not ${loading.join(" and ")}`;
+  }
   const destination = (attrs.as ?? "").trim().toLowerCase();
   if (relations.includes("preload") && !PRELOAD_DESTINATIONS.has(destination)) {
     return `a preload of "${attrs.as ?? ""}" isn't allowed: it may load a script, a style, a font or an image`;

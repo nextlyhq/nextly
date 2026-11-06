@@ -105,14 +105,32 @@ function governing(
   return undefined;
 }
 
-/** Whether a source is a hash (`'sha256-…'`). */
+/**
+ * Whether a source is a hash (`'sha256-…'`), by CSP's whole grammar: a
+ * malformed one is no hash, and cancels nothing.
+ */
 function isHash(source: string): boolean {
-  return /^'sha(256|384|512)-/i.test(source);
+  return /^'sha(256|384|512)-[A-Za-z0-9+/_-]+={0,2}'$/i.test(source);
 }
 
-/** Whether a source is a nonce (`'nonce-…'`). */
+/** A nonce source's value, by CSP's whole grammar; `undefined` for any other. */
+function nonceValue(source: string): string | undefined {
+  return /^'nonce-([A-Za-z0-9+/_-]+={0,2})'$/i.exec(source)?.[1];
+}
+
+/** Whether a source is a nonce (`'nonce-…'`) a browser honours. */
 function isNonce(source: string): boolean {
-  return /^'nonce-/i.test(source);
+  return nonceValue(source) !== undefined;
+}
+
+/** Whether a list names the nonce an element carries. */
+function namesNonce(
+  sources: readonly string[],
+  nonce: string | undefined
+): boolean {
+  return (
+    nonce !== undefined && sources.some(source => nonceValue(source) === nonce)
+  );
 }
 
 /** Whether a list holds a keyword, in any case. */
@@ -154,19 +172,22 @@ function hashKey(source: string): string | undefined {
 /** Whether a list names `hash` (`sha256-…`), compared as CSP compares it. */
 function namesHash(sources: readonly string[], hash: string): boolean {
   const key = hashKey(hash);
-  return key !== undefined && sources.some(source => hashKey(source) === key);
+  return (
+    key !== undefined &&
+    sources.some(source => isHash(source) && hashKey(source) === key)
+  );
 }
 
 /**
  * Whether a list lets inline code with `hash` run. A nonce or hash in the list
  * cancels `'unsafe-inline'`; a nonce lets an element run only where the site
- * passes its nonce to the code. A style attribute takes no nonce, and is
+ * passes the code the very nonce the list names. A style attribute takes no nonce, and is
  * matched by hash only under `'unsafe-hashes'`.
  */
 function allowsInline(
   sources: readonly string[],
   hash: string,
-  siteNonce: boolean,
+  nonce: string | undefined,
   kind: SiteCodeInlineKind
 ): boolean {
   const mode = inlineMode(sources, kind === "script");
@@ -175,7 +196,7 @@ function allowsInline(
     return holds(sources, "'unsafe-hashes'") && namesHash(sources, hash);
   }
   if (namesHash(sources, hash)) return true;
-  return mode === "nonce" && siteNonce;
+  return namesNonce(sources, nonce);
 }
 
 /** A host source's parts, read as CSP Level 3 reads one. */
@@ -191,12 +212,13 @@ function defaultPort(protocol: string): string {
 }
 
 /**
- * Whether a host source's host matches a URL's host. An IP address matches
- * nothing but the loopback address, as CSP Level 3 matches hosts.
+ * Whether a host source's host matches a URL's host. As CSP Level 3 matches
+ * hosts, a URL whose host is an IP address, not a domain, matches no host
+ * source at all, a wildcard's included; only `'self'` can allow one.
  */
 function hostMatches(pattern: string, host: string): boolean {
+  if (IPV4.test(host) || host.startsWith("[")) return false;
   if (pattern === "*") return true;
-  if (IPV4.test(pattern)) return pattern === "127.0.0.1" && host === pattern;
   // `*.example.com` matches its subdomains, never example.com itself.
   if (pattern.startsWith("*.")) {
     return host.endsWith(pattern.slice(1).toLowerCase());
@@ -204,10 +226,31 @@ function hostMatches(pattern: string, host: string): boolean {
   return pattern.toLowerCase() === host;
 }
 
-/** Whether a host source's path matches a URL's path. */
+/** A path segment percent-decoded, or as written where it can't be. */
+function decodedSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * Whether a host source's path matches a URL's path, as CSP Level 3 matches
+ * them: segment by segment, each percent-decoded; a path ending `/` matches
+ * everything under it, any other names one file.
+ */
 function pathMatches(pattern: string | undefined, path: string): boolean {
-  if (pattern === undefined || pattern === "/") return true;
-  return pattern.endsWith("/") ? path.startsWith(pattern) : path === pattern;
+  if (pattern === undefined || pattern === "") return true;
+  const exact = !pattern.endsWith("/");
+  const wanted = pattern.split("/");
+  const found = path.split("/");
+  if (wanted.length > found.length) return false;
+  if (exact && wanted.length !== found.length) return false;
+  if (!exact) wanted.pop();
+  return wanted.every(
+    (segment, at) => decodedSegment(segment) === decodedSegment(found[at] ?? "")
+  );
 }
 
 /** Whether one host source allows a URL. */
@@ -302,8 +345,8 @@ export interface SiteCodeLoad {
 interface LoadContext {
   /** The site's own origin, which `'self'` and site paths stand for. */
   readonly siteOrigin: string;
-  /** Whether the site passes its nonce to site code. */
-  readonly siteNonce: boolean;
+  /** The nonce the site passes to site code, if it passes one. */
+  readonly nonce: string | undefined;
 }
 
 /**
@@ -318,7 +361,7 @@ function allowsLoad(
   url: URL,
   context: LoadContext
 ): boolean {
-  if (load.nonceable === true && context.siteNonce && sources.some(isNonce)) {
+  if (load.nonceable === true && namesNonce(sources, context.nonce)) {
     return true;
   }
   if (load.kind === "script") {
@@ -391,10 +434,12 @@ function linkLoad(attrs: SiteCodeAttrs): SiteCodeLoad | undefined {
   return relations.includes("stylesheet") ? { ...load, nonceable: true } : load;
 }
 
-/** What one entry loads and runs inline. */
+/** What one entry loads and runs inline, and the hosts it hints at. */
 interface Parts {
   readonly loads: SiteCodeLoad[];
   readonly inline: Inline[];
+  /** Hosts a `preconnect` link opens a connection to, as written. */
+  readonly hints?: readonly string[];
 }
 
 const NOTHING: Parts = { loads: [], inline: [] };
@@ -458,7 +503,14 @@ function partsOf(entry: SiteCodeEntry): Parts {
       };
     case "link": {
       const load = linkLoad(entry.attrs);
-      return load === undefined ? NOTHING : { loads: [load], inline: [] };
+      const hint = siteCodeLinkRelations(entry.attrs.rel).includes("preconnect")
+        ? entry.attrs.href
+        : undefined;
+      return {
+        loads: load === undefined ? [] : [load],
+        inline: [],
+        ...(hint === undefined ? {} : { hints: [hint] }),
+      };
     }
     case "noscript":
       return fallbackParts(entry.child);
@@ -503,7 +555,12 @@ export async function siteCodeFacts(
       hashes[code.kind].add(await cspHash(code.text));
     }
     for (const load of parts.loads) {
-      loads.set(`${load.kind} ${load.url} ${load.integrity ?? ""}`, load);
+      // Keyed by what can allow it too: the same URL from a nonced element
+      // and from a stylesheet's import are two loads, judged apart.
+      loads.set(
+        `${load.kind} ${load.url} ${load.integrity ?? ""} ${load.nonceable === true}`,
+        load
+      );
     }
   }
   return {
@@ -542,8 +599,11 @@ export interface CspCheckInput {
   readonly reportOnly?: boolean;
   /** The site's own origin, which `'self'` and site paths stand for. */
   readonly siteOrigin: string;
-  /** Whether the site passes its nonce to site code. */
-  readonly siteNonce?: boolean;
+  /**
+   * The nonce the site passes to site code: its value, or `true` for the
+   * nonce the policy names (a placeholder for the per-request one).
+   */
+  readonly siteNonce?: boolean | string;
 }
 
 /** One way an entry would be blocked: the directive, and why. */
@@ -566,14 +626,14 @@ const INLINE_BLOCKED: Readonly<Record<SiteCodeInlineKind, string>> = {
 async function inlineFindings(
   inline: readonly Inline[],
   policy: CspPolicy,
-  siteNonce: boolean
+  nonce: string | undefined
 ): Promise<Blocked[]> {
   const findings: Blocked[] = [];
   for (const code of inline) {
     const rule = governing(policy, code.kind);
     if (rule === undefined) continue;
     const hash = await cspHash(code.text);
-    if (allowsInline(rule.sources, hash, siteNonce, code.kind)) continue;
+    if (allowsInline(rule.sources, hash, nonce, code.kind)) continue;
     findings.push({
       directive: rule.directive,
       message: INLINE_BLOCKED[code.kind],
@@ -612,16 +672,48 @@ function loadFindings(
   return findings;
 }
 
+/**
+ * What a policy would block of the connections an entry hints at. CSP judges
+ * a resource hint by every fetch directive at once: it may connect where any
+ * of them allows, and a block is reported as `default-src`'s. A blocked hint
+ * breaks nothing, so the merge never widens a policy for one.
+ */
+function hintFindings(
+  hints: readonly string[],
+  policy: CspPolicy,
+  context: LoadContext
+): Blocked[] {
+  const fetchDirectives = [...policy]
+    .filter(([name]) => name.endsWith("-src"))
+    .map(([, sources]) => sources);
+  if (fetchDirectives.length === 0) return [];
+  const findings: Blocked[] = [];
+  for (const hint of hints) {
+    const url = urlOf(hint, context.siteOrigin);
+    if (url === undefined) continue;
+    const allowed = fetchDirectives.some(sources =>
+      sources.some(source => sourceMatches(source, url, context.siteOrigin))
+    );
+    if (allowed) continue;
+    findings.push({
+      directive: "default-src",
+      message: `${url.origin} is blocked for a connection hint, which only speeds the page up`,
+    });
+  }
+  return findings;
+}
+
 /** The findings for one entry against a parsed policy. */
 async function entryFindings(
   entry: SiteCodeEntry,
   policy: CspPolicy,
   context: LoadContext
 ): Promise<Blocked[]> {
-  const { loads, inline } = partsOf(entry);
+  const { loads, inline, hints = [] } = partsOf(entry);
   return [
-    ...(await inlineFindings(inline, policy, context.siteNonce)),
+    ...(await inlineFindings(inline, policy, context.nonce)),
     ...loadFindings(loads, policy, context),
+    ...hintFindings(hints, policy, context),
   ];
 }
 
@@ -643,14 +735,15 @@ export async function checkSiteCodeAgainstCsp(
   }
   const level: CspFinding["level"] =
     input.reportOnly === true ? "warning" : "error";
+  const policies = parsePolicies(input.policy);
   const context = {
     siteOrigin: input.siteOrigin,
-    siteNonce: input.siteNonce === true,
+    nonce: elementNonce(input.siteNonce, policies),
   };
   // Every policy the header carries is enforced, so each is checked; a block
   // two policies make alike is said once.
   const findings = new Map<string, CspFinding>();
-  for (const policy of parsePolicies(input.policy)) {
+  for (const policy of policies) {
     for (const slot of ["head", "body"] as const) {
       for (const [index, entry] of slots[slot].entries()) {
         for (const found of await entryFindings(entry, policy, context)) {
@@ -717,12 +810,12 @@ function inlineNeeds(
   policy: CspPolicy,
   kind: SiteCodeInlineKind,
   hashes: readonly string[],
-  siteNonce: boolean
+  nonce: string | undefined
 ): string[] {
   const rule = governing(policy, kind);
   if (rule === undefined) return [];
   const blocked = hashes.filter(
-    hash => !allowsInline(rule.sources, hash, siteNonce, kind)
+    hash => !allowsInline(rule.sources, hash, nonce, kind)
   );
   if (blocked.length === 0) return [];
   const named = blocked.map(hash => `'${hash}'`);
@@ -730,10 +823,19 @@ function inlineNeeds(
 }
 
 /**
+ * The source naming one URL exactly: its origin and path, with the two
+ * characters a policy reads as separators (`;` and `,`) escaped.
+ */
+function exactSource(url: URL): string {
+  return `${url.origin}${url.pathname.replace(/;/g, "%3B").replace(/,/g, "%2C")}`;
+}
+
+/**
  * The sources letting one blocked load happen: its integrity's hashes for a
  * script under `'strict-dynamic'` (no host is honoured there, and one without
- * integrity needs the site's nonce instead), else `'self'` for the site's own
- * origin or the load's origin. Nothing for a load already allowed.
+ * integrity needs the site's nonce instead), else the one URL it loads, never
+ * its whole host. Nothing for a load already allowed, and nothing for one from
+ * an IP address, which no source but `'self'` can allow.
  */
 function loadNeeds(
   policy: CspPolicy,
@@ -747,7 +849,8 @@ function loadNeeds(
   if (load.kind === "script" && holds(rule.sources, "'strict-dynamic'")) {
     return integrityHashes(load.integrity).map(hash => `'${hash}'`);
   }
-  return [url.origin === context.siteOrigin ? "'self'" : url.origin];
+  if (IPV4.test(url.hostname) || url.hostname.startsWith("[")) return [];
+  return [exactSource(url)];
 }
 
 /**
@@ -756,7 +859,8 @@ function loadNeeds(
  * path-scoped source, say) adds nothing. Hashes are added only where inline
  * code is blocked, which never happens under a list relying on
  * `'unsafe-inline'`, so it is never cancelled. A kind no directive restricts
- * is left alone. Pass `siteNonce` when the site hands its nonce to site code.
+ * is left alone. Pass `siteNonce` when the site hands its nonce to site code:
+ * its value, or `true` for the nonce the policy names.
  *
  * Additions for scripts and styles go to `script-src-elem` and
  * `style-src-elem`, made from what they fell back to, so workers and style
@@ -766,17 +870,41 @@ function loadNeeds(
 export function mergeSiteCodeIntoCsp(
   header: string,
   facts: SiteCodeFacts,
-  options: { readonly siteNonce?: boolean } = {}
+  options: { readonly siteNonce?: boolean | string } = {}
 ): string {
+  const policies = parsePolicies(header);
   const context = {
     siteOrigin: facts.siteOrigin,
-    siteNonce: options.siteNonce === true,
+    nonce: elementNonce(options.siteNonce, policies),
   };
   // Each policy the header carries is enforced on its own, so each is given
   // what it blocks.
-  return parsePolicies(header)
+  return policies
     .map(parsed => serialiseCsp(mergedPolicy(parsed, facts, context)))
     .join(", ");
+}
+
+/**
+ * The nonce site code carries: the value given, or for `true` the first
+ * nonce any policy names, the placeholder for the per-request one. An element
+ * has one nonce, so a header whose policies name different ones can't allow
+ * it by nonce under all of them.
+ */
+function elementNonce(
+  siteNonce: boolean | string | undefined,
+  policies: readonly CspPolicy[]
+): string | undefined {
+  if (typeof siteNonce === "string") return siteNonce;
+  if (siteNonce !== true) return undefined;
+  for (const policy of policies) {
+    for (const sources of policy.values()) {
+      for (const source of sources) {
+        const value = nonceValue(source);
+        if (value !== undefined) return value;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** One policy with what site code needs that it blocks added. */
@@ -787,12 +915,7 @@ function mergedPolicy(
 ): CspPolicy {
   const policy = new Map(parsed);
   for (const kind of ["script", "style", "style-attr"] as const) {
-    const needs = inlineNeeds(
-      policy,
-      kind,
-      facts.hashes[kind],
-      context.siteNonce
-    );
+    const needs = inlineNeeds(policy, kind, facts.hashes[kind], context.nonce);
     addTo(policy, kind, needs);
   }
   for (const load of facts.loads) {

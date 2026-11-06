@@ -199,18 +199,35 @@ describe("what site code loads", () => {
   });
 
   it("matches a path as a directory or an exact file", async () => {
+    // Which entry is blocked, not only that one is: the second each time.
+    const blockedIndexes = async (policy: string, urls: string[]) => {
+      const check = await checkSiteCodeAgainstCsp(
+        { policy, siteOrigin: ORIGIN },
+        { head: urls.map(url => loaded(url)), body: [] }
+      );
+      if (!check.checked) throw new Error(check.reason);
+      return check.findings.map(finding => finding.index);
+    };
     expect(
-      await blockedBy("script-src https://cdn.example/lib/", [
-        loaded("https://cdn.example/lib/a.js"),
-        loaded("https://cdn.example/other.js"),
+      await blockedIndexes("script-src https://cdn.example/lib/", [
+        "https://cdn.example/lib/a.js",
+        "https://cdn.example/other.js",
       ])
-    ).toEqual(["script-src"]);
+    ).toEqual([1]);
     expect(
-      await blockedBy("script-src https://cdn.example/a.js", [
-        loaded("https://cdn.example/a.js"),
-        loaded("https://cdn.example/a.js.map"),
+      await blockedIndexes("script-src https://cdn.example/a.js", [
+        "https://cdn.example/a.js",
+        "https://cdn.example/a.js.map",
       ])
-    ).toEqual(["script-src"]);
+    ).toEqual([1]);
+  });
+
+  it("compares path segments percent-decoded", async () => {
+    expect(
+      await blockedBy("script-src https://cdn.example/a%2Eb.js", [
+        loaded("https://cdn.example/a.b.js"),
+      ])
+    ).toEqual([]);
   });
 
   it("matches a port only where the source names it", async () => {
@@ -370,17 +387,64 @@ describe("what site code loads", () => {
     ).toEqual(["script-src"]);
   });
 
-  it("matches no IP address but the loopback one", async () => {
+  it("matches no URL whose host is an IP address, by any host source", async () => {
+    // A host source needs a domain; the bare `*` keyword is no host source.
+    for (const policy of [
+      "script-src https://203.0.113.5",
+      "script-src https://127.0.0.1",
+      "script-src https://*",
+    ]) {
+      const ip = policy.includes("127.0.0.1") ? "127.0.0.1" : "203.0.113.5";
+      expect(await blockedBy(policy, [loaded(`https://${ip}/a.js`)])).toEqual([
+        "script-src",
+      ]);
+    }
+  });
+
+  it("takes no malformed nonce or hash for one, so 'unsafe-inline' stands", async () => {
     expect(
-      await blockedBy("script-src https://203.0.113.5", [
-        loaded("https://203.0.113.5/a.js"),
-      ])
+      await blockedBy(
+        "script-src 'unsafe-inline' 'nonce-'",
+        [inline("a()")],
+        [],
+        { siteNonce: true }
+      )
+    ).toEqual([]);
+    expect(
+      await blockedBy("script-src 'unsafe-inline' 'sha256-'", [inline("a()")])
+    ).toEqual([]);
+  });
+
+  it("allows by nonce only where each policy names the element's one nonce", async () => {
+    const twoPolicies = "script-src 'nonce-a', script-src 'nonce-b'";
+    expect(
+      await blockedBy(twoPolicies, [inline("x()")], [], { siteNonce: "a" })
     ).toEqual(["script-src"]);
     expect(
-      await blockedBy("script-src https://127.0.0.1", [
-        loaded("https://127.0.0.1/a.js"),
+      await blockedBy(twoPolicies, [inline("x()")], [], { siteNonce: true })
+    ).toEqual(["script-src"]);
+    expect(
+      await blockedBy("script-src 'nonce-a'", [inline("x()")], [], {
+        siteNonce: "b",
+      })
+    ).toEqual(["script-src"]);
+  });
+
+  it("judges a connection hint by every fetch directive at once", async () => {
+    const hint: SiteCodeEntry = {
+      tag: "link",
+      attrs: { rel: "preconnect", href: "https://api.example" },
+    };
+    expect(await blockedBy("default-src 'none'", [hint])).toEqual([
+      "default-src",
+    ]);
+    expect(
+      await blockedBy("default-src 'none'; connect-src https://api.example", [
+        hint,
       ])
     ).toEqual([]);
+    // A policy with no fetch directive restricts no connection.
+    expect(await blockedBy("frame-ancestors 'none'", [hint])).toEqual([]);
   });
 
   it("judges what a pixel's style attribute fetches", async () => {
@@ -487,7 +551,7 @@ describe("adding what site code needs to a policy", () => {
   it("adds the hash and origin to script-src-elem, never to script-src, which workers fall back to", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("script-src 'self' 'sha256-AAAA'", facts)).toBe(
-      `script-src 'self' 'sha256-AAAA'; script-src-elem 'self' 'sha256-AAAA' ${hash} ${GTM}`
+      `script-src 'self' 'sha256-AAAA'; script-src-elem 'self' 'sha256-AAAA' ${hash} ${GTM}/gtag/js`
     );
   });
 
@@ -496,7 +560,7 @@ describe("adding what site code needs to a policy", () => {
     expect(
       mergeSiteCodeIntoCsp("script-src 'self' 'unsafe-inline'", facts)
     ).toBe(
-      `script-src 'self' 'unsafe-inline'; script-src-elem 'self' 'unsafe-inline' ${GTM}`
+      `script-src 'self' 'unsafe-inline'; script-src-elem 'self' 'unsafe-inline' ${GTM}/gtag/js`
     );
   });
 
@@ -522,10 +586,12 @@ describe("adding what site code needs to a policy", () => {
     expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
   });
 
-  it("adds 'self' for a load from the site itself", async () => {
+  it("adds the one URL a blocked load needs, never its whole host", async () => {
     const facts = await siteCodeFacts([loaded("/analytics.js")], ORIGIN);
     const merged = mergeSiteCodeIntoCsp("default-src 'none'", facts);
-    expect(merged).toBe("default-src 'none'; script-src-elem 'self'");
+    expect(merged).toBe(
+      `default-src 'none'; script-src-elem ${ORIGIN}/analytics.js`
+    );
     expect(await blockedBy(merged, [loaded("/analytics.js")])).toEqual([]);
   });
 
@@ -566,10 +632,10 @@ describe("adding what site code needs to a policy", () => {
   it("adds to a directive of the kind's own, never widening default-src", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("default-src 'self'; img-src *", facts)).toBe(
-      `default-src 'self'; img-src *; script-src-elem 'self' ${hash} ${GTM}`
+      `default-src 'self'; img-src *; script-src-elem 'self' ${hash} ${GTM}/gtag/js`
     );
     expect(mergeSiteCodeIntoCsp("default-src 'none'", facts)).toBe(
-      `default-src 'none'; script-src-elem ${hash} ${GTM}`
+      `default-src 'none'; script-src-elem ${hash} ${GTM}/gtag/js`
     );
   });
 
@@ -584,7 +650,7 @@ describe("adding what site code needs to a policy", () => {
         facts
       )
     ).toBe(
-      "script-src https://cdn.example, script-src 'none'; script-src-elem https://cdn.example"
+      "script-src https://cdn.example, script-src 'none'; script-src-elem https://cdn.example/a.js"
     );
   });
 
@@ -596,13 +662,47 @@ describe("adding what site code needs to a policy", () => {
     expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
   });
 
+  it("keeps a stylesheet imported and linked as two loads, the import unnonced", async () => {
+    const facts = await siteCodeFacts(
+      [
+        style('@import "https://fonts.example/a.css";'),
+        {
+          tag: "link",
+          attrs: { rel: "stylesheet", href: "https://fonts.example/a.css" },
+        },
+      ],
+      ORIGIN
+    );
+    // The link runs by the nonce; the import needs its URL all the same.
+    expect(
+      mergeSiteCodeIntoCsp("style-src 'nonce-x'", facts, { siteNonce: true })
+    ).toBe(
+      "style-src 'nonce-x'; style-src-elem 'nonce-x' https://fonts.example/a.css"
+    );
+  });
+
+  it("never widens a policy for a connection hint", async () => {
+    const facts = await siteCodeFacts(
+      [
+        {
+          tag: "link",
+          attrs: { rel: "preconnect", href: "https://api.example" },
+        },
+      ],
+      ORIGIN
+    );
+    expect(mergeSiteCodeIntoCsp("default-src 'none'", facts)).toBe(
+      "default-src 'none'"
+    );
+  });
+
   it("adds a frame's origin to frame-src, not the child-src it fell back to", async () => {
     const facts = await siteCodeFacts(
       [pixel("iframe", "https://www.googletagmanager.com/ns.html")],
       ORIGIN
     );
     expect(mergeSiteCodeIntoCsp("child-src 'self'", facts)).toBe(
-      `child-src 'self'; frame-src 'self' ${GTM}`
+      `child-src 'self'; frame-src 'self' ${GTM}/ns.html`
     );
   });
 
