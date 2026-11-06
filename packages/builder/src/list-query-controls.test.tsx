@@ -263,7 +263,9 @@ describe("a list's source", () => {
       { entryCollection: null }
     );
     expect(
-      await screen.findByText(/this page is not an entry of a collection/)
+      await screen.findByText(
+        /This page isn't an entry in a collection, so it has no related entries to show\./
+      )
     ).toBeDefined();
   });
 

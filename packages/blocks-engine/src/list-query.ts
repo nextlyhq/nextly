@@ -1018,7 +1018,7 @@ function relationSource(
     if (judgement.entryCollection === null) {
       return {
         problem:
-          "This list shows related entries of this page's entry, but this page is not an entry of a collection, so it has none. Choose a collection.",
+          "This page isn't an entry in a collection, so it has no related entries to show. Choose a collection.",
         code: "list-relation-no-entry",
       };
     }

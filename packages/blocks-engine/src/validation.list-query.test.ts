@@ -612,7 +612,7 @@ describe("a collection list's query at save", () => {
       expect(issues.map(issue => [issue.code, issue.message])).toEqual([
         [
           "list-relation-no-entry",
-          "This list shows related entries of this page's entry, but this page is not an entry of a collection, so it has none. Choose a collection.",
+          "This page isn't an entry in a collection, so it has no related entries to show. Choose a collection.",
         ],
       ]);
       // Not knowing the page is still judged by shape alone.
