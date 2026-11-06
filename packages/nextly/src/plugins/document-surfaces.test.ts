@@ -197,6 +197,39 @@ describe("publishedDocumentSurfaces", () => {
     ]);
   });
 
+  it("publishes only the component and label a replacement declares", () => {
+    // Anything else on the declaration stays behind: here a value that cannot
+    // be written as JSON, and a `toJSON` that would rewrite the override.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const published = publishedDocumentSurfaces(
+      plugin("layouts", {
+        layouts: {
+          documentActions: {
+            delete: {
+              component: "layouts#Remove",
+              label: "Remove layout…",
+              extra: circular,
+              toJSON: () => ({ component: "elsewhere#Other" }),
+            },
+            unpublish: "hidden",
+          },
+        },
+      })
+    );
+    expect(published.documentActions).toEqual([
+      {
+        slug: "layouts",
+        action: "delete",
+        override: { component: "layouts#Remove", label: "Remove layout…" },
+      },
+      { slug: "layouts", action: "unpublish", override: "hidden" },
+    ]);
+    expect(JSON.parse(JSON.stringify(published.documentActions))).toEqual(
+      published.documentActions
+    );
+  });
+
   it("gives nothing for a disabled plugin", () => {
     expect(
       publishedDocumentSurfaces(

@@ -227,6 +227,22 @@ export function assertDocumentSurfaces(plugins: PluginDefinition[]): void {
 }
 
 /**
+ * An override as the admin is given it: `"hidden"`, or a new object holding
+ * only the component and label the boot check judged. The declaration itself
+ * is not passed on, so nothing else on it (a value that does not survive
+ * JSON, a `toJSON` that rewrites it) reaches the metadata every signed-in
+ * request serializes.
+ */
+function publishedOverride(override: unknown): PluginDocumentActionOverride {
+  if (override === "hidden") return "hidden";
+  const { component, label } = override as {
+    component: ComponentPath;
+    label?: string;
+  };
+  return label === undefined ? { component } : { component, label };
+}
+
+/**
  * The document surfaces one ENABLED plugin gives the admin, on the slugs they
  * apply to. Read after `assertDocumentSurfaces` has passed, so every entry
  * names an action this version knows and something to draw.
@@ -244,7 +260,7 @@ export function publishedDocumentSurfaces(plugin: PluginDefinition): {
           {
             slug: declared.slug,
             action: declared.action,
-            override: declared.override as PluginDocumentActionOverride,
+            override: publishedOverride(declared.override),
           },
         ]
       : []
