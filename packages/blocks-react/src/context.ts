@@ -3,6 +3,7 @@ import type {
   BindingIssue,
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
+  ConditionIssue,
   RemotePatternInput,
   SpacingMode,
 } from "@nextlyhq/blocks-engine";
@@ -477,6 +478,18 @@ export interface PageContext {
    */
   listNoteActions?: boolean;
   /**
+   * The page of the page's paginated list this render draws, and where each
+   * of its pages is served. Given by a route that serves a list's pages at
+   * their own addresses; absent, every list shows its first page and draws
+   * no links between pages.
+   *
+   * Read by the one list it names, so a second list split into pages, which
+   * validation refuses, never pages the same address twice.
+   *
+   * @experimental Settles with list pagination.
+   */
+  listPage?: ListPageContext;
+  /**
    * How the sections of the accordion being rendered draw their titles: as
    * text, or as the heading level the accordion names.
    *
@@ -619,7 +632,25 @@ export interface PageBindings {
  *
  * @experimental
  */
-export type BindingIssuesHandler = (issues: readonly BindingIssue[]) => void;
+export type BindingIssuesHandler = (issues: readonly PageIssue[]) => void;
+
+/**
+ * Something a render could not use as stored: a binding, or a block's
+ * visibility conditions (`kind: "condition"`), which travel one channel so a
+ * route logs, and an editor shows, both alike.
+ *
+ * @experimental
+ */
+export type PageIssue = BindingIssue | ConditionIssue;
+
+/**
+ * Whether a page issue is a binding's, for a handler that reads only those.
+ *
+ * @experimental
+ */
+export function isBindingIssue(issue: PageIssue): issue is BindingIssue {
+  return !("kind" in issue && issue.kind === "condition");
+}
 
 /**
  * Reads one page render may perform when the route was given no number.
@@ -662,6 +693,34 @@ export function createQueryBudget(
       return true;
     },
   };
+}
+
+/**
+ * Which page of its list a render draws, and the address of each.
+ *
+ * @experimental Settles with list pagination.
+ */
+export interface ListPageContext {
+  /** The list whose pages these are: the node's id. */
+  readonly nodeId: string;
+  /** The page drawn, from 1. */
+  readonly page: number;
+  /**
+   * The address of page `page` of the list, for its links: the page's own
+   * address for page 1.
+   */
+  readonly href: (page: number) => string;
+  /**
+   * True where the page already claimed the list's first read from its
+   * allowance (`queries`), in the order the route counted its pages in, so
+   * the list reads without claiming again.
+   */
+  readonly claimed?: boolean;
+  /**
+   * How many pages the list has, where the route counted them to serve this
+   * page; absent, the list counts its pages from its own read.
+   */
+  readonly pages?: number;
 }
 
 /** A context with nothing wired up: the standalone default. */

@@ -22,9 +22,11 @@
  * @module visibility
  */
 import type { BlockNode } from "./document";
+import { isPlainRecord } from "./plain-record";
 
 /**
- * True when a node's entry-field conditions gate it.
+ * True when a node's entry-field conditions gate it: its own, or those of a
+ * component placement it was expanded from (`within`).
  *
  * `devices` is NOT this question and must never be folded into it: per-breakpoint hiding is
  * presentation decided by CSS on a node that is always served, while a condition decides whether
@@ -42,18 +44,84 @@ export function isConditionGated(node: {
   const envelope: unknown = node.visibility;
   // No envelope is no gate. This is the ordinary node, and it must stay the cheapest path.
   if (envelope === undefined || envelope === null) return false;
-  // The envelope has to be readable before the field inside it means anything. `visibility:
-  // "hidden"` and `visibility: ["tier"]` both answer `undefined` to a property read, and reading
-  // that as "no gate" is the leak: an author wrote a restriction this cannot parse.
-  if (typeof envelope !== "object" || Array.isArray(envelope)) return true;
+  return conditionGatesOf(envelope).length > 0;
+}
 
-  const groups: unknown = (envelope as { conditions?: unknown }).conditions;
+/**
+ * Whether one set of stored groups restricts anyone: the rule above, for the
+ * `conditions` of an envelope.
+ */
+function groupsGate(groups: unknown): boolean {
   if (groups === undefined || groups === null) return false;
   // A malformed value — a flat list of predicates from an older writer, an object, a string — is
   // still an author saying this node is restricted.
   if (!Array.isArray(groups)) return true;
   if (groups.length === 0) return false;
   return !groups.some(group => Array.isArray(group) && group.length === 0);
+}
+
+/**
+ * What stands for a `within` that is not a list: evaluated, it reads as
+ * conditions nothing can read, so the block it gates fails closed.
+ */
+const UNREADABLE_GATE = "unreadable";
+
+/**
+ * A stored visibility with any placement gates removed. `within` exists only
+ * while a page is drawn, written by the resolver as it expands a conditioned
+ * placement; a stored document holding one is read as if it did not, so
+ * persisted data can never add a gate of its own. The same object when there
+ * is nothing to remove.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function storedVisibilityOf(visibility: unknown): unknown {
+  if (!isPlainRecord(visibility) || !Object.hasOwn(visibility, "within")) {
+    return visibility;
+  }
+  const { within: _placementGates, ...stored } = visibility;
+  return stored;
+}
+
+/**
+ * The gates the component placements a block was expanded from put on it,
+ * each an envelope as that placement stored it. Only the resolver writes
+ * `within`, on the document it draws, never on one stored (see
+ * {@link storedVisibilityOf}); a value of it that is not a list is one gate
+ * nothing can read.
+ */
+export function placementGatesOf(
+  envelope: Readonly<Record<string, unknown>>
+): readonly unknown[] {
+  const within = envelope.within;
+  if (within === undefined || within === null) return [];
+  if (!Array.isArray(within)) return [UNREADABLE_GATE];
+  // Each gate is read as an envelope of its own, never through ITS `within`,
+  // so a stored value can't make this walk deeper than one level.
+  return within.filter(
+    (gate: unknown) => !isPlainRecord(gate) || groupsGate(gate.conditions)
+  );
+}
+
+/**
+ * Every gate on a node, each an envelope its conditions are read from: the
+ * node's own conditions, when they restrict anyone, then those of the
+ * placements it was expanded from. ALL must hold for the node to be served.
+ *
+ * An envelope that is not a record is its own one gate, which nothing can
+ * read: an author wrote a restriction, so it must still restrict.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function conditionGatesOf(envelope: unknown): readonly unknown[] {
+  if (envelope === undefined || envelope === null) return [];
+  // `visibility: "hidden"` and `visibility: ["tier"]` both answer `undefined` to a property read,
+  // and reading that as "no gate" is the leak: an author wrote a restriction this cannot parse.
+  if (!isPlainRecord(envelope)) return [envelope];
+  const own = groupsGate(envelope.conditions)
+    ? [{ conditions: envelope.conditions }]
+    : [];
+  return [...own, ...placementGatesOf(envelope)];
 }
 
 /**

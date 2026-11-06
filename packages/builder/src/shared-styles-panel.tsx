@@ -44,6 +44,7 @@ import * as React from "react";
 
 import {
   blockLookGroups,
+  lookKeyOf,
   type BlockLookGroup,
   type LookKey,
 } from "./block-look-rows";
@@ -302,12 +303,14 @@ function useLookGroups(
   );
   // Each look's search text, as each shared style's is: its name and every
   // property and value it declares, so a search the box promises finds both.
+  // Keyed by look, its type with its id, since two types' own looks may
+  // share an id and each is found by its own text.
   const texts = React.useMemo(
     () =>
       new Map(
         groups.flatMap(group =>
           group.rows.map(row => [
-            row.id,
+            lookKeyOf(row),
             sharedStyleSearchText(row, styleContext),
           ])
         )
@@ -316,16 +319,14 @@ function useLookGroups(
   );
   if (query.trim() === "") return groups;
   return groups
-    .map(group => {
-      const found = new Set(
-        searchSharedStyles(
-          group.rows,
-          query,
-          row => texts.get(row.id) ?? ""
-        ).map(row => row.id)
-      );
-      return { ...group, rows: group.rows.filter(row => found.has(row.id)) };
-    })
+    .map(group => ({
+      ...group,
+      rows: searchSharedStyles(
+        group.rows,
+        query,
+        row => texts.get(lookKeyOf(row)) ?? ""
+      ),
+    }))
     .filter(group => group.rows.length > 0);
 }
 
@@ -342,6 +343,7 @@ function PanelLooks({
   editing,
   styleContext,
   reaches,
+  blocksOf,
 }: {
   library: readonly NamedClass[];
   suppliedClassIds: readonly string[] | undefined;
@@ -351,6 +353,8 @@ function PanelLooks({
   editing: PanelLookEditing | undefined;
   /** Each worn look's reach, from the tab's one usage read. */
   reaches: ReadonlyMap<string, SharedStyleReach>;
+  /** The open page's blocks carrying a class, as the shared styles read them. */
+  blocksOf: (id: string) => BlocksOnThisPage;
 }): React.JSX.Element | null {
   const groups = useLookGroups(library, suppliedClassIds, query, styleContext);
   return (
@@ -362,6 +366,7 @@ function PanelLooks({
       editing={editing?.editing}
       onEdit={editing?.onEdit}
       reachOf={row => reaches.get(row.id)}
+      blocksOf={row => blocksOf(row.id)}
       chip={reach => <ReachChip reach={reach} />}
     />
   );
@@ -481,6 +486,7 @@ export function SharedStylesPanel({
           editing={looks}
           styleContext={styleContext}
           reaches={usage.styles}
+          blocksOf={blocksOf}
         />
         <section
           className="nx-vars__group"

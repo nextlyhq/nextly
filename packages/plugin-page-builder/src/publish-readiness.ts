@@ -50,6 +50,7 @@ import {
   respondMutation,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
+import { readableTitleText } from "nextly/config";
 import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
@@ -393,10 +394,13 @@ export async function titlesAsCaller(
   return titles;
 }
 
-/** A stored title as the dialog names it. */
+/**
+ * A stored title as the dialog names it: core's reading of a title value
+ * (`readableTitleText`, a nominated number included), as the admin and the
+ * entries route name an entry, or "Untitled".
+ */
 function titleOf(value: unknown): string {
-  const title = typeof value === "string" ? value.trim() : "";
-  return title === "" ? "Untitled" : title;
+  return readableTitleText(value) ?? "Untitled";
 }
 
 /**

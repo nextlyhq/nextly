@@ -2226,6 +2226,14 @@ export class SingleMutationService extends BaseService {
       if (accessDenied) {
         return accessDenied;
       }
+      // A conditional write naming a key no update stores is refused here: its
+      // access has been judged, so a caller who may not update is refused
+      // alike whatever it names, and no hook has run.
+      storedFieldRead.refuseUnstoredKeys(
+        options.context,
+        { kind: "single", slug },
+        { tableName: singleMeta.tableName, fields: singleMeta.fields }
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The

@@ -14,7 +14,7 @@
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { Button } from "@nextlyhq/ui";
 import { Check, Loader2, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, type JSX } from "react";
+import { useEffect, useRef, type JSX, type Ref } from "react";
 
 import {
   checkingWords,
@@ -44,12 +44,12 @@ function Note({ note }: { note: RemovalNote }): JSX.Element {
  * sight. Held at the tab's very edge, over its bottom padding, so nothing
  * shows beneath them.
  */
-function Actions({
+export function Actions({
   children,
   held = false,
   note,
 }: {
-  children: JSX.Element[];
+  children: JSX.Element | JSX.Element[];
   held?: boolean;
   note?: string;
 }): JSX.Element {
@@ -252,77 +252,148 @@ function StepBody({
     );
   }
   if (step.kind === "removing") {
-    const words = removingWords(step.labels);
     return (
-      <div className="space-y-3" data-breakpoint-removal="removing">
-        <section
-          aria-labelledby="breakpoint-removal-title"
-          className="space-y-2 rounded-md border border-border p-4"
-        >
-          <h4 id="breakpoint-removal-title" className="text-base font-semibold">
-            {words.title}
-          </h4>
-          <p className="text-sm text-muted-foreground">{words.body}</p>
-          {/* Indeterminate: the route reports finished or not, not a total. */}
-          <div
-            role="progressbar"
-            aria-label={words.title}
-            className="relative h-1.5 overflow-hidden rounded-full bg-muted"
-          >
-            <div className="absolute inset-y-0 left-1/4 w-1/3 rounded-full bg-foreground motion-safe:animate-pulse" />
-          </div>
-          <p className="text-sm text-muted-foreground">{words.hint}</p>
-        </section>
-        <Actions>
-          <Button type="button" variant="outline" onClick={onClose}>
-            Close
-          </Button>
-          <Button type="button" disabled>
-            Removing…
-          </Button>
-        </Actions>
-      </div>
+      <WorkingStep
+        attrs={{ "data-breakpoint-removal": "removing" }}
+        titleId="breakpoint-removal-title"
+        words={removingWords(step.labels)}
+        busy="Removing…"
+        onClose={onClose}
+      />
     );
   }
   if (step.kind === "refused") {
     return (
-      <div className="space-y-3" data-breakpoint-removal="refused">
-        <section
-          role="alert"
-          aria-labelledby="breakpoint-removal-title"
-          className="space-y-2 rounded-md border border-border p-4"
-        >
-          <h4
-            id="breakpoint-removal-title"
-            className="text-base font-semibold text-destructive"
-          >
-            Nothing was removed
-          </h4>
-          <p className="text-sm text-muted-foreground">{step.message}</p>
-        </section>
-        <Actions>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={removal.cancelRefused}
-          >
-            Cancel
-          </Button>
-          <Button type="button" onClick={removal.reload}>
-            Reload breakpoints
-          </Button>
-        </Actions>
-      </div>
+      <RefusedStep
+        attrs={{ "data-breakpoint-removal": "refused" }}
+        titleId="breakpoint-removal-title"
+        title="Nothing was removed"
+        message={step.message}
+      >
+        <Button type="button" variant="outline" onClick={removal.cancelRefused}>
+          Cancel
+        </Button>
+        <Button type="button" onClick={removal.reload}>
+          Reload breakpoints
+        </Button>
+      </RefusedStep>
     );
   }
   return null;
 }
 
-/** A status row above the breakpoint list: resumed, done or left. */
+/** The data attribute a step is found by: its flow, and its state. */
+type StepAttrs = Readonly<Record<`data-${string}`, string>>;
+
+/**
+ * A step that works while the person waits: its title, what it is doing, an
+ * indeterminate bar (the route reports finished or not, not a total), and
+ * Close beside a busy button. `titleRef` takes focus as it appears.
+ */
+export function WorkingStep({
+  attrs,
+  titleId,
+  titleRef,
+  words,
+  busy,
+  onClose,
+}: {
+  attrs: StepAttrs;
+  titleId: string;
+  titleRef?: Ref<HTMLHeadingElement>;
+  words: {
+    readonly title: string;
+    readonly body: string;
+    readonly hint: string;
+  };
+  busy: string;
+  onClose: () => void;
+}): JSX.Element {
+  return (
+    <div className="space-y-3" {...attrs}>
+      <section
+        aria-labelledby={titleId}
+        className="space-y-2 rounded-md border border-border p-4"
+      >
+        <h4
+          ref={titleRef}
+          tabIndex={titleRef === undefined ? undefined : -1}
+          id={titleId}
+          className="text-base font-semibold outline-none"
+        >
+          {words.title}
+        </h4>
+        <p className="text-sm text-muted-foreground">{words.body}</p>
+        <div
+          role="progressbar"
+          aria-label={words.title}
+          className="relative h-1.5 overflow-hidden rounded-full bg-muted"
+        >
+          <div className="absolute inset-y-0 left-1/4 w-1/3 rounded-full bg-foreground motion-safe:animate-pulse" />
+        </div>
+        <p className="text-sm text-muted-foreground">{words.hint}</p>
+      </section>
+      <Actions>
+        <Button type="button" variant="outline" onClick={onClose}>
+          Close
+        </Button>
+        <Button type="button" disabled>
+          {busy}
+        </Button>
+      </Actions>
+    </div>
+  );
+}
+
+/** A refused step: its title in the destructive colour, why, and its buttons. */
+export function RefusedStep({
+  attrs,
+  titleId,
+  titleRef,
+  title,
+  message,
+  children,
+}: {
+  attrs: StepAttrs;
+  titleId: string;
+  titleRef?: Ref<HTMLHeadingElement>;
+  title: string;
+  message: string;
+  children: JSX.Element | JSX.Element[];
+}): JSX.Element {
+  return (
+    <div className="space-y-3" {...attrs}>
+      <section
+        role="alert"
+        aria-labelledby={titleId}
+        className="space-y-2 rounded-md border border-border p-4"
+      >
+        <h4
+          ref={titleRef}
+          tabIndex={titleRef === undefined ? undefined : -1}
+          id={titleId}
+          className="text-base font-semibold text-destructive outline-none"
+        >
+          {title}
+        </h4>
+        <p className="text-sm text-muted-foreground">{message}</p>
+      </section>
+      <Actions>{children}</Actions>
+    </div>
+  );
+}
+
+/**
+ * A status row above the breakpoint list: resumed, done or left. A finished
+ * removal that can still be undone says until when, with Undo beside it.
+ */
 export function RemovalStatusRow({
   removal,
+  offer,
 }: {
   removal: BreakpointRemoval;
+  /** The undo this row's removal can still have, when it can. */
+  offer?: { readonly hint: string; readonly undo: () => void };
 }): JSX.Element | null {
   const { step } = removal;
   const row =
@@ -356,10 +427,19 @@ export function RemovalStatusRow({
           aria-hidden="true"
         />
       )}
-      <div className="space-y-0.5">
+      <div className="flex-1 space-y-0.5">
         <p className="font-medium">{row.words.title}</p>
-        <p className="text-muted-foreground">{row.words.hint}</p>
+        <p className="text-muted-foreground">
+          {offer === undefined
+            ? row.words.hint
+            : `${row.words.hint} ${offer.hint}`}
+        </p>
       </div>
+      {offer === undefined ? null : (
+        <Button type="button" variant="outline" size="sm" onClick={offer.undo}>
+          Undo
+        </Button>
+      )}
     </div>
   );
 }

@@ -4338,3 +4338,94 @@ describe("resolveComponentInstances and the loops it closes", () => {
     expect(result.loopsClosed).toEqual([]);
   });
 });
+
+/** The placement gates the resolver put on a node, a render-time key. */
+const gatesOn = (node: ResolvedBlockNode | undefined): unknown =>
+  (node?.visibility as { within?: unknown } | undefined)?.within;
+
+describe("an instance carrying visibility conditions", () => {
+  const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+  const featured = [[{ field: "featured", op: "is_true" }]];
+  const card = component([
+    node("plain"),
+    node("own", { visibility: { conditions: featured } }),
+  ]);
+  const conditioned = (extra: Partial<BlockNode> = {}) =>
+    page([
+      instance("i1", "card", {}, { visibility: { conditions: vip }, ...extra }),
+    ]);
+
+  it("stands by default, for the pass that prunes hidden nodes", () => {
+    const result = resolveComponentInstances(conditioned(), defs({ card }));
+    expect(result.document.nodes.map(each => each.type)).toEqual([
+      COMPONENT_INSTANCE_TYPE,
+    ]);
+  });
+
+  it("is expanded when asked to carry, each root keeping its own conditions and gated by the instance's", () => {
+    const result = resolveComponentInstances(conditioned(), defs({ card }), {
+      conditioned: "carry",
+    });
+    const roots = result.document.nodes;
+    expect(roots.map(each => each.type)).toEqual(["core/text", "core/text"]);
+    // The instance's conditions are a gate of their own, judged apart from
+    // the root's, so neither is multiplied into the other.
+    expect(roots[0]?.visibility).toEqual({ within: [{ conditions: vip }] });
+    expect(roots[1]?.visibility).toEqual({
+      conditions: featured,
+      within: [{ conditions: vip }],
+    });
+    // Every root stays gated, so a reader deciding nothing still holds it back.
+    for (const root of roots) expect(isConditionGated(root)).toBe(true);
+  });
+
+  it("keeps the devices the instance hides on beside the conditions it carries", () => {
+    const result = resolveComponentInstances(
+      conditioned({
+        visibility: { conditions: vip, devices: { mobile: false } },
+      } as Partial<BlockNode>),
+      defs({ card }),
+      { conditioned: "carry" }
+    );
+    expect(result.document.nodes[0]?.visibility).toEqual({
+      devices: { mobile: false },
+      within: [{ conditions: vip }],
+    });
+  });
+
+  it("passes a visibility nothing can read on to every root, so each fails closed", () => {
+    const unreadable = page([
+      stored(instance("i1", "card") as ResolvedBlockNode, {
+        visibility: "hidden",
+      }) as BlockNode,
+    ]);
+    const result = resolveComponentInstances(unreadable, defs({ card }), {
+      conditioned: "carry",
+    });
+    const roots = result.document.nodes;
+    // CONTROL: the instance was expanded rather than left standing.
+    expect(roots.map(each => each.type)).toEqual(["core/text", "core/text"]);
+    for (const root of roots) {
+      expect(isConditionGated(root)).toBe(true);
+      expect(gatesOn(root)).toContain("hidden");
+    }
+  });
+
+  it("keeps each placement's gate apart through nested components", () => {
+    const outer = component([
+      instance("inner", "card", {}, { visibility: { conditions: featured } }),
+    ]);
+    const result = resolveComponentInstances(
+      page([instance("i1", "outer", {}, { visibility: { conditions: vip } })]),
+      defs({ card: component([node("plain")]), outer }),
+      { conditioned: "carry" }
+    );
+    const [root] = result.document.nodes;
+    expect(root?.type).toBe("core/text");
+    expect(root?.visibility?.conditions).toBeUndefined();
+    expect(gatesOn(root)).toHaveLength(2);
+    expect(gatesOn(root)).toEqual(
+      expect.arrayContaining([{ conditions: vip }, { conditions: featured }])
+    );
+  });
+});
