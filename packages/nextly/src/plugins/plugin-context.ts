@@ -138,8 +138,10 @@ import { methodFacade } from "./service-facade";
 import {
   resolveServiceOpts,
   ownCollectionReads,
+  withWriteTransactionToken,
   wrapCollectionsForPlugin,
   type PluginCollectionService,
+  type PluginCollectionTransaction,
   type PluginOwnCollectionReads,
   type ServiceOpts,
 } from "./service-opts";
@@ -356,6 +358,16 @@ export interface InTransactionContext<T = Record<string, unknown>>
    * has settled, and has no `transaction` of its own: it is one already.
    */
   db: PluginTransaction;
+  /**
+   * The write's transaction as `ctx.services.collections`' in-transaction
+   * methods take it (`createEntryInTransaction` and the rest): their writes
+   * join the write's own. The same token for every handler call on one
+   * transaction, each entry of a batch included, so work keyed by it sees
+   * what the earlier calls did. It refuses once the handler has settled.
+   *
+   * @experimental
+   */
+  transaction: PluginCollectionTransaction;
 }
 
 /**
@@ -2103,9 +2115,11 @@ export function createPluginContext(
     const known = inTransactionRunners.get(handler);
     if (known) return known;
     const runner: InTransactionRunner = (tx, write) =>
-      bindToTransaction(tx, async bound => {
-        await handler({ ...write, db: bound });
-      });
+      bindToTransaction(tx, bound =>
+        withWriteTransactionToken(tx, async transaction => {
+          await handler({ ...write, db: bound, transaction });
+        })
+      );
     inTransactionRunners.set(handler, runner);
     return runner;
   };

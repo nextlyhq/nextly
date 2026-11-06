@@ -67,7 +67,7 @@ export interface Claims {
   readonly dialect: PluginRouteContext["dialect"];
 }
 
-type Tx = PluginCollectionTransaction;
+export type Tx = PluginCollectionTransaction;
 
 /** Names a holder in a refusal, as the person asking may see it. */
 export type DescribeHolder = (holder: Holder) => Promise<string>;
@@ -655,4 +655,81 @@ async function handOver(claims: Claims, tx: Tx, key: string): Promise<void> {
     // waits on that one.
     await claimOrWait(claims, tx, { address, holder });
   }
+}
+
+/** What a holder should hold: its addresses, and the spaces of its lists. */
+export interface DesiredClaims {
+  readonly addresses: readonly ServedAddress[];
+  readonly spaces: readonly ServedAddress[];
+}
+
+/**
+ * Bring what `holder` holds to `desired`, in `tx`: claim each address and
+ * space it should hold and does not, then release each it holds and should
+ * not, handing a released one to whatever waited on it. A holder that holds
+ * exactly what it should is read and left alone, taking no lock.
+ *
+ * Every lock the change takes is taken first, in key order, so a save
+ * moving `/a` to `/b` and one moving `/b` to `/a` never wait on each other
+ * crosswise. Claims come before releases, so a claim that is refused leaves
+ * what the holder held in place, and the refusal rolls the save back whole.
+ *
+ * @returns Whether anything changed.
+ */
+export async function reconcileHolder(
+  claims: Claims,
+  tx: Tx,
+  holder: Holder,
+  desired: DesiredClaims,
+  describe: DescribeHolder
+): Promise<boolean> {
+  const held = await claimsIn(
+    claims,
+    tx,
+    {
+      holderCollection: { equals: holder.collection },
+      holderId: { equals: holder.id },
+    },
+    row =>
+      sameHolder(row.holder, holder) &&
+      (row.kind === "address" || row.kind === "space")
+  );
+  const heldKeys = new Set(held.map(row => row.key));
+  const wanted = new Set([
+    ...desired.addresses.map(at => storedKey(claimKey("address", at))),
+    ...desired.spaces.map(at => storedKey(claimKey("space", at))),
+  ]);
+  const claimAddresses = desired.addresses.filter(
+    at => !heldKeys.has(storedKey(claimKey("address", at)))
+  );
+  const claimSpaces = desired.spaces.filter(
+    at => !heldKeys.has(storedKey(claimKey("space", at)))
+  );
+  const release = held.filter(row => !wanted.has(row.key));
+  if (
+    claimAddresses.length === 0 &&
+    claimSpaces.length === 0 &&
+    release.length === 0
+  ) {
+    return false;
+  }
+  await lockInOrder(claims, tx, [
+    ...claimAddresses.flatMap(locksFor),
+    ...claimSpaces,
+    ...release.flatMap(locksOf),
+  ]);
+  for (const address of claimAddresses) {
+    await claimAddress(claims, tx, { address, holder, describe });
+  }
+  for (const list of claimSpaces) {
+    await claimSpace(claims, tx, { list, holder, describe });
+  }
+  for (const row of release) {
+    if (row.address === null) continue;
+    await releaseClaims(claims, tx, holder, {
+      address: row.address,
+      kind: row.kind === "space" ? "space" : "address",
+    });
+  }
+  return true;
 }

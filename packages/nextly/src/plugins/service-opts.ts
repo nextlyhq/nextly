@@ -606,6 +606,41 @@ export interface PluginTransactionRecord {
 const pluginTransactions = new WeakMap<object, PluginTransactionRecord>();
 
 /**
+ * The token each write's transaction hands its in-transaction handlers, by
+ * the adapter's transaction: one per transaction, so every handler call in
+ * it (each entry of a batch included) holds the same token, and what one
+ * call wrote through it the next one sees as the same transaction's work.
+ */
+const writeTransactionTokens = new WeakMap<
+  object,
+  PluginCollectionTransaction
+>();
+
+/**
+ * Run `work` with the token of the write transaction `tx`, as the collection
+ * service's in-transaction methods take it, open while `work` runs and
+ * refusing once it has settled, as every token a plugin holds does. The same
+ * token for every call on one transaction, opened again for each.
+ *
+ * @internal The in-transaction phase's, for `InTransactionContext.transaction`.
+ */
+export function withWriteTransactionToken<R>(
+  tx: TransactionContext,
+  work: (token: PluginCollectionTransaction) => Promise<R>
+): Promise<R> {
+  const key = tx as unknown as object;
+  let token = writeTransactionTokens.get(key);
+  if (token === undefined) {
+    token = Object.freeze({}) as PluginCollectionTransaction;
+    writeTransactionTokens.set(key, token);
+  }
+  const scope = transactionScope("ctx.hooks.onInTransaction");
+  pluginTransactions.set(token, { tx, scope });
+  const held = token;
+  return scope.run(() => work(held));
+}
+
+/**
  * The record a plugin's token stands for, or a refusal when the value is not
  * one `withTransaction` handed out.
  */

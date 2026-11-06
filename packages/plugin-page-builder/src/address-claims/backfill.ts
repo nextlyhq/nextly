@@ -1,0 +1,123 @@
+/**
+ * The address claims of the pages a site already has, taken once the boot
+ * has finished, so a site upgrading to the address store keeps every
+ * published page at its address before a new page or list can take it.
+ *
+ * Run on every boot, in the background, and safe to run again: a page whose
+ * claims already match what it should hold is read and left alone, so a pass
+ * over a site that is up to date writes nothing, and a site whose languages
+ * changed since the last boot claims its pages in the new ones. Pages are
+ * claimed in id order, the order they were made in, so of two pages that
+ * clash the older keeps the address and the newer waits for it, reported in
+ * the waiting report rather than refused, since nobody is saving it now.
+ *
+ * @module address-claims/backfill
+ */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+
+import {
+  claimOrWait,
+  reconcileHolder,
+  type Claims,
+  type Tx,
+} from "./claim-store";
+import { pageClaims } from "./page-claims";
+
+/** How many pages one read of the walk takes. */
+const BATCH = 100;
+
+/** The Direct API read the walk makes. */
+export interface PagesReader {
+  find(args: Record<string, unknown>): Promise<{ items: readonly unknown[] }>;
+}
+
+/** What the backfill needs. */
+export interface BackfillDeps {
+  readonly pages: string;
+  readonly claims: Claims;
+  readonly locales: readonly string[];
+  readonly nextly: PagesReader;
+  readonly withTransaction: <T>(work: (tx: Tx) => Promise<T>) => Promise<T>;
+  readonly warn: (message: string, context: Record<string, unknown>) => void;
+}
+
+/** Claim every published page's address, in id order. Never throws. */
+export async function backfillPageClaims(deps: BackfillDeps): Promise<void> {
+  let after: string | undefined;
+  for (;;) {
+    let items: readonly unknown[];
+    try {
+      ({ items } = await deps.nextly.find({
+        collection: deps.pages,
+        where: {
+          status: { equals: "published" },
+          ...(after === undefined ? {} : { id: { greater_than: after } }),
+        },
+        sort: "id",
+        limit: BATCH,
+        overrideAccess: true,
+        depth: 0,
+      }));
+    } catch (error) {
+      deps.warn("Could not read the pages whose addresses to claim.", {
+        error: String(error),
+      });
+      return;
+    }
+    for (const item of items) {
+      const row = item as Record<string, unknown>;
+      if (typeof row.id !== "string" && typeof row.id !== "number") continue;
+      await claimPage(deps, String(row.id), row);
+      after = String(row.id);
+    }
+    if (items.length < BATCH) return;
+  }
+}
+
+/**
+ * One page's claims: reconciled as a save would, or, where another document
+ * already holds its address, left waiting for it.
+ */
+async function claimPage(
+  deps: BackfillDeps,
+  id: string,
+  row: Readonly<Record<string, unknown>>
+): Promise<void> {
+  const holder = { collection: deps.pages, id };
+  const wanted = pageClaims(row, deps.locales);
+  if (wanted.addresses.length === 0) return;
+  try {
+    await deps.withTransaction(tx =>
+      reconcileHolder(
+        deps.claims,
+        tx,
+        holder,
+        wanted,
+        async other => `${other.collection} ${other.id}`
+      )
+    );
+    return;
+  } catch (error) {
+    if (!NextlyError.isCode(error, "CONFLICT")) {
+      deps.warn("Could not claim a page's address.", {
+        page: id,
+        error: String(error),
+      });
+      return;
+    }
+  }
+  // Held by another document: wait for each address rather than refuse,
+  // and claim no space, which a later save of the page settles.
+  try {
+    await deps.withTransaction(async tx => {
+      for (const address of wanted.addresses) {
+        await claimOrWait(deps.claims, tx, { address, holder });
+      }
+    });
+  } catch (error) {
+    deps.warn("Could not record a page as waiting for its address.", {
+      page: id,
+      error: String(error),
+    });
+  }
+}

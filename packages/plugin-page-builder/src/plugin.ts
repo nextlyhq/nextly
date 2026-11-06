@@ -30,6 +30,15 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 // isomorphic and reachable from a browser bundle.
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import {
+  backfillPageClaims,
+  type PagesReader,
+} from "./address-claims/backfill";
+import { claimLocales } from "./address-claims/page-claims";
+import {
+  registerPageAddressClaims,
+  type ReadsById,
+} from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
@@ -61,7 +70,10 @@ import {
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
-import { addressClaimsCollection } from "./collections/address-claims";
+import {
+  ADDRESS_CLAIMS_SLUG,
+  addressClaimsCollection,
+} from "./collections/address-claims";
 import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
@@ -1260,6 +1272,9 @@ export const pageBuilder = (
    * handled long after it.
    */
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
+  // The claiming of existing pages' addresses, set by `init` and run once the
+  // boot has finished.
+  let pageClaimsBackfill: (() => Promise<void>) | null = null;
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -1919,6 +1934,43 @@ export const pageBuilder = (
         pathOf: () => "tokens",
       });
       registerReadinessNotice(ctx, opts);
+      // A page's address, and its paginated list's later pages, held in the
+      // address store in the save's own transaction, so two documents never
+      // hold one address whichever path saved them.
+      const claimsStore = {
+        services: ctx.services,
+        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
+        dialect: ctx.dialect,
+      };
+      const pagesSlug = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
+      const siteLocales = (): readonly string[] =>
+        claimLocales(
+          ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+          ctx.config.localization?.defaultLocale
+        );
+      registerPageAddressClaims(ctx.hooks, {
+        pages: pagesSlug,
+        claims: claimsStore,
+        locales: siteLocales,
+        nextly: async () => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          return (await getCachedNextly()) as unknown as ReadsById;
+        },
+        collection: slug =>
+          ctx.services.collections.getCollection(slug, undefined as never),
+      });
+      pageClaimsBackfill = async () => {
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+        await backfillPageClaims({
+          pages: pagesSlug,
+          claims: claimsStore,
+          locales: siteLocales(),
+          nextly: (await getCachedNextly()) as unknown as PagesReader,
+          withTransaction: work =>
+            ctx.services.collections.withTransaction(work),
+          warn: (message, meta) => ctx.logger.warn(message, meta),
+        });
+      };
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
       registerLayoutReadinessNotice({
@@ -2058,6 +2110,10 @@ export const pageBuilder = (
     // Then record the site's spacing model, once: AFTER the seed, so the seed
     // is recorded and not taken for content. Neither step throws.
     onReady: () => {
+      // Existing pages' addresses, claimed in the background: the backfill
+      // never throws, and a boot is not held for it.
+      const backfill = pageClaimsBackfill;
+      if (backfill !== null) void backfill().catch(() => undefined);
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
       const seeded =
