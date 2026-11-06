@@ -74,6 +74,12 @@ interface Call {
 const calls: Call[] = [];
 /** The one hook that refuses the write, by the name it is recorded under. */
 let refuseAt: string | null = null;
+/**
+ * Whether `plugin:beforeUpdate` puts a value for the shared `tagline` field in
+ * the data, which is what makes a field's own before hooks run on a status
+ * change: they run for the fields the data names.
+ */
+let stampTagline = false;
 /** A status `plugin:beforeChange` writes into the data it is handed, if any. */
 let statusSetByHook: string | null = null;
 
@@ -112,6 +118,10 @@ const guard = definePlugin({
         // Left for the hooks after it, as a guard leaves what it decided.
         context.context.mark = "set-before";
         observe("plugin:beforeUpdate", context);
+        if (stampTagline) {
+          return { ...(context.data as Doc), tagline: "Stamped by a hook" };
+        }
+        return undefined;
       });
       ctx.hooks.on("beforeChange", slug, context => {
         observe("plugin:beforeChange", context);
@@ -163,24 +173,47 @@ function collection(
       text({
         name: "title",
         localized: shape.localized,
-        hooks: {
-          afterChange: [
-            ({ value }: { value: unknown }) => {
-              calls.push({
-                hook: "field:afterChange",
-                collection: slug,
-                operation: "update",
-                status: undefined,
-                originalStatus: undefined,
-                mark: undefined,
-              });
-              return value;
-            },
-          ],
-        },
+        hooks: fieldHooks(slug, "title", ["afterChange"]),
+      }),
+      // Shared by every language, so it lives on the entry's own row, which
+      // the after hooks of a move of every language are handed.
+      text({
+        name: "tagline",
+        localized: false,
+        hooks: fieldHooks(slug, "tagline", [
+          "beforeValidate",
+          "beforeChange",
+          "afterChange",
+        ]),
       }),
     ],
   });
+}
+
+/** A field hook for each of `phases`, recorded as `field:<name>:<phase>`. */
+function fieldHooks(
+  slug: string,
+  name: string,
+  phases: readonly ("beforeValidate" | "beforeChange" | "afterChange")[]
+): Record<string, ((args: { value: unknown }) => unknown)[]> {
+  return Object.fromEntries(
+    phases.map(phase => [
+      phase,
+      [
+        ({ value }: { value: unknown }) => {
+          calls.push({
+            hook: `field:${name}:${phase}`,
+            collection: slug,
+            operation: "update",
+            status: undefined,
+            originalStatus: undefined,
+            mark: undefined,
+          });
+          return value;
+        },
+      ],
+    ])
+  );
 }
 
 /**
@@ -205,6 +238,19 @@ const storedProbes: PrebuiltHookConfig<Record<string, unknown>>[] =
       return Promise.resolve(context.data as Record<string, unknown>);
     },
   }));
+
+/** Whether a recorded hook is a field's `afterChange`. */
+function isFieldAfterChange(hook: string): boolean {
+  return hook.startsWith("field:") && hook.endsWith(":afterChange");
+}
+
+/** The hooks recorded before the first after hook: what ran before the write. */
+function beforeTheWrite(hooks: readonly string[]): string[] {
+  const firstAfter = hooks.findIndex(
+    hook => hook.includes(":after") || isFieldAfterChange(hook)
+  );
+  return firstAfter < 0 ? [...hooks] : hooks.slice(0, firstAfter);
+}
 
 const DIRECTIONS = [
   { route: "unpublish-all", from: "published", to: "draft" },
@@ -280,6 +326,7 @@ describe.each(getConfiguredTestDialects())(
       calls.length = 0;
       refuseAt = null;
       statusSetByHook = null;
+      stampTagline = false;
     });
 
     const handler = (): CollectionsHandler =>
@@ -313,14 +360,16 @@ describe.each(getConfiguredTestDialects())(
     async function seed(slug: string, status: string): Promise<string> {
       // Seeded with no hook refusing, whatever the case has armed.
       const armed = refuseAt;
+      const stamping = stampTagline;
       refuseAt = null;
+      stampTagline = false;
       const created = await handler().createEntry(
         {
           collectionName: slug,
           overrideAccess: true,
           ...(slug === NOTES ? {} : { locale: "en" }),
         },
-        { title: "Home", status }
+        { title: "Home", tagline: "Shared", status }
       );
       expect(created.success, JSON.stringify(created)).toBe(true);
       const id = String((created.data as Doc).id);
@@ -338,6 +387,7 @@ describe.each(getConfiguredTestDialects())(
       }
       calls.length = 0;
       refuseAt = armed;
+      stampTagline = stamping;
       return id;
     }
 
@@ -395,12 +445,10 @@ describe.each(getConfiguredTestDialects())(
               "stored:afterUpdate",
             ])
           );
-          // A translated collection's update runs a field's `afterChange`
-          // only for the fields it wrote, so only the one-language
-          // collection's status change reaches the title's.
-          if (slug === NOTES) {
-            expect(baseline.hooks).toContain("field:afterChange");
-          }
+          // A status change of one language through `PATCH` runs the
+          // `afterChange` of every field on the row it saved, the shared
+          // `tagline` included, though it changed none of them.
+          expect(baseline.hooks).toContain("field:tagline:afterChange");
 
           const id = await seed(slug, direction.from);
           const moved = await rest(
@@ -409,9 +457,15 @@ describe.each(getConfiguredTestDialects())(
             {}
           );
           expect(moved.status, JSON.stringify(moved.json)).toBe(200);
-          expect(calls.map(call => call.hook)).toEqual(baseline.hooks);
+          // The same hooks, except a field's `afterChange`: the move changed
+          // no field, only statuses, so it runs none, as a write restricts
+          // that phase to the fields it touched. A hook that mails or
+          // re-indexes on a change would otherwise act on an unchanged value.
+          expect(calls.map(call => call.hook)).toEqual(
+            baseline.hooks.filter(hook => !isFieldAfterChange(hook))
+          );
           for (const call of calls) {
-            if (call.hook === "field:afterChange") continue;
+            if (call.hook.startsWith("field:")) continue;
             expect(call.operation, call.hook).toBe("update");
             expect(call.status, call.hook).toBe(direction.to);
           }
@@ -429,6 +483,38 @@ describe.each(getConfiguredTestDialects())(
           expect(await statuses(slug, id)).toEqual(
             languagesOf(slug).map(() => direction.to)
           );
+        });
+
+        it(`${direction.route} of ${slug} runs a field's own before hooks for a field a hook put in the data`, async () => {
+          // `plugin:beforeUpdate` names the shared `tagline`, so its field
+          // hooks run, as they do for a status change of one language.
+          stampTagline = true;
+          const baseline = await oneLanguageChange(
+            slug,
+            direction.from,
+            direction.to
+          );
+          expect(baseline.status, JSON.stringify(baseline.json)).toBe(200);
+          const before = beforeTheWrite(baseline.hooks);
+          // The positive control: the baseline ran both field phases.
+          expect(before).toEqual(
+            expect.arrayContaining([
+              "field:tagline:beforeValidate",
+              "field:tagline:beforeChange",
+            ])
+          );
+
+          const id = await seed(slug, direction.from);
+          const moved = await rest(
+            "POST",
+            ["collections", slug, "entries", id, direction.route],
+            {}
+          );
+          expect(moved.status, JSON.stringify(moved.json)).toBe(200);
+          const hooks = calls.map(call => call.hook);
+          expect(beforeTheWrite(hooks)).toEqual(before);
+          // What the hook put in the data is not written, so no field changed.
+          expect(hooks.filter(isFieldAfterChange)).toEqual([]);
         });
 
         for (const refuser of REFUSERS) {

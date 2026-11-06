@@ -10286,9 +10286,18 @@ export class CollectionMutationService extends BaseService {
         // save sees it here. Any other move runs them once, with the entry
         // as the move left it, as a status change of one language does.
         // Never both: the languages a promotion reported are the write.
+        //
+        // A move that put nothing live changed the statuses and no field, so
+        // the fields' `afterChange` runs only for `status`, as a write runs
+        // that phase only for the fields it touched (`updateEntryWrite`): the
+        // row it is handed carries every shared field, and a handler that
+        // mails or re-indexes on a change would act on an unchanged value.
+        // The whole row is still handed over, so a handler that does run can
+        // read its siblings.
         const afterRuns: {
           data: Record<string, unknown>;
           originalData: Record<string, unknown> | null;
+          touched?: ReadonlySet<string>;
         }[] =
           promotedForHooks.length > 0
             ? promotedForHooks
@@ -10299,6 +10308,7 @@ export class CollectionMutationService extends BaseService {
                     status: direction.nextStatus,
                   },
                   originalData: existingEntry as Record<string, unknown>,
+                  touched: new Set(["status"]),
                 },
               ];
         for (const run of afterRuns) {
@@ -10334,6 +10344,7 @@ export class CollectionMutationService extends BaseService {
             data: run.data,
             operation: "update",
             user: params.user,
+            only: run.touched,
           });
         }
 
