@@ -21,6 +21,7 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { LOCALE_PARAM } from "@admin/constants/search-params";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import {
   useEntries,
   useBulkDeleteEntries,
@@ -71,6 +72,13 @@ import {
   type ChosenForCollection,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import {
+  PLUGIN_FILTER_PARAM,
+  chosenPluginFilters,
+  listFiltersFor,
+  pluginFilterWheres,
+  writePluginFilterParams,
+} from "./plugin-filters";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryVersions } from "./useEntrySelection";
 
@@ -187,6 +195,28 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   const searchParams = useSearchParams();
   const whereParam = getSearchParam(searchParams, "where");
 
+  // The filters plugins offer this list, and the options the page's URL has
+  // chosen among them (`?pf=<filter>:<value>`), each resolved by name against
+  // what was declared, so a `pf` naming anything else is ignored.
+  const { plugins } = useBranding();
+  const pluginFilters = useMemo(
+    () => listFiltersFor(plugins, collectionSlug),
+    [plugins, collectionSlug]
+  );
+  const pluginFilterParam = searchParams[PLUGIN_FILTER_PARAM];
+  const chosenPluginFilterOptions = useMemo(
+    () =>
+      chosenPluginFilters(
+        pluginFilters,
+        pluginFilterParam === undefined
+          ? []
+          : Array.isArray(pluginFilterParam)
+            ? pluginFilterParam
+            : [pluginFilterParam]
+      ),
+    [pluginFilters, pluginFilterParam]
+  );
+
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -280,8 +310,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       updatedTo,
       translated: translationFilter,
       readsTranslationState: asksTranslationStatus,
+      pluginWheres: pluginFilterWheres(
+        pluginFilters,
+        chosenPluginFilterOptions
+      ),
     });
   }, [
+    pluginFilters,
+    chosenPluginFilterOptions,
     whereParam,
     status,
     createdFrom,
@@ -486,6 +522,20 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       setPage(1); // Reset to first page on status change
     },
     [collectionSlug]
+  );
+
+  const handlePluginFilterChange = useCallback(
+    (name: string, value: string | null) => {
+      const next = new Map(chosenPluginFilterOptions);
+      if (value === null) next.delete(name);
+      else next.set(name, value);
+      // Kept in the URL, which the list reads back: the choice survives a
+      // reload and a shared link, and the request follows the URL.
+      writePluginFilterParams(pluginFilters, next);
+      // Reset to the first page, as for the list's own filters.
+      setPage(1);
+    },
+    [chosenPluginFilterOptions, pluginFilters]
   );
 
   const handleTranslationFilterChange = useCallback(
@@ -734,6 +784,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           onStatusChange={handleStatusChange}
           translationFilter={translationFilter}
           onTranslationFilterChange={handleTranslationFilterChange}
+          pluginFilters={pluginFilters}
+          chosenPluginFilters={chosenPluginFilterOptions}
+          onPluginFilterChange={handlePluginFilterChange}
           createdFrom={createdFrom}
           createdTo={createdTo}
           updatedFrom={updatedFrom}

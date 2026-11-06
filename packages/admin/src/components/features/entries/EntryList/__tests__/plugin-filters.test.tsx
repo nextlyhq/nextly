@@ -21,7 +21,11 @@ const STATE: OfferedListFilter = {
   label: "Ticket state",
   options: [
     { value: "open", label: "Open", where: { state: { equals: "open" } } },
-    { value: "closed", label: "Closed", where: { state: { equals: "closed" } } },
+    {
+      value: "closed",
+      label: "Closed",
+      where: { state: { equals: "closed" } },
+    },
   ],
 };
 
@@ -45,9 +49,7 @@ vi.mock("../EntryTable", async importOriginal => {
     ...actual,
     EntryTable: (props: Record<string, unknown>) => {
       tableProps(props);
-      return table.real ? (
-        <actual.EntryTable {...(props as never)} />
-      ) : null;
+      return table.real ? <actual.EntryTable {...(props as never)} /> : null;
     },
   };
 });
@@ -94,7 +96,12 @@ const chooseInTable = (name: string, value: string | null): void => {
   const props = tableProps.mock.calls.at(-1)?.[0] as {
     onPluginFilterChange?: (name: string, value: string | null) => void;
   };
-  act(() => props.onPluginFilterChange?.(name, value));
+  act(() => {
+    props.onPluginFilterChange?.(name, value);
+    // The admin shell's router patches history so a replaceState announces
+    // itself; no router is mounted here, so the announcement is made by hand.
+    window.dispatchEvent(new Event("locationchange"));
+  });
 };
 
 function at(search: string): void {
@@ -144,7 +151,9 @@ describe("the toolbar", () => {
 
     expect(within(menu).getByText("Ticket state")).toBeTruthy();
     const open = within(menu).getByRole("menuitemcheckbox", { name: "Open" });
-    const closed = within(menu).getByRole("menuitemcheckbox", { name: "Closed" });
+    const closed = within(menu).getByRole("menuitemcheckbox", {
+      name: "Closed",
+    });
     expect(open.getAttribute("aria-checked")).toBe("true");
     expect(closed.getAttribute("aria-checked")).toBe("false");
 
@@ -169,8 +178,20 @@ describe("the entry list with a plugin's filter", () => {
 
     expect(lastRead().where).toEqual({ state: { equals: "open" } });
     expect(
-      (tableProps.mock.calls.at(-1)?.[0] as { pluginFilters?: unknown }).pluginFilters
+      (tableProps.mock.calls.at(-1)?.[0] as { pluginFilters?: unknown })
+        .pluginFilters
     ).toEqual([STATE]);
+  });
+
+  it("adds the option's where to the list's own filters rather than replacing them", () => {
+    at(
+      `?where=${encodeURIComponent(JSON.stringify({ priority: { equals: "high" } }))}&pf=acme-support.state:open`
+    );
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(lastRead().where).toEqual({
+      and: [{ priority: { equals: "high" } }, { state: { equals: "open" } }],
+    });
   });
 
   it("keeps a choice in the URL and requests it", () => {
@@ -185,7 +206,9 @@ describe("the entry list with a plugin's filter", () => {
     expect(lastRead().where).toEqual({ state: { equals: "closed" } });
 
     chooseInTable("acme-support.state", null);
-    expect(new URLSearchParams(window.location.search).getAll("pf")).toEqual([]);
+    expect(new URLSearchParams(window.location.search).getAll("pf")).toEqual(
+      []
+    );
     expect(lastRead().where).toBeUndefined();
   });
 
@@ -208,7 +231,8 @@ describe("the entry list with a plugin's filter", () => {
 
     expect(lastRead().where).toBeUndefined();
     expect(
-      (tableProps.mock.calls.at(-1)?.[0] as { pluginFilters?: unknown }).pluginFilters
+      (tableProps.mock.calls.at(-1)?.[0] as { pluginFilters?: unknown })
+        .pluginFilters
     ).toEqual([]);
   });
 });

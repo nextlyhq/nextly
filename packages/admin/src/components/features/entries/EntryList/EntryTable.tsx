@@ -19,6 +19,7 @@ import {
   DropdownMenuSeparator,
 } from "@nextlyhq/ui";
 import {
+  Fragment,
   useState,
   useMemo,
   useEffect,
@@ -46,6 +47,7 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import type { OfferedListFilter } from "./plugin-filters";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import {
   rowId,
@@ -138,6 +140,12 @@ export interface EntryTableProps {
   translationFilter?: TranslationListFilter | null;
   /** Callback when the language filter changes. */
   onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
+  /** The filters plugins offer this list (`contributes.admin.filters`). */
+  pluginFilters?: readonly OfferedListFilter[];
+  /** The option each plugin filter has chosen, by filter name. */
+  chosenPluginFilters?: ReadonlyMap<string, string>;
+  /** Choose a plugin filter's option, or `null` to clear it. */
+  onPluginFilterChange?: (name: string, value: string | null) => void;
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
   /** Created date upper bound (YYYY-MM-DD) */
@@ -202,6 +210,9 @@ export const EntryTable: ForwardRefExoticComponent<
     onStatusChange,
     translationFilter = null,
     onTranslationFilterChange,
+    pluginFilters = [],
+    chosenPluginFilters,
+    onPluginFilterChange,
     createdFrom = "",
     createdTo = "",
     updatedFrom = "",
@@ -352,10 +363,14 @@ export const EntryTable: ForwardRefExoticComponent<
     !!createdTo ||
     !!updatedFrom ||
     !!updatedTo ||
-    !!translationFilter;
+    !!translationFilter ||
+    (chosenPluginFilters?.size ?? 0) > 0;
+
+  // Offered only where a choice can be acted on.
+  const hasPluginFilters = pluginFilters.length > 0 && !!onPluginFilterChange;
 
   const showFilterDropdown =
-    hasStatusField || hasDateFilters || hasLanguageFilter;
+    hasStatusField || hasDateFilters || hasLanguageFilter || hasPluginFilters;
 
   const clearDateFilters = () => {
     onCreatedFromChange?.("");
@@ -442,6 +457,35 @@ export const EntryTable: ForwardRefExoticComponent<
                   )}
               </>
             )}
+
+            {hasPluginFilters &&
+              pluginFilters.map((filter, index) => (
+                <Fragment key={filter.name}>
+                  {(index > 0 ||
+                    (hasStatusField && onStatusChange) ||
+                    hasLanguageFilter) && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel>{filter.label}</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {filter.options.map(option => {
+                    const active =
+                      chosenPluginFilters?.get(filter.name) === option.value;
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={option.value}
+                        checked={active}
+                        onCheckedChange={() =>
+                          onPluginFilterChange?.(
+                            filter.name,
+                            active ? null : option.value
+                          )
+                        }
+                      >
+                        {option.label}
+                      </DropdownMenuCheckboxItem>
+                    );
+                  })}
+                </Fragment>
+              ))}
 
             {hasDateFilters && (
               <>
