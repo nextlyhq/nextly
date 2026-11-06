@@ -17575,7 +17575,7 @@ export class CollectionMutationService extends BaseService {
       appliesFilter: params.appliesFilter !== false,
     });
     if ("refusal" in asked) return { refusal: asked.refusal };
-    return { collection, deleteLanguages, asked };
+    return { refusal: undefined, collection, deleteLanguages, asked };
   }
 
   /**
@@ -17609,7 +17609,7 @@ export class CollectionMutationService extends BaseService {
       { ...params, overrideAccess: false, routeAuthorized: false },
       schema
     );
-    return !("refusal" in gate);
+    return gate.refusal === undefined;
   }
 
   async deleteEntry(params: {
@@ -17684,7 +17684,7 @@ export class CollectionMutationService extends BaseService {
         { ...params, user: accessUser },
         schema
       );
-      if ("refusal" in gate) return gate.refusal;
+      if (gate.refusal !== undefined) return gate.refusal;
       const { collection, deleteLanguages } = gate;
       const { languages: askedLanguages, filters: deleteFilters } = gate.asked;
       const { storedHooks, tableName, sharedContext, requestFacts } =
