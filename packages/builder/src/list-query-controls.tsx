@@ -43,6 +43,7 @@ import {
   type BindingFieldShape,
   type BlockDocument,
   type BlockNode,
+  type ListFieldKind,
   type ListFieldSource,
   type ListFilter,
   type ListFilterOp,
@@ -205,13 +206,28 @@ function fieldSourceOf(
   };
 }
 
+/**
+ * A field type of each list kind, the one the engine's `listFieldKind` reads
+ * back as that kind: a kind's own name is not always a field type (a choice
+ * is a `select`, a yes/no a `checkbox`), and a type the engine does not know
+ * has no kind, so its filters and sorts would be refused.
+ */
+const FIELD_TYPE_OF_KIND: Readonly<Record<ListFieldKind, string>> = {
+  text: "text",
+  number: "number",
+  date: "date",
+  boolean: "checkbox",
+  choice: "select",
+  entry: "relationship",
+};
+
 /** The shapes of what a collection offers, for a host naming no others. */
 function offeredShapes(found: LoopCollection): BindingFieldShape[] {
   return [
     { name: "id", type: "text" },
     ...found.fields.map(field => ({
       name: field.name,
-      type: field.kind === "entry" ? "relationship" : field.kind,
+      type: FIELD_TYPE_OF_KIND[field.kind],
       ...(field.relationTo === undefined
         ? {}
         : { relationTo: field.relationTo }),

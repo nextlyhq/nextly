@@ -485,6 +485,24 @@ describe("ZodGenerator — Individual Field Generation", () => {
     expect(required.safeParse("lucide:star").success).toBe(true);
   });
 
+  it('refuses "" for an icon required by `validation: { required: true }`', () => {
+    // The Schema Builder's spelling of a requirement. The entry validator
+    // refuses "" for it as missing, so the generated schema must too.
+    const col = createCollection([
+      {
+        name: "mark",
+        type: "icon",
+        validation: { required: true },
+      } as unknown as FieldConfig,
+    ]);
+    const { code } = gen.generateSchema(col);
+    const schema = runInNewContext(String(extractFieldSchema(code, "mark")), {
+      z,
+    }) as z.ZodType;
+    expect(schema.safeParse("").success).toBe(false);
+    expect(schema.safeParse("lucide:star").success).toBe(true);
+  });
+
   it("generates polymorphic schema for upload fields with array relationTo", () => {
     const col = createCollection([
       {

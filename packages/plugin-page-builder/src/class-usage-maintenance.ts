@@ -73,7 +73,7 @@ import type {
   ClassUsageScope,
   ClassUsageVariant,
 } from "./collections/class-usage-index";
-import { walkPages } from "./paged-walk";
+import { lastIdOf, walkPages } from "./paged-walk";
 import { readStoredJson } from "./stored-json";
 import type { UsageIndex, UsageSubject } from "./usage-index";
 
@@ -109,6 +109,13 @@ export interface ClassUsageIndexStore {
      * repeated one reads as a duplicate and is also deleted.
      */
     sort: string;
+    /**
+     * The id of the last row the previous page held, absent on the first
+     * page. A store that pages by an id keyset starts after it, so a row
+     * removed from a page already read moves no later row out of reach; one
+     * that pages by offset may ignore it.
+     */
+    after?: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
   create(args: { data: Record<string, unknown> }): Promise<unknown>;
   delete(args: { id: string }): Promise<unknown>;
@@ -350,6 +357,8 @@ async function rowsWhere<T extends { id: string }>(
   decode: (item: unknown) => T | null
 ): Promise<T[]> {
   const rows: T[] = [];
+  // Where the last page ended, which the next one starts after.
+  let after: string | undefined;
   await walkPages({
     maxPages: MAX_PAGES,
     describe,
@@ -358,6 +367,7 @@ async function rowsWhere<T extends { id: string }>(
         where,
         limit: PAGE_SIZE,
         page,
+        ...(after === undefined ? {} : { after }),
         // Ordered by a column these writes cannot move. Offset paging reads
         // position N of an ordered set, so ordering by anything this
         // maintenance rewrites would reshuffle rows between queries and skip
@@ -365,6 +375,7 @@ async function rowsWhere<T extends { id: string }>(
         sort: "id",
       }),
     onPage: items => {
+      after = lastIdOf(items) ?? after;
       for (const item of items) {
         const row = decode(item);
         if (row === null) continue;

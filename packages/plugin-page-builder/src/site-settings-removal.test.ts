@@ -342,6 +342,13 @@ describe("a removal of a breakpoint a code-supplied shared style holds", () => {
           "c-coded": { base: { tablet: { color: "#444" } } },
         },
         overridden: ["c-coded"],
+        // The override exactly as stored, which an undo compares with.
+        overrides: {
+          "c-coded": {
+            ...coded,
+            styles: { base: { base: { color: "#333333" } } },
+          },
+        },
       },
     });
   });

@@ -35,6 +35,7 @@ import {
 import {
   DEFINITION_ACTION_KINDS,
   PAGE_ACTION_KINDS,
+  TEMPLATE_ACTION_KINDS,
 } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
@@ -65,6 +66,8 @@ import {
 } from "./library-route";
 import { namedQueryParamsSchema } from "./named-queries";
 import { pageActionRequestJsonSchema } from "./page-actions-route";
+import { TEMPLATE_ACTIONS_ROUTE_PATH } from "./templates/template-actions-contract";
+import { templateActionRequestJsonSchema } from "./templates/template-actions-route";
 
 /**
  * `GET /manifest`: the composition manifest, as the caller may read it.
@@ -142,7 +145,7 @@ export interface ManifestLayout {
 /** One action, as a client calls it over HTTP or through the service. */
 export interface ManifestAction {
   /** The service method that runs it. */
-  readonly name: "pageAction" | "definitionAction";
+  readonly name: "pageAction" | "definitionAction" | "templateAction";
   readonly method: "POST";
   /** The route's path under the plugin's mount; `:id` is the component's id. */
   readonly path: string;
@@ -273,7 +276,7 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
     ).extend({ defaultLayout: id.nullable() }),
     actions: z.array(
       z.strictObject({
-        name: z.enum(["pageAction", "definitionAction"]),
+        name: z.enum(["pageAction", "definitionAction", "templateAction"]),
         method: z.literal("POST"),
         path: text,
         kinds: z.array(text),
@@ -550,6 +553,13 @@ export function manifestActions(): CompositionManifest["actions"] {
       path: DEFINITION_ACTIONS_ROUTE_PATH,
       kinds: [...DEFINITION_ACTION_KINDS],
       request: definitionActionRequestJsonSchema(),
+    },
+    {
+      name: "templateAction",
+      method: "POST",
+      path: TEMPLATE_ACTIONS_ROUTE_PATH,
+      kinds: [...TEMPLATE_ACTION_KINDS],
+      request: templateActionRequestJsonSchema(),
     },
   ];
   return actions;

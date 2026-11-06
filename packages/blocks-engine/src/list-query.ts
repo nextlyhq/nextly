@@ -44,6 +44,7 @@ import type { BindingFieldShape } from "./binding-rules";
 import { bindingKindOf } from "./binding-vocabulary";
 import { isCalendarDay } from "./calendar-day";
 import type { BlockDocument, BlockNode } from "./document";
+import { withHeldSeverity } from "./held-findings";
 import { describeValue, pointer } from "./issue-text";
 import {
   isNamedQueryName,
@@ -267,8 +268,11 @@ export const LIST_ISSUE_CODES: {
 /** A field name as a list may write it: no paths, operators or quoting. */
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Whether a value is a field name a list may write. */
-function isFieldName(value: unknown): value is string {
+/**
+ * Whether a value is a field name a list or a condition may write: one
+ * top-level field, no paths, operators or quoting.
+ */
+export function isListFieldName(value: unknown): value is string {
   return (
     typeof value === "string" && FIELD_NAME.test(value) && value !== "__proto__"
   );
@@ -288,6 +292,18 @@ export function isListFilterOp(op: unknown): op is ListFilterOp {
  */
 export function isListDay(value: unknown): value is string {
   return isCalendarDay(value);
+}
+
+/**
+ * The day after a `YYYY-MM-DD` day, for comparing whole days: "after the 1st"
+ * is "from the start of the 2nd". A list's day filter and a condition on a
+ * day read it alike.
+ */
+export function listDayAfter(day: string): string {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, (date ?? 1) + 1))
+    .toISOString()
+    .slice(0, 10);
 }
 
 function isScalar(value: unknown): value is ListFilterScalar {
@@ -375,7 +391,7 @@ function readFilter(
       `holds ${extra.map(key => `"${describeValue(key)}"`).join(", ")}, which a filter row does not take`
     );
   }
-  if (!isFieldName(row.field)) {
+  if (!isListFieldName(row.field)) {
     return problem(`names "${describeValue(row.field)}", which is not a field`);
   }
   if (!isListFilterOp(row.op)) {
@@ -426,7 +442,7 @@ function sortKeysIn(stored: string): ListSortKey[] | string {
     if (text === "") continue;
     const descending = text.startsWith("-");
     const field = (descending ? text.slice(1) : text).trim();
-    if (!isFieldName(field)) {
+    if (!isListFieldName(field)) {
       return `The sort names "${describeValue(text)}", which is not a field name, such as -date.`;
     }
     keys.push({ field, descending });
@@ -487,7 +503,7 @@ function readRelation(
       `The related source is of "${describeValue(value.of)}", which is neither "entry" nor "item".`
     );
   }
-  if (!isFieldName(value.field)) {
+  if (!isListFieldName(value.field)) {
     return problem(
       `The related source names "${describeValue(value.field)}", which is not a field.`
     );
@@ -1484,11 +1500,6 @@ function walkFindings(
   return findings;
 }
 
-/** What makes two findings the same problem on the same block. */
-function signature(finding: Finding): string {
-  return `${finding.nodeId}\u0000${finding.code}\u0000${finding.message}`;
-}
-
 /**
  * The problems of every list in a document, as validation issues.
  *
@@ -1514,25 +1525,15 @@ export function listQueryIssues(
   readonly message: string;
   readonly severity: "error" | "warning";
 }[] {
-  const findings = walkFindings(nodes, judgement);
-  if (findings.length === 0) return [];
-  const held = new Set(
-    (judgement.stored ?? []).flatMap(form =>
-      isPlainRecord(form) && Array.isArray(form.nodes)
-        ? walkFindings(form.nodes, judgement).map(signature)
-        : []
-    )
+  // An input the query no longer takes and a read visitors cannot read are
+  // warnings whatever the stored forms hold.
+  return withHeldSeverity(
+    walkFindings(nodes, judgement),
+    judgement.stored,
+    forest => walkFindings(forest, judgement)
+  ).map(issue =>
+    ALWAYS_WARNINGS.has(issue.code) ? { ...issue, severity: "warning" } : issue
   );
-  return findings.map(finding => ({
-    path: finding.path,
-    nodeId: finding.nodeId,
-    code: finding.code,
-    message: finding.message,
-    severity:
-      ALWAYS_WARNINGS.has(finding.code) || held.has(signature(finding))
-        ? "warning"
-        : "error",
-  }));
 }
 
 /**
