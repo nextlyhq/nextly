@@ -529,6 +529,26 @@ describe("a list whose source is a named query", () => {
     expect(headings(element)).toEqual(["Template"]);
   });
 
+  it("claims a run's reads once per render, however many lists draw it", async () => {
+    const run = vi.fn<NamedQueryDefinition["run"]>(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const element = await drawn(
+      page(
+        list(named(), [itemHeading("a")], "first"),
+        list(named(), [itemHeading("b")], "second")
+      ),
+      context({
+        namedQueries: host(eventsQuery(run), base({ events: EVENTS })),
+        // One read: the run makes it; the second list joins that run and
+        // claims nothing more, so it still draws its rows.
+        queries: createQueryBudget(1),
+      })
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(headings(element)).toEqual(["One", "Two", "One", "Two"]);
+  });
+
   it("runs once per render when drawn inside every entry of an outer list", async () => {
     const run = vi.fn<NamedQueryDefinition["run"]>(async ({ reader }) => ({
       rows: (await reader.find({ collection: "events" })).items,
@@ -805,6 +825,37 @@ describe("a list whose source is a named query", () => {
         "p"
       )
     ).not.toContain("secret");
+  });
+
+  it("lets a related list read its entries inside an ordinary list inside it", async () => {
+    // A named list, an ordinary posts list in each row, and a list of each
+    // post's tags in that: the tags' outer item is a post, no query's row.
+    const tags = list(
+      { collection: "tags", relation: { of: "item", field: "tags" } },
+      [itemHeading("tag")],
+      "tags"
+    );
+    const posts = list({ collection: "posts" }, [tags], "posts");
+    const definition = eventsQuery(() =>
+      Promise.resolve({ rows: [{ id: "e1", title: "Event" }] })
+    );
+    const element = await drawn(
+      page(list(named(), [posts])),
+      context({
+        namedQueries: host(definition, base({})),
+        diagnostics: true,
+        data: {
+          find: query =>
+            Promise.resolve(
+              query.collection === "posts"
+                ? { items: [{ id: "p1", tags: ["t1"] }], total: 1 }
+                : { items: [{ id: "t1", title: "Tag one" }], total: 1 }
+            ),
+        },
+      })
+    );
+    expect(headings(element)).toContain("Tag one");
+    expect(element.innerHTML).not.toContain("shows a custom source's rows");
   });
 
   it("tells an author a related list inside it has no entries to read", async () => {

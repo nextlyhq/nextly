@@ -118,6 +118,49 @@ describe("a named query's declaration", () => {
       'entries of "posts"',
     ],
     [
+      "a row field a binding could not address",
+      {
+        rows: {
+          key: "id",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "display-name", type: "text" },
+          ],
+        },
+      },
+      'named "display-name"',
+    ],
+    [
+      "a row field a plain object would not keep",
+      {
+        rows: {
+          key: "id",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "__proto__", type: "text" },
+          ],
+        },
+      },
+      'named "__proto__"',
+    ],
+    [
+      "a group's own field a binding could not address",
+      {
+        rows: {
+          key: "id",
+          fields: [
+            { name: "id", type: "text" },
+            {
+              name: "venue",
+              type: "group",
+              fields: [{ name: "street name", type: "text" }],
+            },
+          ],
+        },
+      },
+      'named "street name"',
+    ],
+    [
       "a row key that is not a declared field",
       { rows: { key: "slug", fields: [{ name: "id", type: "text" }] } },
       'key "slug"',

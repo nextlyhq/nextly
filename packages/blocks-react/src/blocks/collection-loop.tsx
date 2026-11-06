@@ -353,7 +353,14 @@ export async function renderCollectionLoop({
   return drawList(
     {
       outcome,
-      itemContext: item => ({ ...ctx, item, itemSource: collection }),
+      // An ordinary entry: the item is no named query's row, whatever the
+      // list around this one shows.
+      itemContext: item => ({
+        ...ctx,
+        item,
+        itemSource: collection,
+        itemQuery: undefined,
+      }),
     },
     { className, renderSlot, spacingMode, ctx, nodeId: node.id }
   );
