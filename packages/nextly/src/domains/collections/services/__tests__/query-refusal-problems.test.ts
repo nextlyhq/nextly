@@ -30,7 +30,10 @@ import {
   assertSortableField,
   refuseHiddenColumnFilter,
 } from "../../../../shared/lib/filterable-fields";
-import { refuseFilterProblems } from "../../query/filter-shape";
+import {
+  refuseFilterProblems,
+  unknownFieldProblem,
+} from "../../query/filter-shape";
 import { queryRefusalProblems } from "../collection-query-service";
 
 const USER = { id: "u1" };
@@ -124,13 +127,11 @@ describe("queryRefusalProblems", () => {
     ],
     [
       "a filter on what a release holds, refused as the release check does",
+      // The release check is private to the service; this is its refusal,
+      // made by the same two calls it makes.
       () =>
         refuseFilterProblems([
-          {
-            path: "where._inRelease",
-            code: "FILTER_UNKNOWN_FIELD",
-            message: "x",
-          },
+          unknownFieldProblem("where._inRelease", "_inRelease"),
         ]),
       "where._inRelease",
     ],

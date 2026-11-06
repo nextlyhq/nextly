@@ -17,6 +17,8 @@
  * @module plugins/admin-contributions-offer
  * @experimental
  */
+import type { WhereFilter } from "../domains/collections/query/query-operators";
+
 import type {
   AdminContribution,
   PluginListFilterDeclaration,
@@ -42,10 +44,7 @@ export interface ContributionAudience {
    * Whether the list read would let the reader filter this collection by
    * `where`. Never throws: a failure to decide answers no.
    */
-  mayFilter: (
-    collection: string,
-    where: Record<string, unknown>
-  ) => Promise<boolean>;
+  mayFilter: (collection: string, where: WhereFilter) => Promise<boolean>;
   /**
    * The collections a filter or rule that names none is offered on: every
    * collection the admin lists. Empty when they could not be read, so nothing
@@ -103,7 +102,7 @@ function stableKey(value: unknown): string {
 export function readerFilterVerdict(
   problemsOf: (
     collection: string,
-    where: Record<string, unknown>
+    where: WhereFilter
   ) => Promise<readonly unknown[]>,
   onFailure: (collection: string, error: unknown) => void
 ): ContributionAudience["mayFilter"] {
@@ -126,14 +125,14 @@ export function readerFilterVerdict(
 }
 
 /** The `where` a rule's fields are judged by: each field, as the read would filter on it. */
-function whereNaming(fields: readonly string[]): Record<string, unknown> {
+function whereNaming(fields: readonly string[]): WhereFilter {
   return { and: fields.map(field => ({ [field]: { exists: true } })) };
 }
 
 /** The collections among `candidates` the reader may filter by `where`. */
 async function offeredOn(
   candidates: readonly string[],
-  where: Record<string, unknown>,
+  where: WhereFilter,
   audience: ContributionAudience
 ): Promise<string[]> {
   const verdicts = await Promise.all(
@@ -261,10 +260,7 @@ export async function listFiltersForReader(
     for (const collection of filter.collections ?? audience.collections) {
       const verdicts = await Promise.all(
         filter.options.map(option =>
-          audience.mayFilter(
-            collection,
-            option.where as Record<string, unknown>
-          )
+          audience.mayFilter(collection, option.where)
         )
       );
       const values = filter.options

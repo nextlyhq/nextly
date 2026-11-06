@@ -736,6 +736,26 @@ export type {
 } from "nextly";
 
 /**
+ * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
+ * blocks, tabs, list columns, row and bulk actions and side panel sections,
+ * each ordered at its place, with a declared visibility rule and permission.
+ * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ */
+export type {
+  AdminBlockContribution,
+  AdminBulkActionContribution,
+  AdminColumnContribution,
+  AdminContribution,
+  AdminContributionAction,
+  AdminRowActionContribution,
+  AdminSidebarSectionContribution,
+  AdminTabContribution,
+  AdminContributionKind,
+  RowPredicate,
+  RowPredicateValue,
+} from "nextly";
+
+/**
  * Hook types.
  * @public `HookContext` — exercised by `plugin-form-builder`'s collection hook.
  * @experimental `HookType`, `HookContextPhase`, `HookHandler` — the `ctx.hooks`
