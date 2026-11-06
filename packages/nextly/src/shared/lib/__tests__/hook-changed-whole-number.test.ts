@@ -40,14 +40,16 @@ describe("hookChangedWholeNumberIssues", () => {
 
   it("keeps a decimal field's fraction", () => {
     const fields: ValidatableField[] = [
-      { name: "price", type: "number", dbType: "decimal" },
+      // The walk reads the descriptor's raw opt-in off the config, which
+      // carries more than ValidatableField declares.
+      { name: "price", type: "number", dbType: "decimal" } as unknown as ValidatableField,
     ];
     expect(hookChangedWholeNumberIssues({ price: 2.5 }, fields)).toEqual([]);
   });
 
   it("keeps a float-format field's fraction", () => {
     const fields: ValidatableField[] = [
-      { name: "ratio", type: "number", options: { format: "float" } },
+      { name: "ratio", type: "number", options: { format: "float" } } as unknown as ValidatableField,
     ];
     expect(hookChangedWholeNumberIssues({ ratio: 2.5 }, fields)).toEqual([]);
   });
@@ -105,8 +107,11 @@ describe("hookChangedWholeNumberIssues", () => {
   });
 
   it("judges a whole-number field inside a component a container stores, by the component's own fields", () => {
+    // The walk reads the component reference off the raw config, which
+    // carries more than ValidatableField declares; the walk takes it as the
+    // validator's own fields arrive.
     const fields: ValidatableField[] = [
-      { name: "banner", type: "component", component: "cta" },
+      { name: "banner", type: "component", component: "cta" } as unknown as ValidatableField,
     ];
     const componentFields: ValidatableField[] = [
       { name: "weight", type: "number", label: "Weight" },
@@ -127,8 +132,11 @@ describe("hookChangedWholeNumberIssues", () => {
   });
 
   it("leaves a component alone when no resolver is handed, as the gate left it unjudged", () => {
+    // The walk reads the component reference off the raw config, which
+    // carries more than ValidatableField declares; the walk takes it as the
+    // validator's own fields arrive.
     const fields: ValidatableField[] = [
-      { name: "banner", type: "component", component: "cta" },
+      { name: "banner", type: "component", component: "cta" } as unknown as ValidatableField,
     ];
     expect(
       hookChangedWholeNumberIssues({ banner: { weight: 1.5 } }, fields)

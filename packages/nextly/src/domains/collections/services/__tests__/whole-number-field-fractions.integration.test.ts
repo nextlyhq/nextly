@@ -534,7 +534,17 @@ describe.each(getConfiguredTestDialects())(
         SLUG,
         "denied-frac-1",
         { locked: { label: "sibling edit" } },
-        { overrideAccess: false, user: { id: "sibling-editor" } }
+        {
+      overrideAccess: false,
+      // The rules this write meets read only who the caller is; the role
+      // rows userWhoMay inserted answer for the grants.
+      user: {
+        id: "sibling-editor",
+        email: "sibling-editor@example.test",
+        role: "",
+        permissions: [],
+      },
+    }
       )) as unknown as Record<string, unknown>;
       expect(edited.title).toBe("denied legacy");
       expect((edited.locked as Record<string, unknown>).label).toBe(
@@ -552,7 +562,17 @@ describe.each(getConfiguredTestDialects())(
           SLUG,
           "denied-frac-1",
           { quantity: 2.5 },
-          { overrideAccess: false, user: { id: "sibling-editor" } }
+          {
+      overrideAccess: false,
+      // The rules this write meets read only who the caller is; the role
+      // rows userWhoMay inserted answer for the grants.
+      user: {
+        id: "sibling-editor",
+        email: "sibling-editor@example.test",
+        role: "",
+        permissions: [],
+      },
+    }
         )
       );
       expectFractionRefusal(refusal, "quantity");
