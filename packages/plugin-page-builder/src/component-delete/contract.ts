@@ -6,7 +6,11 @@
  * ## The calls
  *
  * - `POST /components/:id/delete` with `{ "dryRun": true }`: what deleting it
- *   would do, changing nothing, and whether a delete is open already.
+ *   would do, changing nothing, and whether a delete is open already. One
+ *   call judges one slice of the site's documents; while `plan.complete` is
+ *   false, call again with `{ "dryRun": true, "after": plan.next }` for the
+ *   next slice. Each call answers its own slice's documents, so the dialog
+ *   adds them up.
  * - `POST /components/:id/delete` with `{}`: start the delete, or carry the
  *   caller's own on by one step. The dialog calls it again until the status
  *   is no longer `preflight` or `running`; closing the dialog pauses the
@@ -16,19 +20,27 @@
  *
  * ## The statuses, and the dialog state each one is
  *
- * - `none`: nothing uses it; the delete removes it at once.
+ * - `none`: nothing uses it; the delete removes it at once. Only ever
+ *   answered once the plan is complete.
  * - `used`: it is used; the delete turns each copy into plain blocks first.
+ *   Answered as soon as a slice finds a use, complete or not.
+ * - `counting`: the slices so far found no use, and the plan is not complete
+ *   yet ("Counting…"); ask for the next slice.
  * - `refused`: it cannot be deleted as things stand: a Layout uses it
  *   (`layouts`), or a host cannot be converted (`left`). Nothing changed.
  * - `preflight`, `running`: the delete is under way (`run.yours` false: it
- *   is somebody else's).
+ *   is somebody else's). `preflight` is the check before anything changes,
+ *   which may take several calls on a large site.
  * - `partly-done`: every host it could convert was converted; the ones in
  *   `left` were not, so the component is kept. Starting again picks up there.
  * - `done`: the component was deleted.
  * - `idle`: no delete is open (GET only).
  *
- * A caller without the right to delete components is answered with
- * `mayDelete: false` on a dry run, and refused (403) when starting.
+ * A caller who may not delete THIS component (judged by core's own delete
+ * gate for it, a rule over the row included) is answered with
+ * `mayDelete: false` on a dry run, and refused (403) when starting or
+ * carrying a delete on; a delete they had open is stopped, with nothing
+ * further converted.
  *
  * @module component-delete/contract
  * @experimental Settles when the delete dialog ships.
@@ -46,7 +58,8 @@ export type ComponentDeleteStatus =
   | "running"
   | "partly-done"
   | "done"
-  | "idle";
+  | "idle"
+  | "counting";
 
 /** One document named to the caller: one they may read. */
 export interface NamedDocument {
@@ -94,8 +107,18 @@ export interface LeftDocument {
   readonly words: string;
 }
 
-/** What deleting would do, as the dry run judges it. */
+/**
+ * What deleting would do, as the dry run judges it: over one slice of the
+ * site's documents, the whole of them when `complete`.
+ */
 export interface DeletePlan {
+  /** Whether this slice reached the last document. */
+  readonly complete: boolean;
+  /**
+   * Where the next slice starts, to send back as `after`; `null` once
+   * complete. Opaque.
+   */
+  readonly next: string | null;
   /** The documents whose copies are turned into plain blocks. */
   readonly convert: DocumentList;
   /**

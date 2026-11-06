@@ -43,9 +43,8 @@ function transaction(
     table: () => columns as never,
     select: (table: unknown) => {
       reads += 1;
-      return {
-        all: async () => (table === componentDeletions ? runs : []),
-      };
+      const rows = async () => (table === componentDeletions ? runs : []);
+      return { all: rows, where: () => ({ all: rows }) };
     },
     update: (table: unknown, set: Record<string, unknown>) => ({
       where: async () => {
@@ -80,7 +79,7 @@ describe("judging a write inside its transaction", () => {
 
   it("refuses a row holding a component that is being deleted", async () => {
     const tx = transaction([
-      { id: "r", componentId: "card", purpose: "delete", phase: "settling" },
+      { id: "r", componentId: "card", purpose: "delete", phase: "deleted" },
     ]);
 
     await expect(
@@ -132,7 +131,7 @@ describe("judging a write inside its transaction", () => {
 
   it("leaves alone runs of other components, retired-field runs and a run still judging", async () => {
     const tx = transaction([
-      { id: "a", componentId: "other", purpose: "delete", phase: "settling" },
+      { id: "a", componentId: "other", purpose: "delete", phase: "deleted" },
       { id: "b", componentId: "card", purpose: "strip-retired", phase: "done" },
       { id: "c", componentId: "card", purpose: "delete", phase: "preflight" },
     ]);
