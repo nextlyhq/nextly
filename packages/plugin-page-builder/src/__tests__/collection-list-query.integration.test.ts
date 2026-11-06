@@ -47,6 +47,8 @@ const CATS = "lqi_cats";
 const WORDS = "lqi_words";
 const DOCS = "lqi_docs";
 const SHELVES = "lqi_shelves";
+const TAGS = "lqi_tags";
+const BOARDS = "lqi_boards";
 
 type Row = Record<string, unknown>;
 
@@ -128,6 +130,21 @@ describe.each(getConfiguredTestDialects())(
                 hasMany: true,
                 access: { read: () => false },
               }),
+            ],
+          }),
+          defineCollection({
+            slug: TAGS,
+            status: true,
+            access: { read: () => true },
+            fields: [text({ name: "title" }), number({ name: "rank" })],
+          }),
+          defineCollection({
+            slug: BOARDS,
+            status: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title" }),
+              relationship({ name: "tags", relationTo: TAGS, hasMany: true }),
             ],
           }),
           defineCollection({
@@ -570,6 +587,116 @@ describe.each(getConfiguredTestDialects())(
         );
         expect((await drawn(ofItem("staffPicks"), inner)).titles).toEqual([]);
       });
+    });
+
+    describe("a sorted related source of more entries than one read takes", () => {
+      /** How many entries the board holds: more than a read's 100. */
+      const MANY = 150;
+      let board: Row = {};
+
+      beforeAll(async () => {
+        // Titles that repeat and differ by case, and some empty, so the
+        // order is the database's collation, empty values last and ties by
+        // id: what no merge outside the database could repeat.
+        const words = ["apple", "Apple", "Banana", "banana", "cherry", ""];
+        const tagIds: string[] = [];
+        for (let index = 0; index < MANY; index += 1) {
+          const created = await t.nextly.create({
+            collection: TAGS,
+            data: {
+              title: words[index % words.length],
+              rank: index % 7,
+              status: "published",
+            },
+            overrideAccess: true,
+          });
+          tagIds.push(String(created.item.id));
+        }
+        const created = await t.nextly.create({
+          collection: BOARDS,
+          data: {
+            title: "Board",
+            // Stored against the id order, so no read order is the stored one.
+            tags: [...tagIds].reverse(),
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        board = (await t.nextly.findByID({
+          collection: BOARDS,
+          id: String(created.item.id),
+          depth: 0,
+          overrideAccess: true,
+        })) as Row;
+      });
+
+      /** Every tag's id in the database's own order for `sort`, read whole. */
+      async function databaseOrder(sort: string): Promise<string[]> {
+        const reader = createPublicReader(t.nextly, { locale: "en" });
+        const order: string[] = [];
+        for (let offset = 0; offset < MANY; offset += 100) {
+          const { items } = await reader.find({
+            collection: TAGS,
+            sort,
+            limit: 100,
+            offset,
+          });
+          order.push(...items.map(item => String(item.id)));
+        }
+        return order;
+      }
+
+      /**
+       * The public reader, bounded as the canvas's route bounds a read: at
+       * most 100 values in a filter and 100 rows a read.
+       */
+      function boundedData(): PageContext["data"] {
+        const data = createDefaultDataProvider(
+          createPublicReader(t.nextly, { locale: "en" })
+        );
+        return {
+          find: async query => {
+            const wide = (query.filters ?? []).some(
+              row => Array.isArray(row.value) && row.value.length > 100
+            );
+            if (wide || (query.limit ?? 10) > 100) {
+              throw new Error("A read names more than 100 values.");
+            }
+            return await data.find(query);
+          },
+        };
+      }
+
+      it.each([
+        ["title", 40, 30],
+        ["-title", 90, 20],
+        ["rank,-title", 0, 100],
+        ["title", 120, 50],
+      ])(
+        "sorts by %s across every read, then skips %i and shows %i",
+        async (sort, offset, limit) => {
+          const listed = await drawn(
+            {
+              collection: TAGS,
+              relation: { of: "entry", field: "tags" },
+              sort,
+              offset,
+              limit,
+            },
+            {
+              entry: board,
+              entryCollection: BOARDS,
+              diagnostics: true,
+              data: boundedData(),
+            },
+            "id"
+          );
+          expect(listed.note).toBeNull();
+          expect(listed.titles).toEqual(
+            (await databaseOrder(sort)).slice(offset, offset + limit)
+          );
+        }
+      );
     });
 
     it("lists a stored loop sorted by a field the public may not read in id order, and tells an author", async () => {
