@@ -325,6 +325,43 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["content", "subtitle"]);
     });
 
+    it("previews a field change with the lines the review shows, and writes nothing", async () => {
+      process.env.NODE_ENV = "development";
+      const service = t.getService<CollectionService>("collectionService");
+      await service.createCollection(created("articles"), {});
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      await adapter.executeQuery(
+        "INSERT INTO dc_articles (id, title, body, slug, created_at, updated_at) VALUES ('a', 'T', 'x', 'a', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+      const folder = join(t.basePath, "database", "history");
+      const before = readdirSync(folder).sort();
+
+      const response = (await dispatchCollections(
+        {} as ServiceContainer,
+        "previewSchemaChanges",
+        { collectionName: "articles" },
+        {
+          fields: [
+            { name: "body", type: "text" },
+            { name: "subtitle", type: "text", required: true },
+          ],
+          eventResolutions: [
+            {
+              kind: "provide_default",
+              eventId: "add_required_field_no_default:dc_articles.subtitle",
+              value: "Untitled",
+            },
+          ],
+        }
+      )) as Response;
+
+      const body = (await response.json()) as { notices?: string[] };
+      expect(body.notices).toEqual([
+        "This save fills 1 row with 'Untitled' in subtitle.",
+      ]);
+      expect(readdirSync(folder).sort()).toEqual(before);
+    });
+
     it.runIf(dialect !== "sqlite")(
       "changes a relationship's foreign-key action when its onDelete changes",
       async () => {
