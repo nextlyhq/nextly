@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import type { ServiceContainer } from "../../../../services";
@@ -27,14 +27,8 @@ import { runFileMigrations } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 
 let instance: TestNextly | undefined;
-let previousNodeEnv: string | undefined;
-
-beforeEach(() => {
-  previousNodeEnv = process.env.NODE_ENV;
-});
-
 afterEach(async () => {
-  process.env.NODE_ENV = previousNodeEnv;
+  vi.unstubAllEnvs();
   await instance?.destroy();
   instance = undefined;
 });
@@ -65,8 +59,8 @@ describe.each(getConfiguredTestDialects())(
       }) as Parameters<CollectionService["createCollection"]>[0];
 
     it("in development writes the definition and an applied migration where the config says", async () => {
-      process.env.NODE_ENV = "development";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
 
       await service.createCollection(created("articles"), {});
 
@@ -100,8 +94,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("keeps a plugin many-to-one's foreign-key action through the definition into a deploy's registry row", async () => {
-      process.env.NODE_ENV = "development";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
       const author = {
         name: "author",
         type: "relationship",
@@ -171,8 +165,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("in development deletes the collection through its own applied drop file", async () => {
-      process.env.NODE_ENV = "development";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
       await service.createCollection(created("articles"), {});
 
       await service.deleteCollection("articles", {});
@@ -204,8 +198,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a delete the history checks refuse, before anything is torn down", async () => {
-      process.env.NODE_ENV = "development";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
       await service.createCollection(created("articles"), {});
       const folder = join(t.basePath, "database", "history");
       const [first] = readdirSync(folder).filter(f => f.endsWith(".sql"));
@@ -226,8 +220,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("writes a plugin's long text and formatted number through the writer", async () => {
-      process.env.NODE_ENV = "development";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
       const fields = [
         { name: "bio", type: "text", options: { variant: "long" } },
         { name: "price", type: "number", options: { format: "float" } },
@@ -274,8 +268,8 @@ describe.each(getConfiguredTestDialects())(
       );
 
     it("writes a field change, with the person's rename, as its own applied file", async () => {
-      process.env.NODE_ENV = "development";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
       await service.createCollection(created("articles"), {});
       const adapter = t.adapter as unknown as DrizzleAdapter;
       await adapter.executeQuery(
@@ -326,8 +320,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("previews a field change with the lines the review shows, and writes nothing", async () => {
-      process.env.NODE_ENV = "development";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
       await service.createCollection(created("articles"), {});
       const adapter = t.adapter as unknown as DrizzleAdapter;
       await adapter.executeQuery(
@@ -365,8 +359,8 @@ describe.each(getConfiguredTestDialects())(
     it.runIf(dialect !== "sqlite")(
       "changes a relationship's foreign-key action when its onDelete changes",
       async () => {
-        process.env.NODE_ENV = "development";
-        const service = t.getService<CollectionService>("collectionService");
+        vi.stubEnv("NODE_ENV", "development");
+        const service = t.getService("collectionService");
         await service.createCollection(created("people"), {});
         const author = (onDelete: string) => ({
           name: "author",
@@ -399,8 +393,8 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it("outside development writes them and runs nothing", async () => {
-      process.env.NODE_ENV = "production";
-      const service = t.getService<CollectionService>("collectionService");
+      vi.stubEnv("NODE_ENV", "production");
+      const service = t.getService("collectionService");
 
       await service.createCollection(created("articles"), {});
 

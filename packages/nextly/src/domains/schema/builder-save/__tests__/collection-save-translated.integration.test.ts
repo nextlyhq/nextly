@@ -73,7 +73,7 @@ describe.each(getConfiguredTestDialects())(
     it("pushes the rename in development, records its migration applied, and replays to the same tables", async () => {
       const t = await boot(dialect);
       instance = t;
-      const service = t.getService<CollectionService>("collectionService");
+      const service = t.getService("collectionService");
       await service.createCollection(
         {
           name: "posts",

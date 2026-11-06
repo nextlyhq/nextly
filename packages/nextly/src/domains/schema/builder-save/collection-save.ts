@@ -1040,7 +1040,6 @@ async function runWritten(
       db,
       dialect,
       splitSqlStatements(file.sql, dialect, {
-        source: filename,
         transaction: file.transaction,
       }),
       filename

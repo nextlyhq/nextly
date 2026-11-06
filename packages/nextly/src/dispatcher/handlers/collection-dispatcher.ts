@@ -737,7 +737,7 @@ const COLLECTIONS_METHODS: Record<
       const answers = body as SchemaChangeAnswers;
       const notices = await reviewLinesOf({
         slug: p.collectionName,
-        collection,
+        collection: writerRowOf(collection),
         fields: fields as FieldDefinition[],
         localized:
           previewLocalized ??
@@ -941,7 +941,7 @@ const COLLECTIONS_METHODS: Record<
           const written = await saveThroughWriter({
             ...(translated ? { appliedBy: push } : {}),
             slug: p.collectionName,
-            collection,
+            collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
             localized: isLocalized,
             answers: {
@@ -1656,6 +1656,20 @@ export const formatToastSummaryForTest = formatToastSummary;
 // Test seam for the hint-receipt decision helper. The behavioural
 // contract is "non-empty renames map -> log; everything else -> silent".
 export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
+
+/**
+ * A registry row as the writer reads it: its table and its fields, which the
+ * registry stores as the field definitions they were saved as.
+ */
+function writerRowOf(collection: { tableName: string; fields?: unknown }): {
+  tableName: string;
+  fields: FieldDefinition[];
+} {
+  return {
+    tableName: collection.tableName,
+    fields: (collection.fields ?? []) as FieldDefinition[],
+  };
+}
 
 /** What a field change gives the Builder save writer. */
 interface WriterChange {
