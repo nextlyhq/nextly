@@ -154,7 +154,19 @@ async function openDelete(
   await page.getByRole("button", { name: "Delete component…" }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
+  await checked(dialog);
   return dialog;
+}
+
+/**
+ * Wait until the dry run has read every slice of the site: on a production
+ * build with the suite's seed that can take longer than an expectation's
+ * default wait.
+ */
+async function checked(dialog: Locator): Promise<void> {
+  await expect(dialog).not.toContainText(/Checking where|Still checking/, {
+    timeout: 120_000,
+  });
 }
 
 /** Every node type a stored document holds, nested slots included. */
@@ -187,6 +199,7 @@ test.describe("Delete component", () => {
 
     await page.getByRole("button", { name: "Delete component…" }).click();
     const dialog = page.getByRole("alertdialog", { name: "Delete component" });
+    await checked(dialog);
     await expect(dialog).toContainText("is used in 1 document");
     const link = dialog.getByRole("link", { name: placing.title });
     await expect(link).toHaveAttribute(
@@ -327,6 +340,7 @@ test.describe("Delete component", () => {
     await page.getByRole("menuitem", { name: "Delete component…" }).click();
 
     const dialog = page.getByRole("alertdialog", { name: "Delete component" });
+    await checked(dialog);
     await expect(dialog).toContainText(listed.title);
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   });
