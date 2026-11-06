@@ -795,6 +795,100 @@ describe("removing variables", () => {
     expect(write.mock.calls[1]?.[1]).toMatchObject({ rev: "8" });
   });
 
+  describe("a restore refused because the Single changed meanwhile", () => {
+    const removeAccentUsed = (store: VariableStore) =>
+      refusal(
+        removeVariables(
+          post({ ids: ["t-accent"] }),
+          store,
+          supplied,
+          checksOf(
+            async () => undefined,
+            [{ kind: "collection", slug: "pages", id: "p9" }]
+          )
+        )
+      );
+    const added = {
+      id: "t-new",
+      name: "color.new",
+      kind: "color",
+      values: { light: "#abcdef" },
+    };
+
+    it("reads the Single again and puts the variable back into what it holds now", async () => {
+      const original = { tokens: [accent, brand] };
+      const { store, write } = storeOf(original, "7");
+      // Someone else's save after the removal: brand edited, a variable added.
+      const latest: VariableRead = {
+        section: { tokens: [{ ...brand, label: "Brand 2" }, added] },
+        classes: [],
+        rev: "9",
+      };
+      store.read = vi
+        .fn<VariableStore["read"]>()
+        .mockResolvedValueOnce({ section: original, classes: [], rev: "7" })
+        .mockResolvedValue(latest);
+      write
+        .mockImplementationOnce(async section => ({
+          section,
+          classes: [],
+          rev: "8",
+        }))
+        .mockRejectedValueOnce(new Error("stale version"));
+
+      expect(await removeAccentUsed(store)).toMatchObject({
+        publicData: { errors: [{ code: "IN_USE" }] },
+      });
+      // The removal, the refused restore, then the restore over the newer
+      // save, its edits kept, made from that save's version.
+      expect(write).toHaveBeenCalledTimes(3);
+      expect(write.mock.calls[2]?.[0]).toEqual({
+        tokens: [accent, { ...brand, label: "Brand 2" }, added],
+      });
+      expect(write.mock.calls[2]?.[1]).toMatchObject({ rev: "9" });
+    });
+
+    it("leaves a variable a later save already put back as that save stored it", async () => {
+      const original = { tokens: [accent, brand] };
+      const { store, write } = storeOf(original, "7");
+      const again = { ...accent, label: "Accent again" };
+      store.read = vi
+        .fn<VariableStore["read"]>()
+        .mockResolvedValueOnce({ section: original, classes: [], rev: "7" })
+        .mockResolvedValue({
+          section: { tokens: [brand, again] },
+          classes: [],
+          rev: "9",
+        });
+      write
+        .mockImplementationOnce(async section => ({
+          section,
+          classes: [],
+          rev: "8",
+        }))
+        .mockRejectedValueOnce(new Error("stale version"));
+
+      await removeAccentUsed(store);
+      expect(write.mock.calls[2]?.[0]).toEqual({ tokens: [brand, again] });
+    });
+
+    it("reports the restore's own failure after a bounded number of tries", async () => {
+      const { store, write } = storeOf({ tokens: [accent] }, "7");
+      const stale = new Error("stale version");
+      write
+        .mockImplementationOnce(async section => ({
+          section,
+          classes: [],
+          rev: "8",
+        }))
+        .mockRejectedValue(stale);
+
+      expect(await removeAccentUsed(store)).toBe(stale);
+      // The removal, then three restores.
+      expect(write).toHaveBeenCalledTimes(4);
+    });
+  });
+
   it("puts the variables back when the final rescan cannot finish", async () => {
     const { store, write } = storeOf({ tokens: [accent] }, "3");
     const unreadable = new Error("a form could not be read");
