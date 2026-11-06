@@ -17,6 +17,9 @@
  *   itself, projected to what visitors may read.
  * - **Priced blog posts** asks for one of each kind of input, for the
  *   editor's test of the Inputs group.
+ * - **Featured posts (failing)** and **Blog posts with history notes** are
+ *   the editor's failure and caution: a run that throws, and one reading a
+ *   collection visitors can read nothing of.
  *
  * The first two take a required `match`, so a test lists only the rows it
  * made, the other tests' rows of the same collections left out.
@@ -191,9 +194,55 @@ const pricedPosts = defineNamedQuery({
   },
 });
 
+/**
+ * A query whose run fails, for the editor's note on a failed run: the error
+ * it throws carries words an author must never be shown.
+ */
+const failingPosts = defineNamedQuery({
+  name: "e2e.failing-posts",
+  label: "Featured posts (failing)",
+  description: "A query whose upstream refuses every request.",
+  reads: { collections: ["bound-entries"] },
+  rows: { collection: "bound-entries" },
+  run: () =>
+    Promise.reject(new Error("upstream refused: ECONNREFUSED token=demo")),
+});
+
+/**
+ * A query that reads a collection visitors can read nothing of
+ * (`history-notes`, which declares no read rule), for the editor's caution
+ * naming the fields a published list of it goes without. It lists blog
+ * posts, so it still draws rows.
+ */
+const postsWithNotes = defineNamedQuery({
+  name: "e2e.posts-with-notes",
+  label: "Blog posts with history notes",
+  description: "Each blog post, beside the newest history note.",
+  reads: { collections: ["bound-entries", "history-notes"] },
+  rows: { collection: "bound-entries" },
+  async run({ window, reader }) {
+    // A visitor reads none of it: the published page gets nothing here.
+    await reader
+      .find({ collection: "history-notes", limit: 1 })
+      .catch(() => undefined);
+    return {
+      rows: (
+        await reader.find({
+          collection: "bound-entries",
+          sort: "title",
+          limit: window.limit,
+          offset: window.offset,
+        })
+      ).items,
+    };
+  },
+});
+
 /** The playground's named queries, in the order the Source menu lists them. */
 export const E2E_NAMED_QUERIES = [
   postsWithStory,
   blogPosts,
   pricedPosts,
+  failingPosts,
+  postsWithNotes,
 ] as const;
