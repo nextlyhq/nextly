@@ -54,7 +54,6 @@ import {
 import { respondList, type PaginationMeta } from "nextly";
 import { humanizeFieldName } from "nextly/field-label";
 
-import { labelOf, pluralLabelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
@@ -66,6 +65,7 @@ import {
   type LoopListFieldItem,
   type LoopRelationItem,
 } from "./loop-collections-contract";
+import { labelOf, pluralLabelOf } from "./collection-labels";
 import {
   registryRecords,
   schemaIsLive,

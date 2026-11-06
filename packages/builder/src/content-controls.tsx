@@ -45,13 +45,13 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { CollectionControl, SortControl } from "./collection-loop-controls";
+import type { QueryField } from "./list-query-model";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
 import { propLabel, type EditableProp } from "./inspector";
-import type { QueryField } from "./list-query-model";
 import type { OpenPassages } from "./open-passages";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";

@@ -32,17 +32,17 @@ import {
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import {
+  LIST_ISSUE_CODES,
+  listQueryIssues,
+  type ListFieldSource,
+} from "./list-query";
+import {
   DEFAULT_LIMITS,
   LIMIT_WARNING_RATIO,
   MAX_ENVELOPE_ENTRIES,
   MAX_NODES,
 } from "./limits";
 import type { DocumentLimits } from "./limits";
-import {
-  LIST_ISSUE_CODES,
-  listQueryIssues,
-  type ListFieldSource,
-} from "./list-query";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";

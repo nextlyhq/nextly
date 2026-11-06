@@ -50,12 +50,12 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { newListQueryIssues } from "./list-query-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
   withLockIssues,
 } from "./layers-lock-judgement";
-import { newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */

@@ -249,7 +249,7 @@ function readerFilters(
 function idOf(value: unknown): string | number | undefined {
   if (typeof value === "string" || typeof value === "number") return value;
   if (typeof value === "object" && value !== null && "id" in value) {
-    const id = value.id;
+    const id = (value as { id: unknown }).id;
     if (typeof id === "string" || typeof id === "number") return id;
   }
   return undefined;

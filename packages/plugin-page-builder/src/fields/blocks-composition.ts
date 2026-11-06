@@ -91,12 +91,12 @@ import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import { isForest } from "./blocks-document";
+import type { ListFieldsReader } from "./list-query-judgement";
 import {
   LAYERS_LOCK_CHANGED,
   placedLockMessage,
   variantLockMessage,
 } from "./layers-lock-wording";
-import type { ListFieldsReader } from "./list-query-judgement";
 import {
   composedFormsRead,
   lockBaselines,
