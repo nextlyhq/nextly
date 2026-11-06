@@ -1718,6 +1718,20 @@ export class UserMutationService extends BaseService {
         }
       }
 
+      // The grant and the roles were written in the insert's transaction; the
+      // role caches that answered for this account before it existed are
+      // flushed once they commit. Inside an enclosing transaction that is its
+      // commit: flushed before it, a permission check on another connection
+      // could cache the account as holding no role, and keep that answer.
+      // Registered before the `user.created` announcement below, since
+      // after-commit effects run in the order they were registered: a
+      // subscriber asking what the new account may do is answered from the
+      // committed roles, not from what was cached before them.
+      if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
+        const userRoles = (await serviceContainerFor(this.adapter)).userRoles;
+        await this.afterCommit(() => userRoles.invalidateRoleCaches(newUserId));
+      }
+
       // With the account and its outbox row committed, offer the shared
       // post-commit hooks, mirroring the collection/single/media write paths: a
       // bounded retention pass trims old outbox rows even on a
@@ -1738,17 +1752,6 @@ export class UserMutationService extends BaseService {
             email,
           },
         });
-      }
-
-      // The grant and the roles were written in the insert's transaction; the
-      // role caches that answered for this account before it existed are
-      // flushed once they commit. Inside an enclosing transaction that is its
-      // commit: flushed before it, a permission check on another connection
-      // could cache the account as holding no role, and keep that answer.
-      if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
-        const userRoles = (await serviceContainerFor(this.adapter)).userRoles;
-        const createdId = String(user.id);
-        await this.afterCommit(() => userRoles.invalidateRoleCaches(createdId));
       }
 
       // Hand the invite link back to the admin. The token was committed with

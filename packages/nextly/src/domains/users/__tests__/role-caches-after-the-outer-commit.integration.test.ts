@@ -32,7 +32,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { ServiceContainer } from "../../../services/index";
-import { hasPermission } from "../../../services/lib/permissions";
+import { hasPermission, rbacRevision } from "../../../services/lib/permissions";
 
 let current: TestNextly | undefined;
 
@@ -226,5 +226,36 @@ describe.each(SERVER_DIALECTS)(
         expect(await mayRead(asked.userId)).toBe(after);
       }
     );
+
+    // After the commit the caches are flushed and `user.created` announced,
+    // in the order they were registered. Announced first, a subscriber is
+    // told of the account while what was cached about it, the account holding
+    // no role, still stands: the role version has not moved yet. Read when the
+    // event is delivered, since handlers are called as it is emitted.
+    it("retires the new account's cached access before announcing user.created", async () => {
+      const b = await boot(dialect);
+      const announced: Array<{ revision: string; mayRead: Promise<boolean> }> =
+        [];
+      current!.events.on<{ userId: string }>("user.created", event => {
+        announced.push({
+          revision: rbacRevision(),
+          mayRead: mayRead(event.payload.userId),
+        });
+      });
+
+      let written: string | undefined;
+      const asked = await askedWhileOpen(b, async () => {
+        const userId = await newUser(b, true);
+        written = rbacRevision();
+        return userId;
+      });
+      await current!.events.settle();
+
+      expect(asked.whileOpen).toBe(false);
+      expect(announced).toHaveLength(1);
+      expect(written).toBeDefined();
+      expect(announced[0].revision).not.toBe(written);
+      expect(await announced[0].mayRead).toBe(true);
+    });
   }
 );
