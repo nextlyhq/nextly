@@ -163,6 +163,50 @@ describe("plugin services inside a named query's frame", () => {
     expect(data).toEqual({ rows: ["plain"] });
   });
 
+  it("guard a handle held inside plain data a service method returns", () => {
+    class Repository {
+      readonly #rows = ["SENTINEL"];
+      read(): string[] {
+        return this.#rows;
+      }
+    }
+    registerPluginService(PLUGIN, "nested", () => ({
+      open: () => ({
+        repository: new Repository(),
+        read: () => ["SENTINEL"],
+        deep: { list: [{ read: () => ["SENTINEL"] }] },
+        rows: ["plain", "rows"],
+      }),
+    }));
+    const service = services().nested as unknown as {
+      open: () => {
+        repository: Repository;
+        read: () => string[];
+        deep: { list: { read: () => string[] }[] };
+        rows: string[];
+      };
+    };
+    // Taken outside the frame, as a query's module might keep it.
+    const opened = service.open();
+    const frame = openNamedQueryFrame("notes.all");
+    for (const call of [
+      () => opened.repository.read(),
+      () => opened.read(),
+      () => opened.deep.list[0]?.read(),
+    ]) {
+      expect(outcome(() => frame.run(call))).toBe("named-query-trusted-read");
+    }
+    // Plain data inside it stays usable inside the frame.
+    expect(frame.run(() => opened.rows.map(row => row.toUpperCase()))).toEqual([
+      "PLAIN",
+      "ROWS",
+    ]);
+    // Outside the frame every handle works as it always did.
+    expect(opened.repository.read()).toEqual(["SENTINEL"]);
+    expect(opened.read()).toEqual(["SENTINEL"]);
+    expect(opened.deep.list[0]?.read()).toEqual(["SENTINEL"]);
+  });
+
   it("answer through the frame's own door", () => {
     const frame = openNamedQueryFrame("notes.all");
     expect(frame.run(() => frame.read(() => services().store?.read()))).toEqual(

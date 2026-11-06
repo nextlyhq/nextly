@@ -286,3 +286,37 @@ export type {
   SavePatternDryRunResponse,
   StoredPageAddress,
 } from "./library-contract";
+// Site code every published page carries, `@experimental` until it renders:
+// the rules an entry is held to, the sanitiser turning pasted HTML into
+// entries, and the check of a site's Content Security Policy, with the merge
+// a host's proxy adds what the code needs to its policy by.
+export {
+  SITE_CODE_LIMITS,
+  siteCodeEntryProblem,
+  siteCodeScriptKind,
+  siteCodeUrlProblem,
+} from "./site-code/rules";
+export type {
+  SiteCodeAttrs,
+  SiteCodeEntry,
+  SiteCodeSlot,
+} from "./site-code/rules";
+export { normaliseSiteCodeText, sanitiseSiteCode } from "./site-code/sanitise";
+export type { SanitisedSiteCode } from "./site-code/sanitise";
+export {
+  checkSiteCodeAgainstCsp,
+  cspHash,
+  mergeSiteCodeIntoCsp,
+  parseCsp,
+  siteCodeFacts,
+} from "./site-code/csp";
+export type {
+  CspCheck,
+  CspCheckInput,
+  CspFinding,
+  CspPolicy,
+  SiteCodeFacts,
+  SiteCodeInlineKind,
+  SiteCodeLoad,
+  SiteCodeResourceKind,
+} from "./site-code/csp";

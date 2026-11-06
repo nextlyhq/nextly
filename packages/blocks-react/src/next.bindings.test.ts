@@ -1128,8 +1128,13 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(runtime.judged).toContain("shapes collection:Public");
   });
 
-  it("reads the site's zone for a list's item conditions only when one orders a value", async () => {
-    const listWith = (op: string, value?: unknown) =>
+  it("reads the site's zone for a list's item conditions only when one orders a date", async () => {
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "rating", type: "number" },
+      { name: "publishedAt", type: "date" },
+    ]);
+    const listWith = (field: string, op: string, value?: unknown) =>
       instance(
         page({
           id: "loop",
@@ -1141,7 +1146,7 @@ describe("a page's blocks shown by their visibility conditions", () => {
               shownWhen("pill", "Featured", [
                 [
                   {
-                    field: "title",
+                    field,
                     op,
                     ...(value === undefined ? {} : { value }),
                   },
@@ -1161,14 +1166,65 @@ describe("a page's blocks shown by their visibility conditions", () => {
     const { html } = await renderedPage(
       createBlocksPage,
       { ...base, maxQueries: 2 },
-      listWith("equals", "Public")
+      listWith("title", "equals", "Public")
     );
     expect(siteRead()).toBe(false);
     expect(html).toContain("Featured");
-    // CONTROL: an ordered comparison reads it.
+    // Nor does ordering a number, which compares no day.
     runtime.tags = [];
-    await renderedPage(createBlocksPage, base, listWith("greater_than", "A"));
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("rating", "greater_than", 3)
+    );
+    expect(siteRead()).toBe(false);
+    // CONTROL: ordering a date reads it.
+    runtime.tags = [];
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("publishedAt", "greater_than", "2026-01-01")
+    );
     expect(siteRead()).toBe(true);
+  });
+
+  it("prepares a conditioned page three times, never a fourth for metadata's question", async () => {
+    await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      )
+    );
+    // Once as stored, once with every conditioned block kept for the reads,
+    // once decided by the entry. Metadata's own question about the Layout
+    // isn't asked by a render, so it prepares nothing more.
+    expect(runtime.pipelineRuns).toBe(3);
+  });
+
+  it("prepares a conditioned page three times for its metadata too, reusing the page kept for its question", async () => {
+    const route = createBlocksPage({
+      ...base,
+      nextly: instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      ) as never,
+      metadata: (_entry, _context, derived) => ({
+        title: derived.title ?? "Page",
+      }),
+    });
+    runtime.pipelineRuns = 0;
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    // The page kept to ask whether it reads anything is the one its reads
+    // are taken from: a fourth preparation would be the same work again.
+    expect(runtime.pipelineRuns).toBe(3);
   });
 
   it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {

@@ -17,6 +17,7 @@ import {
   bindingDemand,
   bindingKindOf,
   conditionDemand,
+  conditionFieldKind,
   DEFAULT_LIMITS,
   LIST_ENTRY_SLOT,
   deriveSeoFromDocument,
@@ -25,25 +26,21 @@ import {
   isListDay,
   DOCUMENT_FORMAT_VERSION,
   paginatedList,
-  readListQuery,
   type PaginatedList,
   regionDocument,
   resolveDocumentSeo,
-  resolveNodeBindings,
   safeTimeZone,
   type BindingDemand,
   type BindingRun,
   type BindingFieldShape,
   type BlockDocument,
-  type ConditionDemand,
-  type ConditionSubject,
   type BlockNode,
+  type ConditionDemand,
   type SourceDemand,
   type BlockSeoContribution,
   type DefinitionsById,
   type DocumentLimits,
   type LayoutRegion,
-  type ListQuery,
   type RemotePatternInput,
   type SeoImageCandidate,
   type SiteSheetInput,
@@ -86,7 +83,7 @@ import type {
 import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
-import { collectionLoop } from "./blocks/collection-loop";
+import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
 import {
   conditionDayStart,
   listEntryCount,
@@ -129,6 +126,7 @@ import type {
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
+import { listCollections, listCollectionsWhere } from "./list-collections";
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -152,7 +150,11 @@ import {
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
-import { conditionAllows, type ConditionGate } from "./visibility";
+import {
+  conditionAllows,
+  entrySubjectOf,
+  type ConditionGate,
+} from "./visibility";
 
 // The default stays published here too, where a route's `maxQueries` is set.
 export { DEFAULT_MAX_QUERIES };
@@ -798,7 +800,7 @@ async function siteZone(
   window: number | false | undefined
 ): Promise<string | undefined> {
   if (config.timeZone !== undefined) return config.timeZone;
-  const site = await readSite(config, budget, window);
+  const site = await readSite(config.cacheScope, budget, window);
   if (site === undefined) {
     throw new Error(
       "The site settings could not be read, so the site's time zone, and today in it, is not known."
@@ -2192,6 +2194,15 @@ async function readById(
 ): Promise<PublicRecord> {
   if (!reads.budget.take()) return undefined;
   try {
+    // An editor's reader reads by id, which alone returns the working draft
+    // of an entry with one pending; a published page's reads as a list does.
+    if (reads.reader.findById !== undefined) {
+      return await reads.reader.findById({
+        collection,
+        id,
+        select: fields,
+      });
+    }
     const { items } = await reads.reader.find({
       collection,
       filters: [{ field: "id", op: "equals", value: id }],
@@ -2274,20 +2285,20 @@ async function withRelations(
  */
 async function readPublicEntry(args: {
   demand: SourceDemand;
-  entry: ContentEntry;
-  context: RenderContext;
+  slug: string;
+  entryId: unknown;
   entrySource: EntrySource;
   entryRef: BlocksFieldShapeRef;
   reads: SourceReads;
 }): Promise<PublicRecord> {
-  const { demand, entry, context, reads } = args;
+  const { demand, slug, reads } = args;
   let record: PublicRecord;
   if (args.entrySource === "single") {
-    record = await readSingle(reads, context.collection, demand.fields);
+    record = await readSingle(reads, slug, demand.fields);
   } else {
-    const id: unknown = entry.id;
+    const id = args.entryId;
     if (typeof id !== "string" && typeof id !== "number") return undefined;
-    record = await readById(reads, context.collection, id, demand.fields);
+    record = await readById(reads, slug, id, demand.fields);
   }
   return await withRelations(record, demand, args.entryRef, reads);
 }
@@ -2316,7 +2327,7 @@ async function readSingles(
  * pages that show them.
  */
 async function readSite(
-  config: BlocksPageConfig,
+  cacheScope: string | undefined,
   budget: QueryBudget,
   window: number | false | undefined
 ): Promise<BlocksSiteSettings | undefined> {
@@ -2324,85 +2335,12 @@ async function readSite(
   try {
     return await cachedFind(async () => await readPublicSiteSettings(), {
       tags: nextlySiteSettingsTags(),
-      keyParts: ["nextly-public-site-settings", config.cacheScope ?? ""],
+      keyParts: ["nextly-public-site-settings", cacheScope ?? ""],
       revalidate: await releaseBoundedRevalidate(window),
     });
   } catch {
     return undefined;
   }
-}
-
-/**
- * The collection a named query's rows are entries of, by the queries the
- * route was handed, or undefined for rows of a schema of their own and a
- * query the route does not know. Rows are told apart as every reader of
- * them tells them apart, by whether they hold `fields`.
- */
-type RowsCollectionOf = (query: string) => string | undefined;
-
-function rowsCollectionOf(config: BlocksPageConfig): RowsCollectionOf {
-  return name => {
-    const rows = config.namedQueries?.definitionOf(name)?.rows;
-    return rows === undefined || "fields" in rows ? undefined : rows.collection;
-  };
-}
-
-/**
- * The collections the page's lists read that `wanted` keeps, each list's
- * query read as the engine reads it: its collection, or, for a custom
- * source, the collection its query's rows are entries of (`rowsOf`), whose
- * fields its items bind and decide conditions by. One walk for every
- * question about the page's lists, so no two of them disagree about which
- * lists a page holds.
- */
-function listCollectionsWhere(
-  documents: readonly BlockDocument[],
-  wanted: (query: ListQuery, list: BlockNode) => boolean,
-  run: BindingRun | undefined,
-  rowsOf: RowsCollectionOf
-): Set<string> {
-  const found = new Set<string>();
-  const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
-  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    if (node.type === collectionLoop.name) {
-      const { query } = readListQuery(listPropsAsBound(node, run));
-      const collection =
-        query.collection ??
-        (query.namedQuery === undefined
-          ? undefined
-          : rowsOf(query.namedQuery.name));
-      if (collection !== undefined && wanted(query, node)) {
-        found.add(collection);
-      }
-    }
-    for (const children of Object.values(node.slots ?? {})) {
-      stack.push(...children);
-    }
-  }
-  return found;
-}
-
-/**
- * A list's props as the page's binding pass fills them, so a list whose
- * collection an entry binding names is asked about that collection, the one
- * it draws, rather than the fallback stored beside the binding. A binding to
- * a list item is filled only as an item is drawn, so it leaves its prop as
- * stored here.
- */
-function listPropsAsBound(
-  list: BlockNode,
-  run: BindingRun | undefined
-): Record<string, unknown> {
-  if (run === undefined || list.bindings === undefined) return list.props;
-  return resolveNodeBindings(list, run, { phase: "page" }).props;
-}
-
-/** The collections the page's lists draw, whose items its bindings read. */
-function listCollections(
-  documents: readonly BlockDocument[],
-  rowsOf: RowsCollectionOf
-): Set<string> {
-  return listCollectionsWhere(documents, () => true, undefined, rowsOf);
 }
 
 /**
@@ -2414,7 +2352,7 @@ function listCollections(
 function listsComparingDays(
   documents: readonly BlockDocument[],
   run: BindingRun | undefined,
-  rowsOf: RowsCollectionOf
+  namedQueries: NamedQueryLookup | undefined
 ): Set<string> {
   return listCollectionsWhere(
     documents,
@@ -2422,30 +2360,48 @@ function listsComparingDays(
       query.filters.some(row => isListDay(row.value)) ||
       conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).any,
     run,
-    rowsOf
+    namedQueries
   );
 }
 
 /**
  * Whether any list on the page compares days, and so needs the site's zone:
- * one filtering by a day, or one whose item conditions order a value. A list
- * whose item conditions only match text or a yes-or-no needs field shapes
- * but no zone, and must not spend the page's query budget reading one.
+ * one filtering by a day, or one whose item conditions order a field its
+ * collection holds as a date. A list whose item conditions match text, a
+ * yes-or-no or a number needs field shapes but no zone, and must not spend
+ * the page's query budget reading one. A field whose shape is unknown fails
+ * its condition closed, so it compares no day either.
  */
 function listsNeedZone(
   documents: readonly BlockDocument[],
   run: BindingRun | undefined,
-  rowsOf: RowsCollectionOf
+  shapesOf: (collection: string) => readonly BindingFieldShape[] | undefined,
+  namedQueries: NamedQueryLookup | undefined
 ): boolean {
   return (
     listCollectionsWhere(
       documents,
-      (query, list) =>
+      (query, list, collection) =>
         query.filters.some(row => isListDay(row.value)) ||
-        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).ordersValues,
+        ordersADay(
+          conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
+            new Set(),
+          shapesOf(collection)
+        ),
       run,
-      rowsOf
+      namedQueries
     ).size > 0
+  );
+}
+
+/** Whether any of `fields` is a date in `shapes`, as a condition reads it. */
+function ordersADay(
+  fields: ReadonlySet<string>,
+  shapes: readonly BindingFieldShape[] | undefined
+): boolean {
+  if (fields.size === 0 || shapes === undefined) return false;
+  return shapes.some(
+    shape => fields.has(shape.name) && conditionFieldKind(shape) === "date"
   );
 }
 
@@ -2470,12 +2426,10 @@ async function listDayInputs(args: {
     args.bindings === undefined
       ? undefined
       : pageBindingRun(args.bindings, args.context.locale, args.resolver);
-  const rowsOf = rowsCollectionOf(args.config);
-  const collections = listsComparingDays(args.documents, run, rowsOf);
+  // A custom source's items are read as its rows' collection's.
+  const namedQueries = args.config.namedQueries;
+  const collections = listsComparingDays(args.documents, run, namedQueries);
   if (collections.size === 0) return {};
-  const timeZone = listsNeedZone(args.documents, run, rowsOf)
-    ? await listZone(args)
-    : undefined;
   const cache: ReadCache = {
     scope: args.config.cacheScope ?? "",
     locale: args.context.locale,
@@ -2489,6 +2443,15 @@ async function listDayInputs(args: {
       known.set(collection, undefined);
     }
   }
+  // Asked once the shapes are known, so only a date compared needs the zone.
+  const timeZone = listsNeedZone(
+    args.documents,
+    run,
+    collection => known.get(collection),
+    namedQueries
+  )
+    ? await listZone(args)
+    : undefined;
   return {
     ...(timeZone === undefined ? {} : { timeZone }),
     fieldShapes: {
@@ -2509,19 +2472,12 @@ async function listZone(args: {
   const site =
     args.bindings?.site ??
     (args.config.timeZone === undefined
-      ? await readSite(args.config, args.budget, args.window)
+      ? await readSite(args.config.cacheScope, args.budget, args.window)
       : undefined);
   return (
     args.bindings?.timeZone ??
-    pageTimeZone(args.config, site ?? undefined, args.context)
+    pageTimeZone(args.config.timeZone, site ?? undefined, args.context)
   );
-}
-
-/** A shape ref as a map key. */
-function refKey(ref: BlocksFieldShapeRef): string {
-  return "collection" in ref
-    ? `collection:${ref.collection}`
-    : `single:${ref.single}`;
 }
 
 /**
@@ -2552,7 +2508,7 @@ async function cachedFieldShapes(
         "nextly-binding-field-shapes",
         cache.scope,
         cache.locale ?? "",
-        refKey(ref),
+        shapeRefKey(ref),
       ],
       revalidate: await releaseBoundedRevalidate(cache.window),
     }
@@ -2569,13 +2525,12 @@ async function cachedFieldShapes(
 async function readFieldShapes(
   entryRef: BlocksFieldShapeRef,
   demand: BindingDemand,
-  documents: readonly BlockDocument[],
-  cache: ReadCache,
-  rowsOf: RowsCollectionOf
+  lists: readonly string[],
+  cache: ReadCache
 ): Promise<BlocksFieldShapes> {
   const known = new Map<string, readonly BindingFieldShape[] | undefined>();
   const fetch = async (ref: BlocksFieldShapeRef) => {
-    const key = refKey(ref);
+    const key = shapeRefKey(ref);
     if (known.has(key)) return known.get(key);
     let shapes: readonly BindingFieldShape[] | undefined;
     try {
@@ -2602,10 +2557,11 @@ async function readFieldShapes(
       if (target !== undefined) await fetch({ collection: target });
     }
   }
-  for (const collection of listCollections(documents, rowsOf)) {
+  for (const collection of lists) {
     await fetch({ collection });
   }
-  return { fieldsOf: ref => known.get(refKey(ref)) };
+  // Recorded, so the shapes read can be sent whole to an editor's canvas.
+  return recordedFieldShapes(known);
 }
 
 /**
@@ -2614,15 +2570,15 @@ async function readFieldShapes(
  * used.
  */
 function pageTimeZone(
-  config: BlocksPageConfig,
+  routeZone: string | undefined,
   site: BlocksSiteSettings | undefined,
-  context: RenderContext
+  where: { readonly collection: string; readonly slug: string }
 ): string | undefined {
-  const zone = config.timeZone ?? site?.timezone ?? undefined;
-  if (config.timeZone === undefined && zone !== undefined) {
+  const zone = routeZone ?? site?.timezone ?? undefined;
+  if (routeZone === undefined && zone !== undefined) {
     if (!safeTimeZone(zone).valid) {
       console.warn(
-        `[blocks] The site's time zone "${zone}" is not one this runtime knows, so bound date-times on "${context.collection}" page "${context.slug}" are shown in UTC.`
+        `[blocks] The site's time zone "${zone}" is not one this runtime knows, so bound date-times on "${where.collection}" page "${where.slug}" are shown in UTC.`
       );
     }
   }
@@ -2630,46 +2586,100 @@ function pageTimeZone(
 }
 
 /**
- * What a page's bindings read, read as the public reads it, or nothing when
- * the documents it draws hold no binding.
+ * What a binding-source read is given: the documents drawn, where the page's
+ * entry is and who reads it.
+ *
+ * @experimental Settles with the editor's binding sources.
+ */
+export interface BindingSourcesArgs {
+  /** The documents drawn, as the read pipeline prepared them. */
+  readonly documents: readonly BlockDocument[];
+  /**
+   * What the bindings read, when the caller has worked it out already: the
+   * editor's canvas works it out from the document it draws and sends only
+   * that. Absent, it is read from `documents`.
+   */
+  readonly demand?: BindingDemand;
+  /**
+   * The collections the page's lists draw, whose public field shapes judge
+   * their items' bindings, when the caller has worked them out already with
+   * `listCollections`, as the editor's canvas does. Absent, they are read
+   * from `documents`.
+   */
+  readonly lists?: readonly string[];
+  /**
+   * The site's named queries, so a custom source's list is asked about the
+   * collection its rows are entries of, whose fields its items bind by,
+   * where `lists` is read from `documents`. Undefined, such a list's items
+   * are judged by their values.
+   */
+  readonly namedQueries?: NamedQueryLookup | undefined;
+  /** Whether the page's entry is a collection's entry or a Single. */
+  readonly entrySource: "collection" | "single";
+  /** The collection, or the Single, the page's entry belongs to. */
+  readonly slug: string;
+  /** The entry's id, for a collection's entry. */
+  readonly entryId?: unknown;
+  /** The page, for what is said about it: its address or its slug. */
+  readonly page: string;
+  /** The language the sources are read in. */
+  readonly locale?: string;
+  /**
+   * Who reads the entry, the Singles and each relation a path follows: a
+   * published page's public reader, or an editor's reader that reads as the
+   * person editing. The site settings and the field shapes are the public's
+   * whoever reads: the same for everyone, and holding no one's data.
+   */
+  readonly reader: BlocksPublicReader;
+  /** The page's read budget, which every source read claims from. */
+  readonly budget: QueryBudget;
+  /** The route's cache scope, for the public, shared reads. */
+  readonly cacheScope?: string;
+  /** The route's own time zone, which wins over the site's. */
+  readonly timeZone?: string;
+  /** The release window the public, shared reads are bounded by. */
+  readonly window?: number | false;
+  /**
+   * What the page's blocks' visibility conditions read of its entry, read in
+   * the same one read of the entry as its bindings'.
+   */
+  readonly conditions?: ConditionDemand;
+}
+
+/**
+ * What a page's bindings read, through `args.reader`, or nothing when the
+ * documents it draws hold no binding.
  *
  * Asked of each document as the read pipeline prepared it: composed,
  * migrated, gated, de-duplicated and with its known placeholders removed, so
- * a node the page does not present claims no read.
+ * a node the page does not present claims no read. A published page passes
+ * its public reader; the editor's canvas passes a reader that reads as the
+ * person editing, so the two answer the same question by one implementation.
+ *
+ * @experimental Settles with the editor's binding sources.
  */
-async function readPageBindings(args: {
-  config: BlocksPageConfig;
-  entry: ContentEntry;
-  context: RenderContext;
-  documents: readonly BlockDocument[];
-  entrySource: EntrySource;
-  reader: BlocksPublicReader;
-  budget: QueryBudget;
-  window: number | false | undefined;
-  /** What the page's blocks' visibility conditions read of its entry. */
-  conditions?: ConditionDemand;
-}): Promise<PageBindings | undefined> {
-  const { config, context } = args;
+export async function readBindingSources(
+  args: BindingSourcesArgs
+): Promise<PageBindings | undefined> {
   // Prepared trees are already within the pipeline's caps, and a composed
   // tree may run deeper than a stored one, so no cap is applied again.
-  const demand = withConditions(bindingDemand(args.documents), args.conditions);
+  const demand = withConditions(
+    args.demand ?? bindingDemand(args.documents),
+    args.conditions
+  );
   if (!demand.any) return undefined;
   const entryRef: BlocksFieldShapeRef =
     args.entrySource === "single"
-      ? { single: context.collection }
-      : { collection: context.collection };
-  const shapes = await readFieldShapes(
-    entryRef,
-    demand,
-    args.documents,
-    {
-      scope: config.cacheScope ?? "",
-      locale: context.locale,
-      window: args.window,
-    },
-    // A custom source's items bind as entries of its rows' collection.
-    rowsCollectionOf(config)
-  );
+      ? { single: args.slug }
+      : { collection: args.slug };
+  const lists = args.lists ?? [
+    ...listCollections(args.documents, args.namedQueries),
+  ];
+  const shapes = await readFieldShapes(entryRef, demand, lists, {
+    scope: args.cacheScope ?? "",
+    locale: args.locale,
+    window: args.window,
+  });
   const reads: SourceReads = {
     reader: args.reader,
     budget: args.budget,
@@ -2679,8 +2689,10 @@ async function readPageBindings(args: {
     demand.entry === undefined
       ? undefined
       : await readPublicEntry({
-          ...args,
           demand: demand.entry,
+          slug: args.slug,
+          entryId: args.entryId,
+          entrySource: args.entrySource,
           entryRef,
           reads,
         });
@@ -2742,21 +2754,21 @@ function warnOfUnknownTimeZone(zone: string | undefined): void {
  * needs the site's zone, and the zone its date-times are shown in.
  */
 async function siteAndZone(
-  args: {
-    config: BlocksPageConfig;
-    context: RenderContext;
-    budget: QueryBudget;
-    window: number | false | undefined;
-  },
+  args: Pick<
+    BindingSourcesArgs,
+    "slug" | "page" | "budget" | "cacheScope" | "timeZone" | "window"
+  >,
   demand: BindingDemand
 ): Promise<{ site?: BlocksSiteSettings; timeZone?: string }> {
-  const { config } = args;
-  const needsZone = demand.formatsDates && config.timeZone === undefined;
+  const needsZone = demand.formatsDates && args.timeZone === undefined;
   const site =
     demand.site || needsZone
-      ? await readSite(config, args.budget, args.window)
+      ? await readSite(args.cacheScope, args.budget, args.window)
       : undefined;
-  const timeZone = pageTimeZone(config, site, args.context);
+  const timeZone = pageTimeZone(args.timeZone, site, {
+    collection: args.slug,
+    slug: args.page,
+  });
   return {
     ...(site === undefined ? {} : { site }),
     ...(timeZone === undefined ? {} : { timeZone }),
@@ -2853,9 +2865,28 @@ async function readPageInputs(args: {
     effectiveLimits(config)
   );
   const page = drawn(config, args.resolver, document, definitions);
+  // Whether the page's conditions have an entry to judge. A Single's page has
+  // none, as the editor and the save say, so its entry-scoped conditions fail
+  // closed with nothing read, and its conditioned blocks are never kept for
+  // the reads: neither their fields nor what they bind is asked for. The ONE
+  // place this is decided; the reads, the skip and the decision follow it.
+  const conditionsReadEntry = args.entrySource === "collection";
+  // Whether the page reads anything is asked of it with every conditioned
+  // block kept, as its reads are taken below: a conditioned block's bindings
+  // and its conditions' entry read both spend the budget the render spends,
+  // so metadata must read the Layout before them just as the render does.
+  // Only metadata asks, and the kept page it prepares is reused for the reads.
+  const keptPage =
+    conditionsReadEntry &&
+    args.regionsOnlyWhenBound === true &&
+    holdsBackConditions(page.prepared)
+      ? keptForReading(page)
+      : undefined;
+  const pageReading = keptPage ?? page;
   const skipRegions =
     args.regionsOnlyWhenBound === true &&
-    (page.prepared === null || !bindingDemand([page.prepared.presented]).any);
+    (pageReading.prepared === null ||
+      !readsAnything(pageReading.prepared.presented));
   const { regions, regionDefinitions } = await layoutRegions({
     config,
     provider: skipRegions ? undefined : args.layoutsProvider,
@@ -2876,18 +2907,33 @@ async function readPageInputs(args: {
   // A page holding conditioned blocks is read with all of them kept: a block
   // that may show asks for what it binds, and its conditions name the entry
   // fields they check. Read once, then decided against what was read.
-  const conditioned = parts.some(part => holdsBackConditions(part.prepared));
-  const reading = conditioned ? parts.map(keptForReading) : parts;
+  const conditioned =
+    conditionsReadEntry &&
+    parts.some(part => holdsBackConditions(part.prepared));
+  // The page kept for metadata's question above is the same reading: not
+  // prepared a second time.
+  const reading = conditioned
+    ? parts.map((part, index) =>
+        index === 0 && keptPage !== undefined ? keptPage : keptForReading(part)
+      )
+    : parts;
   const readingDocs = presentedOf(reading);
-  const bindings = await readPageBindings({
-    config,
-    entry,
-    context,
+  const bindings = await readBindingSources({
     documents: readingDocs,
     entrySource: args.entrySource,
+    slug: context.collection,
+    entryId: entry.id,
+    page: context.slug,
+    ...(context.locale === undefined ? {} : { locale: context.locale }),
     reader: publicReaderFor(config, context.locale, args.window),
     budget,
-    window: args.window,
+    ...(config.cacheScope === undefined
+      ? {}
+      : { cacheScope: config.cacheScope }),
+    ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
+    ...(args.window === undefined ? {} : { window: args.window }),
+    // A custom source's items bind as entries of its rows' collection.
+    namedQueries: config.namedQueries,
     ...(conditioned
       ? { conditions: conditionDemand(readingDocs.flatMap(doc => doc.nodes)) }
       : {}),
@@ -2907,6 +2953,18 @@ async function readPageInputs(args: {
     bindings,
     presented: presentedOf(decided),
   };
+}
+
+/**
+ * Whether a presented tree reads anything at the route: a binding, or an
+ * entry field a condition checks. A list's item conditions read nothing more
+ * than the list does.
+ */
+function readsAnything(presented: BlockDocument): boolean {
+  return (
+    bindingDemand([presented]).any ||
+    conditionDemand(presented.nodes).entryFields.size > 0
+  );
 }
 
 /** The trees a set of drawn documents present, the unreadable left out. */
@@ -2953,30 +3011,6 @@ function decideConditions(
   });
   if (issues.length > 0) report(issues);
   return decided;
-}
-
-/** The page's entry as a condition reads it, when the public may read it. */
-function entrySubjectOf(bindings: PageBindings | undefined): {
-  entry?: ConditionSubject;
-} {
-  const values = bindings?.entry;
-  const ref = bindings?.entryRef;
-  const readable =
-    ref === undefined ? undefined : bindings?.fieldShapes?.fieldsOf(ref);
-  if (values === undefined || values === null || readable === undefined) {
-    return {};
-  }
-  return {
-    entry: {
-      // The public's fields are all a page is handed, so a field outside them
-      // reads as one the entry lacks; either way it fails closed.
-      fields: {
-        declared: new Set(readable.map(field => field.name)),
-        readable,
-      },
-      values,
-    },
-  };
 }
 
 /**
