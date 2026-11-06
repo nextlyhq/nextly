@@ -411,6 +411,9 @@ describe.each(getConfiguredTestDialects())(
         ["data", { data: { total: 10n } }],
         ["data", { data: cyclic }],
         ["previous", { data: {}, previous: { total: 10n } }],
+        // An object whose own `toJSON` makes it no JSON object at all.
+        ["data", { data: { toJSON: () => undefined } }],
+        ["data", { data: { toJSON: () => ["not", "an", "object"] } }],
       ] as const) {
         const refusal = await refusalOf(
           plugin().webhooks.record({ type: PAID, id: "ord_1", ...event })
