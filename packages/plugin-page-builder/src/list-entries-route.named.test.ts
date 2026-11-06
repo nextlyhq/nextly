@@ -1,10 +1,9 @@
 /**
  * The canvas's run of a list's named query, through the list entries route:
- * refused before it runs unless the caller may read every collection the
- * query declares, made over the ONE base reader the route is given, as the
- * published page makes it, and answered as the list envelope with the
- * query's own count, the reads it made, and a failure as the run judged and
- * logged it.
+ * made over the ONE base reader the route is given, as the published page
+ * makes it, with who may read what left to that reader, and answered as the
+ * list envelope with the query's own count, the reads it made, and a failure
+ * as the run judged and logged it.
  */
 import {
   defineNamedQuery,
@@ -79,7 +78,6 @@ function reads(
   return {
     reader,
     failures,
-    mayRead: () => Promise.resolve(true),
     definitionOf: name => (name === upcoming.name ? upcoming : undefined),
     baseReader: () => Promise.resolve(reader),
     fieldsOf: () => Promise.resolve(undefined),
@@ -94,15 +92,30 @@ const asked = (params: Record<string, string> = { city: "lahore" }) => ({
 });
 
 describe("a named run on the canvas", () => {
-  it("is refused before it runs for a caller who may not read a collection it declares", async () => {
-    const mayRead = vi.fn((slug: string) => Promise.resolve(slug !== "venues"));
-    const made = reads({ mayRead });
-    await expect(readNamedListEntries(asked(), made)).rejects.toMatchObject({
-      code: "FORBIDDEN",
+  it("fails the run, in the refusal's own words, where the caller may not read what it reads", async () => {
+    // Core's gate refuses inside the base reader, as for a list's own read:
+    // the route makes no second check of its own.
+    const refusing = base();
+    const made = reads({
+      baseReader: () =>
+        Promise.resolve({
+          ...refusing,
+          count: () =>
+            Promise.reject(
+              Object.assign(new Error("Forbidden"), {
+                code: "FORBIDDEN",
+                statusCode: 403,
+                publicMessage: "You don't have permission to read venues.",
+              })
+            ),
+        }),
     });
-    // Nothing was read: the precondition ran first.
-    expect(made.reader.asked).toEqual([]);
-    expect(mayRead).toHaveBeenCalledWith("venues");
+    const answer = await readNamedListEntries(asked(), made);
+    expect(answer.items).toEqual([]);
+    expect(answer.meta.named.failure).toMatchObject({
+      code: "threw",
+      detail: "You don't have permission to read venues.",
+    });
   });
 
   it("answers its rows projected to what it declares, its count, and the reads it made", async () => {

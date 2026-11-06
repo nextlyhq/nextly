@@ -6,6 +6,10 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// A document's own metadata, its bound segments filled by the page's binding
+// pass: what a collection template gives each entry's page.
+export { resolveDocumentSeo } from "./document-seo";
+export type { ResolvedDocumentSeo } from "./document-seo";
 // Which Layout a page is drawn inside: the one rule the render, the editor
 // and the tests share.
 export { resolvePageLayout } from "./resolve-layout";
@@ -29,6 +33,8 @@ export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   BINDING_SOURCES,
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
@@ -92,7 +98,10 @@ export type {
   DocumentFormatVersion,
   DocumentKind,
   BlockOrigin,
+  DocumentSeo,
   DocumentSettings,
+  SeoBinding,
+  SeoTextSegment,
   LocaleOverlay,
   LocaleOverlayValue,
   NodeStyles,
@@ -1330,6 +1339,7 @@ export {
   listFieldKind,
   listKindSortable,
   listQueryIssues,
+  namesListSource,
   listRelationTarget,
   listSortText,
   namedQueryHiddenReads,

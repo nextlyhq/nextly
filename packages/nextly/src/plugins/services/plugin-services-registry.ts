@@ -15,6 +15,8 @@
  * @module plugins/services/plugin-services-registry
  */
 
+import { refusingInsideNamedQuery } from "../../auth/named-query-scope";
+
 interface ServiceEntry {
   factory: () => unknown;
   instance?: unknown;
@@ -95,7 +97,14 @@ export function buildPluginServicesNamespace(): Record<
           {
             get(_t, svcName) {
               if (typeof svcName !== "string") return undefined;
-              return resolve(pluginName, svcName);
+              // A service is reached from anywhere an instance or a plugin
+              // context is, so every method it hands out refuses to run
+              // inside a page builder named query, as the Direct API does:
+              // a query reads only through the reader it is given.
+              return refusingInsideNamedQuery(
+                resolve(pluginName, svcName),
+                `plugins.${pluginName}.${svcName}`
+              );
             },
             has(_t, svcName) {
               return (

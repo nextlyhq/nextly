@@ -30,6 +30,7 @@
 import {
   applyOps,
   COLLECTION_LIST_TYPE,
+  namesListSource,
   COMPONENT_INSTANCE_TYPE,
   findNode,
   isComponentInstance,
@@ -575,25 +576,50 @@ function listQueryUpdate(
       `There is no collection list "${listId}" on this page.`,
     ]);
   }
-  const sets = (part: keyof ListQueryChange) =>
-    change[part] !== undefined && change[part] !== null;
-  const props: Record<string, unknown> = { ...node.props };
-  if (sets("namedQuery")) {
-    if (SOURCE_PARTS.some(sets)) {
+  return {
+    kind: "update",
+    id: listId,
+    patch: { props: listPropsWith({ ...node.props }, change) },
+  };
+}
+
+/**
+ * A list's props with `change` applied: each part given set, each `null`
+ * removed. A list has one source: a change setting a custom source removes
+ * the collection, related entries, filters and sort, and is refused when it
+ * also names one of them (empty forms name none, as the save reads them); a
+ * change naming a collection or related entries removes a custom source.
+ */
+function listPropsWith(
+  props: Record<string, unknown>,
+  change: ListQueryChange
+): Record<string, unknown> {
+  const settingNamed =
+    change.namedQuery !== undefined && change.namedQuery !== null;
+  if (settingNamed) {
+    if (namesListSource({ ...change })) {
       throw refusedAction([
         "This list's source is a custom source, so it can't also name a collection, related entries, filters or sort.",
       ]);
     }
     for (const part of SOURCE_PARTS) delete props[part];
-  } else if (sets("collection") || sets("relation")) {
+  } else if (
+    namesListSource({
+      collection: change.collection,
+      relation: change.relation,
+    })
+  ) {
     delete props.namedQuery;
   }
+  // A custom source's write leaves the source parts it removed removed,
+  // whatever empty form they were sent in.
+  const skipped: readonly string[] = settingNamed ? SOURCE_PARTS : [];
   for (const [part, value] of Object.entries(change)) {
-    if (value === undefined) continue;
+    if (value === undefined || skipped.includes(part)) continue;
     if (value === null) delete props[part];
     else props[part] = value;
   }
-  return { kind: "update", id: listId, patch: { props } };
+  return props;
 }
 
 /** A placement's props with values set and some fields reset to what they inherit. */

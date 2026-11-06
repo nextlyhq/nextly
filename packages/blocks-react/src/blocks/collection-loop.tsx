@@ -75,14 +75,19 @@ export interface CollectionLoopProps {
 /**
  * The key for one iteration.
  *
- * An entry's own id when it has one, of either type a database hands back, and
- * its position otherwise. Falling back for a numeric id would give every row in
- * a numerically-keyed collection a positional key, which is exactly the case
- * where reordering silently reuses the wrong DOM node.
+ * The row's own key when it has one, of either type a database hands back,
+ * and its position otherwise: an entry's id, or the field a named query
+ * declares its rows keyed by. Falling back for a numeric key would give every
+ * row in a numerically-keyed collection a positional key, which is exactly
+ * the case where reordering silently reuses the wrong DOM node.
  */
-function keyFor(item: Record<string, unknown>, index: number): string | number {
-  const id = item.id;
-  return typeof id === "string" || typeof id === "number" ? id : index;
+export function listItemKey(
+  item: Readonly<Record<string, unknown>>,
+  index: number,
+  keyField = "id"
+): string | number {
+  const key = item[keyField];
+  return typeof key === "string" || typeof key === "number" ? key : index;
 }
 
 /**
@@ -213,6 +218,8 @@ function emptyMarks(
 interface ListRead {
   readonly outcome: ListOutcome;
   readonly itemContext: (item: Record<string, unknown>) => PageContext;
+  /** The field each row is keyed by; an entry's id when absent. */
+  readonly rowKey?: string;
 }
 
 /**
@@ -259,6 +266,7 @@ async function readNamedSource(
   return {
     outcome,
     itemContext: itemOf(outcome.rowsCollection, base.named.name),
+    ...(outcome.rowKey === undefined ? {} : { rowKey: outcome.rowKey }),
   };
 }
 
@@ -376,7 +384,7 @@ function drawList(
       ? renderSlot("empty")
       : outcome.items.map((item, index) => (
           <div
-            key={keyFor(item, index)}
+            key={listItemKey(item, index, read.rowKey)}
             // Under the classic model no gap is written, so an entry wears
             // nothing: its blocks space themselves with their own margins.
             {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}

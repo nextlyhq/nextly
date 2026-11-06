@@ -81,10 +81,19 @@ import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
-import type {
-  InTransactionHandlerSet,
-  InTransactionPhaseInput,
-} from "../../../hooks/in-transaction-phase";
+// A working draft as an after-hook compares against it (`markedDraft`): marked
+// as the draft it is diffed with is, so a repeat draft save does not report the
+// marker as changing. Shared with the in-transaction phase, which marks one the
+// same way.
+import {
+  type InTransactionCall,
+  inTransactionHandlersFor,
+  markedDraft,
+  replacedByUpdate,
+  runInTransactionPhaseFor,
+  writtenByUpdate,
+} from "../../../hooks/in-transaction-call";
+import type { InTransactionHandlerSet } from "../../../hooks/in-transaction-phase";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -420,7 +429,12 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
-import { entryWriteContext, holdStoredExpectation } from "./stored-field-read";
+import {
+  entryWriteContext,
+  fieldAccessPass,
+  holdStoredExpectation,
+  refuseUnlessWhole,
+} from "./stored-field-read";
 import {
   prepareWriteMatch,
   writeMatchOf,
@@ -1684,44 +1698,6 @@ function changesFieldFilterNames(
     if (!known || !isDeepStrictEqual(draft[name], live[name])) return true;
   }
   return false;
-}
-
-/**
- * A working draft as an after-hook compares against it: marked as the draft it
- * is diffed with is, so a repeat draft save does not report the marker as
- * changing. A copy, since the stored snapshot (the activity record's
- * `previous`) carries no marker, as the new draft's does not.
- */
-function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
-  return { ...draft, _isWorkingDraft: true };
-}
-
-/** The handler set of a write no in-transaction handler is registered for. */
-const NO_IN_TRANSACTION_HANDLERS: InTransactionHandlerSet = Object.freeze([]);
-
-/**
- * What an update wrote, as an in-transaction handler is shown it: the pending
- * draft, marked, when the edit was held as one, else the document the write
- * left. One answer for both update paths.
- */
-function writtenByUpdate(
-  updated: Record<string, unknown>,
-  draft: Record<string, unknown> | undefined
-): Record<string, unknown> {
-  return draft ? markedDraft(draft) : updated;
-}
-
-/**
- * What an update replaced, as an in-transaction handler is shown it: on a save
- * that accumulated onto a working draft, that prior draft, marked, as the
- * activity record and `afterUpdate` compare against; else the document before
- * the write. One answer for both update paths.
- */
-function replacedByUpdate<T>(
-  previous: T,
-  priorDraft: Record<string, unknown> | undefined
-): T | Record<string, unknown> {
-  return priorDraft ? markedDraft(priorDraft) : previous;
 }
 
 /**
@@ -9317,8 +9293,17 @@ export class CollectionMutationService extends BaseService {
       // be stale (a concurrent writer may commit between it and the lock), so a
       // transition detected only under the lock still needs the committed row
       // for its event payload rather than falling back to the stale pre-read.
-      const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
-
+      // An in-transaction handler is handed the entry as this publish leaves
+      // it, so it needs that row too.
+      // The in-transaction handlers, asked once for this write: a retried
+      // attempt runs the same set.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
+      const needsFreshParent =
+        !!versionsConfig?.enabled ||
+        hasMainStatus ||
+        inTransactionHandlers.length > 0;
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await this.adapter.transaction(async tx => {
@@ -9575,6 +9560,25 @@ export class CollectionMutationService extends BaseService {
                 })
               : [];
         }
+
+        // What an in-transaction handler is handed as the entry before this
+        // publish: the default language's whole read-shape document (its
+        // components, relations and translated values), read before anything
+        // is written, and only when the write took a handler.
+        const phaseBefore =
+          inTransactionHandlers.length > 0
+            ? (
+                await this.languageDocumentsOnTx(tx, {
+                  row: preImageRow,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  manyToManyFields,
+                  locales: [null],
+                })
+              ).get(null)
+            : undefined;
 
         // Where a promotion can rewrite a slug, the ones the entry was
         // reachable at until now: the main row's as locked, and each
@@ -10260,6 +10264,36 @@ export class CollectionMutationService extends BaseService {
             })),
           ]
         );
+
+        // Last in the transaction, as on an update: publishing or withdrawing
+        // every language is an update of the entry, and is retried as one.
+        // The handler is handed the default language's whole read-shape
+        // document as the publish left it, against the one read before
+        // anything was written; both read only when it took a handler. No
+        // hook context is shared on this path, so the handler's is empty.
+        const phaseAfter =
+          inTransactionHandlers.length > 0
+            ? (
+                await this.languageDocumentsOnTx(tx, {
+                  row: publishedParentRow ?? preImageRow,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  manyToManyFields,
+                  locales: [null],
+                })
+              ).get(null)
+            : undefined;
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "update",
+          id: params.entryId,
+          data: phaseAfter,
+          originalData: phaseBefore ?? null,
+          user: params.user,
+          context: {},
+        });
       }, versionConflictRetries());
 
       // The entry was deleted out from under the publish: nothing was written or
@@ -13615,23 +13649,36 @@ export class CollectionMutationService extends BaseService {
       // is passed so owner/record-aware access rules can evaluate.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      await this.keepDeniedFieldsAtStored({
-        data: finalData,
-        storedId: String(existingEntry.id),
-        collectionName: params.collectionName,
-        stored: await this.storedForCarryForward({
-          row: existingEntry as Record<string, unknown>,
-          fields,
-          tableName,
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          locale: params.locale,
-          overrideAccess: params.overrideAccess,
-        }),
-        tableName,
+      // For a conditional write made whole, what this pass takes out or keeps
+      // is recorded, and refuses it once every hook has run.
+      const storedForAccess = await this.storedForCarryForward({
+        row: existingEntry as Record<string, unknown>,
         fields,
-        params,
+        tableName,
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        locale: params.locale,
+        overrideAccess: params.overrideAccess,
       });
+      await fieldAccessPass(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        finalData,
+        () =>
+          this.keepDeniedFieldsAtStored({
+            data: finalData,
+            storedId: String(existingEntry.id),
+            collectionName: params.collectionName,
+            stored: storedForAccess,
+            tableName,
+            fields,
+            params,
+          })
+      );
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
@@ -13692,6 +13739,17 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         user: params.user,
       });
+      // Every hook has run: a conditional write made whole is judged here, on
+      // what is about to be persisted, before it is shaped and written.
+      await refuseUnlessWhole(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        finalData
+      );
 
       // A password the update leaves out of a container keeps its stored hash.
       const reach = await this.passwordReach(fields);
@@ -18645,10 +18703,7 @@ export class CollectionMutationService extends BaseService {
   private inTransactionHandlersFor(
     collection: string
   ): InTransactionHandlerSet {
-    const registry = this.hookService.hookRegistry;
-    return registry.hasInTransaction(collection)
-      ? registry.inTransactionRunners(collection)
-      : NO_IN_TRANSACTION_HANDLERS;
+    return inTransactionHandlersFor(this.hookService.hookRegistry, collection);
   }
 
   /**
@@ -18662,23 +18717,12 @@ export class CollectionMutationService extends BaseService {
    * the entry, as the version and the outbox event do, and those are recorded
    * under `skipHooks` too.
    */
-  private async runInTransactionPhase(
+  private runInTransactionPhase(
     tx: TransactionContext,
     handlers: InTransactionHandlerSet,
-    input: Omit<InTransactionPhaseInput, "data" | "originalData"> & {
-      /** Undefined when the write found no row: nothing was written. */
-      data: Record<string, unknown> | undefined;
-      originalData?: Record<string, unknown> | null;
-    }
+    call: InTransactionCall
   ): Promise<void> {
-    if (input.data === undefined || handlers.length === 0) return;
-    const { runInTransactionPhase } = await import(
-      "../../../hooks/in-transaction-phase"
-    );
-    await runInTransactionPhase(handlers, tx, {
-      ...input,
-      originalData: input.originalData ?? undefined,
-    });
+    return runInTransactionPhaseFor(handlers, tx, call);
   }
 
   /**

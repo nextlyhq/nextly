@@ -1,29 +1,40 @@
 /**
  * The read behind a collection list on the editor's canvas: one read of a
- * list's entries, as a VISITOR reads them.
+ * list's entries, AS THE PERSON EDITING reads them.
  *
  * The canvas draws a list with the renderer's own `readList`, which builds
- * its reads from the stored query exactly as on a published page; this route
- * answers each read through the public reader a published page reads with
- * (`createPublicReader`), so the entries the author designs around, the
- * order they come in and a sort or a filter the reader refuses are the
- * visitor's. Its refusals travel unchanged, so the canvas tells the author
- * what a visitor's page would hide.
+ * its reads from the stored query exactly as on a published page. This route
+ * answers each read through the editor reader (`createEditorReader`), which
+ * takes the public reader's query, with its keys, refusals and limits, and
+ * reads it as the signed-in person with drafts included: the author sees the
+ * entries they could see in the admin, never more. A published page still
+ * reads the same list as an anonymous visitor, published entries and public
+ * fields only. A filter or sort the published page would refuse is refused
+ * here too, so the canvas never draws a list the published page cannot.
  *
  * ## Who may ask
  *
- * The route is authenticated, and a read of a collection the caller may not
- * read (`caller.can("read", slug)`) is refused before anything is read, as
- * the loop collections route lists only those. The rows themselves are the
- * public's: published entries and public fields only, whoever asks.
+ * The route is authenticated, and every read runs through core's one access
+ * gate as the caller (`readingAsUser`, `overrideAccess: false`): the gate is
+ * the only door. A caller who may not read the collection is refused by it
+ * before any row is read or any read hook runs, with the refusal the admin
+ * gives them, and their row and field rules apply exactly as they do to
+ * their own reads there. No second check is made here, so the two can never
+ * answer one caller differently.
  *
  * ## A list whose source is a named query
  *
  * Its run function lives only on the server, so the canvas asks for one run
- * of it (`{ named }`) and the route makes it with the renderer's own
- * `readNamedList`, over the same public reader, inside nextly's frame: the
- * rows, refusals and failures are the published page's. The caller must be
- * able to read every collection the query declares, asked before it runs.
+ * of it (`{ named }`), and the route makes it with the renderer's own
+ * `readNamedList`, inside nextly's frame, over ONE base reader: the editor
+ * reader above, as the caller, for the collections the query reads. Core's
+ * gate judges each of those reads as the caller, as it judges a list's own,
+ * so there is no second check here either.
+ *
+ * ## Caching
+ *
+ * None. The answer is one person's, so the route is `noStore`, it is never
+ * tagged, and nothing a published page reads is made from it.
  *
  * @module list-entries-route
  */
@@ -53,11 +64,12 @@ import {
   namedQueryFailureLine,
   readNamedList,
 } from "@nextlyhq/blocks-react/blocks";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 import { z } from "nextly/zod";
 
 import { readBodyWith } from "./composition-route-kit";
+import { readingAsUser } from "./library-route";
 import {
   LIST_ENTRIES_NAMED_MAX_PARAMS,
   LIST_ENTRIES_ROUTE_PATH,
@@ -191,72 +203,34 @@ const ListEntriesNamedBody = z
 /** Either read the route takes: a list's read, or one named run. */
 const ListEntriesAnyBody = z.union([ListEntriesBody, ListEntriesNamedBody]);
 
-/**
- * What the route reads with, injected so the gate and the read are tested
- * without a server.
- */
+/** What the route reads with, injected so the read is tested without a server. */
 export interface ListEntriesReads {
-  /** Whether the caller may read this collection. */
-  mayRead(slug: string): Promise<boolean>;
-  /** One read as a visitor reads it, in the read's language. */
-  publicFind(query: ListEntriesRequest["query"]): Promise<ListEntriesResponse>;
+  /** One read as the caller reads it, drafts included, in the read's language. */
+  find(query: ListEntriesRequest["query"]): Promise<ListEntriesResponse>;
 }
 
 /**
- * Answer one read: refused unless the caller may read the collection, and
- * otherwise the public's rows.
+ * Answer one read: the rows as the caller reads them. Every refusal travels
+ * unchanged: core's refusal of a collection the caller may not read, a sort
+ * the reader will not take, or a field the public may not filter by, so the
+ * canvas tells the author what the page would do.
  */
-export async function readListEntries(
+export function readListEntries(
   request: ListEntriesRequest,
   reads: ListEntriesReads
 ): Promise<ListEntriesResponse> {
-  // The precondition runs first: nothing is read for a caller who may not
-  // read the collection, and the refusal names nothing about it.
-  if (!(await reads.mayRead(request.query.collection))) {
-    throw NextlyError.forbidden({
-      logContext: {
-        reason: "list-entries-forbidden",
-        collection: request.query.collection,
-      },
-    });
-  }
-  try {
-    return await reads.publicFind(request.query);
-  } catch (error) {
-    throw visitorRefusal(error, request.query.collection);
-  }
+  return reads.find(request.query);
 }
 
 /**
- * A refusal of the visitor's read, as the editor is told it. The read is made
- * as no one, so a collection visitors may not read answers "sign in" (401);
- * handed back as that, the admin would take the AUTHOR's session for expired
- * and send them to sign in. It is the page's visitors who are refused, so it
- * travels as a refusal (403) saying so. Any other failure travels unchanged.
- */
-function visitorRefusal(error: unknown, collection: string): unknown {
-  if (!NextlyError.isAuthRequired(error) && !NextlyError.isForbidden(error)) {
-    return error;
-  }
-  return new NextlyError({
-    code: "FORBIDDEN",
-    publicMessage: `Visitors can't read ${collection}, so a published list of it shows nothing.`,
-    logMessage: "A canvas list's visitor read was refused",
-    logContext: { reason: "list-entries-visitor-refused", collection },
-    ...(error instanceof Error ? { cause: error } : {}),
-  });
-}
-
-/**
- * What a named run is made with, injected so the gate and the run are
- * tested without a server. The canvas runs a query through ONE base reader,
- * which the host is built on: the reader the canvas's other list reads use,
- * today the public one, so the rows an author designs around are a
- * visitor's. A reader with the editing person's access fits the same seam.
+ * What a named run is made with, injected so the run is tested without a
+ * server. The canvas runs a query through ONE base reader, which the host
+ * is built on: the reader the canvas's other list reads use, the editor
+ * reader as the caller, so the rows an author designs around are the ones
+ * they could read in the admin. Who may read what is core's gate's, inside
+ * that reader; nothing here decides it again.
  */
 export interface NamedListEntriesReads {
-  /** Whether the caller may read this collection. */
-  mayRead(slug: string): Promise<boolean>;
   /** The registered query of a name, run function included. */
   definitionOf(name: string): NamedQueryDefinition | undefined;
   /** The base reader a run's scoped reader wraps, in the run's language. */
@@ -289,11 +263,11 @@ function countingBudget(): QueryBudget & { readonly taken: () => number } {
 }
 
 /**
- * Answer one named run: refused unless the caller may read every collection
- * the query declares, and otherwise the run's rows, made as the published
- * page makes them. A run that fails answers no rows and its failure as the
- * run judged it, so the canvas draws the note a preview would, under the
- * reference the log names it by.
+ * Answer one named run: the run's rows, made as the published page makes
+ * them, over the base reader. A run that fails (a read the caller may not
+ * make among them) answers no rows and its failure as the run judged it, so
+ * the canvas draws the note a preview would, under the reference the log
+ * names it by.
  */
 export async function readNamedListEntries(
   request: ListEntriesNamedRequest,
@@ -301,15 +275,6 @@ export async function readNamedListEntries(
 ): Promise<ListEntriesNamedResponse> {
   const { name, params, limit, offset, locale, node } = request.named;
   const definition = reads.definitionOf(name);
-  // The precondition runs first, as for a list's read: nothing is run for a
-  // caller who may not read what the query reads.
-  for (const slug of definition?.reads.collections ?? []) {
-    if (!(await reads.mayRead(slug))) {
-      throw NextlyError.forbidden({
-        logContext: { reason: "list-entries-named-forbidden", name },
-      });
-    }
-  }
   const host: NamedQueryHost = {
     definitionOf: asked => (asked === name ? definition : undefined),
     reader: await reads.baseReader(locale),
@@ -352,24 +317,41 @@ export async function readNamedListEntries(
   };
 }
 
-/** The public reader over this instance, in a language: the canvas's base. */
-async function publicBaseReader(
+/**
+ * The canvas's base for a named run: the editor reader as the caller, the
+ * reader the canvas's other list reads use. It reads collections; a Single
+ * and the site settings it does not read yet, so those are the public's, as
+ * a published page reads them, until it does.
+ */
+async function canvasBaseReader(
+  ctx: PluginRouteContext,
   locale: string | undefined
 ): Promise<ListBaseReader> {
-  const { createPublicReader, readPublicSiteSettings, requireNextly } =
-    await import("nextly/runtime");
+  const {
+    createEditorReader,
+    createPublicReader,
+    readPublicSiteSettings,
+    requireNextly,
+  } = await import("nextly/runtime");
   const nextly = requireNextly();
-  const reader = createPublicReader(
+  const { user, actor } = await readingAsUser(ctx);
+  const binding = locale === undefined ? {} : { locale };
+  const editor = createEditorReader(
+    { find: async args => await nextly.find(args) },
+    { user, ...(actor === undefined ? {} : { actor }) },
+    binding
+  );
+  const visitor = createPublicReader(
     {
       find: async args => await nextly.find(args),
       findSingle: async args => await nextly.findSingle(args),
     },
-    locale === undefined ? {} : { locale }
+    binding
   );
   return {
-    find: query => reader.find(query),
-    count: query => reader.count(query),
-    findSingle: query => reader.findSingle(query),
+    find: query => editor.find(query),
+    count: query => editor.count(query),
+    findSingle: query => visitor.findSingle(query),
     siteSettings: async () => ({ ...(await readPublicSiteSettings()) }),
   };
 }
@@ -380,12 +362,8 @@ function directNamedListEntriesReads(
   definitionOf: (name: string) => NamedQueryDefinition | undefined
 ): NamedListEntriesReads {
   return {
-    mayRead: slug =>
-      ctx.caller === null
-        ? Promise.resolve(false)
-        : ctx.caller.can("read", slug),
     definitionOf,
-    baseReader: publicBaseReader,
+    baseReader: locale => canvasBaseReader(ctx, locale),
     fieldsOf: async (collection, locale) => {
       const { bindingFieldShapes } = await import("nextly/runtime");
       return bindingFieldShapes(
@@ -404,11 +382,14 @@ function directNamedListEntriesReads(
         read: async operation => (await opened).read(operation),
       };
     },
+    // The site's zone, else UTC, as a published page with no zone of its
+    // own reads it. Settings that cannot be read fail the run, which the
+    // canvas then says, rather than a day in the wrong zone.
     today: async () => {
       const { readPublicSiteSettings } = await import("nextly/runtime");
-      const settings = await readPublicSiteSettings().catch(() => undefined);
+      const settings = await readPublicSiteSettings();
       return calendarDayIn(
-        safeTimeZone(settings?.timezone ?? undefined).zone,
+        safeTimeZone(settings.timezone ?? undefined).zone,
         new Date()
       );
     },
@@ -419,24 +400,22 @@ function directNamedListEntriesReads(
   };
 }
 
-/** The reads the route binds: the caller's permission and the public reader. */
+/** The read the route binds: the editor reader, as the caller. */
 function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
   return {
-    // No caller is no reader: the route is authenticated, so this is a guard
-    // for a caller the dispatcher could not resolve.
-    mayRead: slug =>
-      ctx.caller === null
-        ? Promise.resolve(false)
-        : ctx.caller.can("read", slug),
     // Imported at call time, so loading this module costs none of the
     // runtime, as the route's other reads are.
-    publicFind: async query => {
-      const { createPublicReader, requireNextly } = await import(
+    find: async query => {
+      const { createEditorReader, requireNextly } = await import(
         "nextly/runtime"
       );
       const nextly = requireNextly();
-      const reader = createPublicReader(
+      // The caller as core judges their own reads: their user, and an API
+      // key's own scope when the request carried one.
+      const { user, actor } = await readingAsUser(ctx);
+      const reader = createEditorReader(
         { find: async args => await nextly.find(args) },
+        { user, ...(actor === undefined ? {} : { actor }) },
         query.locale === undefined ? {} : { locale: query.locale }
       );
       return reader.find(query);
@@ -446,8 +425,9 @@ function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
 
 /**
  * The route declaration. Authenticated (no `public: true`), with no
- * permission of its own: the collection read is asked of the caller above.
- * A POST because a read carries a query, never because it writes.
+ * permission of its own: core's gate judges each read as the caller.
+ * A POST because a read carries a query, never because it writes; `noStore`
+ * because its answer is one person's.
  */
 export function listEntriesRoute(
   /** The registered named query of a name: this instance's own registry. */
@@ -455,11 +435,13 @@ export function listEntriesRoute(
 ): {
   method: "POST";
   path: string;
+  noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: LIST_ENTRIES_ROUTE_PATH,
+    noStore: true,
     handler: async (req, ctx) => {
       const body = await readBodyWith(req, ListEntriesAnyBody, "list entries");
       if ("named" in body) {

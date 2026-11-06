@@ -96,3 +96,47 @@ export function refusedInsideNamedQuery(
   const frame = namedQueryFrame.getStore();
   return frame === undefined ? undefined : refusal(frame.name, operation);
 }
+
+/** Each object already guarded, so one reached twice is one proxy. */
+const guardedObjects = new WeakMap<object, object>();
+
+/**
+ * `value` with every function reached through it refusing to run inside a
+ * named query's frame: for a namespace the Direct API hands out whose
+ * methods do not pass through its own guarded entry points, such as the
+ * services plugins contribute. A method taken from it outside the frame and
+ * called inside one is refused all the same, since the check is made when it
+ * is called. Values other than functions and objects pass as they are.
+ */
+export function refusingInsideNamedQuery<T>(value: T, path: string): T {
+  if (typeof value === "function") {
+    const method = value as (...args: unknown[]) => unknown;
+    return ((...args: unknown[]) => {
+      const refused = refusedInsideNamedQuery(path);
+      if (refused !== undefined) throw refused;
+      return method(...args);
+    }) as T;
+  }
+  if (typeof value !== "object" || value === null) return value;
+  const known = guardedObjects.get(value);
+  if (known !== undefined) return known as T;
+  const proxy = new Proxy(value, {
+    get(target, prop) {
+      // Read with the target as the receiver, so a getter reading a private
+      // field reads it from the object that holds it.
+      const member = Reflect.get(target, prop, target) as unknown;
+      const at = `${path}.${String(prop)}`;
+      if (typeof member === "function") {
+        const method = member as (...args: unknown[]) => unknown;
+        return (...args: unknown[]) => {
+          const refused = refusedInsideNamedQuery(at);
+          if (refused !== undefined) throw refused;
+          return Reflect.apply(method, target, args);
+        };
+      }
+      return refusingInsideNamedQuery(member, at);
+    },
+  });
+  guardedObjects.set(value, proxy);
+  return proxy;
+}

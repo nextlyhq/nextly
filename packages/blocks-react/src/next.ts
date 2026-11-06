@@ -25,6 +25,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   readListQuery,
   regionDocument,
+  resolveDocumentSeo,
   safeTimeZone,
   type BindingDemand,
   type BindingFieldShape,
@@ -37,7 +38,6 @@ import {
   type DocumentLimits,
   type LayoutRegion,
   type ListQuery,
-  type NamedQueryDefinition,
   type RemotePatternInput,
   type SeoImageCandidate,
   type SiteSheetInput,
@@ -94,7 +94,6 @@ import {
   createQueryBudget,
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
-  NAMED_QUERY_SERVICE,
 } from "./context";
 import type {
   BindingIssuesHandler,
@@ -106,6 +105,7 @@ import type {
   BlocksPublicReader,
   BlocksSiteSettings,
   NamedQueryHost,
+  NamedQueryLookup,
   PageBindings,
   PageContext,
   QueryBudget,
@@ -402,6 +402,16 @@ export interface BlocksPageConfig
    */
   timeZone?: string;
   /**
+   * The site's named queries, which its pages' collection lists may take as
+   * their source: `namedQueriesOf(pageBuilderPlugin)` from
+   * `@nextlyhq/plugin-page-builder`, the queries that page builder
+   * registered for this site. Absent, the route knows of none, and a list
+   * naming one shows its empty state.
+   *
+   * @experimental
+   */
+  namedQueries?: NamedQueryLookup;
+  /**
    * The caps this site holds its documents to, used while repairing a stored
    * shape. Passed to the renderer AND used when deriving metadata, so a site
    * that raised `maxNodes` for long pages does not have its metadata derived
@@ -632,29 +642,25 @@ function deploymentIdentity(
 }
 
 /**
- * The named queries the route's own Nextly instance registered, read from
- * its page builder's service: each site its own, so two sites served from
- * one process never resolve each other's queries. Nothing for an instance
- * without the page builder, whose lists' queries are then not set up.
+ * The site's time zone, for a named query's day: the route's, else the one
+ * the site settings name, UTC only when they name none. Settings that could
+ * not be read (the page's reads spent, or the read failing) are not settings
+ * that name no zone: that refuses, and the list draws its empty state rather
+ * than run a query on another zone's day.
  */
-function instanceNamedQueries(
-  config: BlocksPageConfig
-): (name: string) => NamedQueryDefinition | undefined {
-  return name => {
-    const instance = readerFor(config) as { readonly plugins?: unknown };
-    const plugins = instance.plugins;
-    if (typeof plugins !== "object" || plugins === null) return undefined;
-    const service = (
-      plugins as Record<string, Record<string, unknown> | undefined>
-    )[NAMED_QUERY_SERVICE.plugin]?.[NAMED_QUERY_SERVICE.service];
-    const definitionOf = (service as { definitionOf?: unknown } | undefined)
-      ?.definitionOf;
-    return typeof definitionOf === "function"
-      ? (definitionOf as (name: string) => NamedQueryDefinition | undefined)(
-          name
-        )
-      : undefined;
-  };
+async function siteZone(
+  config: BlocksPageConfig,
+  budget: QueryBudget,
+  window: number | false | undefined
+): Promise<string | undefined> {
+  if (config.timeZone !== undefined) return config.timeZone;
+  const site = await readSite(config, budget, window);
+  if (site === undefined) {
+    throw new Error(
+      "The site settings could not be read, so the site's time zone, and today in it, is not known."
+    );
+  }
+  return site.timezone ?? undefined;
 }
 
 /** How long a cached "today" may live before it is asked again, in seconds. */
@@ -697,7 +703,9 @@ function namedQueryHostFor(args: {
   const reader = publicReaderFor(config, locale, window);
   let today: Promise<string> | undefined;
   return {
-    definitionOf: instanceNamedQueries(config),
+    // The site's own queries, as the route was handed them: none when it
+    // was handed none, so a list naming one shows its empty state.
+    definitionOf: name => config.namedQueries?.definitionOf(name),
     reader: {
       ...reader,
       siteSettings: async () => {
@@ -714,11 +722,7 @@ function namedQueryHostFor(args: {
     },
     today: () => {
       today ??= (async () =>
-        await todayFor(
-          config.timeZone ??
-            (await readSite(config, budget, window))?.timezone ??
-            undefined
-        ))();
+        await todayFor(await siteZone(config, budget, window)))();
       return today;
     },
     fieldsOf: async collection =>
@@ -908,7 +912,12 @@ async function derivePageSeo(
    * The document as the caller already prepared it for its reads, so the
    * pipeline runs once for this invocation.
    */
-  preparation: PreparedDocument | undefined
+  preparation: PreparedDocument | undefined,
+  /**
+   * Where the document's own metadata bindings that could not be used are
+   * reported. They are no node's, so the render's report never holds them.
+   */
+  reportIssues?: BindingIssuesHandler
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
@@ -916,6 +925,13 @@ async function derivePageSeo(
   // where a present-but-undefined key erases a canonical they already knew.
   const path = emitPath(slug);
   const canonical = path === null ? {} : { canonical: path };
+
+  // One binding pass for the blocks and the document's own metadata, so a
+  // bound title segment and a bound heading read the same value.
+  const run =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(bindings, locale, resolver);
 
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
@@ -934,9 +950,7 @@ async function derivePageSeo(
       ...(definitions === undefined || definitions.size === 0
         ? {}
         : { definitions }),
-      ...(bindings === undefined
-        ? {}
-        : { bindings: pageBindingRun(bindings, locale, resolver) }),
+      ...(run === undefined ? {} : { bindings: run }),
     },
     preparation
   );
@@ -945,11 +959,23 @@ async function derivePageSeo(
   // and metadata claiming a title it does not show would be worse than silence.
   if (prepared === null) return canonical;
 
-  const { image: imageCandidates, ...text } = deriveSeoFromDocument(
+  const { image: blockImages, ...derived } = deriveSeoFromDocument(
     prepared,
     type => resolver.get(type),
     isUnconditional
   );
+  // What the document states for the page as a whole wins over what its
+  // blocks offer, field by field; its image is tried first, and a block's
+  // still answers when it yields no picture.
+  const own = resolveDocumentSeo(prepared, run);
+  if (own.issues.length > 0) reportIssues?.(own.issues);
+  const text = {
+    ...derived,
+    ...(own.title === undefined ? {} : { title: own.title }),
+    ...(own.description === undefined ? {} : { description: own.description }),
+  };
+  const imageCandidates =
+    own.image === undefined ? blockImages : [own.image, ...(blockImages ?? [])];
   const image = await firstUsableImage(
     imageCandidates,
     resolveMedia,
@@ -2724,7 +2750,8 @@ function blocksRouteConfig(
               inputs.definitions,
               inputs.bindings,
               context.locale,
-              inputs.page.prepared ?? undefined
+              inputs.page.prepared ?? undefined,
+              bindingIssueLog(context)
             );
             return metadata(entry, context, derived);
           },

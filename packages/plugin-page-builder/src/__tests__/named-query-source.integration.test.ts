@@ -32,7 +32,6 @@ import {
   createBlockResolver,
   createQueryBudget,
   createStandaloneContext,
-  NAMED_QUERY_SERVICE,
   PageRenderer,
   type NamedQueryFailure,
 } from "@nextlyhq/blocks-react";
@@ -40,6 +39,7 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
   definePlugin,
   getCachedNextly,
+  type PluginDefinition,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 import {
@@ -69,7 +69,7 @@ import {
 } from "../composition-service";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import type { NamedQueryItem } from "../named-queries-contract";
-import { pageBuilder } from "../plugin";
+import { namedQueriesOf, pageBuilder } from "../plugin";
 
 import {
   call,
@@ -217,17 +217,8 @@ function page(...nodes: BlockNode[]) {
   return { formatVersion: 1, kind: "page", nodes };
 }
 
-/** The named queries an instance's page builder serves its published pages. */
-function queriesOf(
-  t: TestNextly
-): (name: string) => NamedQueryDefinition | undefined {
-  const service = t.nextly.plugins[NAMED_QUERY_SERVICE.plugin]?.[
-    NAMED_QUERY_SERVICE.service
-  ] as {
-    definitionOf: (name: string) => NamedQueryDefinition | undefined;
-  };
-  return name => service.definitionOf(name);
-}
+/** The page builder the current test booted, whose queries its site reads. */
+let builder: PluginDefinition;
 
 /** A page drawn as a published page draws it, with the failures it logged. */
 async function published(
@@ -244,8 +235,8 @@ async function published(
         ...createStandaloneContext(),
         queries: createQueryBudget(),
         namedQueries: {
-          // This instance's own queries, as a published route reads them.
-          definitionOf: queriesOf(t),
+          // This site's own queries, as its published route is handed them.
+          definitionOf: name => namedQueriesOf(builder).definitionOf(name),
           reader,
           today: () => Promise.resolve("2026-11-06"),
           // The public's fields of a collection, as a published page's
@@ -276,7 +267,9 @@ describe.each(getConfiguredTestDialects())(
       current = await createTestNextly({
         dialect,
         plugins: [
-          pageBuilder({ namedQueries: [upcoming, allEvents, trusted] }),
+          (builder = pageBuilder({
+            namedQueries: [upcoming, allEvents, trusted],
+          })),
           composer,
         ],
         collections: [
@@ -344,9 +337,10 @@ describe.each(getConfiguredTestDialects())(
         ...(extra.dryRun === true ? { dryRun: true } : {}),
       });
 
-    it("registers the site's queries at boot, served by this instance", async () => {
-      const t = await boot();
-      const lookup = queriesOf(t);
+    it("registers the site's queries, handed to the route that renders its pages", async () => {
+      await boot();
+      const lookup = (name: string) =>
+        namedQueriesOf(builder).definitionOf(name);
       expect(lookup("events.upcoming")).toBe(upcoming);
       expect(lookup("events.trusted")).toBe(trusted);
       expect(lookup("events.gone")).toBeUndefined();
@@ -424,6 +418,29 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedProps(t, id)).toEqual({ collection: EVENTS });
       }
     );
+
+    it("takes a custom source sent beside empty or removed source parts", async () => {
+      const t = await boot();
+      const id = await homePage(t, {
+        collection: EVENTS,
+        sort: "-title",
+        limit: 5,
+      });
+      const { cookie } = await holding(t, AUTHOR);
+      const set = await change(cookie, id, {
+        namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
+        collection: "",
+        filters: [],
+        sort: "",
+        relation: null,
+      });
+      expect(set.status).toBe(200);
+      // The empty parts are left out with the source they stood for.
+      expect(await storedProps(t, id)).toEqual({
+        namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
+        limit: 5,
+      });
+    });
 
     it("sets and refuses a custom source through the composition service a plugin reaches", async () => {
       const t = await boot();

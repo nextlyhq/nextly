@@ -301,16 +301,21 @@ export interface PluginHookRegistry {
    * after the commit, belongs in an `after*` hook.
    *
    * Runs for create, update and delete on collections, the bulk operations
-   * included (once per entry), and whether or not a write skips its hooks.
-   * Not yet for Singles, nor when every language of an entry is published or
-   * withdrawn at once (`publishAllLocales`, `unpublishAllLocales`).
+   * included (once per entry), for publishing or withdrawing every language,
+   * and for a Single's update and publish (as an `update`, registered under
+   * `single:<slug>`); whether or not a write skips its hooks. In a batch
+   * sharing one transaction, a handler that throws aborts the whole batch,
+   * whatever `stopOnError` says.
    *
    * A write takes its set of handlers once, so one registered while a write is
    * under way first runs on the next write. The shared hook `context` it is
    * handed is a deeply frozen copy of plain data only (see
    * `InTransactionWrite.context`).
    *
-   * @param collection - Collection slug, or '*' for every collection
+   * In development, a handler that makes an outbound HTTP call is warned
+   * about once: the call is not undone with a discarded attempt.
+   *
+   * @param collection - Collection slug, `single:<slug>`, or '*' for every one
    * @param handler - Called with the write and a database bound to its
    *   transaction
    *

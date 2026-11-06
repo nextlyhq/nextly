@@ -330,16 +330,26 @@ export interface CanvasNamedQueries {
 
 /** One set per language, shared by the canvas and the inspector. */
 const BY_LANGUAGE = new Map<string, CanvasNamedQueries>();
+/** The person whose runs `BY_LANGUAGE` holds, so another's are dropped first. */
+let runsFor: string | null | undefined;
 
 /**
- * The canvas's custom sources in `locale`, the language being edited: one
- * object per language, so the Source menu, the canvas and the count share
- * one read of the sources and one set of kept runs. A failed read of the
- * sources is not kept, so the next asks again.
+ * The canvas's custom sources for `userId`, the signed-in person, in
+ * `locale`, the language being edited: one object per person and language,
+ * so the Source menu, the canvas and the count share one read of the
+ * sources and one set of kept runs. A run reads as the person signed in, so
+ * the moment another person asks, every earlier person's runs are dropped
+ * before anything is answered, as the canvas's list reads are. A failed read
+ * of the sources is not kept, so the next asks again.
  */
 export function canvasNamedQueriesIn(
-  locale: string | undefined
+  locale: string | undefined,
+  userId: string | null
 ): CanvasNamedQueries {
+  if (runsFor !== userId) {
+    BY_LANGUAGE.clear();
+    runsFor = userId;
+  }
   const key = locale ?? "";
   const known = BY_LANGUAGE.get(key);
   if (known !== undefined) return known;

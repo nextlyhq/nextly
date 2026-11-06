@@ -239,7 +239,7 @@ export interface ContentServices {
    */
   readonly listCustomSources?: () => Promise<readonly CustomSource[]>;
   /**
-   * How many entries a list's stored query matches as a visitor reads them,
+   * How many entries a list's stored query matches as the canvas reads them,
    * and how many of those its window shows, from one count read. Asked only
    * for the list selected in the editor. Undefined where one read cannot
    * count it, such as a list of an entry's related entries.

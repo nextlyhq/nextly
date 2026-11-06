@@ -261,7 +261,7 @@ describe("a routed page's named queries", () => {
 
   /** The named-query host the route built for one render. */
   async function hostOf(
-    nextly: ReturnType<typeof instance> & { plugins?: unknown }
+    nextly: ReturnType<typeof instance>
   ): Promise<NamedQueryHost> {
     const context = await renderContext(
       { collections: ["pages"], field: "content", revalidate: 60 },
@@ -324,27 +324,46 @@ describe("a routed page's named queries", () => {
     expect((cached.calls[0] as { tags: string[] }).tags).toHaveLength(3);
   });
 
-  it("resolves a query from the route's own instance, and from no other", async () => {
+  it("resolves a query from the queries the route was handed, and from no other", async () => {
     const definition = {
       ...declaration(),
       run: () => Promise.resolve({ rows: [] }),
     };
-    const withQueries = {
-      ...instance(),
-      plugins: {
-        "@nextlyhq/plugin-page-builder": {
-          namedQueries: {
-            definitionOf: (name: string) =>
-              name === "events.upcoming" ? definition : undefined,
-          },
+    const handed = await renderContext(
+      {
+        collections: ["pages"],
+        field: "content",
+        namedQueries: {
+          definitionOf: name =>
+            name === "events.upcoming" ? definition : undefined,
         },
       },
-    };
-    expect((await hostOf(withQueries)).definitionOf("events.upcoming")).toBe(
+      instance()
+    );
+    expect(handed.namedQueries?.definitionOf("events.upcoming")).toBe(
       definition
     );
+    // A route handed none knows of none, whatever another site registered.
     expect(
       (await hostOf(instance())).definitionOf("events.upcoming")
     ).toBeUndefined();
+  });
+
+  it("refuses the render's day when the site's time zone cannot be read, rather than use UTC", async () => {
+    // No zone on the route, and no site settings this process can read.
+    await expect((await hostOf(instance())).today()).rejects.toThrow(
+      /time zone/
+    );
+    const zoned = await renderContext(
+      {
+        collections: ["pages"],
+        field: "content",
+        timeZone: "Asia/Karachi",
+      },
+      instance()
+    );
+    await expect(zoned.namedQueries?.today()).resolves.toMatch(
+      /^\d{4}-\d{2}-\d{2}$/
+    );
   });
 });

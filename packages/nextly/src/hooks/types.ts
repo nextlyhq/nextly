@@ -713,9 +713,9 @@ export type BeforeOperationHandler<T = any> = (
  * rollback: writes on the transaction it is handed, nothing outside it.
  */
 export interface InTransactionWrite<T = Record<string, unknown>> {
-  /** The collection written to. */
+  /** The collection written to, or `single:<slug>` for a Single. */
   collection: string;
-  /** What the write did. */
+  /** What the write did. A Single is only ever updated. */
   operation: "create" | "update" | "delete";
   /** The written entry's id. */
   id: string;

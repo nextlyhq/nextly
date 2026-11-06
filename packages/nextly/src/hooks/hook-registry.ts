@@ -273,10 +273,15 @@ export class HookRegistry {
 
   /** Drop the entries whose owner is suspended, cheaply when none is. */
   private runnable<H>(entries: RegisteredHook<H>[]): H[] {
-    if (this.suspendedOwners.size === 0) return entries.map(e => e.handler);
-    return entries
-      .filter(e => !this.suspendedOwners.has(e.owner))
-      .map(e => e.handler);
+    return this.runnableEntries(entries).map(e => e.handler);
+  }
+
+  /** {@link runnable}, keeping who owns each handler. */
+  private runnableEntries<H>(
+    entries: RegisteredHook<H>[]
+  ): RegisteredHook<H>[] {
+    if (this.suspendedOwners.size === 0) return entries;
+    return entries.filter(e => !this.suspendedOwners.has(e.owner));
   }
 
   /**
@@ -572,13 +577,25 @@ export class HookRegistry {
    * @internal
    */
   inTransactionRunners(collection: string): InTransactionRunner[] {
+    return this.inTransactionEntries(collection).map(e => e.handler);
+  }
+
+  /**
+   * @experimental {@link inTransactionRunners}, with the owner of each, which
+   * the phase names when a handler does something it should not.
+   *
+   * @internal
+   */
+  inTransactionEntries(
+    collection: string
+  ): ReadonlyArray<{ handler: InTransactionRunner; owner: HookOwner }> {
     return [
-      ...this.runnable(
+      ...this.runnableEntries(
         this.inTransactionHooks.get(inTransactionKey("*")) ?? []
       ),
       ...(collection === "*"
         ? []
-        : this.runnable(
+        : this.runnableEntries(
             this.inTransactionHooks.get(inTransactionKey(collection)) ?? []
           )),
     ];

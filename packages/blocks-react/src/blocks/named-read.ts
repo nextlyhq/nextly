@@ -229,8 +229,26 @@ async function rowFields(
       key: rows.key,
     };
   }
-  const shapes = (await host.fieldsOf?.(rows.collection)) ?? [];
-  return { fields: [...ENTRY_FIELDS, ...shapes], key: "id" };
+  // A host that judges access and answers nothing is saying visitors may
+  // read none of the collection: no row of it is shown, not even its id.
+  // A host that judges nothing keeps each row's id and timestamps.
+  const shapes = await host.fieldsOf?.(rows.collection);
+  if (host.fieldsOf !== undefined && shapes === undefined) {
+    throw rowsHiddenError(declaration, rows.collection);
+  }
+  return { fields: [...ENTRY_FIELDS, ...(shapes ?? [])], key: "id" };
+}
+
+/** The refusal of rows from a collection visitors may read none of. */
+function rowsHiddenError(
+  declaration: NamedQueryDeclaration,
+  collection: string
+): NamedQueryRunError {
+  return new NamedQueryRunError(
+    "rows-hidden",
+    `The named query "${declaration.name}" lists entries of "${collection}", which visitors may not read.`,
+    collection
+  );
 }
 
 /** Wait for `work`, or reject once `signal` aborts. */
@@ -442,6 +460,7 @@ const FAILURE_CODES: ReadonlySet<string> = new Set<NamedQueryFailureCode>([
   "budget",
   "timeout",
   "bad-rows",
+  "rows-hidden",
   "threw",
 ]);
 
@@ -510,6 +529,11 @@ function classify(
         };
       case "bad-rows":
         return { code: error.code, detail: NAMED_QUERY_TEXT.badRows(label) };
+      case "rows-hidden":
+        return {
+          code: error.code,
+          detail: NAMED_QUERY_TEXT.rowsHidden(label, error.what ?? "its rows"),
+        };
       default:
         break;
     }
@@ -548,6 +572,8 @@ export interface NamedListOutcome {
   readonly total?: number;
   /** The collection its rows are entries of; absent for a field schema. */
   readonly rowsCollection?: string;
+  /** The field each row is keyed by: the declared key, or the entry's id. */
+  readonly rowKey?: string;
 }
 
 /** A failed read: the empty state, the author's words, and the host's log. */
@@ -592,10 +618,13 @@ function replayClaims(count: number, claim: () => boolean): boolean {
 }
 
 /**
- * The render's day, read inside the same containment as the run: a failure
- * to resolve it draws the empty state, never fails the page.
+ * What every render asks before the run, cached or not, inside the same
+ * containment as the run: the render's day, and whether visitors may still
+ * read the collection the query's rows are entries of. A kept result made
+ * before its collection was closed to visitors is never drawn from. A
+ * failure to resolve either draws the empty state, never fails the page.
  */
-async function renderDay(
+async function beforeRun(
   host: NamedQueryHost,
   declaration: NamedQueryDeclaration,
   at: {
@@ -605,6 +634,16 @@ async function renderDay(
   }
 ): Promise<string | NamedListOutcome> {
   try {
+    const rows = declaration.rows;
+    if ("collection" in rows && host.fieldsOf !== undefined) {
+      if ((await host.fieldsOf(rows.collection)) === undefined) {
+        return failed(
+          "rows-hidden",
+          NAMED_QUERY_TEXT.rowsHidden(declaration.label, rows.collection),
+          at
+        );
+      }
+    }
     return await host.today();
   } catch (error) {
     const ref = referenceFor(at.name, at.nodeId);
@@ -681,6 +720,7 @@ function succeeded(
     items: data.rows,
     failed: false,
     ...(data.total === undefined ? {} : { total: data.total }),
+    rowKey: "fields" in rows ? rows.key : "id",
     ...("collection" in rows ? { rowsCollection: rows.collection } : {}),
     ...(caution === undefined
       ? {}
@@ -709,7 +749,7 @@ export async function readNamedList(
     return failed("unknown", NAMED_QUERY_TEXT.removed(named.name), at);
   }
   const declaration = namedQueryDeclaration(definition);
-  const day = await renderDay(host, declaration, at);
+  const day = await beforeRun(host, declaration, at);
   if (typeof day !== "string") return day;
   const today = day;
   const judged = judgeNamedParams(declaration, named.params, {

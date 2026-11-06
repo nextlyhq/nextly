@@ -33,6 +33,7 @@ export type {
   NamedQueryFailure,
   NamedQueryFailureCode,
   NamedQueryHost,
+  NamedQueryLookup,
   NamedQueryRunData,
   PageBindings,
   PageContext,
@@ -44,7 +45,6 @@ export type {
 export {
   createDefaultDataProvider,
   createQueryBudget,
-  NAMED_QUERY_SERVICE,
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
   defineBlock,

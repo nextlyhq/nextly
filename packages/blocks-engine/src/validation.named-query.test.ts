@@ -11,6 +11,7 @@ import {
   COLLECTION_LIST_TYPE,
   LIST_FIELD_CODES,
   listQueryIssues,
+  namesListSource,
   readListQuery,
   type ListFields,
   type ListFieldSource,
@@ -186,6 +187,28 @@ describe("readListQuery with a custom source", () => {
       readListQuery({ ...named(), filters: [], sort: " ", collection: "" })
         .problems
     ).toEqual([]);
+  });
+});
+
+describe("namesListSource", () => {
+  it("names a collection, related entries, filters or a sort, and nothing empty", () => {
+    expect(namesListSource({ collection: "events" })).toBe(true);
+    expect(namesListSource({ relation: { of: "entry", field: "x" } })).toBe(
+      true
+    );
+    expect(
+      namesListSource({ filters: [{ field: "a", op: "exists", value: true }] })
+    ).toBe(true);
+    expect(namesListSource({ sort: "-title" })).toBe(true);
+    // The empty forms an editor or a client writes name no source.
+    expect(
+      namesListSource({
+        collection: " ",
+        filters: [],
+        sort: "",
+        relation: null,
+      })
+    ).toBe(false);
   });
 });
 

@@ -6,19 +6,35 @@
  * the site defines: a shared style, a breakpoint. The engine cannot make it,
  * since a document on its own does not say whether an id is new, and a page
  * holding an id the site has since dropped must stay savable. The write path
- * can, by reading both stored forms.
+ * can, by reading both stored forms and comparing by `undefined-references`,
+ * the comparison a shared style's variables are judged by too.
  *
  * @module fields/added-undefined-ids
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { PluginFieldValidateArgs } from "@nextlyhq/plugin-sdk";
 
+import { newUndefinedIds } from "../undefined-references";
+
 import { readStoredForms } from "./lock-baselines";
+
+/** No stored id: what the first, cheaper comparison is made against. */
+const NOTHING_HELD: ReadonlySet<string> = new Set();
 
 /** The page's stored forms as one read answered: both, or unreadable. */
 export interface StoredForms {
   readonly forms: readonly BlockDocument[];
   readonly readable: boolean;
+}
+
+/**
+ * Whether the stored read can name the field at `path`: a top-level field, or
+ * one inside named groups (`hero.body`), which is where the editor opens a
+ * blocks field. A field in a repeater's rows (`rows[2].body`) has no stored
+ * path of its own.
+ */
+export function storedReadReaches(path: string): boolean {
+  return path !== "" && !/[[\]]/.test(path) && !path.split(".").includes("");
 }
 
 /**
@@ -59,10 +75,12 @@ export async function addedUndefinedIds(
 ): Promise<string[]> {
   if (used.length === 0) return [];
   const known = await defined();
-  const undefinedHere = used.filter(id => !known.has(id));
+  // Asked first with nothing held, so the stored forms are read only when the
+  // write names something the site does not define.
+  const undefinedHere = newUndefinedIds(used, known, NOTHING_HELD);
   if (undefinedHere.length === 0) return [];
   const snapshot = await stored();
   if (!snapshot.readable) return [];
   const held = new Set(snapshot.forms.flatMap(form => [...heldBy(form)]));
-  return undefinedHere.filter(id => !held.has(id));
+  return newUndefinedIds(undefinedHere, known, held);
 }

@@ -31,6 +31,12 @@ export const NEXTLY_ERROR_STATUS = {
   // receives, so the key form can say which: choose a smaller role, or ask
   // for access. The sentence stays FORBIDDEN's and names no permission.
   API_KEY_ROLE_ABOVE_CREATOR: 403,
+  // A plugin's declared action asked of a row its visibility rule hides,
+  // judged on the row as the caller reads it. Separate from FORBIDDEN, which
+  // the action's permission refuses with: the caller may hold every
+  // permission, and the row is what is wrong. Generic: it never says which
+  // rule, or which field.
+  ACTION_NOT_AVAILABLE: 403,
   NOT_FOUND: 404,
   // A write to a collection or Single removed from code: its registry row
   // says the app's code defines it, and the running configuration no longer
@@ -343,6 +349,7 @@ const GENERIC_PUBLIC_MESSAGE: Readonly<
   INVALID_INPUT: "The request could not be processed.",
   AUTH_REQUIRED: "Authentication required.",
   FORBIDDEN: "You don't have permission to perform this action.",
+  ACTION_NOT_AVAILABLE: "This action isn't available for this entry.",
   NOT_FOUND: "Not found.",
   METHOD_NOT_ALLOWED: "That method is not allowed on this address.",
   RANGE_NOT_SATISFIABLE: "The requested range is outside the file.",
