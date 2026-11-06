@@ -119,7 +119,8 @@ export function canvasBindingsFor(
  * reads them. Until the first answer arrives, and for a page with no binding,
  * no source is read: bound props keep their own values or fallbacks, as the
  * canvas always drew them. While a changed ask is answered, the previous
- * answer is kept, so bound values do not blink to their fallbacks.
+ * answer is kept, so bound values do not blink to their fallbacks; when the
+ * changed ask fails, the previous answer goes and the fallbacks are drawn.
  */
 export function useCanvasBindings(
   document: BlockDocument,
@@ -147,7 +148,10 @@ export function useCanvasBindings(
       },
       () => {
         // The sources could not be read: bound props keep their own values
-        // or fallbacks, as before any answer.
+        // or fallbacks, as before any answer. The previous ask's answer is
+        // dropped too, or the canvas would go on drawing another locale's or
+        // another page's values as this one's.
+        if (current) setAnswer(null);
       }
     );
     return () => {

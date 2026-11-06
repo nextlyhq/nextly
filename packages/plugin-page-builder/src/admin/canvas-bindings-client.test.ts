@@ -1,19 +1,31 @@
+// @vitest-environment jsdom
+
 /**
  * The canvas's binding sources: asked only for what the page's bindings read,
  * and kept per signed-in person, so no person is ever handed another's.
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+
+/** The document the hook test edits; the other tests pass theirs in. */
+const editing = vi.hoisted(() => ({
+  identity: null as null | {
+    kind: "collection";
+    slug: string;
+    documentId: string;
+  },
+}));
+const writePluginRoute = vi.hoisted(() => vi.fn());
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => "u1",
-  useDocumentIdentity: () => null,
-  writePluginRoute: vi.fn(),
+  useDocumentIdentity: () => editing.identity,
+  writePluginRoute,
 }));
 
-const { canvasBindingsFor, canvasBindingsRequest } = await import(
-  "./canvas-bindings-client"
-);
+const { canvasBindingsFor, canvasBindingsRequest, useCanvasBindings } =
+  await import("./canvas-bindings-client");
 
 const page = (bindings?: Record<string, unknown>): BlockDocument =>
   ({
@@ -95,5 +107,25 @@ describe("the canvas's binding sources", () => {
     expect(other).toHaveBeenCalledTimes(1);
     expect(second.entry).toEqual({ id: "p1", title: "B's view" });
     expect(first.entry).toEqual({ id: "p1", title: "A's draft" });
+  });
+
+  it("drops the earlier answer when a changed ask fails", async () => {
+    editing.identity = identity;
+    const bound = page({ text: { $bind: "title" } });
+    writePluginRoute.mockResolvedValueOnce(answer("English title"));
+    const { result, rerender } = renderHook(
+      ({ locale }: { locale: string }) => useCanvasBindings(bound, locale),
+      { initialProps: { locale: "en" } }
+    );
+    await waitFor(() =>
+      expect(result.current.entry).toEqual({ id: "p1", title: "English title" })
+    );
+    // The editor switches locale and that read fails: the English value must
+    // not go on standing in for the German page.
+    writePluginRoute.mockRejectedValueOnce(new Error("offline"));
+    rerender({ locale: "de" });
+    await waitFor(() => expect(result.current.entry).toBeUndefined());
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
+    editing.identity = null;
   });
 });
