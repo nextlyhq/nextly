@@ -42,7 +42,11 @@ import {
 import { Lock, Moon, Search } from "lucide-react";
 import * as React from "react";
 
-import { blockLookGroups, type BlockLookGroup } from "./block-look-rows";
+import {
+  blockLookGroups,
+  type BlockLookGroup,
+  type LookKey,
+} from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";
 import { useSurvivingReport } from "./builder-notices";
 import { ChromeTooltip } from "./chrome-tooltip";
@@ -190,9 +194,9 @@ export interface SharedStylesPanelProps {
 /** How the Block looks group's rows choose the look the inspector edits. */
 export interface PanelLookEditing {
   /** Edit a look in the inspector. */
-  readonly onEdit: (lookId: string) => void;
+  readonly onEdit: (look: LookKey) => void;
   /** The look the inspector is editing, whose row shows as chosen. */
-  readonly editingId: string | null;
+  readonly editing: LookKey | null;
 }
 
 /** How many rows mount before the author asks for more; also one usage read. */
@@ -355,7 +359,7 @@ function PanelLooks({
       library={library}
       tokens={paint.tokens}
       mode={paint.mode}
-      editingId={editing?.editingId}
+      editing={editing?.editing}
       onEdit={editing?.onEdit}
       reachOf={row => reaches.get(row.id)}
       chip={reach => <ReachChip reach={reach} />}

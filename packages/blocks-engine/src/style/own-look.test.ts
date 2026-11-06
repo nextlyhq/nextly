@@ -80,10 +80,17 @@ describe("the site's edits to its block types' own looks", () => {
     });
   });
 
-  it("read an id once: a second own look sharing it, of another type, is not read", () => {
-    const image = { ...primary, blockType: "core/image", orderIndex: 3 };
+  it("read each type's own look, even where two types' own looks share an id", () => {
+    // An own look claims no id, so a shared one changes nothing it renders.
+    const image = {
+      ...primary,
+      blockType: "core/image",
+      orderIndex: 3,
+      styles: colour("teal"),
+    };
     expect(blockDefaultsOf([primary, image])).toEqual({
       "core/button": colour("purple"),
+      "core/image": colour("teal"),
     });
   });
 

@@ -211,7 +211,10 @@ describe("the list", () => {
     const onEditLook = vi.fn();
     await panel({
       library: [CARD, primary, outline],
-      looks: { onEdit: onEditLook, editingId: outline.id },
+      looks: {
+        onEdit: onEditLook,
+        editing: { id: outline.id, blockType: "core/button" },
+      },
     });
     const looks = screen.getByRole("region", { name: "Block looks" });
     const rows = within(looks).getAllByRole("button");
@@ -228,7 +231,10 @@ describe("the list", () => {
       "true",
     ]);
     fireEvent.click(rows[0] as HTMLElement);
-    expect(onEditLook).toHaveBeenCalledWith(primary.id);
+    expect(onEditLook).toHaveBeenCalledWith({
+      id: primary.id,
+      blockType: "core/button",
+    });
   });
 
   it("reads a worn look's count with the styles' and says it in the row's name", async () => {
@@ -246,7 +252,7 @@ describe("the list", () => {
     await panel({
       library: [CARD, outline],
       access,
-      looks: { onEdit: () => {}, editingId: null },
+      looks: { onEdit: () => {}, editing: null },
     });
     // One read for the tab: the styles and the worn look together.
     expect(usageReads).toHaveLength(1);

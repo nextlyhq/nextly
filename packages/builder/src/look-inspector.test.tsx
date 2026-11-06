@@ -115,7 +115,7 @@ function mount(lookId: string, selectedId: string | null = null) {
         mayChange: true,
         writeStyles: writeStyles as unknown as SharedStylesHost["writeStyles"],
       }}
-      lookEditing={{ id: lookId, onExit }}
+      lookEditing={{ look: { id: lookId, blockType: "acme/box" }, onExit }}
     />
   );
   return { editor, writeStyles, onExit };
@@ -189,7 +189,10 @@ describe("editing a look with no block selected", () => {
           mayChange: true,
           writeStyles: async () => undefined,
         }}
-        lookEditing={{ id: own.id, onExit: () => {} }}
+        lookEditing={{
+          look: { id: own.id, blockType: "acme/box" },
+          onExit: () => {},
+        }}
       />
     );
     // The page's box wears no look, so the box's own look reaches it.
@@ -204,7 +207,10 @@ describe("editing a look with no block selected", () => {
         editor={editorFor(null)}
         classLibrary={[own, raised]}
         sharedStyles={{ mayChange: false, writeStyles: async () => undefined }}
-        lookEditing={{ id: raised.id, onExit: () => {} }}
+        lookEditing={{
+          look: { id: raised.id, blockType: "acme/box" },
+          onExit: () => {},
+        }}
       />
     );
     const bar = screen.getByRole("group", { name: "Editing Raised" });
@@ -232,10 +238,34 @@ describe("editing a look with no block selected", () => {
         canvasRoot={canvas}
         classLibrary={[own, raised]}
         sharedStyles={{ mayChange: true, writeStyles: async () => undefined }}
-        lookEditing={{ id: own.id, onExit: () => {} }}
+        lookEditing={{
+          look: { id: own.id, blockType: "acme/box" },
+          onExit: () => {},
+        }}
       />
     );
     expect(inner.hasAttribute("data-nx-look-reach")).toBe(true);
+  });
+
+  it("holds a look whose id another block type's own look shares, and writes nothing", () => {
+    const twin: NamedClass = { ...own, blockType: "acme/other", orderIndex: 2 };
+    const writeStyles = vi.fn(async () => undefined);
+    render(
+      <InspectorPanel
+        editor={editorFor(null)}
+        classLibrary={[own, twin, raised]}
+        sharedStyles={{ mayChange: true, writeStyles }}
+        lookEditing={{
+          look: { id: own.id, blockType: "acme/box" },
+          onExit: () => {},
+        }}
+      />
+    );
+    const bar = screen.getByRole("group", { name: "Editing Plain" });
+    expect(bar.querySelector(".nx-look-bar__held")?.textContent).toMatch(
+      /same id/
+    );
+    expect(writeStyles).not.toHaveBeenCalled();
   });
 
   it("edits the selected block instead while one is selected", () => {

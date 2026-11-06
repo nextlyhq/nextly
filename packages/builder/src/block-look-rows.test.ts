@@ -112,6 +112,18 @@ describe("the Design panel's block looks", () => {
     ]);
   });
 
+  it("marks an own look whose id another block type's own look shares", () => {
+    const twin = { ...square, id: primary.id };
+    const rows = blockLookGroups([primary, outline, twin], new Set()).flatMap(
+      group => group.rows.map(row => [row.blockType, row.id, row.sharedId])
+    );
+    expect(rows).toEqual([
+      ["core/button", primary.id, true],
+      ["core/button", outline.id, false],
+      ["core/image", primary.id, true],
+    ]);
+  });
+
   it("reads a library with no looks as no groups", () => {
     expect(blockLookGroups([card], new Set())).toEqual([]);
   });

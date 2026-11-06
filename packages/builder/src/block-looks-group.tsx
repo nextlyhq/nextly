@@ -17,9 +17,11 @@ import * as React from "react";
 
 import {
   ownLookDescription,
+  sameLook,
   siteBaseOf,
   type BlockLookGroup,
   type BlockLookRow,
+  type LookKey,
 } from "./block-look-rows";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { blockLabel } from "./inserter";
@@ -35,9 +37,9 @@ export interface BlockLooksGroupProps {
   readonly tokens: SiteTokenSet | undefined;
   readonly mode: TokenMode;
   /** The look being edited in the inspector, whose row shows as chosen. */
-  readonly editingId: string | null | undefined;
+  readonly editing: LookKey | null | undefined;
   /** Edit a look in the inspector. Absent: the rows are shown, not chosen. */
-  readonly onEdit?: (lookId: string) => void;
+  readonly onEdit?: (look: LookKey) => void;
   /** A worn look's reach, as the tab's usage read has it, or `undefined`. */
   readonly reachOf: (row: BlockLookRow) => SharedStyleReach | undefined;
   /** A reach drawn as the shared styles' counts are. */
@@ -54,7 +56,7 @@ export function BlockLooksGroup({
   library,
   tokens,
   mode,
-  editingId,
+  editing,
   onEdit,
   reachOf,
   chip,
@@ -88,7 +90,7 @@ export function BlockLooksGroup({
                   <LookRow
                     row={row}
                     title={title}
-                    chosen={editingId === row.id}
+                    chosen={sameLook(row, editing)}
                     onEdit={onEdit}
                     specimen={
                       <LookSpecimen
@@ -126,7 +128,7 @@ function LookRow({
   readonly row: BlockLookRow;
   readonly title: string;
   readonly chosen: boolean;
-  readonly onEdit: ((lookId: string) => void) | undefined;
+  readonly onEdit: ((look: LookKey) => void) | undefined;
   readonly specimen: React.ReactNode;
   readonly reach: SharedStyleReach | undefined;
   readonly chip: (reach: SharedStyleReach) => React.ReactNode;
@@ -180,7 +182,7 @@ function LookRow({
       aria-label={label}
       aria-description={description}
       data-block-look={row.id}
-      onClick={() => onEdit(row.id)}
+      onClick={() => onEdit({ id: row.id, blockType: row.blockType })}
     >
       {content}
     </button>

@@ -499,11 +499,11 @@ function editorInspector(
       // The author's right, the style write and the reach reads, so a
       // shared style the block wears can become the Style tab's target.
       sharedStyles={sharedStyles}
-      {...(view.lookEditing.id === null
+      {...(view.lookEditing.look === null
         ? {}
         : {
             lookEditing: {
-              id: view.lookEditing.id,
+              look: view.lookEditing.look,
               onExit: view.lookEditing.exit,
             },
           })}

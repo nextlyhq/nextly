@@ -26,6 +26,29 @@ import {
   type SharedStyleRow,
 } from "./shared-style-library";
 
+/**
+ * Which look is meant: its id and its block type together. Two block types'
+ * own looks may share an id, since an own look claims none, so the type is
+ * what tells them apart.
+ */
+export interface LookKey {
+  readonly id: string;
+  readonly blockType: string;
+}
+
+/** Whether a row is the look a key names. */
+export function sameLook(
+  row: LookKey,
+  key: LookKey | null | undefined
+): boolean {
+  return (
+    key !== null &&
+    key !== undefined &&
+    row.id === key.id &&
+    row.blockType === key.blockType
+  );
+}
+
 /** One look as the Design panel lists it. */
 export interface BlockLookRow extends SharedStyleRow {
   /** The block type the look belongs to. */
@@ -36,6 +59,11 @@ export interface BlockLookRow extends SharedStyleRow {
    * usage count of its own.
    */
   readonly own: boolean;
+  /**
+   * Another block type's own look carries the same id, so a write by id
+   * would reach both: the look is shown, and held from editing.
+   */
+  readonly sharedId: boolean;
 }
 
 /** One block type's looks, its own look first. */
@@ -54,10 +82,16 @@ export function blockLookGroups(
   library: readonly NamedClass[],
   suppliedIds: ReadonlySet<string>
 ): BlockLookGroup[] {
+  const ownRead = ownLooksRead(library);
+  const shared = new Set(
+    ownRead
+      .map(entry => entry.id)
+      .filter((id, at, ids) => ids.indexOf(id) !== at)
+  );
   const own = new Map(
-    ownLooksRead(library).map(entry => [
+    ownRead.map(entry => [
       entry.blockType as string,
-      ownRow(entry, suppliedIds),
+      ownRow(entry, suppliedIds, shared.has(entry.id)),
     ])
   );
   const typeOf = new Map(library.map(entry => [entry?.id, entry?.blockType]));
@@ -67,7 +101,7 @@ export function blockLookGroups(
     if (row.look !== true || blockType === undefined) continue;
     worn.set(blockType, [
       ...(worn.get(blockType) ?? []),
-      { ...row, blockType, own: false },
+      { ...row, blockType, own: false, sharedId: false },
     ]);
   }
   const types: string[] = [];
@@ -91,7 +125,8 @@ export function blockLookGroups(
 /** An own look as a row: no class selects it, so its class name is empty. */
 function ownRow(
   entry: NamedClass,
-  suppliedIds: ReadonlySet<string>
+  suppliedIds: ReadonlySet<string>,
+  sharedId: boolean
 ): BlockLookRow {
   return {
     id: entry.id,
@@ -104,6 +139,7 @@ function ownRow(
     styles: entry.styles,
     blockType: entry.blockType as string,
     own: true,
+    sharedId,
   };
 }
 

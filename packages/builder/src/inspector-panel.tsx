@@ -50,7 +50,11 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
-import { blockLookGroups, type BlockLookRow } from "./block-look-rows";
+import {
+  blockLookGroups,
+  sameLook,
+  type BlockLookRow,
+} from "./block-look-rows";
 import { CanvasPassageContext, type CanvasPassage } from "./canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
@@ -613,11 +617,11 @@ export function InspectorPanel({
 function editedLook(
   panel: Pick<InspectorPanelProps, "editor" | "classLibrary" | "lookEditing">
 ): BlockLookRow | undefined {
-  const id = panel.lookEditing?.id;
-  if (id === undefined || panel.editor.selectedId !== null) return undefined;
+  const key = panel.lookEditing?.look;
+  if (key === undefined || panel.editor.selectedId !== null) return undefined;
   return blockLookGroups(panel.classLibrary ?? [], new Set())
     .flatMap(group => group.rows)
-    .find(row => row.id === id);
+    .find(row => sameLook(row, key));
 }
 
 function SelectionInspector({

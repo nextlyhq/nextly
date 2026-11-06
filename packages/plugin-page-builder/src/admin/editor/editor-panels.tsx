@@ -648,7 +648,7 @@ export function editorPanelRenderer({
                   : {
                       looks: {
                         onEdit: lookEditing.edit,
-                        editingId: lookEditing.id,
+                        editing: lookEditing.look,
                       },
                     })}
                 classes={classes}

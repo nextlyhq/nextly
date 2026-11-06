@@ -14,14 +14,22 @@ describe("editing a look on its own", () => {
     const { result } = renderHook(() =>
       useLookEditing({ selectedId: null, select })
     );
-    expect(result.current.id).toBeNull();
+    expect(result.current.look).toBeNull();
 
-    act(() => result.current.edit("look:core/button:primary"));
+    act(() =>
+      result.current.edit({
+        id: "look:core/button:primary",
+        blockType: "core/button",
+      })
+    );
     expect(select).toHaveBeenCalledWith(null);
-    expect(result.current.id).toBe("look:core/button:primary");
+    expect(result.current.look).toEqual({
+      id: "look:core/button:primary",
+      blockType: "core/button",
+    });
 
     act(() => result.current.exit());
-    expect(result.current.id).toBeNull();
+    expect(result.current.look).toBeNull();
   });
 
   it("leaves the look when a block is selected", () => {
@@ -31,10 +39,15 @@ describe("editing a look on its own", () => {
         useLookEditing({ selectedId, select }),
       { initialProps: { selectedId: null } }
     );
-    act(() => result.current.edit("look:core/button:outline"));
-    expect(result.current.id).toBe("look:core/button:outline");
+    act(() =>
+      result.current.edit({
+        id: "look:core/button:outline",
+        blockType: "core/button",
+      })
+    );
+    expect(result.current.look?.id).toBe("look:core/button:outline");
 
     rerender({ selectedId: "a" });
-    expect(result.current.id).toBeNull();
+    expect(result.current.look).toBeNull();
   });
 });
