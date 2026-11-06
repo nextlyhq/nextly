@@ -102,7 +102,8 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   account: Object.freeze({
     page: "the signed-in admin's account page",
     accepts: Object.freeze(["block", "tab"] as const),
-    builtIns: Object.freeze({}),
+    // The page's own card: the person's name, avatar and email.
+    builtIns: Object.freeze({ block: Object.freeze(["profile"] as const) }),
   }),
   login: Object.freeze({
     page: "the login page",
