@@ -89,3 +89,16 @@ export function writtenByUpdate(
 ): Record<string, unknown> {
   return draft ? markedDraft(draft) : updated;
 }
+
+/**
+ * What an update replaced, as an in-transaction handler is shown it: on a save
+ * that accumulated onto a working draft, that prior draft, marked, as the
+ * hooks compare against; else the document before the write. One answer for
+ * every update path, collection or Single.
+ */
+export function replacedByUpdate<T>(
+  previous: T,
+  priorDraft: Record<string, unknown> | undefined
+): T | Record<string, unknown> {
+  return priorDraft ? markedDraft(priorDraft) : previous;
+}

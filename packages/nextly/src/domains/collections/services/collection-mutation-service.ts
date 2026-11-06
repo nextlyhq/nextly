@@ -89,6 +89,7 @@ import {
   type InTransactionCall,
   inTransactionHandlersFor,
   markedDraft,
+  replacedByUpdate,
   runInTransactionPhaseFor,
   writtenByUpdate,
 } from "../../../hooks/in-transaction-call";
@@ -15520,7 +15521,10 @@ export class CollectionMutationService extends BaseService {
           operation: "update",
           id: params.entryId,
           data: writtenDocument,
-          originalData: previousDocument,
+          originalData: replacedByUpdate(
+            previousDocument,
+            priorWorkingDraftDocument
+          ),
           user: params.user,
           context: sharedContext,
         });
@@ -19859,7 +19863,10 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         id: entryId,
         data: writtenByUpdate(updatedDocument, workingDraftDocument),
-        originalData: previousDocument,
+        originalData: replacedByUpdate(
+          previousDocument,
+          priorWorkingDraftDocument
+        ),
         user: params.user,
         context: sharedContext,
       });
