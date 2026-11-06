@@ -53,7 +53,6 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
-  type Condition,
   type NodeVisibility,
   type ExposedProperty,
   type ExposedPropertyType,
@@ -1863,10 +1862,8 @@ function withInstanceConditions(
     if (inner !== undefined && !Array.isArray(inner)) return root;
     const joined =
       inner === undefined
-        ? (outer as Condition[][])
-        : (outer as Condition[][]).flatMap(group =>
-            (inner as Condition[][]).map(mine => [...group, ...mine])
-          );
+        ? outer
+        : outer.flatMap(group => inner.map(mine => [...group, ...mine]));
     return { ...root, visibility: { ...(own ?? {}), conditions: joined } };
   });
 }
