@@ -220,6 +220,7 @@ describe("a confirmed removal's write of the shared styles", () => {
       begin: vi.fn(async () => ({ id: "run-1" })),
       abandon: vi.fn(async () => {}),
       publish: vi.fn(async () => {}),
+      discardFragment: vi.fn(async () => {}),
       keepFragment: vi.fn(async () => {
         throw new Error("the fragments table refused the row");
       }),

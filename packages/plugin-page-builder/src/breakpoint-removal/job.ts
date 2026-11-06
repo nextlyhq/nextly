@@ -47,11 +47,19 @@ export function breakpointRemovalJob(
     handler: async (_input, context) => {
       // The runner's own deadline: the walk checks the live clock against it
       // between documents.
-      await service().carryOn({ deadline: context.deadline });
-      // After the walk, which the deadline is for: the purge is one delete.
+      // The purge runs whether or not the walk does: a walk failing on every
+      // pass must not keep rows past the window. The walk's failure is still
+      // the pass's, once the purge is done.
+      let walkFailed: { error: unknown } | undefined;
+      try {
+        await service().carryOn({ deadline: context.deadline });
+      } catch (error) {
+        walkFailed = { error };
+      }
       await service().purgeFragments(
         new Date(Date.now() - FRAGMENTS_KEPT_DAYS * DAY_MS)
       );
+      if (walkFailed !== undefined) throw walkFailed.error;
     },
   });
 }

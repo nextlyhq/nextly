@@ -111,6 +111,25 @@ describe("splitDocument", () => {
     expect(split.document).not.toEqual(document);
   });
 
+  it("keeps a block whose id is __proto__ as one of its own", () => {
+    const split = splitDocument(
+      page([
+        heading("__proto__", {
+          styles: { base: { mobile: { color: "#222" } } },
+        }),
+      ]),
+      removingMobile
+    );
+    // Through JSON, as the fragment is stored.
+    const stored = JSON.parse(JSON.stringify(split.fragment)) as {
+      nodes: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(stored.nodes, "__proto__")).toBe(true);
+    expect(stored.nodes["__proto__"]).toEqual({
+      styles: { base: { mobile: { color: "#222" } } },
+    });
+  });
+
   it("answers the same document, and no fragment, when nothing is held there", () => {
     const document = page([
       heading("a", { styles: { base: { tablet: { color: "#1" } } } }),

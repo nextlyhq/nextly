@@ -4,10 +4,12 @@
  * Every stored value a removal strips has a row in `breakpoint_removal_fragments`
  * holding what the strip took out of it (`strip`'s `DocumentFragment`), and the
  * shared styles have one for what the set's write took out of them. Each row
- * is written BEFORE the strip it records: a row whose write then fails or
- * loses a race is harmless, since putting values back only fills what a value
- * holds none of, while a strip with no row could never be undone. A row that
- * cannot be written stops the strip.
+ * is written BEFORE the strip it records, since a strip with no row could
+ * never be undone, and a row that cannot be written stops the strip. A row
+ * whose write then answers that it was not made (a race, a refusal) is
+ * deleted again: the value it records may since have been changed by someone
+ * else, and putting it back would undo their change. A write whose outcome is
+ * unknown (it threw) keeps its row.
  *
  * The removal's walk is generic (`host-rewrite/rewrite`), so this wraps the
  * two places it touches a value: its step, which sees each value and what the
@@ -69,8 +71,12 @@ export type StoredFragment = FragmentRow & { readonly keptAt: Date };
 
 /** The fragments table, through the plugin's database surface. */
 export interface FragmentStore {
-  /** Keep one row. Throws when it cannot be written. */
-  keep(row: FragmentRow): Promise<void>;
+  /** Keep one row, answering its id. Throws when it cannot be written. */
+  keep(row: FragmentRow): Promise<string>;
+  /** Delete one row: its write was not made. */
+  discard(id: string): Promise<void>;
+  /** Delete a removal's every row: the removal was dropped. */
+  forget(runId: string): Promise<void>;
   /** A removal's rows, the newest first. */
   forRun(runId: string): Promise<StoredFragment[]>;
   /** Delete every row kept before `before`. */
@@ -79,12 +85,12 @@ export interface FragmentStore {
 
 /** The fragment store over the plugin's own `ctx.db`. */
 export function fragmentStore(
-  db: Pick<PluginDatabase, "select" | "table" | "insert" | "delete">
+  db: Pick<PluginDatabase, "select" | "table" | "insertReturning" | "delete">
 ): FragmentStore {
   const columns = () => db.table(breakpointRemovalFragments);
   return {
     keep: async row => {
-      await db.insert(breakpointRemovalFragments, {
+      const kept = await db.insertReturning(breakpointRemovalFragments, {
         runId: row.runId,
         documentKey:
           row.host === null ? SITE_STYLE_FRAGMENT_KEY : documentKeyOf(row.host),
@@ -92,6 +98,15 @@ export function fragmentStore(
         form: row.form,
         fragment: row.fragment,
       });
+      return kept.id;
+    },
+    discard: async id => {
+      await db.delete(breakpointRemovalFragments).where(eq(columns().id, id));
+    },
+    forget: async runId => {
+      await db
+        .delete(breakpointRemovalFragments)
+        .where(eq(columns().runId, runId));
     },
     forRun: async runId => {
       const t = columns();
@@ -141,7 +156,7 @@ const NO_FRAGMENT = "breakpoint-removal-write-without-fragment";
  * each value it rewrites loses; `writer` keeps that row before each write.
  */
 export function fragmentCapture(
-  store: Pick<FragmentStore, "keep">,
+  store: Pick<FragmentStore, "keep" | "discard">,
   runId: string
 ): {
   readonly remember: (form: StoredForm, fragment: DocumentFragment) => void;
@@ -162,14 +177,17 @@ export function fragmentCapture(
       if (fragment === undefined) {
         throw NextlyError.internal({ logContext: { reason: NO_FRAGMENT } });
       }
-      await store.keep({
+      const id = await store.keep({
         runId,
         host: write.host,
         form: write.expected.form,
         fragment,
       });
       remembered.delete(key);
-      return inner(write);
+      const result = await inner(write);
+      // Not made: the row records a strip that did not happen.
+      if (result.kind !== "written") await store.discard(id);
+      return result;
     },
   };
 }

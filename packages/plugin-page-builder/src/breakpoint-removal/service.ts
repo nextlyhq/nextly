@@ -130,7 +130,9 @@ export interface BreakpointRemovalService {
    * Keep what a removal took out of the shared styles, before the write that
    * takes it out. Throws when it cannot be kept, so that write is not made.
    */
-  keepFragment(row: FragmentRow): Promise<void>;
+  keepFragment(row: FragmentRow): Promise<string>;
+  /** Delete a kept row whose write was not made. */
+  discardFragment(id: string): Promise<void>;
   /** Delete what removals took out before `before`: past their undo window. */
   purgeFragments(before: Date): Promise<void>;
 }
@@ -311,7 +313,11 @@ export function breakpointRemovalService(
         },
         startedBy
       ),
-    abandon: runId => runs().abandon(runId),
+    // A dropped removal stripped nothing, so nothing it kept is owed back.
+    abandon: async runId => {
+      await fragmentStore(install().db).forget(runId);
+      await runs().abandon(runId);
+    },
     holding: () => runs().holding(),
     openRemoval: async () => {
       const run = await runs().openRun();
@@ -348,6 +354,7 @@ export function breakpointRemovalService(
     retire: ids => runs().retire(ids),
     publish: runId => runs().publish(runId),
     keepFragment: row => fragmentStore(install().db).keep(row),
+    discardFragment: id => fragmentStore(install().db).discard(id),
     purgeFragments: before => fragmentStore(install().db).purge(before),
   };
 }

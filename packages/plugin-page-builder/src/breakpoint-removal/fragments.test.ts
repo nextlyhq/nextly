@@ -73,11 +73,21 @@ function walkOne(options: {
   let cursor: string | null = null;
   const progress = new Map<string, HostState>();
   let attempt = 0;
+  // The rows kept and not discarded, by id.
+  const alive = new Map<string, FragmentRow>();
+  let ids = 0;
   const capture = fragmentCapture(
     {
       keep: async row => {
         log.push("keep");
         await options.keep(row);
+        const id = `row-${String((ids += 1))}`;
+        alive.set(id, row);
+        return id;
+      },
+      discard: async id => {
+        log.push("discard");
+        alive.delete(id);
       },
     },
     "run-1"
@@ -139,6 +149,7 @@ function walkOne(options: {
         step: stripBreakpointsStep(removingMobile, capture.remember),
       }),
     stored: () => stored,
+    alive: () => [...alive.values()],
     log,
     setStored: (value: unknown) => {
       stored = value;
@@ -208,12 +219,44 @@ describe("keeping what a removal takes out", () => {
       { nodes: { t1: { styles: { base: { mobile: { color: "#1155cc" } } } } } },
       { nodes: { t1: { styles: { base: { mobile: { color: "#ff0000" } } } } } },
     ]);
-    expect(site.log).toEqual(["keep", "keep", "write"]);
+    expect(site.log).toEqual(["keep", "discard", "keep", "write"]);
+    // Only the strip that was made is on record.
+    expect(site.alive().map(row => row.fragment)).toEqual([
+      { nodes: { t1: { styles: { base: { mobile: { color: "#ff0000" } } } } } },
+    ]);
+  });
+
+  it("keeps nothing for a value someone else cleared before the strip's write landed", async () => {
+    let site: ReturnType<typeof walkOne> | undefined;
+    site = walkOne({
+      keep: async () => {},
+      // The author takes Mobile's colour out themselves meanwhile.
+      beforeWrite: attempt => {
+        if (attempt !== 1) return undefined;
+        site?.setStored({
+          ...page("#000"),
+          nodes: [
+            {
+              ...page("#000").nodes[0],
+              styles: { base: { base: { color: "#000" } } },
+            },
+          ],
+        });
+        return { kind: "changed" };
+      },
+    });
+    await site.walk();
+    expect(site.log).toEqual(["keep", "discard"]);
+    // No row to put their colour back from.
+    expect(site.alive()).toEqual([]);
   });
 
   it("refuses a write it has kept nothing for", async () => {
     const written: HostWrite[] = [];
-    const capture = fragmentCapture({ keep: async () => {} }, "run-1");
+    const capture = fragmentCapture(
+      { keep: async () => "row-1", discard: async () => {} },
+      "run-1"
+    );
     const writer = capture.writer(async write => {
       written.push(write);
       return { kind: "written" };

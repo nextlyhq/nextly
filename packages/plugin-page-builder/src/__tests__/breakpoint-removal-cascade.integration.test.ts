@@ -845,6 +845,28 @@ describe.each(getConfiguredTestDialects())(
       expect(await store.forRun(runId)).toEqual([]);
     });
 
+    it("discards a row by its id, and forgets every row of a removal that was dropped", async () => {
+      const { svc, fragments } = await boot();
+      const run = await svc.begin(["mobile"], null, "user:test");
+      const row = {
+        runId: run.id,
+        host: null,
+        form: "site" as const,
+        fragment: { classes: {}, overridden: [] },
+      };
+      const first = await svc.keepFragment(row);
+      await svc.keepFragment(row);
+      const { store } = fragments();
+      expect(await store.forRun(run.id)).toHaveLength(2);
+      // Its write was not made: that row alone goes.
+      await svc.discardFragment(first);
+      expect(await store.forRun(run.id)).toHaveLength(1);
+      // The removal is dropped: nothing it kept is owed back.
+      await svc.abandon(run.id);
+      expect(await store.forRun(run.id)).toEqual([]);
+      expect(await svc.runById(run.id)).toBeNull();
+    });
+
     it("refuses a second removal while one is open", async () => {
       const { svc, cookie } = await boot();
       // Open for a breakpoint the set below does not define again.

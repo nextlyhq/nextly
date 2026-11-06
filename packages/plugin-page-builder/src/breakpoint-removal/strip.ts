@@ -131,7 +131,8 @@ function splitEnvelope(
     if (held.length === 0) continue;
     const kept: Record<string, unknown> = { ...byBreakpoint };
     removed ??= {};
-    removed[state] = {};
+    // Without a prototype, so an id of `__proto__` is an own key.
+    removed[state] = Object.create(null) as Record<string, unknown>;
     for (const id of held) {
       removed[state][id] = byBreakpoint[id];
       delete kept[id];
@@ -239,7 +240,8 @@ export function splitDocument(
 ): { document: BlockDocument; fragment: DocumentFragment | undefined } {
   if (removal.ids.size === 0) return { document, fragment: undefined };
   const kept = keptOf(removal);
-  const nodeFragments: Record<string, NodeFragment> = {};
+  // Without a prototype, so a block whose id is `__proto__` is an own key.
+  const nodeFragments = Object.create(null) as Record<string, NodeFragment>;
   let changed = false;
   const nodes = mapForest(document.nodes, node => {
     const split = splitNode(node, removal, kept);

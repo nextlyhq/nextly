@@ -431,7 +431,8 @@ function strippedClassTier(
 ): { tier: readonly unknown[]; fragment: ClassesFragment } | undefined {
   const read = readStoredJson(stored);
   const list: readonly unknown[] = Array.isArray(read) ? read : [];
-  const classes: Record<string, RemovedStyles> = {};
+  // Without a prototype, so a class whose id is `__proto__` is an own key.
+  const classes = Object.create(null) as Record<string, RemovedStyles>;
   let changed = false;
   const stripped = list.map(entry => {
     const split = splitClass(entry, ids);
@@ -601,7 +602,8 @@ const BREAKPOINTS_CHANGED =
  * the breakpoints themselves is a removal planned from a set no longer stored,
  * so it is refused for the person to reload.
  */
-async function writeRemovalSet(args: {
+/** What a removal's write of its set is handed. */
+interface RemovalSetWrite {
   breakpoints: SiteBreakpointsRequest["breakpoints"];
   ctx: BreakpointsRouteContext;
   nextly: SiteSettingsDirectApi;
@@ -609,37 +611,58 @@ async function writeRemovalSet(args: {
   stored: VersionedSiteStyle;
   removedIds: ReadonlySet<string>;
   /**
-   * Keep what the write takes out of the shared styles, before it does:
-   * refused when it cannot be kept, and the write is not made.
+   * Keep what the write takes out of the shared styles, before it does,
+   * answering the row's id: refused when it cannot be kept, and the write is
+   * not made.
    */
-  keep: (fragment: ClassesFragment) => Promise<void>;
-}): Promise<void> {
+  keep: (fragment: ClassesFragment) => Promise<string>;
+  /** Delete a kept row whose write was not made. */
+  discard: (id: string) => Promise<void>;
+}
+
+/**
+ * One attempt at a removal's write, from the version `read`: what it takes
+ * out of the shared styles kept first. `undefined` once written; the
+ * refusal, when the write was refused as made from a replaced version, with
+ * its row deleted again: the write was not made, so its row records a strip
+ * that did not happen. Any other failure may have committed, so its row
+ * stays and the failure is thrown.
+ */
+async function attemptRemovalSet(
+  args: RemovalSetWrite,
+  read: VersionedSiteStyle
+): Promise<{ readonly stale: unknown } | undefined> {
+  const classes = strippedClassTier(
+    read.classes,
+    args.removal.defaults?.classes,
+    args.removedIds
+  );
+  const kept =
+    classes === undefined ? undefined : await args.keep(classes.fragment);
+  try {
+    await writeSiteStyle(
+      args.nextly,
+      args.ctx,
+      {
+        breakpoints: args.breakpoints,
+        ...(classes === undefined ? {} : { classes: classes.tier }),
+      },
+      versionToWrite(read)
+    );
+    return undefined;
+  } catch (error) {
+    if (!isStaleVersion(error)) throw error;
+    if (kept !== undefined) await args.discard(kept);
+    return { stale: error };
+  }
+}
+
+async function writeRemovalSet(args: RemovalSetWrite): Promise<void> {
   let read = args.stored;
   for (let attempt = 1; ; attempt += 1) {
-    const classes = strippedClassTier(
-      read.classes,
-      args.removal.defaults?.classes,
-      args.removedIds
-    );
-    // Kept for every attempt, from the version that attempt strips: a row
-    // for an attempt refused as stale only fills values that are there.
-    if (classes !== undefined) await args.keep(classes.fragment);
-    try {
-      await writeSiteStyle(
-        args.nextly,
-        args.ctx,
-        {
-          breakpoints: args.breakpoints,
-          ...(classes === undefined ? {} : { classes: classes.tier }),
-        },
-        versionToWrite(read)
-      );
-      return;
-    } catch (error) {
-      if (!isStaleVersion(error) || attempt >= REMOVAL_WRITE_ATTEMPTS) {
-        throw error;
-      }
-    }
+    const refused = await attemptRemovalSet(args, read);
+    if (refused === undefined) return;
+    if (attempt >= REMOVAL_WRITE_ATTEMPTS) throw refused.stale;
     read = await args.removal.stored(args.ctx);
     if (!sameStoredValue(read.breakpoints, args.stored.breakpoints)) {
       throw NextlyError.conflict({
@@ -699,6 +722,7 @@ async function beginRemoval(args: {
           form: "site",
           fragment,
         }),
+      discard: id => service.discardFragment(id),
     });
   } catch (error) {
     // A write can commit and still throw (a hook after it failed): then the

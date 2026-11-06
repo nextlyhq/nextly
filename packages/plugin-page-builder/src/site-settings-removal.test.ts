@@ -117,7 +117,8 @@ function fakeService(over: Partial<BreakpointRemovalService> = {}) {
     carryOn: async () => {},
     retire: async () => {},
     publish: async () => {},
-    keepFragment: async () => {},
+    keepFragment: async () => "row-1",
+    discardFragment: async () => {},
     purgeFragments: async () => {},
     ...over,
   };
@@ -182,7 +183,10 @@ describe("a breakpoint save racing another save of the site style", () => {
       breakpoints: set(DESKTOP, TABLET),
       classes: [BAND],
     });
-    const { service, abandon } = fakeService();
+    let rows = 0;
+    const keepFragment = vi.fn(async () => `row-${String((rows += 1))}`);
+    const discardFragment = vi.fn(async () => {});
+    const { service, abandon } = fakeService({ keepFragment, discardFragment });
     const removal = removalOver(single, service, {
       // A shared style saved in Design while the removal counts.
       count: async () => single.saveElsewhere({ classes: [BAND, ADDED] }),
@@ -205,6 +209,9 @@ describe("a breakpoint save racing another save of the site style", () => {
     // CONTROL: the first write was refused, and the second made.
     expect(single.nextly.updateSingle).toHaveBeenCalledTimes(2);
     expect(abandon).not.toHaveBeenCalled();
+    // A row kept for each attempt, and the refused attempt's deleted again.
+    expect(keepFragment).toHaveBeenCalledTimes(2);
+    expect(discardFragment.mock.calls).toEqual([["row-1"]]);
   });
 
   it("refuses a removal whose breakpoints another save changed meanwhile, and drops its run", async () => {
@@ -305,7 +312,7 @@ describe("a removal of a breakpoint a code-supplied shared style holds", () => {
       breakpoints: set(DESKTOP, TABLET),
       classes: [BAND],
     });
-    const keepFragment = vi.fn(async () => {});
+    const keepFragment = vi.fn(async () => "row-1");
     const { service } = fakeService({ keepFragment });
     const removal = removalOver(single, service, {
       defaults: { classes: [coded, plain] },
