@@ -892,7 +892,32 @@ const COLLECTIONS_METHODS: Record<
           const acknowledgedConversions = (
             body as { acknowledgedConversions?: string[] }
           ).acknowledgedConversions;
+          // A translated collection, or one turning translation on or off,
+          // keeps its push in development, which carries values across the
+          // change; the writer writes its migration and records it once the
+          // push has run.
+          const translated = wasLocalized || isLocalized;
+          const change: Parameters<typeof applyCollectionSchemaChange>[0] = {
+            slug: p.collectionName,
+            collection,
+            fields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            // The dialog does not change Draft/Published: the persisted status, before and after.
+            status: collection.status === true,
+            wasStatus: collection.status === true,
+            renameResolutions: renameResolutions ?? [],
+            eventResolutions: eventResolutions ?? [],
+            legacyResolutions: resolutions
+              ? { tableName, byFieldName: resolutions }
+              : undefined,
+          };
+          let pushedSummary: PushSummary | undefined;
+          const push = async (): Promise<void> => {
+            pushedSummary = (await applyCollectionSchemaChange(change)).summary;
+          };
           const written = await saveThroughWriter({
+            ...(translated ? { appliedBy: push } : {}),
             slug: p.collectionName,
             collection,
             fields: fields as unknown as FieldDefinition[],
@@ -912,22 +937,8 @@ const COLLECTIONS_METHODS: Record<
               : written.fields;
           const result =
             written !== undefined
-              ? { summary: undefined }
-              : await applyCollectionSchemaChange({
-                  slug: p.collectionName,
-                  collection,
-                  fields: fields as unknown as FieldDefinition[],
-                  wasLocalized,
-                  isLocalized,
-                  // The dialog does not change Draft/Published: the persisted status, before and after.
-                  status: collection.status === true,
-                  wasStatus: collection.status === true,
-                  renameResolutions: renameResolutions ?? [],
-                  eventResolutions: eventResolutions ?? [],
-                  legacyResolutions: resolutions
-                    ? { tableName, byFieldName: resolutions }
-                    : undefined,
-                });
+              ? { summary: pushedSummary }
+              : await applyCollectionSchemaChange(change);
 
           // pipeline.apply mutates the live DB (renamed/added/dropped
           // columns) but does NOT persist the updated `fields` JSON on
@@ -1631,6 +1642,8 @@ export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
  * a writer, where the push pipeline applies the change as it did before.
  */
 async function saveThroughWriter(args: {
+  /** Applies the change in development instead of the file (`writeCollectionSave`). */
+  appliedBy?: () => Promise<void>;
   slug: string;
   collection: { tableName: string; fields?: FieldDefinition[] };
   fields: FieldDefinition[];
@@ -1677,7 +1690,13 @@ async function saveThroughWriter(args: {
       logger,
       applies: process.env.NODE_ENV === "development",
     },
-    save
+    save,
+    args.appliedBy === undefined ? {} : { appliedBy: args.appliedBy }
   );
   return { fields, applied: result.applied };
 }
+
+/** What a push reports of the change it applied. */
+type PushSummary = Awaited<
+  ReturnType<typeof applyCollectionSchemaChange>
+>["summary"];

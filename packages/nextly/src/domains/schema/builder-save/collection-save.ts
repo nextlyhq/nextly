@@ -198,6 +198,15 @@ export async function writeCollectionSave(
      * finishes from.
      */
     keepFilesOnFailure?: boolean;
+    /**
+     * What applies the change in development instead of the file's
+     * statements: a translated collection's push, which carries its values
+     * across a translation change as the file's companions cannot yet. Once
+     * it has run, each written file is recorded applied where the database
+     * stands as its snapshot says, and the save is refused, its files kept,
+     * where it does not.
+     */
+    appliedBy?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
@@ -210,14 +219,22 @@ export async function writeCollectionSave(
   await writeAtomically(definitionPath, serializeUiSchema(plan.next));
 
   const written: string[] = [];
+  // Once a push has run, the database changed outside the files: they stay.
+  let pushed = false;
   try {
     const files = await writeFiles(deps, save, plan, names =>
       written.push(...names)
     );
-    if (deps.applies) await runWritten(deps, files, plan.table);
+    if (deps.applies && options.appliedBy !== undefined) {
+      pushed = true;
+      await options.appliedBy();
+      await recordWhatWasPushed(deps, files, plan.table);
+    } else if (deps.applies) {
+      await runWritten(deps, files, plan.table);
+    }
     return { files: [...written], applied: deps.applies };
   } catch (error) {
-    if (options.keepFilesOnFailure !== true) {
+    if (options.keepFilesOnFailure !== true && !pushed) {
       await undoUnapplied(deps, written, before, definitionPath, error);
     }
     throw error;
@@ -1097,6 +1114,50 @@ async function liveTable(
     ),
     table
   );
+}
+
+/**
+ * Record each written file applied after a push applied its change: one with
+ * a snapshot where the collection's table stands as that snapshot says, and a
+ * companion, which describes what the push itself did to the translation
+ * tables. Where the table does not, the save is refused naming the file, and
+ * nothing is recorded for it or after it.
+ */
+async function recordWhatWasPushed(
+  deps: CollectionSaveDeps,
+  files: SaveFiles,
+  table: string
+): Promise<void> {
+  const repo = new SchemaEventsRepository(
+    deps.adapter.getDrizzle(),
+    deps.adapter.getCapabilities().dialect
+  );
+  const ordered = [
+    ...(files.adopt === undefined ? [] : [files.adopt]),
+    ...files.change,
+  ];
+  const last = [...ordered].reverse().find(f => files.adopt !== f);
+  for (const filename of ordered) {
+    const file = await unitOf(deps, filename);
+    const target = await snapshotOf(deps, filename);
+    // The adoption describes the table before the push; the change's file the
+    // table after it, which is what the database is compared with.
+    if (target !== null && filename === last) {
+      const live = await liveTable(deps, table);
+      const expected = onlyTable(target, table);
+      if (!snapshotsEquivalent(live, expected)) {
+        throw new NextlyError({
+          code: "NEXTLY_MIGRATION_DRIFT",
+          publicMessage: `The database does not stand as ${filename} says after the save's change was applied, so it was not recorded applied. Compare the table with the file, then record it with \`nextly migrate:resolve --applied ${filename}\` once they match.`,
+          logContext: {
+            file: filename,
+            differences: diffSnapshots(expected, live).length,
+          },
+        });
+      }
+    }
+    await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
+  }
 }
 
 /** A written file as the runner takes it. */
