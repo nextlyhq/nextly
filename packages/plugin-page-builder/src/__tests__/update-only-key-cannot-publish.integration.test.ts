@@ -229,6 +229,7 @@ describe.each(getConfiguredTestDialects())(
         const id = await draftOf(host);
         const res = await rest("PATCH", `${entries}/${id}`, author, {
           title: `${host} ${id} edited`,
+          _overwrite: true,
         });
         expect(res.status, await res.clone().text()).toBe(200);
         expect(await storedRow(host, id)).toEqual({
@@ -242,6 +243,7 @@ describe.each(getConfiguredTestDialects())(
         const before = await storedRow(host, id);
         const res = await rest("PATCH", `${entries}/${id}`, author, {
           status: "published",
+          _overwrite: true,
         });
         expect(res.status).toBe(403);
         expect(await storedRow(host, id)).toEqual(before);
@@ -253,6 +255,7 @@ describe.each(getConfiguredTestDialects())(
         const res = await rest("PATCH", `${entries}/${id}`, author, {
           title: `${host} ${id} published`,
           status: "published",
+          _overwrite: true,
         });
         expect(res.status).toBe(403);
         expect(await storedRow(host, id)).toEqual(before);
@@ -274,7 +277,7 @@ describe.each(getConfiguredTestDialects())(
         const before = await storedRow(host, id);
         const res = await rest("POST", `${entries}/bulk-update`, author, {
           ids: [id],
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         });
         // A bulk write answers per row, so the row is what is checked.
         expect(res.status).not.toBe(500);
@@ -286,7 +289,7 @@ describe.each(getConfiguredTestDialects())(
         const before = await storedRow(host, id);
         const res = await rest("PATCH", entries, author, {
           where: { id: { equals: id } },
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         });
         expect(res.status).not.toBe(500);
         expect(await storedRow(host, id)).toEqual(before);
@@ -296,6 +299,7 @@ describe.each(getConfiguredTestDialects())(
         const id = await draftOf(host);
         const res = await rest("PATCH", `${entries}/${id}`, publisher, {
           status: "published",
+          _overwrite: true,
         });
         expect(res.status, await res.clone().text()).toBe(200);
         expect((await storedRow(host, id))?.status).toBe("published");
@@ -306,11 +310,11 @@ describe.each(getConfiguredTestDialects())(
         const byQuery = await draftOf(host);
         await rest("POST", `${entries}/bulk-update`, publisher, {
           ids: [byIds],
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         });
         await rest("PATCH", entries, publisher, {
           where: { id: { equals: byQuery } },
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         });
         expect((await storedRow(host, byIds))?.status).toBe("published");
         expect((await storedRow(host, byQuery))?.status).toBe("published");

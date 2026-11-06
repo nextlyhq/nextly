@@ -113,6 +113,7 @@ describe.each(getConfiguredTestDialects())(
               styles: { base: { mobile: { color: "#222222" } } },
             },
           ],
+          _overwrite: true,
         },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
@@ -242,7 +243,10 @@ describe.each(getConfiguredTestDialects())(
       });
       await t.nextly.updateSingle({
         slug: "frontpage",
-        data: { content: doc("page", [heading("f", atMobile)]) },
+        data: {
+          content: doc("page", [heading("f", atMobile)]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       // May manage the site and open pages; may not open components.
@@ -318,7 +322,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id: String(created.item.id),
-        data: { title: "Home, renamed" },
+        data: { title: "Home, renamed", _overwrite: true },
         overrideAccess: true,
       });
       const set = {

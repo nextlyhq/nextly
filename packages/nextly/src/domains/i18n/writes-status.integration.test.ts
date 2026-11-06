@@ -127,7 +127,7 @@ describe("write companion _status (M6b)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "H2" }
+      { heading: "H2", _overwrite: true }
     );
     expect(await companionStatus(t, "de")).toBe("published");
 
@@ -139,7 +139,7 @@ describe("write companion _status (M6b)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { status: "draft" }
+      { status: "draft", _overwrite: true }
     );
     expect(await companionStatus(t, "de")).toBe("draft");
   });
@@ -166,7 +166,7 @@ describe("write companion _status (M6b)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { status: "draft" }
+      { status: "draft", _overwrite: true }
     );
     expect(await companionStatus(t, "de")).toBe("draft");
     // The entry (and its default/English content) must remain published.
@@ -192,7 +192,7 @@ describe("write companion _status (M6b)", () => {
         locale: "en",
         overrideAccess: true,
       },
-      { status: "draft" }
+      { status: "draft", _overwrite: true }
     );
     expect(await mainStatus(t)).toBe("draft");
     expect(await companionStatus(t, "en")).toBe("draft");

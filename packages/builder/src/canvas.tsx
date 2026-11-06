@@ -49,6 +49,7 @@ import {
 import {
   INSTANCE_ATTRIBUTE,
   layoutPartSheets,
+  LIST_ACTION_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   sharedStyleInputs,
@@ -509,6 +510,16 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isChrome(target: EventTarget | null): boolean {
   return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
+}
+
+/** The action a list's note offers, when a press landed on it. */
+function listActionOf(target: EventTarget | null): string | null {
+  if (!isElement(target)) return null;
+  return (
+    target
+      .closest(`[${LIST_ACTION_ATTRIBUTE}]`)
+      ?.getAttribute(LIST_ACTION_ATTRIBUTE) ?? null
+  );
 }
 
 /**
@@ -1148,7 +1159,8 @@ function useCanvasPointer(
   onDoubleClick:
     | ((event: React.MouseEvent<HTMLDivElement>) => void)
     | undefined,
-  marked: readonly string[]
+  marked: readonly string[],
+  onListSortField?: (id: string) => void
 ): {
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
@@ -1158,12 +1170,24 @@ function useCanvasPointer(
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (onSelect === undefined || isChrome(event.target)) return;
+      const id = nodeIdFromEvent(event.target);
+      // A list note's "Choose a field", pressed or activated from the
+      // keyboard: the host selects the list and takes the author to its sort,
+      // in place of the plain selection a click inside the list makes.
+      if (
+        id !== null &&
+        onListSortField !== undefined &&
+        listActionOf(event.target) === "choose-sort-field"
+      ) {
+        onListSortField(id);
+        return;
+      }
       // A click on the canvas background resolves to null, which CLEARS the
       // selection rather than being ignored. Ignoring it leaves an inspector
       // showing a node the author believes they have deselected.
-      onSelect(nodeIdFromEvent(event.target), selectionModeFor(event));
+      onSelect(id, selectionModeFor(event));
     },
-    [onSelect]
+    [onSelect, onListSortField]
   );
   const doubleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1326,6 +1350,12 @@ export interface CanvasProps {
    * reading modifiers off a later render's event would read a different click.
    */
   onSelect?: (id: string | null, mode: SelectionMode) => void;
+  /**
+   * Raised with a collection list's id when its note's "Choose a field" is
+   * pressed, for the host to select the list and take the author to its
+   * sort. Absent, the press selects the list as any click inside it does.
+   */
+  onListSortField?: (id: string) => void;
   /**
    * Everything else the renderer needs, passed through untouched.
    *
@@ -1896,12 +1926,14 @@ function useSelectionPointer({
   selectedId,
   onSelect,
   onDoubleClick,
+  onListSortField,
   dragPointerDown,
 }: {
   selectedIds: CanvasProps["selectedIds"];
   selectedId: string | null;
   onSelect: CanvasProps["onSelect"];
   onDoubleClick: CanvasProps["onDoubleClick"];
+  onListSortField: CanvasProps["onListSortField"];
   dragPointerDown:
     | ((event: React.PointerEvent<HTMLDivElement>) => void)
     | undefined;
@@ -1910,7 +1942,12 @@ function useSelectionPointer({
     () => markedIds(selectedIds, selectedId),
     [selectedIds, selectedId]
   );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const pointer = useCanvasPointer(
+    onSelect,
+    onDoubleClick,
+    marked,
+    onListSortField
+  );
   const canvasPointerDown = pointer.onPointerDown;
   const pointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -2091,6 +2128,7 @@ export function Canvas({
   dragHandlers,
   drag,
   onDoubleClick,
+  onListSortField,
   overlay,
   regions,
 }: CanvasProps): JSX.Element {
@@ -2107,6 +2145,7 @@ export function Canvas({
     selectedId,
     onSelect,
     onDoubleClick,
+    onListSortField,
     dragPointerDown: dragHandlers?.onPointerDown,
   });
 

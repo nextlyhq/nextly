@@ -126,12 +126,12 @@ async function pendingDrafts(
 async function germanOnlyAndPublished(t: TestNextly): Promise<void> {
   await singlesOf(t).update(
     SLUG,
-    { siteName: "DE live", status: "published" },
+    { siteName: "DE live", status: "published", _overwrite: true },
     { locale: "de", overrideAccess: true }
   );
   await singlesOf(t).update(
     SLUG,
-    { status: "published" },
+    { status: "published", _overwrite: true },
     { locale: "*", overrideAccess: true }
   );
 }
@@ -159,7 +159,7 @@ describe.each(
       // A status-less save on a published document is held as a pending edit.
       await singlesOf(t).update(
         SLUG,
-        { siteName: "EN pending" },
+        { siteName: "EN pending", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
 
@@ -170,7 +170,7 @@ describe.each(
 
       const result = await singlesOf(t).update(
         SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "*", overrideAccess: true }
       );
 
@@ -193,14 +193,14 @@ describe.each(
 
       await singlesOf(t).update(
         SLUG,
-        { siteName: "EN pending" },
+        { siteName: "EN pending", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       expect(JSON.stringify(await pendingDrafts(t))).toContain("EN pending");
 
       await singlesOf(t).update(
         SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
 
@@ -217,12 +217,12 @@ describe.each(
 
       await singlesOf(t).update(
         SLUG,
-        { siteName: "EN pending" },
+        { siteName: "EN pending", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       await singlesOf(t).update(
         SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "*", overrideAccess: true }
       );
 

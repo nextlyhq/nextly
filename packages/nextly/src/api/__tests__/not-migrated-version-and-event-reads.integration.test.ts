@@ -143,7 +143,7 @@ async function boot(dialect: TestDialect): Promise<Target> {
   await api.update({
     collection: POSTS,
     id: live.item.id,
-    data: { title: "Second" },
+    data: { title: "Second", _overwrite: true },
   });
   const gone = await api.create({
     collection: POSTS,

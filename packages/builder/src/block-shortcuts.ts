@@ -7,10 +7,12 @@
  * @module block-shortcuts
  */
 import {
+  DEFAULT_TOKEN_PREFIX,
   getBlock,
   getStyleProperty,
   isStyleLeaf,
   isTokenRef,
+  scaledTokenText,
   tokenCustomProperty,
   type BlockNode,
   type BreakpointId,
@@ -31,7 +33,15 @@ export const BUTTON_BLOCK = "core/button";
 export interface ShortcutAt {
   readonly state: StyleState;
   readonly breakpoint: BreakpointId;
+  /**
+   * The prefix the site's tokens are written under, which a value reaching
+   * from elsewhere names its tokens with; the default prefix when omitted.
+   */
+  readonly tokenPrefix?: string;
 }
+
+/** The value Medium writes for the text size over one reaching from elsewhere. */
+const OWN_TEXT = "inherit";
 
 /**
  * What reaches the edited address from elsewhere (a wider device, a shared
@@ -107,7 +117,8 @@ export function heightOf(
   reaching: Reaching = NOTHING_REACHES
 ): HeightChoice | undefined {
   const shown = storedAt(node, at, "minHeight") ?? reaching("min-height");
-  if (shown === undefined) return "auto";
+  // `auto` is what Auto writes over a min height reaching from elsewhere.
+  if (shown === undefined || shown === "auto") return "auto";
   return shown === FULL_SCREEN ? "screen" : undefined;
 }
 
@@ -222,7 +233,13 @@ export function sizeOf(
   const padding = storedAt(node, at, "padding");
   const text = storedAt(node, at, "fontSize");
   if (padding === undefined && text === undefined) {
-    return reachingSize(node, reaching);
+    return reachingSize(node, reaching, at.tokenPrefix ?? DEFAULT_TOKEN_PREFIX);
+  }
+  // What Medium writes over a size reaching from elsewhere: the button's own
+  // padding tokens and its inherited text size.
+  const own = scaledPadding(node, 1);
+  if (own !== undefined && samePadding(padding, own) && text === OWN_TEXT) {
+    return "medium";
   }
   for (const size of ["small", "large"] as const) {
     const scaled = scaledPadding(node, SIZES[size].times);
@@ -268,21 +285,19 @@ function sizeReaches(reaching: Reaching): boolean {
 }
 
 /**
- * Whether a side's reaching text is its own token scaled by `times`, as the
- * compiler writes it: `calc(var(<prefix><token>) * <times>)`, under whatever
- * prefix the site's tokens carry.
+ * Whether a side's reaching text is its own token scaled by `times`, spelled
+ * exactly as the compiler writes it under the site's prefix: a token whose name
+ * merely ends the same way (`brand.button.padding-y`) is another token.
  */
 function reachesScaled(
   text: string | undefined,
   token: string,
-  times: number
+  times: number,
+  prefix: string
 ): boolean {
-  const name = tokenCustomProperty(token, "");
-  const match = /^calc\(var\((--[\w-]*)\) \* ([\d.]+)\)$/.exec(text ?? "");
   return (
-    match !== null &&
-    (match[1] === `--${name}` || match[1]?.endsWith(`-${name}`) === true) &&
-    Number(match[2]) === times
+    text ===
+    scaledTokenText(`var(${tokenCustomProperty(token, prefix)})`, times)
   );
 }
 
@@ -294,7 +309,8 @@ function reachesScaled(
  */
 function reachingSize(
   node: BlockNode,
-  reaching: Reaching
+  reaching: Reaching,
+  prefix: string
 ): SizeChoice | undefined {
   if (!sizeReaches(reaching)) return "medium";
   const own = scaledPadding(node, 1);
@@ -307,7 +323,7 @@ function reachingSize(
         const token = own[side];
         return (
           isTokenRef(token) &&
-          reachesScaled(reaching(cssProperty), token.$token, times)
+          reachesScaled(reaching(cssProperty), token.$token, times, prefix)
         );
       })
     ) {
@@ -332,7 +348,7 @@ export function planSize(
     const over = sizeReaches(reaching);
     return written(node, at, [
       ["padding", over ? (scaledPadding(node, 1) ?? null) : null],
-      ["fontSize", over ? "inherit" : null],
+      ["fontSize", over ? OWN_TEXT : null],
     ]);
   }
   const padding = scaledPadding(node, SIZES[size].times);

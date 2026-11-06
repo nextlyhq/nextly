@@ -214,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
       } as never);
       await trusted.updateSingle({
         slug: "hsettings",
-        data: { siteName: "Site", seedMarker: "seed-7" },
+        data: { siteName: "Site", seedMarker: "seed-7", _overwrite: true },
       } as never);
     }, 180_000);
 

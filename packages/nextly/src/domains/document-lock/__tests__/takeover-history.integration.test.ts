@@ -113,7 +113,7 @@ async function masthead(
 ): Promise<{ ref: DocumentRef; subject: ContentEventSubject }> {
   const saved = await t.nextly.updateSingle({
     slug: "masthead",
-    data: { heading: "one" },
+    data: { heading: "one", _overwrite: true },
   });
   const id = (saved.item as { id: string }).id;
   return {

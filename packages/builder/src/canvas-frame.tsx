@@ -1079,6 +1079,28 @@ const PAGE_CHROME_TOKENS: readonly {
     tokens: ["--nx-builder-region-opacity"],
   },
   {
+    // A collection list's note to its author holds the admin's words alone,
+    // so it may take the admin's face as well as its colours.
+    selector: "[data-nx-list-diagnostic]",
+    tokens: [
+      // The focus ring of the note's one action.
+      "--nx-builder-select",
+      "--nx-builder-warning",
+      "--nx-builder-danger",
+      "--nx-builder-surface-raised",
+      "--nx-builder-text",
+      "--nx-builder-scheme",
+      "--font-sans",
+      "--radius-sm",
+    ],
+  },
+  {
+    // A list drawing its empty state holds the site's content, so its tag
+    // reads only the editor's own names.
+    selector: "[data-nx-list-shows]",
+    tokens: ["--nx-builder-select", "--nx-builder-select-text"],
+  },
+  {
     selector: ".nx-canvas-region__badge, .nx-canvas-region__tag",
     tokens: [
       "--nx-builder-border",

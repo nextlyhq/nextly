@@ -457,6 +457,34 @@ describe("ZodGenerator — Individual Field Generation", () => {
     expect(schema.safeParse(`${longest}a`).success).toBe(false);
   });
 
+  it('lets an optional icon field be cleared to "", and a required one not', () => {
+    const col = createCollection([
+      { name: "badge", type: "icon" } as FieldConfig,
+      { name: "mark", type: "icon", required: true } as FieldConfig,
+    ]);
+    const { code } = gen.generateSchema(col);
+    const parse = (name: string): z.ZodType =>
+      runInNewContext(String(extractFieldSchema(code, name)), {
+        z,
+      }) as z.ZodType;
+    const optional = parse("badge");
+    // "" is what the admin clears an optional icon to.
+    expect(optional.safeParse("").success).toBe(true);
+    expect(optional.safeParse(null).success).toBe(true);
+    expect(optional.safeParse(undefined).success).toBe(true);
+    expect(optional.safeParse("lucide:star").success).toBe(true);
+    // Any other string is still judged by its shape and length.
+    expect(optional.safeParse("Star").success).toBe(false);
+    expect(optional.safeParse(" ").success).toBe(false);
+    expect(
+      optional.safeParse(`lucide:${"a".repeat(255 - "lucide:".length)}a`)
+        .success
+    ).toBe(false);
+    const required = parse("mark");
+    expect(required.safeParse("").success).toBe(false);
+    expect(required.safeParse("lucide:star").success).toBe(true);
+  });
+
   it("generates polymorphic schema for upload fields with array relationTo", () => {
     const col = createCollection([
       {

@@ -166,7 +166,7 @@ async function documentWithMixedRows(
   const second = reordered ? rows(2).reverse() : rows(2);
   await handler.updateEntry(
     { collectionName: "notes", entryId: id, overrideAccess: true },
-    { title: "v2", items: second, cards: second }
+    { title: "v2", items: second, cards: second, _overwrite: true }
   );
   return id;
 }

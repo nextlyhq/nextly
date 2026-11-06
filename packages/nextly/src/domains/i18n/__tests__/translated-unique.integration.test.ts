@@ -68,7 +68,7 @@ describeEachDialect("a translated unique field", dialect => {
     return entryId
       ? entries.updateEntry(
           { collectionName: "pages", entryId, overrideAccess: true, locale },
-          data
+          { ...data, _overwrite: true }
         )
       : entries.createEntry(
           { collectionName: "pages", overrideAccess: true, locale },
@@ -640,7 +640,7 @@ describeEachDialect("a translated unique field", dialect => {
       entryId
         ? entries.updateEntry(
             { collectionName: "ranks", entryId, overrideAccess: true, locale },
-            data
+            { ...data, _overwrite: true }
           )
         : entries.createEntry(
             { collectionName: "ranks", overrideAccess: true, locale },

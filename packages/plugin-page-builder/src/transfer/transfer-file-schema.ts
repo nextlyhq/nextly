@@ -13,6 +13,7 @@
  *
  * @module transfer/transfer-file-schema
  */
+import { isDefaultLook } from "@nextlyhq/blocks-engine";
 import { z } from "nextly/zod";
 
 import {
@@ -214,5 +215,15 @@ export function readTransferFile(
   }
   // The parse checked the shapes the contract names; the documents' insides
   // are the blocks field's to judge, as the writes do.
-  return { file: parsed.data as unknown as TransferFile };
+  const file = parsed.data as unknown as TransferFile;
+  // A block's own look edits the base of every block of its type on a site,
+  // so it stays with the site it was made on: a file carrying one, however it
+  // came to, never changes the importing site's own looks. Its documents draw
+  // with that site's own looks, as they do with its bases.
+  return {
+    file: {
+      ...file,
+      classes: file.classes.filter(entry => !isDefaultLook(entry)),
+    },
+  };
 }
