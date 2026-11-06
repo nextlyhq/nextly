@@ -307,6 +307,32 @@ describe("a custom source at save", () => {
     ).toEqual([]);
   });
 
+  it("refuses a custom source's list split into pages, and keeps one a stored page holds", () => {
+    const document = page(
+      list("l", { ...named({ city: "lahore" }), paginate: true })
+    );
+    expect(judged(document)).toEqual([
+      ["list-paginate-named", "error", "/nodes/0/props/paginate"],
+    ]);
+    // Judged by its shape alone too, as the editor's save is.
+    expect(judged(document, { namedQueries: undefined })).toEqual([
+      ["list-paginate-named", "error", "/nodes/0/props/paginate"],
+    ]);
+    expect(judged(document, { stored: [document] })).toEqual([
+      ["list-paginate-named", "warning", "/nodes/0/props/paginate"],
+    ]);
+    const [refused] = validate(document, ctx).filter(
+      issue => issue.code === "list-paginate-named"
+    );
+    expect(refused?.message).toBe(
+      "A custom source's list can't be split into pages yet. Turn off Split into pages, or choose a collection."
+    );
+    // Not split into pages, the same list saves.
+    expect(
+      judged(page(list("l", { ...named({ city: "lahore" }), paginate: false })))
+    ).toEqual([]);
+  });
+
   it("refuses a related list inside a custom source's list", () => {
     const inner = list("inner", {
       collection: "events",
