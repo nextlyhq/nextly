@@ -1121,6 +1121,7 @@ export function EntryForm({
     mayWrite: () => !pluginWritesHeldNow.current,
     onDeleted: onDelete,
     onOwnChange: expectOwnChange,
+    locale,
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {

@@ -29,13 +29,14 @@ import type {
   SiteBreakpointRemovalStatus,
   SiteBreakpointsDryRun,
   SiteBreakpointsSaved,
+  SiteBreakpointUndoable,
 } from "../../library-contract";
 import {
   askBreakpointRemoval,
   carryOnBreakpointRemoval,
   confirmBreakpointRemoval,
   readBreakpointRemoval,
-  readSiteRemovals,
+  readRemovals,
 } from "../breakpoint-removal-client";
 
 import {
@@ -43,6 +44,8 @@ import {
   nothingStored,
   resumedWords,
 } from "./breakpoint-removal-flow";
+import { undoResumedWords } from "./breakpoint-undo-flow";
+import { followLoop } from "./follow-loop";
 
 /** Where a removal is. */
 export type RemovalStep =
@@ -70,6 +73,11 @@ export type RemovalStep =
       readonly labels: readonly string[];
       /** What the dry run counted, to say once it is done. */
       readonly counted: readonly RemovedBreakpoint[];
+      /**
+       * Whether its route already said it finished, and only its status is
+       * owed: then the status is read again, and the route not called.
+       */
+      readonly finished?: boolean;
     }
   | {
       readonly kind: "resumed";
@@ -109,6 +117,8 @@ export interface BreakpointRemovalOptions {
   readonly save: (next: BreakpointSet) => Promise<string | null | undefined>;
   /** The removals the tab's read reports, or `undefined` where it reports none. */
   readonly removals: readonly SiteBreakpointRemovalStatus[] | undefined;
+  /** The removal the tab's read offers to undo, as it reports it. */
+  readonly undoable?: SiteBreakpointUndoable | null;
   /** Read the tab again. */
   readonly reread: () => void;
   /** Read the site's style again, so the canvas draws the stored set. */
@@ -190,7 +200,10 @@ function shownStep(
   own: RemovalStep,
   removals: readonly SiteBreakpointRemovalStatus[] | undefined
 ): RemovalStep {
-  const open = removals?.find(removal => removal.open);
+  // An undo's run is the undo's to show (`use-breakpoint-undo`).
+  const open = removals?.find(
+    removal => removal.open && removal.undoes === undefined
+  );
   const finished = own.kind === "done" || own.kind === "left";
   if (
     open !== undefined &&
@@ -200,7 +213,9 @@ function shownStep(
     return { kind: "resumed", runId: open.runId, labels: open.labels };
   }
   if (own.kind !== "idle") return own;
-  const leftOver = removals?.find(removal => !removal.open && removal.left > 0);
+  const leftOver = removals?.find(
+    removal => !removal.open && removal.left > 0 && removal.undoes === undefined
+  );
   return leftOver === undefined
     ? own
     : { kind: "left", runId: leftOver.runId, status: leftOver };
@@ -217,11 +232,19 @@ function afterDryRun(
 
 /** What the tab reads off a step. */
 function stepFacts(
-  step: RemovalStep
+  step: RemovalStep,
+  removals: readonly SiteBreakpointRemovalStatus[] | undefined
 ): Pick<BreakpointRemoval, "blocked" | "inFlight" | "takesOver"> {
+  const undoing = removals?.find(
+    removal => removal.open && removal.undoes !== undefined
+  );
   return {
     blocked:
-      step.kind === "resumed" ? resumedWords(step.labels).hint : undefined,
+      step.kind === "resumed"
+        ? resumedWords(step.labels).hint
+        : undoing === undefined
+          ? undefined
+          : undoResumedWords(undoing.labels).hint,
     inFlight:
       step.kind === "checking" || (step.kind === "confirm" && step.sending),
     takesOver:
@@ -264,7 +287,7 @@ type Finish = (
   runId: string,
   labels: readonly string[],
   counted: readonly RemovedBreakpoint[] | undefined
-) => Promise<"settled" | "again">;
+) => Promise<"settled" | "again" | "unread">;
 
 /**
  * Carry the removal on screen on through its route until it says it has
@@ -286,46 +309,46 @@ function useFollowRemoval(
   const followed = useRef<{
     labels: readonly string[];
     counted: readonly RemovedBreakpoint[] | undefined;
-  }>({ labels: [], counted: undefined });
+    finished: boolean;
+  }>({ labels: [], counted: undefined, finished: false });
   const labels =
     step.kind === "removing" || step.kind === "resumed"
       ? step.labels
       : undefined;
   const counted = step.kind === "removing" ? step.counted : undefined;
+  const finished = step.kind === "removing" && step.finished === true;
   useEffect(() => {
-    if (labels !== undefined) followed.current = { labels, counted };
+    if (labels !== undefined) {
+      followed.current = { labels, counted, finished };
+    }
   });
   useEffect(() => {
     if (following === undefined) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const asked = turn.current;
-    const call = async (): Promise<void> => {
-      let wait = FOLLOW_MS;
+    // Once the route has said finished, only the run's status is owed: an
+    // unreadable status is read again, and the route is not called again.
+    let statusOnly = followed.current.finished;
+    const settle = async (): Promise<"settled" | "again" | "unread"> => {
+      const known = followed.current;
+      return finish(asked, following, known.labels, known.counted);
+    };
+    return followLoop(async stopped => {
       try {
-        const answered = await carryOnBreakpointRemoval(following);
-        if (stopped) return;
-        if (answered.finished) {
-          const known = followed.current;
-          const outcome = await finish(
-            asked,
-            following,
-            known.labels,
-            known.counted
-          );
-          // Opened again, or its status could not be read: followed on.
-          if (outcome === "settled" || stopped) return;
+        if (!statusOnly) {
+          const answered = await carryOnBreakpointRemoval(following);
+          if (stopped()) return null;
+          statusOnly = answered.finished;
         }
+        if (!statusOnly) return FOLLOW_MS;
+        const outcome = await settle();
+        if (outcome === "settled" || stopped()) return null;
+        // Opened again: followed on. Unread: its status read again later.
+        statusOnly = outcome === "unread";
+        return statusOnly ? FOLLOW_AFTER_TROUBLE_MS : FOLLOW_MS;
       } catch {
-        wait = FOLLOW_AFTER_TROUBLE_MS;
+        return FOLLOW_AFTER_TROUBLE_MS;
       }
-      if (!stopped) timer = setTimeout(() => void call(), wait);
-    };
-    void call();
-    return () => {
-      stopped = true;
-      if (timer !== undefined) clearTimeout(timer);
-    };
+    });
   }, [following, finish, turn]);
 }
 
@@ -333,6 +356,7 @@ export function useBreakpointRemoval({
   current,
   save,
   removals,
+  undoable,
   reread,
   refreshStyle,
 }: BreakpointRemovalOptions): BreakpointRemoval {
@@ -363,13 +387,24 @@ export function useBreakpointRemoval({
       const status = await statusOf(runId);
       reread();
       if (turn.current !== asked) return "settled";
-      // Still open (a write sent a document back to be stripped since), or
-      // nothing known: the removal is followed on, never called done.
-      if (status === undefined || status?.open === true) {
+      // Nothing known: its status is read again, never taken for done.
+      if (status === undefined) {
         setOwn({
           kind: "removing",
           runId,
-          labels: status?.labels ?? labels,
+          labels,
+          counted: counted ?? [],
+          finished: true,
+        });
+        return "unread";
+      }
+      // Still open (a write sent a document back to be stripped since): the
+      // removal is followed on, never called done.
+      if (status?.open === true) {
+        setOwn({
+          kind: "removing",
+          runId,
+          labels: status.labels,
           counted: counted ?? [],
         });
         return "again";
@@ -385,22 +420,31 @@ export function useBreakpointRemoval({
   // looked at alone now and then, and the read asked again only when they
   // differ from the ones on screen: a refresh each time would hold Edit
   // breakpoints while it lasts.
+  const undoableNow = useRef(undoable);
+  useEffect(() => {
+    undoableNow.current = undoable;
+  });
   useEffect(() => {
     const timer = setInterval(() => {
-      readSiteRemovals().then(
-        removalsThere => {
-          if (
-            JSON.stringify(removalsThere ?? null) !==
-            JSON.stringify(removalsNow.current ?? null)
-          ) {
+      readRemovals().then(
+        there => {
+          if (there === undefined) return;
+          const shown = {
+            removals: removalsNow.current ?? [],
+            undoable: undoableNow.current ?? null,
+          };
+          // Changed elsewhere: Settings, and the style the canvas draws with,
+          // which an undo or a removal another tab made has changed too.
+          if (JSON.stringify(there) !== JSON.stringify(shown)) {
             reread();
+            refreshStyle();
           }
         },
         () => undefined
       );
     }, WATCH_MS);
     return () => clearInterval(timer);
-  }, [reread]);
+  }, [reread, refreshStyle]);
 
   /** Where a stored removal goes next: done, settled, or followed. */
   const afterSave = (
@@ -533,6 +577,6 @@ export function useBreakpointRemoval({
       }
     },
     generation,
-    ...stepFacts(step),
+    ...stepFacts(step, removals),
   };
 }
