@@ -146,12 +146,16 @@ function browserDay(at: Date): string {
 /** How long a run's answer is kept, so the page drawn again runs nothing new. */
 const KEPT_FOR_MS = 15_000;
 
-/** A failure the route answered, as the renderer reads a carried one. */
+/**
+ * A failure the route answered, as the renderer reads a carried one, with
+ * the reads the run made before it failed, which the canvas claims.
+ */
 function carried(
-  failure: NonNullable<ListEntriesNamedResponse["meta"]["named"]["failure"]>
+  failure: NonNullable<ListEntriesNamedResponse["meta"]["named"]["failure"]>,
+  reads: number
 ): Error {
   return Object.assign(new Error(failure.detail), {
-    namedQueryFailure: failure,
+    namedQueryFailure: { ...failure, reads },
   });
 }
 
@@ -265,7 +269,9 @@ export function canvasNamedHost(
         },
       });
       const named = answer.meta.named;
-      if (named.failure !== undefined) throw carried(named.failure);
+      if (named.failure !== undefined) {
+        throw carried(named.failure, named.reads);
+      }
       return {
         rows: [...answer.items],
         ...(named.counted ? { total: answer.meta.total } : {}),

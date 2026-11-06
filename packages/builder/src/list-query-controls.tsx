@@ -3034,8 +3034,13 @@ function useNamedEditing(
     }
     setDraft(undefined);
     const kept = declaredOnly(source, params);
-    // The source and its inputs in one write, so it is one undo step.
-    if (JSON.stringify(kept) !== JSON.stringify(query.namedQuery?.params)) {
+    // The source and its inputs in one write, so it is one undo step: a
+    // new source is a change even when its inputs equal the stored ones.
+    const stored = query.namedQuery;
+    if (
+      named.name !== stored?.name ||
+      JSON.stringify(kept) !== JSON.stringify(stored.params)
+    ) {
       commit(namedSourceChanges(named.name, kept));
     }
   };

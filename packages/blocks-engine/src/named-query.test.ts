@@ -453,9 +453,13 @@ describe("what an author is told about a custom source", () => {
     ).toBe(
       "Most read reads views from Page views, which visitors can't read, so on the published page visitors see the rows without them."
     );
-    // A collection whose fields are not known is named alone.
-    expect(NAMED_QUERY_TEXT.readsHidden("Page views", [])).toContain(
-      "It reads Page views, which visitors can't read"
+    // A collection whose fields are not known is named alone, as the
+    // one-argument form it first shipped with still says.
+    expect(NAMED_QUERY_TEXT.readsHidden("Page views", [])).toBe(
+      "It reads Page views, which visitors can't read, so a published list of it may show nothing."
+    );
+    expect(NAMED_QUERY_TEXT.readsHidden("Page views")).toBe(
+      NAMED_QUERY_TEXT.readsHidden("Page views", [])
     );
     expect(
       NAMED_QUERY_TEXT.readsHidden("Notes", ["a", "b", "c", "d", "e"])

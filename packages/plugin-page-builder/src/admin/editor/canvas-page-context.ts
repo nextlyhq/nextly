@@ -190,10 +190,25 @@ export function useCanvasPageContext(
   }, [base, listsShowingEmpty, listsStillShowing]);
 }
 
+/** How long the canvas waits before asking again for queries it could not read. */
+const RETRY_FIRST_MS = 2000;
+/** The longest it waits between asks, however many have failed. */
+const RETRY_MOST_MS = 60_000;
+
+/** The wait before ask number `attempt` (from 1), doubling to its cap. */
+export function namedHostRetryDelay(attempt: number): number {
+  return Math.min(
+    RETRY_FIRST_MS * 2 ** Math.max(0, attempt - 1),
+    RETRY_MOST_MS
+  );
+}
+
 /**
  * The canvas's host for named queries in `locale`, once the site's queries
- * are read; `undefined` until then, or where they could not be read, so a
- * list whose source is one draws its template rather than a failure.
+ * are read; `undefined` until then, so a list whose source is one draws its
+ * template rather than a failure. A read that fails is asked again, after a
+ * wait that grows to a cap, so one failed request never leaves the canvas
+ * without its queries for the rest of the session.
  */
 function useCanvasNamedHost(
   locale: string | undefined,
@@ -204,20 +219,30 @@ function useCanvasNamedHost(
     readonly userId: string | null;
     readonly host: NamedQueryHost;
   }>();
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     canvasNamedQueriesIn(locale, userId)
       .host()
       .then(
         host => {
           if (live) setFound({ locale, userId, host });
         },
-        () => undefined
+        () => {
+          // The shared read keeps no failure, so the next ask reads again.
+          if (!live) return;
+          retry = setTimeout(
+            () => setAttempt(count => count + 1),
+            namedHostRetryDelay(attempt + 1)
+          );
+        }
       );
     return () => {
       live = false;
+      if (retry !== undefined) clearTimeout(retry);
     };
-  }, [locale, userId]);
+  }, [locale, userId, attempt]);
   // The host for THIS person and language only, so one never draws another's.
   return found !== undefined &&
     found.locale === locale &&

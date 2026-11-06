@@ -169,6 +169,29 @@ describe("the canvas's runs of a named query", () => {
     expect(outcome.diagnostic?.message).toContain(failure.detail);
   });
 
+  it("hands the renderer a failed run's reads, so the canvas's allowance is charged for them", async () => {
+    const failure = {
+      code: "threw",
+      detail:
+        "Upcoming events stopped with an error. Ask your developer, quoting ref NQ-1A2B3C.",
+      ref: "NQ-1A2B3C",
+    };
+    const host = canvasNamedHost(
+      SOURCES,
+      () => Promise.resolve(answer({ counted: false, reads: 3, failure }, [])),
+      undefined
+    );
+    const asked = host.cache?.({
+      declaration: upcoming,
+      key: ["k"],
+      read: () => Promise.reject(new Error("never read here")),
+      asked: { params: { city: "lahore" }, window: { limit: 6, offset: 0 } },
+    });
+    await expect(asked).rejects.toMatchObject({
+      namedQueryFailure: { ...failure, reads: 3 },
+    });
+  });
+
   it("tells an author what a visitor's page goes without, naming the fields", async () => {
     const outcome = await readWith(() =>
       Promise.resolve(answer({ counted: true, reads: 1 }))

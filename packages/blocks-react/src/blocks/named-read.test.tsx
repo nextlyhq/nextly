@@ -910,6 +910,26 @@ describe("a named query's run made somewhere else, as an editor's canvas makes i
     );
   });
 
+  it("claims the reads a carried failure made from the page's allowance, as a success's are", async () => {
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    const budget = createQueryBudget(3);
+    const made = host(definition, base({ events: EVENTS }), {
+      cache: () =>
+        Promise.reject(
+          Object.assign(new Error("carried"), {
+            namedQueryFailure: { ...carriedFailure, reads: 2 },
+          })
+        ),
+    });
+    await drawn(
+      page(list(named())),
+      context({ namedQueries: made, queries: budget, diagnostics: true })
+    );
+    // Three were allowed and the failed run spent two: one is left.
+    expect(budget.take()).toBe(true);
+    expect(budget.take()).toBe(false);
+  });
+
   it("does not take an error's words for a carried failure unless it is one a run can have", async () => {
     const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
     const { element } = await draw(definition, {

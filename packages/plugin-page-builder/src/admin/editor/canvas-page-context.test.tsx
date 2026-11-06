@@ -9,22 +9,28 @@
  *
  * @module canvas-page-context.test
  */
-import { renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const readMedia = vi.fn<(id: string) => Promise<unknown>>();
 const identity = vi.fn<() => unknown>(() => null);
+const userId = vi.fn<() => string>(() => "u1");
+// The site's named queries, which the canvas's host is built from: none by
+// default, answered per test where one asks.
+const readPluginRoute = vi.fn<() => Promise<unknown>>(() =>
+  Promise.resolve({ items: [], meta: {} })
+);
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useMediaResolver: () => readMedia,
   useDocumentIdentity: () => identity(),
-  useCurrentUserId: () => "u1",
+  useCurrentUserId: () => userId(),
+  readPluginRoute: () => readPluginRoute(),
   writePluginRoute: vi.fn(),
 }));
 
-const { listEntryCollectionOf, useCanvasPageContext } = await import(
-  "./canvas-page-context"
-);
+const { listEntryCollectionOf, namedHostRetryDelay, useCanvasPageContext } =
+  await import("./canvas-page-context");
 const { canvasListReadsIn } = await import("../list-entries-client");
 
 describe("the collection a document's lists read the entry of", () => {
@@ -155,5 +161,35 @@ describe("the canvas's page context", () => {
     // with its allowance renewed.
     expect(result.current).toBe(first);
     expect(result.current.queries?.take()).toBe(true);
+  });
+});
+
+describe("the canvas's host for named queries", () => {
+  it("asks again after a failed read of the site's queries, rather than drawing without them for the session", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Its own person, so no host an earlier test made is reused.
+      userId.mockReturnValue("u-retry");
+      readPluginRoute
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValue({ items: [], meta: {} });
+      const { result } = renderHook(() => useCanvasPageContext());
+      // The first ask failed: no host yet, so a named list draws its template.
+      await waitFor(() => expect(readPluginRoute).toHaveBeenCalled());
+      expect(result.current.namedQueries).toBeUndefined();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(namedHostRetryDelay(1));
+      });
+      await waitFor(() => expect(result.current.namedQueries).toBeDefined());
+    } finally {
+      userId.mockReturnValue("u1");
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits longer after each failure, to a cap", () => {
+    expect(namedHostRetryDelay(1)).toBe(2000);
+    expect(namedHostRetryDelay(2)).toBe(4000);
+    expect(namedHostRetryDelay(10)).toBe(60_000);
   });
 });

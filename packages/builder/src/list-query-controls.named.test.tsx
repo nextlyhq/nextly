@@ -119,6 +119,22 @@ const UPCOMING: CustomSource = {
   readsHidden: [],
 };
 
+/** A second source taking the same input as the first, under another name. */
+const ARCHIVE: CustomSource = {
+  declaration: namedQueryDeclaration(
+    defineNamedQuery({
+      name: "events.archive",
+      label: "Events archive",
+      description: "Past events, newest first.",
+      params: { city: param.text({ label: "City", required: true }) },
+      reads: { collections: ["events"] },
+      rows: { key: "id", fields: [{ name: "id", type: "text" }] },
+      run,
+    })
+  ),
+  readsHidden: [],
+};
+
 /** A source with nothing it needs, which reads a collection visitors can't. */
 const MOST_READ: CustomSource = {
   declaration: namedQueryDeclaration(
@@ -183,7 +199,7 @@ function mount(
       editor={editor}
       contentServices={{
         listLoopCollections: vi.fn(async () => [POSTS]),
-        listCustomSources: vi.fn(async () => [UPCOMING, MOST_READ]),
+        listCustomSources: vi.fn(async () => [UPCOMING, MOST_READ, ARCHIVE]),
         ...services,
       }}
     />
@@ -297,6 +313,21 @@ describe("choosing a custom source", () => {
         namedQuery: { name: "events.upcoming", params: { city: "Lahore" } },
         limit: 6,
       },
+    ]);
+  });
+
+  it("writes a new source whose inputs equal the stored source's, since the source itself changed", async () => {
+    const editor = mount({
+      namedQuery: { name: "events.upcoming", params: { city: "Lahore" } },
+    });
+    await openSource("Upcoming events");
+    fireEvent.click(screen.getByRole("option", { name: /^Events archive/ }));
+    expect(editor.apply).not.toHaveBeenCalled();
+    const city = screen.getByRole("textbox", { name: "City" });
+    fireEvent.change(city, { target: { value: "Lahore" } });
+    fireEvent.keyDown(city, { key: "Enter" });
+    expect(writes(editor)).toEqual([
+      { namedQuery: { name: "events.archive", params: { city: "Lahore" } } },
     ]);
   });
 

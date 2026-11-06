@@ -505,7 +505,7 @@ export const NAMED_QUERY_TEXT: {
   readonly paramUnknown: (query: string, key: string) => string;
   readonly readsHidden: (
     collection: string,
-    fields: readonly string[]
+    fields?: readonly string[]
   ) => string;
   readonly readsHiddenCanvas: (
     query: string,
@@ -550,7 +550,9 @@ export const NAMED_QUERY_TEXT: {
     `${query} no longer takes "${key}". It will be left out.`,
   // The fields are named where the schema names them, so the author knows
   // what goes missing: the rows still show, without what visitors can't read.
-  readsHidden: (collection, fields) =>
+  // `fields` is optional, so a caller of the one-argument form this shipped
+  // with is told what it always was.
+  readsHidden: (collection, fields = []) =>
     fields.length === 0
       ? `It reads ${collection}, which visitors can't read, so a published list of it may show nothing.`
       : `It reads ${wordList(fields)} from ${collection}, which visitors can't read, so visitors see the rows without them.`,

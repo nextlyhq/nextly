@@ -9401,6 +9401,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-muted-foreground);
 }
 
+/* A value after a source's mark takes the room the trigger's space-between
+   would leave around it, so it starts right after the mark whatever its
+   length, as a value with no mark starts at the trigger's start. */
+.nx-font-pick__trigger > .nx-list-query__icon + .nx-font-pick__value {
+  flex: 1;
+  min-width: 0;
+}
+
 /* A refused value's control, marked as the field the error names. */
 .nx-font-pick[data-invalid] .nx-font-pick__trigger,
 .nx-list-query input[aria-invalid="true"],

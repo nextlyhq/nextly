@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The page builder's editor offers a Collection list's custom sources: the site's named queries are listed above its collections in the Source menu, each with its description and a Needs input tag, and choosing one draws an Inputs group with a control per input. A source whose input needs a value is written only once it can run, while the canvas tags the list with what it still shows. The canvas runs the query on the server, as a visitor reads, and a failed run's note offers its log reference to copy.
+The page builder's editor offers a Collection list's custom sources: the site's named queries are listed above its collections in the Source menu, each with its description and a Needs input tag, and choosing one draws an Inputs group with a control per input. A source whose input needs a value is written only once it can run, while the canvas tags the list with what it still shows. The canvas runs the query on the server with the editing person's own access, drafts included, as the canvas's other lists read; a failed run's note offers its log reference to copy.

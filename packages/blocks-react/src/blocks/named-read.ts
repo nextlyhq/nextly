@@ -478,6 +478,12 @@ export interface CarriedNamedQueryFailure {
   readonly code: NamedQueryFailureCode;
   readonly detail: string;
   readonly ref: string;
+  /**
+   * How many reads the failed run made before it stopped, which the render
+   * that asked claims from its own allowance, as it claims a run's that
+   * succeeded.
+   */
+  readonly reads?: number;
 }
 
 /**
@@ -492,14 +498,21 @@ export function carriedFailureOf(
   const carried: unknown = (error as { namedQueryFailure?: unknown })
     .namedQueryFailure;
   if (!isPlainRecord(carried)) return undefined;
-  const { code, detail, ref } = carried;
+  const { code, detail, ref, reads } = carried;
+  const counted =
+    typeof reads === "number" && Number.isSafeInteger(reads) && reads > 0;
   return typeof code === "string" &&
     FAILURE_CODES.has(code) &&
     typeof detail === "string" &&
     detail !== "" &&
     typeof ref === "string" &&
     REFERENCE.test(ref)
-    ? { code: code as NamedQueryFailureCode, detail, ref }
+    ? {
+        code: code as NamedQueryFailureCode,
+        detail,
+        ref,
+        ...(counted ? { reads } : {}),
+      }
     : undefined;
 }
 
@@ -799,6 +812,11 @@ export async function readNamedList(
   try {
     data = await pending;
   } catch (error) {
+    // A run made elsewhere that read and then failed cost those reads too:
+    // claimed here, once, as a run that succeeded is, so failing lists share
+    // the page's allowance rather than each spending a fresh one.
+    const spent = carriedFailureOf(error)?.reads ?? 0;
+    if (!ranHere && !joined) replayClaims(spent, claim);
     return failedRun(error, declaration, at);
   }
   // Reads are claimed once per render for each run: as made, or, for a
