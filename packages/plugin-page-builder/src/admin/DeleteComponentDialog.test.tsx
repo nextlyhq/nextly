@@ -180,10 +180,10 @@ describe("the dry run", () => {
   it("lists the documents that use it, counting the ones the author can't view, and offers to turn each copy into plain blocks", async () => {
     show();
     expect(await screen.findByText(/is used in 3 documents/)).toBeTruthy();
-    const home = screen.getByRole("link", { name: "Home" });
+    const home = screen.getByRole("link", { name: /^Home / });
     expect(home.getAttribute("href")).toBe("/admin/collections/pages/p1");
     expect(
-      screen.getByRole("link", { name: "Footer" }).getAttribute("href")
+      screen.getByRole("link", { name: /^Footer / }).getAttribute("href")
     ).toBe("/admin/singles/site-footer");
     expect(screen.getByText("and 1 document you can't view")).toBeTruthy();
     expect(
@@ -296,8 +296,8 @@ describe("the dry run", () => {
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
     release();
     expect(await screen.findByText(/is used in 2 documents\./)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Home" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Pricing" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Pricing / })).toBeTruthy();
     expect(screen.queryByText(/Nothing uses/)).toBeNull();
     expect(screen.getByRole("button", { name: /then delete/ })).toBeTruthy();
   });
@@ -339,7 +339,7 @@ describe("the dry run", () => {
       );
     show();
     expect(await screen.findByText(/A Layout uses/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Main" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Main / })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Delete component" })
@@ -381,7 +381,7 @@ describe("the dry run", () => {
     expect(
       await screen.findByText(/You don't have permission to delete/)
     ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Home" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
   });

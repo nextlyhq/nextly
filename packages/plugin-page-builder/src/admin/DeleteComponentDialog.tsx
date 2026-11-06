@@ -54,9 +54,10 @@ import {
   AlertDialogTitle,
   Button,
   Progress,
+  Skeleton,
   Spinner,
 } from "@nextlyhq/ui";
-import { CircleCheck } from "lucide-react";
+import { CircleCheck, ExternalLink } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -71,6 +72,7 @@ import type {
   ComponentDeleteResult,
   DocumentList,
   LeftDocument,
+  NamedDocument,
 } from "../component-delete/contract";
 import { MESSAGES, SOMEONE_ELSE_IS_DELETING } from "../component-delete/words";
 
@@ -187,6 +189,28 @@ export function checkedFace(
   return tallyUses(tally) === 0 ? "none" : "used";
 }
 
+/**
+ * A document, as a link that opens it in a new tab, so the author keeps the
+ * dialog and its place. The icon and the hidden words say where it opens.
+ */
+function DocumentLink({ document }: { document: NamedDocument }): JSX.Element {
+  return (
+    <a
+      className="flex min-w-0 items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
+      href={documentHref(document)}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <span className="truncate">{documentTitle(document)}</span>
+      <ExternalLink
+        aria-hidden="true"
+        className="size-3.5 shrink-0 text-muted-foreground"
+      />
+      <span className="sr-only">{" (opens in a new tab)"}</span>
+    </a>
+  );
+}
+
 /** A list of documents: the first few as links, the rest counted. */
 function DocumentLinks({
   list,
@@ -211,14 +235,7 @@ function DocumentLinks({
               key={`${document.kind}:${document.slug}:${document.id ?? ""}`}
               className="px-3 py-2"
             >
-              <a
-                className="block truncate font-medium text-primary underline-offset-4 hover:underline"
-                href={documentHref(document)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {documentTitle(document)}
-              </a>
+              <DocumentLink document={document} />
             </li>
           ))}
         </ul>
@@ -251,7 +268,9 @@ function LeftDocuments({
   return (
     <ul
       aria-label={label}
-      className="max-h-60 divide-y divide-border overflow-y-auto rounded-md border border-border text-sm"
+      // On a phone the dialog itself scrolls, so the list is not a second
+      // scroller inside it; wider screens cap it.
+      className="divide-y divide-border rounded-md border border-border text-sm sm:max-h-60 sm:overflow-y-auto"
     >
       {left.map((entry, index) => (
         <li
@@ -268,14 +287,7 @@ function LeftDocuments({
               A document you can&rsquo;t view
             </span>
           ) : (
-            <a
-              className="block truncate font-medium text-primary underline-offset-4 hover:underline"
-              href={documentHref(entry.document)}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {documentTitle(entry.document)}
-            </a>
+            <DocumentLink document={entry.document} />
           )}
           <span className="block text-muted-foreground">{entry.words}</span>
         </li>
@@ -376,7 +388,7 @@ function PlanNotes({ tally }: { tally: DeleteTally }): JSX.Element | null {
       {drafts > 0 ? (
         <Alert variant="warning" role="note">
           <AlertDescription>
-            {`${documents(drafts)} ${drafts === 1 ? "has" : "have"} unpublished changes. ${drafts === 1 ? "Its" : "Their"} copies are turned into plain blocks in the changes, but the component is kept until they are published or discarded. Then delete it again.`}
+            {`${documents(drafts)} ${drafts === 1 ? "has" : "have"} unpublished changes. ${drafts === 1 ? "Its copy is" : "Their copies are"} converted in those changes too, but the component is kept until they are published or discarded. Delete it again after that.`}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -530,7 +542,14 @@ function checkedFaceOf(
         footer: (
           <>
             <SafeButton label="Cancel" cancelRef={cancelRef} />
-            <Button type="button" variant="destructive" onClick={args.onDelete}>
+            <Button
+              type="button"
+              variant="destructive"
+              // The words are long: on a phone they wrap rather than push
+              // the dialog past the screen's edge.
+              className="h-auto min-h-9 whitespace-normal py-2 text-center"
+              onClick={args.onDelete}
+            >
               Turn each copy into plain blocks, then delete
             </Button>
           </>
@@ -579,10 +598,9 @@ function refusedFace(
           </>
         ) : (
           <>
-            <Named name={name} opening />
             {left.length === 1
-              ? " can't be deleted, because of the document below."
-              : " can't be deleted, because of the documents below."}
+              ? "The document below stops the delete. Fix it, then check again."
+              : "Each document below stops the delete. Fix them, then check again."}
           </>
         )}
         {afterStart ? " Nothing was changed." : null}
@@ -622,12 +640,18 @@ function faceOf(view: View, args: FaceArgs): Face {
             {" is used…"}
           </>
         ),
+        // The shape of the list to come, so the dialog does not jump.
         body: (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span aria-hidden="true" className="inline-flex">
-              <Spinner size="sm" />
-            </span>
-            <span>Checking…</span>
+          <div
+            aria-hidden="true"
+            className="divide-y divide-border rounded-md border border-border"
+          >
+            <div className="px-3 py-2.5">
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+            <div className="px-3 py-2.5">
+              <Skeleton className="h-4 w-1/2" />
+            </div>
           </div>
         ),
         announce: "Checking where the component is used.",
@@ -916,7 +940,8 @@ export function DeleteComponentDialog({
         // inside the dialog rather than past the screen.
         className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto sm:max-w-lg"
       >
-        <AlertDialogHeader>
+        {/* Left-aligned at every width: the lists below read from the left. */}
+        <AlertDialogHeader className="text-left sm:text-left">
           <AlertDialogTitle className="flex items-center gap-2">
             {/* The success colour marks the outcome on an icon, where it
                 needs only 3:1, so the sentence keeps the body text colour. */}
