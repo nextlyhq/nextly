@@ -1174,9 +1174,7 @@ describe("the site config's own collections' views", () => {
   ] as unknown as CollectionConfig[];
 
   it("are listed as the site config's, beside the plugins'", () => {
-    expect(
-      componentImportMapEntries([], undefined, siteCollections)
-    ).toEqual([
+    expect(componentImportMapEntries([], undefined, siteCollections)).toEqual([
       {
         path: "./views/orders#OrderEditor",
         owner: "the site config",
@@ -1202,8 +1200,8 @@ describe("the site config's own collections' views", () => {
     expect(map).toContain('"./views/orders#OrderEditor": _p0.OrderEditor,');
     expect(map).toContain('"@acme/cards/admin#OrderTotals": _p1.OrderTotals,');
     // And listed, so the admin's check reads them as registered.
-    expect(
-      buildComponentPathsModule([], undefined, siteCollections)
-    ).toContain("./views/orders#OrderEditor");
+    expect(buildComponentPathsModule([], undefined, siteCollections)).toContain(
+      "./views/orders#OrderEditor"
+    );
   });
 });

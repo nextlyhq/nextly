@@ -92,7 +92,6 @@ registerComponents(COMPONENTS);
 // "Export" on the Components, Patterns and Layouts lists.
 registerExportActions();
 
-
 export {
   BlocksField,
   BlocksSummary,

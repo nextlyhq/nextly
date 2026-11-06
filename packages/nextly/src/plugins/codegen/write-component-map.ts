@@ -10,10 +10,10 @@
  * @module plugins/codegen/write-component-map
  */
 
-import type { CollectionConfig } from "../../collections/config/define-collection";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { PluginDefinition } from "../plugin-context";
 
 import {

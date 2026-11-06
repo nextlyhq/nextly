@@ -428,43 +428,40 @@ describe("a list read back", () => {
 });
 
 describe("a plugin collection's own views", () => {
-  it(
-    "does not agree when a collection view is added without regenerating",
-    async () => {
-      await generate([shop]);
-      // The same plugin, now replacing a collection's edit screen.
-      const withView = {
-        ...shop,
-        contributes: {
-          ...shop.contributes,
-          collections: [
-            {
-              slug: "orders",
-              fields: [],
-              admin: {
-                components: {
-                  views: {
-                    Edit: { Component: "@acme/shop/admin#OrderEditor" },
-                  },
+  it("does not agree when a collection view is added without regenerating", async () => {
+    await generate([shop]);
+    // The same plugin, now replacing a collection's edit screen.
+    const withView = {
+      ...shop,
+      contributes: {
+        ...shop.contributes,
+        collections: [
+          {
+            slug: "orders",
+            fields: [],
+            admin: {
+              components: {
+                views: {
+                  Edit: { Component: "@acme/shop/admin#OrderEditor" },
                 },
               },
             },
-          ],
-        },
-      } as unknown as PluginDefinition;
+          },
+        ],
+      },
+    } as unknown as PluginDefinition;
 
-      const found = await checkComponentMapFiles(
-        [withView],
-        TYPES,
-        root,
-        undefined
-      );
+    const found = await checkComponentMapFiles(
+      [withView],
+      TYPES,
+      root,
+      undefined
+    );
 
-      expect(found.missing.map(each => each.path)).toEqual([
-        "@acme/shop/admin#OrderEditor",
-      ]);
-    }
-  );
+    expect(found.missing.map(each => each.path)).toEqual([
+      "@acme/shop/admin#OrderEditor",
+    ]);
+  });
 });
 
 describe("a site collection's own views", () => {

@@ -259,7 +259,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   const { data: collection, isLoading: collectionLoading } =
     useCollection(collectionSlug);
 
-
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
   // Asked only of a user the server lets read every language's state: the

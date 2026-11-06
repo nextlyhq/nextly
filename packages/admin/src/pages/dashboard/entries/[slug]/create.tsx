@@ -152,7 +152,6 @@ export default function CreateEntryPage({
   // Fetch enriched collection schema (component fields are populated)
   const { data: collection, isLoading, error } = useCollectionSchema(slug);
 
-
   /**
    * The page's measure, on every branch.
    *

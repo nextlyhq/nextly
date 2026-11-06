@@ -37,8 +37,8 @@
  * @since 1.0.0
  */
 
-import { noticeDeprecation } from "nextly/deprecation-notice";
 import type { FieldConfig } from "nextly/config";
+import { noticeDeprecation } from "nextly/deprecation-notice";
 import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 

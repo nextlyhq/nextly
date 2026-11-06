@@ -388,7 +388,6 @@ export default function EditEntryPage({
     enabled: isNonDefaultLocale || !!translateFrom,
   });
 
-
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;
   // The tab names the entry as the page heading does, once both the entry and

@@ -16,10 +16,10 @@
  * @module plugins/codegen/check-component-map
  */
 
-import type { CollectionConfig } from "../../collections/config/define-collection";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { PluginDefinition } from "../plugin-context";
 
 import {
