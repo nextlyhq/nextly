@@ -295,14 +295,14 @@ describe.each(getConfiguredTestDialects())(
         expect(published.data?._rev).toBe(await readRev(t, BANNER, "*"));
       });
 
-      it("publishes with no version, until a version is required", async () => {
+      it("refuses a publish with no version, publishing nothing", async () => {
         const t = await boot(dialect);
         await translatedBanner(t);
-        await save(t, BANNER, "es", {
-          headline: "hola otra vez",
-          _overwrite: true,
-        });
-        expect((await publishAll(t, {})).success).toBe(true);
+        const before = await lifecycleOf(t, BANNER);
+        const refused = await publishAll(t, {});
+        expect(refused.code, JSON.stringify(refused)).toBe("VERSION_REQUIRED");
+        expect(refused.statusCode).toBe(428);
+        expect(await lifecycleOf(t, BANNER)).toEqual(before);
       });
 
       it("publishes over a change with the overwrite choice, and records it", async () => {
