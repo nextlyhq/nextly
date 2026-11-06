@@ -25,6 +25,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { forgetCompanionReadiness } from "../../i18n/runtime/companion-readiness";
+import { changeBetweenAttempts } from "../../versions/__tests__/helpers/between-attempts";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { VersionConflictError } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
@@ -828,28 +829,20 @@ describe.each(getConfiguredTestDialects())(
       ).mockImplementationOnce(() => {
         throw new VersionConflictError();
       });
-      const transaction = handle.adapter.transaction.bind(handle.adapter);
-      let attempts = 0;
-      vi.spyOn(handle.adapter, "transaction").mockImplementation((async (
-        ...args: Parameters<typeof transaction>
-      ) => {
-        attempts += 1;
-        if (attempts === 2) {
-          const draft = parsed(
-            (await repo.findWorkingDraft(ref, null))!.snapshot
-          );
-          (draft.hero as Record<string, unknown>).heading = "Second";
-          await repo.upsertWorkingDraft({ ref, locale: null, snapshot: draft });
-        }
-        return transaction(...args);
-      }) as typeof handle.adapter.transaction);
+      const attempts = changeBetweenAttempts(handle.adapter, async () => {
+        const draft = parsed(
+          (await repo.findWorkingDraft(ref, null))!.snapshot
+        );
+        (draft.hero as Record<string, unknown>).heading = "Second";
+        await repo.upsertWorkingDraft({ ref, locale: null, snapshot: draft });
+      });
 
       await singles.update(
         "home",
         { status: "published", _overwrite: true },
         { overrideAccess: true }
       );
-      expect(attempts).toBeGreaterThanOrEqual(2);
+      expect(attempts()).toBe(2);
       vi.restoreAllMocks();
       expect(contentOf((await liveHome(handle)).hero)).toMatchObject({
         heading: "Second",

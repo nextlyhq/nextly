@@ -476,6 +476,46 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
         why: "A filter is kept in the page's URL by its name, so each name is declared once.",
         next: `Declare the filter "${field(error, "filter")}" once.`,
       })),
+      ...resolved("admin-contribution-invalid", error => ({
+        what: detail(error),
+        why: "A contribution is drawn where its place puts it, so it needs a kind that place takes, the fields that kind draws with, and rules the admin can evaluate.",
+        next: `Correct the contribution in \`contributes.admin.contributions\` of "${field(error, "plugin")}" as the line above says.`,
+      })),
+      ...resolved("admin-contribution-outside-namespace", error => ({
+        what: detail(error),
+        why: "A plugin's contributions are named under its admin slug, so no two plugins declare the same one and each can be ordered against by name.",
+        next: `Rename the contribution "${field(error, "contribution")}" so that it starts with "${field(error, "expectedPrefix")}".`,
+      })),
+      ...resolved("admin-contribution-duplicate", error => ({
+        what: detail(error),
+        why: "Other contributions are ordered against a contribution by its id, so each id is declared once.",
+        next: `Declare the contribution "${field(error, "contribution")}" once.`,
+      })),
+      ...resolved("admin-contribution-kind-not-accepted", error => ({
+        what: detail(error),
+        why: "Each admin place draws only the kinds of contribution its page has room for.",
+        next: `Move "${field(error, "contribution")}" to a place that takes a ${field(error, "kind")}, or contribute a kind "${field(error, "place")}" takes.`,
+      })),
+      ...resolved("contribution-order-unknown", error => ({
+        what: detail(error),
+        why: "A contribution is placed `before` or `after` another one of its kind at the same place, contributed or built in.",
+        next: `Name a ${field(error, "kind")} at "${field(error, "place")}" that exists, or drop the reference.`,
+      })),
+      ...resolved("contribution-order-cycle", error => ({
+        what: detail(error),
+        why: "Contributions ordered before and after each other leave no order that keeps every request.",
+        next: "Drop one of the `before` or `after` references between the contributions named above.",
+      })),
+      ...resolved("contribution-replace-unknown", error => ({
+        what: detail(error),
+        why: "A contribution may replace only a part the page draws itself, of its own kind, at its place.",
+        next: `Replace one of the built-in parts named at "${field(error, "place")}", or drop \`replaces\`.`,
+      })),
+      ...resolved("contribution-replace-twice", error => ({
+        what: detail(error),
+        why: "A built-in part can be replaced by one contribution only, or which one is drawn would depend on load order.",
+        next: `Keep \`replaces: "${field(error, "replaces")}"\` on one of the contributions named above.`,
+      })),
       ...resolved("principal-kind-invalid", error => {
         const parts = cut(detail(error), " cannot be used: ");
         return {

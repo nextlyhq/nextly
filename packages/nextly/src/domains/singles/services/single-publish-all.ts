@@ -148,7 +148,7 @@ import {
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
-import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { versionConflictRetries } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import {
@@ -230,8 +230,8 @@ export interface PublishAllSinglePreview {
 /**
  * Everything the publish acts on, resolved once before the transaction opens.
  *
- * Gathered up front because the transaction body may RE-RUN: `withVersionConflictRetry`
- * replays it on a version_no race, and anything resolved inside would be
+ * Gathered up front because the transaction body may RE-RUN: the version-conflict retry
+ * (`versionConflictRetries`) replays it on a version_no race, and anything resolved inside would be
  * resolved again — including the permission reads, which would then take a
  * second connection while this write holds its own.
  */
@@ -430,8 +430,8 @@ export class SinglePublishAllService extends BaseService {
         locale: undefined,
       });
 
-      const outcome = await withVersionConflictRetry(() =>
-        this.adapter.transaction(tx =>
+      const outcome = await this.adapter.transaction(
+        tx =>
           this.commitPublish(
             tx,
             plan,
@@ -441,8 +441,8 @@ export class SinglePublishAllService extends BaseService {
             promoteGrants,
             promoteReads,
             { stale, languages: judged, personName: options.user?.name ?? null }
-          )
-        )
+          ),
+        versionConflictRetries()
       );
 
       // The document was deleted out from under the publish: nothing was
@@ -1079,7 +1079,7 @@ export class SinglePublishAllService extends BaseService {
   /**
    * The publish itself: lock, re-check, write every status, capture, record.
    *
-   * Runs inside `withVersionConflictRetry`, so the whole body may re-run — it
+   * Retried on a version conflict (`versionConflictRetries`), so the whole body may re-run — it
    * therefore derives everything it reports from values read under THIS
    * attempt's lock rather than carrying state across attempts.
    */

@@ -51,33 +51,19 @@ import {
 } from "./builder-view";
 import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
-import {
-  blocksFieldReach,
-  blocksFieldSurvey,
-} from "./class-usage-blocks-fields";
+import { blocksFieldReach } from "./class-usage-blocks-fields";
 import {
   registerClassUsageMaintenance,
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
-import {
-  classUsageDocumentRowReader,
-  ownIndexReader,
-  usageCountReader,
-  usageRowReader,
-} from "./class-usage-runtime";
-import {
-  CLASS_USAGE_INDEX_SLUG,
-  classUsageIndexCollection,
-} from "./collections/class-usage-index";
+import { hostFieldReader } from "./class-usage-runtime";
+import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
   componentRetiredCollection,
 } from "./collections/component-retired-exposures";
-import {
-  COMPONENT_USAGE_INDEX_SLUG,
-  componentUsageIndexCollection,
-} from "./collections/component-usage-index";
+import { componentUsageIndexCollection } from "./collections/component-usage-index";
 import {
   COMPONENTS_SLUG,
   componentsCollection,
@@ -205,6 +191,11 @@ import {
   sharedStyleRoutes,
 } from "./shared-styles-routes";
 import {
+  BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+  BREAKPOINT_REMOVAL_UNDONE_METADATA,
+  siteBreakpointUndoRoute,
+} from "./site-breakpoint-undo";
+import {
   resolveFontOptions,
   type PageBuilderFontOptions,
 } from "./site-fonts/options";
@@ -250,6 +241,7 @@ import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
+  forgetGoneScopes,
   usageBackfillDeps,
   type BackfillHost,
 } from "./usage-backfill-wiring";
@@ -259,6 +251,11 @@ import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
+import {
+  usageIndexStores,
+  usageTableOf,
+  usageTableRows,
+} from "./usage-index-tables";
 import { variantUseRoute } from "./variant-use-route";
 import { SINGLE_HOOK_NAMESPACE } from "./write-target";
 
@@ -758,51 +755,6 @@ function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
   );
 }
 
-/**
- * Turn the installed plugin context into what a backfill pass needs.
- *
- * Every member is a FUNCTION rather than a resolved value, and that is the
- * whole shape of it. A site can gain a collection, a locale or a draft variant
- * after boot, and the Direct API is not resolvable until services are
- * registered — so anything captured here would be a fact about the moment the
- * plugin was installed, used to decide whether an index covering the site as it
- * is now is complete.
- */
-/**
- * Whether any declared Single carries a blocks field.
- *
- * The index cannot cover a Single at all: a plugin has no supported way to READ
- * one — the available path CREATES the row when it is absent, so indexing would
- * materialise every Single in the app as a side effect — and `writeTargetOf`
- * declines every `single:` hook for that reason. So no scope is enumerated for
- * them, and a backfill that finishes every collection scope has still not made
- * the index cover a site whose homepage is a blocks-backed Single.
- *
- * The declaration is what is read, not the content: a Single that nobody has
- * filled in yet still means the index will not cover it once somebody does, and
- * this answer must not flip the day an author first saves.
- *
- * PAGED and exhausted, for the reason the collection listing is: a short read
- * here answers "no Singles hold blocks" for a site where a later page does, and
- * that is the direction that lets completeness be claimed wrongly. A listing it
- * cannot parse answers TRUE — the conservative reading, since "I could not
- * check" must not become "there is nothing to worry about".
- */
-export async function singlesHoldBlocks(
-  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
-): Promise<boolean> {
-  // The slugs configuration still declares, read once. A row whose source is
-  // `code` and whose slug is not in here is a leftover, not a Single.
-  const declared = declaredSingleSlugs(ctx);
-  for await (const rows of singlesRegistryPages(ctx)) {
-    // `true` is the refusal on every unreadable shape: it means content may be
-    // out of reach, which is what withholds completeness.
-    if (rows === UNREADABLE_PAGE) return true;
-    if (rowsHoldBlocks(rows, declared)) return true;
-  }
-  return false;
-}
-
 /** What {@link singlesRegistryPages} yields for a registry it cannot read whole. */
 const UNREADABLE_PAGE = Symbol("unreadable registry page");
 
@@ -843,36 +795,6 @@ async function* singlesRegistryPages(
     // shape that would otherwise loop for ever.
     if (rows.length === 0 || offset + rows.length >= total) return;
   }
-}
-
-/** Whether any row on one page is a live Single declaring blocks content. */
-function rowsHoldBlocks(
-  rows: readonly unknown[],
-  declared: ReadonlySet<string> | undefined
-): boolean {
-  for (const row of rows) {
-    // An ORPHAN says nothing about content that exists. Removing a code-first
-    // Single from config leaves its registry row readable until someone runs
-    // the destructive cleanup — `PluginSinglesService.list` documents that,
-    // says such a row carries `source: "code"`, and says a caller who must
-    // exclude them can, because `source` is on every record and a plugin holds
-    // `ctx.config.singles`. It is not filtered at that layer because doing so
-    // after pagination would return short pages and a total describing one of
-    // them.
-    //
-    // Counted here, a removed Single kept `unreachable` true for ever and no
-    // count could become exact for content the app no longer has.
-    if (isOrphanedSingle(row, declared)) continue;
-    // The FULL survey, not the addressable half. A Single declaring its blocks
-    // field under a named group — or behind a field-group reference — returns
-    // an empty addressable list, and reading only that reported "this Single
-    // holds no blocks" for content no scope will ever index. The collection side
-    // already asks it this way; asking differently here is how the two come to
-    // disagree about the same declaration.
-    const survey = blocksFieldSurvey(row as { fields?: unknown });
-    if (survey.addressable.length > 0 || survey.unaddressable) return true;
-  }
-  return false;
 }
 
 /** How many registry rows one page of the collection listing asks for. */
@@ -989,6 +911,16 @@ export async function registeredCollectionSlugs(
   }
 }
 
+/**
+ * Turn the installed plugin context into what a backfill pass needs.
+ *
+ * Every member is a FUNCTION rather than a resolved value, and that is the
+ * whole shape of it. A site can gain a collection, a locale or a draft variant
+ * after boot, and the Direct API is not resolvable until services are
+ * registered — so anything captured here would be a fact about the moment the
+ * plugin was installed, used to decide whether an index covering the site as it
+ * is now is complete.
+ */
 function installContext(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions
@@ -1031,27 +963,17 @@ function installContext(
     hasDrafts: async collection =>
       (await resolvedCollectionDraftSplit(resolvedCollectionView(collection)))
         .eligible,
-    singlesHoldBlocks: () => singlesHoldBlocks(ctx),
+    singles: () => singlesDeclaringBlocks(ctx),
     locales: () =>
       ctx.config.localization?.locales.map(locale => locale.code) ?? [],
     // The SAME bounds the renderer draws under, for the reason the write path
     // reads them per call: an index derived under different ones records a
     // different document than the page serves.
     limits: () => opts.limits ?? DEFAULT_LIMITS,
-    // RESOLVED slugs, not the declared ones. An integrator may rename either,
-    // and a pass holding a literal would write to a table that does not exist
-    // while reporting the scope backfilled.
-    slugs: () => ({
-      classIndex:
-        ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
-      componentIndex:
-        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-        COMPONENT_USAGE_INDEX_SLUG,
-    }),
+    // The index rows, in the plugin's own tables.
+    db: ctx.db,
     // The run, its progress and the dirty mark, in the plugin's own tables.
     bookkeeping: () => usageBookkeeping(ctx.db, ctx.dialect),
-    ownIndexReader: indexCollection =>
-      ownIndexReader(ctx.services.ownCollections, indexCollection),
   };
 }
 
@@ -1132,6 +1054,9 @@ function rewriteInstallFor(
       const seen = new Set<string>();
       const hints: { slug: string; id: string }[] = [];
       for (const host of found?.hosts ?? []) {
+        // Collection entries only: the walk after the hints reads every
+        // Single anyway, and a hint names an entry by its id.
+        if (host.single === true) continue;
         const key = `${host.slug}\u001F${host.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1190,10 +1115,15 @@ async function storedDraftOf(at: {
 /**
  * Every live Single whose declaration holds a blocks field, with its fields
  * and its localization master switch, or `undefined` when the registry cannot
- * be read whole. Orphaned code-first rows are left out, as `singlesHoldBlocks`
- * leaves them out.
+ * be read whole. Orphaned code-first rows are left out: removing a code-first
+ * Single from config leaves its registry row readable until someone runs the
+ * destructive cleanup, and that row says nothing about content that exists.
+ *
+ * PAGED and exhausted, for the reason the collection listing is: a short read
+ * leaves out a Single a later page holds, and the usage index would call
+ * itself whole without having walked it.
  */
-async function singlesDeclaringBlocks(
+export async function singlesDeclaringBlocks(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
 ): Promise<SingleToWalk[] | undefined> {
   const declared = declaredSingleSlugs(ctx);
@@ -1211,6 +1141,36 @@ async function singlesDeclaringBlocks(
     }
   }
   return found;
+}
+
+/**
+ * One live Single holding blocks, read as {@link singlesDeclaringBlocks} reads
+ * each, from the Singles registry, which creates nothing; `undefined` when no
+ * live Single of that slug holds a blocks field. Refused when the registry's
+ * answer cannot be read, so a save it cannot place is a maintenance failure
+ * rather than a Single silently left out.
+ */
+async function liveSingle(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  slug: string
+): Promise<SingleToWalk | undefined> {
+  const listed: unknown = await ctx.services.singles.list({
+    slugAllowlist: [slug],
+    limit: 1,
+  });
+  const rows = (listed as { data?: unknown }).data;
+  const page = Array.isArray(rows)
+    ? singlesDeclaringBlocksIn(rows, declaredSingleSlugs(ctx))
+    : undefined;
+  if (page === undefined) {
+    throw new Error(
+      `[page-builder] the Singles registry could not be read for "${slug}", so its usage could not be recorded`
+    );
+  }
+  const single = page.find(entry => entry.slug === slug);
+  if (single === undefined) return undefined;
+  const localizedSite = (ctx.config.localization?.locales.length ?? 0) > 0;
+  return singleToWalk(single, configuredSingles(ctx).get(slug), localizedSite);
 }
 
 /** The Singles declared in code, by slug, as the site's config states them. */
@@ -1426,22 +1386,17 @@ export const pageBuilder = (
   };
   /**
    * How many documents place a component directly, from the usage index: the
-   * number the removal dialog says, and the one a hold counts again.
+   * number the removal dialog says, and the one a hold counts again. The
+   * index rows live in the plugin's own tables, so no route context is read.
    */
-  const countPlacements =
-    (ctx: Pick<PluginRouteContext, "self">) => async (id: string) => {
-      const index =
-        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-        COMPONENT_USAGE_INDEX_SLUG;
-      return componentUsageCount({
-        read: usageCountReader(await requireInstalled().nextly(), index),
-        componentId: id,
-        health: await usageHealthService(requireInstalled).read(
-          componentUsageIndex,
-          index
-        ),
-      });
-    };
+  const countPlacements = () => async (id: string) => {
+    const health = usageHealthService(requireInstalled);
+    return componentUsageCount({
+      read: health.counts(componentUsageIndex),
+      componentId: id,
+      health: await health.read(componentUsageIndex),
+    });
+  };
   // The cleanup of retired values still stored, published by `init` for the
   // reason `rewriteInstall` is: its service and sweep are contributed before
   // `init` runs and called long after it.
@@ -1670,9 +1625,6 @@ export const pageBuilder = (
       // so when some of those could not be judged. Set here because the
       // resolved slugs exist only once the plugin is installed; the field type
       // was declared before that and reads this through a getter.
-      const componentIndex =
-        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-        COMPONENT_USAGE_INDEX_SLUG;
       // What the server log says when the field's validation could not judge
       // a write's Layers locks.
       const warnLayersLockUnjudged = (found: LayersLockUnjudged) =>
@@ -1758,13 +1710,9 @@ export const pageBuilder = (
           };
         },
         hostsOf: indexHostFinder({
-          nextly: () => requireInstalled().nextly(),
-          indexCollection: componentIndex,
+          rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),
           health: () =>
-            usageHealthService(requireInstalled).read(
-              componentUsageIndex,
-              componentIndex
-            ),
+            usageHealthService(requireInstalled).read(componentUsageIndex),
         }),
         onUnjudged: unjudged =>
           ctx.logger.warn(
@@ -1827,21 +1775,11 @@ export const pageBuilder = (
 
       usage.reconcile = registerClassUsageMaintenance({
         ctx,
-        // The RESOLVED slug, not the declared one. An integrator may
-        // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
-        // only the renamed collection — so a hook holding the literal would
-        // write every row to a table that does not exist, and would also fail
-        // to recognise its own writes and recurse.
-        indexCollection:
-          ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
-          CLASS_USAGE_INDEX_SLUG,
-        // Resolved the same way and for the same reason: an integrator may
-        // rename it, and a hook holding the declared name would write every row
-        // to a collection that does not exist and fail to recognise its own
-        // writes, so the wildcard would re-enter itself.
-        componentIndexCollection:
-          ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-          COMPONENT_USAGE_INDEX_SLUG,
+        // Both indexes' rows, in the plugin's own tables.
+        stores: () => usageIndexStores(ctx.db),
+        // A saved Single's declaration, from the Singles registry, which
+        // reads it without creating the Single's document.
+        single: slug => liveSingle(ctx, slug),
         // The registry record, projected. `getCollection` is declared to
         // return a shape that promises none of the properties this question
         // reads, while returning an object that carries all of them.
@@ -1923,7 +1861,7 @@ export const pageBuilder = (
         // fields: the count the designer confirmed is final until it lands.
         removalHolds = installHoldsFor(ctx, opts, composition, {
           nextly: () => requireInstalled().nextly(),
-          count: countPlacements(ctx),
+          count: countPlacements(),
         });
         // The values already stored when a field was retired: walked out of
         // every document by the sweep below, and walked again when a write
@@ -1977,6 +1915,8 @@ export const pageBuilder = (
         site: rewriteInstall.site,
         defaults: configStyle,
         definedBreakpoints,
+        breakpointsNow: async () =>
+          siteBreakpoints(await siteStyleNow()) ?? null,
       };
       removalLogger = ctx.logger;
       // A write holding a removed breakpoint's values, committed after the
@@ -2023,12 +1963,16 @@ export const pageBuilder = (
       // screen, REST route or Direct API call reaches them.
       schema: pageBuilderSchema,
       // The audit rows this plugin writes: one per breakpoint removed, with
-      // what removing it dropped.
+      // what removing it dropped, and one per removal undone.
       audit: {
         kinds: [
           {
             kind: BREAKPOINT_REMOVED_AUDIT,
             metadataKeys: [...BREAKPOINT_REMOVED_METADATA],
+          },
+          {
+            kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+            metadataKeys: [...BREAKPOINT_REMOVAL_UNDONE_METADATA],
           },
         ],
       },
@@ -2096,6 +2040,8 @@ export const pageBuilder = (
           state: () => usageBackfillDeps(requireInstalled()).state(),
           rebuild: (scope, walk) =>
             usageBackfillDeps(requireInstalled()).rebuild(scope, walk),
+          forgetGone: (scopes, fenced, run) =>
+            forgetGoneScopes(requireInstalled(), scopes, fenced, run),
         }),
         // The default-Layout repair. A sweep, so the runner keeps one queued
         // and every jobs pass confirms the site still has a published default,
@@ -2237,15 +2183,14 @@ export const pageBuilder = (
           // through other components by the same index, and through the
           // Layouts wrapping pages, read live, the site's default included.
           countPages: ctx => async id => {
-            const index =
-              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-              COMPONENT_USAGE_INDEX_SLUG;
-            const host = requireInstalled();
-            const rows = usageRowReader(await host.nextly(), index);
-            const health = await usageHealthService(requireInstalled).read(
-              componentUsageIndex,
-              index
+            const rows = usageTableRows(
+              requireInstalled().db,
+              usageTableOf(componentUsageIndex)
             );
+            const health =
+              await usageHealthService(requireInstalled).read(
+                componentUsageIndex
+              );
             // Imported at call time, as the Layout choices route does, so the
             // entry stays free of the runtime graph.
             const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -2295,19 +2240,8 @@ export const pageBuilder = (
         variantUseRoute({
           store: componentStoreOf(opts),
           hosts: () => composition?.hostsOf,
-          readForm: async (host, form) => {
-            const row = await classUsageDocumentRowReader(
-              await requireInstalled().nextly()
-            )({
-              entity: host.slug,
-              entityKey: host.id,
-              locale: "",
-              variant: form,
-            });
-            return row !== null && typeof row === "object"
-              ? (row as Record<string, unknown>)[host.field]
-              : undefined;
-          },
+          readForm: async (host, form) =>
+            hostFieldReader(await requireInstalled().nextly())(host, form),
           limits: opts.limits ?? DEFAULT_LIMITS,
         }),
         // Save a selection as a component, or convert it into one. Here
@@ -2397,6 +2331,9 @@ export const pageBuilder = (
         // one that does not finish in its save is carried on by the second.
         siteBreakpointsRoute(breakpointRemoval),
         siteBreakpointRemovalRoute(breakpointRemoval),
+        // The newest removal undone, within its 30 days; its walk is carried
+        // on through the removal route.
+        siteBreakpointUndoRoute(breakpointRemoval),
         // Where one removal stands, read by its id.
         siteBreakpointRemovalStatusRoute(breakpointRemoval),
         // A pattern, a component or a Layout as one file, with the components,
@@ -2431,9 +2368,6 @@ export const pageBuilder = (
         ...sharedStyleRoutes({
           configClassIds,
           usage: ctx => {
-            const index =
-              ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
-              CLASS_USAGE_INDEX_SLUG;
             const kinds = new Map<string, SharedStyleUsageKind>([
               [
                 componentStoreOf(opts).collection ??
@@ -2449,17 +2383,14 @@ export const pageBuilder = (
             ]);
             return {
               health: () =>
-                usageHealthService(requireInstalled).read(
-                  classUsageIndex,
-                  index
-                ),
+                usageHealthService(requireInstalled).read(classUsageIndex),
               // One bounded read for a whole page of styles.
               documentsUsingEach: async (classIds, health) =>
                 listDocumentsUsingEach({
                   index: classUsageIndex,
-                  rows: usageRowReader(
-                    await requireInstalled().nextly(),
-                    index
+                  rows: usageTableRows(
+                    requireInstalled().db,
+                    usageTableOf(classUsageIndex)
                   ),
                   referenceIds: classIds,
                   health,

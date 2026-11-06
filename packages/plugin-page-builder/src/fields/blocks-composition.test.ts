@@ -1754,10 +1754,12 @@ describe("a component save judged inside the documents that use it", () => {
         listIncomplete: true,
         reasons: expect.arrayContaining([
           expect.stringContaining("cannot list every document"),
-          expect.stringContaining("through a placement's override"),
         ]),
       },
     ]);
+    // Not said of every lookup any more: the index records a document that
+    // reaches a component through a placement's override as using it.
+    expect(unjudged[0]!.reasons.join(" ")).not.toContain("override");
   });
 
   it("reports a host it cannot read as unjudged rather than passing over it", async () => {
@@ -2502,5 +2504,121 @@ describe("a placement's variant on a page write", () => {
     expect(
       await judge(choosing("gone"), write(readStored, "pages", "home"))
     ).toEqual([]);
+  });
+});
+
+describe("a placed block's visibility conditions, judged as the page composes them", () => {
+  /** A component holding a box shown only when `field` is set. */
+  const gatedOn = (field: string) =>
+    component([
+      {
+        ...node("b1", "acme/box", { children: [] }),
+        visibility: { conditions: [[{ field, op: "exists" }]] },
+      },
+    ]);
+  const listFields: ListFieldsReader = async collection =>
+    collection === "pages"
+      ? {
+          declared: new Set(["id", "title", "secret"]),
+          readable: [
+            { name: "id", type: "text" },
+            { name: "title", type: "text" },
+          ],
+        }
+      : undefined;
+
+  it("refuses a page placing a component whose condition checks a field visitors can't see there", async () => {
+    // CONTROL: the same component checking a public field of the page.
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        open: { published: gatedOn("title") },
+        hidden: { published: gatedOn("secret") },
+      },
+    });
+    expect(
+      await judge(
+        page([placing("i1", "open")]),
+        write(readStored, "pages", "p1"),
+        { listFields }
+      )
+    ).toEqual([]);
+    const issues = await judge(
+      page([placing("i1", "hidden")]),
+      write(readStored, "pages", "p1"),
+      { listFields }
+    );
+    expect(codes(issues)).toEqual(["condition-field-protected"]);
+    expect(issues[0]!.message).toContain('"hidden"');
+    expect(issues[0]!.message).toContain('"secret"');
+  });
+
+  it("refuses a page newly placing a component stored with an operator conditions don't have", async () => {
+    const legacy = component([
+      {
+        ...node("b1", "acme/box", { children: [] }),
+        visibility: { conditions: [[{ field: "title", op: "matches" }]] },
+      },
+    ]);
+    const { readStored } = storeOf({
+      [COMPONENTS]: { old: { published: legacy } },
+    });
+    const issues = await judge(
+      page([placing("i1", "old")]),
+      write(readStored, "pages", "p1"),
+      { listFields }
+    );
+    expect(codes(issues)).toEqual(["condition-op-unknown"]);
+    expect(issues[0]!.message).toContain('"old"');
+  });
+
+  it("keeps a placed condition the stored page already composed to", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { hidden: { published: gatedOn("secret") } },
+      pages: { p1: { published: page([placing("i1", "hidden")]) } },
+    });
+    expect(
+      await judge(
+        page([placing("i1", "hidden"), node("t1")]),
+        write(readStored, "pages", "p1"),
+        { listFields }
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses a component save changing a condition to a field a placing page's visitors can't see", async () => {
+    const hostPage: HostRef = {
+      slug: "pages",
+      id: "home",
+      field: FIELD,
+      localized: false,
+    };
+    const finder: HostFinder = {
+      whole: async () => true,
+      placing: async ids => ({
+        hosts: ids.includes("gated") ? [hostPage] : [],
+        complete: true,
+      }),
+    };
+    const { readStored } = storeOf({
+      [COMPONENTS]: { gated: { published: gatedOn("title") } },
+      pages: { home: { published: page([placing("i1", "gated")]) } },
+    });
+    // CONTROL: another public field breaks nothing.
+    expect(
+      await judge(gatedOn("id"), write(readStored, COMPONENTS, "gated"), {
+        hostsOf: finder,
+        listFields,
+        status: "published",
+      })
+    ).toEqual([]);
+    const issues = await judge(
+      gatedOn("secret"),
+      write(readStored, COMPONENTS, "gated"),
+      { hostsOf: finder, listFields, status: "published" }
+    );
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    expect(issues[0]!.message).toContain(
+      "a block's visibility condition would check a field it can't use there"
+    );
   });
 });

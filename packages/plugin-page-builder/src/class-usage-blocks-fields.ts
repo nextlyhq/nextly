@@ -510,3 +510,46 @@ function nestedDeclarations(value: unknown): readonly unknown[] | null {
   const field = value as { fields?: unknown };
   return Array.isArray(field.fields) ? field.fields : null;
 }
+
+/**
+ * A Single's declaration, as the usage index reads which of its blocks fields
+ * store per language.
+ *
+ * A Single declared in code states both its switch and each field's flag. One
+ * made in the admin states neither on the surface a plugin can read, so on a
+ * site with languages each of its fields is read as stored per language: a
+ * shared value is then recorded once per language, which counts the Single
+ * once all the same, rather than a translation's components being missed.
+ */
+export function singleUsageDeclaration(single: {
+  readonly fields?: unknown;
+  readonly localized?: boolean;
+  readonly languagesUnknown?: boolean;
+}): BlocksFieldsCollection {
+  if (single.languagesUnknown !== true) {
+    return { fields: single.fields, localized: single.localized === true };
+  }
+  return { fields: everyFieldLocalized(single.fields, 0), localized: true };
+}
+
+/**
+ * A list of declarations with every field in it, and in every container it
+ * holds, marked as stored per language, so a blocks field inside a nameless
+ * group is read per language as a top-level one is. Containers deeper than
+ * the declaration walk reads are left as they are; the walk reports those as
+ * out of reach anyway.
+ */
+function everyFieldLocalized(fields: unknown, depth: number): unknown {
+  if (!Array.isArray(fields) || depth > MAX_GROUP_DEPTH) return fields;
+  return fields.map((field: unknown) => {
+    if (typeof field !== "object" || field === null) return field;
+    const nested = (field as { fields?: unknown }).fields;
+    return {
+      ...field,
+      localized: true,
+      ...(Array.isArray(nested)
+        ? { fields: everyFieldLocalized(nested, depth + 1) }
+        : {}),
+    };
+  });
+}
