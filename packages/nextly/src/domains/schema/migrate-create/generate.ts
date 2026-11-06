@@ -93,6 +93,7 @@ import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-r
 import {
   appStreamSnapshots,
   NO_APP_STREAM_TABLES,
+  type AppStreamSnapshots,
   type AppStreamTables,
 } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
@@ -102,6 +103,7 @@ import {
   settingsChangesFor,
   settingsRecordOf,
   type EntitySettingsChange,
+  type EntitySettingsRecord,
   type RecordedEntitySettings,
 } from "./entity-settings";
 import {
@@ -110,7 +112,13 @@ import {
   formatTimestamp,
   slugify,
 } from "./format-file";
-import { promptRenames, type RenameDecision } from "./prompt-renames";
+import type { RenameDecision } from "./prompt-renames";
+import {
+  scopedSettingsChanges,
+  scopedSettingsRecord,
+  scopedStream,
+  type GenerateScope,
+} from "./scope";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
@@ -235,6 +243,24 @@ export interface GenerateArgs {
    * `migrate:create --plugin` writes.
    */
   appStream?: AppStreamTables;
+  /**
+   * The caller's answer to which detected drop-and-add pairs are renames, for a
+   * caller that already knows (a Schema Builder save, from the change the person
+   * made). Given, it decides every candidate and the terminal prompt is never
+   * loaded, so a run inside the app's server cannot wait on a terminal; absent,
+   * the operator is asked (`promptRenames`). A candidate it returns no decision
+   * for is declined.
+   */
+  decideRenames?: (
+    candidates: readonly RenameCandidate[]
+  ) => Promise<RenameDecision[]>;
+  /**
+   * The one entity this migration is for (`scope.ts`): the file changes only
+   * its tables, and the snapshot is the latest one with only its tables and
+   * settings replaced. Absent, the migration covers everything the config and
+   * the latest snapshot differ on, as `migrate:create` writes it.
+   */
+  scope?: GenerateScope;
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -287,12 +313,116 @@ function operationTableName(op: Operation): string {
 }
 
 /**
+ * `args` with only the scoped entity among its entities and only its tables'
+ * registry rows, so every planner plans for it alone and the entity headers
+ * name only it; `args` itself without a scope.
+ */
+function withScopedEntities(args: GenerateArgs): GenerateArgs {
+  const { scope } = args;
+  if (scope === undefined) return args;
+  const only = (kind: GenerateScope["kind"], list: MinimalConfigEntity[]) =>
+    kind === scope.kind ? list.filter(e => e.slug === scope.slug) : [];
+  const rows = (upserts: GenerateArgs["metadataUpserts"]) =>
+    upserts?.filter(row => scope.tables.has(row.tableName));
+  return {
+    ...args,
+    collections: only("collection", args.collections),
+    singles: only("single", args.singles),
+    components: only("fieldGroup", args.components),
+    metadataUpserts: rows(args.metadataUpserts),
+    previousMetadataUpserts: rows(args.previousMetadataUpserts),
+  };
+}
+
+/**
+ * The app stream's snapshots as a run with `scope` writes them: unchanged
+ * without one; with one, every table outside it as the latest snapshot file
+ * (`latest`) has it (`scopedStream`).
+ */
+function streamInScope(
+  scope: GenerateScope | undefined,
+  stream: AppStreamSnapshots,
+  latest: SnapshotFile | null
+): AppStreamSnapshots {
+  if (scope === undefined) return stream;
+  return scopedStream(scope, stream, {
+    snapshot: latest?.snapshot ?? EMPTY_SNAPSHOT,
+    ...(latest?.contributions === undefined
+      ? {}
+      : { contributions: latest.contributions }),
+  });
+}
+
+/**
+ * The settings record the run writes and the settings changes it names. With
+ * a scope, every other entity keeps its entry in the record and is named in no
+ * change: it is not among the run's entities, which would otherwise read as
+ * its removal (`scopedSettingsRecord`).
+ */
+function settingsInScope(
+  args: GenerateArgs,
+  latest: SnapshotFile | null
+): {
+  settingsRecord: EntitySettingsRecord | undefined;
+  changedSettings: EntitySettingsChange[];
+} {
+  const desired = settingsRecordOf(args);
+  const changes = settingsChangesFor(
+    args,
+    latest === null ? null : latest.entities
+  );
+  if (args.scope === undefined) {
+    return { settingsRecord: desired, changedSettings: changes };
+  }
+  return {
+    settingsRecord: scopedSettingsRecord(args.scope, latest?.entities, desired),
+    changedSettings: scopedSettingsChanges(args.scope, changes),
+  };
+}
+
+/** A rename candidate's identity: its table and the two columns it pairs. */
+const renameKey = (c: RenameCandidate) =>
+  `${c.tableName}\u0000${c.fromColumn}\u0000${c.toColumn}`;
+
+/**
+ * Which rename candidates are renames: the caller's answer where it gives one
+ * (`decideRenames`), else the operator's. The prompt is loaded only when it
+ * asks, so a caller inside the app's server never loads the terminal UI.
+ */
+async function renameDecisions(
+  candidates: RenameCandidate[],
+  args: Pick<
+    GenerateArgs,
+    "decideRenames" | "nonInteractive" | "autoAcceptRenames"
+  >
+): Promise<RenameDecision[]> {
+  if (args.decideRenames !== undefined) {
+    // Only a pair the detector found can be a rename: a decision naming any
+    // other would rename a column the operations never drop and add.
+    const detected = new Map(candidates.map(c => [renameKey(c), c]));
+    return (await args.decideRenames(candidates)).flatMap(decision => {
+      const candidate = detected.get(renameKey(decision.candidate));
+      return candidate === undefined
+        ? []
+        : [{ candidate, accepted: decision.accepted }];
+    });
+  }
+  const { promptRenames } = await import("./prompt-renames");
+  return promptRenames(candidates, {
+    nonInteractive: args.nonInteractive,
+    autoAccept: args.autoAcceptRenames,
+  });
+}
+
+/**
  * Run the migrate:create orchestration. Returns null if no operations
  * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
 export async function generateMigration(
-  args: GenerateArgs
+  requested: GenerateArgs
 ): Promise<GenerateResult | null> {
+  // Scoped, every planner below sees the scoped entity alone.
+  const args = withScopedEntities(requested);
   const metaDir = resolve(args.migrationsDir, "meta");
   // Single clock for the whole run so the main file and its companions share a
   // deterministic base timestamp (companions get a strictly-later one below).
@@ -306,7 +436,7 @@ export async function generateMigration(
   //    The app stream's extension tables are folded into BOTH sides, since a
   //    table the app contributes to is compared over its owner's current
   //    declaration rather than over the copy the last snapshot froze.
-  const stream = appStreamSnapshots({
+  const unscoped = appStreamSnapshots({
     previous: previous?.data.snapshot ?? EMPTY_SNAPSHOT,
     previousContributions: previous?.data.contributions ?? {},
     desired: buildDesiredSnapshotFromConfig(
@@ -317,6 +447,8 @@ export async function generateMigration(
     ),
     tables: args.appStream ?? NO_APP_STREAM_TABLES,
   });
+  // Scoped, every table outside the scope stays as the latest snapshot has it.
+  const stream = streamInScope(args.scope, unscoped, previous?.data ?? null);
   const previousSnapshot = stream.previous;
   const desiredSnapshot = stream.desired;
 
@@ -411,10 +543,9 @@ export async function generateMigration(
   //     with the previous snapshot's record; a previous snapshot that predates
   //     the record says nothing about settings, so each entity is named as
   //     recorded for the first time (`settingsChanges`).
-  const settingsRecord = settingsRecordOf(args);
-  const changedSettings = settingsChangesFor(
+  const { settingsRecord, changedSettings } = settingsInScope(
     args,
-    previous === null ? null : previous.data.entities
+    previous?.data ?? null
   );
   const hasSettingsChanges = changedSettings.length > 0;
 
@@ -463,10 +594,7 @@ export async function generateMigration(
       ),
       args.dialect
     );
-    decisions = await promptRenames(candidates, {
-      nonInteractive: args.nonInteractive,
-      autoAccept: args.autoAcceptRenames,
-    });
+    decisions = await renameDecisions(candidates, args);
     operations = applyRenameDecisions(
       operations,
       decisions,
