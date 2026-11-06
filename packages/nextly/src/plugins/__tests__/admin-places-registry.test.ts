@@ -480,3 +480,18 @@ describe("in the CLI", () => {
     }
   );
 });
+
+describe("core's built-in names", () => {
+  it("every built-in name is unique within its place and spelled as a name", () => {
+    // Lower-case words joined by single dashes, and never a dot: every
+    // contribution id holds one, so a built-in name can never collide with
+    // one. Unique within the place across its kinds, so `before`, `after`
+    // and `replaces` each name exactly one part of the page.
+    const NAME = /^[a-z]+(-[a-z]+)*$/;
+    for (const [place, { builtIns }] of Object.entries(CORE_ADMIN_PLACES)) {
+      const names = Object.values(builtIns as Record<string, string[]>).flat();
+      expect(new Set(names).size, place).toBe(names.length);
+      for (const name of names) expect(name, `${place} ${name}`).toMatch(NAME);
+    }
+  });
+});
