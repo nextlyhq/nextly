@@ -1340,6 +1340,8 @@ export {
 // classes, the evaluator the renderer asks, and their save-time judgement.
 export {
   canonicalConditions,
+  conditionDemand,
+  conditionScopeIn,
   CONDITION_FIELD_CODES,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
@@ -1354,6 +1356,7 @@ export {
 } from "./visibility-conditions";
 export type {
   ConditionDayStart,
+  ConditionDemand,
   ConditionEvaluation,
   ConditionFieldKind,
   ConditionInput,
@@ -1363,6 +1366,7 @@ export type {
   ConditionOp,
   ConditionRegistry,
   ConditionRenderClass,
+  ConditionScope,
   ConditionSource,
   ConditionSubject,
 } from "./visibility-conditions";

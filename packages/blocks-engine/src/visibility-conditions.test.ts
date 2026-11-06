@@ -15,6 +15,8 @@ import type { BlockNode } from "./document";
 import type { ListFields } from "./list-query";
 import {
   canonicalConditions,
+  conditionDemand,
+  conditionScopeIn,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
   CONDITION_MAX,
@@ -625,5 +627,85 @@ describe("conditions stored before they were evaluated", () => {
     expect(
       codes([[{ field: "publishedAt", op: "eq", value: "2026-11-01" }]])
     ).toEqual(["condition-unsuited"]);
+  });
+});
+
+describe("what a page's conditions read of its entry", () => {
+  const gated = (id: string, conditions: unknown, slots?: unknown) => ({
+    id,
+    type: "core/box",
+    version: 1,
+    props: {},
+    visibility: { conditions },
+    ...(slots === undefined ? {} : { slots }),
+  });
+
+  it("names the entry fields every entry-scoped condition checks, once each", () => {
+    const demand = conditionDemand([
+      gated("a", [[{ field: "tier", op: "equals", value: "vip" }]]),
+      gated("b", [
+        [{ field: "tier", op: "exists" }],
+        [{ field: "rating", op: "gt", value: 3 }],
+      ]),
+    ]);
+    expect([...demand.entryFields].sort()).toEqual(["rating", "tier"]);
+    expect(demand.any).toBe(true);
+  });
+
+  it("leaves out conditions a list's item decides, but not those in its empty state", () => {
+    const list = {
+      id: "l",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: {
+        children: [gated("in", [[{ field: "title", op: "exists" }]])],
+        empty: [gated("e", [[{ field: "tier", op: "exists" }]])],
+      },
+    };
+    const demand = conditionDemand([list]);
+    expect([...demand.entryFields]).toEqual(["tier"]);
+    expect(demand.any).toBe(true);
+  });
+
+  it("asks for the site's day only when a condition orders a value", () => {
+    expect(
+      conditionDemand([gated("a", [[{ field: "tier", op: "exists" }]])])
+        .ordersValues
+    ).toBe(false);
+    expect(
+      conditionDemand([
+        gated("a", [
+          [{ field: "publishedAt", op: "less_than", value: "2026-01-01" }],
+        ]),
+      ]).ordersValues
+    ).toBe(true);
+  });
+
+  it("asks nothing of a page with no conditions, or ones that restrict nobody", () => {
+    expect(
+      conditionDemand([
+        gated("a", [[]]),
+        { id: "b", type: "core/box", version: 1, props: {} },
+      ])
+    ).toEqual({
+      any: false,
+      entryFields: new Set(),
+      ordersValues: false,
+    });
+  });
+
+  it("says where a list's children read: the item in its per-entry slot only", () => {
+    const list = {
+      type: "core/collection-loop",
+      props: { collection: "posts" },
+    };
+    const page = { source: "entry" as const, collection: "pages" };
+    expect(conditionScopeIn(list, "children", page)).toEqual({
+      source: "item",
+      collection: "posts",
+    });
+    expect(conditionScopeIn(list, "empty", page)).toBe(page);
+    expect(conditionScopeIn({ type: "core/box" }, "children", page)).toBe(page);
   });
 });

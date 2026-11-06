@@ -27,7 +27,6 @@ import {
   safeTimeZone,
   type BindingDemand,
   type BindingFieldShape,
-  type BindingIssue,
   type BlockDocument,
   type BlockNode,
   type SourceDemand,
@@ -95,6 +94,7 @@ import type {
   BindingIssuesHandler,
   BlockHostPolicy,
   BlocksDataProvider,
+  PageIssue,
   BlocksDataProviderFactory,
   BlocksFieldShapeRef,
   BlocksFieldShapes,
@@ -2367,7 +2367,7 @@ async function readPageInputs(args: {
  * report, naming the page and counting each problem, never a value.
  */
 function bindingIssueLog(context: RenderContext): BindingIssuesHandler {
-  return (issues: readonly BindingIssue[]) => {
+  return (issues: readonly PageIssue[]) => {
     const counts = new Map<string, number>();
     for (const issue of issues) {
       counts.set(issue.code, (counts.get(issue.code) ?? 0) + 1);

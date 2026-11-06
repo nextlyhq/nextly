@@ -13,7 +13,6 @@ import {
   type SiteSheetInput,
   type StyleCompileContext,
   type BreakpointSet,
-  type BindingIssue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
@@ -24,9 +23,11 @@ import {
   type BlockHostPolicy,
   type PageBindings,
   type PageContext,
+  type PageIssue,
 } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
+  heldConditionsOf,
   pageBindingRun,
   readStagesFor,
   rendersOwnMarkup,
@@ -192,12 +193,14 @@ export interface PageRendererProps {
  */
 function bindingIssueReport(
   handler: BindingIssuesHandler | undefined
-): (issues: readonly BindingIssue[]) => void {
+): (issues: readonly PageIssue[]) => void {
   const seen = new Set<string>();
   return issues => {
     if (handler === undefined) return;
     const fresh = issues.filter(issue => {
-      const key = `${issue.nodeId}\u0000${issue.prop}\u0000${issue.code}`;
+      // A binding is placed by its prop, a condition by where it is stored.
+      const at = "prop" in issue ? issue.prop : issue.path;
+      const key = `${issue.nodeId}\u0000${at}\u0000${issue.code}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -734,7 +737,14 @@ export function PageRenderer({
   const boundaryBindings: BoundaryBindings | undefined =
     bindingRun === undefined
       ? undefined
-      : { run: bindingRun, bound: stages.boundValues, report };
+      : {
+          run: bindingRun,
+          bound: stages.boundValues,
+          report,
+          // The blocks the route kept because their conditions held for the
+          // page's entry, drawn where any other conditioned block is not.
+          held: heldConditionsOf(prepared),
+        };
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the

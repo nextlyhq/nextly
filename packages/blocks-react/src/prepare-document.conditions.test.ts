@@ -1,0 +1,104 @@
+/**
+ * A prepared document gated again once the entry its page shows is known.
+ *
+ * A route prepares a page before it reads anything, which holds every
+ * conditioned block back. Once the entry is read, the page is gated again by
+ * its conditions, reusing what was composed and migrated, and the renderer is
+ * handed the result as it is handed any preparation: the blocks whose
+ * conditions held are drawn, and the rest stay out.
+ */
+import {
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+  type BlockNode,
+  type ConditionSubject,
+} from "@nextlyhq/blocks-engine";
+import { describe, expect, it } from "vitest";
+
+import { coreBlocks } from "./blocks";
+import {
+  heldConditionsOf,
+  prepareDocument,
+  readStagesFor,
+  regateDocument,
+} from "./prepare-document";
+import { createBlockResolver } from "./resolver";
+
+const resolver = createBlockResolver([...coreBlocks]);
+
+const heading = (id: string, text: string, conditions?: unknown): BlockNode =>
+  ({
+    id,
+    type: "core/heading",
+    version: 1,
+    props: { text, level: 2 },
+    ...(conditions === undefined ? {} : { visibility: { conditions } }),
+  }) as BlockNode;
+
+const page = (...nodes: BlockNode[]): BlockDocument =>
+  ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes,
+  }) as BlockDocument;
+
+const entry = (tier: string): ConditionSubject => ({
+  fields: {
+    declared: new Set(["tier"]),
+    readable: [{ name: "tier", type: "text" }],
+  },
+  values: { tier },
+});
+
+const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+
+const ids = (document: BlockDocument | undefined) =>
+  document?.nodes.map(node => node.id);
+
+describe("a prepared page gated by its entry", () => {
+  const stored = page(
+    heading("open", "Everyone"),
+    heading("members", "VIP only", vip)
+  );
+
+  it("holds a conditioned block back until its entry is known", () => {
+    const prepared = prepareDocument(stored, { resolver });
+    expect(ids(prepared?.presented)).toEqual(["open"]);
+  });
+
+  it("draws a block whose conditions hold for the entry, and names it held", () => {
+    const prepared = prepareDocument(stored, { resolver });
+    const regated = regateDocument(prepared!, { entry: entry("vip") });
+    expect(ids(regated?.prepared.presented)).toEqual(["open", "members"]);
+    expect([...heldConditionsOf(regated!.prepared)]).toEqual(["members"]);
+    // The renderer, handed it for the same document, draws the same tree.
+    const stages = readStagesFor(stored, { resolver }, regated!.prepared);
+    expect(ids(stages?.prepared)).toEqual(["open", "members"]);
+  });
+
+  it("keeps a block out whose conditions don't hold", () => {
+    const prepared = prepareDocument(stored, { resolver });
+    const regated = regateDocument(prepared!, { entry: entry("free") });
+    expect(ids(regated?.prepared.presented)).toEqual(["open"]);
+    expect(heldConditionsOf(regated!.prepared).size).toBe(0);
+  });
+
+  it("presents every conditioned block when asked to keep them all, for a route's reads", () => {
+    const prepared = prepareDocument(stored, { resolver });
+    const kept = regateDocument(prepared!, "keep-all");
+    expect(ids(kept?.prepared.presented)).toEqual(["open", "members"]);
+    // Kept for reading only: none of them is named held.
+    expect(heldConditionsOf(kept!.prepared).size).toBe(0);
+  });
+
+  it("refuses a preparation it did not make", () => {
+    expect(
+      regateDocument({ presented: stored } as never, { entry: entry("vip") })
+    ).toBeNull();
+  });
+
+  it("names nothing held for a document prepared without an entry", () => {
+    const prepared = prepareDocument(stored, { resolver });
+    expect(heldConditionsOf(prepared!).size).toBe(0);
+  });
+});

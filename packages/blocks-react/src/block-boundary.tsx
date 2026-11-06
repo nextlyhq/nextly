@@ -3,7 +3,6 @@ import {
   blockTypeClassName,
   renderedDomId,
   resolveNodeBindings,
-  type BindingIssue,
   type BindingRun,
   type BlockNode,
   type BoundValues,
@@ -19,7 +18,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { BlockHostPolicy, PageContext } from "./context";
+import type { BlockHostPolicy, PageContext, PageIssue } from "./context";
 import {
   editorMarkers,
   EDITOR_NAMESPACE,
@@ -38,7 +37,7 @@ import {
   normalizeRenderable,
 } from "./renderable";
 import type { BlockResolver } from "./resolver";
-import { isUnconditional } from "./visibility";
+import { conditionAllows } from "./visibility";
 // Imported as well as re-exported below: this module both PUBLISHES the names,
 // which consumers outside the package address elements by, and uses them.
 
@@ -94,8 +93,14 @@ export interface BoundaryBindings {
   readonly run: BindingRun;
   /** What the page's pass filled, by node id. */
   readonly bound: ReadonlyMap<string, BoundValues>;
-  /** Where a list item's binding problems go, once each. */
-  readonly report: (issues: readonly BindingIssue[]) => void;
+  /** Where a list item's binding and condition problems go, once each. */
+  readonly report: (issues: readonly PageIssue[]) => void;
+  /**
+   * The blocks whose visibility conditions held for the page's entry, by id,
+   * as the route decided them once it read the entry. Carried here, beside
+   * the context rather than on it, as everything a render threads down is.
+   */
+  readonly held?: ReadonlySet<string>;
 }
 
 /**
@@ -1657,20 +1662,29 @@ export function BlockList({
   nodeAttribute,
   bindings,
 }: BlockListProps): ReactNode {
-  return nodes
-    .filter(isUnconditional)
-    .map(node => (
-      <BlockBoundary
-        key={node.id}
-        node={node}
-        context={context}
-        blocks={blocks}
-        classes={classes}
-        fallback={fallback}
-        {...(hostPolicy === undefined ? {} : { hostPolicy })}
-        {...(spacingMode === undefined ? {} : { spacingMode })}
-        {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
-        {...(bindings === undefined ? {} : { bindings })}
-      />
-    ));
+  return (
+    nodes
+      // A conditioned block is drawn where its conditions allow it: held for
+      // the page's entry, or holding for the list item being drawn.
+      .filter(node =>
+        conditionAllows(node, context, {
+          ...(bindings?.held === undefined ? {} : { held: bindings.held }),
+          ...(bindings === undefined ? {} : { report: bindings.report }),
+        })
+      )
+      .map(node => (
+        <BlockBoundary
+          key={node.id}
+          node={node}
+          context={context}
+          blocks={blocks}
+          classes={classes}
+          fallback={fallback}
+          {...(hostPolicy === undefined ? {} : { hostPolicy })}
+          {...(spacingMode === undefined ? {} : { spacingMode })}
+          {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+          {...(bindings === undefined ? {} : { bindings })}
+        />
+      ))
+  );
 }
