@@ -26,8 +26,8 @@ import { Activity, useState, type ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 
-import type { PlaceContributionProps, PlaceProps } from "./TargetSlot";
 import { PlaceContributionFallback } from "./PlaceContributionFallback";
+import type { PlaceContributionProps, PlaceProps } from "./TargetSlot";
 import { usePlaceContributions } from "./usePlaceContributions";
 
 /** The value the page's own content takes in the strip; ids always hold a dot. */
