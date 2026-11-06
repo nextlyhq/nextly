@@ -78,11 +78,10 @@ export function DocumentPanel({
   navigationDisabled = actionsDisabled,
   publishAllDisabled = actionsDisabled,
 }: DocumentPanelProps): ReactElement | null {
-  const sections = usePlaceContributions(
-    place.place,
-    "sidebarSection",
-    place.entry
-  );
+  const sections = usePlaceContributions(place.place, "sidebarSection", {
+    context: place.context,
+    entry: place.entry,
+  });
   // Nothing to say until the document exists.
   if (mode === "create") return null;
 
