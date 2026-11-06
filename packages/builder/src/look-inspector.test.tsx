@@ -138,7 +138,7 @@ describe("editing a look with no block selected", () => {
     expect(screen.getByText("A look for Box blocks")).toBeDefined();
     const bar = screen.getByRole("group", { name: "Editing Plain" });
     expect(bar.querySelector(".nx-look-bar__line")?.textContent).toBe(
-      "Editing Plain · every Box without another look"
+      "Editing Plain · every Box"
     );
   });
 
@@ -196,6 +196,46 @@ describe("editing a look with no block selected", () => {
     expect(canvas.querySelector("[data-nx-look-reach]")).not.toBeNull();
     view.unmount();
     expect(canvas.querySelector("[data-nx-look-reach]")).toBeNull();
+  });
+
+  it("says why the look's values can't be changed when the author may not", () => {
+    render(
+      <InspectorPanel
+        editor={editorFor(null)}
+        classLibrary={[own, raised]}
+        sharedStyles={{ mayChange: false, writeStyles: async () => undefined }}
+        lookEditing={{ id: raised.id, onExit: () => {} }}
+      />
+    );
+    const bar = screen.getByRole("group", { name: "Editing Raised" });
+    const held = bar.querySelector(".nx-look-bar__held");
+    expect(held?.textContent).not.toBe("");
+    expect(held).not.toBeNull();
+  });
+
+  it("marks the blocks a component draws, read from the composed page, whatever their ids", () => {
+    const composed = {
+      ...page,
+      nodes: [
+        ...page.nodes,
+        { id: "inner\nbox", type: "acme/box", version: 1, props: {} },
+      ],
+    } as unknown as BlockDocument;
+    const editor = { ...editorFor(null), composed: () => composed };
+    const canvas = window.document.createElement("div");
+    const inner = window.document.createElement("div");
+    inner.setAttribute("data-nx-node", "inner\nbox");
+    canvas.append(inner);
+    render(
+      <InspectorPanel
+        editor={editor}
+        canvasRoot={canvas}
+        classLibrary={[own, raised]}
+        sharedStyles={{ mayChange: true, writeStyles: async () => undefined }}
+        lookEditing={{ id: own.id, onExit: () => {} }}
+      />
+    );
+    expect(inner.hasAttribute("data-nx-look-reach")).toBe(true);
   });
 
   it("edits the selected block instead while one is selected", () => {

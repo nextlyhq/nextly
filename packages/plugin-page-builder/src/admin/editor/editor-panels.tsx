@@ -45,7 +45,7 @@ import {
 } from "../pattern-library-client";
 
 import { DesignPanel } from "./design-panel";
-import type { LookEditingState } from "./look-editing";
+import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
   withoutSelfPatterns,
@@ -402,8 +402,12 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const [searchOpen, setSearchOpen] = useState(false);
   // The Pages panel, and the request its rows send to open Settings.
   const pages = usePagesPanel(mount.initialDocument.kind === "page");
+  // Which look the inspector edits on its own: chosen in the Design panel,
+  // left by selecting a block, by the bar's Back, or by Esc.
+  const lookEditing = useLookEditing(editor);
   return {
     entryFields,
+    lookEditing,
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
@@ -437,6 +441,8 @@ export type EditorPanels = OfferedLibrary &
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
+    /** The look edited on its own from the Design panel, with no block. */
+    lookEditing: LookEditingState;
   };
 
 /**

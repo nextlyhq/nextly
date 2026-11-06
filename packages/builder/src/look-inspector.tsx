@@ -84,7 +84,7 @@ function standInEditor(editor: EditorState, blockType: string): EditorState {
 /** What an edit to the look changes, under the bar's first line. */
 function lookChangeWords(look: BlockLookRow, title: string): string {
   return look.own
-    ? `Changes the ${title.toLowerCase()}'s own look on every page. A block's own values still win.`
+    ? `Changes every ${title} on every page. Where another look, a shared style or the block's own values set something, they win.`
     : `Changes ${look.name} on every page that uses it. A shared style and a block's own values still win.`;
 }
 
@@ -99,13 +99,14 @@ export function LookInspector({
 }: LookInspectorProps): React.JSX.Element {
   const target = useLookTarget(look, host);
   // The blocks on this page the edit reaches, marked while the look is edited.
-  const reachKey = [...lookReach(editor.document, library, look)].join("\n");
+  // Over the page as the canvas draws it, components composed in, so a block
+  // a placement draws is marked too. Keyed as JSON, which spells any id.
+  const reachKey = JSON.stringify([
+    ...lookReach(editor.composed() ?? editor.document, library, look),
+  ]);
   React.useEffect(() => {
     if (canvasRoot === null || canvasRoot === undefined) return;
-    markLookReach(
-      canvasRoot,
-      new Set(reachKey === "" ? [] : reachKey.split("\n"))
-    );
+    markLookReach(canvasRoot, new Set(JSON.parse(reachKey) as string[]));
     return () => markLookReach(canvasRoot, null);
   }, [canvasRoot, reachKey]);
   const stand = React.useMemo(
@@ -121,7 +122,12 @@ export function LookInspector({
           {`A look for ${title} blocks`}
         </span>
       </div>
-      <LookBar look={look} title={title} onExit={onExit} />
+      <LookBar
+        look={look}
+        title={title}
+        onExit={onExit}
+        readOnly={target?.kind === "shared" ? target.readOnly : undefined}
+      />
       {target === undefined ? (
         <p className="nx-inspector__note">
           {
@@ -143,10 +149,13 @@ function LookBar({
   look,
   title,
   onExit,
+  readOnly,
 }: {
   readonly look: BlockLookRow;
   readonly title: string;
   readonly onExit: () => void;
+  /** Why the look's values can't be changed, when they can't. */
+  readonly readOnly: string | undefined;
 }): React.JSX.Element {
   return (
     <div
@@ -167,6 +176,13 @@ function LookBar({
         </span>
       </p>
       <p className="nx-look-bar__note">{lookChangeWords(look, title)}</p>
+      {/* The controls below are held: the bar says why, as the editing bar
+          does for a shared style the block wears. */}
+      {readOnly === undefined ? null : (
+        <p className="nx-look-bar__held" role="note">
+          {readOnly}
+        </p>
+      )}
       <button type="button" className="nx-look-bar__back" onClick={onExit}>
         <ArrowLeft aria-hidden="true" size={12} />
         Back to block editing

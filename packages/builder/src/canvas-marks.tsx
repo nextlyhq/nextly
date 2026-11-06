@@ -61,6 +61,24 @@ import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
 import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
 
+/**
+ * The marks that are the marked element's outline and nothing more, by the
+ * attribute that asks for each: a block an edit to the look being edited
+ * reaches, and a drop's parent and refused target.
+ */
+const OUTLINE_MARKS = [
+  [LOOK_REACH_ATTRIBUTE, "look-reach"],
+  [DROP_PARENT_ATTRIBUTE, "drop-parent"],
+  [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
+] as const;
+
+/** The outline-only marks an element asks for, drawn as `box`. */
+function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
+  return OUTLINE_MARKS.filter(([attribute]) =>
+    marked.hasAttribute(attribute)
+  ).map(([, kind]) => ({ ...box, kind }));
+}
+
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
   readonly kind:
@@ -643,16 +661,8 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
           ...(marked.hasAttribute(EDITING_ATTRIBUTE) ? { editing: true } : {}),
         });
       }
-      // A block an edit to the look being edited reaches, dashed.
-      if (marked.hasAttribute(LOOK_REACH_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "look-reach" });
-      }
-      if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-parent" });
-      }
-      if (marked.hasAttribute(DROP_REFUSED_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-refused" });
-      }
+      // The marks drawn as the element's outline alone, one per attribute.
+      found.push(...outlineMarksOf(marked, { ...outline, ...plain }));
     });
   placements.forEach(({ placement, parts, ...look }) => {
     const ring = ringOf(placementOutline(parts));

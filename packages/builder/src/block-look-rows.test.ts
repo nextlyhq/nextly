@@ -135,14 +135,12 @@ describe("a look's specimen base", () => {
 
 describe("the words a look's edit carries", () => {
   it("say who the edit reaches, and what the Default chip covers", () => {
-    expect(lookReachWords({ own: true }, "Button")).toBe(
-      "every Button without another look"
-    );
+    expect(lookReachWords({ own: true }, "Button")).toBe("every Button");
     expect(lookReachWords({ own: false }, "Button")).toBe(
       "every Button that wears it"
     );
     expect(ownLookDescription("Button")).toBe(
-      "Default · applies to every Button without another look"
+      "Default · every Button starts from this look; other looks are laid on top"
     );
   });
 });

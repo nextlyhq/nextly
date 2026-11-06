@@ -1,8 +1,8 @@
 /**
  * The blocks on the page an edit to a look reaches, marked dashed on the
- * canvas while the look is edited on its own: every block of its type that
- * wears no other look for a block's own look, and every block wearing it for
- * any other look.
+ * canvas while the look is edited on its own: every block of its type for a
+ * block's own look, which is the base every other look of the type is laid on,
+ * and every block wearing it for any other look.
  *
  * Which look a block wears is the Style tab's own answer (`wornLook` over the
  * looks the library renders), so the marks and the tiles cannot disagree.
@@ -33,8 +33,9 @@ export function lookReach(
   const reached = new Set<string>();
   walkNodes(document.nodes, node => {
     if (node.type !== look.blockType) return;
-    const worn = wornLook(node.classes, looks);
-    if (look.own ? worn === null : worn === look.id) reached.add(node.id);
+    if (look.own || wornLook(node.classes, looks) === look.id) {
+      reached.add(node.id);
+    }
   });
   return reached;
 }

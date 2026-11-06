@@ -1521,6 +1521,12 @@
   color: var(--nx-foreground);
 }
 
+/* Why the look's values can't be changed, beside the held controls. */
+.nx-look-bar__held {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+}
+
 .nx-look-bar__back {
   display: inline-flex;
   align-items: center;

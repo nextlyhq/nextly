@@ -221,7 +221,7 @@ describe("the list", () => {
     ]);
     // The own look says what it covers, on hover and to a screen reader.
     expect(rows[0]?.getAttribute("aria-description")).toBe(
-      "Default · applies to every Button without another look"
+      "Default · every Button starts from this look; other looks are laid on top"
     );
     expect(rows.map(each => each.getAttribute("aria-pressed"))).toEqual([
       "false",
@@ -229,6 +229,32 @@ describe("the list", () => {
     ]);
     fireEvent.click(rows[0] as HTMLElement);
     expect(onEditLook).toHaveBeenCalledWith(primary.id);
+  });
+
+  it("finds a look by a value it sets, as it finds a shared style", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: { base: { base: { opacity: 0.25 } } },
+    };
+    const text: NamedClass = {
+      ...outline,
+      id: "look:core/button:text",
+      slug: "button-text",
+      label: "Text",
+      orderIndex: 1,
+      styles: {},
+    };
+    await panel({ library: [CARD, outline, text] });
+    fireEvent.change(screen.getByRole("searchbox", { name: /Search/ }), {
+      target: { value: "0.25" },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(within(looks).getByText("Outline")).toBeTruthy();
+    expect(within(looks).queryByText("Text")).toBeNull();
   });
 
   it("says how to make one when there are none, with no + to create an empty one", async () => {

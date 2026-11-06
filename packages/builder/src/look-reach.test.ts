@@ -46,9 +46,10 @@ const page = {
 } as unknown as BlockDocument;
 
 describe("the blocks an edit to a look reaches", () => {
-  it("are every block of the type wearing no other look, for its own look", () => {
+  it("are every block of the type, for its own look, which every other look is laid on", () => {
     expect([...lookReach(page, [outline], primary)].sort()).toEqual([
       "nested",
+      "outlined",
       "plain",
     ]);
   });

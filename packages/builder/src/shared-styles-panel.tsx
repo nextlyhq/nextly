@@ -285,7 +285,8 @@ function useRows(
 function useLookGroups(
   library: readonly NamedClass[] | undefined,
   suppliedClassIds: readonly string[] | undefined,
-  query: string
+  query: string,
+  styleContext: StyleCompileContext | undefined
 ): BlockLookGroup[] {
   const suppliedKey = idsKey(suppliedClassIds ?? []);
   const groups = React.useMemo(
@@ -295,13 +296,32 @@ function useLookGroups(
         : blockLookGroups(library, new Set(idsOf(suppliedKey))),
     [library, suppliedKey]
   );
-  const needle = query.trim().toLowerCase();
-  if (needle === "") return groups;
+  // Each look's search text, as each shared style's is: its name and every
+  // property and value it declares, so a search the box promises finds both.
+  const texts = React.useMemo(
+    () =>
+      new Map(
+        groups.flatMap(group =>
+          group.rows.map(row => [
+            row.id,
+            sharedStyleSearchText(row, styleContext),
+          ])
+        )
+      ),
+    [groups, styleContext]
+  );
+  if (query.trim() === "") return groups;
   return groups
-    .map(group => ({
-      ...group,
-      rows: group.rows.filter(row => row.name.toLowerCase().includes(needle)),
-    }))
+    .map(group => {
+      const found = new Set(
+        searchSharedStyles(
+          group.rows,
+          query,
+          row => texts.get(row.id) ?? ""
+        ).map(row => row.id)
+      );
+      return { ...group, rows: group.rows.filter(row => found.has(row.id)) };
+    })
     .filter(group => group.rows.length > 0);
 }
 
@@ -317,15 +337,17 @@ function PanelLooks({
   access,
   paint,
   editing,
+  styleContext,
 }: {
   library: readonly NamedClass[];
   suppliedClassIds: readonly string[] | undefined;
   query: string;
+  styleContext: StyleCompileContext | undefined;
   access: SharedStylesAccess | undefined;
   paint: TilePaint;
   editing: PanelLookEditing | undefined;
 }): React.JSX.Element | null {
-  const groups = useLookGroups(library, suppliedClassIds, query);
+  const groups = useLookGroups(library, suppliedClassIds, query, styleContext);
   const usage = useUsage(access, wornLookIds(groups));
   return (
     <BlockLooksGroup
@@ -456,6 +478,7 @@ export function SharedStylesPanel({
           access={access}
           paint={paint}
           editing={looks}
+          styleContext={styleContext}
         />
         <section
           className="nx-vars__group"

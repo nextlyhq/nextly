@@ -126,12 +126,12 @@ export function lookReachWords(
   row: Pick<BlockLookRow, "own">,
   blockTitle: string
 ): string {
-  return row.own
-    ? `every ${blockTitle} without another look`
-    : `every ${blockTitle} that wears it`;
+  // A block's own look is the base every other look of the type is laid on,
+  // so an edit to it reaches every block of the type.
+  return row.own ? `every ${blockTitle}` : `every ${blockTitle} that wears it`;
 }
 
-/** The Default chip's description: what a block's own look applies to. */
+/** The Default chip's description: what a block's own look is to its type. */
 export function ownLookDescription(blockTitle: string): string {
-  return `Default · applies to every ${blockTitle} without another look`;
+  return `Default · every ${blockTitle} starts from this look; other looks are laid on top`;
 }
