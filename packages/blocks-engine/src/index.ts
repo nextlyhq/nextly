@@ -970,7 +970,11 @@ export type { CompiledDeclarations, Declaration } from "./style/declarations";
  * @experimental
  */
 export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./style/overlay";
-export { DISCLOSURE_ICONS, DISCLOSURE_POSITIONS } from "./style/disclosure";
+export {
+  DISCLOSURE_ICON_PROPERTY,
+  DISCLOSURE_ICONS,
+  DISCLOSURE_POSITIONS,
+} from "./style/disclosure";
 export { serializeRules } from "./style/serialize";
 export type { CssRule } from "./style/serialize";
 export {

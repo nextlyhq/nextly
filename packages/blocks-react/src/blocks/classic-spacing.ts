@@ -82,8 +82,10 @@ const CLASSIC_BLOCK_BASES: Readonly<Record<string, NodeStyles | null>> =
           display: "grid",
           gap: { $token: "space.4" },
           // The browser's own marker, as these sections drew before an
-          // accordion offered an icon of its own.
+          // accordion offered an icon of its own, and the icon's position a
+          // new accordion has, so choosing an icon puts it after the title.
           disclosureIcon: "browser",
+          disclosurePosition: "after",
         },
       },
     },

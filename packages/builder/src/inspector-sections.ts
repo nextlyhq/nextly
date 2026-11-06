@@ -53,6 +53,8 @@ export type InspectorSectionKey =
  *   it sits: Cover (which part stays in view), Contain, None or Scale down
  *   (where it sits in its box). Fill stretches it to the box, so there is
  *   nothing to place.
+ * - `icon-drawn`: while a disclosure draws an icon of its own (not the
+ *   browser's marker, and not none), which is what a position moves.
  * - `state`: while a state other than Normal is being edited.
  */
 export type PropertyTier =
@@ -63,6 +65,7 @@ export type PropertyTier =
   | "flex-or-grid"
   | "media"
   | "framed-media"
+  | "icon-drawn"
   | "state";
 
 export interface InspectorSectionDef {
@@ -90,7 +93,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     label: "Icon",
     properties: [
       ["disclosureIcon", "common"],
-      ["disclosurePosition", "common"],
+      ["disclosurePosition", "icon-drawn"],
     ],
   },
   {
@@ -268,9 +271,17 @@ export interface TierContext {
   readonly media: boolean;
   /** The fit the block is given here, if it is given one. */
   readonly objectFit?: string | undefined;
+  /** The disclosure icon the block draws here, if it is given one. */
+  readonly disclosureIcon?: string | undefined;
   /** The state being edited. */
   readonly state: StyleState;
 }
+
+/**
+ * The disclosure icons that draw nothing a position could move: the browser's
+ * own marker, which stays where the browser puts it, and none.
+ */
+const UNDRAWN_ICONS: ReadonlySet<string> = new Set(["browser", "none"]);
 
 /** Whether a property of this tier shows without being asked for. */
 export function tierShows(tier: PropertyTier, context: TierContext): boolean {
@@ -292,6 +303,10 @@ export function tierShows(tier: PropertyTier, context: TierContext): boolean {
       return context.media;
     case "framed-media":
       return context.media && FRAMED_FITS.has(context.objectFit ?? "");
+    // Shown where the icon in force is unknown too: the block's default
+    // draws one.
+    case "icon-drawn":
+      return !UNDRAWN_ICONS.has(context.disclosureIcon ?? "");
     case "state":
       return context.state !== "base";
   }

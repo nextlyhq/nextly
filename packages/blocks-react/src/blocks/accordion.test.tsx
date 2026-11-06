@@ -263,6 +263,21 @@ describe("an accordion's titles and icon, on a rendered page", () => {
     expect(html).toContain("margin-inline-start: auto");
   });
 
+  it("puts an icon chosen on a classic site after the title, as on a new one", () => {
+    const chosen = {
+      ...page({}),
+      nodes: [
+        {
+          ...(page({}).nodes[0] as object),
+          styles: { base: { base: { disclosureIcon: "chevron" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const html = markup(chosen, "classic");
+    expect(html).toContain("rotate(180deg)");
+    expect(html).toContain("margin-inline-start: auto");
+  });
+
   it("keeps the browser's marker on a site built before icons were offered", () => {
     const html = markup(page({}), "classic");
     expect(html).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);

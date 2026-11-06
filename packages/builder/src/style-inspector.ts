@@ -33,6 +33,7 @@
 import {
   BASE_BREAKPOINT,
   breakpointContexts,
+  DISCLOSURE_ICON_PROPERTY,
   getBlock,
   getStyleProperty,
   STYLE_CATALOG,
@@ -268,6 +269,12 @@ export function inspectStyle(
     display: cascadedKeyword(styles, at, "display", "display"),
     media: options?.media === true,
     objectFit: cascadedKeyword(styles, at, "object-fit", "objectFit"),
+    disclosureIcon: cascadedKeyword(
+      styles,
+      at,
+      DISCLOSURE_ICON_PROPERTY,
+      "disclosureIcon"
+    ),
     state,
   };
   const inspected = [...allowed].map(property => {

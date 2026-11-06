@@ -47,16 +47,17 @@ const CAPTURED_ACCORDION =
  * An accordion's sections now draw an empty icon beside their titles, and a
  * classic site's accordion keeps the browser's marker: its icon choice is
  * Browser default, which keeps the summary as the browser draws it, hides
- * that icon and keeps a title on the marker's line; and a section's title
+ * that icon and keeps a title on the marker's line, with the position a new
+ * accordion has for an icon chosen later; and a section's title
  * takes the section's own typography, which a text title already did. The
  * page looks as it did.
  */
 const OLD_CSS = CAPTURED_CSS.replace(
   CAPTURED_ACCORDION,
   [
-    ".nx-pb-page :where(.nx-bt-core--accordion) { --nx-pb-disclosure-icon: browser; display: grid; gap: var(--site-space-4) }",
+    ".nx-pb-page :where(.nx-bt-core--accordion) { --nx-pb-disclosure-icon: browser; --nx-pb-disclosure-position: after; display: grid; gap: var(--site-space-4) }",
     ".nx-pb-page :where(.nx-bt-core--accordion > details > summary) { display: revert; list-style: revert }",
-    ".nx-pb-page :where(.nx-bt-core--accordion > details > summary > .nx-pb-disclosure-icon) { display: none }",
+    ".nx-pb-page :where(.nx-bt-core--accordion > details > summary > .nx-pb-disclosure-icon) { display: none; order: 1; margin-inline-start: auto }",
     ".nx-pb-page :where(.nx-bt-core--accordion > details > summary > .nx-pb-disclosure-title) { display: inline }",
     ".nx-pb-page :where(.nx-bp-core--accordion-item--title) { font-size: inherit; font-weight: inherit; line-height: inherit; margin-block-end: 0; margin-block-start: 0; margin-inline-end: 0; margin-inline-start: 0 }",
   ].join("\n")

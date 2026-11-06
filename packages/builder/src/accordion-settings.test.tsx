@@ -132,3 +132,21 @@ describe("an Accordion's Icon section", () => {
     );
   });
 });
+
+describe("an Accordion's icon position, offered where an icon is drawn", () => {
+  it("is not offered while the icon is the browser's own or none", () => {
+    for (const icon of ["browser", "none"]) {
+      mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: icon } } });
+      open("Icon");
+      expect(screen.queryByRole("group", { name: "Position" })).toBeNull();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("is offered while a chevron or a plus is drawn", () => {
+    mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: "plus" } } });
+    open("Icon");
+    expect(screen.getByRole("group", { name: "Position" })).toBeDefined();
+  });
+});
