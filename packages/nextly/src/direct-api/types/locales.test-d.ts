@@ -40,6 +40,8 @@ assertType<Exact<LocaleFrom<LockedSite>, "en" | "fr">>(true);
 assertType<Takes<LocaleOptionFrom<LockedSite>, "fr">>(true);
 // Every language at once stays a read's choice on every site.
 assertType<Takes<LocaleOptionFrom<LockedSite>, "all">>(true);
+// And every language a write sweeps (`EVERY_LOCALE`, the all-language status change).
+assertType<Takes<LocaleOptionFrom<LockedSite>, "*">>(true);
 // A language the site does not have is not taken.
 assertType<Exact<Takes<LocaleOptionFrom<LockedSite>, "de">, false>>(true);
 assertType<Exact<DeprecatedLocaleFrom<LockedSite>, never>>(true);

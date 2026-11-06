@@ -15,8 +15,13 @@
  */
 import type { GeneratedTypes } from "./shared";
 
-/** What a read accepts for "the default language, all languages included". */
-type EveryLanguage = "all";
+/**
+ * What a call accepts for every language at once: `"all"`, a read's "the default language, all
+ * languages included", and `"*"`, a write's every language at once (the all-language status
+ * change). Both are in the language option on every site, so code using them keeps compiling
+ * once types are generated.
+ */
+type EveryLanguage = "all" | "*";
 
 /**
  * A site's language codes: exactly those its configuration locks, or any code where Settings

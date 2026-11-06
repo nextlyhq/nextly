@@ -60,6 +60,20 @@ export interface GeneratedFile {
 }
 
 /**
+ * The languages a types file lists, for every writer of one (`generate:types`, `build`,
+ * `db:sync --types`): those a configuration that declares them locks, as the reads match them.
+ * Where it declares none, Settings manages them and the types take any code. Old codes still
+ * accepted after a conversion come from the upgrade that converts them; none are recorded before
+ * it.
+ */
+export function generatedLanguages(config: {
+  localization?: Pick<SanitizedLocalizationConfig, "locales">;
+}): { locales?: string[] } {
+  const locales = config.localization?.locales.map(locale => locale.code);
+  return locales === undefined ? {} : { locales };
+}
+
+/**
  * Generates the types file without writing it: the path and content
  * `writeTypesFile` writes, for a run that only reports them.
  */
@@ -78,10 +92,7 @@ export function generateTypesFile(
     generateInputTypes: true,
     generateConfig: true,
     generateModuleAugmentation: options.moduleAugmentation,
-    // The languages a configuration that declares them locks, as the reads match them. Where it
-    // declares none, Settings manages them and the types take any code. Old codes still accepted
-    // after a conversion come from the upgrade that converts them; none are recorded before it.
-    locales: options.config.localization?.locales.map(locale => locale.code),
+    ...generatedLanguages(options.config),
   }).generateTypesFile(
     options.collections,
     options.singles,
