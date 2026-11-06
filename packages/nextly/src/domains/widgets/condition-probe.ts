@@ -39,6 +39,7 @@ import {
 } from "../../database/seeders/sample-content";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
   callerMayReadAnyRelease,
@@ -342,6 +343,9 @@ async function firstCreatableOf(
     const settled = await Promise.allSettled(group.map(mayCreateIn));
     for (const [index, result] of settled.entries()) {
       if (result.status === "rejected") {
+        // A rule that could not run ends the request with that answer, not
+        // with an internal error that hides which rule and that a retry helps.
+        rethrowIfRuleCouldNotRun(result.reason);
         throw NextlyError.internal({
           ...(result.reason instanceof Error ? { cause: result.reason } : {}),
           logContext: {

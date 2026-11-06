@@ -43,6 +43,10 @@ import {
 } from "../../auth/principal-scope";
 import type { RequestContext } from "../../collections/fields/types/base";
 import { NextlyError } from "../../errors/nextly-error";
+import {
+  ruleCouldNotRun,
+  waitedOutPoolBound,
+} from "../../errors/rule-could-not-run";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
@@ -112,6 +116,17 @@ function grantsResolver(
   visitor: VisitorGrantsLoader = processVisitor
 ): () => Promise<CallerGrants> {
   let pending: Promise<CallerGrants> | undefined;
+  // A lookup that rejects is forgotten once it settles, so the next rule asks
+  // again rather than being handed the failure: a lookup that waited out the
+  // bound for a database connection ends its request, and a retry is judged
+  // afresh. Only the rules already awaiting it share the rejection.
+  const remembered = (lookup: Promise<CallerGrants>) => {
+    pending = lookup;
+    lookup.catch(() => {
+      if (pending === lookup) pending = undefined;
+    });
+    return lookup;
+  };
   return () => {
     if (pending) return pending;
     // A scoped API key is judged on the grants stamped on the KEY. `userId`
@@ -143,25 +158,26 @@ function grantsResolver(
       // rule and the rule above it answer a visitor alike, from the database
       // `visitor` reads. A read of Public that fails rejects, and the rule is
       // denied as a user's would be.
-      pending =
+      return remembered(
         currentPrincipal() !== null
           ? Promise.resolve({ permissions: [], roles: [] })
           : visitor(executor).then(actor => ({
               permissions: actor.permissions,
               roles: [],
-            }));
-      return pending;
+            }))
+      );
     }
-    pending = Promise.all([
-      listEffectiveGrants(userId, executor),
-      listRoleSlugsForUser(userId, executor),
-    ])
-      // A lookup that fails rejects, and every rule awaiting it is denied by
-      // its own guard (`runFieldRule`). Not an empty grant set: that denies
-      // a rule asking for a role or a permission, and allows one asking for
-      // the absence of one.
-      .then(([permissions, roles]) => ({ permissions, roles }));
-    return pending;
+    return remembered(
+      Promise.all([
+        listEffectiveGrants(userId, executor),
+        listRoleSlugsForUser(userId, executor),
+      ])
+        // A lookup that fails rejects, and every rule awaiting it is denied
+        // by its own guard (`runFieldRule`). Not an empty grant set: that
+        // denies a rule asking for a role or a permission, and allows one
+        // asking for the absence of one.
+        .then(([permissions, roles]) => ({ permissions, roles }))
+    );
   };
 }
 
@@ -595,9 +611,16 @@ async function fieldRuleAllows(
   fn: FieldAccessFn,
   operation: FieldRuleOperation,
   ctx: FieldRuleCaller,
-  snapshot: Record<string, unknown> | undefined
+  snapshot: Record<string, unknown> | undefined,
+  field: string
 ): Promise<boolean> {
-  return runFieldRule(fn, operation, ctx, { id: ctx.id, data: snapshot });
+  return runFieldRule(
+    fn,
+    operation,
+    ctx,
+    { id: ctx.id, data: snapshot },
+    field
+  );
 }
 
 /** What a field rule may be asked: the field operations alone. */
@@ -605,7 +628,8 @@ type FieldRuleOperation = "create" | "read" | "update";
 
 /**
  * Call a field rule with the caller's grants and the entry fields given, and
- * read its answer; a rule that throws denies (fail-secure).
+ * read its answer; a rule that throws denies (fail-secure), except one that
+ * could not reach the database, which ends the request (`ruleCouldNotRun`).
  *
  * `entry` is spread into the arguments, so a caller may pass accessors in
  * place of values and observe whether the rule reads them.
@@ -614,7 +638,9 @@ async function runFieldRule(
   fn: FieldAccessFn,
   operation: FieldRuleOperation,
   ctx: Omit<FieldRuleCaller, "id">,
-  entry: Pick<AccessRuleContext, "id" | "data">
+  entry: Pick<AccessRuleContext, "id" | "data">,
+  /** The field the rule guards, where the caller knows it, to name it. */
+  field?: string
 ): Promise<boolean> {
   // A literal answers before the grants are resolved: it reads neither them
   // nor the entry, so resolving them would be a lookup with no question.
@@ -643,7 +669,19 @@ async function runFieldRule(
       entry
     );
     return await fn(args);
-  } catch {
+  } catch (error) {
+    // A rule whose own query, or the caller's grants it reads, waited out the
+    // bound for a database connection never answered: the field is neither
+    // shown nor hidden, and the whole request ends naming the rule, rather
+    // than returning the document with the field silently withheld.
+    if (waitedOutPoolBound(error)) {
+      throw ruleCouldNotRun({
+        subject: ctx.target.slug,
+        ...(field !== undefined ? { field } : {}),
+        rule: `the field ${operation} rule`,
+        cause: error,
+      });
+    }
     // Fail-secure: an access rule that throws denies the field.
     return false;
   }
@@ -737,7 +775,7 @@ async function applyWriteAccessRec(
     }
     const fn = entry.access?.[operation];
     if (!fn) continue;
-    const allowed = await fieldRuleAllows(fn, operation, ctx, snapshot);
+    const allowed = await fieldRuleAllows(fn, operation, ctx, snapshot, name);
     if (!allowed) denied.push(name);
   }
   for (const name of denied) delete data[name];
@@ -994,7 +1032,7 @@ async function applyReadAccessRec(
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    const allowed = await fieldRuleAllows(fn, "read", ctx, snapshot);
+    const allowed = await fieldRuleAllows(fn, "read", ctx, snapshot, name);
     if (!allowed) denied.push(name);
   }
   // Record what stays removed for the next pass to restore as evidence. A prior

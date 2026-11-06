@@ -12,6 +12,10 @@
 
 import { container } from "../di/container";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import {
+  ruleCouldNotRun,
+  waitedOutPoolBound,
+} from "../errors/rule-could-not-run";
 import type { AccessOperation } from "../services/access/types";
 import type {
   CollectionAccessControl,
@@ -118,7 +122,17 @@ export async function codeAccessAllows(
   let answer: unknown;
   try {
     answer = await operationAccess(ctx);
-  } catch {
+  } catch (error) {
+    // A rule whose own query waited out the bound for a database connection
+    // never answered: the request ends with that, naming whose rule it is,
+    // rather than reading the wait as a refusal. Any other throw refuses.
+    if (waitedOutPoolBound(error)) {
+      throw ruleCouldNotRun({
+        subject: target.slug,
+        rule: `the ${operation} rule`,
+        cause: error,
+      });
+    }
     return false;
   }
   // Only `true` allows every entry; a filter, which this check does not

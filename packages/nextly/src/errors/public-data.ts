@@ -27,6 +27,17 @@ export type RateLimitPublicData = {
 };
 
 /**
+ * Which rule a `RULE_COULD_NOT_RUN` is about: the collection or Single whose
+ * rule it is, and the field, for a field's rule. The names of what the caller
+ * asked to read or write, and a retry hint.
+ */
+export type RuleCouldNotRunPublicData = {
+  subject: string;
+  field?: string;
+  retryAfterSeconds?: number;
+};
+
+/**
  * Which Single a `NOT_FOUND` from the singles read is ABOUT.
  *
  * The slug the caller named, and nothing more: a Single that is not registered
@@ -215,6 +226,7 @@ export type PublicData =
   | NotMigratedPublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
+  | RuleCouldNotRunPublicData
   | SingleAbsentPublicData
   | ReleaseProblemsPublicData
   | SharedFieldsConflictPublicData

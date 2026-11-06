@@ -2,6 +2,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
@@ -754,6 +755,9 @@ export class FieldGroupQueryService extends BaseService {
           results[index][fieldName] = value;
         });
       } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the component replaced by a default.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode a read failure must roll the write back rather than
         // ship a payload with silently-missing component data.
         if (strict) throw error;
@@ -855,6 +859,8 @@ export class FieldGroupQueryService extends BaseService {
           }
         }
       } catch (error) {
+        // A rule that could not run never answered: see the catch above.
+        rethrowIfRuleCouldNotRun(error);
         // A caller judging a document by what it holds cannot take a default
         // for a field it failed to read.
         if (strict) throw error;
@@ -1058,6 +1064,8 @@ export class FieldGroupQueryService extends BaseService {
           allRows.push({ row, fields: meta.fields, slug });
         }
       } catch (error) {
+        // A rule that could not run never answered: see the catches above.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode surface the failure so a durable payload is not built
         // from a partial dynamic-zone read.
         if (strict) throw error;
@@ -1665,6 +1673,9 @@ export class FieldGroupQueryService extends BaseService {
 
       return expanded;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the component's relationships left unexpanded.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.debug("Could not expand relationships in component data", {
         componentSlug,
         error: error instanceof Error ? error.message : String(error),

@@ -29,6 +29,7 @@ import {
   collectionRowNotMigrated,
 } from "../../database/with-db-errors";
 import { container } from "../../di/container";
+import { rethrowIfRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import {
   applyFieldReadAccess,
@@ -196,7 +197,8 @@ function copiedWithOrigins(
  * that same document with the field read rules applied for the reader, the
  * document's own and each component's, as a read applies them; then walked
  * as it was scanned. A field the rules removed, anywhere, is not among them.
- * Rules that cannot be evaluated show no field at all.
+ * Rules that cannot be evaluated show no field at all; a rule that could not
+ * run, for want of a database connection, ends the request instead.
  *
  * @experimental
  */
@@ -237,7 +239,10 @@ export async function linkFieldKeysVisibleIn(
         grants,
       }
     );
-  } catch {
+  } catch (error) {
+    // A field rule that could not run never answered: the request ends with
+    // that, not with every link field reading as hidden.
+    rethrowIfRuleCouldNotRun(error);
     return new Set();
   }
   const visible = new Set<string>();

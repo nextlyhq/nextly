@@ -23,6 +23,7 @@ import {
   readableEntities,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
+import { rethrowIfAnyRuleCouldNotRun } from "../../errors/rule-could-not-run";
 
 import { allWidgets, type CanonicalWidget } from "./canonical";
 import { collectionSettingsToken } from "./collection-cards";
@@ -64,6 +65,9 @@ export async function permissionVerdicts(
     const settled = await Promise.allSettled(
       group.map(slug => callerHoldsPermission(slug, caller))
     );
+    // A rule that could not run never answered: the request ends with that,
+    // not with the widgets it gates hidden as though refused.
+    rethrowIfAnyRuleCouldNotRun(settled);
     group.forEach((slug, index) => {
       const outcome = settled[index];
       // A rejected decision DENIES. A permission check that threw has told us
