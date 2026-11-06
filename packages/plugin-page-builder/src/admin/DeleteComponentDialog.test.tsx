@@ -16,10 +16,12 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { useState, type JSX } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ComponentDeleteResult,
+  DeletePlan,
   DocumentList,
 } from "../component-delete/contract";
 import { MESSAGES, SOMEONE_ELSE_IS_DELETING } from "../component-delete/words";
@@ -27,6 +29,7 @@ import { MESSAGES, SOMEONE_ELSE_IS_DELETING } from "../component-delete/words";
 /** A request body, as the dialog sends it. */
 interface Body {
   readonly dryRun?: true;
+  readonly after?: string;
 }
 
 /** An error as the admin's API client throws it. */
@@ -59,8 +62,34 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { DeleteComponentDialog, checkedFace } = await import(
   "./DeleteComponentDialog"
 );
+const { addSlice, EMPTY_TALLY } = await import("./component-delete-client");
 
 const NONE: DocumentList = { named: [], unreadable: 0, more: 0 };
+
+/** A dry run's plan: the whole site in one slice, unless said otherwise. */
+function planOf(rest: Partial<DeletePlan> = {}): DeletePlan {
+  return {
+    complete: true,
+    next: null,
+    convert: NONE,
+    drafts: NONE,
+    mayBeRefused: 0,
+    ...rest,
+  };
+}
+
+const HOME = {
+  kind: "collection",
+  slug: "pages",
+  id: "p1",
+  title: "Home",
+} as const;
+const PRICING = {
+  kind: "collection",
+  slug: "pages",
+  id: "p2",
+  title: "Pricing",
+} as const;
 
 /** An answer of the routes, with what a case does not say left empty. */
 function result(
@@ -81,18 +110,13 @@ function envelope(item: ComponentDeleteResult) {
 
 const USED = result({
   status: "used",
-  plan: {
+  plan: planOf({
     convert: {
-      named: [
-        { kind: "collection", slug: "pages", id: "p1", title: "Home" },
-        { kind: "single", slug: "site-footer", title: "Footer" },
-      ],
+      named: [HOME, { kind: "single", slug: "site-footer", title: "Footer" }],
       unreadable: 1,
       more: 0,
     },
-    drafts: NONE,
-    mayBeRefused: 0,
-  },
+  }),
 });
 
 const handlers = { onClose: vi.fn(), onDeleted: vi.fn() };
@@ -103,6 +127,24 @@ const handlers = { onClose: vi.fn(), onDeleted: vi.fn() };
  */
 async function shown(text: string): Promise<void> {
   expect((await screen.findAllByText(text)).length).toBeGreaterThan(0);
+}
+
+/** The dialog as a screen holds it: closing it closes it. */
+function Host(): JSX.Element {
+  const [open, setOpen] = useState(true);
+  return (
+    <DeleteComponentDialog
+      componentId="c1"
+      name="Hero"
+      open={open}
+      onClose={() => {
+        handlers.onClose();
+        setOpen(false);
+      }}
+      onDeleted={handlers.onDeleted}
+      leaveLabel="Back to Components"
+    />
+  );
 }
 
 function show(name: string | null = "Hero"): void {
@@ -155,17 +197,11 @@ describe("the dry run", () => {
     answer = () =>
       envelope({
         ...USED,
-        plan: {
+        plan: planOf({
           convert: USED.plan?.convert ?? NONE,
-          drafts: {
-            named: [
-              { kind: "collection", slug: "pages", id: "p1", title: "Home" },
-            ],
-            unreadable: 0,
-            more: 0,
-          },
+          drafts: { named: [HOME], unreadable: 0, more: 0 },
           mayBeRefused: 2,
-        },
+        }),
       });
     show();
     expect(
@@ -181,7 +217,7 @@ describe("the dry run", () => {
       envelope(
         result({
           status: "none",
-          plan: { convert: NONE, drafts: NONE, mayBeRefused: 0 },
+          plan: planOf(),
         })
       );
     show();
@@ -191,35 +227,99 @@ describe("the dry run", () => {
     ).toBeTruthy();
   });
 
-  it("never says nothing uses it while the count is not whole, and asks again until it is", async () => {
-    const partial = result({
-      status: "none",
-      plan: {
-        convert: NONE,
-        drafts: NONE,
-        mayBeRefused: 0,
-        complete: false,
-      } as ComponentDeleteResult["plan"],
+  it("never says nothing uses it before the last slice, and asks for each slice from where the last stopped", async () => {
+    // The second slice is held until the first has been read on screen.
+    let release: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      release = resolve;
     });
-    const whole = result({
-      status: "none",
-      plan: { convert: NONE, drafts: NONE, mayBeRefused: 0 },
-    });
-    let asked = 0;
-    answer = () => {
-      asked += 1;
-      return envelope(asked === 1 ? partial : whole);
+    answer = async body => {
+      if (body.after === undefined) {
+        return envelope(
+          result({
+            status: "counting",
+            plan: planOf({ complete: false, next: "slice-2" }),
+          })
+        );
+      }
+      await held;
+      return envelope(result({ status: "none", plan: planOf() }));
     };
     show();
-    expect(await screen.findByText(/Still finding where/)).toBeTruthy();
+    expect(await screen.findByText(/Still checking where/)).toBeTruthy();
+    expect(screen.getByText("Checking… none found so far")).toBeTruthy();
     expect(screen.queryByText(/Nothing uses/)).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Delete component" })
     ).toBeNull();
+    release();
+    expect(await screen.findByText(/Nothing uses/)).toBeTruthy();
+    expect(calls).toEqual([
+      { dryRun: true },
+      { dryRun: true, after: "slice-2" },
+    ]);
+  });
+
+  it("adds each slice's documents up, saying at least how many while it reads, and offers the delete once every slice is read", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    answer = async body => {
+      if (body.after === undefined) {
+        return envelope(
+          result({
+            status: "used",
+            plan: planOf({
+              complete: false,
+              next: "slice-2",
+              convert: { named: [HOME], unreadable: 0, more: 0 },
+            }),
+          })
+        );
+      }
+      await held;
+      // The last slice found nothing of its own: the sum still uses it.
+      return envelope(
+        result({
+          status: "none",
+          plan: planOf({
+            convert: { named: [PRICING], unreadable: 0, more: 0 },
+          }),
+        })
+      );
+    };
+    show();
     expect(
-      await screen.findByText(/Nothing uses/, undefined, { timeout: 4000 })
+      await screen.findByText(/is used in at least 1 document so far/)
     ).toBeTruthy();
-    expect(calls).toEqual([{ dryRun: true }, { dryRun: true }]);
+    expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
+    release();
+    expect(await screen.findByText(/is used in 2 documents\./)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Home" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Pricing" })).toBeTruthy();
+    expect(screen.queryByText(/Nothing uses/)).toBeNull();
+    expect(screen.getByRole("button", { name: /then delete/ })).toBeTruthy();
+  });
+
+  it("shows a refusal a slice finds at once, reading no further", async () => {
+    answer = () =>
+      envelope(
+        result({
+          status: "refused",
+          plan: planOf({ complete: false, next: "slice-2" }),
+          layouts: {
+            named: [
+              { kind: "collection", slug: "layouts", id: "l1", title: "Main" },
+            ],
+            unreadable: 0,
+            more: 0,
+          },
+        })
+      );
+    show();
+    expect(await screen.findByText(/A Layout uses/)).toBeTruthy();
+    expect(calls).toEqual([{ dryRun: true }]);
   });
 
   it("refuses with the Layouts that use it, and offers nothing to confirm", async () => {
@@ -227,7 +327,7 @@ describe("the dry run", () => {
       envelope(
         result({
           status: "refused",
-          plan: { convert: NONE, drafts: NONE, mayBeRefused: 0 },
+          plan: planOf(),
           layouts: {
             named: [
               { kind: "collection", slug: "layouts", id: "l1", title: "Main" },
@@ -251,7 +351,7 @@ describe("the dry run", () => {
       envelope(
         result({
           status: "refused",
-          plan: { convert: NONE, drafts: NONE, mayBeRefused: 0 },
+          plan: planOf(),
           left: [
             {
               document: {
@@ -330,7 +430,7 @@ describe("the delete", () => {
         run: { yours: true, step: "converting" },
         progress: { converted: 1, unchanged: 0, left: 0, pending: 2 },
       }),
-      result({ status: "done", run: { yours: true, step: "settling" } }),
+      result({ status: "done", run: { yours: true, step: "deleted" } }),
     ];
     answer = body =>
       body.dryRun === true ? envelope(USED) : envelope(steps.shift() ?? USED);
@@ -363,7 +463,7 @@ describe("the delete", () => {
         })
       );
     };
-    show();
+    render(<Host />);
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Turn each copy into plain blocks, then delete",
@@ -373,6 +473,13 @@ describe("the delete", () => {
     expect(screen.getByText(MESSAGES.running)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     expect(handlers.onClose).toHaveBeenCalled();
+    // A step already sent may land; none is sent after it. Calling on would
+    // send one every quarter second.
+    const atPause = stepped;
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 900));
+    });
+    expect(stepped).toBeLessThanOrEqual(atPause + 1);
   });
 
   it("lists the documents a partly done delete left, and offers to try again", async () => {
@@ -425,6 +532,36 @@ describe("the delete", () => {
     await shown("You don't have permission to delete this component.");
   });
 
+  it("says the author may not delete it when a step part way is refused with 403, and what was converted before", async () => {
+    let stepped = 0;
+    answer = body => {
+      if (body.dryRun === true) return envelope(USED);
+      stepped += 1;
+      if (stepped === 1) {
+        return envelope(
+          result({
+            status: "running",
+            run: { yours: true, step: "converting" },
+            progress: { converted: 2, unchanged: 0, left: 0, pending: 1 },
+          })
+        );
+      }
+      return Promise.reject(new ApiError("Forbidden", 403));
+    };
+    show();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Turn each copy into plain blocks, then delete",
+      })
+    );
+    await shown("You don't have permission to delete this component.");
+    expect(
+      screen.getByText(
+        "2 documents were turned into plain blocks before that. The component was kept."
+      )
+    ).toBeTruthy();
+  });
+
   it("says someone else is deleting it when the start is refused with 409", async () => {
     answer = body =>
       body.dryRun === true
@@ -471,29 +608,40 @@ describe("the delete", () => {
 
 describe("checkedFace", () => {
   it("puts someone else's delete before every other answer", () => {
-    expect(
-      checkedFace({
-        ...USED,
-        mayDelete: false,
-        status: "refused",
-        run: { yours: false, step: "converting" },
-      })
-    ).toBe("someone-else");
+    const answered = {
+      ...USED,
+      mayDelete: false,
+      status: "refused" as const,
+      run: { yours: false, step: "converting" },
+    };
+    expect(checkedFace(answered, addSlice(EMPTY_TALLY, answered))).toBe(
+      "someone-else"
+    );
   });
 
-  it("reads a part-counted plan as counting, never as nothing used", () => {
+  it("reads slices that found nothing as counting until the last, never as nothing used", () => {
+    const first = result({
+      status: "counting",
+      plan: planOf({ complete: false, next: "slice-2" }),
+    });
+    const tally = addSlice(EMPTY_TALLY, first);
+    expect(checkedFace(first, tally)).toBe("counting");
+    const last = result({ status: "none", plan: planOf() });
+    expect(checkedFace(last, addSlice(tally, last))).toBe("none");
+  });
+
+  it("reads a used earlier slice as used, though the last slice found nothing", () => {
+    const first = result({
+      status: "used",
+      plan: planOf({
+        complete: false,
+        next: "slice-2",
+        convert: { named: [HOME], unreadable: 0, more: 0 },
+      }),
+    });
+    const last = result({ status: "none", plan: planOf() });
     expect(
-      checkedFace(
-        result({
-          status: "none",
-          plan: {
-            convert: NONE,
-            drafts: NONE,
-            mayBeRefused: 0,
-            complete: false,
-          } as ComponentDeleteResult["plan"],
-        })
-      )
-    ).toBe("counting");
+      checkedFace(last, addSlice(addSlice(EMPTY_TALLY, first), last))
+    ).toBe("used");
   });
 });

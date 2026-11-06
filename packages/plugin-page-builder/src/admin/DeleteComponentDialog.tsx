@@ -9,9 +9,12 @@
  * by what the route answers (`component-delete/contract.ts`):
  *
  * - **Checking**: the dry run is on its way.
- * - **Counting**: the dry run counted part of the site only; it is asked
- *   again, and nothing is offered until the count is whole, so a component
- *   whose uses are still being found never reads as unused.
+ * - **Counting**: the dry run reads the site a slice at a time, each slice
+ *   answering only its own documents, so the dialog adds them up and asks
+ *   for the next. The documents found so far are listed as they come, and
+ *   nothing is offered until every document is read, so a component whose
+ *   uses are still being found never reads as unused. A refusal found on
+ *   the way is shown at once: reading more cannot undo it.
  * - **Nothing uses it**: delete it at once, or Cancel.
  * - **Used**: the documents that use it, named where the author may read
  *   them and counted where not, with "Turn each copy into plain blocks, then
@@ -27,7 +30,8 @@
  *   dialog stays open; the bar counts the documents finished. Closing pauses
  *   the delete, which the next opening offers to resume.
  * - **Partly done**: the documents left, each with why, so the component was
- *   kept; trying again picks up where it stopped.
+ *   kept; trying again picks up where it stopped. A delete refused part way
+ *   for want of the right says what was converted before it.
  * - **Deleted**.
  * - **Error**: the refusal's own words, and Try again.
  *
@@ -71,15 +75,19 @@ import type {
 import { MESSAGES, SOMEONE_ELSE_IS_DELETING } from "../component-delete/words";
 
 import {
+  addSlice,
   checkComponentDelete,
   documentCount,
   documentHref,
   documentTitle,
-  planComplete,
+  EMPTY_TALLY,
   progressOf,
   stepComponentDelete,
+  tallyRefuses,
+  tallyUses,
   underWay,
   type DeleteCall,
+  type DeleteTally,
 } from "./component-delete-client";
 
 /** Which component the dialog deletes, and what follows. */
@@ -102,8 +110,16 @@ export interface DeleteComponentDialogProps {
 /** Where the dialog is. */
 type View =
   | { readonly kind: "checking" }
-  /** The dry run's answer, whole or still counting. */
-  | { readonly kind: "checked"; readonly result: ComponentDeleteResult }
+  /**
+   * The dry run as read so far: the last slice's answer, which carries the
+   * right to delete and the open delete, and every slice's documents added
+   * up.
+   */
+  | {
+      readonly kind: "checked";
+      readonly result: ComponentDeleteResult;
+      readonly tally: DeleteTally;
+    }
   | {
       readonly kind: "deleting";
       /** The last step's answer; null before the first one lands. */
@@ -113,16 +129,14 @@ type View =
   | { readonly kind: "stopped"; readonly result: ComponentDeleteResult }
   | { readonly kind: "deleted" }
   | { readonly kind: "someone-else"; readonly message: string }
-  | { readonly kind: "forbidden" }
+  /** Refused for want of the right, with what an earlier step converted. */
+  | { readonly kind: "forbidden"; readonly converted: number }
   | {
       readonly kind: "failed";
       readonly message: string;
       /** What Try again does: check again, or start the delete again. */
       readonly retry: "check" | "delete";
     };
-
-/** How long a part-counted plan waits before it is asked again. */
-const RECOUNT_MS = 1500;
 
 /** How long the dialog waits between two steps of the delete. */
 const STEP_GAP_MS = 250;
@@ -143,9 +157,12 @@ function wait(ms: number): Promise<void> {
 }
 
 /**
- * The face of a dry run's answer, by what stops a delete first: someone
- * else's open delete, then the author's own paused one, then the right to
- * delete at all, then a refusal, then whether anything uses it.
+ * The face of the dry run as read so far, by what stops a delete first:
+ * someone else's open delete, then the author's own paused one, then the
+ * right to delete it, then a refusal (which reading more cannot undo), then,
+ * only once every document is read, whether anything uses it. Until then it
+ * is counting, so a component whose uses are still being found never reads
+ * as unused.
  */
 type CheckedFace =
   | "counting"
@@ -156,16 +173,18 @@ type CheckedFace =
   | "none"
   | "used";
 
-/** Which face a dry run's answer shows. */
-export function checkedFace(result: ComponentDeleteResult): CheckedFace {
+/** Which face the dry run shows, from its last answer and its tally. */
+export function checkedFace(
+  result: ComponentDeleteResult,
+  tally: DeleteTally
+): CheckedFace {
   if (result.run !== null) {
     return result.run.yours ? "resume" : "someone-else";
   }
-  if (!planComplete(result.plan)) return "counting";
   if (!result.mayDelete) return "no-permission";
-  if (result.status === "refused") return "refused";
-  if (result.status === "none") return "none";
-  return "used";
+  if (tallyRefuses(tally)) return "refused";
+  if (!tally.complete) return "counting";
+  return tallyUses(tally) === 0 ? "none" : "used";
 }
 
 /** A list of documents: the first few as links, the rest counted. */
@@ -348,13 +367,9 @@ function SafeButton({
 }
 
 /** What a used component's plan says beside its list. */
-function PlanNotes({
-  result,
-}: {
-  result: ComponentDeleteResult;
-}): JSX.Element | null {
-  const drafts = documentCount(result.plan?.drafts);
-  const mayBeRefused = result.plan?.mayBeRefused ?? 0;
+function PlanNotes({ tally }: { tally: DeleteTally }): JSX.Element | null {
+  const drafts = documentCount(tally.drafts);
+  const mayBeRefused = tally.mayBeRefused;
   if (drafts === 0 && mayBeRefused === 0) return null;
   return (
     <div className="space-y-2">
@@ -374,43 +389,64 @@ function PlanNotes({
   );
 }
 
-/** How many documents a plan turns into plain blocks, or else holds drafts. */
-function usedBy(result: ComponentDeleteResult): number {
-  const convert = documentCount(result.plan?.convert);
-  return convert > 0 ? convert : documentCount(result.plan?.drafts);
-}
-
 /** The face of a dry run's answer. */
-function checkedFaceOf(result: ComponentDeleteResult, args: FaceArgs): Face {
+function checkedFaceOf(
+  result: ComponentDeleteResult,
+  tally: DeleteTally,
+  args: FaceArgs
+): Face {
   const { name, cancelRef } = args;
-  const plan = result.plan;
-  const count = usedBy(result);
+  const count = tallyUses(tally);
+  // "At least" while documents are still to be read.
+  const atLeast = tally.complete ? "" : "at least ";
   const list =
-    plan === undefined ? null : (
-      <DocumentLinks list={plan.convert} label="Documents that use it" />
-    );
-  switch (checkedFace(result)) {
+    documentCount(tally.convert) > 0 ? (
+      <DocumentLinks list={tally.convert} label="Documents that use it" />
+    ) : documentCount(tally.drafts) > 0 ? (
+      <DocumentLinks
+        list={tally.drafts}
+        label="Documents with unpublished changes"
+      />
+    ) : null;
+  switch (checkedFace(result, tally)) {
     case "counting":
       return {
         title: "Delete component",
         sentence: (
           <>
-            {"Still finding where "}
-            <Named name={name} />
-            {count > 0
-              ? ` is used: ${documents(count)} so far. This can take a moment on a large site.`
-              : " is used. This can take a moment on a large site."}
+            {count > 0 ? (
+              <>
+                <Named name={name} opening />
+                {` is used in at least ${documents(count)} so far. The rest of the site is still being checked, so nothing can be deleted yet.`}
+              </>
+            ) : (
+              <>
+                {"Still checking where "}
+                <Named name={name} />
+                {" is used. This can take a moment on a large site."}
+              </>
+            )}
           </>
         ),
         body: (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span aria-hidden="true" className="inline-flex">
-              <Spinner size="sm" />
-            </span>
-            <span>Counting…</span>
+          <div className="space-y-3">
+            {list}
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span aria-hidden="true" className="inline-flex">
+                <Spinner size="sm" />
+              </span>
+              <span>
+                {count > 0
+                  ? `Checking… ${documents(count)} found so far`
+                  : "Checking… none found so far"}
+              </span>
+            </div>
           </div>
         ),
-        announce: "Still counting where it is used.",
+        announce:
+          count > 0
+            ? `Still checking. ${documents(count)} found so far.`
+            : MESSAGES.counting,
         footer: <SafeButton label="Cancel" cancelRef={cancelRef} />,
       };
     case "someone-else":
@@ -445,7 +481,7 @@ function checkedFaceOf(result: ComponentDeleteResult, args: FaceArgs): Face {
           <>
             {"You don't have permission to delete "}
             <Named name={name} />
-            {count > 0 ? `. It is used in ${documents(count)}.` : "."}
+            {count > 0 ? `. It is used in ${atLeast}${documents(count)}.` : "."}
           </>
         ),
         body: list,
@@ -453,7 +489,7 @@ function checkedFaceOf(result: ComponentDeleteResult, args: FaceArgs): Face {
         footer: <SafeButton label="Close" cancelRef={cancelRef} />,
       };
     case "refused":
-      return refusedFace(result, args, false);
+      return refusedFace(tally, args, false);
     case "none":
       return {
         title: "Delete component",
@@ -487,13 +523,7 @@ function checkedFaceOf(result: ComponentDeleteResult, args: FaceArgs): Face {
         body: (
           <div className="space-y-3">
             {list}
-            <PlanNotes result={result} />
-            {plan !== undefined && documentCount(plan.convert) === 0 ? (
-              <DocumentLinks
-                list={plan.drafts}
-                label="Documents with unpublished changes"
-              />
-            ) : null}
+            <PlanNotes tally={tally} />
           </div>
         ),
         announce: `It is used in ${documents(count)}.`,
@@ -526,12 +556,12 @@ function someoneElseFace(message: string, { cancelRef }: FaceArgs): Face {
  * step of a delete the author confirmed.
  */
 function refusedFace(
-  result: ComponentDeleteResult,
+  tally: DeleteTally,
   { name, cancelRef, onCheck }: FaceArgs,
   afterStart: boolean
 ): Face {
-  const layouts = result.layouts;
-  const left = result.left ?? [];
+  const layouts = tally.layouts;
+  const left = tally.left;
   const layoutCount = documentCount(layouts);
   return {
     title: "This component can't be deleted yet",
@@ -604,7 +634,7 @@ function faceOf(view: View, args: FaceArgs): Face {
         footer: <SafeButton label="Cancel" cancelRef={cancelRef} />,
       };
     case "checked":
-      return checkedFaceOf(view.result, args);
+      return checkedFaceOf(view.result, view.tally, args);
     case "deleting": {
       const { finished, total } = progressOf(view.result?.progress);
       return {
@@ -627,7 +657,7 @@ function faceOf(view: View, args: FaceArgs): Face {
     }
     case "stopped":
       if (view.result.status === "refused") {
-        return refusedFace(view.result, args, true);
+        return refusedFace(addSlice(EMPTY_TALLY, view.result), args, true);
       }
       return {
         title: "Some copies couldn't be turned into plain blocks",
@@ -675,7 +705,14 @@ function faceOf(view: View, args: FaceArgs): Face {
       return {
         title: "Delete component",
         sentence: "You don't have permission to delete this component.",
-        body: null,
+        // Refused part way: what an earlier step converted stays converted,
+        // showing what it showed, and the component is kept.
+        body:
+          view.converted > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {`${documents(view.converted)} ${view.converted === 1 ? "was" : "were"} turned into plain blocks before that. The component was kept.`}
+            </p>
+          ) : null,
         announce: "You don't have permission to delete this component.",
         footer: <SafeButton label="Close" cancelRef={cancelRef} />,
       };
@@ -711,13 +748,15 @@ function faceOf(view: View, args: FaceArgs): Face {
 /** The view a call that is not an answer leaves the dialog in. */
 function viewOfRefusal(
   call: Exclude<DeleteCall, { kind: "answer" }>,
-  retry: "check" | "delete"
+  retry: "check" | "delete",
+  /** What the delete had converted when it was refused. */
+  converted = 0
 ): View {
   switch (call.kind) {
     case "conflict":
       return { kind: "someone-else", message: call.message };
     case "forbidden":
-      return { kind: "forbidden" };
+      return { kind: "forbidden", converted };
     case "failed":
       return { kind: "failed", message: call.message, retry };
   }
@@ -745,18 +784,38 @@ export function DeleteComponentDialog({
     turn.current += 1;
     const mine = turn.current;
     setView({ kind: "checking" });
+    // Each slice answers only its own documents: they are added up, and the
+    // next slice asked for from where this one stopped, until the plan is
+    // whole or something already read decides the face.
+    let tally = EMPTY_TALLY;
+    let after: string | null = null;
     for (;;) {
-      const answer = await checkComponentDelete(componentId);
+      const answer = await checkComponentDelete(componentId, after);
       if (turn.current !== mine) return;
       if (answer.kind !== "answer") {
         setView(viewOfRefusal(answer, "check"));
         return;
       }
-      setView({ kind: "checked", result: answer.result });
-      // A plan still being counted is asked again; nothing is offered on it.
-      if (checkedFace(answer.result) !== "counting") return;
-      await wait(RECOUNT_MS);
-      if (turn.current !== mine) return;
+      const result = answer.result;
+      // The author's own delete already removed it.
+      if (result.run?.yours === true && result.run.step === "deleted") {
+        setView({ kind: "deleted" });
+        return;
+      }
+      tally = addSlice(tally, result);
+      setView({ kind: "checked", result, tally });
+      if (checkedFace(result, tally) !== "counting") return;
+      const next = result.plan?.next ?? null;
+      if (next === null) {
+        // Not whole, with nowhere to read on: doubt is not "unused".
+        setView({
+          kind: "failed",
+          message: "Not every document could be checked. Try again.",
+          retry: "check",
+        });
+        return;
+      }
+      after = next;
     }
   }, [componentId]);
 
@@ -764,17 +823,21 @@ export function DeleteComponentDialog({
     turn.current += 1;
     const mine = turn.current;
     setView({ kind: "deleting", result: null });
+    let last: ComponentDeleteResult | null = null;
     for (;;) {
       const answer = await stepComponentDelete(componentId);
       // Closed or moved on: the delete pauses here, and resumes when the
       // dialog is opened again.
       if (turn.current !== mine) return;
       if (answer.kind !== "answer") {
-        setView(viewOfRefusal(answer, "delete"));
+        setView(
+          viewOfRefusal(answer, "delete", last?.progress?.converted ?? 0)
+        );
         return;
       }
       const result = answer.result;
       if (underWay(result)) {
+        last = result;
         setView({ kind: "deleting", result });
         await wait(STEP_GAP_MS);
         if (turn.current !== mine) return;

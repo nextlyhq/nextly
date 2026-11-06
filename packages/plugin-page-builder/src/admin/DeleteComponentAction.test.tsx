@@ -34,6 +34,8 @@ const NOTHING_USES_IT: ComponentDeleteResult = {
   mayDelete: true,
   run: null,
   plan: {
+    complete: true,
+    next: null,
     convert: { named: [], unreadable: 0, more: 0 },
     drafts: { named: [], unreadable: 0, more: 0 },
     mayBeRefused: 0,

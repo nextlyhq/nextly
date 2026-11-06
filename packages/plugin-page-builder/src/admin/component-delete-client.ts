@@ -19,9 +19,9 @@ import { isApiError, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import {
   COMPONENT_DELETE_ROUTE_PATH,
   type ComponentDeleteResult,
-  type DeletePlan,
   type DeleteProgress,
   type DocumentList,
+  type LeftDocument,
   type NamedDocument,
 } from "../component-delete/contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -57,19 +57,19 @@ const UNEXPLAINED = "The component could not be deleted. Try again.";
 /** Said when the dry run could not be read. */
 export const UNCHECKED = "Where the component is used could not be checked.";
 
-/** One call: the dry run (`dryRun`) or one step of the delete. */
+/** One call: a slice of the dry run, or one step of the delete. */
 async function call(
   componentId: string,
-  dryRun: boolean,
+  body: object,
   unexplained: string
 ): Promise<DeleteCall> {
   try {
     const answer = await writePluginRoute<Envelope>({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
       path: pathOf(componentId),
-      // `{}` starts or steps the delete; the route refuses any other key, so
-      // nothing but `dryRun` is ever sent.
-      body: dryRun ? { dryRun: true } : {},
+      // `{}` starts or steps the delete; the route refuses any key but
+      // `dryRun` and `after`, so a typo can never start one.
+      body,
     });
     if (answer?.item === undefined) {
       return { kind: "failed", message: unexplained };
@@ -86,14 +86,24 @@ async function call(
   }
 }
 
-/** What deleting would do, changing nothing. */
-export function checkComponentDelete(componentId: string): Promise<DeleteCall> {
-  return call(componentId, true, UNCHECKED);
+/**
+ * One slice of what deleting would do, changing nothing: the first slice, or
+ * the one starting at `after`, the cursor the last slice answered.
+ */
+export function checkComponentDelete(
+  componentId: string,
+  after: string | null
+): Promise<DeleteCall> {
+  return call(
+    componentId,
+    after === null ? { dryRun: true } : { dryRun: true, after },
+    UNCHECKED
+  );
 }
 
 /** Start the caller's delete, or carry it on by one step. */
 export function stepComponentDelete(componentId: string): Promise<DeleteCall> {
-  return call(componentId, false, UNEXPLAINED);
+  return call(componentId, {}, UNEXPLAINED);
 }
 
 /** Whether an answer says the delete is still under way. */
@@ -102,15 +112,78 @@ export function underWay(result: ComponentDeleteResult): boolean {
 }
 
 /**
- * Whether the dry run's plan is whole. A plan still being counted, on a site
- * too large to count in one call, says `complete: false`; a plan that says
- * nothing of it is whole. Read here once, so no face takes a part-counted
- * plan for "nothing uses it".
+ * The dry run's slices, added up. Each slice answers only its own documents,
+ * so the dialog's account of what the delete would do is the sum of the
+ * slices read so far, and whole once a slice says it reached the last
+ * document.
  */
-export function planComplete(plan: DeletePlan | undefined): boolean {
-  if (plan === undefined) return true;
-  const said = (plan as DeletePlan & { readonly complete?: unknown }).complete;
-  return said !== false;
+export interface DeleteTally {
+  readonly convert: DocumentList;
+  readonly drafts: DocumentList;
+  readonly mayBeRefused: number;
+  readonly layouts: DocumentList;
+  readonly left: readonly LeftDocument[];
+  /** Whether every document has been read. */
+  readonly complete: boolean;
+}
+
+const NO_DOCUMENTS: DocumentList = { named: [], unreadable: 0, more: 0 };
+
+/** Nothing read yet. */
+export const EMPTY_TALLY: DeleteTally = {
+  convert: NO_DOCUMENTS,
+  drafts: NO_DOCUMENTS,
+  mayBeRefused: 0,
+  layouts: NO_DOCUMENTS,
+  left: [],
+  complete: false,
+};
+
+/** A named document's identity, so one counted twice is listed once. */
+function keyOf(document: NamedDocument): string {
+  return JSON.stringify([document.kind, document.slug, document.id ?? null]);
+}
+
+/** Two slices' lists as one. */
+function joined(a: DocumentList, b: DocumentList | undefined): DocumentList {
+  if (b === undefined) return a;
+  const seen = new Set(a.named.map(keyOf));
+  return {
+    named: [
+      ...a.named,
+      ...b.named.filter(document => !seen.has(keyOf(document))),
+    ],
+    unreadable: a.unreadable + b.unreadable,
+    more: a.more + b.more,
+  };
+}
+
+/** The tally with one more slice's answer added. */
+export function addSlice(
+  tally: DeleteTally,
+  result: ComponentDeleteResult
+): DeleteTally {
+  const plan = result.plan;
+  return {
+    convert: joined(tally.convert, plan?.convert),
+    drafts: joined(tally.drafts, plan?.drafts),
+    mayBeRefused: tally.mayBeRefused + (plan?.mayBeRefused ?? 0),
+    layouts: joined(tally.layouts, result.layouts),
+    left: [...tally.left, ...(result.left ?? [])],
+    // A dry run that answers no plan has nothing more to read.
+    complete: plan === undefined || plan.complete,
+  };
+}
+
+/** Whether what was read so far stops the delete: it cannot be undone by more. */
+export function tallyRefuses(tally: DeleteTally): boolean {
+  return tally.left.length > 0 || documentCount(tally.layouts) > 0;
+}
+
+/** How many documents use it, as read so far. */
+export function tallyUses(tally: DeleteTally): number {
+  const convert = documentCount(tally.convert);
+  return convert > 0 ? convert : documentCount(tally.drafts);
 }
 
 /** How many documents a list stands for: named, unreadable and beyond it. */
