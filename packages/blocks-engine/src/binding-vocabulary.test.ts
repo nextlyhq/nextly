@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { fieldFitsProp, type BindingFieldShape } from "./binding-rules";
+import {
+  bindablePropKind,
+  fieldFitsProp,
+  type BindingFieldShape,
+} from "./binding-rules";
 import {
   bindingKindOf,
   canBindFieldToProp,
@@ -51,6 +55,8 @@ describe("which fields a picker offers for a prop", () => {
     expect(canBindFieldToProp({ type: "upload" }, { type: "icon" })).toBe(
       false
     );
+    // Its own value and its fallback are judged as text: an id is a string.
+    expect(bindablePropKind({ type: "icon" })).toBe("text");
   });
 
   it("offers an email prop text only", () => {
