@@ -28,6 +28,7 @@ import {
   optionLabel,
   richTextToPlainText,
   type BlockDocument,
+  type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
@@ -180,6 +181,10 @@ export interface LoopCollection {
     readonly type: string;
     readonly hasMany?: boolean;
     readonly relationTo?: string | readonly string[];
+    /** A time of day, which no list filters or sorts by. */
+    readonly timeOnly?: boolean;
+    /** The primitive a plugin's field type is stored as, which gives its kind. */
+    readonly storage?: FieldStoragePrimitive;
   }[];
 }
 
