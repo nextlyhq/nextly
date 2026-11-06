@@ -234,8 +234,9 @@ The status is `428`. Creates, deletes and autosave send neither.
 
 A save in one language is judged on that language and on the shared fields, never on another
 language's translations. A version read in every language is accepted for a save of one of them.
-A `_rev` that isn't one a read returned, or that names no version of the language you save, is a
-`400 VALIDATION_ERROR`.
+A `_rev` that isn't in the form a read returns, or that names no version of the language you save,
+is a `400 VALIDATION_ERROR`. One in that form but above the document's current version is answered
+as a conflict, `409 STALE_VERSION`.
 
 ### When the document changed
 
