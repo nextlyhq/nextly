@@ -55,8 +55,10 @@ import { propLabel, type EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
 import { loadLucideIcons } from "./lucide-icon-source";
 import type { OpenPassages } from "./open-passages";
+import { readRecentIcons, rememberIcon } from "./recent-icons";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
+import type { PreferenceStore } from "./shell-state";
 import { useStoredDraft } from "./stored-draft";
 import { fitsSideBySide, type SideBySideRoom } from "./style-numeric";
 import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
@@ -248,6 +250,12 @@ export interface ContentServices {
    * finishes it before the document is stored.
    */
   readonly openPassages?: OpenPassages;
+  /**
+   * Where the icons this author chose last are kept, for the Icon control's
+   * Recent row: the host's, so it is one per signed-in author. Absent, the
+   * picker offers no Recent row.
+   */
+  readonly recentIcons?: PreferenceStore;
 }
 
 /**
@@ -1422,7 +1430,8 @@ export function UnsupportedField({
 
 /**
  * An `icon` prop: the chosen icon, drawn with its name and set, as one button
- * that opens a search-first picker, and a clear button. The set loads when
+ * that opens a search-first picker, and a clear button. The picker offers the
+ * author's recent icons first, from the host's store. The set loads when
  * the control first draws an icon or opens its picker. A chosen icon commits
  * at once, as one undo step; clearing removes the prop. An id the set no
  * longer draws is shown with a warning and kept until another is chosen.
@@ -1433,8 +1442,13 @@ function IconControl({
   disabled,
   onCommit,
   label,
+  services,
 }: ContentControlProps): React.JSX.Element {
   const name = label ?? propLabel(prop.name, prop.schema);
+  const store = services?.recentIcons;
+  // Read once per control and kept up to date by its own choices; another
+  // control's choice reaches this one when it is next drawn.
+  const [recent, setRecent] = React.useState(() => readRecentIcons(store));
   return (
     <div className="nx-inspector__field" data-content-control="icon">
       <Label htmlFor={id}>{name}</Label>
@@ -1448,7 +1462,11 @@ function IconControl({
         }
         disabled={disabled}
         loadIcons={loadLucideIcons}
-        onChange={next => onCommit(prop.name, next ?? undefined)}
+        {...(store === undefined ? {} : { recentIcons: recent })}
+        onChange={next => {
+          if (next !== null) setRecent(rememberIcon(store, recent, next));
+          onCommit(prop.name, next ?? undefined);
+        }}
       />
     </div>
   );

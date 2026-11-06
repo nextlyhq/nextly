@@ -9,6 +9,8 @@
  * - Clearing removes the prop.
  * - An id the set does not draw is shown with a warning and not rewritten.
  * - A lock holds it.
+ * - The author's recent icons, from the host's store, lead the picker, and a
+ *   choice is remembered there, newest first.
  */
 import {
   cleanup,
@@ -27,6 +29,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -95,7 +98,10 @@ afterEach(() => {
 
 function mount(
   props: Record<string, unknown>,
-  { locked }: { locked?: boolean } = {}
+  {
+    locked,
+    contentServices,
+  }: { locked?: boolean; contentServices?: ContentServices } = {}
 ) {
   registerBlocks(
     [
@@ -139,7 +145,12 @@ function mount(
     undoDepth: 0,
     composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
-  render(<InspectorPanel editor={editor} />);
+  render(
+    <InspectorPanel
+      editor={editor}
+      {...(contentServices === undefined ? {} : { contentServices })}
+    />
+  );
   return editor;
 }
 
@@ -193,5 +204,33 @@ describe("an icon prop in the Content tab", () => {
     const button = await screen.findByRole("button", { name: "Icon: Star" });
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(screen.queryByRole("button", { name: "Clear icon" })).toBeNull();
+  });
+
+  it("offers the author's recent icons first, and remembers a choice newest first", async () => {
+    let kept: string | null = JSON.stringify(["lucide:truck"]);
+    const store = {
+      read: () => kept,
+      write: (value: string) => {
+        kept = value;
+      },
+    };
+    mount({}, { contentServices: { recentIcons: store } });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Icon: none chosen" })
+    );
+    expect(
+      await screen.findByRole("option", { name: "Truck, recent" })
+    ).toBeDefined();
+    fireEvent.click(await screen.findByRole("option", { name: "Star" }));
+    expect(JSON.parse(kept ?? "null")).toEqual(["lucide:star", "lucide:truck"]);
+  });
+
+  it("offers no Recent row where the host keeps no store", async () => {
+    mount({});
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Icon: none chosen" })
+    );
+    await screen.findByRole("option", { name: "Star" });
+    expect(screen.queryByText("Recent")).toBeNull();
   });
 });
