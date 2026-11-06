@@ -100,6 +100,18 @@ describe("the canvas's binding sources", () => {
         )
       ),
       { ...valid, lists: ["posts; drop"] },
+      // An empty projection would read the whole entry, every field with it.
+      {
+        ...valid,
+        demand: { ...valid.demand, entry: { fields: [], follows: {} } },
+      },
+      {
+        ...valid,
+        demand: {
+          ...valid.demand,
+          entry: { fields: ["title"], follows: { author: [] } },
+        },
+      },
     ]) {
       await expect(
         canvasBindingsRoute().handler(post(body), ctx)

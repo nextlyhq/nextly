@@ -57,11 +57,16 @@ const SLUG = z
 const MOST = 200;
 
 /** What one source is read for, as the canvas sends it. */
+/*
+ * A source and each relation it follows name at least one field: the canvas
+ * never asks for none, and an empty projection would read the whole entry,
+ * every large field with it.
+ */
 const SOURCE_DEMAND = z
   .object({
-    fields: z.array(NAME).max(MOST),
+    fields: z.array(NAME).min(1).max(MOST),
     follows: z
-      .record(NAME, z.array(NAME).max(MOST))
+      .record(NAME, z.array(NAME).min(1).max(MOST))
       .refine(follows => Object.keys(follows).length <= MOST, {
         message: `At most ${String(MOST)} relations.`,
       }),
