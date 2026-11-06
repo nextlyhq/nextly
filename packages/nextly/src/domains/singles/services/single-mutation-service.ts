@@ -2226,6 +2226,14 @@ export class SingleMutationService extends BaseService {
       if (accessDenied) {
         return accessDenied;
       }
+      // A conditional write naming a key no update stores is refused here: its
+      // access has been judged, so a caller who may not update is refused
+      // alike whatever it names, and no hook has run.
+      storedFieldRead.refuseUnstoredKeys(
+        options.context,
+        { kind: "single", slug },
+        { tableName: singleMeta.tableName, fields: singleMeta.fields }
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The
@@ -2480,29 +2488,38 @@ export class SingleMutationService extends BaseService {
           locale,
         });
       const storedLocales = this.localization?.locales.map(l => l.code) ?? [];
-      await keepDeniedAtStoredOnUpdate({
-        data: currentData,
-        stored: await storedFieldGroupsIn(options.locale),
-        storedIn: {
-          locales: storedLocales,
-          read: locale => storedFieldGroupsIn(locale),
-        },
-        fields: fieldConfigs,
-        source: this.fieldGroupDataService,
-        access: singleWriteAccess,
-        ownRules: document =>
-          applyFieldWriteAccess({
-            kind: "single",
-            slug,
-            data: document,
-            operation: "update",
-            user: options.user,
-            authenticatedScope: options.authenticatedScope,
-            overrideAccess: options.overrideAccess,
-            id: documentId,
-            grants: writeGrants,
-          }),
-      });
+      const storedForAccess = await storedFieldGroupsIn(options.locale);
+      // For a conditional write made whole, what this pass takes out or keeps
+      // is recorded, and refuses it once every hook has run.
+      await storedFieldRead.fieldAccessPass(
+        options.context,
+        { kind: "single", slug },
+        currentData,
+        () =>
+          keepDeniedAtStoredOnUpdate({
+            data: currentData,
+            stored: storedForAccess,
+            storedIn: {
+              locales: storedLocales,
+              read: locale => storedFieldGroupsIn(locale),
+            },
+            fields: fieldConfigs,
+            source: this.fieldGroupDataService,
+            access: singleWriteAccess,
+            ownRules: document =>
+              applyFieldWriteAccess({
+                kind: "single",
+                slug,
+                data: document,
+                operation: "update",
+                user: options.user,
+                authenticatedScope: options.authenticatedScope,
+                overrideAccess: options.overrideAccess,
+                id: documentId,
+                grants: writeGrants,
+              }),
+          })
+      );
       await runFieldHooks({
         kind: "single",
         slug,
@@ -2638,6 +2655,13 @@ export class SingleMutationService extends BaseService {
         operation: "update",
         user: options.user,
       });
+      // Every hook has run: a conditional write made whole is judged here, on
+      // what is about to be persisted, before it is normalized and written.
+      await storedFieldRead.refuseUnlessWhole(
+        options.context,
+        { kind: "single", slug },
+        currentData
+      );
 
       // 6.35. Authorize a change to the single's published state, judged on the
       // post-hook data. Publishing needs `publish-<slug>` and unpublishing

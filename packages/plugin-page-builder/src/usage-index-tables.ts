@@ -31,7 +31,9 @@ import {
   classUsageRows,
   componentUsageRows,
   SCHEMA_PREFIX,
+  tokenUsageRows,
 } from "./schema/tables";
+import { tokenUsageIndex } from "./token-usage";
 import type { UsageRowReader } from "./usage-count";
 import type {
   GroupedUsageReader,
@@ -152,10 +154,18 @@ const COMPONENT_TABLE: UsageTable = usageTable(
   })
 );
 
+/** The variable index's table. */
+const TOKEN_TABLE: UsageTable = usageTable(
+  tokenUsageRows,
+  db => db.table(tokenUsageRows),
+  data => ({ ...subjectOf(data), tokenId: text(data, "tokenId") })
+);
+
 /** Which table holds each index's rows. */
 const TABLES: ReadonlyMap<unknown, UsageTable> = new Map<unknown, UsageTable>([
   [classUsageIndex, CLASS_TABLE],
   [componentUsageIndex, COMPONENT_TABLE],
+  [tokenUsageIndex, TOKEN_TABLE],
 ]);
 
 /**
@@ -293,17 +303,19 @@ export function fencedUsageTableStore(
   };
 }
 
-/** Both usage indexes' stores, as a save's maintenance writes them. */
+/** Every usage index's store, as a save's maintenance writes them. */
 export interface UsageIndexStores {
   classIndex: ClassUsageIndexStore;
   componentIndex: ClassUsageIndexStore;
+  tokenIndex: ClassUsageIndexStore;
 }
 
-/** Both usage indexes' stores, over their tables in `db`. */
+/** Every usage index's store, over its table in `db`. */
 export function usageIndexStores(db: UsageDb): UsageIndexStores {
   return {
     classIndex: usageTableStore(db, usageTableOf(classUsageIndex)),
     componentIndex: usageTableStore(db, usageTableOf(componentUsageIndex)),
+    tokenIndex: usageTableStore(db, usageTableOf(tokenUsageIndex)),
   };
 }
 

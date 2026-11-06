@@ -1,6 +1,6 @@
 /**
- * Which stored documents still reference some shared styles, read from the
- * documents themselves rather than from the usage index.
+ * Which stored documents still reference some shared styles or variables,
+ * read from the documents themselves rather than from a usage index.
  *
  * The index is the fast answer and it can be wrong low: two saves of one
  * document that interleave can each remove the usage row the other wrote
@@ -16,23 +16,27 @@
  * each collection a page of 100 rows at a time, as the system: this is a
  * safety check, not an answer to the caller, so a document the caller may not
  * read still holds a style. Each blocks field's stored document is walked by
- * `classUsageOf`, the walk the index records from, so the two cannot disagree
- * about what a reference is.
+ * the extractor the caller names, which is the walk its index records from
+ * (`classUsageOf` for shared styles, `tokenUsageOf` for variables), so the
+ * rescan and the index cannot disagree about what a reference is.
  *
- * ## What it does not
+ * ## Every stored form
  *
- * A collection row is read as stored, in the default language, without its
- * pending working draft: a list read overlays neither, and reading each
- * document again by id per language and per draft would cost a query per
- * document per form. Those forms stay covered by the usage index, which
- * removal asks first; this read guards the stored rows the index can lose.
- * A Single is one document, so both of its forms are read.
+ * A list read gives a collection row as stored in the default language,
+ * without its pending working draft. A removal is the one act that turns a
+ * use the rescan missed into lost styling, so each listed row is read again
+ * in every other form it may be stored in: each of the site's languages, and
+ * the working draft in each, by the by-id read the usage index is maintained
+ * through (`class-usage-runtime`), so the two agree on what each form is. A
+ * Single is read in the same forms. A form that cannot be read refuses the
+ * removal rather than being taken for one using nothing.
+ *
+ * That costs a read per form of each document, which only a removal pays.
  *
  * @module shared-style-rescan
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-import { classUsageOf } from "./class-usage";
 import { walkPages } from "./paged-walk";
 import type { BuilderDocumentType } from "./site-style-route";
 import { readStoredJson } from "./stored-json";
@@ -47,6 +51,12 @@ export const RESCAN_PAGE_SIZE = 100;
  * collection.
  */
 const RESCAN_PAGES_MAX = 10_000;
+
+/**
+ * The references one stored blocks value holds, by the walk an index records
+ * from. Handed in, so one rescan serves every index.
+ */
+export type ReferencesOf = (stored: unknown) => readonly string[];
 
 /** One stored document that still references a style. */
 export interface StoredUse {
@@ -73,7 +83,16 @@ export interface StoredDocuments {
     type: BuilderDocumentType,
     after: string | undefined
   ): Promise<{ items: readonly unknown[]; hasNext: boolean }>;
-  /** A Single's stored forms: its document, and its pending draft if any. */
+  /**
+   * A row's stored forms beyond the listed one: its document in each of the
+   * site's languages, and its pending working draft in each. A form the row
+   * does not have is left out; one that cannot be read throws.
+   */
+  rowForms(type: BuilderDocumentType, id: string): Promise<readonly unknown[]>;
+  /**
+   * A Single's stored forms: its document and its pending draft, in each of
+   * the site's languages.
+   */
   singleForms(type: BuilderDocumentType): Promise<readonly unknown[]>;
 }
 
@@ -97,10 +116,11 @@ function valueAt(row: unknown, path: string): unknown {
 export function referencesAny(
   row: unknown,
   paths: readonly string[],
-  ids: ReadonlySet<string>
+  ids: ReadonlySet<string>,
+  referencesOf: ReferencesOf
 ): boolean {
   return paths.some(path =>
-    classUsageOf(valueAt(row, path)).ids.some(id => ids.has(id))
+    referencesOf(valueAt(row, path)).some(id => ids.has(id))
   );
 }
 
@@ -113,6 +133,34 @@ function rowId(row: unknown): string | undefined {
 }
 
 /**
+ * Whether any other stored form of a listed row references one of `ids`.
+ * A form that cannot be read is refused, so the removal fails closed rather
+ * than passing over a use it could not see.
+ */
+async function otherFormsReference(
+  type: BuilderDocumentType,
+  id: string,
+  ids: ReadonlySet<string>,
+  documents: StoredDocuments,
+  referencesOf: ReferencesOf
+): Promise<boolean> {
+  let forms: readonly unknown[];
+  try {
+    forms = await documents.rowForms(type, id);
+  } catch (error) {
+    throw NextlyError.internal({
+      ...(error instanceof Error ? { cause: error } : {}),
+      logContext: {
+        reason: "shared-style-rescan-form-unreadable",
+        collection: type.slug,
+        id,
+      },
+    });
+  }
+  return forms.some(form => referencesAny(form, type.paths, ids, referencesOf));
+}
+
+/**
  * The rows of one collection that reference any of `ids`.
  *
  * Paged by id rather than by offset: a document deleted behind an offset
@@ -122,7 +170,8 @@ function rowId(row: unknown): string | undefined {
 async function collectionUses(
   type: BuilderDocumentType,
   ids: ReadonlySet<string>,
-  documents: StoredDocuments
+  documents: StoredDocuments,
+  referencesOf: ReferencesOf
 ): Promise<StoredUse[]> {
   const uses: StoredUse[] = [];
   let after: string | undefined;
@@ -131,7 +180,7 @@ async function collectionUses(
       const page = await documents.rowsAfter(type, after);
       return { items: [...page.items], meta: { hasNext: page.hasNext } };
     },
-    onPage: items => {
+    onPage: async items => {
       for (const row of items) {
         const id = rowId(row);
         // A row with no id cannot move the cursor or be named, and skipping
@@ -145,7 +194,10 @@ async function collectionUses(
             },
           });
         }
-        if (referencesAny(row, type.paths, ids)) {
+        if (
+          referencesAny(row, type.paths, ids, referencesOf) ||
+          (await otherFormsReference(type, id, ids, documents, referencesOf))
+        ) {
           uses.push({ kind: "collection", slug: type.slug, id });
         }
         after = id;
@@ -163,17 +215,20 @@ async function collectionUses(
  */
 export async function storedUsesOf(
   ids: readonly string[],
-  documents: StoredDocuments
+  documents: StoredDocuments,
+  referencesOf: ReferencesOf
 ): Promise<StoredUse[]> {
   if (ids.length === 0) return [];
   const asked = new Set(ids);
   const uses: StoredUse[] = [];
   for (const type of await documents.collections()) {
-    uses.push(...(await collectionUses(type, asked, documents)));
+    uses.push(...(await collectionUses(type, asked, documents, referencesOf)));
   }
   for (const type of await documents.singles()) {
     const forms = await documents.singleForms(type);
-    if (forms.some(form => referencesAny(form, type.paths, asked))) {
+    if (
+      forms.some(form => referencesAny(form, type.paths, asked, referencesOf))
+    ) {
       uses.push({
         kind: "single",
         slug: type.slug,

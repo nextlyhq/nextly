@@ -232,10 +232,11 @@ function permissionsAsked(
     owner && action && "run" in action
       ? runRoute(owner, action.run)
       : undefined;
-  const routes =
-    route && route.public !== true
-      ? resolvedPermission(route.requiredPermission, owner)
-      : undefined;
+  // Boot refuses an action naming a public route, so every route an action
+  // runs has a caller and may have a gate.
+  const routes = route
+    ? resolvedPermission(route.requiredPermission, owner)
+    : undefined;
   return [own, routes].filter((p): p is string => p !== undefined);
 }
 
