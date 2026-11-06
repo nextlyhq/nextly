@@ -38,9 +38,22 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
+
+/** A Single holding a blocks field. */
+const HOMEPAGE = "homepage";
+
+/** The Singles service, as a Single's save reaches it. */
+interface Singles {
+  update(
+    slug: string,
+    data: Record<string, unknown>,
+    options: { overrideAccess?: boolean }
+  ): Promise<{ success: boolean }>;
+}
 
 const text = (id: string): Node => ({
   id,
@@ -198,6 +211,12 @@ describe.each(getConfiguredTestDialects())(
         collections: [
           { slug: "notes", fields: [textField({ name: "title" })] } as never,
         ],
+        singles: [
+          {
+            slug: HOMEPAGE,
+            fields: [{ name: "content", type: BLOCKS_TYPE }],
+          } as never,
+        ],
       });
       return current;
     }
@@ -246,9 +265,11 @@ describe.each(getConfiguredTestDialects())(
       second: () => Promise<unknown>
     ) {
       gate.holdId = holdId;
-      gate.marker = marker;
       const one = first();
       await gate.held;
+      // Only now: the first write's own hooks have run, so only the second
+      // write's can match.
+      gate.marker = marker;
       const two = second();
       await Promise.race([
         gate.validated,
@@ -316,6 +337,34 @@ describe.each(getConfiguredTestDialects())(
       expect(
         codesOf(two.status === "rejected" ? two.reason : undefined)
       ).toEqual(["depth-exceeded"]);
+    });
+
+    it("refuses a Single placing a component that a concurrent save makes too deep", async () => {
+      const t = await boot();
+      const deep = await component(t, "deep", [box("d1", [text("d2")])]);
+      const singles = t.getService("singleEntryService") as unknown as Singles;
+
+      const [one, two] = await interleaved(
+        deep,
+        () => setContent(t, deep, [box("d1", [box("d3", [text("d2")])])]),
+        "h2-placing-deep",
+        async () => {
+          const saved = await singles.update(
+            HOMEPAGE,
+            {
+              content: document("page", [
+                box("h1", [box("h2-placing-deep", [placing("i1", deep)])]),
+              ]),
+            },
+            { overrideAccess: true }
+          );
+          if (!saved.success) throw new Error(JSON.stringify(saved));
+          return saved;
+        }
+      );
+
+      expect(one.status).toBe("fulfilled");
+      expect(two.status).toBe("rejected");
     });
 
     it("refuses the second half of a loop saved in a transaction its caller opened", async () => {

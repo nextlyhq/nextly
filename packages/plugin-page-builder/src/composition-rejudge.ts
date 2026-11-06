@@ -19,9 +19,10 @@
  *
  * The lock is taken only by a write whose blocks value or status changed, so a
  * write to a collection holding no blocks field, or one leaving its blocks
- * alone, never waits on it. Singles are left to their validation: their
- * transactions read at MySQL's default isolation, where a read made under the
- * lock could answer from before it.
+ * alone, never waits on it. Collections and Singles alike.
+ *
+ * Blocks values inside a repeater's rows or a field-group instance are not
+ * judged here: they are left to validation.
  *
  * @module composition-rejudge
  */
@@ -72,7 +73,6 @@ async function rejudgedIssues(
   dialect: PluginContext["dialect"]
 ): Promise<{ path: string; code: string; message: string }[]> {
   if (write.operation === "delete" || write.data === undefined) return [];
-  if (write.collection.startsWith(SINGLE_PREFIX)) return [];
   const data = write.data;
   const original = write.originalData;
   const statusChanged = !sameStoredValue(data.status, original?.status);
@@ -85,13 +85,21 @@ async function rejudgedIssues(
   );
   if (changed.length === 0) return [];
 
-  const fieldWrite: PluginFieldWrite = {
-    kind: "collection",
-    slug: write.collection,
-    id: write.id,
-    inTransaction: true,
-    readStored: target => write.readStored(BLOCKS_TYPE, target),
-  };
+  const single = write.collection.startsWith(SINGLE_PREFIX);
+  const fieldWrite: PluginFieldWrite = single
+    ? {
+        kind: "single",
+        slug: write.collection.slice(SINGLE_PREFIX.length),
+        inTransaction: true,
+        readStored: target => write.readStored(BLOCKS_TYPE, target),
+      }
+    : {
+        kind: "collection",
+        slug: write.collection,
+        id: write.id,
+        inTransaction: true,
+        readStored: target => write.readStored(BLOCKS_TYPE, target),
+      };
 
   await holdCompositionGraph(write.db, dialect);
   const judging: CompositionSetup = {
