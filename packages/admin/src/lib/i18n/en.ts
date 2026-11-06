@@ -35,4 +35,12 @@ export const en = {
   "nextly.status.noAccess.title.page": "You don't have access to this page",
   "nextly.status.noAccess.description":
     "Your account doesn't have permission to open it. If you need it, ask an admin.",
+  "nextly.pagination.label": "Pagination",
+  "nextly.pagination.first": "Go to first page",
+  "nextly.pagination.previous": "Go to previous page",
+  "nextly.pagination.next": "Go to next page",
+  "nextly.pagination.last": "Go to last page",
+  "nextly.pagination.page": "Go to page {page}",
+  "nextly.search.placeholder": "Search...",
+  "nextly.search.clear": "Clear search",
 } as const;
