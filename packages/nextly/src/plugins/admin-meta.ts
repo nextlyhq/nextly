@@ -19,7 +19,7 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import { contributedListFilters } from "./admin-filters";
-import type { FieldSurface } from "./contributions";
+import type { FieldSurface, PluginTranslations } from "./contributions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -27,6 +27,7 @@ import type {
   PluginDefinition,
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
+import { collectPluginTranslations } from "./plugin-translations";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
 import { settingsPermissionOf } from "./settings-permission";
@@ -82,6 +83,13 @@ export interface PluginAdminMeta {
    * JSON-only; see `PluginAdminContributions.clientConfig`.
    */
   clientConfig?: Record<string, unknown>;
+  /**
+   * The plugin's admin strings, by interface language and key, for an enabled
+   * plugin that declares any. Served on the signed-in metadata only, never on
+   * the public channel, so an anonymous visitor learns nothing of which
+   * plugins are installed from it.
+   */
+  translations?: PluginTranslations;
   /**
    * Declared HTTP routes, summarized as method + path. Handlers and
    * middleware are code and never serialize; the admin only names what the
@@ -346,6 +354,10 @@ export function buildPluginAdminMeta(
   // would publish ambiguous addresses from a list nothing had checked.
   validatePluginSlugs(plugins);
   validatePluginMenus(plugins);
+  // The same collector boot runs, so this cannot serve a catalog boot refused.
+  // Served regardless of enabled state, as `fieldTypes` and `clientConfig`
+  // are: a disabled plugin's field editors still mount and read their strings.
+  const translations = collectPluginTranslations(plugins);
 
   return plugins.map(plugin => {
     const slug = pluginAdminSlug(plugin.name);
@@ -407,6 +419,8 @@ export function buildPluginAdminMeta(
     // rejected. Called again here because the reduced value is what publishes.
     const validated = validatedClientConfig(plugin);
     if (validated !== undefined) meta.clientConfig = validated;
+    const declared = translations.get(plugin.name);
+    if (declared !== undefined) meta.translations = declared;
 
     // Behavioral admin UI only for enabled plugins.
     const admin = plugin.contributes?.admin;
