@@ -518,7 +518,7 @@ function personOf(
   if (!STORED_IDENTITY.safeParse(identity).success) {
     throw NextlyError.invalidInput({ message: IDENTITY_REFUSAL });
   }
-  return "user" in identity ? identity : undefined;
+  return identity.overrideAccess === true ? undefined : identity;
 }
 
 const IDENTITY_REFUSAL =
