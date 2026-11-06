@@ -335,13 +335,23 @@ export interface ReleaseRunTarget {
   entryId?: string;
 }
 
-const releaseRun = new AsyncLocalStorage<ReleaseRunTarget>();
+/** A release run's mark: the document it is for, and whether it was used. */
+interface ReleaseRunMark {
+  readonly target: ReleaseRunTarget;
+  taken: boolean;
+}
+
+const releaseRun = new AsyncLocalStorage<ReleaseRunMark>();
 
 /**
  * Run `operation` as a release run's write to `target`, which is not judged:
  * a scheduled run publishes what its release was given, whatever was saved
- * since. Pinned by the release runner only. A write to any other document
- * made meanwhile, by a hook say, is judged as usual.
+ * since. Pinned by the release runner only, around its one write.
+ *
+ * The mark exempts one write: the first to `target` that is judged, which is
+ * the runner's own, since its version is decided before any hook runs. A
+ * write a hook makes meanwhile, to `target` or to any other document, is
+ * judged as usual.
  *
  * @internal
  */
@@ -349,16 +359,25 @@ export function runAsReleaseRun<T>(
   target: ReleaseRunTarget,
   operation: () => T
 ): T {
-  return releaseRun.run(target, operation);
+  return releaseRun.run({ target, taken: false }, operation);
 }
 
-/** Whether a write to `target` is a release run's own, and so not judged. */
+/**
+ * Whether a write to `target` is a release run's own, and so not judged.
+ * Answers yes once per run: the answer takes the mark, so a later write to
+ * the same document within the run is judged.
+ */
 export function releaseRunExemptFor(target: ReleaseRunTarget): boolean {
-  const pinned = releaseRun.getStore();
-  if (pinned === undefined) return false;
+  const mark = releaseRun.getStore();
+  if (mark === undefined || mark.taken) return false;
+  const pinned = mark.target;
   if (pinned.scopeKind !== target.scopeKind) return false;
   if (pinned.scopeSlug !== target.scopeSlug) return false;
-  return target.scopeKind === "single" || pinned.entryId === target.entryId;
+  if (target.scopeKind !== "single" && pinned.entryId !== target.entryId) {
+    return false;
+  }
+  mark.taken = true;
+  return true;
 }
 
 /** Who made a row's last counted change, as the row records it: ids only. */

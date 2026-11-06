@@ -578,6 +578,34 @@ describe.each(getConfiguredTestDialects())(
       expect((await stored(t, NOTES, id)).title).toBe("first");
     });
 
+    // Access is a precondition: a caller who may not update here is refused
+    // for that, whatever the body says, before it is asked for a version.
+    it("refuses an update by query from a caller who may not update as forbidden, before asking for a version", async () => {
+      const t = await boot(dialect);
+      const reader = await userWhoMay(t, "user-vr-reader", "read", [NOTES]);
+      const writer = await userWhoMay(t, "user-vr-writer", "update", [NOTES]);
+      await grantTo(t, writer, "read", [NOTES]);
+      const id = await create(t, NOTES, { title: "a" });
+      const byQuery = (user: string, data: Doc) =>
+        codeOf(() =>
+          t.nextly.update({
+            collection: NOTES as never,
+            where: { id: { equals: id } },
+            data,
+            overrideAccess: false,
+            user: { id: user },
+          } as never)
+        );
+
+      expect(await byQuery(reader, { title: "b" })).toBe("FORBIDDEN");
+      expect(await byQuery(reader, { title: "b", _overwrite: true })).toBe(
+        "FORBIDDEN"
+      );
+      // One who may update is still asked for a version.
+      expect(await byQuery(writer, { title: "b" })).toBe("VERSION_REQUIRED");
+      expect((await stored(t, NOTES, id)).title).toBe("a");
+    });
+
     // A lock claim or renewal may name the version the editor holds, and is
     // decoded as an update's would be, but it writes no document: one that
     // names none is answered as before, while an update naming none is not.

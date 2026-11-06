@@ -6,6 +6,8 @@
  * not stop it. The run carries no version of its own, so it is applied as an
  * unjudged write, document-wide members (every language) included, and the
  * document's version still moves, since a run is a real change of its state.
+ * Only the run's own write is exempt: one a hook makes to the same document
+ * during the run is judged as any other.
  *
  * @module domains/releases/__tests__/release-run-not-judged.integration.test
  */
@@ -34,10 +36,15 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  afterHookedChange = undefined;
 });
+
+/** Run after each write to a hooked post, for a case that writes from a hook. */
+let afterHookedChange: (() => Promise<void>) | undefined;
 
 const POSTS = "rn_posts";
 const PAGES = "rn_pages";
+const HOOKED = "rn_hooked";
 const DAY = 24 * 60 * 60 * 1000;
 
 const OPEN = {
@@ -55,6 +62,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: POSTS,
         status: true,
         access: OPEN,
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: HOOKED,
+        status: true,
+        access: OPEN,
+        hooks: { afterChange: [() => afterHookedChange?.()] },
         fields: [text({ name: "title" })],
       }),
       defineCollection({
@@ -232,6 +246,54 @@ describe.each(getConfiguredTestDialects())(
         ["en", "published"],
         ["es", "published"],
       ]);
+    });
+
+    it("judges a write a hook makes to the same document during the run", async () => {
+      const t = await boot(dialect);
+      const id = await create(t, HOOKED, { title: "draft", status: "draft" });
+      const read = (await t.nextly.findByID({
+        collection: HOOKED as never,
+        id,
+        overrideAccess: true,
+      } as never)) as { _rev?: string };
+      const release = await scheduled(t, {
+        slug: HOOKED,
+        entryId: id,
+        action: "publish",
+      });
+      // Saved since the read: a write from that read is out of date.
+      await handlerOf(t).updateEntry(
+        { collectionName: HOOKED, entryId: id, overrideAccess: true },
+        { title: "saved since", _overwrite: true }
+      );
+      // During the run's own write, a hook writes the same document from the
+      // old read. Only the run's write is exempt; the hook's is judged.
+      let hookAnswer: unknown = "not run";
+      afterHookedChange = async () => {
+        afterHookedChange = undefined;
+        try {
+          await t.nextly.update({
+            collection: HOOKED as never,
+            id,
+            data: { title: "by the hook", _rev: read._rev },
+            overrideAccess: true,
+          } as never);
+          hookAnswer = "applied";
+        } catch (error) {
+          hookAnswer = error;
+        }
+      };
+
+      const ran = await t.nextly.releases.publishNow({ id: release });
+
+      expect(hookAnswer).toMatchObject({
+        code: "STALE_VERSION",
+        statusCode: 409,
+      });
+      expect(ran.state).toBe("published");
+      const after = await stored(t, HOOKED, id);
+      expect(after.status).toBe("published");
+      expect(after.title).toBe("saved since");
     });
   }
 );

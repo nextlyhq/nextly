@@ -190,6 +190,19 @@ describe("the release run's mark", () => {
     expect(releaseRunExemptFor(entry)).toBe(false);
   });
 
+  it("exempts one write: a later one to the same document in the run is judged", () => {
+    runAsReleaseRun(entry, () => {
+      // A write to another document first leaves the mark for the run's own.
+      expect(releaseRunExemptFor({ ...entry, entryId: "b" })).toBe(false);
+      expect(releaseRunExemptFor(entry)).toBe(true);
+      expect(releaseRunExemptFor(entry)).toBe(false);
+    });
+    // Each run has a mark of its own.
+    runAsReleaseRun(entry, () => {
+      expect(releaseRunExemptFor(entry)).toBe(true);
+    });
+  });
+
   it("matches a Single on its slug alone", () => {
     runAsReleaseRun({ scopeKind: "single", scopeSlug: "home" }, () => {
       expect(
