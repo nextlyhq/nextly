@@ -167,6 +167,23 @@
    */
   --nx-builder-warning: var(--nx-warning);
   --nx-builder-danger: var(--nx-destructive);
+  /*
+   * The badge on a block a visitor will not see filled: amber words on an
+   * amber-tinted plate of the editor's raised surface. The words are the
+   * warning mixed toward the admin's own text colour, darker in the light
+   * theme and lighter in the dark one, so they hold 4.5:1 on the plate in
+   * both.
+   */
+  --nx-builder-warning-text: color-mix(
+    in oklch,
+    var(--nx-warning) 55%,
+    var(--nx-foreground)
+  );
+  --nx-builder-warning-ground: color-mix(
+    in oklch,
+    var(--nx-warning) 12%,
+    var(--nx-builder-surface-raised)
+  );
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
@@ -9971,4 +9988,153 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   background: var(--nx-muted);
   color: var(--nx-muted-foreground);
   cursor: default;
+}
+
+/*
+ * The badges on blocks whose bound value a visitor will not see. The layer
+ * spans the canvas and is never a pointer target itself, as the empty
+ * containers' layer is not; each badge opts back in. Above the marks and the
+ * appenders, below the floating toolbar.
+ */
+.nx-visitor-unreadable {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/*
+ * Anchored by its right edge to the block's: placed at the box's right edge
+ * and drawn leftwards from it, so no width has to be guessed.
+ */
+/*
+ * The marked block's outline: a faint amber dash just outside its box, so the
+ * badge on its edge reads as this block's mark. Drawn only, never a target.
+ */
+.nx-visitor-unreadable__outline {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in oklch, var(--nx-warning) 70%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.nx-visitor-unreadable__badge {
+  position: absolute;
+  transform: translateX(-100%);
+  pointer-events: auto;
+}
+
+/* On the outline's top edge, a tab of it: its top corners round, its foot
+   sits on the dash. */
+.nx-visitor-unreadable__badge:not([data-inside])
+  .nx-visitor-unreadable__button {
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* Inside the outline's top corner, its outer corner square with the dash. */
+.nx-visitor-unreadable__badge[data-inside] .nx-visitor-unreadable__button {
+  border-start-end-radius: 0;
+}
+
+.nx-visitor-unreadable__button {
+  display: inline-flex;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 0.25rem;
+  block-size: 1.375rem;
+  padding: 0 0.4375rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-warning) 50%, var(--nx-builder-border));
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-visitor-unreadable__button > svg {
+  flex: none;
+}
+
+.nx-visitor-unreadable__button:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+/*
+ * The tooltip: under the badge, right-aligned with it, in the editor's own
+ * popover surface. Shown while the badge is hovered or focused, and put away
+ * by Escape until it is left.
+ */
+.nx-visitor-unreadable__tip {
+  position: absolute;
+  inset-block-start: calc(100% + 0.375rem);
+  inset-inline-end: 0;
+  display: none;
+  flex-direction: column;
+  gap: 0.25rem;
+  inline-size: max-content;
+  max-inline-size: 18rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md, 0.375rem);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
+.nx-visitor-unreadable__badge:hover .nx-visitor-unreadable__tip,
+.nx-visitor-unreadable__button:focus ~ .nx-visitor-unreadable__tip {
+  display: flex;
+}
+
+.nx-visitor-unreadable__badge[data-dismissed] .nx-visitor-unreadable__tip {
+  display: none;
+}
+
+/*
+ * The inspector's note under a prop whose bound value a visitor will not see:
+ * the badge's amber, on the same tinted plate, with the field and what the
+ * published page shows instead in words.
+ */
+.nx-inspector__visitor-unreadable {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  margin-block-start: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-warning) 45%, var(--nx-builder-border));
+  border-radius: var(--radius-md, 0.375rem);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.45;
+}
+
+.nx-inspector__visitor-unreadable > svg {
+  flex: none;
+  margin-block-start: 0.125rem;
+}
+
+.nx-inspector__visitor-unreadable-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nx-inspector__visitor-unreadable-lines > p {
+  margin: 0;
 }

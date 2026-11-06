@@ -14,6 +14,7 @@ import {
   registryNestingSource,
   getBlock,
   paginatedList,
+  visitorUnreadableBindings,
   type BlockDocument,
   type BreakpointId,
   type StyleState,
@@ -21,8 +22,10 @@ import {
   type RemotePattern,
   type BreakpointSet,
   type DefinitionsById,
+  type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
 import {
+  noPublicFields,
   prepareDocumentForRead,
   registeredBlocks,
   type PageStyleCascade,
@@ -270,6 +273,12 @@ type CanvasRender = {
   canvasRender: PageRenderInputs;
   classSummaryContext: StyleCompileContext;
 };
+
+/** Nothing marked: no sources read yet, or none of their shapes known. */
+const NONE_UNREADABLE: ReadonlyMap<
+  string,
+  readonly VisitorUnreadableBinding[]
+> = new Map();
 
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
@@ -938,12 +947,27 @@ export function useBoundCanvasRender(
   locale: string | undefined,
   /** Whether the document is a component's own, which has no entry. */
   component: boolean
-): PageRenderInputs {
+): {
+  readonly canvasRender: PageRenderInputs;
+  /**
+   * The bound props on the page a visitor will not see filled, by node id:
+   * the published page's own binding check, asked with the field shapes a
+   * visitor may read, which the canvas's sources carry.
+   */
+  readonly visitorUnreadable: ReadonlyMap<
+    string,
+    readonly VisitorUnreadableBinding[]
+  >;
+} {
   const { document, regions } = drawn;
+  const pageTree = useMemo(
+    () => drawnTree(document, canvasRender.definitions, canvasRender),
+    [document, canvasRender]
+  );
   const trees = useMemo(
     () =>
       [
-        drawnTree(document, canvasRender.definitions, canvasRender),
+        pageTree,
         ...regions.map(region =>
           drawnTree(
             region.document,
@@ -952,13 +976,36 @@ export function useBoundCanvasRender(
           )
         ),
       ].filter((tree): tree is BlockDocument => tree !== null),
-    [document, regions, canvasRender]
+    [pageTree, regions, canvasRender]
   );
   const bindings = useCanvasBindings(trees, locale, component);
-  return useMemo(
+  const bound = useMemo(
     () => ({ ...canvasRender, bindings }),
     [canvasRender, bindings]
   );
+  // Judged on the page's tree as the canvas draws it (repaired, composed and
+  // gated by the renderer's own pipeline), so a mark lands on the block that
+  // is drawn; a Layout region's bindings are its own editor's to say.
+  const visitorUnreadable = useMemo(() => {
+    const shapes = bindings.fieldShapes;
+    if (shapes === undefined || pageTree === null) return NONE_UNREADABLE;
+    return visitorUnreadableBindings(pageTree, {
+      schema: shapes,
+      ...(bindings.entryRef === undefined
+        ? {}
+        : { entryRef: bindings.entryRef }),
+      props: { get: getBlock },
+      // A source the person editing read, of which the public may read no
+      // field: the published page reads none of it.
+      unreadableSource: ref => {
+        if ("site" in ref) return false;
+        const read =
+          "single" in ref ? bindings.singles?.get(ref.single) : bindings.entry;
+        return (read ?? null) !== null && noPublicFields(shapes, ref);
+      },
+    });
+  }, [pageTree, bindings]);
+  return { canvasRender: bound, visitorUnreadable };
 }
 
 /**

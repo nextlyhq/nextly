@@ -36,6 +36,8 @@ import {
   SelectionBreadcrumb,
   SpacingOverlay,
   VariantPreviewTag,
+  VisitorUnreadableBadges,
+  VisitorUnreadableProvider,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -137,6 +139,13 @@ type EditorView = EditorMount &
   SiteStyleInputs &
   CanvasInputs &
   EditorPanels & {
+    /**
+     * The bound props on the page a visitor will not see filled, by node id,
+     * for the canvas's badges and the inspector's note.
+     */
+    visitorUnreadable: ReturnType<
+      typeof useBoundCanvasRender
+    >["visitorUnreadable"];
     documentDirty: boolean;
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
@@ -610,6 +619,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     canvasFallback,
     onCanvasFallback,
     canvasDir,
+    visitorUnreadable,
   } = view;
   return (
     <>
@@ -705,6 +715,15 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       componentLibrary.titleOf
                     )
                   }
+                />
+                {/* A block whose bound value a visitor will not see says
+                    so above its corner; pressing the badge selects it, and
+                    the inspector says it in full. Hidden mid-drag, as the
+                    other controls over the canvas are. */}
+                <VisitorUnreadableBadges
+                  marked={visitorUnreadable}
+                  onSelect={editor.select}
+                  hidden={dragging}
                 />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
@@ -1073,7 +1092,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The canvas's render inputs with the sources its bindings read, asked of
   // the tree the canvas draws (in a component's view, the open variant's)
   // and of the Layout regions drawn around it, together.
-  const canvasRender = useBoundCanvasRender(
+  const { canvasRender, visitorUnreadable } = useBoundCanvasRender(
     canvas.canvasRender,
     { document: componentView.preview.document, regions: panels.canvasRegions },
     mount.locale,
@@ -1111,6 +1130,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...canvas,
     ...panels,
     canvasRender,
+    visitorUnreadable,
     documentDirty,
     pageTitle,
     componentView,
@@ -1148,86 +1168,89 @@ function EditorBody<TFieldValues extends FieldValues>({
     // this document, rather than covering the window over them. A component's
     // own view carries its banner above the editor.
     <EditorFrame banner={componentView.banner}>
-      <BuilderShell
-        notices={notices}
-        onExit={shellExit(componentView, done)}
-        // The signed-in author's own preferences, not the browser's.
-        store={mount.preferenceStore}
-        availablePanels={availablePanels}
-        // Forces the insert panel open from the empty-container appender,
-        // which lives on the canvas below rather than beside the rail that
-        // normally opens a panel.
-        openPanelRequest={openPanelRequest}
-        onZoomChange={setZoom}
-        // The device being edited: chosen here, held and stored by the shell,
-        // and reported back so the canvas and the inspector follow it.
-        editingBreakpointRequest={deviceRequest}
-        onEditingBreakpointChange={setChosenDevice}
-        appliedScale={appliedScale}
-        // Whether the page is live, which the admin's own chrome would have
-        // shown had this editor not asked for it to be hidden. `undoDepth` is
-        // the editor's OWN dirty signal: the form's is false for as long as the
-        // editor is open, because the document is committed on the way out.
-        // The title is the top bar's switcher, so the shell draws none.
-        {...editorTopBar(view, { title: page.title, field: name })}
-        openSettingsRequest={view.pages.settingsRequest}
-        renderSettings={editorSettings(view, page)}
-        // The shell owns the region; this fills it. Rendered unconditionally
-        // rather than only when something is selected, because the panel states
-        // "select a block to edit it" — a region that appears and disappears
-        // with the selection makes the canvas resize on every click.
-        // The policy travels with the panel because the Style tab judges a
-        // written value at the keystroke and has to reach the same verdict the
-        // published compiler will.
-        //
-        // The tokens travel with it for the same reason one step further: a
-        // colour control offers the site's tokens and resolves a stored
-        // reference to the name an author currently reads, and `policy.tokens`
-        // cannot serve either — a `TokenLookup` answers ABOUT a name the caller
-        // already holds and cannot enumerate one. This is the MERGED set the
-        // canvas compiles with, so the picker offers exactly the tokens the
-        // page will resolve.
-        inspector={editorInspector(view, cardVerbs, sharedStyle.host)}
-        // Switched on the panel id rather than rendering the inserter for
-        // whatever the rail reports open. The shell asks for the panel it
-        // opened, and a renderer ignoring that argument would draw the inserter
-        // under every heading the moment a second panel is listed above.
-        // The trail sits in the bottom bar, which the shell owns. Passed as a
-        // slot rather than rendered beside the canvas so it cannot overlap the
-        // page an author is editing.
-        // The hint names Enter, Escape and the palette's key because this
-        // editor binds all three: inline editing and the block keyboard
-        // actions below, and the palette it mounts.
-        breadcrumb={
-          <SelectionBreadcrumb
-            editor={editor}
-            hints={{ editText: true, goUp: true, commandPalette: true }}
-            componentTitle={componentLibrary.titleOf}
-          />
-        }
-        checklist={editorChecklist(view)}
-        renderPanel={editorPanelRenderer(view)}
-      >
-        {/*
+      {/* The bound props a visitor will not see, for the inspector's note
+          under each; the canvas's badges are handed the same answer. */}
+      <VisitorUnreadableProvider value={view.visitorUnreadable}>
+        <BuilderShell
+          notices={notices}
+          onExit={shellExit(componentView, done)}
+          // The signed-in author's own preferences, not the browser's.
+          store={mount.preferenceStore}
+          availablePanels={availablePanels}
+          // Forces the insert panel open from the empty-container appender,
+          // which lives on the canvas below rather than beside the rail that
+          // normally opens a panel.
+          openPanelRequest={openPanelRequest}
+          onZoomChange={setZoom}
+          // The device being edited: chosen here, held and stored by the shell,
+          // and reported back so the canvas and the inspector follow it.
+          editingBreakpointRequest={deviceRequest}
+          onEditingBreakpointChange={setChosenDevice}
+          appliedScale={appliedScale}
+          // Whether the page is live, which the admin's own chrome would have
+          // shown had this editor not asked for it to be hidden. `undoDepth` is
+          // the editor's OWN dirty signal: the form's is false for as long as the
+          // editor is open, because the document is committed on the way out.
+          // The title is the top bar's switcher, so the shell draws none.
+          {...editorTopBar(view, { title: page.title, field: name })}
+          openSettingsRequest={view.pages.settingsRequest}
+          renderSettings={editorSettings(view, page)}
+          // The shell owns the region; this fills it. Rendered unconditionally
+          // rather than only when something is selected, because the panel states
+          // "select a block to edit it" — a region that appears and disappears
+          // with the selection makes the canvas resize on every click.
+          // The policy travels with the panel because the Style tab judges a
+          // written value at the keystroke and has to reach the same verdict the
+          // published compiler will.
+          //
+          // The tokens travel with it for the same reason one step further: a
+          // colour control offers the site's tokens and resolves a stored
+          // reference to the name an author currently reads, and `policy.tokens`
+          // cannot serve either — a `TokenLookup` answers ABOUT a name the caller
+          // already holds and cannot enumerate one. This is the MERGED set the
+          // canvas compiles with, so the picker offers exactly the tokens the
+          // page will resolve.
+          inspector={editorInspector(view, cardVerbs, sharedStyle.host)}
+          // Switched on the panel id rather than rendering the inserter for
+          // whatever the rail reports open. The shell asks for the panel it
+          // opened, and a renderer ignoring that argument would draw the inserter
+          // under every heading the moment a second panel is listed above.
+          // The trail sits in the bottom bar, which the shell owns. Passed as a
+          // slot rather than rendered beside the canvas so it cannot overlap the
+          // page an author is editing.
+          // The hint names Enter, Escape and the palette's key because this
+          // editor binds all three: inline editing and the block keyboard
+          // actions below, and the palette it mounts.
+          breadcrumb={
+            <SelectionBreadcrumb
+              editor={editor}
+              hints={{ editText: true, goUp: true, commandPalette: true }}
+              componentTitle={componentLibrary.titleOf}
+            />
+          }
+          checklist={editorChecklist(view)}
+          renderPanel={editorPanelRenderer(view)}
+        >
+          {/*
           Inside the shell, which is what provides the shortcut context — a
           caller rendering the shell is outside it and cannot register bindings.
           It draws the live region and publishes the structural verbs to what it
           wraps, which is how the toolbar presses exactly what the keys press.
         */}
-        <BlockKeyboardActions
-          editor={editor}
-          // Esc with no block selected leaves a look edited on its own.
-          onEscapeWithoutSelection={panels.lookEditing.exit}
-          onEditText={componentView.preview.onEditText}
-          onSaveAsPattern={savePattern.open}
-          /*
+          <BlockKeyboardActions
+            editor={editor}
+            // Esc with no block selected leaves a look edited on its own.
+            onEscapeWithoutSelection={panels.lookEditing.exit}
+            onEditText={componentView.preview.onEditText}
+            onSaveAsPattern={savePattern.open}
+            /*
             The same map the canvas draws with, so a keyboard move of an
             instance is judged by the roots it draws — as its drop is — rather
             than by the instance node's own type, which the nesting rule
             restricts nowhere.
           */
-          definitions={componentLibrary.definitions}
-          /*
+            definitions={componentLibrary.definitions}
+            /*
             Whether the author holds the grant the save is judged by, asked of
             the server because only it knows the RESOLVED collection: a site may
             rename it, and the browser knows the declared name alone. Passed
@@ -1235,17 +1258,17 @@ function EditorBody<TFieldValues extends FieldValues>({
             `onSaveAsPattern` is passed — the collection a pattern goes in is
             this plugin's business, not the canvas's.
           */
-          mayCreatePattern={mayCreatePattern}
-          components={componentVerbs}
-          // "Save as shared style…", offered by every block menu.
-          sharedStyles={sharedStyle.verb}
-          // Opening a placed component in its own view: the host's, since it
-          // knows the view's address and whether this author may update
-          // components. Absent, no surface offers it.
-          onEditComponent={componentView.onEditComponent}
-          onShareVerbs={setCardVerbs}
-        >
-          {/*
+            mayCreatePattern={mayCreatePattern}
+            components={componentVerbs}
+            // "Save as shared style…", offered by every block menu.
+            sharedStyles={sharedStyle.verb}
+            // Opening a placed component in its own view: the host's, since it
+            // knows the view's address and whether this author may update
+            // components. Absent, no surface offers it.
+            onEditComponent={componentView.onEditComponent}
+            onShareVerbs={setCardVerbs}
+          >
+            {/*
             Inside the verbs provider, which is what lets the palette run
             exactly what the keystrokes and the toolbar run.
 
@@ -1255,18 +1278,18 @@ function EditorBody<TFieldValues extends FieldValues>({
             while the button exists — would give the editor two ways out that
             behave differently.
           */}
-          <EditorSearch
-            editor={editor}
-            onExit={done}
-            canvas={canvas.canvasElement}
-            // The Add panel's own sources, so search offers what it offers.
-            insert={searchInsertSources(panels)}
-            componentTitle={componentLibrary.titleOf}
-            open={panels.search.open}
-            onOpenChange={panels.search.setOpen}
-          />
-          {editorCanvasRegion(view)}
-          {/*
+            <EditorSearch
+              editor={editor}
+              onExit={done}
+              canvas={canvas.canvasElement}
+              // The Add panel's own sources, so search offers what it offers.
+              insert={searchInsertSources(panels)}
+              componentTitle={componentLibrary.titleOf}
+              open={panels.search.open}
+              onOpenChange={panels.search.setOpen}
+            />
+            {editorCanvasRegion(view)}
+            {/*
             Rendered inside the verbs provider so the form and the button that
             opens it are one feature rather than two that have to be kept in
             step. The dialog is CONTROLLED from here because the verb that opens
@@ -1274,31 +1297,32 @@ function EditorBody<TFieldValues extends FieldValues>({
             owned its own trigger would be reachable from one surface and not
             from the palette, the context menu or a keystroke.
           */}
-          <SavePatternPrompt
-            document={savePattern.document}
-            selectedIds={editor.selection.ids}
-            onClose={savePattern.close}
-            returnFocusTo={savePattern.returnFocusTo}
-          />
-          <ComponentFromSelectionPrompt
-            request={makeComponent.request}
-            editor={editor}
-            library={componentLibrary}
-            onClose={makeComponent.close}
-            returnFocusTo={makeComponent.returnFocusTo}
-          />
-          <ComponentActionPrompt
-            request={makeComponent.request}
-            editor={editor}
-            library={componentLibrary}
-            onClose={makeComponent.close}
-            returnFocusTo={makeComponent.returnFocusTo}
-          />
-          {publishOffer}
-          {removalHold}
-          {sharedStyle.dialog}
-        </BlockKeyboardActions>
-      </BuilderShell>
+            <SavePatternPrompt
+              document={savePattern.document}
+              selectedIds={editor.selection.ids}
+              onClose={savePattern.close}
+              returnFocusTo={savePattern.returnFocusTo}
+            />
+            <ComponentFromSelectionPrompt
+              request={makeComponent.request}
+              editor={editor}
+              library={componentLibrary}
+              onClose={makeComponent.close}
+              returnFocusTo={makeComponent.returnFocusTo}
+            />
+            <ComponentActionPrompt
+              request={makeComponent.request}
+              editor={editor}
+              library={componentLibrary}
+              onClose={makeComponent.close}
+              returnFocusTo={makeComponent.returnFocusTo}
+            />
+            {publishOffer}
+            {removalHold}
+            {sharedStyle.dialog}
+          </BlockKeyboardActions>
+        </BuilderShell>
+      </VisitorUnreadableProvider>
     </EditorFrame>
   );
 }
