@@ -219,6 +219,16 @@ export interface BreakpointRemovalService {
   ): Promise<BreakpointRun>;
   /** Refuse (409) unless removal `runId` can be undone now, opening nothing. */
   assertUndoable(runId: string): Promise<void>;
+  /**
+   * The removal that can be undone now, with when its window ends: the
+   * newest, judged as `undo` judges it. `null` when there is none.
+   */
+  undoable(): Promise<{
+    readonly run: BreakpointRun;
+    /** When it was made, as its window is judged from. */
+    readonly removedAt: Date;
+    readonly until: Date;
+  } | null>;
   /** What removal `runId` kept of the shared styles; `null` for nothing. */
   keptSharedStyles(runId: string): Promise<StoredFragment | null>;
   /**
@@ -468,26 +478,36 @@ async function undoLanded(
 }
 
 /**
- * Whether removal `runId` can be undone now: it is a finished removal, the
+ * Whether removal `runId` can be undone now, judged once for the undo and
+ * for the Settings read that offers it (`undoable`), so the two never
+ * disagree: it is a finished removal, the
  * newest one (`newestRemoval`), not undone already, and within the days what
  * it took out is kept for, read from its id. Rows are kept after the run
  * opens, so they outlive this window, never the other way round. Answers the
- * refusal to throw, or when the window ends.
+ * refusal to throw, or when the window ends. `scanned` is the newest removal
+ * when the caller has already looked for it, so the scan, which reads kept
+ * rows per removal, runs once per judgement.
  */
 async function undoJudged(
   installed: RemovalInstall,
   all: readonly BreakpointRun[],
-  runId: string
-): Promise<{ refusal: NextlyError } | { refusal?: undefined; ends: number }> {
+  runId: string,
+  scanned?: { readonly newest: BreakpointRun | undefined }
+): Promise<
+  { refusal: NextlyError } | { refusal?: undefined; at: number; ends: number }
+> {
   const run = all.find(candidate => candidate.id === runId);
   if (run === undefined || run.open || run.undoes !== null) {
     return { refusal: cannotUndo("not-a-done-removal", runId) };
   }
-  const newest = await newestRemoval(
-    all,
-    id => fragmentStore(installed.db).keptAny(id),
-    installed.definedBreakpoints
-  );
+  const newest =
+    scanned !== undefined
+      ? scanned.newest
+      : await newestRemoval(
+          all,
+          id => fragmentStore(installed.db).keptAny(id),
+          installed.definedBreakpoints
+        );
   if (newest?.id !== runId) {
     return { refusal: cannotUndo("a-newer-removal", runId) };
   }
@@ -500,7 +520,7 @@ async function undoJudged(
   }
   const ends = at + FRAGMENTS_KEPT_DAYS * DAY_MS;
   if (Date.now() >= ends) return { refusal: pastItsWindow(runId, ends) };
-  return { ends };
+  return { at, ends };
 }
 
 /**
@@ -698,6 +718,25 @@ export function breakpointRemovalService(
         startedBy,
         runId
       );
+    },
+    undoable: async () => {
+      const installed = install();
+      const all = await runs().runs();
+      const newest = await newestRemoval(
+        all,
+        id => fragmentStore(installed.db).keptAny(id),
+        installed.definedBreakpoints
+      );
+      if (newest === undefined) return null;
+      // Judged against the scan just made, not a second one.
+      const judged = await undoJudged(installed, all, newest.id, { newest });
+      return judged.refusal === undefined
+        ? {
+            run: newest,
+            removedAt: new Date(judged.at),
+            until: new Date(judged.ends),
+          }
+        : null;
     },
     keptSharedStyles: runId => fragmentStore(install().db).sharedStyles(runId),
     undoSkipped: async undoRunId => {

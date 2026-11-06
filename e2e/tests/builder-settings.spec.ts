@@ -641,7 +641,9 @@ test.describe("Removing a breakpoint in Settings", () => {
         })
       ).toBeVisible();
       await expect(placeCount(dialog, "Pages")).toHaveText("1");
-      await expect(dialog.getByText("This can't be undone.")).toBeVisible();
+      await expect(
+        dialog.getByText("You can undo this from Settings for 30 days.")
+      ).toBeVisible();
       await expect(dialog.getByText("Default Layout")).toHaveCount(0);
       expect((await storedTextStyles(page.request, id))[small]).toBeDefined();
 
@@ -708,6 +710,57 @@ test.describe("Removing a breakpoint in Settings", () => {
       ).toHaveCount(0);
     } finally {
       await page.unrouteAll({ behavior: "ignoreErrors" });
+      await storeSiteBreakpoints(page.request, null);
+    }
+  });
+
+  test("removes a styled breakpoint, then undoes it from Settings: the breakpoint and its styles come back", async ({
+    page,
+  }) => {
+    const small = "small-undo";
+    await storeSiteBreakpoints(page.request, setWith(small));
+    try {
+      const { id } = await createStyledPage(page.request, small);
+      await openEditor(page, id);
+      const dialog = await editBreakpoints(page);
+      await dialog.getByRole("button", { name: "Remove Small" }).click();
+      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog
+        .getByRole("button", { name: "Remove Small and its styles" })
+        .click();
+
+      // Removed, and offered to undo, with until when.
+      await expect(dialog.getByText("Small was removed")).toBeVisible();
+      await expect(dialog.getByText(/You can undo this until /)).toBeVisible();
+      await expect
+        .poll(async () => (await storedTextStyles(page.request, id))[small])
+        .toBeUndefined();
+
+      // Undo asks first, and Back changes nothing.
+      await dialog.getByRole("button", { name: "Undo" }).click();
+      await expect(
+        dialog.getByRole("heading", { name: "Put Small back?" })
+      ).toBeVisible();
+      await dialog.getByRole("button", { name: "Back" }).click();
+      expect((await storedTextStyles(page.request, id))[small]).toBeUndefined();
+
+      // Put back: the breakpoint is defined again and the page's styles return.
+      await dialog.getByRole("button", { name: "Undo" }).click();
+      await dialog.getByRole("button", { name: "Put Small back" }).click();
+      await expect(
+        dialog.getByText("Small is back, with its styles")
+      ).toBeVisible();
+      await expect(dialog.getByText("put back")).toBeVisible();
+      await expect
+        .poll(async () => (await storedTextStyles(page.request, id))[small])
+        .toBeDefined();
+      // Undone once: nothing is offered to undo any more.
+      await expect(dialog.getByRole("button", { name: "Undo" })).toHaveCount(0);
+      await dialog.getByRole("button", { name: "Close" }).click();
+      await expect(
+        devices(page).getByRole("radio", { name: /^Small/ })
+      ).toHaveCount(1);
+    } finally {
       await storeSiteBreakpoints(page.request, null);
     }
   });

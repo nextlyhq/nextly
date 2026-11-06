@@ -63,7 +63,7 @@ export function joinNames(names: readonly string[]): string {
 }
 
 /** `n` and its noun, singular for one. */
-function count(n: number, one: string, many: string): string {
+export function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
@@ -312,7 +312,7 @@ export function confirmWords(
       notes: notesOf(removed),
     })),
     notes,
-    undo: "This can't be undone.",
+    undo: "You can undo this from Settings for 30 days.",
     confirm: `Remove ${names} and ${one ? "its" : "their"} styles`,
   };
 }
