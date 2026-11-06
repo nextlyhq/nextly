@@ -13,13 +13,15 @@
  * - the handler's `db` reads inside the write's transaction, so it sees the
  *   entry row the write has not committed yet;
  * - a version-conflict retry runs the handler again, and only the attempt that
- *   commits keeps its row;
+ *   commits keeps its row; the retry is handed the shared context as it was,
+ *   whatever a handler of the discarded attempt tried to do to it;
  * - a handler that was removed, or whose plugin is suspended, does not run;
  * - with no handler for a collection, its writes do not reach the phase.
  *
  * The caller-transaction write bodies (`createEntryInTransaction` and its
  * siblings, which the bulk operations use) run the phase too, on the caller's
- * transaction.
+ * transaction. A write takes its handlers once: one registered while it is
+ * under way first runs on the next write.
  */
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -266,6 +268,49 @@ describeEachDialect("the in-transaction phase", dialect => {
     expect(stored?.title).toBe("after");
   });
 
+  it("hands a retried attempt the context as it was, whatever a handler did to it", async () => {
+    const ctx = await boot(dialect);
+    const id = await createOrder("before");
+    const seen: unknown[] = [];
+    const refused: string[] = [];
+    let attempts = 0;
+    ctx.hooks.onInTransaction("orders", ({ context }) => {
+      attempts += 1;
+      const nested = context.nested as { count: number; tags: string[] };
+      seen.push({ count: nested.count, tags: [...nested.tags] });
+      if (attempts > 1) return;
+      // The first attempt tries to leave nested state for the next one, then
+      // loses a version race.
+      try {
+        nested.count = 99;
+      } catch {
+        refused.push("count");
+      }
+      try {
+        nested.tags.push("leaked");
+      } catch {
+        refused.push("tags");
+      }
+      throw new VersionConflictError();
+    });
+    const sent = { nested: { count: 1, tags: ["a"] } };
+
+    await nextly().update({
+      collection: "orders",
+      id,
+      data: { title: "after" },
+      context: sent,
+    });
+
+    expect(seen).toEqual([
+      { count: 1, tags: ["a"] },
+      { count: 1, tags: ["a"] },
+    ]);
+    expect(refused).toEqual(["count", "tags"]);
+    // Nor did the attempt reach the caller's own object.
+    expect(sent).toEqual({ nested: { count: 1, tags: ["a"] } });
+  });
+
   it("stops running a handler once it is removed, or its plugin is suspended", async () => {
     const ctx = await boot(dialect);
     ctx.hooks.onInTransaction("orders", keepLedger);
@@ -388,6 +433,61 @@ describeEachDialect(
       expect(ran).toEqual(["create", "update"]);
       expect(await orderCount()).toBe(0);
       expect(await ledgerRows(ctx)).toEqual([]);
+    });
+
+    it("runs only the handlers a write took when it began: a handler registered meanwhile waits for the next write", async () => {
+      const ctx = await boot(dialect);
+      const collections = ctx.services.collections;
+      const handed: { op: string; title: unknown }[] = [];
+      const late: InTransactionHandler = async write => {
+        handed.push({ op: write.operation, title: write.data?.title });
+        await keepLedger(write);
+      };
+      // The seam: right after a write asks the registry for its handlers, a
+      // plugin registers one, as a concurrent request could.
+      const presence = HookRegistry.prototype.hasInTransaction;
+      const registerRightAfterTheQuestion = (): void => {
+        vi.spyOn(
+          HookRegistry.prototype,
+          "hasInTransaction"
+        ).mockImplementationOnce(function (
+          this: HookRegistry,
+          collection: string
+        ) {
+          const answer = presence.call(this, collection);
+          ctx.hooks.onInTransaction("orders", late);
+          return answer;
+        });
+      };
+
+      registerRightAfterTheQuestion();
+      const id = await collections.withTransaction(async tx => {
+        const created = await collections.createEntryInTransaction(
+          tx,
+          "orders",
+          { title: "one" },
+          {}
+        );
+        return String(created.id);
+      });
+      ctx.hooks.offInTransaction("orders", late);
+      registerRightAfterTheQuestion();
+      await collections.withTransaction(async tx => {
+        await collections.updateEntryInTransaction(
+          tx,
+          "orders",
+          id,
+          { title: "two" },
+          {}
+        );
+      });
+      // Registered all along now, so the next write runs it.
+      await collections.withTransaction(async tx => {
+        await collections.deleteEntryInTransaction(tx, "orders", id, {});
+      });
+
+      expect(handed).toEqual([{ op: "delete", title: "two" }]);
+      expect(await ledgerRows(ctx)).toEqual([{ entryId: id, op: "delete" }]);
     });
 
     it("throws the handler's refusal out of the caller's transaction, keeping nothing", async () => {

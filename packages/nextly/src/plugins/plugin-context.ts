@@ -302,6 +302,13 @@ export interface PluginHookRegistry {
    *
    * Runs for create, update and delete on collections, the bulk operations
    * included (once per entry), and whether or not a write skips its hooks.
+   * Not yet for Singles, nor when every language of an entry is published or
+   * withdrawn at once (`publishAllLocales`, `unpublishAllLocales`).
+   *
+   * A write takes its set of handlers once, so one registered while a write is
+   * under way first runs on the next write. The shared hook `context` it is
+   * handed is a deeply frozen copy of plain data only (see
+   * `InTransactionWrite.context`).
    *
    * @param collection - Collection slug, or '*' for every collection
    * @param handler - Called with the write and a database bound to its
