@@ -507,13 +507,16 @@ as one that keeps a Layout pages still use published, refuses `unpublish-all`
 too. `afterChange` runs once every language's status is saved, so one that
 throws does not undo the move.
 
-Two things differ from an ordinary save. The write moves statuses and nothing
-else, so other values a `before*` hook puts in `data` are not saved, and a hook
-that removes `status` or sets another one has the write refused with a `409`
-rather than ignored. And where a publish puts pending changes live (a
-collection with `versions: { drafts: true }`), `afterChange` runs once for each
-language whose change went live, with that language's document, instead of
-once for the write.
+Three things differ from an ordinary save. The write moves statuses and
+nothing else, so other values a `before*` hook puts in `data` are not saved,
+and a hook that removes `status` or sets another one has the write refused with
+a `409` rather than ignored. Because no field changes, a field's own
+`afterChange` hook does not run: the entry's row is handed to the collection's
+`afterChange`, but a field hook that mails or re-indexes on a change is not
+told about a value that did not change. And where a publish puts pending
+changes live (a collection with `versions: { drafts: true }`), `afterChange`
+runs once for each language whose change went live, with that language's
+document, instead of once for the write.
 
 The validation gate is what separates the two write hooks. Use `beforeValidate`
 to supply or repair a value you want the rules applied to; use `beforeChange` to
