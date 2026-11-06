@@ -108,6 +108,26 @@ function entryAndSingles(schema: BindingSchemaSource): BindingSchemaSource {
   };
 }
 
+/** One binding's mark, when a visitor will not see it filled. */
+function unreadableBinding(
+  check: BindingCheck,
+  prop: string,
+  input: VisitorUnreadableInput
+): VisitorUnreadableBinding | undefined {
+  const whole = unreadableWhole(check, prop, input);
+  if (whole !== undefined) return whole;
+  if (check.outcome !== "fallback") return undefined;
+  const missing = check.issues.find(
+    issue => issue.code === "binding-field-missing"
+  );
+  if (missing === undefined) return undefined;
+  return {
+    prop,
+    path: missing.path,
+    ...(check.fallback === undefined ? {} : { fallback: check.fallback }),
+  };
+}
+
 /** One node's bindings a visitor will not see filled; none when it holds none. */
 function unreadableOn(
   node: Readonly<Record<string, unknown>>,
@@ -132,21 +152,8 @@ function unreadableOn(
       schema,
       refs,
     });
-    const whole = unreadableWhole(check, prop, input);
-    if (whole !== undefined) {
-      marked.push(whole);
-      continue;
-    }
-    if (check.outcome !== "fallback") continue;
-    const missing = check.issues.find(
-      issue => issue.code === "binding-field-missing"
-    );
-    if (missing === undefined) continue;
-    marked.push({
-      prop,
-      path: missing.path,
-      ...(check.fallback === undefined ? {} : { fallback: check.fallback }),
-    });
+    const mark = unreadableBinding(check, prop, input);
+    if (mark !== undefined) marked.push(mark);
   }
   return marked.length === 0 ? null : { id, marked };
 }
