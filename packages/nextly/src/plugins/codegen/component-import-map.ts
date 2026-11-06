@@ -46,6 +46,7 @@ export type ComponentMapUse =
   | "collection view"
   | "document view"
   | "slot"
+  | "contribution"
   | "field type"
   | "block editor"
   | "block editor entry";
@@ -193,7 +194,29 @@ function collectAdminEntries(
       entry(view.component, owner, "document view")
     ),
     ...collectAdminSlotPaths(admin).map(tagged("slot")),
+    ...collectContributionPaths(admin.contributions).map(
+      tagged("contribution")
+    ),
   ];
+}
+
+/**
+ * The component each contribution to an admin place draws with: a block's,
+ * tab's or side panel section's, a column's cell, and an action that opens
+ * one. Read as plain JavaScript hands it over, since generation runs before
+ * startup checks anything: an entry naming no component is skipped here and
+ * refused by startup, by name.
+ */
+function collectContributionPaths(contributions: unknown): string[] {
+  if (!Array.isArray(contributions)) return [];
+  return contributions.flatMap((contribution: unknown) => {
+    if (!isRecord(contribution)) return [];
+    const action = contribution.action;
+    const opened = isRecord(action) ? action.open : undefined;
+    return [contribution.component, opened].filter(
+      (path): path is string => typeof path === "string" && path !== ""
+    );
+  });
 }
 
 /**
