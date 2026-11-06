@@ -14,10 +14,18 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## What you get
 
-- **20 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
+- **21 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
-  image, gallery, button, embed, form), and one that reads from your content
+  image, gallery, icon, button, embed, form), and one that reads from your content
   ([Collection list](#reading-content-into-a-page)).
+- **Icons.** The Icon block draws one icon from the built-in [Lucide](https://lucide.dev)
+  set as inline SVG, rendered on the server, so a published page ships no script for it.
+  Its **Icon** control (Content tab) opens a search-first picker that offers the icons you
+  used last first. It is sized by its font size and drawn in its text colour (Style tab).
+  Leave **Screen reader label** empty for a decorative icon, which screen readers skip;
+  fill it in for an icon that says something on its own. A linked icon is named by its
+  label, or by the icon's name when there is none. The page stores the icon's id
+  (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
 - **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
   section's title as text or as a heading from level 2 to 6, and its **Icon** and
   **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
@@ -35,11 +43,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## Availability
 
-|            |                                                                                                 |
+| | |
 | ---------- | ----------------------------------------------------------------------------------------------- |
-| Package    | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app                      |
-| Status     | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
-| Permission | Editing a page requires update access to the collection holding it                              |
+| Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
+| Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
+| Permission | Editing a page requires update access to the collection holding it |
 
 ## Install
 
@@ -68,12 +76,18 @@ boot refuses to start:
 npx nextly plugins install @nextlyhq/plugin-page-builder
 ```
 
-The plugin keeps the bookkeeping behind its usage counts (how far the background job
-has indexed existing pages, and whether an index write has failed) in two tables of
-its own, `page_builder__usage_runs` and `page_builder__usage_progress`. No admin
-screen or API reaches them. Installing creates them; a site upgrading from a version
-without them runs `npx nextly migrate` before it starts on the new version, since a
-production boot refuses a plugin whose tables are behind it.
+The plugin keeps its usage counts in tables of its own: which documents place each
+component and apply each shared style (`page_builder__component_usage` and
+`page_builder__class_usage`), and the bookkeeping behind them, how far the background
+job has indexed existing content and whether an index write has failed
+(`page_builder__usage_runs` and `page_builder__usage_progress`). No admin screen or
+API reaches them. The counts cover collection entries and Singles, and a component a
+placement chooses through one of its fields counts as used where it is placed.
+Installing creates the tables; a site upgrading from a version without them runs
+`npx nextly migrate` before it starts on the new version, since a production boot
+refuses a plugin whose tables are behind it. After the upgrade the background job
+indexes every page and Single again, and until it has finished, counts read as "at
+least" rather than as exact.
 
 Last, run `npx nextly generate:types`. It writes the file that registers the builder's
 screen with the admin, and that file also loads the editor's styles, so there is nothing

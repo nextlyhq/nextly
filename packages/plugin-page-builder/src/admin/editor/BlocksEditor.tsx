@@ -90,6 +90,7 @@ import {
 } from "./media-summary-reader";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
+import { recentIconsStore } from "./recent-icons-store";
 import { useReveal, type Reveal } from "./reveal-hidden";
 import {
   settingsAddressOf,
@@ -374,9 +375,9 @@ function borrowedServices(): ContentServices {
 
 /**
  * The borrowed services with this editor's open-passage registry, its
- * language and the collection its document is an entry of, one object per
- * registry, language and collection so the panel sees the same one on every
- * render. A relation search and a link's search read titles in
+ * language, the collection its document is an entry of and the author's
+ * recent icons, one object per registry, language, collection and author so
+ * the panel sees the same one on every render. A relation search and a link's search read titles in
  * the language being edited.
  */
 const servicesByPassages = new WeakMap<
@@ -397,8 +398,10 @@ function servicesFor(
     servicesByPassages.set(passages, byLocale);
   }
   // All three in the key, as JSON so no language, collection and person can
-  // collide: the list count below reads as the person signed in.
+  // collide: the list count below reads as the person signed in, and the
+  // recent icons are theirs.
   const key = JSON.stringify([locale ?? "", entryCollection ?? null, userId]);
+  const recentIcons = recentIconsStore(userId);
   let services = byLocale.get(key);
   if (services === undefined) {
     services = {
@@ -416,6 +419,8 @@ function servicesFor(
       // canvas's own read of the list in this language.
       countListEntries: canvasListReadsIn(locale, userId).count,
       ...(entryCollection === undefined ? {} : { entryCollection }),
+      // The icons this author chose last, for the Icon control's Recent row.
+      ...(recentIcons === undefined ? {} : { recentIcons }),
     };
     byLocale.set(key, services);
   }

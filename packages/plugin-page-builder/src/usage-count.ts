@@ -38,6 +38,7 @@
  *
  * @module usage-count
  */
+import { lastIdOf } from "./paged-walk";
 import type {
   GroupedUsageReader,
   UsageIndex,
@@ -97,8 +98,14 @@ export interface DocumentsUsing {
    * it is a reference, but nameable by no one.
    */
   readonly collections: readonly {
+    /** The collection's slug, or the Single's when {@link single} is set. */
     readonly collection: string;
     readonly documents: readonly (string | null)[];
+    /**
+     * Set when `collection` names a Single rather than a collection: its one
+     * document is listed with no id, and is read through the Single API.
+     */
+    readonly single?: true;
   }[];
   /** Whether `collections` is the whole answer; see {@link UsageCount}. */
   readonly complete: boolean;
@@ -110,6 +117,13 @@ interface FoundReference {
   /** `null` for a row that names no collection: a document nobody can place. */
   readonly collection: string | null;
   readonly document: string | null;
+  /** Whether the row is filed under a Single rather than a collection. */
+  readonly single?: boolean;
+}
+
+/** Where a reference's documents are grouped: a Single apart from a collection of its name. */
+function groupKey(reference: FoundReference & { collection: string }): string {
+  return `${reference.single === true ? "single" : "collection"}\u0000${reference.collection}`;
 }
 
 /**
@@ -129,7 +143,13 @@ function listingFrom(
 ): Map<string, DocumentsUsing> {
   const byId = new Map<
     string,
-    { collections: Map<string, Set<string | null>>; placeable: boolean }
+    {
+      collections: Map<
+        string,
+        { collection: string; single: boolean; documents: Set<string | null> }
+      >;
+      placeable: boolean;
+    }
   >();
   for (const id of referenceIds) {
     byId.set(id, { collections: new Map(), placeable: true });
@@ -137,22 +157,28 @@ function listingFrom(
   for (const reference of found) {
     const entry = byId.get(reference.referenceId);
     if (entry === undefined) continue;
-    if (reference.collection === null) {
+    const collection = reference.collection;
+    if (collection === null) {
       entry.placeable = false;
       continue;
     }
-    const documents =
-      entry.collections.get(reference.collection) ?? new Set<string | null>();
-    documents.add(reference.document);
-    entry.collections.set(reference.collection, documents);
+    const key = groupKey({ ...reference, collection });
+    const group = entry.collections.get(key) ?? {
+      collection,
+      single: reference.single === true,
+      documents: new Set<string | null>(),
+    };
+    group.documents.add(reference.document);
+    entry.collections.set(key, group);
   }
   const whole = indexIsWhole(health);
   const listings = new Map<string, DocumentsUsing>();
   for (const [id, entry] of byId) {
     listings.set(id, {
-      collections: [...entry.collections].map(([collection, documents]) => ({
-        collection,
-        documents: [...documents],
+      collections: [...entry.collections.values()].map(group => ({
+        collection: group.collection,
+        documents: [...group.documents],
+        ...(group.single ? { single: true as const } : {}),
       })),
       complete: !readCut && entry.placeable && whole,
     });
@@ -221,6 +247,12 @@ export interface UsageRowReader {
     where: Record<string, { equals: string } | { in: string[] }>;
     /** Which page of rows, from 1. */
     page: number;
+    /**
+     * The id of the last row the previous page held; absent on the first
+     * page. Pages run by id, so a row removed meanwhile moves no later one
+     * out of reach.
+     */
+    after?: string;
   }): Promise<{ items: readonly unknown[]; hasNext: boolean }>;
 }
 
@@ -254,11 +286,14 @@ export async function listDocumentsUsingEach<TRow extends UsageSubject>(args: {
   const asked = ids.filter(id => id !== "");
   const found: FoundReference[] = [];
   let readCut = false;
+  let after: string | undefined;
   for (let page = 1; asked.length > 0; page += 1) {
     const read = await args.rows({
       where: args.index.whereReferencingAny(asked),
       page,
+      ...(after === undefined ? {} : { after }),
     });
+    after = lastIdOf(read.items) ?? after;
     for (const item of read.items) {
       const reference = foundIn(args.index, item);
       if (reference !== undefined) found.push(reference);
@@ -291,6 +326,7 @@ function foundIn<TRow extends UsageSubject>(
         : null,
     document:
       typeof row[DOCUMENT_COLUMN] === "string" ? row[DOCUMENT_COLUMN] : null,
+    single: row.scope === "single",
   };
 }
 

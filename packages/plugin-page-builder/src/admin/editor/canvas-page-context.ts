@@ -30,6 +30,7 @@ import {
   createStandaloneContext,
   type PageContext,
   type QueryBudget,
+  type ResolvedIcon,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
 import {
@@ -40,6 +41,19 @@ import {
 import { useEffect, useMemo } from "react";
 
 import { canvasListReadsIn } from "../list-entries-client";
+
+/**
+ * An icon as the canvas draws it, from the set a published page draws with.
+ * The set is reached through a dynamic `import()`, so it is a chunk of its
+ * own, fetched when the canvas first draws an icon rather than with the
+ * editor; the set's own resolver loads its data once and keeps it.
+ */
+async function resolveCanvasIcon(id: string): Promise<ResolvedIcon | null> {
+  const { resolveLucideIcon } = await import(
+    "@nextlyhq/blocks-react/icons/lucide"
+  );
+  return resolveLucideIcon(id);
+}
 
 /** What a media item read through the admin gives a block to draw. */
 interface MediaItem {
@@ -95,8 +109,9 @@ export function listEntryCollectionOf(
 
 /**
  * The canvas's page context: its images resolve through the admin's media
- * read, which caches each item by id and shares a read in flight, and its
- * lists read in `locale`, the language being edited.
+ * read, which caches each item by id and shares a read in flight, its icons
+ * from the published page's icon set, and its lists read in `locale`, the
+ * language being edited.
  */
 export function useCanvasPageContext(
   listsShowingEmpty?: ReadonlySet<string>,
@@ -123,6 +138,7 @@ export function useCanvasPageContext(
     () =>
       createStandaloneContext({
         resolveMedia: async id => drawnMedia(await readMedia(id)),
+        resolveIcon: resolveCanvasIcon,
         ...lists.terms,
         data: lists.data,
         queries: budget,
