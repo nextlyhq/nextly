@@ -804,10 +804,12 @@ the document started from. When the document has changed since, an answer that h
 matching history version only for a caller who may read the document (see
 [Versions and conflicts](#versions-and-conflicts)). A copy read in one language is judged on the
 shared fields and that language. A `held` or `lost` answer never carries `changed`, and a claim
-without `_rev` is answered as before. A `_rev` that isn't one a read returned is a
-`400 VALIDATION_ERROR`, refused before anything is claimed. The admin sends its copy's `_rev`, so
-an editor hears of a colleague's change within one renewal, before saving, and an editor taking a
-document back learns it changed while they were away.
+without `_rev` is answered as before. A malformed `_rev` is a `400 VALIDATION_ERROR`, refused
+before anything is claimed. One in the form a read returns is only compared, never refused: a
+version no read gave, such as one above the current version, is claimed and answered with
+`changed` like any other copy that differs. The admin sends its copy's `_rev`, so an editor hears
+of a colleague's change within one renewal, before saving, and an editor taking a document back
+learns it changed while they were away.
 
 Give it up with `DELETE` and the same body. The `item` is `{ "released": true }`, and releasing a
 claim already lost is not an error. A renewal or release without `claimToken` is a
