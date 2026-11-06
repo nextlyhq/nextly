@@ -28,7 +28,6 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { RenderedTemplate } from "nextly/api/email-template-preview-types";
 
 import {
   listTemplates,
@@ -39,6 +38,9 @@ import {
   previewTemplate,
   previewDraft,
   sendTestEmail,
+  getSendTestTarget,
+  getTemplateEngine,
+  readAsLiquid,
   overrideTemplate,
   resetTemplate,
   compareTemplate,
@@ -51,6 +53,9 @@ import {
   type UpdateEmailTemplatePayload,
   type EmailTemplatePreviewResult,
   type SendTestEmailResult,
+  type SendTestTarget,
+  type TemplateEngine,
+  type TemplateTestDraft,
   type EmailTemplateComparison,
   type EmailTemplateVersion,
   type OwnerChangeChoice,
@@ -91,11 +96,25 @@ export const emailTemplateKeys = {
       plainTextContent?: string | null | undefined;
       preheader?: string | null | undefined;
       layoutId?: string | null | undefined;
+      fromOverride?: string | null | undefined;
       id?: string | undefined;
       legacy?: boolean | undefined;
     },
     Record<string, unknown>,
   ] => [...emailTemplateKeys.all(), "draftPreview", template, data] as const,
+  /** Where a test of the template would go, and who would deliver it. */
+  testTarget: (
+    id: string,
+    providerId: string | null | undefined
+  ): readonly [
+    "emailTemplates",
+    "testTarget",
+    string,
+    string | null | undefined,
+  ] => [...emailTemplateKeys.all(), "testTarget", id, providerId] as const,
+  /** Whether the template is kept on its first engine, and why. */
+  engine: (id: string): readonly ["emailTemplates", "engine", string] =>
+    [...emailTemplateKeys.all(), "engine", id] as const,
 };
 
 // ============================================================
@@ -277,26 +296,71 @@ export function usePreviewEmailTemplate(): UseMutationResult<
   });
 }
 
+/** What a test send takes: the template, its sample data, and a draft. */
+interface SendTestVariables {
+  templateId: string;
+  variables: Record<string, unknown>;
+  draft?: TemplateTestDraft;
+}
+
 /**
- * useSendTestEmailTemplate — send a real test email from a saved template to
- * the signed-in user's own address.
+ * useSendTestEmailTemplate — send a real test email to the signed-in user's
+ * own address: of the saved template, or with a draft, of what is on screen.
  */
 export function useSendTestEmailTemplate(): UseMutationResult<
   SendTestEmailResult,
   Error,
-  {
-    templateId: string;
-    variables: Record<string, unknown>;
-  },
+  SendTestVariables,
   unknown
 > {
-  return useMutation<
-    SendTestEmailResult,
-    Error,
-    { templateId: string; variables: Record<string, unknown> }
-  >({
-    mutationFn: ({ templateId, variables }) =>
-      sendTestEmail(templateId, variables),
+  return useMutation<SendTestEmailResult, Error, SendTestVariables>({
+    mutationFn: ({ templateId, variables, draft }) =>
+      sendTestEmail(templateId, variables, draft),
+  });
+}
+
+/**
+ * Where a test of the template would go and who would deliver it, read each
+ * time the dialog opens: the provider can change in Settings at any time.
+ */
+export function useSendTestTarget(
+  templateId: string,
+  providerId: string | null | undefined,
+  options?: { enabled?: boolean }
+): UseQueryResult<SendTestTarget, Error> {
+  return useQuery<SendTestTarget, Error>({
+    queryKey: emailTemplateKeys.testTarget(templateId, providerId),
+    queryFn: () => getSendTestTarget(templateId, providerId),
+    enabled: (options?.enabled ?? true) && Boolean(templateId),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** Whether the template is kept on its first engine, and why. */
+export function useTemplateEngine(
+  templateId: string,
+  options?: { enabled?: boolean }
+): UseQueryResult<TemplateEngine, Error> {
+  return useQuery<TemplateEngine, Error>({
+    queryKey: emailTemplateKeys.engine(templateId),
+    queryFn: () => getTemplateEngine(templateId),
+    enabled: (options?.enabled ?? true) && Boolean(templateId),
+    retry: false,
+  });
+}
+
+/** Read a kept template as Liquid from now on. */
+export function useReadAsLiquid(): UseMutationResult<
+  EmailTemplateRecord,
+  Error,
+  string,
+  unknown
+> {
+  const settle = useSettleOwnership();
+  return useMutation<EmailTemplateRecord, Error, string>({
+    mutationFn: id => readAsLiquid(id),
+    onSuccess: settle,
   });
 }
 
@@ -319,7 +383,7 @@ export function useDraftEmailTemplatePreview(
   template: DraftPreviewTemplate,
   data: Record<string, unknown>,
   options?: { enabled?: boolean }
-): UseQueryResult<RenderedTemplate, Error> {
+): UseQueryResult<DraftPreviewResult, Error> {
   return useQuery<DraftPreviewResult, Error>({
     queryKey: emailTemplateKeys.draftPreview(template, data),
     queryFn: () => previewDraft(template, data),

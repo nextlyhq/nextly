@@ -3,8 +3,10 @@
  * no other.
  *
  * The server picks the recipient, so the dialog has no field for one: it only
- * says where the test will arrive, and sends the template's id and its sample
- * data. These assert what a person sees and what the send is handed.
+ * says where the test will arrive and who will deliver it, and sends the
+ * template's id, its sample data and what is on screen, unsaved edits
+ * included. When the provider is the log, which delivers nothing, it says so.
+ * These assert what a person sees and what the send is handed.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,8 +20,22 @@ const userRead = vi.hoisted(() => ({
   } as unknown,
 }));
 
+const targetAsked = vi.hoisted(() => vi.fn());
+const target = vi.hoisted(() => ({
+  current: {
+    data: {
+      to: "ana@example.com",
+      delivery: { provider: "Resend", type: "resend", delivers: true },
+    },
+  } as unknown,
+}));
+
 vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
   useSendTestEmailTemplate: () => ({ mutate, isPending: false }),
+  useSendTestTarget: (...args: unknown[]) => {
+    targetAsked(...args);
+    return target.current;
+  },
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => userRead.current,
@@ -28,6 +44,12 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
 import { SendTestDialog } from "../SendTestDialog";
 
 const SAMPLE = { name: "Ana" };
+const DRAFT = {
+  subject: "Unsaved subject",
+  htmlContent: "<p>Unsaved</p>",
+  providerId: "p-draft",
+};
+const draftOf = vi.fn(() => DRAFT);
 
 function renderDialog(templateId = "t1") {
   return render(
@@ -37,12 +59,21 @@ function renderDialog(templateId = "t1") {
       templateId={templateId}
       templateName="Welcome"
       sampleData={SAMPLE}
+      draftOf={draftOf}
     />
   );
 }
 
 beforeEach(() => {
   mutate.mockReset();
+  draftOf.mockReset();
+  draftOf.mockReturnValue(DRAFT);
+  target.current = {
+    data: {
+      to: "ana@example.com",
+      delivery: { provider: "Resend", type: "resend", delivers: true },
+    },
+  };
   userRead.current = {
     user: { id: "u1", name: "Ana", email: "ana@example.com", avatar: null },
     isLoading: false,
@@ -66,8 +97,12 @@ describe("the send-test dialog", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("sends the template's id and sample data, and no address", () => {
+  it("sends the template's id, sample data and what is on screen, and no address", () => {
     renderDialog();
+    // Read again when the test is sent, not only when the dialog opens: what
+    // is on screen at that moment is what goes.
+    const edited = { ...DRAFT, subject: "Edited after opening" };
+    draftOf.mockReturnValue(edited);
 
     fireEvent.click(screen.getByRole("button", { name: /send test/i }));
 
@@ -75,11 +110,49 @@ describe("the send-test dialog", () => {
     expect(mutate.mock.calls[0]?.[0]).toEqual({
       templateId: "t1",
       variables: SAMPLE,
+      draft: edited,
     });
+  });
+
+  it("asks who delivers it through the provider the draft chose", () => {
+    renderDialog();
+
+    expect(targetAsked).toHaveBeenLastCalledWith("t1", "p-draft", {
+      enabled: true,
+    });
+  });
+
+  it("names the provider that will deliver it", () => {
+    renderDialog();
+
+    expect(screen.getByTestId("send-test-provider").textContent).toContain(
+      "Resend"
+    );
+    expect(screen.queryByTestId("send-test-log")).toBeNull();
+  });
+
+  it("warns that the log provider delivers nothing", () => {
+    target.current = {
+      data: {
+        to: "ana@example.com",
+        delivery: {
+          provider: "Log (no delivery)",
+          type: "log",
+          delivers: false,
+        },
+      },
+    };
+    renderDialog();
+
+    const warning = screen.getByTestId("send-test-log");
+    expect(warning.textContent).toContain("Nothing will be delivered");
+    expect(warning.textContent).toContain("Log (no delivery)");
+    expect(screen.queryByTestId("send-test-provider")).toBeNull();
   });
 
   it("still names the user's own address while it is loading", () => {
     userRead.current = { user: null, isLoading: true, error: null };
+    target.current = { data: undefined };
     renderDialog();
 
     expect(screen.getByTestId("send-test-recipient").textContent).toContain(

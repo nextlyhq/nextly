@@ -215,7 +215,19 @@ function decodeEntities(input: string): string {
  * // 'Hi\n\nVisit us (https://x.io)'
  * ```
  */
-export function htmlToText(html: string): string {
+export function htmlToText(
+  html: string,
+  {
+    linkTargets = true,
+  }: {
+    /**
+     * Write a link as `label (href)`, as a plain-text part needs. Off for
+     * text that stands where a reader sees only the link's label, such as
+     * the preview text in an inbox.
+     */
+    linkTargets?: boolean;
+  } = {}
+): string {
   if (!html) return "";
 
   let text = html;
@@ -230,7 +242,9 @@ export function htmlToText(html: string): string {
     (_match, href: string, label: string) => {
       const cleanLabel = label.replace(/<[^>]+>/g, "").trim();
       const cleanHref = href.trim();
-      if (!cleanHref || cleanHref === cleanLabel) return cleanLabel;
+      if (!linkTargets || !cleanHref || cleanHref === cleanLabel) {
+        return cleanLabel;
+      }
       return cleanLabel ? `${cleanLabel} (${cleanHref})` : cleanHref;
     }
   );
