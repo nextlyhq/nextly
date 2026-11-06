@@ -107,6 +107,75 @@ describe("parseUiSchema", () => {
     expect(r.success).toBe(false);
   });
 
+  it("keeps a relationship's options as the registry stores them, whole", () => {
+    // A plugin or API save sends a relationship as the registry stores it; the
+    // definition holds it as sent, so a deploy's registry row keeps its
+    // foreign-key actions and its junction table.
+    const options = {
+      target: "people",
+      relationType: "manyToOne",
+      onDelete: "set null",
+      onUpdate: "cascade",
+    };
+    const tags = {
+      target: "tags",
+      relationType: "manyToMany",
+      junctionTable: "posts_tags",
+    };
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            { name: "author", type: "relationship", options },
+            { name: "tags", type: "relationship", options: tags },
+          ],
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.collections[0]?.fields.map(f => f.options)).toEqual([
+        options,
+        tags,
+      ]);
+    }
+  });
+
+  it("refuses a relationship's options object on a field of another type", () => {
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "x",
+          fields: [{ name: "a", type: "text", options: { target: "people" } }],
+        },
+      ],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses a relationship whose options name no target and that has no relationTo", () => {
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "x",
+          fields: [
+            {
+              name: "a",
+              type: "relationship",
+              options: { relationType: "manyToOne" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("still accepts a file written before relationships carried options", () => {
+    expect(parseUiSchema(VALID).success).toBe(true);
+  });
+
   it("rejects a relationship without relationTo", () => {
     const r = parseUiSchema({
       collections: [

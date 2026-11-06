@@ -478,6 +478,11 @@ export class CollectionMetadataService extends BaseService {
             previous: null,
             entity: artifacts.manifestEntity,
             change: "create",
+            junctions: this.collectionService.junctionStatements(
+              artifacts.tableName,
+              [],
+              artifacts.metadata.fields
+            ),
           }
         );
         return { rowWritten: this.isDevelopment() };

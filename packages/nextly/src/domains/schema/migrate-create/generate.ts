@@ -269,6 +269,18 @@ export interface GenerateArgs {
    * declared table of its name.
    */
   tablesAsTheyStand?: readonly TableSpec[];
+  /**
+   * Statements the caller adds to the file, which no snapshot describes: a
+   * Schema Builder save's many-to-many junction tables, which the snapshot
+   * leaves out as every drift check does. Each side says which run before the
+   * generated statements (a junction dropped before the table it links) and
+   * which after (one created once that table exists). Part of the file before
+   * it is written, so its checksum and its snapshot's hash cover them.
+   */
+  appendedStatements?: {
+    up: AddedStatements;
+    down: AddedStatements;
+  };
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -386,6 +398,12 @@ function settingsInScope(
     settingsRecord: scopedSettingsRecord(args.scope, latest?.entities, desired),
     changedSettings: scopedSettingsChanges(args.scope, changes),
   };
+}
+
+/** Statements a caller adds to one side of a file, before and after the generated ones. */
+export interface AddedStatements {
+  first: readonly string[];
+  last: readonly string[];
 }
 
 /** `snapshot` with each of `tables` in place of the table of its name. */
@@ -689,6 +707,13 @@ export async function generateMigration(
   );
   sqlStatements.push(...rows.up);
   downSqlStatements.push(...rows.down);
+  const added = args.appendedStatements;
+  if (added !== undefined) {
+    sqlStatements.unshift(...added.up.first);
+    sqlStatements.push(...added.up.last);
+    downSqlStatements.unshift(...added.down.first);
+    downSqlStatements.push(...added.down.last);
+  }
 
   /*
    * 8. Compose file content + write both files.
@@ -746,7 +771,10 @@ export async function generateMigration(
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
     settingsChanges: changedSettings.map(describeSettingsChange),
-    changesNoTable: operations.length === 0,
+    // A junction table the caller adds is a table this file changes.
+    changesNoTable:
+      operations.length === 0 &&
+      (added?.up.first.length ?? 0) + (added?.up.last.length ?? 0) === 0,
     now,
   });
 

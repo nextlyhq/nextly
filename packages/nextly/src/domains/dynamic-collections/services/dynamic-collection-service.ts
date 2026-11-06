@@ -827,7 +827,7 @@ export class DynamicCollectionService extends BaseService {
       versionsMaxPerDoc: data.versionsMaxPerDoc,
       revalidate: data.revalidate,
       webhooks: data.webhooks,
-      fields: fields as unknown as UiSchemaEntity["fields"],
+      fields,
     };
   }
 
@@ -1972,6 +1972,28 @@ export class DynamicCollectionService extends BaseService {
       tableName,
       fields
     );
+  }
+
+  /**
+   * The statements that take a collection's many-to-many junction tables from
+   * `oldFields` to `newFields` (`junctionLifecycle`: drops, renames, action
+   * changes, creates), and the ones that take them back. A Schema Builder save
+   * writes them into its migration file, since the generator `migrate:create`
+   * shares writes no junction table.
+   */
+  junctionStatements(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { up: string[]; down: string[] } {
+    return {
+      up: this.schemaService.junctionLifecycle(tableName, oldFields, newFields),
+      down: this.schemaService.junctionLifecycle(
+        tableName,
+        newFields,
+        oldFields
+      ),
+    };
   }
 
   /** One migration dropping every table of collections deleted together (see the schema service). */

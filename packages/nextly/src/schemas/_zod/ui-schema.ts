@@ -92,6 +92,28 @@ const selectOption = z.object({
   value: z.string().min(1),
 });
 
+/**
+ * A relationship's options as the registry stores them: the target, how it
+ * relates, its foreign-key actions and, for a many-to-many, its junction
+ * table. A plugin or API save sends a relationship this way, and the
+ * definition holds it as sent, so a deploy's registry row, written from the
+ * definition, keeps every one of them. Keys beyond these are kept too.
+ */
+const relationshipOptions = z.looseObject({
+  target: z.string().min(1).optional(),
+  relationType: z
+    .enum(["oneToOne", "oneToMany", "manyToOne", "manyToMany"])
+    .optional(),
+  onDelete: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
+  onUpdate: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
+  junctionTable: z.string().min(1).optional(),
+  targetLabelField: z.string().optional(),
+  maxDepth: z.number().optional(),
+});
+
+/** A relationship's options, as `relationshipOptions` reads them. */
+export type RelationshipOptions = z.infer<typeof relationshipOptions>;
+
 const validation = z
   .object({
     minLength: z.number().optional(),
@@ -170,7 +192,13 @@ export type FieldNode = {
   localized?: boolean;
   hasMany?: boolean;
   relationTo?: string | string[];
-  options?: { id?: string; label: string; value: string }[];
+  /**
+   * A select's or radio's choices; on a relationship, its options as the
+   * registry stores them (`relationshipOptions`).
+   */
+  options?:
+    | { id?: string; label: string; value: string }[]
+    | RelationshipOptions;
   defaultValue?: unknown;
   validation?: {
     minLength?: number;
@@ -278,7 +306,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       localized: z.boolean().optional(),
       hasMany: z.boolean().optional(),
       relationTo: z.union([z.string(), z.array(z.string())]).optional(),
-      options: z.array(selectOption).optional(),
+      options: z.union([z.array(selectOption), relationshipOptions]).optional(),
       defaultValue: z.unknown().optional(),
       validation: validation.optional(),
       admin: fieldAdmin.optional(),
@@ -310,9 +338,10 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       fields: z.array(uiSchemaFieldSchema).optional(),
     })
     .superRefine((f, ctx) => {
+      const choices = Array.isArray(f.options) ? f.options : undefined;
       if (
         (f.type === "select" || f.type === "radio") &&
-        (!f.options || f.options.length === 0)
+        (!choices || choices.length === 0)
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -325,15 +354,29 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // media library and the builder's upload editor deliberately does
       // not collect relationTo, so requiring it here would reject every
       // builder-authored upload field the DB path accepts.
+      // An options object belongs to a relationship alone; anywhere else it
+      // would be read as choices it is not.
+      const related =
+        f.options !== undefined && !Array.isArray(f.options)
+          ? f.options
+          : undefined;
+      if (related !== undefined && f.type !== "relationship") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `only a relationship field may carry an options object`,
+          path: ["options"],
+        });
+      }
       if (
         f.type === "relationship" &&
+        related?.target === undefined &&
         (f.relationTo === undefined ||
           (typeof f.relationTo === "string" && f.relationTo.length === 0) ||
           (Array.isArray(f.relationTo) && f.relationTo.length === 0))
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `${f.type} fields require relationTo`,
+          message: `${f.type} fields require relationTo, or options.target`,
           path: ["relationTo"],
         });
       }

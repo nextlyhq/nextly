@@ -67,6 +67,7 @@ import {
 import {
   buildDesiredSnapshotFromConfig,
   generateMigration,
+  type AddedStatements,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -79,8 +80,8 @@ import type {
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { toSnakeCase } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
+import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest } from "../ui-schema/mutate";
-import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -125,6 +126,13 @@ export interface CollectionSave {
    * (`previewCollectionSave`): a save converts no column it was not shown to.
    */
   acknowledgedConversions?: readonly string[];
+  /**
+   * The statements that take the collection's many-to-many junction tables
+   * from before the save to after it, and back
+   * (`DynamicCollectionService.junctionStatements`): written into the change's
+   * file, since the generator writes no junction table.
+   */
+  junctions?: { up: readonly string[]; down: readonly string[] };
   /** The fields the person renamed, by name: written as renames, keeping their values. */
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
   /** Override the clock for tests. */
@@ -254,7 +262,9 @@ async function planSave(
     projectRoot: deps.projectRoot,
     uiSchemaFile: deps.config.db.uiSchemaFile,
   });
-  const table = resolveCollectionTableName(save.slug);
+  // Named as the generator names it (`uiToMinimal`), so the scope is the
+  // table the migration writes.
+  const table = uiToMinimal(collectionOf(save), "dc_").tableName;
   return {
     current,
     next: withCollection(current, save.slug, save.entity),
@@ -422,6 +432,9 @@ async function writeFiles(
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
+    ...(save.junctions === undefined
+      ? {}
+      : { appended: placedJunctions(save, save.junctions) }),
   });
   onWritten(change);
   return { adopt, change: [...convert, ...change] };
@@ -534,6 +547,19 @@ async function writeAtomically(path: string, text: string): Promise<void> {
   }
 }
 
+/** The collection a save is about: as it becomes, or as it was when deleted. */
+function collectionOf(save: CollectionSave): UiSchemaEntity {
+  const entity = save.entity ?? save.previous;
+  if (entity === null) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "A collection save names no collection.",
+      logContext: { slug: save.slug },
+    });
+  }
+  return entity;
+}
+
 /** A slug as a migration name spells it. */
 const migrationSlug = (slug: string) => slug.replace(/-/g, "_");
 
@@ -567,6 +593,7 @@ async function generateFor(
     table: string;
     now: Date;
     tablesAsTheyStand?: TableSpec[];
+    appended?: { up: AddedStatements; down: AddedStatements };
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -595,12 +622,37 @@ async function generateFor(
     ...(args.tablesAsTheyStand === undefined
       ? {}
       : { tablesAsTheyStand: args.tablesAsTheyStand }),
+    ...(args.appended === undefined
+      ? {}
+      : { appendedStatements: args.appended }),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,
   });
   if (result === null) return [];
   return (await sqlFiles(deps.migrationsDir)).filter(f => !before.has(f));
+}
+
+/**
+ * Where a save's junction statements go in its file. A delete drops each
+ * junction before the table it links, and its down recreates them after it;
+ * every other save changes them once the table stands, and its down undoes
+ * them before the table changes back.
+ */
+function placedJunctions(
+  save: CollectionSave,
+  junctions: NonNullable<CollectionSave["junctions"]>
+): { up: AddedStatements; down: AddedStatements } {
+  const none: readonly string[] = [];
+  return save.entity === null
+    ? {
+        up: { first: junctions.up, last: none },
+        down: { first: none, last: junctions.down },
+      }
+    : {
+        up: { first: none, last: junctions.up },
+        down: { first: junctions.down, last: none },
+      };
 }
 
 /** What `appMigrationInputs` is asked with for this app, its definition aside. */

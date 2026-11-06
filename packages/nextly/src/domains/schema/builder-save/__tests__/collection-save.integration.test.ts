@@ -35,10 +35,13 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { UiSchemaEntity } from "../../../../schemas/_zod/ui-schema";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { runFileMigrations } from "../../../../cli/commands/migrate";
+import { createLogger } from "../../../../cli/utils/logger";
 import { DynamicCollectionService } from "../../../dynamic-collections/services/dynamic-collection-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { checksumOf } from "../../migrate/applied-checksums";
 import { splitSqlStatements } from "../../migrate/split-sql";
+import { junctionTableNameFor } from "../../services/field-column-descriptor";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   previewCollectionSave,
@@ -69,9 +72,12 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  file = "test.db"
+): Promise<TestNextly> {
   if (dialect !== "sqlite") return createTestNextly({ dialect });
-  const url = `file:${join(dir, "test.db")}`;
+  const url = `file:${join(dir, file)}`;
   process.env.DB_DIALECT = "sqlite";
   process.env.DATABASE_URL = url;
   _resetEnvCache();
@@ -357,6 +363,74 @@ describe.each(getConfiguredTestDialects())(
         change: "update",
       });
       expect(await columns()).toContain("subtitle");
+    });
+
+    it("writes a many-to-many field's join table into the file: made here, replayed on an empty database, dropped with the collection", async () => {
+      const m2m = {
+        name: "tags",
+        type: "relationship",
+        options: { target: "tags", relationType: "manyToMany" },
+      };
+      const junction = junctionTableNameFor("dc_posts", m2m);
+      await writeCollectionSave(deps(), {
+        slug: "tags",
+        previous: null,
+        entity: {
+          slug: "tags",
+          labels: { singular: "Tag", plural: "Tags" },
+          fields: [text("label")],
+        } as UiSchemaEntity,
+        change: "create",
+      });
+
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body"), m2m as UiSchemaEntity["fields"][number]]),
+        change: "create",
+        junctions: new DynamicCollectionService(
+          adapter,
+          quiet as never
+        ).junctionStatements("dc_posts", [], [m2m as never]),
+      });
+
+      const files = migrationFiles();
+      expect(files).toHaveLength(2);
+      expect(
+        readFileSync(join(dir, "migrations", files[1]!), "utf-8")
+      ).toContain(junction);
+      expect(await adapter.tableExists(junction)).toBe(true);
+      expect((await appliedRows()).map(r => r.filename)).toEqual(files);
+
+      // A deploy's database, empty, replays the folder and gets the same tables.
+      await instance?.destroy();
+      instance = await boot(dialect, "replay.db");
+      const fresh = instance.adapter as unknown as DrizzleAdapter;
+      await runFileMigrations({
+        adapter: fresh as never,
+        db: fresh.getDrizzle(),
+        dialect: fresh.getCapabilities().dialect,
+        migrationsDir: join(dir, "migrations"),
+        logger: createLogger({ quiet: true }),
+      });
+      expect(await fresh.tableExists("dc_posts")).toBe(true);
+      expect(await fresh.tableExists(junction)).toBe(true);
+
+      await writeCollectionSave(deps({ adapter: fresh }), {
+        slug: "posts",
+        previous: posts([
+          text("body"),
+          m2m as UiSchemaEntity["fields"][number],
+        ]),
+        entity: null,
+        change: "delete",
+        junctions: new DynamicCollectionService(
+          fresh,
+          quiet as never
+        ).junctionStatements("dc_posts", [m2m as never], []),
+      });
+      expect(await fresh.tableExists("dc_posts")).toBe(false);
+      expect(await fresh.tableExists(junction)).toBe(false);
     });
 
     /** A table an earlier version's Builder made, as it made it: in the database, in no snapshot. */
