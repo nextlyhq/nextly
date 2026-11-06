@@ -128,6 +128,7 @@ import {
 } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import {
+  hookChangedWholeNumberIssues,
   validateEntryData,
   type EntryWriteContext,
   type ValidationIssue,
@@ -1475,6 +1476,20 @@ interface EntryValidationArgs {
    * language's value; absent means the app's default language.
    */
   writeLocale?: string;
+  /**
+   * Whether the document merges stored values the request did not carry (a
+   * go-live merge, a promoted draft). The whole-number rule binds values a
+   * caller writes, so it skips such a document — see the option's comment on
+   * `ValidateEntryOptions` for the boundary.
+   */
+  assembledFromStorage?: boolean;
+  /**
+   * The paths that hold a value kept from the stored row because a rule
+   * denies it to this writer — the restore's answer, which the whole-number
+   * rule skips: a legacy stored fraction under a denied path is the row's
+   * own content, not this write's. Absent on a write that restores nothing.
+   */
+  storedProvenancePaths?: ReadonlySet<string>;
   /** What `localizedRequiredContext` resolved for a localized write. */
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
@@ -2885,6 +2900,29 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+  /**
+   * The component schemas the hook walk resolves for a component held in a
+   * group or repeater, by slug, or nothing when the fields hold none: the
+   * gate judged such a component's value against these fields before the
+   * hooks ran, so the walk that judges what the hooks left behind resolves
+   * the same schemas. On the pool, as the gate on these paths reads.
+   */
+  private async hookWalkComponentResolver(
+    fields: FieldDefinition[],
+    executor?: unknown
+  ) {
+    return containedComponentResolver(
+      fields as unknown as FieldConfig[],
+      async componentSlug =>
+        (await this.fieldGroupDataService?.getComponentFields(
+          componentSlug,
+          executor
+        )) ?? null,
+      false
+    );
+  }
+
+  /**
    * What {@link assertEntryValid} refuses a write with, without refusing it:
    * every violation, or none.
    */
@@ -2917,6 +2955,10 @@ export class CollectionMutationService extends BaseService {
       {
         mode: args.mode,
         req: args.user ? { user: args.user } : {},
+        ...(args.assembledFromStorage ? { assembledFromStorage: true } : {}),
+        ...(args.storedProvenancePaths
+          ? { storedProvenancePaths: args.storedProvenancePaths }
+          : {}),
         ...args.localeCtx,
         // A component inside a group or repeater is judged here, since no
         // component write reaches it; read on the write's own connection.
@@ -3618,7 +3660,17 @@ export class CollectionMutationService extends BaseService {
       locale?: string;
     };
     executor?: unknown;
-  }): Promise<void> {
+    /**
+     * The paths that hold a value kept from the stored row because a rule
+     * denies it to this writer, with the value each path holds, so the
+     * whole-number rule leaves them to the row unless a hook changed one —
+     * a legacy stored fraction under one is the row's own content, not
+     * this write's. Empty on a write that restores nothing.
+     */
+  }): Promise<{
+    storedPaths: ReadonlySet<string>;
+    storedValues: ReadonlyMap<string, unknown>;
+  }> {
     // One resolver for the entry's rules and the field groups', read on the
     // write's own connection: inside a transaction, the pool's would wait on
     // the connection the transaction holds and miss its writes.
@@ -3638,7 +3690,7 @@ export class CollectionMutationService extends BaseService {
       access,
       executor: args.executor,
     });
-    await keepDeniedAtStoredOnUpdate({
+    return keepDeniedAtStoredOnUpdate({
       data: args.data,
       stored: await storedIn.read(args.params.locale),
       storedIn,
@@ -3724,6 +3776,12 @@ export class CollectionMutationService extends BaseService {
        * library (a blocks field's composition) judges it on this write.
        */
       write: EntryWriteContext;
+      /**
+       * Whether `data` is the row's own, carried by an assembled document the
+       * write promotes or publishes: the instances' own pass then leaves a
+       * legacy stored fraction alone, as the gate judged this document.
+       */
+      assembledFromStorage?: boolean;
     }
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
@@ -3740,6 +3798,7 @@ export class CollectionMutationService extends BaseService {
         // Who the write is made as, for each instance's own field rules.
         access: args.access,
         write: args.write,
+        assembledFromStorage: args.assembledFromStorage,
       });
     } catch (error: unknown) {
       throw markWriteIntegrityFailure(error);
@@ -4872,6 +4931,7 @@ export class CollectionMutationService extends BaseService {
       user: args.user,
       reader: args.reader,
       readLocale: args.locale,
+      assembledFromStorage: true,
       localeCtx: await this.publishLanguageContext({
         collectionName: args.collectionName,
         locale: args.locale,
@@ -4930,6 +4990,7 @@ export class CollectionMutationService extends BaseService {
         readLocale: locale,
         goesLive: true,
         batch: args.relations.batch,
+        assembledFromStorage: true,
         localeCtx: await this.publishLanguageContext({
           collectionName: args.collectionName,
           locale,
@@ -7288,7 +7349,9 @@ export class CollectionMutationService extends BaseService {
 
       // Collection-level beforeChange hooks, on data the validation gate has
       // just passed. Paired with the field-level phase below so the two
-      // declarations of that name mean the same moment.
+      // declarations of that name mean the same moment. What the hooks leave
+      // behind is judged after the field-level phase — a hook write is a
+      // write the gate never saw.
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "create",
@@ -7310,6 +7373,19 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
+
+      // The whole-number floor judges what the hooks changed: a fraction a
+      // hook produced would reach the integer column and let the database
+      // decide, on every verb this gate guards.
+      const hookIssues = hookChangedWholeNumberIssues(
+        finalData,
+        fields,
+        "",
+        await this.hookWalkComponentResolver(fields)
+      );
+      if (hookIssues.length > 0) {
+        throw NextlyError.validation({ errors: hookIssues });
+      }
 
       // A beforeChange hook runs after validation and can also set `slug`;
       // re-sanitize once more so the stored value stays URL-safe.
@@ -13405,7 +13481,7 @@ export class CollectionMutationService extends BaseService {
       // is passed so owner/record-aware access rules can evaluate.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      await this.keepDeniedFieldsAtStored({
+      const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored({
         data: finalData,
         storedId: String(existingEntry.id),
         collectionName: params.collectionName,
@@ -13454,12 +13530,15 @@ export class CollectionMutationService extends BaseService {
             ? {}
             : { writeLocale: params.locale }),
           id: params.entryId,
+          storedProvenancePaths: storedPaths,
         });
       }
 
       // Collection-level beforeChange hooks, on data the validation gate has
       // just passed. Paired with the field-level phase below so the two
-      // declarations of that name mean the same moment.
+      // declarations of that name mean the same moment. What the hooks leave
+      // behind is judged after the field-level phase — a hook write is a
+      // write the gate never saw.
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "update",
@@ -13482,6 +13561,24 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         user: params.user,
       });
+
+      // The whole-number floor judges what the hooks changed: a fraction a
+      // hook produced would reach the integer column and let the database
+      // decide, on every verb this gate guards. Paths the restore kept from
+      // the row for a denied rule are the row's own, not judged.
+      const hookIssues = hookChangedWholeNumberIssues(
+        finalData,
+        fields,
+        "",
+        await this.hookWalkComponentResolver(fields),
+        storedPaths,
+        // A hook can reach what the restore kept; a value it changed there
+        // is judged, while the row's own content stays the row's.
+        storedValues
+      );
+      if (hookIssues.length > 0) {
+        throw NextlyError.validation({ errors: hookIssues });
+      }
 
       // A password the update leaves out of a container keeps its stored hash.
       const reach = await this.passwordReach(fields);
@@ -18042,6 +18139,19 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
+        // The whole-number floor judges what the hooks changed: a fraction a
+        // hook produced would reach the integer column and let the database
+        // decide, on every verb this gate guards.
+        const hookIssues = hookChangedWholeNumberIssues(
+          finalData,
+          fields,
+          "",
+          // On the write's own connection, as the gate on this path reads.
+          await this.hookWalkComponentResolver(fields, tx.getDrizzle())
+        );
+        if (hookIssues.length > 0) {
+          throw NextlyError.validation({ errors: hookIssues });
+        }
         // A beforeChange hook can also set `slug`, so re-sanitize before
         // storage.
         await this.reSanitizeSlug(finalData, isSlugTaken);
@@ -18715,7 +18825,7 @@ export class CollectionMutationService extends BaseService {
       // explicit override bypasses.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      await this.keepDeniedFieldsAtStored({
+      const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored({
         data: finalData,
         storedId: String(existingEntry.id),
         collectionName: params.collectionName,
@@ -18759,6 +18869,7 @@ export class CollectionMutationService extends BaseService {
           reader: params,
           id: entryId,
           tx,
+          storedProvenancePaths: storedPaths,
         });
       }
 
@@ -18786,6 +18897,22 @@ export class CollectionMutationService extends BaseService {
           operation: "update",
           user: params.user,
         });
+        // The whole-number floor judges what the hooks changed: a fraction a
+        // hook produced would reach the integer column and let the database
+        // decide, on every verb this gate guards. Paths the restore kept
+        // from the row for a denied rule are the row's own, not judged.
+        const hookIssues = hookChangedWholeNumberIssues(
+          finalData,
+          fields,
+          "",
+          // On the write's own connection, as the gate on this path reads.
+          await this.hookWalkComponentResolver(fields, tx.getDrizzle()),
+          storedPaths,
+          storedValues
+        );
+        if (hookIssues.length > 0) {
+          throw NextlyError.validation({ errors: hookIssues });
+        }
       }
 
       // Read AFTER every hook that may decide it: a `beforeChange` hook can
@@ -19088,6 +19215,7 @@ export class CollectionMutationService extends BaseService {
           mode: "update",
           user: params.user,
           reader: params,
+          assembledFromStorage: true,
           id: entryId,
           tx,
           goesLive: true,
@@ -19497,6 +19625,13 @@ export class CollectionMutationService extends BaseService {
               localizedUpdate
             )
           ),
+          // A write that promotes or publishes carries the row's own content
+          // in its component values — the merged document the gate judged
+          // assembled — so the instances' own pass leaves a legacy stored
+          // fraction to the row, as the gate did.
+          ...(publishes && !alreadyLive
+            ? { assembledFromStorage: true }
+            : {}),
         });
         // Which media items the entry uses now, from what this update stored.
         // A held edit stored nothing, so it changes nothing here either.
