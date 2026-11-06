@@ -43,6 +43,7 @@ import { isMissOrDenied } from "./miss-or-denied";
 import {
   assertCountKeys,
   assertNotHidden,
+  createPublicReader,
   hiddenOf,
   refuse,
   selectedFrom,
@@ -114,8 +115,11 @@ function namedFields(
  *
  * Who answers "may the visitor read it" follows the public reader:
  * - given `binding.declarations`, a reader over something other than this
- *   process's Nextly, the declarations answer, as they answer the public
- *   reader: a field they declare hidden is refused;
+ *   process's Nextly, the SAME source answers, asked as the visitor: the
+ *   public reader's own read of the query (one row, its id only), over the
+ *   source this reader reads, refuses what the published page refuses, the
+ *   declared hidden fields and the source's own field rules alike. The
+ *   query's values never come back from it;
  * - otherwise this process's instance answers, through core's visitor field
  *   reader (`visitorFields`), judged as no one in the read's language: a
  *   field declared hidden and a field whose read rule denies the visitor are
@@ -126,16 +130,27 @@ function namedFields(
  */
 async function assertListFieldsPublic(
   query: Pick<PublicReadQuery, "collection" | "filters" | "sort" | "locale">,
-  binding: PublicReaderBinding
+  binding: PublicReaderBinding,
+  source: PublicReaderSource
 ): Promise<void> {
   const named = namedFields(query);
   // Nothing named, nothing to judge: no instance or declaration is asked.
   if (named.length === 0) return;
   if (binding.declarations !== undefined) {
+    // What the declarations say is hidden is refused without a read; what
+    // only the source's field rules decide is asked of the source.
     assertNotHidden(
       query,
       await hiddenOf(binding, { kind: "collection", slug: query.collection })
     );
+    await createPublicReader(source, binding).find({
+      collection: query.collection,
+      ...(query.filters === undefined ? {} : { filters: query.filters }),
+      ...(query.sort === undefined ? {} : { sort: query.sort }),
+      ...(query.locale === undefined ? {} : { locale: query.locale }),
+      limit: 1,
+      select: ["id"],
+    });
     return;
   }
   const { inReadLanguage, visitorFields } = await import("./visitor-fields");
@@ -204,19 +219,24 @@ export function createEditorReader(
     runDetachedFromRequest(() => runAsPrincipal(null, () => nextly.find(args)));
   return Object.freeze({
     async find(query: PublicReadQuery): Promise<PublicReadResult> {
-      // The published page's refusals first, so a query it refuses reads
-      // nothing here either.
-      await assertListFieldsPublic(query, binding);
-      return read(toEditorFind(query, person, binding));
+      // The query's own shape first (the public reader's refusals, before
+      // anything is asked of its fields), then the published page's refusals
+      // of its fields, so a query either refuses reads nothing as the person.
+      const args = toEditorFind(query, person, binding);
+      await assertListFieldsPublic(query, binding, nextly);
+      return read(args);
     },
     async count(query: PublicCountQuery): Promise<number> {
       // Only what narrows a count, as the public reader's count takes, and
       // the published page's refusals, before anything is read.
       assertCountKeys(query);
-      await assertListFieldsPublic(query, binding);
-      const result = await read(
-        toEditorFind({ ...query, limit: 1, select: ["id"] }, person, binding)
+      const args = toEditorFind(
+        { ...query, limit: 1, select: ["id"] },
+        person,
+        binding
       );
+      await assertListFieldsPublic(query, binding, nextly);
+      const result = await read(args);
       return result.meta.total;
     },
     async findSingle(query: PublicSingleQuery): Promise<PublicSingleResult> {
