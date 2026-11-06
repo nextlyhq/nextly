@@ -199,7 +199,10 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: NOTES,
           id,
-          data: { content: page(heroId, { title: "New", body: "Kept" }) },
+          data: {
+            content: page(heroId, { title: "New", body: "Kept" }),
+            _overwrite: true,
+          },
           overrideAccess: true,
         })
       );
@@ -213,7 +216,7 @@ describe.each(getConfiguredTestDialects())(
       const single = await refusal(
         t.nextly.updateSingle({
           slug: HOMEPAGE,
-          data: { content: page(heroId, { title: "New" }) },
+          data: { content: page(heroId, { title: "New" }), _overwrite: true },
           overrideAccess: true,
         })
       );
@@ -236,6 +239,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           title: "Edited",
           content: page(heroId, { title: "Old", body: "Changed" }),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -255,7 +259,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: NOTES,
         id,
-        data: { content: page(heroId, { title: "New", body: "Kept" }) },
+        data: {
+          content: page(heroId, { title: "New", body: "Kept" }),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
 
@@ -283,7 +290,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: heroId,
-        data: { content: hero(["body"]), status: "published" },
+        data: {
+          content: hero(["body"]),
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
 
@@ -299,14 +310,17 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: heroId,
-        data: { title: "Hero, renamed", status: "published" },
+        data: { title: "Hero, renamed", status: "published", _overwrite: true },
         overrideAccess: true,
       });
       const refused = await refusal(
         t.nextly.update({
           collection: NOTES,
           id,
-          data: { content: page(heroId, { title: "New", body: "Kept" }) },
+          data: {
+            content: page(heroId, { title: "New", body: "Kept" }),
+            _overwrite: true,
+          },
           overrideAccess: true,
         })
       );
@@ -354,7 +368,11 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: COMPONENTS_SLUG,
           id: heroId,
-          data: { content: hero(["body"]), status: "published" },
+          data: {
+            content: hero(["body"]),
+            status: "published",
+            _overwrite: true,
+          },
           overrideAccess: true,
         })
       );

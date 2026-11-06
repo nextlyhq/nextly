@@ -347,6 +347,42 @@ describe("PlaceTabs", () => {
     expect(
       screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")
     ).toBe("true");
+
+    // Sent again later, it does not take the page away: the choice of it was
+    // let go of when it went.
+    meta.contributions = {
+      "user.detail": {
+        tab: [
+          billingTab(),
+          { ...billingTab(), id: "acme-a.usage", label: "Usage" },
+        ],
+      },
+    };
+    rerender(page());
+    expect(screen.getByTestId("page-content").style.display).not.toBe("none");
+    expect(
+      screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("the page's own tab names no panel that is not there", () => {
+    meta.contributions = { "user.detail": { tab: [billingTab()] } };
+
+    render(
+      <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">
+        <div data-testid="page-content">content</div>
+      </PlaceTabs>
+    );
+
+    const own = screen.getByRole("tab", { name: "Profile" });
+    expect(own.hasAttribute("aria-controls")).toBe(false);
+    // Every panel a tab does name is on the page.
+    for (const tab of screen.getAllByRole("tab")) {
+      const controls = tab.getAttribute("aria-controls");
+      if (tab.getAttribute("aria-selected") === "true" && controls) {
+        expect(document.getElementById(controls)).not.toBeNull();
+      }
+    }
   });
 
   it("draws no tab while the page's context is not known yet", () => {
@@ -364,6 +400,29 @@ describe("PlaceTabs", () => {
 });
 
 describe("TargetSlot while the page's context is not known yet", () => {
+  it("draws the page's own part a contribution replaces, until the contribution can be drawn", () => {
+    // The server's list holds the replacement in the part's place, and no
+    // marker for the part; the replacement waits for the context.
+    meta.contributions = {
+      "user.detail": {
+        block: [block("acme-a.first", FIRST, { replaces: "content" })],
+      },
+    };
+    const page = (context: typeof CONTEXT | null) => (
+      <TargetSlot
+        place="user.detail"
+        context={context}
+        builtIns={{ content: <div data-testid="page-content">content</div> }}
+      />
+    );
+
+    const { rerender } = render(page(null));
+    expect(drawn()).toEqual(["content"]);
+
+    rerender(page(CONTEXT));
+    expect(drawn()).toEqual(["first block"]);
+  });
+
   it("draws only the page's own parts", () => {
     meta.contributions = {
       "user.detail": {

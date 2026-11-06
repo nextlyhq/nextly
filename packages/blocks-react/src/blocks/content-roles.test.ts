@@ -31,6 +31,7 @@ const CONTENT: Record<string, readonly string[]> = {
     "entryId",
   ],
   "core/button": ["label", "href", "entryCollection", "entryId", "ariaLabel"],
+  "core/icon": ["icon", "label", "href", "entryCollection", "entryId"],
   "core/quote": ["text", "attribution", "source", "citeUrl"],
   "core/list": ["items"],
   "core/embed": ["src", "title"],

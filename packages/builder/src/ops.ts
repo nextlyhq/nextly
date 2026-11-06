@@ -9,6 +9,8 @@
  *   planning that action must reach the same function rather than a copy.
  * - The actions as data (`./composition-actions`): the schemas the page
  *   builder's routes parse with, and the definition planner they run.
+ * - The collection template actions (`./template-actions`), the schema the
+ *   template route parses with.
  *
  * The editor's own modules import `./op-vocabulary`, never this entry, so the
  * schemas load only where they are used.
@@ -85,3 +87,10 @@ export {
   type ListQueryChange,
   type PageAction,
 } from "./composition-actions";
+
+export {
+  TEMPLATE_ACTION_KINDS,
+  templateActionJsonSchema,
+  templateActionSchema,
+  type TemplateAction,
+} from "./template-actions";

@@ -49,6 +49,15 @@ export function sameLook(
   );
 }
 
+/**
+ * A look's key as one string, for a map keyed by look: its block type and id
+ * together, as {@link sameLook} compares them. JSON, since an id is any
+ * string and no separator could be told apart from one.
+ */
+export function lookKeyOf(look: LookKey): string {
+  return JSON.stringify([look.blockType, look.id]);
+}
+
 /** One look as the Design panel lists it. */
 export interface BlockLookRow extends SharedStyleRow {
   /** The block type the look belongs to. */
@@ -60,8 +69,10 @@ export interface BlockLookRow extends SharedStyleRow {
    */
   readonly own: boolean;
   /**
-   * Another block type's own look carries the same id, so a write by id
-   * would reach both: the look is shown, and held from editing.
+   * Another entry in the library carries the own look's id, whether another
+   * type's own look, a worn look or a shared style, so a write by id would
+   * reach both: the look is shown, and held from editing. Always false for a
+   * worn look.
    */
   readonly sharedId: boolean;
 }
@@ -83,11 +94,7 @@ export function blockLookGroups(
   suppliedIds: ReadonlySet<string>
 ): BlockLookGroup[] {
   const ownRead = ownLooksRead(library);
-  const shared = new Set(
-    ownRead
-      .map(entry => entry.id)
-      .filter((id, at, ids) => ids.indexOf(id) !== at)
-  );
+  const shared = idsHeldTwice(library);
   const own = new Map(
     ownRead.map(entry => [
       entry.blockType as string,
@@ -120,6 +127,23 @@ export function blockLookGroups(
       ],
     };
   });
+}
+
+/**
+ * The ids more than one library entry carries, whatever each entry is: a
+ * write to the site's classes by id would reach every one of them.
+ */
+function idsHeldTwice(library: readonly NamedClass[]): Set<string> {
+  const seen = new Set<string>();
+  const twice = new Set<string>();
+  for (const entry of library) {
+    // Stored data: an entry may be malformed, and one with no id shares none.
+    const id = (entry as { id?: unknown } | null)?.id;
+    if (typeof id !== "string") continue;
+    if (seen.has(id)) twice.add(id);
+    seen.add(id);
+  }
+  return twice;
 }
 
 /** An own look as a row: no class selects it, so its class name is empty. */

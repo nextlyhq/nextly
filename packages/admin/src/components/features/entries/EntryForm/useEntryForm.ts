@@ -407,6 +407,14 @@ export interface UseEntryFormReturn {
    * not read it yet: that version no longer replaces the edits when it does.
    */
   stopAwaitingCurrentVersion: () => void;
+  /**
+   * The author's own change, made by a plugin's surface: the first copy of
+   * this entry NEWER than the one now on screen is taken in keeping the
+   * unsaved edits over it, as after the form's own save. A read of the same
+   * or an older version (one that started before the change) leaves it
+   * expected; the expectation ends with that newer copy, or with the entry.
+   */
+  expectOwnChange: () => void;
 }
 
 // ============================================================================
@@ -501,15 +509,49 @@ function entryIdentity(
 function resetDecision(
   last: EntryIdentity | undefined,
   next: EntryIdentity,
-  ownSave: { inFlight: boolean; storedVersion?: string }
-): "keep-unsaved" | "full" {
+  ownSave: OwnWrites
+): "keep-unsaved" | "own-change" | "full" {
   if (last === undefined) return "full";
   if (last.id !== next.id || last.place !== next.place) return "full";
   if (last.version === next.version) return "keep-unsaved";
   const ownEcho =
     ownSave.inFlight ||
     (next.version !== null && next.version === ownSave.storedVersion);
-  return ownEcho ? "keep-unsaved" : "full";
+  if (ownEcho) return "keep-unsaved";
+  // A version newer than the one on screen when the author's own plugin
+  // surface changed the entry: unsaved edits stay over it, as over their own
+  // save, and the copy starts from it. A read that started before the change
+  // brings no newer version and is judged as it always was.
+  return newerThan(next.version, ownSave.ownChange) ? "own-change" : "full";
+}
+
+/**
+ * Whether `version` is newer than the one an expected own change was made
+ * over. Versions are the entry's `updatedAt`, so newer is later in time; a
+ * change made over a copy with no version is passed by any version.
+ */
+function newerThan(
+  version: string | null,
+  ownChange: OwnWrites["ownChange"]
+): boolean {
+  if (ownChange === undefined || version === null) return false;
+  if (ownChange.over === null) return true;
+  return Date.parse(version) > Date.parse(ownChange.over);
+}
+
+/**
+ * What the form knows of its own writes, which decides how a newer copy of
+ * the entry is taken in: a save in flight, the version the last save stored,
+ * and whether the author's own plugin surface has just changed the entry.
+ */
+interface OwnWrites {
+  inFlight: boolean;
+  storedVersion?: string;
+  /**
+   * A change the author's own plugin surface made, being read back: the
+   * entry it was made on and the version on screen when it was made.
+   */
+  ownChange?: { id: EntryIdentity["id"]; over: string | null };
 }
 
 /**
@@ -673,7 +715,9 @@ function useConflictHold(
   // echo of this author's own save keeps the version that save answered.
   const resetBy = useCallback(
     (read: EntryData, decision: ReturnType<typeof resetDecision>) => {
-      if (decision === "full") adoptRead(read);
+      // A plugin's own change is a read too: its version is what the copy
+      // starts from, though the unsaved edits stay over it.
+      if (decision !== "keep-unsaved") adoptRead(read);
     },
     [adoptRead]
   );
@@ -714,7 +758,7 @@ function useConflictChoices(choices: {
   locale: string | undefined;
   readDraft: boolean | undefined;
   resetKey: RefObject<EntryIdentity | undefined>;
-  ownSave: RefObject<{ inFlight: boolean; storedVersion?: string }>;
+  ownSave: RefObject<OwnWrites>;
   submissionLatch: RefObject<boolean>;
   /** Whether writes are held, as the form's own saves ask before writing. */
   writesHeld: () => boolean;
@@ -939,7 +983,7 @@ export function useEntryForm({
   // see `handleDiscardWorkingDraft`.
   const [awaitingEntry, setAwaitingEntry] = useState(false);
   const resetKey = useRef<EntryIdentity | undefined>(undefined);
-  const ownSave = useRef<{ inFlight: boolean; storedVersion?: string }>({
+  const ownSave = useRef<OwnWrites>({
     inFlight: false,
   });
   // The submit guard's synchronous half, the form as a refused publish's way
@@ -966,12 +1010,18 @@ export function useEntryForm({
     const next = entryIdentity(entry, locale, readDraft);
     if (holdsRead(entry, next)) return;
     const decision = resetDecision(resetKey.current, next, ownSave.current);
+    // Taken in once: a later newer version is someone else's again.
+    // Taken in once: a later newer version is someone else's again. And
+    // another entry ends it, since it was about the one it was made on.
+    if (
+      decision === "own-change" ||
+      ownSave.current.ownChange?.id !== next.id
+    ) {
+      ownSave.current.ownChange = undefined;
+    }
     resetKey.current = next;
     resetBy(entry, decision);
-    form.reset(
-      defaultValues,
-      decision === "keep-unsaved" ? KEEP_UNSAVED : undefined
-    );
+    form.reset(defaultValues, decision === "full" ? undefined : KEEP_UNSAVED);
     setAwaitingEntry(false);
   }, [entry, mode, defaultValues, form, locale, readDraft, holdsRead, resetBy]);
 
@@ -980,6 +1030,10 @@ export function useEntryForm({
     collectionSlug: collection.name,
     showToast: true,
     setError: form.setError,
+    // A refusal's reason goes on its field only where the form draws one,
+    // which its conditions decide from the values on screen.
+    fields,
+    valueAt: path => form.getValues(path),
   });
 
   // The read asks every language's translation state only of a user who may
@@ -1008,6 +1062,8 @@ export function useEntryForm({
         setError: form.setError,
         // For the labels a refusal over out-of-date shared fields names them by.
         fields,
+        // And whether the form draws a refused field, by its conditions.
+        valueAt: path => form.getValues(path),
         // Route the save to the active content language.
         locale,
         // Match the editor's read mode so the optimistic update, rollback, and
@@ -1297,6 +1353,15 @@ export function useEntryForm({
     version,
   ]);
 
+  // The author's own plugin surface changed the entry: the copy read back is
+  // theirs, so it keeps their unsaved edits over it. Until released.
+  const expectOwnChange = useCallback((): void => {
+    const shown = resetKey.current;
+    if (shown === undefined) return;
+    // Made over the version on screen now; only a newer one is its copy.
+    ownSave.current.ownChange = { id: shown.id, over: shown.version };
+  }, []);
+
   // Cancel handler
   const handleCancel = useCallback(() => {
     onCancel?.();
@@ -1328,5 +1393,6 @@ export function useEntryForm({
     holdForVersionChange: version.holdForChange,
     releaseVersionHold: version.release,
     stopAwaitingCurrentVersion: hold.stopAwaiting,
+    expectOwnChange,
   };
 }

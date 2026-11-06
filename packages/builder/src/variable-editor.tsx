@@ -27,6 +27,7 @@ import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
 import * as React from "react";
 
+import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
@@ -38,6 +39,14 @@ import {
   type VariableEntry,
 } from "./tokens-studio";
 import { swatchStyle } from "./variable-swatch";
+import {
+  combinedReach,
+  variableRemoval,
+  variableStatus,
+  type VariableReach,
+  type VariableRemoval,
+} from "./variable-usage";
+import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
 
 export interface VariableEditorProps {
   entry: VariableEntry;
@@ -51,6 +60,12 @@ export interface VariableEditorProps {
   onChange: (tokens: SiteTokenSet) => void;
   /** The variable was removed; the popover's row no longer exists. */
   onRemoved: () => void;
+  /**
+   * How widely the variable is used, where the host reads it: said beside
+   * Remove, which refuses in place while it is used. Absent: Remove confirms
+   * as it always has.
+   */
+  usage?: VariableUsageHere;
 }
 
 export function VariableEditor({
@@ -60,6 +75,7 @@ export function VariableEditor({
   readOnly,
   onChange,
   onRemoved,
+  usage,
 }: VariableEditorProps): React.JSX.Element {
   const id = React.useId();
   const { row, lineHeight } = entry;
@@ -136,6 +152,7 @@ export function VariableEditor({
           suppliedOf={suppliedOf}
           onChange={onChange}
           onRemoved={onRemoved}
+          usage={usage}
         />
       )}
     </div>
@@ -763,6 +780,10 @@ function DarkValue({
  * merge straight back on the next read. A half the site added can be removed,
  * behind a confirm naming it. A type size can be one of each, so both actions
  * can show at once.
+ *
+ * Where the host reads how widely the variable is used, its own half says so
+ * beside Remove, and Remove, still pressable, opens why it cannot go ahead
+ * while the variable is used or not counted yet, in place of the confirm.
  */
 function Actions({
   entry,
@@ -771,6 +792,7 @@ function Actions({
   suppliedOf,
   onChange,
   onRemoved,
+  usage,
 }: {
   entry: VariableEntry;
   token: SiteToken;
@@ -778,91 +800,263 @@ function Actions({
   suppliedOf: (identity: string) => SiteToken | undefined;
   onChange: (tokens: SiteTokenSet) => void;
   onRemoved: () => void;
+  usage: VariableUsageHere | undefined;
 }): React.JSX.Element | null {
-  const [confirming, setConfirming] = React.useState(false);
-  const parts = partsOf(entry, token, tokens, suppliedOf);
+  const plan = removalPlan(
+    entry,
+    partsOf(entry, token, tokens, suppliedOf),
+    usage
+  );
+  const { step, setStep, remove } = useRemoveStep(plan);
+  const shown = shownStep(step, plan.removal);
+  if (shown === "confirm" && plan.removable.length > 0) {
+    return (
+      <ConfirmRemove
+        what={plan.what}
+        onKeep={() => setStep("idle")}
+        onRemove={() => {
+          onChange(withoutParts(tokens, plan.removable));
+          onRemoved();
+        }}
+      />
+    );
+  }
+  if (plan.changed.length === 0 && plan.removable.length === 0) return null;
+  return (
+    <>
+      <ActionRow
+        plan={plan}
+        checking={shown === "checking"}
+        onReset={() => onChange(resetParts(tokens, plan.changed))}
+        onRemove={remove}
+      />
+      {shown === "refused" &&
+      plan.gate !== undefined &&
+      plan.reach !== undefined ? (
+        <VariableRefusal
+          name={plan.named}
+          loss={plan.loss}
+          parts={plan.removable}
+          reach={plan.reach}
+          usage={plan.gate}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** What Reset and Remove act on, and what Remove may do. */
+interface RemovalPlan {
+  /** The halves the site's code supplies that the author changed. */
+  readonly changed: readonly Part[];
+  /** The halves the site added, which Remove takes away. */
+  readonly removable: readonly Part[];
+  /** What the confirm names: the variable, or the half that goes. */
+  readonly what: string;
+  /**
+   * What the refusal names: the variable, or the half that goes, as its
+   * heading says it ("Body's line height").
+   */
+  readonly named: string;
+  /** What the places would lose, by what goes: "colour", "line height". */
+  readonly loss: string;
+  /** Remove's own words: "Remove", or "Remove line height". */
+  readonly label: string;
+  /** The usage that gates Remove, where the host reads it. */
+  readonly gate: VariableUsageHere | undefined;
+  /**
+   * How widely what Remove takes away is used, together: a type size and
+   * its line height when both go, so either one in use refuses.
+   */
+  readonly reach: VariableReach | undefined;
+  readonly removal: VariableRemoval;
+}
+
+/** The plan for an entry's halves, under the usage the host read. */
+function removalPlan(
+  entry: VariableEntry,
+  parts: readonly Part[],
+  usage: VariableUsageHere | undefined
+): RemovalPlan {
   const changed = parts.filter(
     part =>
       part.from !== undefined &&
       (part.held === undefined || !sameSiteToken(part.held, part.from))
   );
   const removable = parts.filter(part => part.from === undefined);
+  const gate = removable.length === 0 ? undefined : usage;
+  const reach =
+    gate === undefined
+      ? undefined
+      : combinedReach(removable.map(part => gate.reachOf(part.identity)));
   // The whole variable when every half is the site's own; otherwise only the
   // half that is, named, since the other stays.
+  const halves = removable.map(part => part.name).join(" and ");
   const whole = removable.length === parts.length;
-  const what = whole
-    ? entry.label
-    : `${removable.map(part => part.name).join(" and ")} of ${entry.label}`;
-  if (confirming && removable.length > 0) {
-    return (
-      <div
-        className="nx-vars-editor__confirm"
-        role="group"
-        aria-label={`Remove ${what}`}
-      >
-        <p>
-          Remove <strong>{what}</strong>? Any block using it loses that style.
-          The page still renders.
-        </p>
-        <div className="nx-vars-editor__actions">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="nx-vars-editor__button"
-            onClick={() => setConfirming(false)}
-          >
-            Keep
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            className="nx-vars-editor__button"
-            onClick={() => {
-              onChange(withoutParts(tokens, removable));
-              onRemoved();
-            }}
-          >
-            Remove {what}
-          </Button>
-        </div>
-      </div>
-    );
+  const [alone] = removable;
+  return {
+    changed,
+    removable,
+    what: whole ? entry.label : `${halves} of ${entry.label}`,
+    named: whole ? entry.label : `${entry.label}'s ${halves}`,
+    // A half going on its own loses what that half is; the whole, what the
+    // variable's kind is.
+    loss:
+      !whole && removable.length === 1 && alone !== undefined
+        ? alone.loss
+        : VARIABLE_LOSS_WORDS[entry.row.kind],
+    label: whole ? "Remove" : `Remove ${halves}`,
+    gate,
+    reach,
+    removal: variableRemoval(reach),
+  };
+}
+
+/** The set with each changed half put back to what the site's code supplies. */
+function resetParts(
+  tokens: SiteTokenSet,
+  changed: readonly Part[]
+): SiteTokenSet {
+  const next = [...tokens.tokens];
+  for (const part of changed) {
+    if (part.from !== undefined) next[part.at] = part.from;
   }
-  if (changed.length === 0 && removable.length === 0) return null;
+  return { ...tokens, tokens: next };
+}
+
+/** How widely it is used, then Reset and Remove, as the plan offers them. */
+function ActionRow({
+  plan,
+  checking,
+  onReset,
+  onRemove,
+}: {
+  plan: RemovalPlan;
+  /** Whether Remove is reading where it is used again before it answers. */
+  checking: boolean;
+  onReset: () => void;
+  onRemove: () => void;
+}): React.JSX.Element {
   return (
     <div className="nx-vars-editor__actions">
-      {changed.length === 0 ? null : (
+      {plan.gate === undefined ? null : (
+        <span className="nx-vars-editor__status" role="status">
+          {checking ? "Checking where it's used…" : variableStatus(plan.reach)}
+        </span>
+      )}
+      {plan.changed.length === 0 ? null : (
         <Button
           type="button"
           variant="outline"
           size="sm"
           className="nx-vars-editor__button"
-          onClick={() => {
-            const next = [...tokens.tokens];
-            for (const part of changed) {
-              if (part.from !== undefined) next[part.at] = part.from;
-            }
-            onChange({ ...tokens, tokens: next });
-          }}
+          onClick={onReset}
         >
           Reset
         </Button>
       )}
-      {removable.length === 0 ? null : (
+      {/* Pressable while the variable is used, too: it says why it waits. */}
+      {plan.removable.length === 0 ? null : (
         <Button
           type="button"
           variant="ghost"
           size="sm"
           className="nx-vars-editor__button nx-vars-editor__remove"
-          onClick={() => setConfirming(true)}
+          onClick={onRemove}
         >
-          {whole
-            ? "Remove"
-            : `Remove ${removable.map(part => part.name).join(" and ")}`}
+          {plan.label}
         </Button>
       )}
+    </div>
+  );
+}
+
+/**
+ * Where Remove has got to: nothing yet, reading where it is used again, its
+ * confirm, or why it cannot.
+ */
+type RemoveStep = "idle" | "checking" | "confirm" | "refused";
+
+/**
+ * Remove's steps. Counts read earlier may say a variable is used when it no
+ * longer is, so a Remove they would refuse first reads what it takes away
+ * again, saying so, and answers on the fresh counts: the refusal, or the
+ * confirm once nothing uses it. Nothing stale is shown while it reads; a
+ * read that fails answers on the counts already kept.
+ */
+function useRemoveStep(plan: RemovalPlan): {
+  step: RemoveStep;
+  setStep: (step: RemoveStep) => void;
+  remove: () => void;
+} {
+  const [step, setStep] = React.useState<RemoveStep>("idle");
+  const { gate, removal, removable } = plan;
+  const remove = (): void => {
+    if (!refuses(removal) || gate === undefined) {
+      setStep("confirm");
+      return;
+    }
+    setStep("checking");
+    const answer = (): void =>
+      setStep(current => (current === "checking" ? "refused" : current));
+    gate.readAgain(removable.map(part => part.identity)).then(answer, answer);
+  };
+  return { step, setStep, remove };
+}
+
+/** Whether Remove opens why it cannot go ahead rather than the confirm. */
+function refuses(removal: VariableRemoval): boolean {
+  return removal === "in-use" || removal === "not-whole";
+}
+
+/**
+ * The step shown: the confirm once a refused removal no longer refuses, as
+ * when a count finds the variable unused, since the author asked to remove.
+ */
+function shownStep(step: RemoveStep, removal: VariableRemoval): RemoveStep {
+  return step === "refused" && !refuses(removal) ? "confirm" : step;
+}
+
+/** Remove's confirm, naming what goes. */
+function ConfirmRemove({
+  what,
+  onKeep,
+  onRemove,
+}: {
+  what: string;
+  onKeep: () => void;
+  onRemove: () => void;
+}): React.JSX.Element {
+  return (
+    <div
+      className="nx-vars-editor__confirm"
+      role="group"
+      aria-label={`Remove ${what}`}
+    >
+      <p>
+        Remove <strong>{what}</strong>? Any block using it loses that style. The
+        page still renders.
+      </p>
+      <div className="nx-vars-editor__actions">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="nx-vars-editor__button"
+          onClick={onKeep}
+        >
+          Keep
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          className="nx-vars-editor__button"
+          onClick={onRemove}
+        >
+          Remove {what}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -870,6 +1064,10 @@ function Actions({
 /** One stored variable behind an entry, with what the site's code supplies. */
 interface Part {
   name: string;
+  /** The variable's identity, which its usage is read by. */
+  identity: string;
+  /** What a place would lose with this part alone. */
+  loss: string;
   at: number;
   held: SiteToken | undefined;
   from: SiteToken | undefined;
@@ -887,6 +1085,8 @@ function partsOf(
 ): Part[] {
   const own: Part = {
     name: "size",
+    identity: entry.row.identity,
+    loss: VARIABLE_LOSS_WORDS[entry.row.kind],
     at: entry.row.at,
     held: token,
     from: suppliedOf(entry.row.identity),
@@ -896,6 +1096,8 @@ function partsOf(
     own,
     {
       name: "line height",
+      identity: entry.lineHeight.identity,
+      loss: VARIABLE_LOSS_WORDS.lineHeight,
       at: entry.lineHeight.at,
       held: tokens.tokens[entry.lineHeight.at],
       from: suppliedOf(entry.lineHeight.identity),

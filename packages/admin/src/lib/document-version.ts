@@ -98,6 +98,26 @@ class ChangedSinceOpened extends Error {
 const READ_REFUSED = new Set([403, 404]);
 
 /**
+ * A publish of every language by a caller refused the read of one of them:
+ * it can carry no version naming every language, so it says it is made over
+ * whatever each holds, which the server records as an overwrite.
+ */
+export const OVERWRITE_EVERY_LANGUAGE = { overwrite: true } as const;
+
+/** What a publish of every language says it was made from. */
+export type EveryLanguageVersion = string | typeof OVERWRITE_EVERY_LANGUAGE;
+
+/** The body a publish of every language sends: its version, the overwrite choice, or nothing. */
+export function everyLanguageBody(
+  version: EveryLanguageVersion | undefined
+): Record<string, unknown> {
+  if (version === undefined) return {};
+  return typeof version === "string"
+    ? { [DOCUMENT_VERSION_KEY]: version }
+    : { [DOCUMENT_OVERWRITE_KEY]: true };
+}
+
+/**
  * The version a publish of every language sends: a read of every language's.
  * From an editor, the language on screen is read too, the way the editor read
  * it, and must still be at the version the editor's copy started from, or the
@@ -110,12 +130,16 @@ export async function versionToPublishEveryLanguage(
   readEvery: () => Promise<unknown>,
   shown: ShownCopy | undefined,
   readShown: (copy: ShownCopy) => Promise<unknown>
-): Promise<string | undefined> {
+): Promise<EveryLanguageVersion | undefined> {
+  let refused = false;
   const every = await readEvery().catch((reason: unknown) => {
     // A caller who may publish every language may still be refused a read of
-    // one of them: the publish then goes unjudged, as before versions were
-    // sent, and the server decides what it may publish.
-    if (isApiError(reason) && READ_REFUSED.has(reason.status)) return undefined;
+    // one of them: the publish then chooses to overwrite, and the server
+    // decides what it may publish.
+    if (isApiError(reason) && READ_REFUSED.has(reason.status)) {
+      refused = true;
+      return undefined;
+    }
     throw reason;
   });
   if (shown?.version !== undefined) {
@@ -123,7 +147,7 @@ export async function versionToPublishEveryLanguage(
       throw new ChangedSinceOpened();
     }
   }
-  return versionOf(every);
+  return refused ? OVERWRITE_EVERY_LANGUAGE : versionOf(every);
 }
 
 /** Whether a write was refused because the document changed since the editor's copy, before it was sent or by the server. */
