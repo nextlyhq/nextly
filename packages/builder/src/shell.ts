@@ -562,6 +562,18 @@ export type {
   TokensPanelProps,
   VariablesHeader,
 } from "./tokens-panel";
+/*
+ * How widely variables are used, as a host reads it for the Variables view.
+ * Experimental, as the view's `usage` is.
+ */
+export type {
+  VariableReach,
+  VariablesAccess,
+  VariablesUsage,
+  VariableUse,
+  VariableUseKind,
+  VariableUsesPage,
+} from "./variable-usage";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*

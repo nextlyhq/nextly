@@ -81,12 +81,15 @@ export {
   pageActionSchema,
   planDefinitionAction,
   type ActionPosition,
+  type ConditionInput,
   type DefinitionAction,
   type DefinitionActionSources,
   type ExposureTargetInput,
   type ListQueryChange,
   type PageAction,
 } from "./composition-actions";
+
+export { conditionsOp } from "./condition-ops";
 
 export {
   TEMPLATE_ACTION_KINDS,

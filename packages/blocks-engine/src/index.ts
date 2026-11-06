@@ -1375,6 +1375,7 @@ export {
   conditionIssues,
   conditionOp,
   evaluateConditions,
+  withConditions,
 } from "./visibility-conditions";
 export type {
   ConditionDayStart,

@@ -70,6 +70,7 @@ import {
   type SiteStyleReplayed,
 } from "../site-style-client";
 import { useShown } from "../use-shown";
+import { useVariablesClient } from "../variables-client";
 
 import { rebasedOnCode } from "./class-override-rebase";
 import { useDesignHeaderSlot } from "./design-panel";
@@ -178,6 +179,8 @@ export function TokensStudio({
   supplied,
   pending,
   spacingMode,
+  classes,
+  opens,
   children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
@@ -191,10 +194,17 @@ export function TokensStudio({
   supplied: SiteTokenSet | undefined;
   /** Whether the read is still in flight, as against having failed. */
   pending: boolean;
+  /**
+   * The site's shared styles, so one using a variable says what it sets with
+   * it. Absent while they are being read.
+   */
+  classes?: readonly NamedClass[];
+  /** Where a shared style or a block look using a variable opens. */
+  opens?: StyleOpeners;
   /** The Design panel's tabs. */
   children: React.ReactNode;
 }): React.JSX.Element {
-  const { save } = useSaveSiteStyle();
+  const usage = useStudioUsage(classes, opens);
   const held = useReleasedOnLeave(useHeldSiteStyle());
   // The server refuses a change to the site style without this grant; the
   // panel shows the variables read-only rather than offering edits it would
@@ -220,19 +230,72 @@ export function TokensStudio({
    */
   const editable = merged === undefined ? undefined : resolveSiteTokens(merged);
   const baseline = resolveSiteTokens(supplied);
-  /*
-   * The studio's own latest set, and the authority while it is open.
-   *
-   * `useSiteStyle` answers from a query refetched only after a save lands, so
-   * two edits made before that — two blurs, two removals, a double Add — would
-   * both compose against the SAME snapshot and the second would overwrite the
-   * first. Nothing would report it: the mutation serialises the payloads and
-   * neither fails. Composing against this means every edit builds on the last.
-   */
-  const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
-  const [issue, setIssue] = useState<string | undefined>(undefined);
+  const { edits, shownNow, issue, setIssue, commit } =
+    useTokenCommits(baseline);
   // The spacing choice reports a refusal on the same line an edit does.
   const spacing = useSpacingModeChoice(spacingMode, setIssue);
+
+  /*
+   * The set as it is at the moment an import needs it, rather than the one
+   * the panel last rendered with. `shown` is written before React is told
+   * anything, so it answers for an edit the panel has not been re-rendered
+   * with yet.
+   */
+  const currentTokens = (): SiteTokenSet | undefined => shownNow() ?? editable;
+  const header = useVariablesHeader({
+    onChange: commit,
+    currentTokens,
+    readOnly: !mayChange,
+  });
+  const studio: TokensPanelProps = {
+    tokens: edits ?? editable,
+    supplied: baseline,
+    issue,
+    absence: absenceOf(pending),
+    readOnly: !mayChange,
+    onChange: commit,
+    onActivity: held.extend,
+    onSettle: () => void held.release(),
+    currentTokens,
+    header,
+    ...usage.props,
+    ...spacing,
+  };
+
+  return (
+    <VariablesStudio.Provider value={studio}>
+      {headerSlot === null ? null : createPortal(header.controls, headerSlot)}
+      {/* Above whichever tab is open, since an import or export can be
+          started from any of them. */}
+      <div className="nx-pb-design__reports">{header.overlays}</div>
+      <SharedStyleToOpen.Provider value={usage.toOpen}>
+        {children}
+      </SharedStyleToOpen.Provider>
+    </VariablesStudio.Provider>
+  );
+}
+
+/**
+ * The studio's edits: what it shows, what the last save said, and the commit
+ * every edit goes through.
+ *
+ * The studio's own latest set is the authority while it is open.
+ * `useSiteStyle` answers from a query refetched only after a save lands, so
+ * two edits made before that — two blurs, two removals, a double Add — would
+ * both compose against the SAME snapshot and the second would overwrite the
+ * first. Nothing would report it: the mutation serialises the payloads and
+ * neither fails. Composing against this means every edit builds on the last.
+ */
+function useTokenCommits(baseline: SiteTokenSet): {
+  edits: SiteTokenSet | null;
+  shownNow: () => SiteTokenSet | null;
+  issue: string | undefined;
+  setIssue: (issue: string | undefined) => void;
+  commit: (next: SiteTokenSet) => void;
+} {
+  const { save } = useSaveSiteStyle();
+  const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
+  const [issue, setIssue] = useState<string | undefined>(undefined);
   /*
    * The last set a save is KNOWN to have stored, and what a refused edit falls
    * back to — not "whatever was on screen before it", which after an earlier
@@ -260,42 +323,98 @@ export function TokensStudio({
       settleTokenSave(result, next, { latest, persisted }, show, setIssue)
     );
   };
+  return { edits, shownNow, issue, setIssue, commit };
+}
 
-  /*
-   * The set as it is at the moment an import needs it, rather than the one
-   * the panel last rendered with. `shown` is written before React is told
-   * anything, so it answers for an edit the panel has not been re-rendered
-   * with yet.
-   */
-  const currentTokens = (): SiteTokenSet | undefined => shownNow() ?? editable;
-  const header = useVariablesHeader({
-    onChange: commit,
-    currentTokens,
-    readOnly: !mayChange,
-  });
-  const studio: TokensPanelProps = {
-    tokens: edits ?? editable,
-    supplied: baseline,
-    issue,
-    absence: absenceOf(pending),
-    readOnly: !mayChange,
-    onChange: commit,
-    onActivity: held.extend,
-    onSettle: () => void held.release(),
-    currentTokens,
-    header,
-    ...spacing,
+/**
+ * What the Variables tab is handed of usage: the variable routes, with the
+ * way to a shared style using one, and the site's shared styles; and the
+ * style the Shared styles tab is to open.
+ */
+function useStudioUsage(
+  classes: readonly NamedClass[] | undefined,
+  opens: StyleOpeners | undefined
+): {
+  props: Pick<TokensPanelProps, "usage" | "classes">;
+  toOpen: StyleToOpen;
+} {
+  const opening = useSharedStyleOpening(opens?.sharedStyles);
+  const usage = useVariablesClient(opening.open, useSteady(opens?.look));
+  return {
+    props: { usage, ...(classes === undefined ? {} : { classes }) },
+    toOpen: opening.toOpen,
   };
+}
 
-  return (
-    <VariablesStudio.Provider value={studio}>
-      {headerSlot === null ? null : createPortal(header.controls, headerSlot)}
-      {/* Above whichever tab is open, since an import or export can be
-          started from any of them. */}
-      <div className="nx-pb-design__reports">{header.overlays}</div>
-      {children}
-    </VariablesStudio.Provider>
+/**
+ * The shared style the Shared styles tab opens as it mounts, and taking it,
+ * so a later visit to the tab opens none.
+ */
+interface StyleToOpen {
+  readonly id: string | undefined;
+  readonly taken: () => void;
+}
+
+/** No style to open, outside a studio. */
+const NO_STYLE_TO_OPEN: StyleToOpen = { id: undefined, taken: () => {} };
+
+/**
+ * The style the Variables tab sent the author to, held by the studio, which
+ * surrounds every tab: the Variables tab sets it and the Shared styles tab,
+ * mounted when it is shown, takes it.
+ */
+const SharedStyleToOpen = createContext<StyleToOpen>(NO_STYLE_TO_OPEN);
+
+/**
+ * Where the Variables tab sends an author to a style using a variable: the
+ * Shared styles tab for a shared style, and the inspector's look editor for
+ * a block look, which the Shared styles tab does not list.
+ */
+export interface StyleOpeners {
+  /** Show the Design panel's Shared styles tab. */
+  readonly sharedStyles?: () => void;
+  /** Edit a block look in the inspector. */
+  readonly look?: (look: { id: string; blockType: string }) => void;
+}
+
+/**
+ * The latest of a host's callbacks behind one identity, so a host handing a
+ * new function each render does not change the Variables tab's access, by
+ * which its reads are keyed; nothing when the host hands none.
+ */
+function useSteady<A>(
+  callback: ((arg: A) => void) | undefined
+): ((arg: A) => void) | undefined {
+  const latest = useRef(callback);
+  latest.current = callback;
+  const given = callback !== undefined;
+  return useMemo(
+    () => (given ? (arg: A) => latest.current?.(arg) : undefined),
+    [given]
   );
+}
+
+/**
+ * Opening a shared style from the Variables tab: the style held, then the
+ * Shared styles tab shown. Nothing to open without a way to show that tab.
+ */
+function useSharedStyleOpening(onShowSharedStyles: (() => void) | undefined): {
+  open: ((classId: string) => void) | undefined;
+  toOpen: StyleToOpen;
+} {
+  const [id, setId] = useState<string | undefined>(undefined);
+  // The style held, then the tab shown, through the latest way to the tab.
+  const open = useSteady(
+    onShowSharedStyles === undefined
+      ? undefined
+      : (classId: string) => {
+          setId(classId);
+          onShowSharedStyles();
+        }
+  );
+  const taken = useCallback(() => setId(undefined), []);
+  const toOpen = useMemo(() => ({ id, taken }), [id, taken]);
+  return { open, toOpen };
 }
 
 /**
@@ -1410,6 +1529,7 @@ export function SharedStylesStudio({
 }): React.JSX.Element {
   const mayChange = useCan("update-site-style");
   const access = useSharedStylesClient();
+  const initialOpenId = useStyleToOpen();
   return (
     <SharedStylesPanel
       library={classes.library}
@@ -1424,8 +1544,24 @@ export function SharedStylesStudio({
       currentRenameAttempt={classes.currentRenameAttempt}
       pendingNames={classes.pendingNames}
       {...(looks === undefined ? {} : { looks })}
+      {...(initialOpenId === undefined ? {} : { initialOpenId })}
     />
   );
+}
+
+/**
+ * The style the tab opens as it mounts, sent from the Variables tab, read
+ * once and then taken from the studio, so the tab chosen again later opens
+ * on its list.
+ */
+function useStyleToOpen(): string | undefined {
+  const toOpen = useContext(SharedStyleToOpen);
+  const [initial] = useState(toOpen.id);
+  const { taken } = toOpen;
+  useEffect(() => {
+    if (initial !== undefined) taken();
+  }, [initial, taken]);
+  return initial;
 }
 
 /**
