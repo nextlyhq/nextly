@@ -509,7 +509,10 @@ for (const dialect of getConfiguredTestDialects()) {
         )
       );
       // The Single's one row, with `tagline` left empty.
-      await t.nextly.updateSingle({ slug: "home", data: { body: "hello" } });
+      await t.nextly.updateSingle({
+        slug: "home",
+        data: { body: "hello", _overwrite: true },
+      });
       const row = await registryRow(adapter, "dynamic_singles", "home");
       const columns = await columnsOf(adapter, dialect, "single_home");
       const fields = required(storedFields(row), "tagline");
@@ -607,7 +610,7 @@ for (const dialect of getConfiguredTestDialects()) {
       });
       await t.nextly.updateSingle({
         slug: "home",
-        data: { promo: { label: "h" } },
+        data: { promo: { label: "h" }, _overwrite: true },
       });
       expect(await nullsIn(adapter, "comp_promo", "cta")).toEqual({
         rows: 4,

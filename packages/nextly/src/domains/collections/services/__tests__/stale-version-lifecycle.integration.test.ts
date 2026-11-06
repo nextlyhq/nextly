@@ -183,7 +183,13 @@ async function translatedDraft(t: TestNextly) {
       { title: "hello", note: "n" }
     )
   );
-  await update(t, PAGES, id, { title: "hola" }, { locale: "es" });
+  await update(
+    t,
+    PAGES,
+    id,
+    { title: "hola", _rev: await readRev(t, PAGES, id, "es") },
+    { locale: "es" }
+  );
   return {
     id,
     en: await readRev(t, PAGES, id, "en"),
@@ -222,7 +228,7 @@ describe.each(getConfiguredTestDialects())(
         t,
         PAGES,
         page.id,
-        { title: "hola otra vez" },
+        { title: "hola otra vez", _overwrite: true },
         {
           locale: "es",
           user: ANA,
@@ -252,7 +258,7 @@ describe.each(getConfiguredTestDialects())(
         t,
         PAGES,
         page.id,
-        { title: "hello again" },
+        { title: "hello again", _overwrite: true },
         { locale: "en" }
       );
       const published = await update(
@@ -277,7 +283,7 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       const read = await readRev(t, NOTES, id);
-      await update(t, NOTES, id, { title: "b" });
+      await update(t, NOTES, id, { title: "b", _overwrite: true });
       const refused = await update(t, NOTES, id, {
         status: "published",
         _rev: read,
@@ -297,7 +303,7 @@ describe.each(getConfiguredTestDialects())(
         t,
         PAGES,
         page.id,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "es" }
       );
       const read = await readRev(t, PAGES, page.id, "es");
@@ -305,7 +311,7 @@ describe.each(getConfiguredTestDialects())(
         t,
         PAGES,
         page.id,
-        { title: "hola de nuevo" },
+        { title: "hola de nuevo", _overwrite: true },
         {
           locale: "es",
         }
@@ -335,7 +341,7 @@ describe.each(getConfiguredTestDialects())(
             t,
             PAGES,
             page.id,
-            { title: "hola otra vez" },
+            { title: "hola otra vez", _overwrite: true },
             {
               locale: "es",
               user: ANA,
@@ -360,7 +366,7 @@ describe.each(getConfiguredTestDialects())(
             t,
             PAGES,
             page.id,
-            { note: "changed" },
+            { note: "changed", _overwrite: true },
             { locale: "en" }
           );
           const sharedMoved = await publishEvery(t, page.id, {
@@ -375,7 +381,13 @@ describe.each(getConfiguredTestDialects())(
           });
 
           const again = await readRev(t, PAGES, page.id, "*");
-          await update(t, PAGES, page.id, { title: "hi" }, { locale: "en" });
+          await update(
+            t,
+            PAGES,
+            page.id,
+            { title: "hi", _overwrite: true },
+            { locale: "en" }
+          );
           const before = await lifecycleOf(t, page.id);
           expect((await publishEvery(t, page.id, { _rev: again })).code).toBe(
             "STALE_VERSION"
@@ -394,7 +406,13 @@ describe.each(getConfiguredTestDialects())(
           // Read with no Spanish yet: the version names Spanish at 0.
           const read = await readRev(t, PAGES, id, "*");
           expect(read).toMatch(/es:0$/);
-          await update(t, PAGES, id, { title: "hola" }, { locale: "es" });
+          await update(
+            t,
+            PAGES,
+            id,
+            { title: "hola", _overwrite: true },
+            { locale: "es" }
+          );
           const before = await lifecycleOf(t, id);
           expect((await publishEvery(t, id, { _rev: read })).code).toBe(
             "STALE_VERSION"
@@ -437,7 +455,7 @@ describe.each(getConfiguredTestDialects())(
             t,
             PAGES,
             page.id,
-            { title: "hola otra vez" },
+            { title: "hola otra vez", _overwrite: true },
             {
               locale: "es",
             }
@@ -453,7 +471,7 @@ describe.each(getConfiguredTestDialects())(
             t,
             PAGES,
             page.id,
-            { title: "hola otra vez" },
+            { title: "hola otra vez", _rev: page.es },
             {
               locale: "es",
               user: ANA,
@@ -487,13 +505,14 @@ describe.each(getConfiguredTestDialects())(
         collectionName: PAGES,
         entryId: page.id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       const read = await readRev(t, PAGES, page.id, "*");
       await update(
         t,
         PAGES,
         page.id,
-        { title: "hola otra vez" },
+        { title: "hola otra vez", _overwrite: true },
         {
           locale: "es",
         }

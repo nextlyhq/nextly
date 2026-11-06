@@ -104,7 +104,7 @@ describe("createContentRoute + draft layers (integration)", () => {
     await current.nextly.update({
       collection: "pages",
       id: String(created.item.id),
-      data: { title: "Pending edit" },
+      data: { title: "Pending edit", _overwrite: true },
     });
 
     const publicPage = (await route(current.nextly).ContentPage({
@@ -163,7 +163,7 @@ describe("createContentRoute + draft layers (integration)", () => {
       await current.nextly.update({
         collection: "pages",
         id: String(created.item.id),
-        data: { title: `${slug} pending` },
+        data: { title: `${slug} pending`, _overwrite: true },
       });
     }
 
@@ -248,7 +248,7 @@ describe("createContentRoute + draft layers (integration)", () => {
     await current.nextly.update({
       collection: "pages",
       id: String(created.item.id),
-      data: { title: "Pending edit" },
+      data: { title: "Pending edit", _overwrite: true },
     });
 
     let previewing = false;

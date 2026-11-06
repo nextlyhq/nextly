@@ -120,7 +120,7 @@ async function postWithHistory(t: TestNextly) {
   const id = String((created.data as Doc).id);
   await handlerOf(t).updateEntry(
     { collectionName: POSTS, entryId: id, overrideAccess: true },
-    { title: "second" }
+    { title: "second", _rev: String((created.data as Doc)._rev) }
   );
   return id;
 }
@@ -145,12 +145,12 @@ async function postTitle(t: TestNextly, id: string): Promise<unknown> {
 async function bannerWithHistory(t: TestNextly) {
   await singlesOf(t).update(
     BANNER,
-    { notice: "first" },
+    { notice: "first", _overwrite: true },
     { overrideAccess: true }
   );
   await singlesOf(t).update(
     BANNER,
-    { notice: "second" },
+    { notice: "second", _overwrite: true },
     { overrideAccess: true }
   );
   const recorded = await t.adapter.select<{
@@ -203,7 +203,7 @@ describe.each(getConfiguredTestDialects())(
       const read = await postRev(t, id);
       await handlerOf(t).updateEntry(
         { collectionName: POSTS, entryId: id, overrideAccess: true, user: ANA },
-        { title: "Ana's" }
+        { title: "Ana's", _overwrite: true }
       );
       const viaRest = await rest(
         "POST",
@@ -228,7 +228,7 @@ describe.each(getConfiguredTestDialects())(
       const bannerRead = String((await banner(t))._rev);
       await singlesOf(t).update(
         BANNER,
-        { notice: "Ana's" },
+        { notice: "Ana's", _overwrite: true },
         { overrideAccess: true, user: ANA as never }
       );
       const single = await rest(
@@ -290,7 +290,7 @@ describe.each(getConfiguredTestDialects())(
       const id = await postWithHistory(t);
       await handlerOf(t).updateEntry(
         { collectionName: POSTS, entryId: id, overrideAccess: true },
-        { title: "third" }
+        { title: "third", _overwrite: true }
       );
       const restored = await rest(
         "POST",
@@ -308,7 +308,7 @@ describe.each(getConfiguredTestDialects())(
       const read = await postRev(t, id);
       await handlerOf(t).updateEntry(
         { collectionName: POSTS, entryId: id, overrideAccess: true, user: ANA },
-        { title: "Ana's" }
+        { title: "Ana's", _rev: read }
       );
       const restored = await rest(
         "POST",

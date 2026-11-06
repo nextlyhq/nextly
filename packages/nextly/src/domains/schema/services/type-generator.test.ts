@@ -259,3 +259,19 @@ describe("TypeGenerator — a field pointing at a built-in collection names a ty
     );
   });
 });
+
+describe("TypeGenerator — icon", () => {
+  // A type the generator does not know emits no member at all, so a
+  // `string` member here is the icon branch speaking, not a fallback.
+  it("types an icon field as the string id it stores", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      collection([
+        { name: "badge", type: "icon", required: true },
+        { name: "other", type: "not-registered", required: true },
+      ]),
+    ]);
+
+    expect(code).toContain("badge: string;");
+    expect(code).not.toMatch(/\bother\??:/);
+  });
+});

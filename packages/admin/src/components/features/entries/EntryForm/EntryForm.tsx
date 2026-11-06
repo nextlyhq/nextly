@@ -95,6 +95,7 @@ import { DocumentTitleBlock } from "./DocumentTitleBlock";
 import { DocumentTrail } from "./DocumentTrail";
 import { DocumentViewBody, type DocumentViewMount } from "./DocumentViewBody";
 import {
+  editedLanguageUntranslated,
   effectiveEntryStatus,
   isSlugPerLocale,
   previewLinkLocale,
@@ -417,6 +418,7 @@ export function EntryForm({
     adoptRecoveredVersion,
     holdForVersionChange,
     releaseVersionHold,
+    stopAwaitingCurrentVersion,
   } = useEntryForm({
     collection,
     entry,
@@ -1045,6 +1047,7 @@ export function EntryForm({
   const editedStatus = {
     status: effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft",
     hasWorkingDraft: hasPendingWorkingDraft(entry),
+    untranslated: editedLanguageUntranslated(entry, locale, defaultLocale),
   };
   const contextDocumentStatus =
     mode === "create" ? {} : { documentStatus: editedStatus };
@@ -1136,6 +1139,7 @@ export function EntryForm({
     await loadCurrentVersion(keepsRecoveryPoints);
     if (keepsRecoveryPoints) recovery.recheck();
   };
+  lock.now.stopLoadingCurrent = stopAwaitingCurrentVersion;
   const conflictDialog = (
     <VersionConflictDialog
       conflict={versionConflict}

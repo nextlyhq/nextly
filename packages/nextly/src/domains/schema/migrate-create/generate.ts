@@ -73,6 +73,11 @@ import {
   type WriteCompanionMigrationOpts,
 } from "../../i18n/migration/write-migration-file";
 import {
+  perLanguageStorageEnabled,
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
   type DeclaredIndex,
@@ -418,6 +423,16 @@ export async function generateMigration(
     args.defaultLocale ?? "en",
     companionHistory
   );
+
+  // A file that moves existing values between a main table and its companion records the language
+  // they are in. Under `experimental.perLanguageStorage` a site may declare no languages and keep
+  // them in Settings instead, which a migration file cannot depend on, since the database the
+  // developer reaches is not the one the file runs against. So such a file is refused until the
+  // config names its default.
+  refuseUndeclaredSeedLanguage(args.defaultLocale, {
+    seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+    moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+  });
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -1163,8 +1178,30 @@ function buildDisableSpec(
     defaultLocale,
     parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
     columns,
-    status: entity.status === true,
+    // The companion a disable drops belonged to the entity while it was translated, so it held a
+    // `_status` of each language exactly when the entity is Draft/Published: the rollback lays it
+    // out again as it was, not as the untranslated definition now asked for would.
+    status: publishesPerLanguage({ localized: true, status: entity.status }),
   };
+}
+
+/**
+ * Refuse a file that seeds or moves existing translatable values when, under
+ * `experimental.perLanguageStorage`, the config declares no default language to record them in.
+ */
+function refuseUndeclaredSeedLanguage(
+  defaultLocale: string | undefined,
+  planned: { seeds: boolean; moves: boolean }
+): void {
+  if (defaultLocale !== undefined || !perLanguageStorageEnabled()) return;
+  if (!planned.seeds && !planned.moves) return;
+  throw NextlyError.invalidInput({
+    message:
+      "This migration moves existing content into its per-language tables, which records the " +
+      "language that content is in, and the config declares none. Declare `localization` with " +
+      "its defaultLocale in the config, then run migrate:create again.",
+    logContext: { reason: "per-language-seed-language-undeclared" },
+  });
 }
 
 /** A localized collection's derived companion spec paired with its planned migration. */
@@ -1207,7 +1244,7 @@ function planTranslatedUniqueMigrations(
   plan: TranslatedUniquePlan;
 }[] {
   return entities.flatMap(({ entity: c, kind }) => {
-    if (c.localized !== true) return [];
+    if (!storesPerLanguage(c)) return [];
     const derive = {
       builtBy: "codeFirst" as const,
       slug: c.slug,
@@ -1277,11 +1314,12 @@ function planCompanionMigrations(
       dialect,
       defaultLocale,
       collectionLocalized: true,
-      status: c.status === true, // i18n M6: companion gets a per-locale `_status` column
+      // A per-language `_status` only where the entity publishes each language on its own.
+      status: publishesPerLanguage(c),
     });
 
     // the DISABLE transition (localized `true → false`), planned by `disableEntryFor`.
-    if (c.localized !== true) {
+    if (!storesPerLanguage(c)) {
       const disable = disableEntryFor(
         c,
         entityKind,
@@ -1712,7 +1750,7 @@ function fieldsLeavingTranslationIn(
   history: TranslationRecords,
   dialect: SupportedDialect
 ): LeavingField[] {
-  if (c.localized !== true) return [];
+  if (!storesPerLanguage(c)) return [];
   const previous = previousTranslation(c, kind, previousSnapshot, history);
   if (!previous || previous.columns.size === 0) return [];
   return c.fields.flatMap(field => {
@@ -1803,7 +1841,7 @@ function fieldsJoiningTranslationIn(
   history: TranslationRecords,
   dialect: SupportedDialect
 ): LeavingField[] {
-  if (c.localized !== true) return [];
+  if (!storesPerLanguage(c)) return [];
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
   const previous = previousTranslation(c, kind, previousSnapshot, history);
   if (!prevMain || !previous?.companion) return [];
@@ -1976,7 +2014,7 @@ function warnOfRenamesIntoShared(
   dialect: SupportedDialect,
   warn: (message: string) => void
 ): void {
-  if (c.localized !== true) return;
+  if (!storesPerLanguage(c)) return;
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
   const previous = previousTranslation(c, kind, previousSnapshot, history);
   if (!prevMain || !previous) return;
@@ -2115,7 +2153,7 @@ function withLocalizedMarker(
   entity: MinimalConfigEntity,
   dialect: SupportedDialect
 ): TableSpec {
-  if (entity.localized !== true) return table;
+  if (!storesPerLanguage(entity)) return table;
   // `defaultLocale` does not affect column names, so any value works here.
   const spec = deriveCompanionSpec({
     builtBy: "codeFirst" as const,
@@ -2125,7 +2163,7 @@ function withLocalizedMarker(
     dialect,
     defaultLocale: "en",
     collectionLocalized: true,
-    status: entity.status === true,
+    status: publishesPerLanguage(entity),
   });
   // Each column is recorded with what it stores, so the migration that later removes or renames
   // one can still key the index its DOWN recreates the way this one keyed it.
@@ -2218,7 +2256,7 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
-          localized: c.localized === true,
+          localized: storesPerLanguage(c),
           ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
@@ -2236,7 +2274,7 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
-          localized: c.localized === true,
+          localized: storesPerLanguage(c),
           ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
@@ -2256,7 +2294,7 @@ export function buildDesiredSnapshotFromConfig(
       withLocalizedMarker(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: "codeFirst" as const,
-          localized: c.localized === true,
+          localized: storesPerLanguage(c),
         }),
         c,
         dialect

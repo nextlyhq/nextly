@@ -17,6 +17,7 @@
 import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  LIST_ISSUE_CODES,
   type BlockDocument,
   type BreakpointSet,
   type IssueCode,
@@ -29,6 +30,11 @@ import type {
   PluginFieldValidationResult,
 } from "@nextlyhq/plugin-sdk";
 
+import {
+  openRemovalFor,
+  strippedForms,
+  type OpenRemovalReader,
+} from "../breakpoint-removal/lock-acceptance";
 import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
@@ -44,6 +50,7 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { newListQueryIssues } from "./list-query-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
@@ -78,6 +85,9 @@ const PLACEMENT_BREAKS: ReadonlySet<string> = new Set<IssueCode>([
 const STORED_MAY_HOLD: ReadonlySet<string> = new Set<string>([
   ...PLACEMENT_BREAKS,
   "variant-label-clash" satisfies IssueCode,
+  // A collection list's query problems: a list stored before its bounds and
+  // rows were judged keeps saving with a warning until it is edited.
+  ...Object.keys(LIST_ISSUE_CODES),
 ]);
 
 /** The field type id. Was a built-in token; now this plugin's to own. */
@@ -171,8 +181,14 @@ function judgedByRules(
     args.path,
     formsChangedBy(typeof status === "string" ? status : undefined),
     (args.field as { localized?: unknown }).localized === true
-  ).then(stored => {
-    const again = stored.forms.length === 0 ? issues : judge(stored.forms);
+  ).then(async stored => {
+    const again = await judgedAgainstStored(
+      judge,
+      issues,
+      stored.forms,
+      args.write,
+      composition?.()?.openBreakpointRemoval
+    );
     // A stored value this cannot read may already hold every placement
     // break or name clash found, so none is refused; the server log says what
     // was kept until the page can be judged against it.
@@ -188,6 +204,29 @@ function judgedByRules(
     }
     return kept.length > 0 ? kept : composed();
   });
+}
+
+/**
+ * The issues judged again against the stored forms, which a `contentOnly`
+ * slot lets a document keep. While a breakpoint removal is open, a
+ * `contentOnly` break that remains is judged once more with the stored forms
+ * stripped of the removed breakpoints' values as well, so the removal's own
+ * strip is kept and nothing beyond it is (`breakpoint-removal/lock-acceptance`).
+ */
+async function judgedAgainstStored<T extends { readonly code?: string }>(
+  judge: (stored?: readonly BlockDocument[]) => T[],
+  issues: T[],
+  stored: readonly BlockDocument[],
+  write: PluginFieldValidateArgs["write"],
+  openRemoval: OpenRemovalReader | undefined
+): Promise<T[]> {
+  if (stored.length === 0) return issues;
+  const again = judge(stored);
+  if (!again.some(issue => issue.code === CONTENT_ONLY_BREAK)) return again;
+  const removal = await openRemovalFor(openRemoval, write);
+  if (removal === null) return again;
+  const stripped = strippedForms(stored, removal);
+  return stripped.length === 0 ? again : judge([...stored, ...stripped]);
 }
 
 /**
@@ -249,10 +288,25 @@ export function blocksFieldType(
       // And against one read of the page as stored, so no reference is let
       // through by a snapshot the other checks did not see.
       const storedForms = onceAsked(async () => storedFormsFor(args));
+      // And the fields each collection list names, against the schema and
+      // what visitors may read, on any write the server can read them for.
+      const listFields = composition?.()?.listFields;
+      const lists = async (): Promise<readonly PluginFieldIssue[]> => {
+        if (emptied || listFields === undefined || args.write === undefined) {
+          return [];
+        }
+        return newListQueryIssues(value, args, label, {
+          fieldsOf: listFields,
+          storedForms,
+          maxNodes: composition?.()?.limits.maxNodes,
+        });
+      };
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {
-        if (emptied || definitions === undefined) return [];
+        const listed = await lists();
+        if (emptied || definitions === undefined) return listed;
         const limits = composition?.()?.limits;
         return [
+          ...listed,
           ...(await newClassReferenceIssues(value, args, label, {
             classIds: async () => (await definitions()).classIds,
             limits,
@@ -269,7 +323,11 @@ export function blocksFieldType(
       // hold a lock, and keeps the answer it always got, synchronously where
       // the rules gave one and nothing else is asked.
       if (!judgesLayersLocks(args)) {
-        if (args.write === undefined || emptied || definitions === undefined) {
+        if (
+          args.write === undefined ||
+          emptied ||
+          (definitions === undefined && listFields === undefined)
+        ) {
           return verdict;
         }
         return Promise.resolve(verdict).then(answered =>
@@ -284,7 +342,8 @@ export function blocksFieldType(
           emptied ? null : value,
           args,
           label,
-          composition?.()?.onLayersLockUnjudged
+          composition?.()?.onLayersLockUnjudged,
+          composition?.()?.openBreakpointRemoval
         ).then(locks =>
           classes().then(found =>
             withLockIssues(

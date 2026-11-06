@@ -3,10 +3,10 @@ import { expectTypeOf } from "vitest";
 import type { MessageKey, ParamsFor } from "./translate";
 
 // A key from the English catalog is a message key.
-expectTypeOf<"errors.page.title">().toMatchTypeOf<MessageKey>();
+expectTypeOf<"nextly.errors.page.title">().toMatchTypeOf<MessageKey>();
 
 // A misspelled key is not.
-expectTypeOf<"errors.page.titel">().not.toMatchTypeOf<MessageKey>();
+expectTypeOf<"nextly.errors.page.titel">().not.toMatchTypeOf<MessageKey>();
 
 // A string's `{name}` placeholders are the parameters a call must give, and
 // a string with none takes none.

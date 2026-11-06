@@ -38,6 +38,8 @@ import {
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
+import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -99,6 +101,25 @@ import type { LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
+
+/**
+ * The fields whose columns belong on an entity's main table: every one, or for an entity whose
+ * translatable values live in its companion (`storesPerLanguage`), its shared ones only, so a
+ * column top-up never puts a translatable column back on the main table.
+ */
+function mainTableFields<F extends { name?: string; type: string }>(
+  entity: { localized?: unknown },
+  fields: F[]
+): F[] {
+  if (!storesPerLanguage(entity)) return fields;
+  const translatable = new Set(
+    resolveLocalizedFieldNames(
+      fields as Parameters<typeof resolveLocalizedFieldNames>[0],
+      true
+    )
+  );
+  return fields.filter(field => !field.name || !translatable.has(field.name));
+}
 
 // ============================================================================
 // Core Table Creation
@@ -787,6 +808,25 @@ export async function performAutoSync(
 // ============================================================================
 
 /**
+ * Run a generated migration's statements one at a time, each without its comment lines: the
+ * generator separates them with `--> statement-breakpoint`. One place for the Single and component
+ * syncs and the Single reconcile, which each ran their own copy.
+ */
+async function executeMigrationStatements(
+  adapter: DrizzleAdapter,
+  migrationSQL: string
+): Promise<void> {
+  for (const statement of migrationSQL.split("--> statement-breakpoint")) {
+    const clean = statement
+      .split("\n")
+      .filter(line => !line.trim().startsWith("--"))
+      .join("\n")
+      .trim();
+    if (clean) await adapter.executeQuery(clean);
+  }
+}
+
+/**
  * Register a newly-DDL'd Single table with the live schema resolver.
  *
  * Why: the adapter's `TableResolver` is built once at boot from the current
@@ -806,15 +846,21 @@ export async function performAutoSync(
  * log and continue. The next boot will rebuild the resolver from the
  * registry row that was just written, so the table becomes visible then.
  */
-function registerSingleTableInResolver(
+export function registerSingleTableInResolver(
   adapter: DrizzleAdapter,
   tableName: string,
   fields: FieldDefinition[],
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  // Whether its translatable values live in its per-language table, as the CREATE just laid it
+  // out: the registered table then names none of them, so the next query asks for no column the
+  // main table lacks.
+  localized: boolean
 ): void {
   try {
     const dialect = adapter.getCapabilities().dialect;
-    const { table } = generateRuntimeSchema(tableName, fields, dialect);
+    const { table } = generateRuntimeSchema(tableName, fields, dialect, {
+      localized,
+    });
     const resolver = (
       adapter as unknown as {
         tableResolver?: {
@@ -929,7 +975,10 @@ export async function performSinglesAutoSync(
           drizzleAdapter,
           serviceLogger,
           tableName,
-          [...systemFields, ...singleConfig.fields] as unknown as FieldConfig[],
+          [
+            ...systemFields,
+            ...mainTableFields(singleConfig, singleConfig.fields),
+          ] as unknown as FieldConfig[],
           { timestamps: true, builtBy: "collection" }
         );
 
@@ -946,25 +995,11 @@ export async function performSinglesAutoSync(
         const migrationSQL = schemaService.generateMigrationSQL(
           tableName,
           singleConfig.fields as unknown as FieldDefinition[],
-          { isSingle: true }
+          // Translatable columns stay off a main table whose values live in its companion.
+          { isSingle: true, localized: storesPerLanguage(singleConfig) }
         );
 
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-
-        for (const statement of statements) {
-          const cleanStatement = statement
-            .split("\n")
-            .filter((line: string) => !line.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-
-          if (cleanStatement) {
-            await drizzleAdapter.executeQuery(cleanStatement);
-          }
-        }
+        await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
         const tableActuallyExists = await drizzleAdapter.tableExists(tableName);
 
@@ -975,7 +1010,8 @@ export async function performSinglesAutoSync(
             drizzleAdapter,
             tableName,
             singleConfig.fields as unknown as FieldDefinition[],
-            logger
+            logger,
+            storesPerLanguage(singleConfig)
           );
           await singleRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
@@ -1070,8 +1106,11 @@ export async function performSinglesReconcile(
       // registry's stored fields for UI-created singles.
       const codeFirstConfig = config.singles?.find(s => s.slug === single.slug);
       let fields: FieldDefinition[];
+      // Whether its translatable columns stay off the main table, from the same source as its fields.
+      let localized: boolean;
       if (codeFirstConfig) {
         fields = codeFirstConfig.fields as unknown as FieldDefinition[];
+        localized = storesPerLanguage(codeFirstConfig);
       } else {
         const record = await singleRegistry.getSingleBySlug(single.slug);
         if (!record) {
@@ -1080,29 +1119,16 @@ export async function performSinglesReconcile(
           );
         }
         fields = record.fields as unknown as FieldDefinition[];
+        localized = storesPerLanguage(record);
       }
 
       const migrationSQL = schemaService.generateMigrationSQL(
         single.tableName,
         fields,
-        { isSingle: true }
+        { isSingle: true, localized }
       );
 
-      const statements = migrationSQL
-        .split("--> statement-breakpoint")
-        .map((s: string) => s.trim())
-        .filter((s: string) => s.length > 0);
-
-      for (const statement of statements) {
-        const cleanStatement = statement
-          .split("\n")
-          .filter((line: string) => !line.trim().startsWith("--"))
-          .join("\n")
-          .trim();
-        if (cleanStatement) {
-          await drizzleAdapter.executeQuery(cleanStatement);
-        }
-      }
+      await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
       const tableExists = await drizzleAdapter.tableExists(single.tableName);
       if (tableExists) {
@@ -1113,7 +1139,8 @@ export async function performSinglesReconcile(
           drizzleAdapter,
           single.tableName,
           fields,
-          logger
+          logger,
+          localized
         );
         await singleRegistry.updateMigrationStatus(single.slug, "applied");
         reconciledSlugs.push(single.slug);
@@ -1205,7 +1232,7 @@ export async function performComponentsAutoSync(
           drizzleAdapter,
           serviceLogger,
           tableName,
-          componentConfig.fields,
+          mainTableFields(componentConfig, componentConfig.fields),
           { timestamps: true, builtBy: "fieldGroup" }
         );
 
@@ -1221,25 +1248,12 @@ export async function performComponentsAutoSync(
         // Table doesn't exist — create it
         const migrationSQL = schemaService.generateMigrationSQL(
           tableName,
-          componentConfig.fields
+          componentConfig.fields,
+          // Translatable columns stay off a main table whose values live in its companion.
+          { localized: storesPerLanguage(componentConfig) }
         );
 
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-
-        for (const statement of statements) {
-          const cleanStatement = statement
-            .split("\n")
-            .filter((line: string) => !line.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-
-          if (cleanStatement) {
-            await drizzleAdapter.executeQuery(cleanStatement);
-          }
-        }
+        await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
         const tableActuallyExists = await drizzleAdapter.tableExists(tableName);
 

@@ -101,21 +101,6 @@ import { getRolesScreen } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
-  listWebhooks,
-  getWebhookById,
-  createWebhook,
-  updateWebhook,
-  deleteWebhook,
-  revealWebhookSecret,
-  rotateWebhookSecret,
-  expireWebhookOldSecrets,
-  listWebhookDeliveries,
-  getWebhookDelivery,
-  testWebhookEndpoint,
-  redeliverWebhookDelivery,
-  drainWebhooks,
-} from "./api/webhooks";
-import {
   deleteWidgetLayout,
   getWidgetLayout,
   putWidgetLayout,
@@ -218,6 +203,7 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
+import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
@@ -400,53 +386,6 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "contentEvents",
   "rolesScreen",
 ]);
-
-/**
- * Route a parsed webhook operation to its handler.
- *
- * Mirrors the API-key dispatch: the handlers own their own auth and body
- * parsing, so this only maps the method name.
- */
-async function handleWebhookRequest(
-  req: Request,
-  method: string,
-  routeParams: Record<string, string> | undefined
-): Promise<Response> {
-  const id = routeParams?.webhookId ?? "";
-  switch (method) {
-    case "listWebhooks":
-      return listWebhooks(req);
-    case "getWebhookById":
-      return getWebhookById(req, id);
-    case "createWebhook":
-      return createWebhook(req);
-    case "updateWebhook":
-      return updateWebhook(req, id);
-    case "deleteWebhook":
-      return deleteWebhook(req, id);
-    case "revealWebhookSecret":
-      return revealWebhookSecret(req, id);
-    case "rotateWebhookSecret":
-      return rotateWebhookSecret(req, id);
-    case "expireWebhookOldSecrets":
-      return expireWebhookOldSecrets(req, id);
-    case "listWebhookDeliveries":
-      return listWebhookDeliveries(req, id);
-    case "getWebhookDelivery":
-      return getWebhookDelivery(req, id, routeParams?.deliveryId ?? "");
-    case "testWebhookEndpoint":
-      return testWebhookEndpoint(req, id);
-    case "redeliverWebhookDelivery":
-      return redeliverWebhookDelivery(req, id, routeParams?.deliveryId ?? "");
-    case "drainWebhooks":
-      return drainWebhooks(req);
-    default:
-      return new Response(
-        JSON.stringify({ error: "Unknown webhook operation" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-  }
-}
 
 /** Delegate a languages request to its handler, which manages its own auth and body. */
 async function handleLanguagesRequest(
