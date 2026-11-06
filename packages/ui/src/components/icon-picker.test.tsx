@@ -526,6 +526,71 @@ describe("IconField", () => {
     expect(document.activeElement).toBe(button);
   });
 
+  describe("reports the field left", () => {
+    /** The field between two other buttons, so focus has somewhere to go. */
+    function renderBetween(
+      props: Partial<React.ComponentProps<typeof IconField>> = {}
+    ): ReturnType<typeof vi.fn> {
+      const onBlur = vi.fn();
+      const { load } = fakeSource();
+      render(
+        <>
+          <button type="button">Before</button>
+          <IconField
+            value={null}
+            onChange={() => {}}
+            onBlur={onBlur}
+            loadIcons={load}
+            label="Badge"
+            {...props}
+          />
+          <button type="button">After</button>
+        </>
+      );
+      return onBlur;
+    }
+
+    it("when focus leaves its closed button for outside the field", () => {
+      const onBlur = renderBetween();
+      screen.getByRole("button", { name: "Badge: none chosen" }).focus();
+      expect(onBlur).not.toHaveBeenCalled();
+      screen.getByRole("button", { name: "After" }).focus();
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
+
+    it("not when focus moves from its button to its clear", async () => {
+      const onBlur = renderBetween({ value: "fake:star" });
+      (await screen.findByRole("button", { name: "Badge: Star" })).focus();
+      screen.getByRole("button", { name: "Clear icon" }).focus();
+      expect(onBlur).not.toHaveBeenCalled();
+      // The control: leaving from the clear is reported.
+      screen.getByRole("button", { name: "After" }).focus();
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
+
+    it("once when the picker closes on Escape, not for focus going into it or back", async () => {
+      const onBlur = renderBetween();
+      const button = screen.getByRole("button", { name: "Badge: none chosen" });
+      button.focus();
+      const box = await openPicker(/^Badge/);
+      await waitFor(() => expect(document.activeElement).toBe(box));
+      expect(onBlur).not.toHaveBeenCalled();
+      fireEvent.keyDown(box, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(document.activeElement).toBe(button);
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
+
+    it("once when focus leaves the open picker for outside the field", async () => {
+      const onBlur = renderBetween();
+      const box = await openPicker(/^Badge/);
+      await waitFor(() => expect(document.activeElement).toBe(box));
+      act(() => screen.getByRole("button", { name: "After" }).focus());
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("opens no picker and offers no clear when read-only", async () => {
     renderField({ value: "fake:star", readOnly: true });
     const button = await screen.findByRole("button", { name: "Badge: Star" });

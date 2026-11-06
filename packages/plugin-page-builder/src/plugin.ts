@@ -125,6 +125,7 @@ import type {
   LayersLockUnjudged,
 } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
+import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
 import { registerFencedWriteReport } from "./host-rewrite/after-commit";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
@@ -157,6 +158,7 @@ import {
   patternLibraryRoute,
   type ComponentStore,
 } from "./library-route";
+import { listEntriesRoute } from "./list-entries-route";
 import { loopCollectionsRoute } from "./loop-collections-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
@@ -198,6 +200,7 @@ import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
   siteBreakpointRemovalRoute,
+  siteBreakpointRemovalStatusRoute,
   siteBreakpointsRoute,
   siteSettingsRoute,
   type BreakpointsRouteContext,
@@ -1591,6 +1594,19 @@ export const pageBuilder = (
         // code's defaults and the stored record of the Single as renamed,
         // read per write so a style or a breakpoint removed a moment ago is
         // gone for the next save.
+        // What a page's collection lists may filter and sort by: each
+        // collection's declared fields from its record, and the ones the
+        // public may read as a published page's bindings are judged. Read per
+        // write, so a field hidden a moment ago is refused at the next save.
+        listFields: listFieldsFrom({
+          record: collection =>
+            ctx.services.collections.getCollection(collection, {}),
+          readable: async collection => {
+            // Imported at call time, for the reason the readers above give.
+            const { bindingFieldShapes } = await import("nextly/runtime");
+            return bindingFieldShapes({ collection });
+          },
+        }),
         siteDefinitions: async () => {
           const style = await siteStyleNow();
           return {
@@ -2203,6 +2219,9 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
+        // A collection list's entries on the canvas, read as a visitor reads
+        // them, for a collection the author may read.
+        listEntriesRoute(),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
@@ -2233,11 +2252,15 @@ export const pageBuilder = (
         pageCollectionRoute(),
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
-        siteSettingsRoute(configStyle),
+        // With the removals still holding what they removed, so the tab can
+        // follow one that is still going.
+        siteSettingsRoute(configStyle, breakpointRemoval),
         // A set that removes breakpoints strips what they held from the site;
         // one that does not finish in its save is carried on by the second.
         siteBreakpointsRoute(breakpointRemoval),
         siteBreakpointRemovalRoute(breakpointRemoval),
+        // Where one removal stands, read by its id.
+        siteBreakpointRemovalStatusRoute(breakpointRemoval),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.

@@ -48,6 +48,7 @@ import {
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
 import type { SavePatternDryRunResponse } from "../library-contract";
+import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
 import { MANAGE_SITE_PERMISSION } from "../site-settings";
 
 import { created, holding, person, post, unique } from "./transfer-harness";
@@ -647,6 +648,39 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(removal.status).toBe(200);
       expect(removal.body.item).toMatchObject({ dryRun: true, by: asKey });
+
+      // Applied, the settings record who chose the default with its kind:
+      // the key itself, then the person, never the key as its owner.
+      const chosenByKey = await post(
+        { bearer: made.key },
+        ["layouts", layout, "make-default"],
+        {}
+      );
+      expect(chosenByKey.status, JSON.stringify(chosenByKey.body)).toBe(200);
+      expect(
+        (
+          (await t.nextly.findSingle({
+            slug: PAGE_BUILDER_SETTINGS_SLUG,
+            depth: 0,
+            overrideAccess: true,
+          })) as { defaultLayoutChangedBy?: unknown }
+        ).defaultLayoutChangedBy
+      ).toBe(`api-key:${String(made.doc.id)}`);
+      const chosenByPerson = await post(
+        admin.cookie,
+        ["layouts", layout, "make-default"],
+        {}
+      );
+      expect(chosenByPerson.status).toBe(200);
+      expect(
+        (
+          (await t.nextly.findSingle({
+            slug: PAGE_BUILDER_SETTINGS_SLUG,
+            depth: 0,
+            overrideAccess: true,
+          })) as { defaultLayoutChangedBy?: unknown }
+        ).defaultLayoutChangedBy
+      ).toBe(`user:${admin.id}`);
     });
 
     describe("a component's definition", () => {
