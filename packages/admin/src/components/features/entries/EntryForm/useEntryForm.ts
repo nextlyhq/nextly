@@ -980,6 +980,8 @@ export function useEntryForm({
     collectionSlug: collection.name,
     showToast: true,
     setError: form.setError,
+    // A refusal's reason goes on its field only where the form draws one.
+    fields,
   });
 
   // The read asks every language's translation state only of a user who may

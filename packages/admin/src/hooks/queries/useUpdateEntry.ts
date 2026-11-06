@@ -63,8 +63,8 @@ import {
 } from "@admin/hooks/useSharedFieldsRecovery";
 import { staleVersionOf } from "@admin/lib/document-version";
 import {
-  createServerErrorHandler,
   parseServerErrorMessage,
+  placeServerRefusal,
 } from "@admin/lib/errors/error-mapping";
 import {
   toastMutationResult,
@@ -77,6 +77,7 @@ import {
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
+import { drawnFieldPath } from "./drawn-field-path";
 import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
@@ -376,13 +377,13 @@ export function useUpdateEntry<
         return;
       }
 
-      // Try to map server errors to form fields
-      let handledByForm = false;
-
-      if (setError) {
-        const errorHandler = createServerErrorHandler(setError);
-        handledByForm = errorHandler(error);
-      }
+      // Each reason on the field it names, where the form draws that field;
+      // the form keeps the author's values. Reasons no field can show are
+      // said by the toast below instead.
+      const placed = placeServerRefusal(error, setError, {
+        isFormField: drawnFieldPath(fields),
+      });
+      let handledByForm = placed.handled;
 
       // The out-of-date refusal reports itself, with the action that
       // resolves it, which works on the editor's form, wherever that form
@@ -394,9 +395,10 @@ export function useUpdateEntry<
       // Show generic toast only if errors weren't mapped to form
       if (showToast && !handledByForm) {
         const message =
-          parseServerErrorMessage(error) ||
-          error.message ||
-          "Failed to update entry";
+          placed.toastMessage ??
+          (parseServerErrorMessage(error) ||
+            error.message ||
+            "Failed to update entry");
         toast.error(message);
       }
 
