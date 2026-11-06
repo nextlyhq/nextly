@@ -187,8 +187,13 @@ export async function renderCollectionLoop({
   if (collection === undefined || data === undefined) {
     // Nothing to query against, so the block renders its template once rather
     // than vanishing: an author placing a loop before choosing a collection
-    // still sees what they are building.
-    return <div className={className}>{renderSlot("children")}</div>;
+    // still sees what they are building. Drawn with NO item, not the item of
+    // a list around this one: what this list's item decides inside it would
+    // otherwise be judged by an unrelated entry, and fails closed instead.
+    const { item: _outerItem, itemSource: _outerSource, ...withoutItem } = ctx;
+    return (
+      <div className={className}>{renderSlot("children", withoutItem)}</div>
+    );
   }
   // The page this render draws, when the route pages this list: the one
   // list it names, so no other list on the page is paged by its address.
