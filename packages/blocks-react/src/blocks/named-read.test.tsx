@@ -12,7 +12,6 @@
 import {
   defineNamedQuery,
   param,
-  type BindingIssue,
   type BlockDocument,
   type BlockNode,
   type NamedQueryDefinition,
@@ -25,6 +24,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   createQueryBudget,
+  type BindingIssuesHandler,
   type BlocksFilterOp,
   type BlocksQuery,
   type ListBaseReader,
@@ -184,7 +184,7 @@ function context(overrides: Partial<PageContext>): PageContext {
 async function drawn(
   document: BlockDocument,
   ctx: PageContext,
-  onBindingIssues?: (issues: readonly BindingIssue[]) => void
+  onBindingIssues?: BindingIssuesHandler
 ): Promise<HTMLElement> {
   const stream = await renderToReadableStream(
     <PageRenderer
@@ -677,7 +677,7 @@ describe("a list whose source is a named query", () => {
       rows: (await reader.find({ collection: "events" })).items,
     }));
     const issues = async (query: NamedQueryDefinition) => {
-      const found: BindingIssue[] = [];
+      const found: Parameters<BindingIssuesHandler>[0][number][] = [];
       await drawn(
         page(list(named(), [itemHeading("t", "internalNote")])),
         context({ namedQueries: host(query, base({ events: EVENTS })) }),

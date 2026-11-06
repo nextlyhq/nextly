@@ -184,6 +184,7 @@ import {
   contributionAudienceFor,
   NOBODY,
 } from "./plugins/contribution-audience";
+import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
@@ -2685,6 +2686,9 @@ export function createDynamicHandlers(options?: {
     // And the document views: two screens claiming one address on one
     // document would leave the admin drawing whichever it reached first.
     assertDocumentViews(options.config.plugins ?? []);
+    // And the document actions and panel sections, refused here for the
+    // same reason.
+    assertDocumentSurfaces(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 
