@@ -342,5 +342,25 @@ describe.each(getConfiguredTestDialects())(
       expect(Object.keys(stored)).toEqual(["es"]);
       expect(stored.es.title).toBe("es 2");
     }, 90_000);
+
+    // Publishing every language puts the shared draft live with them: it is
+    // the shared change itself, so nothing about it is out of date.
+    it("publishes every language with a shared edit made in a non-default language", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { views: 60 });
+
+      const published = await entries.publishAllLocales({
+        collectionName: TRANSLATED,
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      for (const locale of ["en", "es"]) {
+        expect((await read(entries, TRANSLATED, id, locale)).views).toBe(60);
+      }
+      expect(await drafts(id)).toEqual({});
+    }, 90_000);
   }
 );

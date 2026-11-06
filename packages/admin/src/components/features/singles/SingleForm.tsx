@@ -1415,6 +1415,11 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
+    // Forwarded for the rail's language panel, which says while the Single's
+    // shared fields hold unpublished changes, docked as inline.
+    _sharedChangesPending:
+      (document as { _sharedChangesPending?: boolean })
+        ._sharedChangesPending === true,
   } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.

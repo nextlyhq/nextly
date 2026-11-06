@@ -197,5 +197,21 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(singles, "en")).title).toBe("en title");
       expect(Object.keys(await drafts())).toEqual(["en"]);
     }, 90_000);
+
+    it("publishes every language with a shared edit made in a non-default language", async () => {
+      const singles = await boot(dialect);
+      await publishedInBoth(singles);
+      await save(singles, "es", { views: 60 });
+
+      const published = await singles.publishAllLocales(SLUG, {
+        overrideAccess: true,
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      for (const locale of ["en", "es"]) {
+        expect((await read(singles, locale)).views).toBe(60);
+      }
+      expect(await drafts()).toEqual({});
+    }, 90_000);
   }
 );
