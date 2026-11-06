@@ -1809,11 +1809,14 @@ function RegionsAround({
   drawn,
   rendered,
   environment,
+  selection,
   children,
 }: {
   drawn: LayoutParts | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   environment: BlockEnvironment | undefined;
+  /** The canvas's selection: a region's open tag closes when it changes. */
+  selection: readonly string[];
   children: React.ReactNode;
 }): React.JSX.Element {
   const frame = (part: DrawnRegion | undefined) =>
@@ -1823,6 +1826,7 @@ function RegionsAround({
           region={part.region}
           rendered={rendered}
           sheet={part.sheet}
+          selection={selection}
         />
       </BlockEnvironmentProvider>
     );
@@ -2246,7 +2250,12 @@ export function Canvas({
       onPointerMove={hover.onPointerMove}
       onPointerLeave={hover.onPointerLeave}
     >
-      <RegionsAround drawn={drawn} rendered={render} environment={environment}>
+      <RegionsAround
+        drawn={drawn}
+        rendered={render}
+        environment={environment}
+        selection={marked}
+      >
         {page}
       </RegionsAround>
       {overlay}
