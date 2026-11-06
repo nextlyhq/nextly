@@ -66,6 +66,7 @@ import {
 } from "./class-usage-runtime";
 import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
 import { componentUsageIndex } from "./component-usage";
+import { tokenUsageIndex } from "./token-usage";
 import {
   requestContextFor,
   writeTargetOf,
@@ -154,6 +155,11 @@ export function registerClassUsageMaintenance(args: {
    * where a second wildcard registration would repeat all of it on every save.
    */
   componentIndexCollection: string;
+  /**
+   * The collection the VARIABLE index's rows live in: a third index derived
+   * from the same read, for the reason the component one is.
+   */
+  tokenIndexCollection: string;
   /** Resolves whether a collection keeps a working draft beside its published row. */
   draftSplit: DraftSplitResolver;
   /** The site's configured locales, read per call. */
@@ -300,10 +306,10 @@ async function forget(
   context: UnknownRecord
 ): Promise<void> {
   const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    // BOTH, because the hook is on the wildcard: a write to either index would
-    // otherwise re-enter this handler and maintain an index against its own
-    // bookkeeping rows.
-    excluded: [args.indexCollection, args.componentIndexCollection],
+    // EVERY index, because the hook is on the wildcard: a write to any of
+    // them would otherwise re-enter this handler and maintain an index
+    // against its own bookkeeping rows.
+    excluded: ownIndexCollections(args),
   });
   if (target === null) return;
 
@@ -317,10 +323,7 @@ async function forget(
   // document that no longer exists, and they would count towards their
   // references until somebody ran a rebuild nobody knew was needed.
   const failures: unknown[] = [];
-  for (const indexCollection of [
-    args.indexCollection,
-    args.componentIndexCollection,
-  ]) {
+  for (const indexCollection of ownIndexCollections(args)) {
     try {
       await forgetDeletedDocument({
         store: classUsageIndexStore(target.nextly, indexCollection),
@@ -363,6 +366,21 @@ async function forget(
 }
 
 /**
+ * Every index collection this maintenance writes: the one list the wildcard
+ * hook excludes from itself and a deleted document is forgotten in, so an
+ * index added here is excluded and forgotten in alike.
+ */
+function ownIndexCollections(
+  args: Parameters<typeof registerClassUsageMaintenance>[0]
+): string[] {
+  return [
+    args.indexCollection,
+    args.componentIndexCollection,
+    args.tokenIndexCollection,
+  ];
+}
+
+/**
  * What this write needs reconciled, or null when it needs nothing.
  *
  * Separated from doing it so the decision to act is one readable sequence, and
@@ -375,10 +393,10 @@ async function planMaintenance(
   context: UnknownRecord
 ): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
   const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    // BOTH, because the hook is on the wildcard: a write to either index would
-    // otherwise re-enter this handler and maintain an index against its own
-    // bookkeeping rows.
-    excluded: [args.indexCollection, args.componentIndexCollection],
+    // EVERY index, because the hook is on the wildcard: a write to any of
+    // them would otherwise re-enter this handler and maintain an index
+    // against its own bookkeeping rows.
+    excluded: ownIndexCollections(args),
   });
   if (target === null) return null;
   return maintenanceOf(args, target, requestContextFor(context));
@@ -413,6 +431,10 @@ async function maintenanceOf(
       usageTarget(
         componentUsageIndex,
         classUsageIndexStore(target.nextly, args.componentIndexCollection)
+      ),
+      usageTarget(
+        tokenUsageIndex,
+        classUsageIndexStore(target.nextly, args.tokenIndexCollection)
       ),
     ],
     read: classUsageDocumentReader(target.nextly),

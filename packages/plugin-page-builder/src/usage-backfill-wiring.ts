@@ -81,10 +81,11 @@ export interface BackfillHost {
   locales: () => readonly string[];
   /** The bounds the renderer draws under. */
   limits: () => DocumentLimits;
-  /** The RESOLVED slugs of the two index collections a pass writes to. */
+  /** The RESOLVED slugs of the index collections a pass writes to. */
   slugs: () => {
     classIndex: string;
     componentIndex: string;
+    tokenIndex: string;
   };
   /** The run, its progress and the dirty mark, in the plugin's own tables. */
   bookkeeping: () => UsageBookkeeping;
@@ -102,6 +103,7 @@ export function hostGeneration(host: BackfillHost): string {
     limits: host.limits(),
     classIndex: slugs.classIndex,
     componentIndex: slugs.componentIndex,
+    tokenIndex: slugs.tokenIndex,
   });
 }
 
@@ -263,6 +265,10 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
           ),
           componentIndex: fencedIndexStore(
             classUsageIndexStore(nextly, slugs.componentIndex),
+            write => walk.fenced(write)
+          ),
+          tokenIndex: fencedIndexStore(
+            classUsageIndexStore(nextly, slugs.tokenIndex),
             write => walk.fenced(write)
           ),
           collection: scope.entity,

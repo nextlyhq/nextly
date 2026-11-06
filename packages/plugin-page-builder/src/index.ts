@@ -188,6 +188,9 @@ export {
 export { usageCountReader } from "./class-usage-runtime";
 export { COMPONENT_RETIRED_SLUG } from "./collections/component-retired-exposures";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
+// The variable index's declared slug, for the same reason: the rebuild above
+// takes its store, and a host has no other way to name it.
+export { TOKEN_USAGE_INDEX_SLUG } from "./collections/token-usage-index";
 export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
 // The service key and its shape, so a host can reach the reader that is
 // actually bound to the installation. `readUsageIndexHealth` above answers

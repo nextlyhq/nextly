@@ -166,8 +166,14 @@ export function backfillGeneration(derivation: {
   classIndex: string;
   /** The RESOLVED slug component-usage rows were written to. */
   componentIndex: string;
+  /**
+   * The RESOLVED slug variable-usage rows are written to. Part of the key, so
+   * a site walked before the variable index existed counts as not walked and
+   * its backfill fills the new index on its own.
+   */
+  tokenIndex: string;
 }): string {
-  const { limits, classIndex, componentIndex } = derivation;
+  const { limits, classIndex, componentIndex, tokenIndex } = derivation;
   // Spelled out rather than JSON-stringified: key order in a serialisation is
   // not part of the type, so a refactor that reorders the interface would
   // silently invalidate every site's progress. Naming each part means a change
@@ -184,5 +190,6 @@ export function backfillGeneration(derivation: {
     limits.maxBytes,
     classIndex,
     componentIndex,
+    tokenIndex,
   ].join("|");
 }

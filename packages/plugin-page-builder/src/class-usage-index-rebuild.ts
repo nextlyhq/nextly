@@ -43,6 +43,7 @@ import { usageTarget, type UsageTarget } from "./class-usage-write";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
 import { componentUsageIndex } from "./component-usage";
 import { walkPages } from "./paged-walk";
+import { tokenUsageIndex } from "./token-usage";
 import { isSupersededRun } from "./usage-bookkeeping";
 
 /** How many documents one query asks for. */
@@ -628,6 +629,12 @@ export interface PageBuilderRebuildArgs {
   classIndex: ClassUsageIndexStore;
   /** Where the COMPONENT index's rows live. */
   componentIndex: ClassUsageIndexStore;
+  /**
+   * Where the VARIABLE index's rows live (`TOKEN_USAGE_INDEX_SLUG`, as
+   * resolved). Required for the reason the other two are: a repair that
+   * skipped it would leave every variable reading as used by nothing.
+   */
+  tokenIndex: ClassUsageIndexStore;
   /** The collection whose documents are walked. */
   collection: string;
   /** The blocks field on those documents. */
@@ -648,13 +655,14 @@ export async function walkPageBuilderUsageIndexes(
   args: PageBuilderRebuildArgs,
   resume?: UsageWalkResume
 ): Promise<{ report: ClassUsageRebuildReport; finished: boolean }> {
-  const { classIndex, componentIndex, ...rest } = args;
+  const { classIndex, componentIndex, tokenIndex, ...rest } = args;
   return walkUsageIndexes(
     {
       ...rest,
       targets: [
         usageTarget(classUsageIndex, classIndex),
         usageTarget(componentUsageIndex, componentIndex),
+        usageTarget(tokenUsageIndex, tokenIndex),
       ],
     },
     resume

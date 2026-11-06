@@ -86,6 +86,10 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import {
+  TOKEN_USAGE_INDEX_SLUG,
+  tokenUsageIndexCollection,
+} from "./collections/token-usage-index";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -989,6 +993,22 @@ export async function registeredCollectionSlugs(
   }
 }
 
+/**
+ * The RESOLVED slugs of the usage index collections: the one place each is
+ * looked up under an integrator's rename, so the backfill and the write path
+ * write to the same tables.
+ */
+function usageIndexSlugs(
+  collections: Readonly<Record<string, string | undefined>>
+): ReturnType<BackfillHost["slugs"]> {
+  return {
+    classIndex: collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
+    componentIndex:
+      collections[COMPONENT_USAGE_INDEX_SLUG] ?? COMPONENT_USAGE_INDEX_SLUG,
+    tokenIndex: collections[TOKEN_USAGE_INDEX_SLUG] ?? TOKEN_USAGE_INDEX_SLUG,
+  };
+}
+
 function installContext(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions
@@ -1041,13 +1061,7 @@ function installContext(
     // RESOLVED slugs, not the declared ones. An integrator may rename either,
     // and a pass holding a literal would write to a table that does not exist
     // while reporting the scope backfilled.
-    slugs: () => ({
-      classIndex:
-        ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
-      componentIndex:
-        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-        COMPONENT_USAGE_INDEX_SLUG,
-    }),
+    slugs: () => usageIndexSlugs(ctx.self.collections),
     // The run, its progress and the dirty mark, in the plugin's own tables.
     bookkeeping: () => usageBookkeeping(ctx.db, ctx.dialect),
     ownIndexReader: indexCollection =>
@@ -1820,23 +1834,17 @@ export const pageBuilder = (
           ),
       };
 
+      // The RESOLVED slugs, not the declared ones. An integrator may
+      // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
+      // only the renamed collection — so a hook holding the literal would
+      // write every row to a table that does not exist, and would also fail
+      // to recognise its own writes and recurse. Each index alike.
+      const indexSlugs = usageIndexSlugs(ctx.self.collections);
       usage.reconcile = registerClassUsageMaintenance({
         ctx,
-        // The RESOLVED slug, not the declared one. An integrator may
-        // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
-        // only the renamed collection — so a hook holding the literal would
-        // write every row to a table that does not exist, and would also fail
-        // to recognise its own writes and recurse.
-        indexCollection:
-          ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
-          CLASS_USAGE_INDEX_SLUG,
-        // Resolved the same way and for the same reason: an integrator may
-        // rename it, and a hook holding the declared name would write every row
-        // to a collection that does not exist and fail to recognise its own
-        // writes, so the wildcard would re-enter itself.
-        componentIndexCollection:
-          ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-          COMPONENT_USAGE_INDEX_SLUG,
+        indexCollection: indexSlugs.classIndex,
+        componentIndexCollection: indexSlugs.componentIndex,
+        tokenIndexCollection: indexSlugs.tokenIndex,
         // The registry record, projected. `getCollection` is declared to
         // return a shape that promises none of the properties this question
         // reads, while returning an object that carries all of them.
@@ -2134,6 +2142,9 @@ export const pageBuilder = (
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // Which documents use which variable, for the Variables panel's counts
+        // and the check a variable's removal makes.
+        tokenUsageIndexCollection(),
         // Each component's retired field and slot ids, recorded when a
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.

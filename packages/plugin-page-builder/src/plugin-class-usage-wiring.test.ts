@@ -15,9 +15,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CLASS_USAGE_INDEX_SLUG } from "./collections/class-usage-index";
 import { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
+import { TOKEN_USAGE_INDEX_SLUG } from "./collections/token-usage-index";
 
 import { UNDETERMINED_CLASS_ID } from "./class-usage-reconcile";
 import { pageBuilder } from "./plugin";
+import { UNDETERMINED_TOKEN_ID } from "./token-usage";
 
 /** The parts of a plugin context `init` reaches for, and nothing more. */
 function initContext(renameMap: Record<string, string> = {}) {
@@ -105,6 +107,7 @@ describe("installing the page-builder plugin", () => {
     );
 
     expect(slugs).toContain("nx_pb_class_usage");
+    expect(slugs).toContain("nx_pb_token_usage");
   });
 });
 
@@ -207,6 +210,7 @@ describe("what one save derives, and writes to each index", () => {
     const { ctx, maintenanceFor } = initContext();
     const created: string[] = [];
     const componentRows: { kind?: string; componentId?: string }[] = [];
+    const tokenRows: (string | undefined)[] = [];
     ctx.services.collections.getCollection = (async () => ({
       fields: [{ type: "blocks", name: "content" }],
     })) as never;
@@ -246,6 +250,9 @@ describe("what one save derives, and writes to each index", () => {
             if (a.collection === CLASS_USAGE_INDEX_SLUG) {
               created.push(a.data.classId as string);
             }
+            if (a.collection === TOKEN_USAGE_INDEX_SLUG) {
+              tokenRows.push((a.data as { tokenId?: string }).tokenId);
+            }
             if (a.collection === COMPONENT_USAGE_INDEX_SLUG) {
               componentRows.push({
                 kind: (a.data as { kind?: string }).kind,
@@ -258,7 +265,7 @@ describe("what one save derives, and writes to each index", () => {
         },
       },
     });
-    return { created, componentRows };
+    return { created, componentRows, tokenRows };
   }
 
   it("uses the limits the HOST configured, not the engine defaults", async () => {
@@ -329,6 +336,44 @@ describe("what one save derives, and writes to each index", () => {
       );
 
       expect(componentRows).toEqual([{ kind: "unreadable", componentId: "" }]);
+    });
+  });
+
+  describe("the variable index, maintained from the same read", () => {
+    const withVariable = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          styles: { base: { base: { color: { $token: "color.brand" } } } },
+        },
+        { id: "b", type: "core/text", version: 1, props: {} },
+      ],
+    };
+
+    it("writes a row for a variable the saved page uses", async () => {
+      const { tokenRows } = await savedUnder({}, withVariable);
+
+      expect(tokenRows).toEqual(["color.brand"]);
+    });
+
+    it("writes NO variable row for a page that uses none", async () => {
+      const { tokenRows } = await savedUnder({});
+
+      expect(tokenRows).toEqual([]);
+    });
+
+    it("marks a page it could not read whole, under the host's limits", async () => {
+      const { tokenRows } = await savedUnder(
+        { limits: { maxDepth: 1, maxNodes: 1, maxBytes: 100_000 } },
+        withVariable
+      );
+
+      expect(tokenRows).toEqual([UNDETERMINED_TOKEN_ID]);
     });
   });
 });

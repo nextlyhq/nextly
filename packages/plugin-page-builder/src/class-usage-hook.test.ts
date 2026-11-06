@@ -28,12 +28,26 @@ const INDEX = "nx_pb_class_usage";
  * configuration the plugin never creates.
  */
 const COMPONENT_INDEX = "nx_pb_component_usage";
+/** The VARIABLE index's collection, wired like the plugin wires it. */
+const TOKEN_INDEX = "nx_pb_token_usage";
 
-/** A document whose single node applies the given classes. */
+/**
+ * A document whose single node applies the given classes, and uses one
+ * variable, so every index has something to derive from it.
+ */
 const documentUsing = (...classes: string[]) => ({
   formatVersion: 1,
   kind: "page",
-  nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+  nodes: [
+    {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes,
+      styles: { base: { base: { color: { $token: "color.brand" } } } },
+    },
+  ],
 });
 
 /** A plugin context that records registrations, plus the handler it captured. */
@@ -80,7 +94,9 @@ function harness(
       // EITHER index collection answers as an index, not as a document read.
       // Keying on the class index alone made the component store receive the
       // document payload and read pages as though they were its own rows.
-      a.collection !== INDEX && a.collection !== COMPONENT_INDEX
+      a.collection !== INDEX &&
+      a.collection !== COMPONENT_INDEX &&
+      a.collection !== TOKEN_INDEX
         ? {
             items: [{ id: "p1", content: documentUsing("hero") }],
             meta: { hasNext: false },
@@ -104,6 +120,7 @@ function harness(
     ctx,
     indexCollection: INDEX,
     componentIndexCollection: COMPONENT_INDEX,
+    tokenIndexCollection: TOKEN_INDEX,
     draftSplit: options.draftSplit ?? (async () => ({ eligible: false })),
     locales: () => options.locales ?? [],
     limits: () => DEFAULT_LIMITS,
@@ -253,6 +270,23 @@ describe("a document that was deleted", () => {
     expect(api.find).not.toHaveBeenCalled();
   });
 
+  it("forgets the document in the VARIABLE index too, and skips that index's own deletes", async () => {
+    const { fireDelete, api } = harness();
+
+    await fireDelete();
+    expect(api.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: TOKEN_INDEX,
+        where: expect.objectContaining({ entityKey: { equals: "p1" } }),
+      })
+    );
+    api.find.mockClear();
+
+    await fireDelete({ collection: TOKEN_INDEX });
+
+    expect(api.find).not.toHaveBeenCalled();
+  });
+
   it("SKIPS a Single, which a wildcard registration also receives", async () => {
     // Core namespaces a Single's hooks as `single:<slug>`. The index models
     // Single subjects but a plugin has no supported way to read one, so none
@@ -345,6 +379,31 @@ describe("which writes it acts on", () => {
     const { fire, api } = harness();
 
     await fire({ collection: INDEX });
+
+    expect(api.findByID).not.toHaveBeenCalled();
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it("records the variables a saved document uses in the VARIABLE index", async () => {
+    const { fire, api } = harness();
+
+    await fire();
+
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: TOKEN_INDEX,
+        data: expect.objectContaining({
+          entityKey: "p1",
+          tokenId: "color.brand",
+        }),
+      })
+    );
+  });
+
+  it("SKIPS the variable index collection, which it writes too", async () => {
+    const { fire, api } = harness();
+
+    await fire({ collection: TOKEN_INDEX });
 
     expect(api.findByID).not.toHaveBeenCalled();
     expect(api.create).not.toHaveBeenCalled();
