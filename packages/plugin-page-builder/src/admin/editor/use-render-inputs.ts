@@ -20,7 +20,7 @@ import {
   type RemotePattern,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import type { PageBindings, PageStyleCascade } from "@nextlyhq/blocks-react";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
   fallbackBreakpoint,
@@ -61,6 +61,7 @@ import {
 } from "../../host-policy";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
+import { useCanvasBindings } from "../canvas-bindings-client";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 import { useStoredSiteStyle } from "../site-style-read";
@@ -264,12 +265,6 @@ type CanvasRender = {
   classSummaryContext: StyleCompileContext;
 };
 
-/**
- * The canvas's binding sources: none read for the page, one object for the
- * editor's life so the pass is not a new input on every render.
- */
-const CANVAS_BINDINGS: PageBindings = Object.freeze({});
-
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
   clientConfig,
@@ -349,6 +344,8 @@ function useCanvasRender({
   // The lists the author chose to see empty, drawn so on the canvas, and
   // every list read in the language being edited.
   const canvasContext = useCanvasPageContext(editor.listsShowingEmpty, locale);
+  // What the page's bindings read, read as the person editing.
+  const bindings = useCanvasBindings(editor.document, locale);
   const canvasRender = useMemo(
     () => ({
       ...pageRenderInputs({
@@ -365,11 +362,12 @@ function useCanvasRender({
         definitions: componentLibrary.definitions,
       }),
       context: canvasContext,
-      // The binding pass, with no source read for the page: a list item's
-      // bindings fill from the entry the canvas drew it with, as on the
-      // published page, and a binding to a source the canvas did not read
-      // keeps the block's own value (or its fallback), as it always drew.
-      bindings: CANVAS_BINDINGS,
+      // The binding pass, with the sources the page's bindings read, read as
+      // the person editing: the entry, its Singles and the site settings. A
+      // list item's bindings fill from the entry the canvas drew it with, as
+      // on the published page; until the sources arrive, a bound prop keeps
+      // its own value (or its fallback), as it always drew.
+      bindings,
     }),
     [
       canvasSiteStyle,
@@ -377,6 +375,7 @@ function useCanvasRender({
       documentLimits,
       componentLibrary.definitions,
       canvasContext,
+      bindings,
     ]
   );
 
