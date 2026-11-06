@@ -16,6 +16,8 @@
  * @experimental
  */
 import {
+  ADMIN_CONTRIBUTION_KINDS,
+  type AdminContributionKind,
   adminPlaceNamespaceOf,
   CORE_ADMIN_PLACES,
   isWellFormedAdminPlaceName,
@@ -31,13 +33,48 @@ export interface DeclaredAdminPlace {
   /** The declaring plugin's name; absent for core's places. */
   owner?: string;
   description?: string;
+  /** The kinds of contribution the place takes. */
+  accepts: readonly AdminContributionKind[];
 }
+
+/** What a plugin's place takes when it does not say: blocks alone. */
+const DEFAULT_PLUGIN_PLACE_ACCEPTS: readonly AdminContributionKind[] = [
+  "block",
+];
 
 /** Core's places, as every set of declared places begins. */
 function corePlaces(): Map<string, DeclaredAdminPlace> {
   return new Map(
-    Object.keys(CORE_ADMIN_PLACES).map(name => [name, { name }] as const)
+    Object.entries(CORE_ADMIN_PLACES).map(
+      ([name, place]) => [name, { name, accepts: place.accepts }] as const
+    )
   );
+}
+
+/**
+ * The kinds a plugin's place takes, as it declared them, refusing a value
+ * that is not a list of kinds. Read as plain JavaScript hands it over.
+ */
+function declaredAccepts(
+  accepts: unknown,
+  pluginName: string,
+  name: string
+): readonly AdminContributionKind[] {
+  if (accepts === undefined) return DEFAULT_PLUGIN_PLACE_ACCEPTS;
+  if (
+    !Array.isArray(accepts) ||
+    accepts.length === 0 ||
+    !accepts.every(kind =>
+      (ADMIN_CONTRIBUTION_KINDS as readonly unknown[]).includes(kind)
+    )
+  ) {
+    throw resolutionError(
+      "admin-place-malformed",
+      `Plugin "${pluginName}" declares the admin place "${name}" with an \`accepts\` that is not a list of one or more contribution kinds: ${ADMIN_CONTRIBUTION_KINDS.join(", ")}.`,
+      { plugin: pluginName, place: name, declared: "accepts" }
+    );
+  }
+  return [...new Set(accepts as AdminContributionKind[])];
 }
 
 /**
@@ -150,13 +187,18 @@ export function collectAdminPlaces(
     for (const place of declared as readonly unknown[]) {
       // Read from what was given, which a plugin in plain JavaScript may have
       // written as a bare string.
-      const given = place as { name?: unknown; description?: unknown } | null;
+      const given = place as {
+        name?: unknown;
+        description?: unknown;
+        accepts?: unknown;
+      } | null;
       const name = given?.name;
       assertPlaceDeclarable(places, name, plugin.name, slug);
       const description = given?.description;
       places.set(name, {
         name,
         owner: plugin.name,
+        accepts: declaredAccepts(given?.accepts, plugin.name, name),
         ...(typeof description === "string" && description !== ""
           ? { description }
           : {}),
