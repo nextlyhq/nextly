@@ -21,10 +21,43 @@ import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
 
+/**
+ * The client components a served page references, read from the payload the
+ * server sent (`self.__next_f`), as `<module>#<export>`. A block that ran in
+ * the browser would add one; a block drawn only on the server adds none.
+ */
+async function clientReferencesOf(page: Page, path: string): Promise<string[]> {
+  const response = await page.goto(path);
+  expect(response?.status()).toBe(200);
+  return page.evaluate(() => {
+    // The payload as the server sent it, from the inline scripts that pushed
+    // it: hydration empties `self.__next_f` itself.
+    const pushed = Array.from(document.scripts, script => {
+      const text = script.textContent ?? "";
+      const start = text.indexOf("self.__next_f.push(");
+      if (start === -1) return "";
+      const entry = JSON.parse(
+        text.slice(start + "self.__next_f.push(".length, text.lastIndexOf(")"))
+      ) as unknown[];
+      return typeof entry[1] === "string" ? entry[1] : "";
+    }).join("");
+    // A client reference row is `<row>:I[<module>,[<chunks>],"<export>"]`.
+    return [
+      ...new Set(
+        [...pushed.matchAll(/(?:^|\n)[0-9a-f]+:I(\[[^\n]*\])/g)].map(match => {
+          const [module, , name] = JSON.parse(match[1] ?? "[]") as unknown[];
+          return `${String(module)}#${String(name)}`;
+        })
+      ),
+    ].sort();
+  });
+}
+
 /** A page with a decorative icon, a labelled one and a linked one. */
 async function seed(
   page: Page,
-  status: "draft" | "published"
+  status: "draft" | "published",
+  withIcons = true
 ): Promise<{ id: string; slug: string }> {
   const run = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
   const slug = `icons-${run}`;
@@ -43,28 +76,7 @@ async function seed(
             version: 1,
             props: { text: "Why shop with us", level: "h2" },
           },
-          {
-            id: "plain",
-            type: "core/icon",
-            version: 1,
-            props: { icon: "lucide:star", label: "" },
-          },
-          {
-            id: "named",
-            type: "core/icon",
-            version: 1,
-            props: { icon: "lucide:truck", label: "Free delivery" },
-          },
-          {
-            id: "linked",
-            type: "core/icon",
-            version: 1,
-            props: {
-              icon: "lucide:mail",
-              label: "Write to us",
-              href: "/contact",
-            },
-          },
+          ...(withIcons ? ICONS : []),
         ],
       },
     },
@@ -73,6 +85,32 @@ async function seed(
   const id = ((await created.json()) as { item: { id: string } }).item.id;
   return { id, slug };
 }
+
+/** The three ways an icon is used: decorative, labelled and linked. */
+const ICONS = [
+  {
+    id: "plain",
+    type: "core/icon",
+    version: 1,
+    props: { icon: "lucide:star", label: "" },
+  },
+  {
+    id: "named",
+    type: "core/icon",
+    version: 1,
+    props: { icon: "lucide:truck", label: "Free delivery" },
+  },
+  {
+    id: "linked",
+    type: "core/icon",
+    version: 1,
+    props: {
+      icon: "lucide:mail",
+      label: "Write to us",
+      href: "/contact",
+    },
+  },
+];
 
 test.describe("the Icon block", () => {
   test.describe.configure({ timeout: 180_000 });
@@ -103,6 +141,16 @@ test.describe("the Icon block", () => {
           /<(path|circle|rect)\b/.test(svg)
       ).length
     ).toBeGreaterThanOrEqual(2);
+
+    // And no client component for it: the page's client references are the
+    // same as those of the same page without its icons.
+    const { slug: plain } = await seed(page, "published", false);
+    const withIcons = await clientReferencesOf(page, `/${slug}`);
+    // The control: the read finds the page's references at all (every page
+    // has its router's), so an equal pair is not two empty readings.
+    expect(withIcons.length).toBeGreaterThan(0);
+    expect(withIcons).toEqual(await clientReferencesOf(page, `/${plain}`));
+    await page.goto(`/${slug}`);
 
     // As the page reads to a visitor: an image with its name, and a link
     // named by its label whose icon is not read a second time.

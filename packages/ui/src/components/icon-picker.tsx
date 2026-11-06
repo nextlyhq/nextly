@@ -366,8 +366,14 @@ function useIconSearch(
   const [attempt, setAttempt] = React.useState(0);
   const [active, setActive] = React.useState(0);
   const [start, setStart] = React.useState<SearchStart | null>(null);
-  /* The answer the highlight was last placed for, so each is placed once. */
-  const placed = React.useRef<SearchAnswer | null>(null);
+  /*
+   * The answer the highlight was last placed for, and the whole set it was
+   * placed among, so each is placed once for the options as drawn.
+   */
+  const placed = React.useRef<{
+    readonly answer: SearchAnswer;
+    readonly wholeSet: readonly IconSourceIcon[] | null;
+  } | null>(null);
   /*
    * Read when an answer lands rather than watched: the chosen icon positions
    * the highlight for the search in hand, and choosing one is no reason to
@@ -375,7 +381,7 @@ function useIconSearch(
    */
   const place = React.useEffectEvent((found: SearchAnswer): void => {
     if (found.status !== "found" || !currentSettled) return;
-    placed.current = found;
+    placed.current = { answer: found, wholeSet };
     // Placed in the options as drawn, the Recent row first. Browsing starts
     // on the chosen icon, or the first; a search, on its best match.
     const browsing = found.query.trim() === "";
@@ -385,24 +391,61 @@ function useIconSearch(
       browsing && currentId
         ? options.findIndex(icon => icon.id === currentId)
         : -1;
-    const index = browsing ? Math.max(0, chosen) : recent.length;
+    // A search with no matches starts on the first recent icon, the only
+    // options it draws, so Enter and the arrow keys still have one to act on.
+    const index = browsing
+      ? Math.max(0, chosen)
+      : found.results.length > 0
+        ? recent.length
+        : 0;
     setActive(index);
     setStart({ index, centred: chosen > 0 });
   });
   const land = React.useEffectEvent((found: SearchAnswer): void => {
     setAnswer(found);
-    if (found.status === "found" && found.query.trim() === "") {
-      setWholeSet(found.results);
-    }
     place(found);
   });
   /*
+   * The whole set, browsed once the source is ready, on its own and not as
+   * one of the searches typed: a query typed before the first browse lands
+   * discards that browse's answer, and the Recent row must not go with it.
+   * Only when there are recent icons to find in it: a picker without them
+   * browses no more than it searches.
+   */
+  const wantsRecent = recentIds !== undefined && recentIds.length > 0;
+  React.useEffect(() => {
+    if (source === null || !wantsRecent) return;
+    let current = true;
+    source.search("").then(
+      results => {
+        if (!current) return;
+        // The Recent row it brings moves every option after it, so the
+        // answer in hand is placed again among the options now drawn (below).
+        setWholeSet(results);
+      },
+      () => {
+        // Without the whole set there is no Recent row; the search itself
+        // still answers, and says when it cannot.
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [source, wantsRecent]);
+  /*
    * An answer that landed before the chosen icon resolved is placed once it
-   * has: a renamed icon is found in the grid by the id it resolves to.
+   * has: a renamed icon is found in the grid by the id it resolves to. So is
+   * one that landed before the whole set did.
    */
   React.useEffect(() => {
-    if (answer !== null && placed.current !== answer) place(answer);
-  }, [answer, currentSettled]);
+    if (
+      answer !== null &&
+      (placed.current?.answer !== answer ||
+        placed.current.wholeSet !== wholeSet)
+    ) {
+      place(answer);
+    }
+  }, [answer, currentSettled, wholeSet]);
   const latest = React.useRef(0);
   React.useEffect(() => {
     if (source === null) return;

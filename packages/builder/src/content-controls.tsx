@@ -55,7 +55,7 @@ import { propLabel, type EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
 import { loadLucideIcons } from "./lucide-icon-source";
 import type { OpenPassages } from "./open-passages";
-import { readRecentIcons, rememberIcon } from "./recent-icons";
+import { useRecentIcons } from "./recent-icons";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
 import type { PreferenceStore } from "./shell-state";
@@ -1460,9 +1460,9 @@ function IconControl({
 }: ContentControlProps): React.JSX.Element {
   const name = label ?? propLabel(prop.name, prop.schema);
   const store = services?.recentIcons;
-  // Read once per control and kept up to date by its own choices; another
-  // control's choice reaches this one when it is next drawn.
-  const [recent, setRecent] = React.useState(() => readRecentIcons(store));
+  // One list per store, which every Icon control on screen draws: a choice
+  // made in another is here too, at once.
+  const [recent, remember] = useRecentIcons(store);
   return (
     <div className="nx-inspector__field" data-content-control="icon">
       <Label htmlFor={id}>{name}</Label>
@@ -1478,7 +1478,7 @@ function IconControl({
         loadIcons={loadLucideIcons}
         {...(store === undefined ? {} : { recentIcons: recent })}
         onChange={next => {
-          if (next !== null) setRecent(rememberIcon(store, recent, next));
+          if (next !== null) remember(next);
           onCommit(prop.name, next ?? undefined);
         }}
       />

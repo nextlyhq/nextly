@@ -101,7 +101,13 @@ function mount(
   {
     locked,
     contentServices,
-  }: { locked?: boolean; contentServices?: ContentServices } = {}
+    props: names = ["icon"],
+  }: {
+    locked?: boolean;
+    contentServices?: ContentServices;
+    /** The block's icon props, each with its own control. */
+    props?: readonly string[];
+  } = {}
 ) {
   registerBlocks(
     [
@@ -111,7 +117,16 @@ function mount(
         description: "A badge.",
         example: { props: {} },
         editor: { label: "Badge" },
-        props: { icon: { label: "Icon", role: "content", type: "icon" } },
+        props: Object.fromEntries(
+          names.map(name => [
+            name,
+            {
+              label: name === "icon" ? "Icon" : "Badge",
+              role: "content",
+              type: "icon",
+            },
+          ])
+        ),
         defaultProps: {},
         render: () => null,
       },
@@ -223,6 +238,31 @@ describe("an icon prop in the Content tab", () => {
     ).toBeDefined();
     fireEvent.click(await screen.findByRole("option", { name: "Star" }));
     expect(JSON.parse(kept ?? "null")).toEqual(["lucide:star", "lucide:truck"]);
+  });
+
+  it("shows a choice made in one icon control in another's Recent row at once", async () => {
+    let kept: string | null = null;
+    const store = {
+      read: () => kept,
+      write: (value: string) => {
+        kept = value;
+      },
+    };
+    mount(
+      {},
+      { contentServices: { recentIcons: store }, props: ["icon", "badge"] }
+    );
+    const [first, second] = await screen.findAllByRole("button", {
+      name: /: none chosen$/,
+    });
+    fireEvent.click(first!);
+    fireEvent.click(await screen.findByRole("option", { name: "Truck" }));
+    // The other control, already on screen, offers it without being drawn
+    // anew by anything else.
+    fireEvent.click(second!);
+    expect(
+      await screen.findByRole("option", { name: "Truck, recent" })
+    ).toBeDefined();
   });
 
   it("offers no Recent row where the host keeps no store", async () => {

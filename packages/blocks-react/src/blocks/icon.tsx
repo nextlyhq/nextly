@@ -88,16 +88,17 @@ export async function renderIcon({
     id === "" || ctx.resolveIcon === undefined
       ? null
       : await ctx.resolveIcon(id).catch(() => null);
+  // An icon this host does not draw: an empty, unnamed element, so the block
+  // keeps its place to be selected and the page shows nothing in its stead.
+  // Decided before the link is resolved, so an icon that draws nothing spends
+  // none of the page's reads on an entry's address it would not use.
+  if (resolved === null) {
+    return <span className={className} aria-hidden="true" />;
+  }
   const label = text(props.label);
   const link = await linkFor(props, (collection, entryId) =>
     ctx.resolveEntryPath(collection, entryId)
   );
-
-  // An icon this host does not draw: an empty, unnamed element, so the block
-  // keeps its place to be selected and the page shows nothing in its stead.
-  if (resolved === null) {
-    return <span className={className} aria-hidden="true" />;
-  }
   if (link === undefined) {
     return renderIconSvg(resolved, { label, className });
   }

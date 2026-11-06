@@ -11,7 +11,7 @@
  * @module icon.test
  */
 import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createStandaloneContext, type PageContext } from "../context";
 import { resolveLucideIcon } from "../icons/lucide";
@@ -96,6 +96,40 @@ describe("core/icon", () => {
       expect(placeholder?.getAttribute("aria-hidden")).toBe("true");
       expect(placeholder?.className).toBe("nx-pb-node1");
     }
+  });
+
+  it("reads no entry's address for an icon it cannot draw", async () => {
+    // A linked entry's address is a read from the page's budget; an icon that
+    // draws nothing has no use for it.
+    const resolveEntryPath = vi.fn(async () => "/about");
+    const ctx = createStandaloneContext({
+      resolveIcon: resolveLucideIcon,
+      resolveEntryPath,
+    });
+    const { container } = render(
+      await renderIcon({
+        props: {
+          icon: "lucide:not-an-icon",
+          entryCollection: "pages",
+          entryId: "p1",
+        },
+        className: "nx-pb-node1",
+        ctx,
+        partClass: () => "",
+      } as never)
+    );
+    expect(container.querySelector("svg, a")).toBeNull();
+    expect(resolveEntryPath).not.toHaveBeenCalled();
+    // The control: a drawn icon linked the same way does read it.
+    render(
+      await renderIcon({
+        props: { icon: "lucide:star", entryCollection: "pages", entryId: "p1" },
+        className: "nx-pb-node1",
+        ctx,
+        partClass: () => "",
+      } as never)
+    );
+    expect(resolveEntryPath).toHaveBeenCalledWith("pages", "p1");
   });
 
   it("says an icon's name as words", () => {

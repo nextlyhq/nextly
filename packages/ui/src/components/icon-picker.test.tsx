@@ -396,6 +396,49 @@ describe("IconField", () => {
     expect(highlightedIn(box)).toBe("Star");
   });
 
+  it("keeps the Recent row for a search typed before the set has loaded", async () => {
+    let arrive: (() => void) | undefined;
+    renderField(
+      { recentIcons: ["fake:heart"] },
+      fakeSource({
+        load: source =>
+          new Promise<IconSource>(resolve => {
+            arrive = () => resolve(source);
+          }),
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Badge/ }));
+    const box = await screen.findByRole("combobox", { name: "Search icons" });
+    // Typed while the set is still on its way, so no browse is ever the
+    // answer in hand.
+    fireEvent.change(box, { target: { value: "star" } });
+    await act(async () => arrive?.());
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("option")
+          .map(option => option.getAttribute("aria-label"))
+      ).toEqual(["Heart, recent", "Star", "Star half"])
+    );
+    expect(highlightedIn(box)).toBe("Star");
+  });
+
+  it("keeps a search with no matches on a recent icon the keys can reach", async () => {
+    const { onChange } = renderField({ recentIcons: ["fake:heart"] });
+    const box = await openPicker(/^Badge/);
+    fireEvent.change(box, { target: { value: "zzz" } });
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe(
+        "No icons match “zzz”."
+      )
+    );
+    expect(highlightedIn(box)).toBe("Heart, recent");
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(highlightedIn(box)).toBe("Heart, recent");
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("fake:heart");
+  });
+
   it("chooses an icon by click", async () => {
     const { onChange } = renderField();
     await openPicker(/^Badge/);
