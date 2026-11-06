@@ -289,7 +289,7 @@ function VariablesView({
   );
   const needle = query.trim().toLowerCase();
   const shown = searched(groups, needle);
-  const usage = useUsageOfRows(hosted, groups);
+  const usage = useUsageOfRows(hosted, groups, issue);
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -466,6 +466,12 @@ function useCommitsSettled(
  * each row's variable and, for a type size, its line height, which has no
  * row of its own and is removed from here or nowhere; and what the rows and
  * their editors are handed of it. Nothing without the host's access.
+ *
+ * A save refused (`issue` coming to say why) is read as a sign the counts
+ * are behind: a removal the server refused because the variable is in use,
+ * which these counts called unused. Every listed variable is read again,
+ * since the panel cannot tell which ones the refused save dropped, so the
+ * next Remove says why it waits rather than confirming again.
  */
 function useUsageOfRows(
   {
@@ -475,14 +481,24 @@ function useUsageOfRows(
     readonly usage?: VariablesAccess | undefined;
     readonly classes?: readonly NamedClass[] | undefined;
   },
-  groups: readonly { readonly entries: readonly VariableEntry[] }[]
+  groups: readonly { readonly entries: readonly VariableEntry[] }[],
+  issue: string | undefined
 ): VariableUsageHere | undefined {
   const identities = React.useMemo(
     () => groups.flatMap(group => group.entries.flatMap(rowIdentities)),
     [groups]
   );
   const reads = useVariableUsage(access, identities);
-  const { values, counter } = reads;
+  const { values, counter, reread } = reads;
+  // The identities as of the latest render, read when a refusal arrives
+  // rather than closed over, so the effect follows the issue alone.
+  const listed = React.useRef(identities);
+  listed.current = identities;
+  React.useEffect(() => {
+    // A fresh list each time: the same list again would be no new state,
+    // and a second refusal would read nothing.
+    if (issue !== undefined) reread([...listed.current]);
+  }, [issue, reread]);
   return React.useMemo(
     () =>
       access === undefined

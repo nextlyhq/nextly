@@ -211,25 +211,36 @@ describe("reading where a variable is used", () => {
     ]);
   });
 
-  it("offers no page past the last the route may be asked for", async () => {
-    // The route refuses a page past its cap, so the list stops there; the
-    // places beyond stay counted in the total.
+  it("follows the route's own next page past the shared styles' page cap", async () => {
+    // The variables route bounds its list by the places the site has, past
+    // the shared styles' 250 pages, and says itself when none follows.
     readAnswer = {
       items: [],
       meta: { total: 6000, hasNext: true },
     };
     const { result } = renderHook(() => useVariablesClient());
-    const before = await result.current.uses(
-      "color.brand",
-      SHARED_STYLE_WHERE_USED_PAGES_MAX - 1,
-      signal
-    );
-    expect(before.hasNext).toBe(true);
-    const last = await result.current.uses(
+    const capped = await result.current.uses(
       "color.brand",
       SHARED_STYLE_WHERE_USED_PAGES_MAX,
       signal
     );
+    // Page 251 is offered, since the route says it follows.
+    expect(capped.hasNext).toBe(true);
+    readAnswer = {
+      items: [],
+      meta: { total: 6000, hasNext: false },
+    };
+    const last = await result.current.uses(
+      "color.brand",
+      SHARED_STYLE_WHERE_USED_PAGES_MAX + 1,
+      signal
+    );
+    expect(reads.at(-1)).toEqual({
+      path: variableWhereUsedPath(
+        "color.brand",
+        SHARED_STYLE_WHERE_USED_PAGES_MAX + 1
+      ),
+    });
     expect(last.hasNext).toBe(false);
     expect(last.total).toBe(6000);
   });

@@ -757,3 +757,69 @@ describe("Show all", () => {
     expect(within(editor).queryByRole("button", { name: /more/ })).toBeNull();
   });
 });
+
+describe("a removal the save refuses", () => {
+  /**
+   * The panel with a host that refuses a save dropping Text, as the server
+   * does for a variable in use: it puts the set back and says why. Text is
+   * counted unused until the refusal, when the count catches up.
+   */
+  function Refusing({ usage }: { usage: VariablesAccess }): React.JSX.Element {
+    const [tokens, setTokens] = React.useState(SITE);
+    const [issue, setIssue] = React.useState<string | undefined>(undefined);
+    const latest = React.useRef(tokens);
+    return (
+      <TokensPanel
+        tokens={tokens}
+        usage={usage}
+        {...(issue === undefined ? {} : { issue })}
+        currentTokens={() => latest.current}
+        onChange={next => {
+          setIssue(undefined);
+          const drops = !next.tokens.some(token => token.name === "color.text");
+          if (drops) {
+            used.text = true;
+            latest.current = SITE;
+            setTokens(SITE);
+            setIssue("Text is used on 1 page, so it can't be removed.");
+            return;
+          }
+          latest.current = next;
+          setTokens(next);
+        }}
+      />
+    );
+  }
+  const used = { text: false };
+
+  it("reads the usage again, so the next Remove says why it waits", async () => {
+    used.text = false;
+    const usage = host({
+      reaches: () => ({ "color.text": used.text ? reach(1) : reach(0) }),
+      uses: [
+        { id: "p1", title: "Homepage", collection: "pages", kind: "pages" },
+      ],
+    });
+    render(<Refusing usage={usage} />);
+    let editor = await openEditor(/^Text.*Not used anywhere$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Remove Text" })
+    );
+    const readsBefore = usage.asked.length;
+
+    // The save refused: Text is read again, and its row catches up.
+    await screen.findByRole("button", { name: /^Text.*Used in 1 place$/ });
+    const again = usage.asked.slice(readsBefore).flat();
+    expect(again).toContain("color.text");
+
+    editor = await openEditor(/^Text.*Used in 1 place$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      within(editor).getByRole("heading", {
+        name: "Text can't be removed while it's in use.",
+      })
+    ).toBeDefined();
+    expect(within(editor).queryByText(/Any block using it/)).toBeNull();
+  });
+});

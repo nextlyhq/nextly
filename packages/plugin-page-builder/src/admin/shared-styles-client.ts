@@ -78,8 +78,16 @@ export interface UsesList<I> {
  */
 export function usesPageFrom<I, O>(
   body: UsesList<I> | undefined,
-  /** The page read, from 1: none follows the last a route may be asked for. */
-  page: number,
+  at: {
+    /** The page read, from 1. */
+    readonly page: number;
+    /**
+     * The last page the route may be asked for, when it caps the list at a
+     * fixed page: none is offered past it. Absent for a route whose
+     * `hasNext` already stops at its own last page.
+     */
+    readonly lastPage?: number;
+  },
   item: (item: I) => O
 ): {
   readonly items: readonly O[];
@@ -94,9 +102,10 @@ export function usesPageFrom<I, O>(
     items: body.items.map(item),
     total: body.meta.total,
     hidden: body.meta.hiddenCount ?? 0,
-    // The route refuses a page past its last, so none is offered past it;
+    // A route that refuses a page past its last has none offered past it;
     // the places beyond are counted in `total` and not named.
-    hasNext: body.meta.hasNext && page < SHARED_STYLE_WHERE_USED_PAGES_MAX,
+    hasNext:
+      body.meta.hasNext && (at.lastPage === undefined || at.page < at.lastPage),
     // The route names the documents it could not count while some pages are
     // still being counted, so the list may be short.
     complete: body.meta.notConsulted === undefined,
@@ -108,13 +117,18 @@ function usesFromResponse(
   body: UsesList<SharedStyleUseItem> | undefined,
   page: number
 ): SharedStyleUsesPage {
-  return usesPageFrom(body, page, item => ({
-    id: item.id,
-    title: item.title,
-    // Kept: an id is unique only within its collection.
-    collection: item.collection,
-    kind: item.kind,
-  }));
+  // The shared-style route lists at most its fixed number of pages.
+  return usesPageFrom(
+    body,
+    { page, lastPage: SHARED_STYLE_WHERE_USED_PAGES_MAX },
+    item => ({
+      id: item.id,
+      title: item.title,
+      // Kept: an id is unique only within its collection.
+      collection: item.collection,
+      kind: item.kind,
+    })
+  );
 }
 
 /**

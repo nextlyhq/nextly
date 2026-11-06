@@ -79,7 +79,10 @@ function usesFromResponse(
   body: UsesList<VariableUseItem> | undefined,
   page: number
 ): VariableUsesPage {
-  return usesPageFrom(body, page, item => {
+  // No fixed last page: the variables route bounds its list by the places
+  // the site has (`variableUsesPagesMax` there), past the shared styles'
+  // cap, and says no page follows its last.
+  return usesPageFrom(body, { page }, item => {
     const href = placeAddress(item);
     return {
       id: item.id,
