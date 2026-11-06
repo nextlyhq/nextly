@@ -364,11 +364,13 @@ async function walkRestore(
   run: { readonly runId: string; readonly undoes: string },
   budget: WalkBudget
 ): Promise<RewriteReport> {
-  // Its removal gives up its claims on what the undo defined again, should
-  // its request have stopped before it did: the same retire, so repeating it
-  // changes nothing.
+  // Its removal, and only it, gives up its claims on what the undo defined
+  // again, should its request have stopped before it did: a newer removal of
+  // the same breakpoint keeps its own. Repeating it changes nothing.
   const undone = await store.runById(run.undoes);
-  if (undone !== null) await store.retire([...removedEver(undone)]);
+  if (undone !== null) {
+    await store.retire([...removedEver(undone)], undone.id);
+  }
   const kept = keptRowsOf(installed.db, run.undoes);
   return rewriteHosts(
     {
