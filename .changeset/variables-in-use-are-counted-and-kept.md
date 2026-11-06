@@ -1,0 +1,34 @@
+---
+"nextly": patch
+"create-nextly-app": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
+---
+
+The page builder now records which pages, components, patterns and Layouts use each Design variable, and new routes answer how widely a variable is used (counting the shared styles whose own styles name it) and where. A variable that something still uses can no longer be removed: the new remove route and any save of the site style that drops it (the Variables panel's save, an undo, an import) are refused with the places that use it. The stored pages are read again before a removal, rather than trusting a count of zero. A page save that adds a reference to a variable the site does not define is refused; a reference the page already held still saves.
+
+`rebuildPageBuilderUsageIndexes` now requires `tokenIndex`, the store of the variable index (`TOKEN_USAGE_INDEX_SLUG`, newly exported), beside `classIndex` and `componentIndex`: a caller that rebuilds the indexes passes it too.

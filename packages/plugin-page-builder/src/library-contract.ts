@@ -1069,3 +1069,121 @@ export interface SharedStylesCountResponse {
 export interface SharedStyleRemoveRequest {
   readonly ids: readonly string[];
 }
+
+/**
+ * Where the Design panel's Variables reads how widely its variables are used,
+ * a page of rows at a time, each variable named by its identity (`$token`:
+ * the token's `id`, else its name) with its own `id` parameter.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_USAGE_ROUTE_PATH = "/variables/usage";
+
+/** The query parameter naming one variable, by identity; repeated for several. */
+export const VARIABLE_ID_PARAM = "id";
+
+/** The query parameter naming which page of a where-used list, from 1. */
+export const VARIABLE_PAGE_PARAM = "page";
+
+/** The most variables one usage read or one removal answers for. */
+export const VARIABLE_USAGE_IDS_MAX = 50;
+
+/**
+ * How widely one variable is used: the documents whose blocks or page
+ * settings name it, from the variable usage index, and the shared styles
+ * whose own styles name it, from the site style. A shared style's reference
+ * is a use whether or not any block applies the style. The places it is used
+ * are `documents` plus `sharedStyles.length`.
+ */
+export interface VariableUsage {
+  /** How many documents use it, gated and hidden content included. */
+  readonly documents: number;
+  /** The same documents, by kind. */
+  readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
+  /** The ids of the shared styles whose styles name it, in id order. */
+  readonly sharedStyles: readonly string[];
+  /** False makes `documents` and `byKind` floors: "at least". */
+  readonly complete: boolean;
+}
+
+/**
+ * What the variables usage read answers: the index's health once for the
+ * screen, whether this caller may ask for a count now, and each variable.
+ *
+ * NOT A SECURITY BOUNDARY: every write is judged on its own.
+ */
+export interface VariablesUsageResponse {
+  /** Whether the usage index covers the whole site, so counts can be exact. */
+  readonly whole: boolean;
+  /** Whether counts that are not whole may still become whole. */
+  readonly counting: boolean;
+  /**
+   * Whether this caller may ask for the pages to be counted now, through
+   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: one count fills every usage index.
+   */
+  readonly mayCount: boolean;
+  /** Each variable asked about, by identity. */
+  readonly variables: Readonly<Record<string, VariableUsage>>;
+}
+
+/**
+ * Where the Variables panel lists the places a variable is used: first the
+ * shared styles naming it, then the documents, read as the caller (documents
+ * the caller may not read are counted in `meta.hiddenCount`, not named). The
+ * canonical list envelope, twenty to a page with `?page=` from 1.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_WHERE_USED_ROUTE_PATH = "/variables/where-used";
+
+/** Which kind of place a variable is used in: a document's kind, or a shared style. */
+export type VariableUseKind = SharedStyleUsageKind | "shared-style";
+
+/**
+ * One place a variable is used. A document is named by its collection and id,
+ * as the shared-style where-used names one. A shared style is named by its
+ * class id in `id`, with the site-style Single's slug as its `collection`, so
+ * the panel can open it in Design > Shared styles.
+ */
+export interface VariableUseItem {
+  readonly id: string;
+  readonly title: string;
+  readonly collection: string;
+  readonly kind: VariableUseKind;
+}
+
+/**
+ * Where the Variables panel removes variables the site added: the one write
+ * that checks first, just before it writes, that nothing uses any of them. A
+ * variable the site's code supplies cannot be removed, only reset.
+ *
+ * Refused in use with a validation error whose issues carry
+ * {@link SHARED_STYLE_IN_USE_CODE}: one issue per variable the index or a
+ * shared style finds in use, its `path` that variable's identity, or one
+ * issue with an empty `path` when the stored documents themselves still use
+ * one. Refused with a conflict when the uses cannot be counted.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_REMOVE_ROUTE_PATH = "/variables/remove";
+
+/** What the remove route is sent: the variables to remove, by identity. */
+export interface VariableRemoveRequest {
+  readonly ids: readonly string[];
+}
+
+/** The usage route's path for some variables, each named by its own `id`. */
+export function variableUsagePath(ids: readonly string[]): string {
+  const params = new URLSearchParams();
+  for (const id of ids) params.append(VARIABLE_ID_PARAM, id);
+  return `${VARIABLE_USAGE_ROUTE_PATH}?${params.toString()}`;
+}
+
+/** The where-used route's path for one variable and one page, from 1. */
+export function variableWhereUsedPath(id: string, page: number): string {
+  const params = new URLSearchParams({
+    [VARIABLE_ID_PARAM]: id,
+    [VARIABLE_PAGE_PARAM]: String(page),
+  });
+  return `${VARIABLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
+}

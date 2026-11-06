@@ -18,7 +18,13 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style-storage
  */
-import { isPlainRecord, type SpacingMode } from "@nextlyhq/blocks-engine";
+import {
+  isPlainRecord,
+  resolveSiteTokens,
+  tokenDisplayLabel,
+  tokenIdentity,
+  type SpacingMode,
+} from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
@@ -305,6 +311,131 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(
   }
 }
 
+/** The mark the variables remove route puts on its own write. */
+const VARIABLE_REMOVE_WRITE = "pageBuilder.variableRemoveWrite";
+
+/**
+ * The context the variables remove route writes with: it has just made the
+ * in-use check itself, so the Single's guard does not walk the site again.
+ */
+export const VARIABLE_REMOVE_WRITE_CONTEXT: Readonly<Record<string, unknown>> =
+  { [VARIABLE_REMOVE_WRITE]: true };
+
+/** One stored variable as a removal names it: its identity and its name. */
+export interface NamedVariable {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * The variables a stored or sent tokens section holds, by identity (`id`,
+ * else `name`), each with the name an author knows it by. Read with the
+ * Single's own token rules, so an entry the write gate would refuse, which no
+ * page can resolve, is no variable here either; SQLite hands the section back
+ * as text.
+ */
+export function storedVariables(raw: unknown): Map<string, NamedVariable> {
+  const variables = new Map<string, NamedVariable>();
+  const tokens = checkStoredTokens(readStoredJson(raw)).value?.tokens ?? [];
+  for (const token of tokens) {
+    const id = tokenIdentity(token);
+    if (!variables.has(id)) {
+      variables.set(id, { id, name: tokenDisplayLabel(token) });
+    }
+  }
+  return variables;
+}
+
+/**
+ * The identities of the variables the site's code supplies, the engine's own
+ * defaults among them: these merge back on every read, so dropping a stored
+ * override of one resets it and removes nothing.
+ */
+export function suppliedVariableIds(
+  defaults: SiteStyleData | undefined
+): ReadonlySet<string> {
+  return new Set(resolveSiteTokens(defaults?.tokens).tokens.map(tokenIdentity));
+}
+
+/**
+ * Whether the variables are still used, refusing (by throwing) when any is:
+ * the one check a removal makes, handed the site's shared styles as they
+ * will be once the write lands. The plugin supplies it once installed.
+ */
+export type VariablesInUseCheck = (
+  removable: readonly NamedVariable[],
+  classes: readonly unknown[]
+) => Promise<void>;
+
+/**
+ * Refuse a write to this Single that drops a variable still in use.
+ *
+ * A whole-section write of the tokens (the Variables panel's save, an undo,
+ * an import of a token file) removes a variable as surely as the remove
+ * route does, so it is judged by the same check: refused, with the same
+ * in-use refusal, when a block, a page's settings or a shared style still
+ * uses it. Shared styles are unlike that on purpose: their removal by a
+ * whole list is allowed and the remove route is their delete, while a
+ * variable removed in use leaves every reference resolving to nothing, so it
+ * is refused on every path.
+ *
+ * The cost falls only on a write that drops one. The stored identities are
+ * compared first, from values in hand, so a write that edits values or labels,
+ * or adds a variable, asks nothing more. Dropping the stored override of a
+ * variable the code supplies is a reset and drops nothing. The remove route's
+ * own write, which has just made this check, and server code acting as
+ * nobody (an import's take-back), are not judged again.
+ */
+function variableRemovalGuard(
+  check: (() => VariablesInUseCheck | undefined) | undefined,
+  defaults: SiteStyleData | undefined
+): (hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}) => Promise<void> {
+  return async hook => {
+    const data = hook.data;
+    if (data === undefined || !Object.hasOwn(data, "tokens")) return;
+    if (hook.user === undefined && hook.principal === undefined) return;
+    if (hook.context?.[VARIABLE_REMOVE_WRITE] === true) return;
+    const dropped = droppedVariables(
+      hook.originalData?.tokens,
+      data.tokens,
+      suppliedVariableIds(defaults)
+    );
+    if (dropped.length === 0) return;
+    const inUse = check?.();
+    if (inUse === undefined) return;
+    // The shared styles as they will be once this write lands: the classes it
+    // writes beside the tokens, else the stored ones, over the code's.
+    const classes = Object.hasOwn(data, "classes")
+      ? data.classes
+      : hook.originalData?.classes;
+    await inUse(
+      dropped,
+      resolveSiteStyle(defaults, readSiteStyleRecord({ classes })).classes ?? []
+    );
+  };
+}
+
+/**
+ * The stored variables a write drops: held before, absent after, and not
+ * supplied by the code, by identity.
+ */
+export function droppedVariables(
+  before: unknown,
+  after: unknown,
+  supplied: ReadonlySet<string>
+): NamedVariable[] {
+  const kept = storedVariables(after);
+  return [...storedVariables(before).values()].filter(
+    variable => !kept.has(variable.id) && !supplied.has(variable.id)
+  );
+}
+
 /**
  * The shared-style guard as the Single runs it. The settings write, and only
  * it, is judged with the open breakpoint removal's ids, read from the
@@ -354,7 +485,12 @@ function sharedStyleGuard(
 export function siteStyleSingle(
   policy: SectionPolicy = {},
   /** The open breakpoint removal, which a locked shared style may be stripped by. */
-  openRemoval?: OpenRemovalReader
+  openRemoval?: OpenRemovalReader,
+  /**
+   * The in-use check a write dropping a variable is judged by, once the
+   * plugin is installed; absent, such a write is not judged.
+   */
+  variablesInUse?: () => VariablesInUseCheck | undefined
 ): SingleConfig {
   return defineSingle({
     slug: SITE_STYLE_SLUG,
@@ -366,6 +502,7 @@ export function siteStyleSingle(
       beforeValidate: [
         refuseBreakpointsOutsideSettings,
         sharedStyleGuard(openRemoval, policy.defaults?.classes),
+        variableRemovalGuard(variablesInUse, policy.defaults),
       ],
     },
     // No `access` block, deliberately: read and update both fall through to

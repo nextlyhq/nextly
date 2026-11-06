@@ -91,12 +91,12 @@ import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import { isForest } from "./blocks-document";
-import type { ListFieldsReader } from "./list-query-judgement";
 import {
   LAYERS_LOCK_CHANGED,
   placedLockMessage,
   variantLockMessage,
 } from "./layers-lock-wording";
+import type { ListFieldsReader } from "./list-query-judgement";
 import {
   composedFormsRead,
   lockBaselines,
@@ -240,6 +240,11 @@ export interface SiteDefinitions {
   readonly classIds: ReadonlySet<string>;
   /** The breakpoints the stylesheet is emitted under, the base included. */
   readonly breakpointIds: ReadonlySet<string>;
+  /**
+   * The identities of the variables the page may name: the engine's, the
+   * code's and the stored ones, merged as the stylesheet resolves them.
+   */
+  readonly tokenIds: ReadonlySet<string>;
 }
 
 /** Which document a write is to: a collection or a single, its slug, an id. */

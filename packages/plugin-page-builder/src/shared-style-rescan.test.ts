@@ -3,9 +3,13 @@
  * reference a style, read through the blocks fields the builder opens, a page
  * at a time by id; and the refusal's words.
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
+import { classUsageOf } from "./class-usage";
 import {
   referencesAny,
   stillUsedMessage,
@@ -13,6 +17,10 @@ import {
   type StoredDocuments,
 } from "./shared-style-rescan";
 import type { BuilderDocumentType } from "./site-style-route";
+import { tokenUsageOf } from "./token-usage";
+
+/** The shared styles' extractor, as the remove route hands it. */
+const classes = (stored: unknown) => classUsageOf(stored).ids;
 
 /** A stored block document whose one node carries `classes`. */
 const blocks = (...classes: string[]) => ({
@@ -40,24 +48,30 @@ describe("whether a stored row references a style", () => {
 
   it("reads a blocks field inside a group, and a group stored as text", () => {
     expect(
-      referencesAny({ hero: { body: blocks("c-card") } }, ["hero.body"], ids)
+      referencesAny(
+        { hero: { body: blocks("c-card") } },
+        ["hero.body"],
+        ids,
+        classes
+      )
     ).toBe(true);
     expect(
       referencesAny(
         { hero: JSON.stringify({ body: blocks("c-card") }) },
         ["hero.body"],
-        ids
+        ids,
+        classes
       )
     ).toBe(true);
   });
 
   it("reads only the fields named, and only the ids asked about", () => {
-    expect(referencesAny({ other: blocks("c-card") }, ["content"], ids)).toBe(
-      false
-    );
-    expect(referencesAny({ content: blocks("c-hero") }, ["content"], ids)).toBe(
-      false
-    );
+    expect(
+      referencesAny({ other: blocks("c-card") }, ["content"], ids, classes)
+    ).toBe(false);
+    expect(
+      referencesAny({ content: blocks("c-hero") }, ["content"], ids, classes)
+    ).toBe(false);
   });
 });
 
@@ -93,7 +107,7 @@ describe("every stored document still using a style", () => {
       { id: "d", content: blocks("c-card", "c-hero") },
       { id: "e", content: blocks() },
     ]);
-    expect(await storedUsesOf(["c-card"], documents)).toEqual([
+    expect(await storedUsesOf(["c-card"], documents, classes)).toEqual([
       { kind: "collection", slug: "pages", id: "b" },
       { kind: "collection", slug: "pages", id: "d" },
     ]);
@@ -111,14 +125,47 @@ describe("every stored document still using a style", () => {
       [],
       [{ type: home, forms: [{ body: blocks() }, { body: blocks("c-card") }] }]
     );
-    expect(await storedUsesOf(["c-card"], documents)).toEqual([
+    expect(await storedUsesOf(["c-card"], documents, classes)).toEqual([
       { kind: "single", slug: "home", id: "", label: "Home" },
     ]);
   });
 
+  it("reads each document by the extractor it is handed: variables too", async () => {
+    // The same rows, asked about a variable through the variable index's own
+    // walk. The class extractor finds nothing here, which is the control.
+    const usingBrand = {
+      ...blocks(),
+      nodes: [
+        {
+          ...blocks().nodes[0],
+          styles: { base: { base: { color: { $token: "color.brand" } } } },
+        },
+      ],
+    };
+    const { documents } = storedOf([
+      { id: "a", content: blocks("color.brand") },
+      { id: "b", content: usingBrand },
+    ]);
+    const tokens = (stored: unknown) =>
+      tokenUsageOf(stored, DEFAULT_LIMITS).ids;
+
+    expect(await storedUsesOf(["color.brand"], documents, tokens)).toEqual([
+      { kind: "collection", slug: "pages", id: "b" },
+    ]);
+    expect(
+      await storedUsesOf(
+        ["color.brand"],
+        storedOf([{ id: "b", content: usingBrand }]).documents,
+        classes
+      )
+    ).toEqual([]);
+  });
+
   it("refuses a row with no id, rather than passing over it", async () => {
     const { documents } = storedOf([{ content: blocks("c-card") }]);
-    await expect(storedUsesOf(["c-card"], documents)).rejects.toMatchObject({
+    await expect(
+      storedUsesOf(["c-card"], documents, classes)
+    ).rejects.toMatchObject({
       code: "INTERNAL_ERROR",
     });
   });

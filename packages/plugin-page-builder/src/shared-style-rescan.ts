@@ -1,6 +1,6 @@
 /**
- * Which stored documents still reference some shared styles, read from the
- * documents themselves rather than from the usage index.
+ * Which stored documents still reference some shared styles or variables,
+ * read from the documents themselves rather than from a usage index.
  *
  * The index is the fast answer and it can be wrong low: two saves of one
  * document that interleave can each remove the usage row the other wrote
@@ -16,8 +16,9 @@
  * each collection a page of 100 rows at a time, as the system: this is a
  * safety check, not an answer to the caller, so a document the caller may not
  * read still holds a style. Each blocks field's stored document is walked by
- * `classUsageOf`, the walk the index records from, so the two cannot disagree
- * about what a reference is.
+ * the extractor the caller names, which is the walk its index records from
+ * (`classUsageOf` for shared styles, `tokenUsageOf` for variables), so the
+ * rescan and the index cannot disagree about what a reference is.
  *
  * ## What it does not
  *
@@ -32,7 +33,6 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-import { classUsageOf } from "./class-usage";
 import { walkPages } from "./paged-walk";
 import type { BuilderDocumentType } from "./site-style-route";
 import { readStoredJson } from "./stored-json";
@@ -47,6 +47,12 @@ export const RESCAN_PAGE_SIZE = 100;
  * collection.
  */
 const RESCAN_PAGES_MAX = 10_000;
+
+/**
+ * The references one stored blocks value holds, by the walk an index records
+ * from. Handed in, so one rescan serves every index.
+ */
+export type ReferencesOf = (stored: unknown) => readonly string[];
 
 /** One stored document that still references a style. */
 export interface StoredUse {
@@ -97,10 +103,11 @@ function valueAt(row: unknown, path: string): unknown {
 export function referencesAny(
   row: unknown,
   paths: readonly string[],
-  ids: ReadonlySet<string>
+  ids: ReadonlySet<string>,
+  referencesOf: ReferencesOf
 ): boolean {
   return paths.some(path =>
-    classUsageOf(valueAt(row, path)).ids.some(id => ids.has(id))
+    referencesOf(valueAt(row, path)).some(id => ids.has(id))
   );
 }
 
@@ -122,7 +129,8 @@ function rowId(row: unknown): string | undefined {
 async function collectionUses(
   type: BuilderDocumentType,
   ids: ReadonlySet<string>,
-  documents: StoredDocuments
+  documents: StoredDocuments,
+  referencesOf: ReferencesOf
 ): Promise<StoredUse[]> {
   const uses: StoredUse[] = [];
   let after: string | undefined;
@@ -145,7 +153,7 @@ async function collectionUses(
             },
           });
         }
-        if (referencesAny(row, type.paths, ids)) {
+        if (referencesAny(row, type.paths, ids, referencesOf)) {
           uses.push({ kind: "collection", slug: type.slug, id });
         }
         after = id;
@@ -163,17 +171,20 @@ async function collectionUses(
  */
 export async function storedUsesOf(
   ids: readonly string[],
-  documents: StoredDocuments
+  documents: StoredDocuments,
+  referencesOf: ReferencesOf
 ): Promise<StoredUse[]> {
   if (ids.length === 0) return [];
   const asked = new Set(ids);
   const uses: StoredUse[] = [];
   for (const type of await documents.collections()) {
-    uses.push(...(await collectionUses(type, asked, documents)));
+    uses.push(...(await collectionUses(type, asked, documents, referencesOf)));
   }
   for (const type of await documents.singles()) {
     const forms = await documents.singleForms(type);
-    if (forms.some(form => referencesAny(form, type.paths, asked))) {
+    if (
+      forms.some(form => referencesAny(form, type.paths, asked, referencesOf))
+    ) {
       uses.push({
         kind: "single",
         slug: type.slug,
