@@ -239,21 +239,27 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(guideRead?.seo).toMatchObject({ fooBar: "a", foo_bar: "b" });
 
       // Saved in the Builder after an unrelated edit: a new field, applied as the Builder's save
-      // applies it, then a new label.
+      // applies it, in development, where a save runs its migration, then a new label.
       const { schemaVersion } = (await new DynamicCollectionRegistryService(
         t.adapter as never,
         consoleLogger
       ).getCollection("articles")) as { schemaVersion?: number };
-      await dispatchCollections(
-        {} as ServiceContainer,
-        "applySchemaChanges",
-        { collectionName: "articles" },
-        {
-          fields: [...ARTICLES_FIELDS, { name: "subtitle", type: "text" }],
-          confirmed: true,
-          schemaVersion: schemaVersion ?? 1,
-        }
-      );
+      const nodeEnv = process.env.NODE_ENV;
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "articles" },
+          {
+            fields: [...ARTICLES_FIELDS, { name: "subtitle", type: "text" }],
+            confirmed: true,
+            schemaVersion: schemaVersion ?? 1,
+          }
+        );
+      } finally {
+        vi.stubEnv("NODE_ENV", nodeEnv);
+      }
       const edited = await t.nextly.create({
         collection: "articles",
         data: { title: "Edited", summary: "s", subtitle: "sub" },

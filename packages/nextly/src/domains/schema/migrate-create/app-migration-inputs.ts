@@ -45,7 +45,7 @@ import {
   type AppStreamTables,
 } from "./app-stream";
 import { toMinimalEntities, withBuilderSettingsAll } from "./config-entities";
-import type { EntitySettingsRecord } from "./entity-settings";
+import type { EntitySettingsRecord, SettingsObject } from "./entity-settings";
 import { removedCollectionTables, type MinimalConfigEntity } from "./generate";
 import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
@@ -81,6 +81,20 @@ export interface AppMigrationInputsArgs {
    * same one the file then holds. Absent, it is read from `db.uiSchemaFile`.
    */
   manifest?: UiSchemaManifest;
+  /**
+   * Collections the database already holds that no snapshot records: a
+   * Schema Builder save adopting a table an earlier version made. Their
+   * addresses and sibling fields were there before those rules, so the checks
+   * judge them as recorded, as a database's own check judges a table it holds.
+   * `migrate:create` reads no database and passes none.
+   */
+  held?: readonly UiSchemaEntity[];
+  /**
+   * The one collection a save writes its migration for: the address and
+   * sibling-field checks judge it alone, since the migration changes nothing
+   * else. Absent, every entity is judged, as `migrate:create` judges them.
+   */
+  judged?: string;
   /** Absolute path to the migrations folder. */
   migrationsDir: string;
   dialect: SupportedDialect;
@@ -261,9 +275,11 @@ export async function appMigrationInputs(
   });
 
   // A new address is judged by the one address rule before anything is written.
-  assertMigrationAddresses(merged, latest, logger);
+  const judgedAgainst = withHeld(latest, input.held ?? []);
+  const judgedEntities = onlyJudged(merged, input.judged);
+  assertMigrationAddresses(judgedEntities, judgedAgainst, logger);
   // And each new pair of sibling fields, against the fields the latest snapshot records.
-  assertMigrationSiblingFields(merged, latest, logger);
+  assertMigrationSiblingFields(judgedEntities, judgedAgainst, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.
@@ -286,6 +302,52 @@ export async function appMigrationInputs(
     appStream,
     latest,
     nothing,
+  };
+}
+
+/** `merged` narrowed to the judged collection, or whole without one. */
+function onlyJudged<T extends { collections: { slug: string }[] }>(
+  merged: T,
+  judged: string | undefined
+): T {
+  if (judged === undefined) return merged;
+  return {
+    ...merged,
+    collections: merged.collections.filter(c => c.slug === judged),
+    singles: [],
+    components: [],
+  };
+}
+
+/**
+ * `latest` with each held collection recorded as its definition, for the
+ * address and sibling-field checks alone: nothing is written from it.
+ */
+function withHeld(
+  latest: { data: SnapshotFile } | null,
+  held: readonly UiSchemaEntity[]
+): { data: SnapshotFile } | null {
+  if (held.length === 0) return latest;
+  const data: SnapshotFile = latest?.data ?? {
+    version: 1,
+    migrationHash: "",
+    snapshot: EMPTY_SNAPSHOT,
+  };
+  const recorded = data.entities ?? {
+    collections: {},
+    singles: {},
+    fieldGroups: {},
+  };
+  const collections = { ...recorded.collections };
+  for (const entity of held) {
+    collections[entity.slug] ??= {
+      source: "builder",
+      settings: entity as unknown as SettingsObject,
+    };
+  }
+  return {
+    ...latest,
+    data: { ...data, entities: { ...recorded, collections } },
   };
 }
 

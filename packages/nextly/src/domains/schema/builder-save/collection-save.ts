@@ -58,6 +58,7 @@ import {
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
 import { runMigrationStatements } from "../migrate/migration-transaction";
+import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
@@ -308,10 +309,13 @@ async function planSave(
   deps: CollectionSaveDeps,
   save: CollectionSave
 ): Promise<SavePlan> {
-  const current = await loadUiSchema({
-    projectRoot: deps.projectRoot,
-    uiSchemaFile: deps.config.db.uiSchemaFile,
-  });
+  const current = withPreviousRecorded(
+    await loadUiSchema({
+      projectRoot: deps.projectRoot,
+      uiSchemaFile: deps.config.db.uiSchemaFile,
+    }),
+    save
+  );
   // Named as the generator names it (`uiToMinimal`), so the scope is the
   // table the migration writes.
   const table = uiToMinimal(collectionOf(save), "dc_").tableName;
@@ -344,7 +348,7 @@ async function adoptionFor(
   ).tables.find(t => t.name === table);
   if (live === undefined) return null;
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps),
+    ...inputsArgs(deps, [save.previous], save.slug),
     manifest: withCollection(current, save.slug, save.previous),
   });
   const declared = inputs.collections.find(c => c.slug === save.slug);
@@ -530,10 +534,16 @@ async function writeFiles(
   plan: SavePlan,
   onWritten: (names: string[]) => void
 ): Promise<SaveFiles> {
+  // An adopted collection's address and sibling fields predate those rules.
+  const held =
+    plan.adoption !== null && save.previous !== null
+      ? { held: [save.previous] }
+      : {};
   const now = save.now ?? new Date();
   let adopt: string | undefined;
   if (plan.adoption !== null && save.previous !== null) {
     const adopted = await generateFor(deps, {
+      ...held,
       manifest: withCollection(plan.current, save.slug, save.previous),
       save,
       name: `${migrationSlug(save.slug)}_adopt`,
@@ -565,6 +575,7 @@ async function writeFiles(
   ) {
     convert.push(
       ...(await generateFor(deps, {
+        ...held,
         manifest: withCollection(plan.current, save.slug, save.previous),
         save,
         name: `${migrationSlug(save.slug)}_convert`,
@@ -576,6 +587,7 @@ async function writeFiles(
     offset += 1;
   }
   const change = await generateFor(deps, {
+    ...held,
     manifest: plan.next,
     save,
     name: `${migrationSlug(save.slug)}_${save.change}`,
@@ -671,6 +683,25 @@ function commandLogger(logger: CollectionSaveDeps["logger"]) {
   };
 }
 
+/**
+ * `manifest` holding the collection as it stood before the save, where the
+ * file does not: one an earlier version made, which the file never recorded.
+ * Taken as it stands, without the checks a change is put through, so the
+ * change is then judged against what already existed rather than as new.
+ */
+function withPreviousRecorded(
+  manifest: UiSchemaManifest,
+  save: CollectionSave
+): UiSchemaManifest {
+  if (
+    save.previous === null ||
+    manifest.collections.some(c => c.slug === save.slug)
+  ) {
+    return manifest;
+  }
+  return { ...manifest, collections: [...manifest.collections, save.previous] };
+}
+
 /** The definition with `slug` replaced by `entity`, or removed where it is null. */
 function withCollection(
   manifest: UiSchemaManifest,
@@ -757,11 +788,13 @@ async function generateFor(
     appended?: { up: AddedStatements; down: AddedStatements };
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
     resolutions?: readonly ColumnResolution[];
+    /** Collections the database holds that no snapshot records (`appMigrationInputs`). */
+    held?: readonly UiSchemaEntity[];
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps),
+    ...inputsArgs(deps, args.held, args.save.slug),
     manifest: args.manifest,
   });
   const before = new Set(await sqlFiles(deps.migrationsDir));
@@ -899,8 +932,14 @@ function placedJunctions(
 }
 
 /** What `appMigrationInputs` is asked with for this app, its definition aside. */
-function inputsArgs(deps: CollectionSaveDeps): AppMigrationInputsArgs {
+function inputsArgs(
+  deps: CollectionSaveDeps,
+  held: readonly UiSchemaEntity[] = [],
+  judged?: string
+): AppMigrationInputsArgs {
   return {
+    ...(held.length === 0 ? {} : { held }),
+    ...(judged === undefined ? {} : { judged }),
     config: deps.config,
     ...(deps.deferredExtends === undefined
       ? {}
@@ -978,6 +1017,17 @@ async function runWritten(
 
   async function runOne(filename: string): Promise<void> {
     const file = await unitOf(deps, filename);
+    // A column made required over rows that would break it, refused before
+    // any statement, as `nextly migrate` refuses it.
+    await refuseRequiredColumnsOverNulls(
+      db,
+      dialect,
+      splitSqlStatements(file.sql, dialect, {
+        source: filename,
+        transaction: file.transaction,
+      }),
+      filename
+    );
     const target = await snapshotOf(deps, filename);
     if (target === null) {
       await runRecordedAttempt({ file, dialect, repo, executeSql });
