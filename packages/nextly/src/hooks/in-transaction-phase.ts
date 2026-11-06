@@ -31,10 +31,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../errors/nextly-error";
+import { getNextlyLogger } from "../observability/logger";
 import { markWriteIntegrityFailure } from "../shared/write-integrity";
 
+import { runWatched, watchOutboundCalls } from "./in-transaction-outbound";
 import { normalizeHookError } from "./normalize-hook-error";
-import type { InTransactionRunner, InTransactionWrite } from "./types";
+import type {
+  HookOwner,
+  InTransactionRunner,
+  InTransactionWrite,
+} from "./types";
 
 /**
  * How deeply the phase may nest. A handler may write through the Direct API
@@ -50,11 +56,15 @@ const phaseDepth = new AsyncLocalStorage<number>();
 
 /**
  * The in-transaction handlers one write runs, taken from the registry once per
- * write ('*' ones first, then the collection's own, suspended owners left out).
+ * write ('*' ones first, then the collection's own, suspended owners left out),
+ * each with its owner, whom the outbound-call warning names.
  *
  * @internal
  */
-export type InTransactionHandlerSet = readonly InTransactionRunner[];
+export type InTransactionHandlerSet = ReadonlyArray<{
+  readonly handler: InTransactionRunner;
+  readonly owner: HookOwner;
+}>;
 
 /** What a write hands the phase: its shared context is copied and frozen here. */
 export type InTransactionPhaseInput = Omit<InTransactionWrite, "context"> & {
@@ -84,11 +94,14 @@ const LEFT_OUT = Symbol("left out");
  * entry's part of a shared transaction.
  */
 export async function runInTransactionPhase(
-  runners: InTransactionHandlerSet,
+  entries: InTransactionHandlerSet,
   tx: TransactionContext,
   input: InTransactionPhaseInput
 ): Promise<void> {
-  if (runners.length === 0) return;
+  if (entries.length === 0) return;
+  // In development, a handler that calls out of the process is told so: the
+  // call is not undone with a discarded attempt. A no-op anywhere else.
+  watchOutboundCalls(getNextlyLogger());
 
   const depth = (phaseDepth.getStore() ?? 0) + 1;
   if (depth > MAX_IN_TRANSACTION_DEPTH) {
@@ -109,9 +122,9 @@ export async function runInTransactionPhase(
     context: detachedContext(input.context),
   };
   await phaseDepth.run(depth, async () => {
-    for (const runner of runners) {
+    for (const { handler, owner } of entries) {
       try {
-        await runner(tx, write);
+        await runWatched(owner, () => handler(tx, write));
       } catch (error: unknown) {
         throw markWriteIntegrityFailure(
           normalizeHookError(error, "inTransaction", input.collection, {
