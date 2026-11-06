@@ -2648,47 +2648,23 @@ export class SingleMutationService extends BaseService {
       // hook produced would reach the integer column and let the database
       // decide. The hooks run after the validation gate, so what they leave
       // behind is a write the gate never saw. Paths the restore kept from
-      // the row for a denied rule are the row's own, not judged. Told as the
-      // gate tells its own issues: a field the writer may not read is not
-      // named.
-      const hookIssues = await issuesTheReaderMaySee(
-        hookChangedWholeNumberIssues(
-          currentData,
+      // the row for a denied rule are the row's own, not judged.
+      const hookIssues = hookChangedWholeNumberIssues(
+        currentData,
+        fieldConfigs,
+        "",
+        // The component schemas the gate resolved before the hooks ran: the
+        // walk judges what a hook left in a component a container stores
+        // against those fields, as the gate judged the value before them.
+        // On the pool, as the gate reads.
+        await containedComponentResolver(
           fieldConfigs,
-          "",
-          // The component schemas the gate resolved before the hooks ran:
-          // the walk judges what a hook left in a component a container
-          // stores against those fields, as the gate judged the value
-          // before them. On the pool, as the gate reads.
-          await containedComponentResolver(
-            fieldConfigs,
-            async componentSlug =>
-              (await this.fieldGroupDataService?.getComponentFields(
-                componentSlug
-              )) ?? null
-          ),
-          storedPaths
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug
+            )) ?? null
         ),
-        {
-          kind: "single",
-          slug,
-          document: relationshipValidationView(currentData, fieldConfigs),
-          fields: fieldConfigs,
-          fieldGroups: this.fieldGroupDataService,
-          entryId: String(documentId),
-          // A Single the reader may not read is shown to them in no part.
-          rowReadable: () =>
-            this.readsSingle(slug, {
-              user: options.user,
-              authenticatedScope: options.authenticatedScope,
-            }),
-          reader: {
-            user: options.user,
-            overrideAccess: options.overrideAccess,
-            authenticatedScope: options.authenticatedScope,
-            grants: writeGrants,
-          },
-        }
+        storedPaths
       );
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });

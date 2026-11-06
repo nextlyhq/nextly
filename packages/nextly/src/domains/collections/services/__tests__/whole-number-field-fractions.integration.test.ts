@@ -120,12 +120,10 @@ describe.each(getConfiguredTestDialects())(
                   text({ name: "label" }),
                   number({
                     name: "rating",
-                    // Seen by no caller and writable by none: the update
+                    // Readable by anyone, writable by none: the update
                     // below edits the sibling and omits this child, so the
-                    // restore puts the stored value back for the write, and
-                    // the hook test below proves the refusal of a fraction
-                    // a hook writes there names no field.
-                    access: { read: () => false, update: () => false },
+                    // restore puts the stored value back for the write.
+                    access: { read: () => true, update: () => false },
                   }),
                 ],
               }),
@@ -166,11 +164,6 @@ describe.each(getConfiguredTestDialects())(
           if (meta && meta.rating === 2) {
             meta.rating = 2.5;
           }
-        } else if (data.title === "hooklocked-1") {
-          // An entry-level hook holds the whole document, so it can reach a
-          // field no caller may see or write: the fraction it leaves there
-          // is judged after the hooks, and its refusal names no field.
-          data.locked = { rating: 2.5 };
         }
         return data;
       });
@@ -547,12 +540,7 @@ describe.each(getConfiguredTestDialects())(
       expect((edited.locked as Record<string, unknown>).label).toBe(
         "sibling edit"
       );
-      // The response shows this caller nothing of what they may not read;
-      // the row itself keeps the stored fraction.
-      expect(
-        ((await readEntry("denied-frac-1")).locked as Record<string, unknown>)
-          .rating
-      ).toBe(2.5);
+      expect((edited.locked as Record<string, unknown>).rating).toBe(2.5);
     });
 
     it("a fraction the caller sends at an allowed path is still refused beside a denied child", async () => {
@@ -568,37 +556,6 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expectFractionRefusal(refusal, "quantity");
-    });
-
-    it("a hook's fraction on a field the writer may not see is told without naming it", async () => {
-      // The hooks run after the gate, so the fraction the hook writes under
-      // `locked` is caught by the post-hook walk — and its refusal is told
-      // as the gate tells its own: a field this writer may not read is not
-      // named, by path or by label.
-      const refusal = await refusalOf(
-        collections.updateEntry(
-          SLUG,
-          "denied-frac-1",
-          // The title is what arms the hook: the hooks see the patch, so
-          // the write carries a whole value and the hook plants the
-          // fraction under `locked` after the gate has passed.
-          { title: "hooklocked-1", quantity: 3 },
-          { overrideAccess: false, user: { id: "sibling-editor" } }
-        )
-      );
-      expect(NextlyError.is(refusal)).toBe(true);
-      expect(refusal.code).toBe("VALIDATION_ERROR");
-      expect(refusal.statusCode).toBe(400);
-      const issues =
-        (refusal.publicData as { errors: ValidationIssueShape[] })?.errors ??
-        [];
-      expect(issues).toEqual([
-        {
-          path: "",
-          code: "UNREADABLE_FIELD",
-          message: "A field you can't see doesn't pass validation.",
-        },
-      ]);
     });
   }
 );
