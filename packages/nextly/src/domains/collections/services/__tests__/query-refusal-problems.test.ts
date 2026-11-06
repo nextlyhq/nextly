@@ -145,6 +145,18 @@ describe("queryRefusalProblems", () => {
     ["a database failure", new Error("connection reset")],
     ["a refusal of another kind", NextlyError.notFound({ logContext: {} })],
     [
+      // Problems named, under another code: a refusal for a reason the read's
+      // chain never gives, so not one of its answers.
+      "another code that names problems",
+      new NextlyError({
+        code: "FORBIDDEN",
+        publicMessage: "No.",
+        publicData: {
+          errors: [{ path: "where.a", code: "X", message: "No." }],
+        },
+      }),
+    ],
+    [
       "a validation error naming no problem",
       NextlyError.validation({ errors: [] }),
     ],
