@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   declarationSubstance,
+  pluginDeclarations,
   templateVariablesSchema,
   withOwnerPresentation,
 } from "../template-variables";
@@ -64,6 +65,15 @@ describe("the declarations a save accepts", () => {
       [{ name: "a", type: "list", fields: [{ type: "text" }] }],
     ],
     ["declarations that are not a list", { name: "a" }],
+    ["an example that is a bigint", [{ name: "a", example: 10n }]],
+    [
+      "a cyclic example",
+      (() => {
+        const cyclic: Record<string, unknown> = {};
+        cyclic.self = cyclic;
+        return [{ name: "a", example: cyclic }];
+      })(),
+    ],
   ])("refuses %s", (_, variables) => {
     expect(templateVariablesSchema.safeParse(variables).success).toBe(false);
   });
@@ -138,5 +148,49 @@ describe("the owner's presentation on a copy", () => {
 
   it("returns no declarations as none", () => {
     expect(withOwnerPresentation(null, owner)).toBeNull();
+  });
+});
+
+describe("pluginDeclarations", () => {
+  it("keeps valid typed declarations as they are with no problem", () => {
+    const valid = [
+      {
+        name: "user",
+        description: "The user",
+        type: "object" as const,
+        example: { id: "u-1" },
+      },
+    ];
+    expect(pluginDeclarations(valid)).toEqual({
+      variables: valid,
+      problem: null,
+    });
+  });
+
+  it("handles null and undefined gracefully", () => {
+    expect(pluginDeclarations(null)).toEqual({
+      variables: null,
+      problem: null,
+    });
+    expect(pluginDeclarations(undefined)).toEqual({
+      variables: null,
+      problem: null,
+    });
+  });
+
+  it("retains substance and reports problem for unparseable presentation", () => {
+    const invalid = [
+      {
+        name: "user",
+        description: "The user",
+        required: true,
+        type: "unknown-type",
+      },
+    ];
+    const result = pluginDeclarations(invalid);
+    expect(result.variables).toEqual([
+      { name: "user", description: "The user", required: true },
+    ]);
+    expect(result.problem).toContain("0.type");
   });
 });

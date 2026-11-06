@@ -33,6 +33,18 @@ const fieldsMessage = {
   path: ["fields"],
 };
 
+const jsonSafe = z.json().refine(
+  val => {
+    try {
+      JSON.stringify(val);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  { message: "Example must be a JSON-serializable value." }
+);
+
 const fieldShape = {
   name: z.string().trim().min(1).max(200),
   // Optional, as a plugin may declare it: a stored declaration without one
@@ -40,8 +52,8 @@ const fieldShape = {
   description: z.string().max(1000).optional(),
   type: z.enum(EMAIL_TEMPLATE_VARIABLE_TYPES).optional(),
   label: z.string().max(200).optional(),
-  // Stored in a JSON column and sent as JSON, so only a JSON value.
-  example: z.json().optional(),
+  // Stored in a JSON column and sent as JSON, so only a JSON-serializable value.
+  example: jsonSafe.optional(),
 };
 
 const fieldSchema: z.ZodType<EmailTemplateVariableField> = z.lazy(() =>

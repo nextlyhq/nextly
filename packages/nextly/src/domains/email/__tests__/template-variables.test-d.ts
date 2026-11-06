@@ -1,7 +1,8 @@
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
-import type {
-  EmailTemplateVariable,
-  EmailTemplateVariableType,
+import {
+  EMAIL_TEMPLATE_VARIABLE_TYPES,
+  type EmailTemplateVariable,
+  type EmailTemplateVariableType,
 } from "../../../schemas/email-templates/types";
 
 // Typed variable declarations, for core and for plugins: today's shapes still
@@ -51,3 +52,17 @@ assertNot<
     EmailTemplateVariable
   >
 >(false);
+
+// Both read from the one list: the union and the tuple agree.
+assertType<
+  Assignable<
+    EmailTemplateVariableType,
+    (typeof EMAIL_TEMPLATE_VARIABLE_TYPES)[number]
+  >
+>(true);
+assertType<
+  Assignable<
+    (typeof EMAIL_TEMPLATE_VARIABLE_TYPES)[number],
+    EmailTemplateVariableType
+  >
+>(true);
