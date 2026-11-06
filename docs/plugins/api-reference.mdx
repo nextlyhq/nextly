@@ -762,7 +762,37 @@ Boot fails, naming the plugin and the place, on a place that is malformed
 reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
-Nothing renders at a place yet.
+
+Settings, a user's detail page, the entry form and the login page draw what is
+sent to them; the other core places draw nothing yet. A plugin draws its own
+place on one of its pages with `TargetSlot` and `PlaceTabs` from
+`@nextlyhq/plugin-sdk/admin` (`@experimental`), the parts core's pages use:
+
+```tsx
+import { PlaceTabs, TargetSlot } from "@nextlyhq/plugin-sdk/admin";
+
+export function InvoicePage({ invoiceId }: { invoiceId: string }) {
+  const context = { invoiceId };
+  return (
+    <PlaceTabs
+      place="acme-billing.invoice"
+      context={context}
+      contentLabel="Invoice"
+    >
+      <Invoice id={invoiceId} />
+      <TargetSlot place="acme-billing.invoice" context={context} />
+    </PlaceTabs>
+  );
+}
+```
+
+Each block and tab is drawn in the order sent, behind its own error boundary,
+and receives the place's `context` (and `entry`, where the page passes one).
+Pass `context={null}` while the page does not know its ids yet: nothing
+contributed is drawn until it does, so no contribution is handed a wrong id.
+With no tab sent, `PlaceTabs` draws its children alone; with one, they are the
+first tab, under `contentLabel`. A plugin's place has no built-in parts, so the
+page draws its own content beside the slot.
 
 ### Entry-list filters
 
@@ -861,7 +891,10 @@ contributions' order allows, and straight after A when nothing competes, and
 them keeps its place there. A contribution may take a
 built-in part's place with `replaces`. The edit page's side panel names its
 four built-in sections, in order: `status`, `publishing`, `language` and
-`details`.
+`details`. Among blocks, settings and a user's detail page name the page's own
+content `content`, the entry form names its fields `fields`, and the login page
+names the sign-in form `form`. A plugin that replaces the login page's `form`
+takes over sign-in for the site.
 
 **Who sees one.** Contributions are sent only in the signed-in workspace
 metadata, the login page's alone in the public one, and each reader receives
@@ -879,9 +912,13 @@ only what they may see:
   contribution whose rule names such a field is not sent to that reader at
   all.
 
-The entry list offers a collection's row actions in each row's menu, after its
-own, on the rows whose `visibleWhen` holds. Other contributions arrive as data
-in the admin's metadata, and are not drawn yet.
+The admin draws blocks and tabs at settings, a user's detail page, the entry
+form and the login page, in the order sent, each behind its own error boundary;
+a contributed tab follows the page's own content, which stays as it was when no
+tab is sent. The entry list offers a collection's row actions in each row's
+menu, after its own, on the rows whose `visibleWhen` holds. Columns, bulk
+actions, side panel sections, and blocks and tabs at the other places arrive as
+data and are not drawn yet.
 
 **Running an action.** An action that `open`s a component draws it with the
 rows it was run on. In a bundled admin, that component resolves only once

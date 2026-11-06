@@ -326,6 +326,30 @@ interface BrandingProviderProps {
   children: React.ReactNode;
 }
 
+/**
+ * Each half carries its own places' contributions: the public half the login
+ * page's, the signed-in half every other place's. Merged place by place, so a
+ * plain merge of the halves does not let signing in take the login page's
+ * away. Nothing when neither half has any.
+ */
+function placesOfBothHalves(
+  publicHalf: AdminBranding | undefined,
+  workspaceHalf: AdminBranding | undefined
+): Pick<AdminBranding, "contributions"> {
+  if (
+    publicHalf?.contributions === undefined &&
+    workspaceHalf?.contributions === undefined
+  ) {
+    return {};
+  }
+  return {
+    contributions: {
+      ...publicHalf?.contributions,
+      ...workspaceHalf?.contributions,
+    },
+  };
+}
+
 export function BrandingProvider({
   children,
 }: BrandingProviderProps): React.JSX.Element {
@@ -418,7 +442,11 @@ export function BrandingProvider({
     const merged =
       brandingData === undefined && workspaceData === undefined
         ? undefined
-        : { ...brandingData, ...workspaceData };
+        : {
+            ...brandingData,
+            ...workspaceData,
+            ...placesOfBothHalves(brandingData, workspaceData),
+          };
     return {
       branding: merged,
       // The WORKSPACE query, matching `isUnavailable`. Both answer one

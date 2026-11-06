@@ -111,6 +111,7 @@ import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "./EntryFormContext";
+import { EntryFormPlace } from "./EntryFormPlace";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
@@ -1630,21 +1631,28 @@ export function EntryForm({
                                   }
                                   bannerSlot={versionBannerSlot}
                                 >
-                                  {mainFields.length > 0 && (
-                                    <div className="@4xl/content:p-8 pt-6">
-                                      {/* Forward the form mode: in edit mode a blank password
+                                  <EntryFormPlace
+                                    kind="collection"
+                                    slug={collectionSlug}
+                                    entryId={entry?.id ?? null}
+                                    {...(entry ? { entry } : {})}
+                                  >
+                                    {mainFields.length > 0 && (
+                                      <div className="@4xl/content:p-8 pt-6">
+                                        {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
-                                      <EntryFormContent
-                                        fields={mainFields}
-                                        disabled={savePending}
-                                        readOnly={lock.readOnly}
-                                        withCard
-                                        mode={mode}
-                                      />
-                                    </div>
-                                  )}
+                                        <EntryFormContent
+                                          fields={mainFields}
+                                          disabled={savePending}
+                                          readOnly={lock.readOnly}
+                                          withCard
+                                          mode={mode}
+                                        />
+                                      </div>
+                                    )}
+                                  </EntryFormPlace>
                                 </ViewedVersionBody>
                               </div>
 

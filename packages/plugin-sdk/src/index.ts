@@ -808,7 +808,8 @@ export type {
  * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
  * blocks, tabs, list columns, row and bulk actions and side panel sections,
  * each ordered at its place, with a declared visibility rule and permission.
- * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ * @experimental The admin draws blocks and tabs at four places so far (see
+ * STABILITY.md).
  */
 export type {
   AdminBlockContribution,
