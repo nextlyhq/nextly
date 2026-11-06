@@ -17517,6 +17517,101 @@ export class CollectionMutationService extends BaseService {
    * @param params - Collection name, entry ID, and optional user context
    * @returns Deletion result or error
    */
+  /**
+   * The delete gate for one entry, as a delete asks it before any hook runs:
+   * the caller's grant, then each language the entry holds, with each filter
+   * a rule answers matched against the entry in its language and kept for the
+   * row lock. The one place the question is asked, by `deleteEntry` and by
+   * `canDeleteEntry` alike, so the check cannot drift from the writer. Reads
+   * only: no hook runs and nothing is written.
+   */
+  private async deleteGateOf(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+      appliesFilter?: boolean;
+    },
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper }
+  ) {
+    // A delete rule that answers a filter allows only the entries it
+    // matches, so the gate hands the filter back for the delete to match its
+    // entry against.
+    const accessParams = {
+      collectionName: params.collectionName,
+      operation: "delete" as const,
+      entryId: params.entryId,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
+      // A scoped API key is judged on its own delete grant, so the session
+      // super-admin bypass does not apply to a super-admin-owned key here.
+      authenticatedScope: params.authenticatedScope,
+    };
+    // Collection metadata: for the languages the entry holds, and for the
+    // stored hooks the delete runs after this.
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    // A delete removes every language the entry holds, so it is asked in
+    // each of them, each time told that one, and a refusal in any refuses
+    // it. Each filter answered is matched in its language now, before any
+    // hook runs, and again under the delete's row lock, so the entry removed
+    // is the one judged.
+    const deleteLanguages = {
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      fields: (collection.schemaDefinition?.fields ||
+        collection.fields ||
+        []) as FieldConfig[],
+    };
+    const asked = await this.deleteAskedInEachLanguage({
+      entry: deleteLanguages,
+      schema,
+      params: accessParams,
+      appliesFilter: params.appliesFilter !== false,
+    });
+    if ("refusal" in asked) return { refusal: asked.refusal };
+    return { collection, deleteLanguages, asked };
+  }
+
+  /**
+   * Whether this caller may delete the entry, decided without deleting it
+   * and without running any hook: the gate `deleteEntry` asks before its
+   * hooks (`deleteGateOf`), a rule's row filter matched against this entry
+   * included. Never overridden, since it exists to apply the rules. An entry
+   * that is not there answers as a refusal, so missing and forbidden cannot
+   * be told apart.
+   *
+   * @experimental
+   */
+  async canDeleteEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** API-key scope; judges the delete gate on the key's own grant. */
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    if (
+      (await this.storedEntry(params.collectionName, params.entryId)) ===
+      undefined
+    ) {
+      return false;
+    }
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const gate = await this.deleteGateOf(
+      { ...params, overrideAccess: false, routeAuthorized: false },
+      schema
+    );
+    return !("refusal" in gate);
+  }
+
   async deleteEntry(params: {
     collectionName: string;
     entryId: string;
@@ -17583,45 +17678,15 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // 1. Check collection-level access FIRST. A delete rule that answers a
-      // filter allows only the entries it matches, so the gate hands the
-      // filter back for this delete to match its entry against.
-      const accessParams = {
-        collectionName: params.collectionName,
-        operation: "delete" as const,
-        entryId: params.entryId,
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        // A scoped API key is judged on its own delete grant, so the session
-        // super-admin bypass does not apply to a super-admin-owned key here.
-        authenticatedScope: params.authenticatedScope,
-      };
-      // Collection metadata: for the languages the entry holds, and for the
-      // stored hooks below.
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
+      // 1. Check collection-level access FIRST, before any hook runs: the
+      // gate `canDeleteEntry` asks too, so the two cannot drift.
+      const gate = await this.deleteGateOf(
+        { ...params, user: accessUser },
+        schema
       );
-      // A delete removes every language the entry holds, so it is asked in
-      // each of them, each time told that one, and a refusal in any refuses
-      // it. Each filter answered is matched in its language now, before any
-      // hook runs, and again under the row lock below, so the entry removed
-      // is the one judged.
-      const deleteLanguages = {
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        fields: (collection.schemaDefinition?.fields ||
-          collection.fields ||
-          []) as FieldConfig[],
-      };
-      const asked = await this.deleteAskedInEachLanguage({
-        entry: deleteLanguages,
-        schema,
-        params: accessParams,
-        appliesFilter: params.appliesFilter !== false,
-      });
-      if ("refusal" in asked) return asked.refusal;
-      const { languages: askedLanguages, filters: deleteFilters } = asked;
+      if ("refusal" in gate) return gate.refusal;
+      const { collection, deleteLanguages } = gate;
+      const { languages: askedLanguages, filters: deleteFilters } = gate.asked;
       const { storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
 

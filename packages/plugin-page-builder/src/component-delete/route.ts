@@ -7,8 +7,8 @@
  *
  * The routes admit a signed-in caller who may read the component store.
  * Before a delete starts, and before each step of it, core's own delete gate
- * is asked whether they may delete THIS component (`probe.ts`), a rule over
- * the row included; refused, nothing is converted. Whether they may change
+ * is asked whether they may delete THIS component (`mayDeleteEntry`), a rule
+ * over the row included, with no hook run; refused, nothing is converted. Whether they may change
  * each document is decided by the writes themselves, made as them through
  * the Direct API with their access enforced. A dry run changes nothing, and
  * says what the gate answered, so the dialog can say so beside what the
@@ -18,6 +18,7 @@
  */
 import {
   getCachedNextly,
+  mayDeleteEntry,
   NextlyError,
   respondMutation,
   type PluginRouteContext,
@@ -36,7 +37,6 @@ import {
   stepComponentDelete,
   type ComponentDeleteDeps,
 } from "./job";
-import { mayDeleteComponent } from "./probe";
 
 /**
  * The request body. Unknown keys are refused rather than dropped: a typo of
@@ -105,12 +105,12 @@ async function depsFor(
     may: (action, resource, anyEntry) =>
       caller.can(action, resource, anyEntry ? { anyEntry } : undefined),
     mayReadSingle: slug => caller.can("read", slug),
+    // Core's own delete gate for this component's row, asked without
+    // deleting it or running a hook.
     mayDeleteIt: async () =>
-      mayDeleteComponent({
-        nextly,
-        components,
-        componentId,
-        asPerson,
+      mayDeleteEntry(await caller.identity(), {
+        collection: components,
+        id: componentId,
       }),
     now: () => new Date(),
   };
