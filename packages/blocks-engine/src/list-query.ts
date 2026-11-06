@@ -662,6 +662,39 @@ export function listPageCount(
   return Math.max(1, Math.ceil(left / Math.max(1, limit)));
 }
 
+/**
+ * The ids of the nodes inside a list, in any of its slots: what it draws per
+ * entry and its empty state alike. Bounded by `maxNodes`.
+ */
+function idsInsideLists(
+  nodes: readonly unknown[],
+  maxNodes: number
+): Set<string> {
+  const inside = new Set<string>();
+  const stack: { node: unknown; listed: boolean }[] = [...nodes]
+    .reverse()
+    .map(node => ({ node, listed: false }));
+  let left = maxNodes;
+  for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {
+    if (left <= 0) break;
+    left -= 1;
+    const { node } = visit;
+    if (!isPlainRecord(node)) continue;
+    if (visit.listed && typeof node.id === "string") inside.add(node.id);
+    const listed = visit.listed || node.type === COLLECTION_LIST_TYPE;
+    const slots = node.slots;
+    if (!isPlainRecord(slots)) continue;
+    for (const name of Object.keys(slots).reverse()) {
+      const children = slots[name];
+      if (!Array.isArray(children)) continue;
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push({ node: children[index], listed });
+      }
+    }
+  }
+  return inside;
+}
+
 /** The list on a page that is split into pages, as its node holds it. */
 export interface PaginatedList {
   readonly id: string;
@@ -706,16 +739,13 @@ export function paginatedList(
         };
       }
     }
+    // Nothing inside a list pages: what it draws per entry repeats once per
+    // outer entry, and its empty state is drawn only when it has none, so
+    // neither is always on the page its address serves.
+    if (node.type === COLLECTION_LIST_TYPE) continue;
     const slots = node.slots;
     if (!isPlainRecord(slots)) continue;
     for (const name of Object.keys(slots).reverse()) {
-      // What a list draws per entry repeats once per outer entry, with no
-      // address of its own, so nothing there pages. A list's other slots
-      // (its empty state) are drawn once, as the walk that judges nesting
-      // reads them too.
-      if (node.type === COLLECTION_LIST_TYPE && name === LIST_ENTRY_SLOT) {
-        continue;
-      }
       const children = slots[name];
       if (Array.isArray(children)) {
         for (let index = children.length - 1; index >= 0; index -= 1) {
@@ -1305,7 +1335,7 @@ function pageFindings(
   query: ListQuery,
   outer: EnclosingList | undefined,
   judgement: ListQueryJudgement,
-  paging: PaginatedList | undefined,
+  paging: PageOwner,
   at: (prop: ListQueryProp) => string,
   nodeId: string
 ): Finding[] {
@@ -1323,7 +1353,9 @@ function pageFindings(
       `${shared} Turn off Split into pages.`
     );
   }
-  if (outer !== undefined) {
+  // Inside another list in any slot: drawn once per outer entry, or, in its
+  // empty state, only when the outer list has none.
+  if (outer !== undefined || paging.insideLists.has(nodeId)) {
     return refused(
       "list-paginate-nested",
       "This list is split into pages, but it sits inside another list, which repeats it for each entry with no address of its own. Turn off Split into pages, or move this list out of that list."
@@ -1335,11 +1367,12 @@ function pageFindings(
       "This list shows related entries, which can't be split into pages. Show a collection instead, or turn off Split into pages."
     );
   }
-  if (paging !== undefined && paging.id !== nodeId) {
+  const owner = paging.list;
+  if (owner !== undefined && owner.id !== nodeId) {
     const other =
-      paging.name === undefined
+      owner.name === undefined
         ? "another list on this page"
-        : `"${paging.name}"`;
+        : `"${owner.name}"`;
     return refused(
       "list-paginate-twice",
       `Only one list on a page can be split into pages, and ${other} already is. Turn off Split into pages on one of them.`
@@ -1348,13 +1381,19 @@ function pageFindings(
   return [];
 }
 
+/** The list a page's address pages, and the nodes no address can page. */
+interface PageOwner {
+  readonly list: PaginatedList | undefined;
+  readonly insideLists: ReadonlySet<string>;
+}
+
 /** Everything found about one list node. */
 function findingsFor(
   node: Readonly<Record<string, unknown>>,
   path: string,
   outer: EnclosingList | undefined,
   judgement: ListQueryJudgement,
-  paging: PaginatedList | undefined
+  paging: PageOwner
 ): { findings: Finding[]; list: EnclosingList } {
   const { query, problems } = readListQuery(node.props);
   const at = (prop: ListQueryProp) => pointer(`${path}/props`, prop);
@@ -1435,7 +1474,10 @@ function walkFindings(
   const budget = { left: judgement.maxNodes ?? Number.MAX_SAFE_INTEGER };
   // The one list the page's address pages, as the route and renderer find
   // it, so every other list split into pages is judged against that one.
-  const paging = paginatedList(nodes, budget.left);
+  const paging: PageOwner = {
+    list: paginatedList(nodes, budget.left),
+    insideLists: idsInsideLists(nodes, budget.left),
+  };
   const stack: Visit[] = [];
   pushChildren(stack, nodes, "/nodes", undefined);
   for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {

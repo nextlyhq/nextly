@@ -237,6 +237,24 @@ describe("a list split into pages, rendered", () => {
     }
   );
 
+  it("links a later page by the route's count where the read reports no total", async () => {
+    // A provider may leave `total` out; the route counted three pages to
+    // serve page 2, and the links follow that count.
+    const { provider } = posts(30, { total: Number.NaN });
+    const host = await drawn(page(list("news", NEWS)), {
+      data: provider,
+      listPage: { ...listPage("news", 2), pages: 3 },
+    });
+    expect(titles(host)[0]).toBe("Post 11");
+    expect(links(host).map(link => link.text)).toEqual([
+      "‹ Previous",
+      "1",
+      "2",
+      "3",
+      "Next ›",
+    ]);
+  });
+
   it("shows its first page, unlinked, where no route pages it", async () => {
     const { provider, queries } = posts(30);
     const host = await drawn(page(list("news", NEWS)), { data: provider });

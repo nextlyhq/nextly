@@ -235,6 +235,11 @@ describe("the addresses a list's pages are served at", () => {
     );
   });
 
+  it("hands a later page the count it was served by, and the own address none", async () => {
+    expect((await mounted()("news/page/2")).listPages).toBe(3);
+    expect((await mounted()("news")).listPages).toBeUndefined();
+  });
+
   it("hands no addresses where the route serves no later pages", async () => {
     const { nextly } = reader(ROWS);
     const { ContentPage } = createContentRoute<RenderContext>({
@@ -329,6 +334,13 @@ describe("pre-rendering a paginated list's later pages", () => {
       { slug: ["news", "page", "3"] },
     ]);
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 1.5])(
+    "refuses a staticParamsLimit of %s when the route is built",
+    limit => {
+      expect(() => statics(limit)).toThrow(/whole number/);
+    }
+  );
 
   it("keeps the later pages within the route's limit", async () => {
     const params = await statics(5);

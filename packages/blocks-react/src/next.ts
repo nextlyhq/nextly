@@ -81,7 +81,7 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { collectionLoop } from "./blocks/collection-loop";
-import { listEntryCount, listPagesOf } from "./blocks/list-read";
+import { listEntryCount, listPagesOf, listWillRead } from "./blocks/list-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -515,10 +515,17 @@ function listPageSlug(slug: string, page: number | undefined): string {
  * Layout region shows on many pages, so a list in one never pages an
  * address. The one finding the route's count and the render share.
  */
-function pagedListOf(page: DrawnDocument): PaginatedList | undefined {
-  return page.prepared === null
-    ? undefined
-    : paginatedList(page.prepared.presented.nodes);
+function pagedListOf(
+  document: BlockDocument,
+  page: DrawnDocument
+): PaginatedList | undefined {
+  // The page's own: the list its stored nodes split into pages, an
+  // instance's exposed slot included, never one a component's definition
+  // brings, which shows on every page placing it.
+  const owned = paginatedList(document.nodes);
+  if (owned === undefined || page.prepared === null) return undefined;
+  const drawn = paginatedList(page.prepared.presented.nodes);
+  return drawn?.id === owned.id ? drawn : undefined;
 }
 
 /**
@@ -533,7 +540,13 @@ function listPageFor(
   // a list's later pages, so the links name exactly the pages it answers.
   const listPagePath = context.listPagePath;
   if (listPagePath === undefined || list === undefined) return undefined;
-  return { nodeId: list.id, page: context.page ?? 1, href: listPagePath };
+  return {
+    nodeId: list.id,
+    page: context.page ?? 1,
+    href: listPagePath,
+    // The route's count, where it served this later page by one.
+    ...(context.listPages === undefined ? {} : { pages: context.listPages }),
+  };
 }
 
 /**
@@ -2644,8 +2657,10 @@ function blocksRouteConfig(
       });
       // The list as the render draws it: composed with its components'
       // definitions, repaired and held to the caps.
-      const list = pagedListOf(page);
+      const list = pagedListOf(document, page);
       if (list === undefined) return null;
+      // A list that makes no read shows one page, and claims nothing.
+      if (!listWillRead(list.props)) return 1;
       const days = await listDayInputs({
         config,
         documents: presented,
@@ -2790,10 +2805,13 @@ function blocksRouteConfig(
       // pages (a Single's gives no addresses, so its list shows one page and
       // claims its own read); a list whose read cannot be claimed draws no
       // links, as the route serves none of its later pages.
-      const pagedList = pagedListOf(page);
+      const pagedList = pagedListOf(document, page);
+      // Claimed only for a list that reads: one with no collection yet, or
+      // a stored query it cannot run, spends nothing another list needs.
       const listPage =
         pagedList !== undefined &&
         context.listPagePath !== undefined &&
+        listWillRead(pagedList.props) &&
         budget.take()
           ? listPageFor(pagedList, context)
           : undefined;

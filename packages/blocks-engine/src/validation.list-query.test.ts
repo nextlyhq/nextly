@@ -1052,23 +1052,22 @@ describe("the list a page's address pages", () => {
     });
   });
 
-  it("finds one in another list's empty state, which is drawn once", () => {
-    const outer = list("outer", { collection: "posts" });
+  it("refuses one in another list's empty state, which is drawn only when that list is empty", () => {
     const nodes = [
       {
-        ...outer,
+        ...list("outer", { collection: "posts" }),
         slots: {
           children: [],
           empty: [list("fallback", { collection: "posts", paginate: true })],
         },
       },
     ];
-    expect(paginatedList(nodes)?.id).toBe("fallback");
+    expect(paginatedList(nodes)).toBeUndefined();
     expect(
-      listQueryIssues(nodes).filter(issue =>
-        issue.code.startsWith("list-paginate")
-      )
-    ).toEqual([]);
+      listQueryIssues(nodes)
+        .filter(issue => issue.code.startsWith("list-paginate"))
+        .map(({ nodeId, code }) => ({ nodeId, code }))
+    ).toEqual([{ nodeId: "fallback", code: "list-paginate-nested" }]);
   });
 
   it("skips related entries, and finds none where nothing is split", () => {

@@ -784,6 +784,24 @@ export async function listEntryCount(
 }
 
 /**
+ * Whether a list's stored props make a read at all: a collection named, no
+ * related source (whose entries are never paged), and nothing stored that
+ * stops the read. The one answer the route's count and the render ask
+ * before claiming a paginated list's read, so neither spends one the list
+ * will not make.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function listWillRead(props: unknown): boolean {
+  const { query, problems } = readListQuery(props);
+  return (
+    query.collection !== undefined &&
+    query.relation === undefined &&
+    blockingProblem(problems) === undefined
+  );
+}
+
+/**
  * A provider's total as a count may be: a whole number from 0, or undefined
  * for anything else (`NaN`, `Infinity`, a fraction, a negative). The one
  * reading the route's page count and a list's page links share, so a total

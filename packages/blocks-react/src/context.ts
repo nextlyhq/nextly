@@ -697,6 +697,11 @@ export interface ListPageContext {
    * the list reads without claiming again.
    */
   readonly claimed?: boolean;
+  /**
+   * How many pages the list has, where the route counted them to serve this
+   * page; absent, the list counts its pages from its own read.
+   */
+  readonly pages?: number;
 }
 
 /** A context with nothing wired up: the standalone default. */

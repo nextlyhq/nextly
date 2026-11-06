@@ -253,10 +253,15 @@ export async function renderCollectionLoop({
   // The links between pages, under the entries, when the route pages this
   // list and its read said how many entries it matches.
   const pages =
-    paging === undefined || matching === undefined || outcome.failed ? null : (
+    paging === undefined || outcome.failed ? null : (
       <ListPages
         page={paging.page}
-        pages={listPagesOf(props, matching)}
+        pages={
+          // The route's own count where it served this page by one, so the
+          // links never depend on a total this read may not report.
+          paging.pages ??
+          (matching === undefined ? 1 : listPagesOf(props, matching))
+        }
         href={paging.href}
         parts={{
           nav: partClass("pages"),

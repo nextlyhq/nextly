@@ -117,6 +117,14 @@ export interface RenderContext extends ResolvedContext {
    * @experimental Settles with list pagination.
    */
   listPagePath?: (page: number) => string;
+  /**
+   * How many pages the entry's paginated list has, as the route counted them
+   * to serve this later page; absent on the entry's own address, where the
+   * list counts its own.
+   *
+   * @experimental Settles with list pagination.
+   */
+  listPages?: number;
 }
 
 /**
@@ -703,7 +711,7 @@ function buildRoute<TNode>(
     if (page > pages) return null;
     return {
       entry: base.entry,
-      context: { ...withListPaths(base.context), page },
+      context: { ...withListPaths(base.context), page, listPages: pages },
     };
   }
 
@@ -927,6 +935,18 @@ export function createPublicContentRoute<TNode>(
           "classifies it static, and a dynamic marking inside a static render is " +
           "an error.",
       },
+    });
+  }
+  // A whole number, so a limit read from the environment as `NaN` or given
+  // as `Infinity` cannot leave every list's pages to be built unbounded.
+  if (
+    config.staticParamsLimit !== undefined &&
+    !Number.isSafeInteger(config.staticParamsLimit)
+  ) {
+    throw NextlyError.invalidInput({
+      message:
+        "createPublicContentRoute() needs a whole number for staticParamsLimit, " +
+        "such as 1000.",
     });
   }
   if (config.staticParamsLimit !== undefined && config.staticParamsLimit <= 0) {
