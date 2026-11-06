@@ -35,6 +35,8 @@ import {
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { HookRegistry } from "../../../hooks/hook-registry";
+import { runInTransactionPhaseFor } from "../../../hooks/in-transaction-call";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -164,6 +166,7 @@ import {
 } from "./promote-gate";
 import {
   checkSingleAccess,
+  getSingleHookCollection,
   singleGrantRefusal,
   type SingleQueryService,
 } from "./single-query-service";
@@ -286,7 +289,12 @@ export class SinglePublishAllService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     private readonly localizationSource?: LocalizationSource,
     /** Reads the promote gate needs: the logical shape, and the live document. */
-    private readonly queryService?: SingleQueryService
+    private readonly queryService?: SingleQueryService,
+    /**
+     * Where the Single's in-transaction handlers are registered. Without one a
+     * publish runs no in-transaction phase.
+     */
+    private readonly hookRegistry?: HookRegistry
   ) {
     super(adapter, logger);
   }
@@ -1143,6 +1151,20 @@ export class SinglePublishAllService extends BaseService {
           promotedLocales: new Set(pending.map(draft => draft.locale)),
         })
       : false;
+
+    // Last in the transaction, and so again on each retried attempt: a
+    // publish of every language is an update of the Single.
+    await this.runInTransactionPhase(
+      tx,
+      {
+        plan,
+        lockedRow,
+        publishedRow: written.publishedRow,
+        priorComponents,
+        priorCompanionValues,
+      },
+      options.user
+    );
 
     return {
       documentVanished: false,
@@ -2211,26 +2233,24 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * The document-wide pair: `single.updated` for the write, and
-   * `single.published` when the main row itself went live.
-   *
-   * Both payloads are assembled at the DEFAULT locale, which is the language an
-   * untagged event describes.
+   * The publish's document after and before, in the default language, in the
+   * read shape the outbox event carries: the one answer the event and the
+   * in-transaction phase are both given.
    */
-  private async recordDocumentEvents(
+  private async publishDocuments(
     tx: TransactionContext,
     args: {
       plan: PublishPlan;
       lockedRow: Record<string, unknown>;
       publishedRow: Record<string, unknown>;
-      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
-      resource: WebhookResource;
-      emitPublished: boolean;
       priorComponents: Map<string, Record<string, unknown>>;
       priorCompanionValues: Map<string, Record<string, unknown>>;
     }
-  ): Promise<boolean> {
-    const { plan, lockedRow, publishedRow, webhookFields, resource } = args;
+  ): Promise<{
+    data: Record<string, unknown>;
+    previous: Record<string, unknown>;
+  }> {
+    const { plan, lockedRow, publishedRow } = args;
     const defaultLocale = this.localization?.defaultLocale;
     const defaultCompanionValues =
       plan.companion && plan.companionPublishable && defaultLocale !== undefined
@@ -2263,6 +2283,57 @@ export class SinglePublishAllService extends BaseService {
       undefined,
       args.priorComponents.get(defaultLocale ?? "")
     );
+    return { data, previous };
+  }
+
+  /**
+   * The in-transaction phase for this publish, as operation `update` under
+   * the Single's hook namespace. The documents are read only once a handler
+   * is known to be registered, so a publish nobody handles reads nothing more.
+   * No hook context is shared on this path, so the handler's is empty.
+   */
+  private async runInTransactionPhase(
+    tx: TransactionContext,
+    args: Parameters<SinglePublishAllService["publishDocuments"]>[1],
+    user: PublishAllSingleLocalesOptions["user"]
+  ): Promise<void> {
+    const registry = this.hookRegistry;
+    const collection = getSingleHookCollection(args.plan.slug);
+    if (!registry?.hasInTransaction(collection)) return;
+    const { data, previous } = await this.publishDocuments(tx, args);
+    await runInTransactionPhaseFor(registry, tx, {
+      collection,
+      operation: "update",
+      id: String(args.plan.existingDoc.id),
+      data,
+      originalData: previous,
+      user,
+      context: {},
+    });
+  }
+
+  /**
+   * The document-wide pair: `single.updated` for the write, and
+   * `single.published` when the main row itself went live.
+   *
+   * Both payloads are assembled at the DEFAULT locale, which is the language an
+   * untagged event describes.
+   */
+  private async recordDocumentEvents(
+    tx: TransactionContext,
+    args: {
+      plan: PublishPlan;
+      lockedRow: Record<string, unknown>;
+      publishedRow: Record<string, unknown>;
+      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
+      resource: WebhookResource;
+      emitPublished: boolean;
+      priorComponents: Map<string, Record<string, unknown>>;
+      priorCompanionValues: Map<string, Record<string, unknown>>;
+    }
+  ): Promise<boolean> {
+    const { plan, webhookFields, resource } = args;
+    const { data, previous } = await this.publishDocuments(tx, args);
 
     let recorded = await recordMutationEvent(tx, {
       type: "single.updated",

@@ -81,7 +81,16 @@ import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
-import type { InTransactionPhaseInput } from "../../../hooks/in-transaction-phase";
+// A working draft as an after-hook compares against it (`markedDraft`): marked
+// as the draft it is diffed with is, so a repeat draft save does not report the
+// marker as changing. Shared with the in-transaction phase, which marks one the
+// same way.
+import {
+  type InTransactionCall,
+  markedDraft,
+  runInTransactionPhaseFor,
+  writtenByUpdate,
+} from "../../../hooks/in-transaction-call";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -1676,28 +1685,6 @@ function changesFieldFilterNames(
     if (!known || !isDeepStrictEqual(draft[name], live[name])) return true;
   }
   return false;
-}
-
-/**
- * A working draft as an after-hook compares against it: marked as the draft it
- * is diffed with is, so a repeat draft save does not report the marker as
- * changing. A copy, since the stored snapshot (the activity record's
- * `previous`) carries no marker, as the new draft's does not.
- */
-function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
-  return { ...draft, _isWorkingDraft: true };
-}
-
-/**
- * What an update wrote, as an in-transaction handler is shown it: the pending
- * draft, marked, when the edit was held as one, else the document the write
- * left. One answer for both update paths.
- */
-function writtenByUpdate(
-  updated: Record<string, unknown>,
-  draft: Record<string, unknown> | undefined
-): Record<string, unknown> {
-  return draft ? markedDraft(draft) : updated;
 }
 
 /**
@@ -9854,6 +9841,20 @@ export class CollectionMutationService extends BaseService {
             })),
           ]
         );
+
+        // Last in the transaction, as on an update: publishing or withdrawing
+        // every language is an update of the entry, and is retried as one.
+        // The documents are the ones the outbox event above carries. No hook
+        // context is shared on this path, so the handler's is empty.
+        await this.runInTransactionPhase(tx, {
+          collection: params.collectionName,
+          operation: "update",
+          id: params.entryId,
+          data: publishedDocument,
+          originalData: previousDocument,
+          user: params.user,
+          context: {},
+        });
       }, versionConflictRetries());
 
       // The entry was deleted out from under the publish: nothing was written or
@@ -18060,24 +18061,11 @@ export class CollectionMutationService extends BaseService {
    * a plugin's rows in step with the entry, as the version and the outbox
    * event do, and those are recorded under `skipHooks` too.
    */
-  private async runInTransactionPhase(
+  private runInTransactionPhase(
     tx: TransactionContext,
-    input: Omit<InTransactionPhaseInput, "data" | "originalData"> & {
-      /** Undefined when the write found no row: nothing was written. */
-      data: Record<string, unknown> | undefined;
-      originalData?: Record<string, unknown> | null;
-    }
+    call: InTransactionCall
   ): Promise<void> {
-    if (input.data === undefined) return;
-    const registry = this.hookService.hookRegistry;
-    if (!registry.hasInTransaction(input.collection)) return;
-    const { runInTransactionPhase } = await import(
-      "../../../hooks/in-transaction-phase"
-    );
-    await runInTransactionPhase(registry, tx, {
-      ...input,
-      originalData: input.originalData ?? undefined,
-    });
+    return runInTransactionPhaseFor(this.hookService.hookRegistry, tx, call);
   }
 
   /**

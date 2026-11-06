@@ -26,9 +26,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../errors/nextly-error";
+import { getNextlyLogger } from "../observability/logger";
 import { markWriteIntegrityFailure } from "../shared/write-integrity";
 
 import type { HookRegistry } from "./hook-registry";
+import { runWatched, watchOutboundCalls } from "./in-transaction-outbound";
 import { normalizeHookError } from "./normalize-hook-error";
 import type { InTransactionWrite } from "./types";
 
@@ -70,8 +72,11 @@ export async function runInTransactionPhase(
   tx: TransactionContext,
   input: InTransactionPhaseInput
 ): Promise<void> {
-  const runners = registry.inTransactionRunners(input.collection);
-  if (runners.length === 0) return;
+  const entries = registry.inTransactionEntries(input.collection);
+  if (entries.length === 0) return;
+  // In development, a handler that calls out of the process is told so: the
+  // call is not undone with a discarded attempt. A no-op anywhere else.
+  watchOutboundCalls(getNextlyLogger());
 
   const depth = (phaseDepth.getStore() ?? 0) + 1;
   if (depth > MAX_IN_TRANSACTION_DEPTH) {
@@ -92,9 +97,9 @@ export async function runInTransactionPhase(
     context: Object.freeze({ ...input.context }),
   };
   await phaseDepth.run(depth, async () => {
-    for (const runner of runners) {
+    for (const { handler, owner } of entries) {
       try {
-        await runner(tx, write);
+        await runWatched(owner, () => handler(tx, write));
       } catch (error: unknown) {
         throw markWriteIntegrityFailure(
           normalizeHookError(error, "inTransaction", input.collection, {

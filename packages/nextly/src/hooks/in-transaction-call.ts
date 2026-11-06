@@ -1,0 +1,68 @@
+/**
+ * How a write calls the in-transaction phase: the one entry every write path
+ * uses, collections and Singles alike, so they ask the same question before
+ * the phase loads and hand it the same shapes.
+ *
+ * Light on purpose. It imports the phase only with `await import()`, once a
+ * handler is registered for the write's target, so every module that writes
+ * stays as light as it was before the phase existed.
+ *
+ * @module hooks/in-transaction-call
+ */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
+import type { HookRegistry } from "./hook-registry";
+import type { InTransactionPhaseInput } from "./in-transaction-phase";
+
+/** What a write hands {@link runInTransactionPhaseFor}. */
+export type InTransactionCall = Omit<
+  InTransactionPhaseInput,
+  "data" | "originalData"
+> & {
+  /** Undefined when the write found no row: nothing was written. */
+  data: Record<string, unknown> | undefined;
+  /** The document before the write; null or absent when there was none. */
+  originalData?: Record<string, unknown> | null;
+};
+
+/**
+ * Run the in-transaction phase for one write on its transaction, when a
+ * handler is registered for its target. A write that found nothing to write
+ * runs no phase.
+ *
+ * The registry is asked before anything loads, so a write no handler is
+ * registered for does exactly what it did before the phase existed.
+ */
+export async function runInTransactionPhaseFor(
+  registry: HookRegistry,
+  tx: TransactionContext,
+  call: InTransactionCall
+): Promise<void> {
+  if (call.data === undefined) return;
+  if (!registry.hasInTransaction(call.collection)) return;
+  const { runInTransactionPhase } = await import("./in-transaction-phase");
+  await runInTransactionPhase(registry, tx, {
+    ...call,
+    data: call.data,
+    originalData: call.originalData ?? undefined,
+  });
+}
+
+/** A held working draft, marked so it reads as one rather than as live. */
+export function markedDraft(
+  draft: Record<string, unknown>
+): Record<string, unknown> {
+  return { ...draft, _isWorkingDraft: true };
+}
+
+/**
+ * What an update wrote, as an in-transaction handler is shown it: the pending
+ * draft, marked, when the edit was held as one, else the document the write
+ * left. One answer for every update path, collection or Single.
+ */
+export function writtenByUpdate(
+  updated: Record<string, unknown>,
+  draft: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  return draft ? markedDraft(draft) : updated;
+}
