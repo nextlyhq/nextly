@@ -19,6 +19,10 @@ import { useMemo, useRef, useState, type JSX } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  refreshAfterEntryChange,
+  refreshAfterEntryDelete,
+} from "@admin/hooks/queries/entry-cache";
 import type {
   DocumentActionReplacementProps,
   DocumentChangeResult,
@@ -29,7 +33,6 @@ import {
   type CollectionDocumentSurfaces,
   type PluginPanelSectionEntry,
 } from "@admin/lib/plugins/document-surfaces";
-import { entryKeys } from "@admin/services/entryApi";
 
 import type { DocumentLockGates } from "./document-lock-affordances";
 import type {
@@ -115,22 +118,18 @@ export function usePluginDocumentSurfaces({
   const openNow = useRef<OpenReplacement | null>(null);
 
   /*
-   * What the editor does once a plugin says what it did to the document.
-   * "deleted" invalidates the collection's lists and leaves, as the built-in
-   * Delete does; "changed" reads the document again, so the editor shows what
-   * the plugin wrote rather than the copy from before.
+   * What the editor does once a plugin says what it did to the document: the
+   * caches refresh exactly as after the built-in delete or update, through the
+   * same functions those hooks call, and a deleted document is left. "changed"
+   * reads it again, so the editor shows what the plugin wrote.
    */
   const documentChanged = (result: DocumentChangeResult): void => {
     if (result === "deleted") {
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.listsByCollection(collectionSlug),
-      });
+      refreshAfterEntryDelete(queryClient, collectionSlug, entryId);
       onDeleted?.();
       return;
     }
-    void queryClient.invalidateQueries({
-      queryKey: entryKeys.detail(collectionSlug, entryId),
-    });
+    refreshAfterEntryChange(queryClient, collectionSlug, entryId);
   };
 
   const actionOverrides = overridesFor(

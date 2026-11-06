@@ -89,6 +89,8 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
 }));
 
 import { EntryForm } from "../EntryForm";
+import { useDocumentLocale } from "../EntryFormContext";
+import { useDocumentActions } from "../useDocumentActionHooks";
 
 const REMOVE = "test/layouts#RemoveLayoutDialog";
 const USAGE = "test/layouts#UsageSection";
@@ -96,12 +98,19 @@ const USAGE = "test/layouts#UsageSection";
 const replacement: { current: DocumentActionReplacementProps | null } = {
   current: null,
 };
+/** What the replacement reads of the document it is drawn in. */
+const drawnIn: {
+  locale: ReturnType<typeof useDocumentLocale>;
+  actions: boolean;
+} = { locale: null, actions: false };
 const section: { current: DocumentPanelSectionProps | null } = {
   current: null,
 };
 
 function RemoveLayoutDialog(props: DocumentActionReplacementProps) {
   replacement.current = props;
+  drawnIn.locale = useDocumentLocale();
+  drawnIn.actions = useDocumentActions() !== null;
   return <div role="dialog" aria-label="Remove layout" />;
 }
 
@@ -150,12 +159,13 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
-function renderEditor(slug: string, onDelete = vi.fn()) {
+function renderEditor(slug: string, onDelete = vi.fn(), locale?: string) {
   render(
     <EntryForm
       collection={collectionNamed(slug)}
       entry={entry}
       mode="edit"
+      {...(locale === undefined ? {} : { locale })}
       onDelete={onDelete}
       // Wired so the menu holds a row no override touches.
       onViewApi={() => {}}
@@ -183,6 +193,8 @@ beforeEach(() => {
   queryClient = createTestQueryClient();
   plugins.current = [LAYOUTS_PLUGIN];
   replacement.current = null;
+  drawnIn.locale = null;
+  drawnIn.actions = false;
   section.current = null;
   registerComponent(REMOVE, RemoveLayoutDialog as never);
   registerComponent(USAGE, UsageSection as never);
@@ -235,6 +247,20 @@ describe("a plugin's document actions", () => {
       entryId: "l1",
     });
     expect(deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it("is drawn inside the document, so it knows the language being edited", async () => {
+    // A replaced Unpublish of a translation has to know which translation:
+    // drawn outside the editor's providers, the SDK's own hooks answer null.
+    renderEditor("layouts", vi.fn(), "es");
+    const del = (await openMenu()).find(
+      item => item.dataset.action === "delete"
+    );
+    await userEvent.setup().click(del!);
+    await screen.findByRole("dialog", { name: "Remove layout" });
+
+    expect(drawnIn.locale).toMatchObject({ code: "es" });
+    expect(drawnIn.actions).toBe(true);
   });
 
   it("leaves the document when the component says it deleted it", async () => {
@@ -328,9 +354,37 @@ describe("a plugin's document panel section", () => {
     act(() => section.current!.documentChanged("changed"));
 
     expect(onDelete).not.toHaveBeenCalled();
-    expect(invalidate).toHaveBeenCalledWith(
+    // What an update refreshes: the entry, its collection's lists and the
+    // dashboard, so a title the plugin changed is not shown stale anywhere.
+    const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        ["entries", "detail", "layouts", "l1"],
+        ["entries", "list", "layouts"],
+        ["dashboard"],
+      ])
+    );
+  });
+
+  it("refreshes what a deletion refreshes when the section deleted it", async () => {
+    renderEditor("layouts");
+    await screen.findByText("Used by 2 pages");
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const remove = vi.spyOn(queryClient, "removeQueries");
+
+    act(() => section.current!.documentChanged("deleted"));
+
+    const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        ["entries", "list", "layouts"],
+        ["entries", "count"],
+        ["dashboard"],
+      ])
+    );
+    expect(remove).toHaveBeenCalledWith(
       expect.objectContaining({
-        queryKey: expect.arrayContaining(["layouts", "l1"]),
+        queryKey: ["entries", "detail", "layouts", "l1"],
       })
     );
   });

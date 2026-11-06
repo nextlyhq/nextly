@@ -415,6 +415,11 @@ Your component receives `DocumentActionReplacementProps` from
 | `collectionSlug`, `entryId` | The document.                                                                                                                                                                               |
 | `close(result?)`            | Ends it. `close("deleted")` leaves the document for its collection's list, as the built-in Delete does. `close("changed")` reads the document again. `close()` means the author backed out. |
 
+Both your replacement and your panel section are drawn inside the document's
+editor, so `useDocumentLocale()` names the language being edited (the one a
+replaced Unpublish of a translation acts on) and `useDocumentActions()` answers
+for the same document.
+
 `panelSections` adds sections to the document panel, after **Details**, in the
 order given: `panelSections: [{ title: "Used by", component: "@acme/plugin-layouts/admin#LayoutUsage" }]`.
 The admin draws each section's heading, spacing and divider, as it does for its

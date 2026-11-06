@@ -1381,6 +1381,11 @@ export function EntryForm({
                       hasUnsavedWork={hasUnsavedWork}
                       isSubmitting={isSubmitting}
                     />
+                    {/* A plugin's replacement for a document action, drawn
+                      inside the document's providers so it reads the
+                      language being edited and the document's actions as
+                      any surface of the editor does. */}
+                    {pluginSurfaces.replacement}
                     {documentView ? (
                       <DocumentViewBody
                         view={documentView}
@@ -1692,7 +1697,6 @@ export function EntryForm({
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
         {conflictDialog}
-        {pluginSurfaces.replacement}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

@@ -81,6 +81,10 @@ export type { DocumentViewProps } from "@nextlyhq/admin";
  *   `collectionSlug` and `entryId`, `documentLock` (hold writes while
  *   `actionsDisabled`), and `documentChanged(result)`, the same two results.
  *
+ * Both are drawn inside the document's editor, so `useDocumentLocale()` names
+ * the language being edited — the one a replaced Unpublish acts on — and
+ * `useDocumentActions()` answers for the same document.
+ *
  * Republished rather than restated: the admin builds these objects.
  *
  * ```tsx
