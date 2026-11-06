@@ -199,11 +199,28 @@ export interface NamedQueryHost {
     run<T>(operation: () => Promise<T>): Promise<T>;
     read<T>(operation: () => Promise<T>): Promise<T>;
   };
+  /**
+   * What an author is told about a run that succeeded, where a visitor's
+   * page would go without part of it: a query reading a collection visitors
+   * can't read. Shown only where an author is looking; an editor's canvas
+   * gives it, a published page does not.
+   */
+  readonly caution?: (declaration: NamedQueryDeclaration) => string | undefined;
   /** Keep a run's result across renders, tagged by everything it declares. */
   readonly cache?: (request: {
     readonly declaration: NamedQueryDeclaration;
     readonly key: readonly string[];
     readonly read: () => Promise<NamedQueryRunData>;
+    /**
+     * The run as the list stores it: its inputs before they are judged, and
+     * its window. What a host that runs the query elsewhere (an editor's
+     * canvas, on its server) asks for, so the run is judged there as on a
+     * published page.
+     */
+    readonly asked: {
+      readonly params: Readonly<Record<string, unknown>>;
+      readonly window: { readonly limit: number; readonly offset: number };
+    };
   }) => Promise<NamedQueryRunData>;
   /**
    * Told about each failed run, for the server log. The failure carries the
@@ -577,6 +594,16 @@ export interface PageContext {
    * @experimental
    */
   listsShowingEmpty?: ReadonlySet<string>;
+  /**
+   * The collection lists, by node id, whose author chose a new source that
+   * is not written yet, since it waits for an input: the editor's tag for
+   * each, which the list wears while it keeps drawing what it stores
+   * ("Still showing Events"). Honoured only where {@link diagnostics} says
+   * an author is looking.
+   *
+   * @experimental
+   */
+  listsStillShowing?: ReadonlyMap<string, string>;
   /**
    * The editor's canvas, which can act on a list note's action: a list whose
    * sort fell back offers "Choose a field" there, which the canvas answers by

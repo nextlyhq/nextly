@@ -26,6 +26,14 @@
  */
 export const LIST_ACTION_ATTRIBUTE = "data-nx-list-action";
 
+/**
+ * The attribute holding the log reference a list note's `copy-ref` action
+ * copies: the reference a failed named query's run is logged under. The
+ * renderer writes it and the editor's canvas reads it, so one string decides
+ * it.
+ */
+export const LIST_REF_ATTRIBUTE = "data-nx-list-copy-ref";
+
 /** The attribute an editor addresses a node by. Named, so one string decides it. */
 export const NODE_ID_ATTRIBUTE = "data-nx-node";
 

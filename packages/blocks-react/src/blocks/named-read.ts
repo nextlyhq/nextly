@@ -421,6 +421,57 @@ function publicMessageOf(error: unknown): string | undefined {
     : undefined;
 }
 
+/** The codes a failed run can carry, as a set to judge a carried one by. */
+const FAILURE_CODES: ReadonlySet<string> = new Set<NamedQueryFailureCode>([
+  "unknown",
+  "params",
+  "undeclared-read",
+  "trusted-read",
+  "budget",
+  "timeout",
+  "bad-rows",
+  "threw",
+]);
+
+/** A log reference as a failure names it: `NQ-` and six hex digits. */
+const REFERENCE = /^NQ-[0-9A-F]{6}$/;
+
+/**
+ * A run that failed somewhere else, as the place that ran it told it: an
+ * editor's canvas runs its named queries on the server, which judged the
+ * failure, logged it under `ref` and words it as `detail`.
+ *
+ * @experimental
+ */
+export interface CarriedNamedQueryFailure {
+  readonly code: NamedQueryFailureCode;
+  readonly detail: string;
+  readonly ref: string;
+}
+
+/**
+ * The failure an error carries from the place that ran the query, on its
+ * `namedQueryFailure`; `undefined` for any other error, or one whose
+ * carried failure is not one a run can have.
+ */
+export function carriedFailureOf(
+  error: unknown
+): CarriedNamedQueryFailure | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const carried: unknown = (error as { namedQueryFailure?: unknown })
+    .namedQueryFailure;
+  if (!isPlainRecord(carried)) return undefined;
+  const { code, detail, ref } = carried;
+  return typeof code === "string" &&
+    FAILURE_CODES.has(code) &&
+    typeof detail === "string" &&
+    detail !== "" &&
+    typeof ref === "string" &&
+    REFERENCE.test(ref)
+    ? { code: code as NamedQueryFailureCode, detail, ref }
+    : undefined;
+}
+
 /** What failed, as a code and the words an author is shown. */
 function classify(
   error: unknown,
@@ -469,10 +520,18 @@ function classify(
 export interface NamedListOutcome {
   readonly items: readonly Record<string, unknown>[];
   readonly failed: boolean;
+  /**
+   * What an author is told: why the run failed, or, for one that ran, what
+   * a visitor's page goes without. `ref` is the log reference the message
+   * names, when it names one, so an editor can offer it to copy.
+   */
   readonly diagnostic?: {
-    readonly kind: "query-failed";
+    readonly kind: "query-failed" | "query-caution";
     readonly message: string;
+    readonly ref?: string;
   };
+  /** A failed run, as the place that ran it would carry it elsewhere. */
+  readonly failure?: CarriedNamedQueryFailure;
   /** How many rows match before the window, when the query counts them. */
   readonly total?: number;
   /** The collection its rows are entries of; absent for a field schema. */
@@ -491,11 +550,12 @@ function failed(
     readonly error?: unknown;
   }
 ): NamedListOutcome {
+  const ref = context.ref ?? referenceFor(context.name, context.nodeId);
   context.host.report?.({
     code,
     query: context.name,
     nodeId: context.nodeId,
-    ref: context.ref ?? referenceFor(context.name, context.nodeId),
+    ref,
     ...(context.error === undefined ? {} : { error: context.error }),
   });
   return {
@@ -504,7 +564,10 @@ function failed(
     diagnostic: {
       kind: "query-failed",
       message: NAMED_QUERY_TEXT.runFailed(detail),
+      // Offered to copy only where the words name it, as a thrown error's do.
+      ...(detail.includes(ref) ? { ref } : {}),
     },
+    failure: { code, detail, ref },
   };
 }
 
@@ -514,6 +577,77 @@ function replayClaims(count: number, claim: () => boolean): boolean {
     if (!claim()) return false;
   }
   return true;
+}
+
+/**
+ * This render's run of a key: the one made already, or the one `make`
+ * starts, kept by the render's allowance (see `runsThisRender`). A failed
+ * run is not kept: an allowance an editor holds for its life would otherwise
+ * answer every later draw with the same failure.
+ */
+function memoised(
+  owner: QueryBudget | undefined,
+  key: string,
+  make: () => Promise<NamedQueryRunData>
+): Promise<NamedQueryRunData> {
+  if (owner === undefined) return make();
+  const runs =
+    runsThisRender.get(owner) ?? new Map<string, Promise<NamedQueryRunData>>();
+  runsThisRender.set(owner, runs);
+  const held = runs.get(key);
+  if (held !== undefined) return held;
+  const pending = make();
+  runs.set(key, pending);
+  pending.catch(() => {
+    if (runs.get(key) === pending) runs.delete(key);
+  });
+  return pending;
+}
+
+/**
+ * A run that threw, as the list draws it. A failure judged where the run
+ * was made keeps that place's words and the reference its log names it by;
+ * any other is judged here, under a reference made for it.
+ */
+function failedRun(
+  error: unknown,
+  declaration: NamedQueryDeclaration,
+  at: {
+    readonly host: NamedQueryHost;
+    readonly name: string;
+    readonly nodeId: string;
+  }
+): NamedListOutcome {
+  const carried = carriedFailureOf(error);
+  if (carried !== undefined) {
+    return failed(carried.code, carried.detail, {
+      ...at,
+      ref: carried.ref,
+      error,
+    });
+  }
+  const ref = referenceFor(at.name, at.nodeId);
+  const why = classify(error, declaration, ref);
+  return failed(why.code, why.detail, { ...at, ref, error });
+}
+
+/** A run that gave rows, with what an author is told about it, if anything. */
+function succeeded(
+  data: NamedQueryRunData,
+  declaration: NamedQueryDeclaration,
+  host: NamedQueryHost
+): NamedListOutcome {
+  const rows = declaration.rows;
+  const caution = host.caution?.(declaration);
+  return {
+    items: data.rows,
+    failed: false,
+    ...(data.total === undefined ? {} : { total: data.total }),
+    ...("collection" in rows ? { rowsCollection: rows.collection } : {}),
+    ...(caution === undefined
+      ? {}
+      : { diagnostic: { kind: "query-caution", message: caution } }),
+  };
 }
 
 /**
@@ -571,38 +705,24 @@ export async function readNamedList(
       claim
     );
   };
-  const owner = ctx.queries;
-  const runs =
-    owner === undefined
-      ? undefined
-      : (runsThisRender.get(owner) ??
-        new Map<string, Promise<NamedQueryRunData>>());
-  if (owner !== undefined && runs !== undefined) {
-    runsThisRender.set(owner, runs);
-  }
-  const memoKey = key.join("\u0000");
-  const pending =
-    runs?.get(memoKey) ??
-    (host.cache === undefined
+  const pending = memoised(ctx.queries, key.join("\u0000"), () =>
+    host.cache === undefined
       ? read()
-      : host.cache({ declaration, key, read }));
-  runs?.set(memoKey, pending);
+      : host.cache({
+          declaration,
+          key,
+          read,
+          asked: { params: named.params, window },
+        })
+  );
   let data: NamedQueryRunData;
   try {
     data = await pending;
   } catch (error) {
-    const ref = referenceFor(named.name, nodeId);
-    const why = classify(error, declaration, ref);
-    return failed(why.code, why.detail, { ...at, ref, error });
+    return failedRun(error, declaration, at);
   }
   if (!ranHere && !replayClaims(data.reads, claim)) {
     return failed("budget", NAMED_QUERY_TEXT.budget(declaration.label), at);
   }
-  const rows = declaration.rows;
-  return {
-    items: data.rows,
-    failed: false,
-    ...(data.total === undefined ? {} : { total: data.total }),
-    ...("collection" in rows ? { rowsCollection: rows.collection } : {}),
-  };
+  return succeeded(data, declaration, host);
 }
