@@ -22,6 +22,7 @@ import {
   resolveFieldGroupRegistryName,
   type FieldGroupRegistryName,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
@@ -135,7 +136,9 @@ async function ownedTablesExist(
     // Read only to seed existing rows; deciding whether a table exists reads
     // neither this nor the builder, which shape its columns.
     defaultLocale: "en",
-    collectionLocalized: localized,
+    // It owns a companion where its translatable values are kept per language: translated, or
+    // any entity under `experimental.perLanguageStorage`.
+    collectionLocalized: storesPerLanguage({ localized }),
     builtBy: "codeFirst",
   });
   if (companion === null) return true;
@@ -355,6 +358,11 @@ export interface LoadedBuilderEntity {
   fields: FieldConfig[];
   /** Draft/Published flag (collections/singles; always false for components). */
   status: boolean;
+  /**
+   * Whether the entity is marked translatable. Read so a column added to it at boot lands where
+   * its values live (`storesPerLanguage`); false where the registry is too old to record it.
+   */
+  localized: boolean;
 }
 
 export interface LoadedBuilderEntities {
@@ -378,11 +386,29 @@ export async function loadBuilderEntities(
     table: "dynamic_collections" | "dynamic_singles" | FieldGroupRegistryName,
     hasStatusColumn: boolean
   ): Promise<LoadedBuilderEntity[]> => {
-    const selectSql = hasStatusColumn
-      ? `SELECT slug, table_name, fields, status FROM ${table}`
-      : `SELECT slug, table_name, fields FROM ${table}`;
+    const columns = hasStatusColumn
+      ? "slug, table_name, fields, status"
+      : "slug, table_name, fields";
+    // `localized` is asked for first and dropped only when the registry has no such column, so an
+    // older registry still yields its entities rather than none.
+    const readRows = async (): Promise<DynamicTableRow[]> => {
+      try {
+        return await adapter.executeQuery<DynamicTableRow>(
+          `SELECT ${columns}, localized FROM ${table}`
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          !/localized|no such column|does not exist|unknown column/i.test(msg)
+        )
+          throw err;
+        return adapter.executeQuery<DynamicTableRow>(
+          `SELECT ${columns} FROM ${table}`
+        );
+      }
+    };
     try {
-      const rows = await adapter.executeQuery<DynamicTableRow>(selectSql);
+      const rows = await readRows();
       const out: LoadedBuilderEntity[] = [];
       for (const row of rows) {
         try {
@@ -397,6 +423,7 @@ export async function loadBuilderEntities(
             fields,
             // Same dialect-boolean coercion as loadDynamicTables.
             status: row.status === 1 || row.status === true,
+            localized: row.localized === 1 || row.localized === true,
           });
         } catch {
           // Skip a row whose fields JSON is malformed.

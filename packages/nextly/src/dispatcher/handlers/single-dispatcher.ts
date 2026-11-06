@@ -45,8 +45,9 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import { publishesPerLanguage } from "../../domains/i18n/per-language-storage";
+import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
+import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
@@ -1303,6 +1304,24 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
+          // Where the translatable values live and how each language publishes, before and after
+          // this save (`translationLayoutChange`). Under `experimental.perLanguageStorage` a toggle
+          // moves no value: it gives each language a publish state of its own, or takes it away.
+          const layout = translationLayoutChange({
+            wasLocalized,
+            isLocalized,
+            wasStatus: single.status === true,
+            hasStatus: single.status === true,
+          });
+          // A precondition, so before anything changes: turning translation off drops each
+          // language's own publish state, which loses nothing only where it is the entry's.
+          if (layout.languagesMustAgreeWithEntry) {
+            await assertLanguageStatesAgreeWithEntry(adapter, {
+              kind: "single",
+              slug,
+              tableName,
+            });
+          }
           // The dialog's answer on a translated field's rename, refused when it does not say,
           // before anything changes.
           const companionRename = await resolveCompanionRename(
@@ -1392,13 +1411,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             tableName,
             oldFields: single.fields as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            localized: isLocalized,
-            wasLocalized:
-              (single as { localized?: boolean }).localized === true,
-            // Both read from the same persisted record as `wasLocalized`, so all three describe the
-            // state before this apply.
-            status: single.status === true,
-            wasStatus: single.status === true,
+            localized: layout.isStored,
+            wasLocalized: layout.wasStored,
+            // Read from the same persisted record as `wasLocalized`: the companion's per-language
+            // `_status` before and after this apply.
+            status: layout.isPublishedPerLanguage,
+            wasStatus: layout.wasPublishedPerLanguage,
+            statusFromEntryInEveryLanguage:
+              layout.statusFromEntryInEveryLanguage,
             adapter,
             renamed: companionRename ?? undefined,
             // The settings the first push left off, once the shared columns hold the default
@@ -1470,25 +1490,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               tableName,
               fields as FieldDefinition[],
               dialect,
-              { localized: isLocalized, status: single.status === true }
+              { localized: layout.isStored, status: single.status === true }
             );
             getSchemaRegistryFromDI()?.registerDynamicSchema(
               tableName,
               freshTable
             );
-            if (isLocalized) {
+            if (layout.isStored) {
               const companion = buildCompanionRuntimeTable({
                 slug,
                 tableName,
                 fields: fields as FieldDefinition[],
                 dialect,
                 localized: true,
-                // As saved, not as the record read before the save: a save that turns
-                // translation on gives a Draft/Published Single its per-language `_status`.
-                status: publishesPerLanguage({
-                  localized: isLocalized,
-                  status: single.status,
-                }),
+                // As saved, not as the record read before the save.
+                status: layout.isPublishedPerLanguage,
               });
               if (companion) {
                 getSchemaRegistryFromDI()?.registerDynamicSchema(

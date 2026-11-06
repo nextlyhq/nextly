@@ -28,6 +28,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { historyLanguagesOf } from "../../../api/versions-access";
 import { createAdapter } from "../../../database/factory";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
@@ -38,6 +39,7 @@ import { consoleLogger } from "../../../services/shared";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { refuseCompanionColumnsThatCannotHold } from "../runtime/companion-io";
 import { reconcileCompanionUniqueIndexes } from "../runtime/companion-unique-reconcile";
 import {
   perLanguageStorageEnabled,
@@ -194,6 +196,128 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await t.nextly.findByID({ collection: "articles", id })
       ).toMatchObject({ headline: "Hello again", excerpt: "A first article." });
+    });
+
+    // A save of an untranslated entity kept per language is recorded in its language, so the
+    // history it can be asked about is every configured language, as a translated entity's is.
+    it("asks an untranslated Single's history in every language the site keeps it in", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        singles: [
+          defineSingle({
+            slug: "notice",
+            versions: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+      });
+      expect(
+        [...(await historyLanguagesOf("single", "notice"))].sort()
+      ).toEqual(["de", "en"]);
+    });
+
+    // A translatable field's values are in the per-language table, which a grouped read does not
+    // aggregate yet: it is refused for that reason, as on a translated collection, not as a field
+    // that has no column.
+    it("refuses grouping by a translatable field as kept per language, not as missing", async () => {
+      const t = await boot(dialect, true);
+      const refused = await t.nextly
+        .group({
+          collection: "articles",
+          groupBy: "headline",
+          overrideAccess: true,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      expect(JSON.stringify(refused)).toContain("stored per locale");
+    });
+
+    // An untranslated Single publishes as a document, and its per-language table keeps no
+    // `_status`, so a publish made from another language moves the document's own status rather
+    // than being dropped for want of a per-language one.
+    it("publishes an untranslated Single as a document when the publish is made from another language", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        singles: [
+          defineSingle({
+            slug: "notice",
+            status: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+      });
+      await current.nextly.updateSingle({
+        slug: "notice",
+        locale: "de",
+        data: { heading: "Hallo", status: "published" },
+      });
+      const [row] = await current.adapter.select<{ status: unknown }>(
+        "single_notice",
+        {}
+      );
+      expect(row?.status).toBe("published");
+    });
+
+    // `nextly migrate` refuses, before it records the new definitions, a translations column that
+    // cannot hold a field the run newly translates. An untranslated entity's translations table
+    // is judged the same way under the setting, since its translatable fields live there.
+    it("refuses a per-language column that cannot hold an untranslated entity's new field", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        collections: [
+          defineCollection({
+            slug: "notes",
+            fields: [text({ name: "headline" })],
+          }),
+        ],
+      });
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await current.adapter.executeQuery(
+        `ALTER TABLE ${q("dc_notes_locales")} ADD COLUMN ${q("code")} INTEGER`
+      );
+      const recorded = new Map([
+        [
+          "collection:notes",
+          {
+            localized: true,
+            fields: [{ name: "headline", type: "text" }],
+          },
+        ],
+      ]);
+      const config = {
+        collections: [
+          {
+            slug: "notes",
+            fields: [
+              { name: "headline", type: "text" },
+              { name: "code", type: "text" },
+            ],
+          },
+        ],
+      };
+
+      const refused = await refuseCompanionColumnsThatCannotHold(
+        current.adapter as never,
+        config as never,
+        recorded
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(
+        JSON.stringify(
+          (refused as { publicData?: { errors?: unknown } } | undefined)
+            ?.publicData?.errors
+        )
+      ).toMatch(/cannot hold every value/);
     });
 
     // Publishing stays document-level for an entity that is not translated: its per-language row
@@ -574,6 +698,63 @@ describe.each(getConfiguredTestDialects())(
           ).toBe(true);
           expect((refused as Error).message).toMatch(/"de"/);
           expect((refused as Error).message).toMatch(/localization block/);
+        } finally {
+          _resetEnvCache();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
+    );
+
+    // A Builder-made Single whose table is missing at boot has it created from its stored fields,
+    // laid out as the setting keeps it: its translatable columns stay in its per-language table.
+    it.runIf(dialect === "sqlite")(
+      "recreates a Builder-made Single's missing table at boot without its translatable columns",
+      async () => {
+        const folder = mkdtempSync(join(tmpdir(), "nextly-per-language-"));
+        const url = `file:${join(folder, "site.db")}`;
+        vi.stubEnv("DB_DIALECT", "sqlite");
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+        const onFile = async () =>
+          createAdapter({ type: "sqlite", url } as Parameters<
+            typeof createAdapter
+          >[0]);
+        try {
+          // The boot reconciles the Builder's Singles beside the configuration's own.
+          const site = {
+            perLanguageStorage: true,
+            singles: [
+              defineSingle({ slug: "site", fields: [number({ name: "n" })] }),
+            ],
+          };
+          const before = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+          });
+          vi.stubEnv("NODE_ENV", "development");
+          await dispatchSingles(
+            "createSingle",
+            {},
+            {
+              slug: "banner",
+              label: "Banner",
+              fields: [
+                { name: "note", type: "text" },
+                { name: "year", type: "number" },
+              ],
+            }
+          );
+          vi.stubEnv("NODE_ENV", "test");
+          await before.adapter.executeQuery(`DROP TABLE "single_banner"`);
+          await before.destroy();
+
+          current = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+          });
+          const columns = await columnsOf(current, ["single_banner"]);
+          expect(columns.single_banner).toContain("year");
+          expect(columns.single_banner).not.toContain("note");
         } finally {
           _resetEnvCache();
           rmSync(folder, { recursive: true, force: true });

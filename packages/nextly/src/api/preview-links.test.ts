@@ -137,6 +137,10 @@ vi.mock("../lib/env", () => ({
 import { verifyPreviewToken } from "../auth/preview/preview-token";
 import { container } from "../di";
 import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../domains/i18n/per-language-storage";
 
 import {
   requireRouteCollectionAccess,
@@ -401,6 +405,22 @@ describe("mintPreviewLink for a Single", () => {
    * very grant the refusal exists to withhold.
    */
   describe("a localized single with no locale named", () => {
+    // Under `experimental.perLanguageStorage` an untranslated Single keeps its values per
+    // language too, so a token with no locale would cover each of them.
+    it("refuses an untranslated Single the site keeps per language under the setting", async () => {
+      statusSingles.add("homepage");
+      setPerLanguageStorage(true);
+      try {
+        const response = await mintPreviewLink(post({ single: "homepage" }));
+        expect(response.status).toBe(400);
+        expect(JSON.stringify(await json(response))).toContain(
+          "needs a locale"
+        );
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    });
+
     it("refuses rather than minting a token covering every translation", async () => {
       localizedSingles.add("homepage");
 

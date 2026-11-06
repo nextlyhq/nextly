@@ -73,7 +73,10 @@ import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translat
 import {
   publishesPerLanguage,
   storesPerLanguage,
+  translationLayoutChange,
+  type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
+import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -193,6 +196,12 @@ export interface UpdateSingleSchemaInput {
    * would turn the repair into a no-op.
    */
   statusRequested: boolean;
+  /**
+   * Where the Single's translatable values live and how each language publishes, before and after
+   * this save (`translationLayoutChange`), derived inside the exclusion. Absent in the caller's
+   * input. With it, `isLocalized`/`wasLocalized` above say where the values are stored.
+   */
+  layout?: TranslationLayoutChange;
 }
 
 /** The updated row, and the status the caller reports back to the user. */
@@ -325,11 +334,15 @@ function mayIssueSchemaDdl(input: UpdateSingleSchemaInput): boolean {
 }
 
 function requestsSchemaWork(input: UpdateSingleSchemaInput): boolean {
-  const { fields, isLocalized, wasLocalized, statusRequested } = input;
+  const { fields, isLocalized, wasLocalized, statusRequested, layout } = input;
   if (fields !== undefined) return true;
   return (
     isLocalized !== wasLocalized ||
-    (statusRequested && (isLocalized || wasLocalized))
+    (statusRequested && (isLocalized || wasLocalized)) ||
+    // A translation toggle under the setting stores nothing elsewhere, but changes how each
+    // language publishes.
+    (layout !== undefined &&
+      layout.isPublishedPerLanguage !== layout.wasPublishedPerLanguage)
   );
 }
 
@@ -735,14 +748,35 @@ export class SingleMetadataService {
     // the companion is created without `_status` while the row ends up saying it has one.
     const wasLocalized = current.localized === true;
     const wasStatus = current.status === true;
+    const hasStatus = args.statusRequested ? args.hasStatus : wasStatus;
+    // Where the values live and how each language publishes, before and after: under
+    // `experimental.perLanguageStorage` a translation toggle moves no value, and only gives each
+    // language a publish state of its own, or takes it away. Every step below reads storage.
+    const layout = translationLayoutChange({
+      wasLocalized,
+      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
+      wasStatus,
+      hasStatus,
+    });
     const input: UpdateSingleSchemaInput = {
       ...args,
       existing: current,
-      wasLocalized,
+      wasLocalized: layout.wasStored,
       wasStatus,
-      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
-      hasStatus: args.statusRequested ? args.hasStatus : wasStatus,
+      isLocalized: layout.isStored,
+      hasStatus,
+      layout,
     };
+
+    // A precondition, so before anything changes: turning translation off drops each language's
+    // own publish state, which loses nothing only where it is the entry's.
+    if (layout.languagesMustAgreeWithEntry && this.adapter) {
+      await assertLanguageStatesAgreeWithEntry(this.adapter, {
+        kind: "single",
+        slug: args.slug,
+        tableName: current.tableName,
+      });
+    }
 
     // Asked here, from the flags this exclusion just re-derived, because the caller's reading can
     // be stale: a concurrent save that turned translation on would make this edit a field leaving
@@ -1565,8 +1599,9 @@ export class SingleMetadataService {
       newFields: plan.fields,
       wasLocalized: input.wasLocalized,
       isLocalized: input.isLocalized,
-      wasStatus: input.wasStatus,
-      status: input.hasStatus,
+      // The companion's own `_status`, before and after.
+      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
     });
   }
 
@@ -1832,8 +1867,11 @@ export class SingleMetadataService {
           newFields: plan.fields,
           localized: input.isLocalized,
           wasLocalized: input.wasLocalized,
-          status: input.hasStatus,
-          wasStatus: input.wasStatus,
+          // The companion's own `_status`, before and after this save.
+          status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+          wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+          statusFromEntryInEveryLanguage:
+            input.layout?.statusFromEntryInEveryLanguage,
           adapter,
           joinedBefore,
           // One rename rule for every column: the main table's decides a translated field's too.

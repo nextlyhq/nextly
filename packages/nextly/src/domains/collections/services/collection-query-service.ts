@@ -171,6 +171,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   isCompanionReady,
@@ -233,7 +234,10 @@ import {
   refuseFilterProblems,
   unknownFieldProblem,
 } from "../query/filter-shape";
-import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
+import {
+  declaredAsStored,
+  groupKeyDeclarationProblem,
+} from "../query/group-key-declaration";
 import { orderBySortKeys } from "../query/sort-order";
 import {
   timeseriesBoundOperand,
@@ -833,7 +837,9 @@ function assertGroupKeyUsable(
   column: unknown,
   declaredFields: FieldDefinition[],
   /** Whether a key names a hidden contributed column of the read's table. */
-  isHiddenColumn: (key: string) => boolean
+  isHiddenColumn: (key: string) => boolean,
+  /** Whether the collection keeps its translatable fields per language. */
+  storedPerLanguage: boolean
 ): FieldDefinition | undefined {
   const snake = toSnakeCase(groupBy);
   const isOwner =
@@ -862,7 +868,10 @@ function assertGroupKeyUsable(
   ]);
   const declared = declaredFields.find(field => spelled.has(field.name));
 
-  const declaredProblem = groupKeyDeclarationProblem(declared, groupBy);
+  const declaredProblem = groupKeyDeclarationProblem(
+    declaredAsStored(declared, storedPerLanguage),
+    groupBy
+  );
   if (declaredProblem !== undefined) {
     throw NextlyError.validation({
       errors: [
@@ -4206,7 +4215,8 @@ export class CollectionQueryService extends BaseService {
       // table here as they are there.
       hiddenColumnMatcher(
         collectionTableName(collection, params.collectionName)
-      )
+      ),
+      storesPerLanguage(collection as { localized?: unknown })
     );
     return { key, field };
   }
