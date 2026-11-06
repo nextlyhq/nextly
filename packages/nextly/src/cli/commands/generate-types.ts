@@ -58,7 +58,7 @@ import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
-import { reportDryRun, type DryRunChange } from "../dry-run";
+import { projectPath, reportDryRun, type DryRunChange } from "../dry-run";
 import { configDeclarationError, exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { loadConfigOrExit } from "../utils/command-prerequisites";
@@ -82,7 +82,6 @@ import {
   applyBlockManifestState,
   blockManifestDryRunChanges,
   readBlockManifestState,
-  shownPath,
 } from "./generate-manifest";
 
 // ============================================================================
@@ -311,7 +310,7 @@ export async function runGenerateTypes(
       if (each.previous === each.code) continue;
       dryRunChanges.push({
         action: "write",
-        target: shownPath(manifestCwd, each.file),
+        target: projectPath(manifestCwd, each.file),
       });
     }
   }
@@ -349,7 +348,7 @@ export async function runGenerateTypes(
           ...dryRunChanges,
           ...plannedFiles(plan).map(file => ({
             action: "write" as const,
-            target: shownPath(manifestCwd, file.path),
+            target: projectPath(manifestCwd, file.path),
           })),
         ],
       });
