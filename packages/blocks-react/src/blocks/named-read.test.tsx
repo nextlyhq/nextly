@@ -10,10 +10,8 @@
  * Drawn through the real `PageRenderer` and core blocks.
  */
 import {
-  clearNamedQueries,
   defineNamedQuery,
   param,
-  registerNamedQueries,
   type BindingIssue,
   type BlockDocument,
   type BlockNode,
@@ -23,7 +21,7 @@ import {
   type NamedReadQuery,
 } from "@nextlyhq/blocks-engine";
 import { renderToReadableStream } from "react-dom/server";
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   createQueryBudget,
@@ -242,8 +240,6 @@ async function draw(
   );
   return { element, reader, host: made };
 }
-
-afterEach(() => clearNamedQueries());
 
 describe("the named query reader's shape", () => {
   it("takes the queries the page's reader takes, written out in the engine", () => {
@@ -655,28 +651,69 @@ describe("a list whose source is a named query", () => {
     const definition = eventsQuery(async ({ reader }) => ({
       rows: (await reader.find({ collection: "events" })).items,
     }));
-    // Registered under the same name with other rows, which the page must
-    // not judge by: its rows come from the host's query.
-    registerNamedQueries([
-      eventsQuery(definition.run, {
-        rows: {
-          key: "id",
-          fields: [
-            { name: "id", type: "text" },
-            { name: "internalNote", type: "text" },
-          ],
-        },
-      }),
+    const issues = async (query: NamedQueryDefinition) => {
+      const found: BindingIssue[] = [];
+      await drawn(
+        page(list(named(), [itemHeading("t", "internalNote")])),
+        context({ namedQueries: host(query, base({ events: EVENTS })) }),
+        reported => found.push(...reported)
+      );
+      return found.filter(issue => issue.code === "binding-field-missing");
+    };
+    // The host's query declares no `internalNote`: the binding is reported.
+    expect(await issues(definition)).toEqual([
+      expect.objectContaining({ nodeId: "t" }),
     ]);
-    const issues: BindingIssue[] = [];
-    await drawn(
-      page(list(named(), [itemHeading("t", "internalNote")])),
-      context({ namedQueries: host(definition, base({ events: EVENTS })) }),
-      found => issues.push(...found)
+    // The host's query that declares it: the same binding is not.
+    expect(
+      await issues(
+        eventsQuery(definition.run, {
+          rows: {
+            key: "id",
+            fields: [
+              { name: "id", type: "text" },
+              { name: "internalNote", type: "text" },
+            ],
+          },
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("makes no read once its run is over, though run keeps going", async () => {
+    let lateRead: Promise<unknown> | undefined;
+    const { element, reader } = await draw(
+      eventsQuery(
+        ({ reader: scoped }) => {
+          // Ignores its signal, and reads after its time is up.
+          setTimeout(() => {
+            lateRead = scoped
+              .find({ collection: "events" })
+              .catch((error: unknown) => error);
+          }, 60);
+          return new Promise(() => undefined);
+        },
+        { timeoutMs: 20 }
+      )
     );
-    expect(issues).toContainEqual(
-      expect.objectContaining({ nodeId: "t", code: "binding-field-missing" })
+    expect(note(element)).toContain("so it was stopped");
+    await new Promise(resolve => setTimeout(resolve, 120));
+    expect(lateRead).toBeDefined();
+    expect(await lateRead).toBeInstanceOf(Error);
+    expect(reader.asked).toEqual([]);
+  });
+
+  it("draws the empty state when the render's day cannot be read", async () => {
+    const run = vi.fn<NamedQueryDefinition["run"]>(() =>
+      Promise.resolve({ rows: [] })
     );
+    const { element, host: made } = await draw(eventsQuery(run), {
+      host: { today: () => Promise.reject(new Error("no clock")) },
+    });
+    expect(emptyShown(element)).toBe(true);
+    expect(note(element)).toContain("Upcoming events stopped with an error");
+    expect(made.failures.map(failure => failure.code)).toEqual(["threw"]);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("logs a failure by its code and reference, never the error's words", () => {

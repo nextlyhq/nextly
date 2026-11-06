@@ -169,6 +169,19 @@ export interface NamedQueryFailure {
 }
 
 /**
+ * Where a Nextly instance hands out the named queries its page builder
+ * registered: the plugin and the service name, as `nextly.plugins` keys
+ * them. The page builder registers the service under it; a published route
+ * reads its site's queries from it.
+ *
+ * @experimental
+ */
+export const NAMED_QUERY_SERVICE: {
+  readonly plugin: "@nextlyhq/plugin-page-builder";
+  readonly service: "namedQueries";
+} = { plugin: "@nextlyhq/plugin-page-builder", service: "namedQueries" };
+
+/**
  * What a page renders a collection list's named query with: where queries
  * are looked up, the reader each run wraps, and the host's cache, frame and
  * log. Absent, a list whose source is a named query draws its template once,
@@ -177,8 +190,12 @@ export interface NamedQueryFailure {
  * @experimental
  */
 export interface NamedQueryHost {
-  /** The registered query of a name; the engine's registry when absent. */
-  readonly definitionOf?: (name: string) => NamedQueryDefinition | undefined;
+  /**
+   * The query registered under a name by the site this page belongs to:
+   * each site keeps its own, so two sites served from one process never
+   * resolve each other's.
+   */
+  readonly definitionOf: (name: string) => NamedQueryDefinition | undefined;
   readonly reader: ListBaseReader;
   /** Today in the site's time zone, `YYYY-MM-DD`, one answer per render. */
   readonly today: () => Promise<string>;

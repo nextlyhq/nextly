@@ -1340,10 +1340,8 @@ export {
 // builder fills at boot, and every message about one, shared by the
 // validator, the renderer, the editor and the plugin SDK.
 export {
-  allNamedQueries,
-  clearNamedQueries,
+  createNamedQueryRegistry,
   defineNamedQuery,
-  getNamedQuery,
   isNamedQueryName,
   judgeNamedParams,
   NAMED_QUERY_DEFAULT_TIMEOUT_MS,
@@ -1358,8 +1356,6 @@ export {
   namedQueryRowFields,
   namedQueryTimeout,
   param,
-  registeredNamedQueries,
-  registerNamedQueries,
 } from "./named-query";
 
 // A block's visibility conditions: the operator vocabulary and its render
@@ -1409,6 +1405,7 @@ export type {
   NamedQueryParamValue,
   NamedQueryParamValues,
   NamedQueryReader,
+  NamedQueryRegistry,
   NamedQueryResult,
   NamedQueryRows,
   NamedQueryRunArgs,

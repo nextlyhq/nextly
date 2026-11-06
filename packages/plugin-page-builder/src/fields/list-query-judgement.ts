@@ -25,7 +25,6 @@ import {
   isPlainRecord,
   LIST_FIELD_CODES,
   listQueryIssues,
-  registeredNamedQueries,
   walkNodes,
   type BindingFieldShape,
   type BlockDocument,
@@ -103,12 +102,23 @@ export function listFieldsFrom(reads: {
       declared,
       // A collection the public may read none of has no readable field, so
       // every field a list names on it is refused as one visitors can't see.
-      readable:
-        shapes === undefined
-          ? []
-          : [{ name: "id", type: "text" }, ...stamps, ...shapes],
+      readable: publicReadsNothing(shapes)
+        ? []
+        : [{ name: "id", type: "text" }, ...stamps, ...shapes],
     };
   };
+}
+
+/**
+ * Whether visitors may read nothing of a collection, from the public field
+ * shapes `bindingFieldShapes` answers: `undefined` when the public may not
+ * read it at all. An empty list is a collection visitors may read whose own
+ * fields are all hidden: they still read its id and timestamps.
+ */
+export function publicReadsNothing(
+  shapes: readonly BindingFieldShape[] | undefined
+): shapes is undefined {
+  return shapes === undefined;
 }
 
 /**
@@ -156,7 +166,7 @@ function collectionsAsked(
   nodes: readonly unknown[],
   entryCollection: string | null | undefined,
   maxNodes: number | undefined,
-  namedQueries: NamedQuerySource
+  namedQueries: NamedQuerySource | undefined
 ): Set<string> {
   const asked = new Set<string>();
   const judgement = {
@@ -169,7 +179,7 @@ function collectionsAsked(
     ...(entryCollection === undefined ? {} : { entryCollection }),
     ...(maxNodes === undefined ? {} : { maxNodes }),
     // A custom source asks about what its query reads and lists.
-    namedQueries,
+    ...(namedQueries === undefined ? {} : { namedQueries }),
   };
   // Both judgements read the schema through one source, so the fields read
   // are those any list or any condition on the page names.
@@ -185,7 +195,7 @@ async function sourceFor(
   read: ListFieldsReader,
   known: Map<string, ListFields | undefined>,
   maxNodes: number | undefined,
-  namedQueries: NamedQuerySource
+  namedQueries: NamedQuerySource | undefined
 ): Promise<ListFieldSource> {
   for (const nodes of forests) {
     const asked = collectionsAsked(
@@ -228,8 +238,8 @@ export interface ListJudging {
   readonly storedForms?: () => Promise<StoredForms>;
   readonly maxNodes?: number;
   /**
-   * The site's named queries, for a list whose source is one; the process
-   * registry the page builder fills at boot when absent.
+   * The site's named queries, for a list whose source is one; absent, such
+   * a list is judged by its shape alone.
    */
   readonly namedQueries?: NamedQuerySource;
   /**
@@ -277,10 +287,10 @@ async function errorsIn<Issue extends ForestIssue>(
 ): Promise<Issue[]> {
   const known = new Map<string, ListFields | undefined>();
   const fieldsOf = site.fieldsOf;
-  const namedQueries = site.namedQueries ?? registeredNamedQueries();
+  const namedQueries = site.namedQueries;
   const judge = async (stored: readonly BlockDocument[]) =>
     judgeForest(nodes, {
-      namedQueries,
+      ...(namedQueries === undefined ? {} : { namedQueries }),
       ...(fieldsOf === undefined
         ? {}
         : {

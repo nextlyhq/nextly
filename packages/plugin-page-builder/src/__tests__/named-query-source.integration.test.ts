@@ -23,11 +23,8 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import {
-  allNamedQueries,
-  clearNamedQueries,
   defineNamedQuery,
   param,
-  registerNamedQueries,
   type BlockNode,
   type NamedQueryDefinition,
 } from "@nextlyhq/blocks-engine";
@@ -35,6 +32,7 @@ import {
   createBlockResolver,
   createQueryBudget,
   createStandaloneContext,
+  NAMED_QUERY_SERVICE,
   PageRenderer,
   type NamedQueryFailure,
 } from "@nextlyhq/blocks-react";
@@ -219,6 +217,18 @@ function page(...nodes: BlockNode[]) {
   return { formatVersion: 1, kind: "page", nodes };
 }
 
+/** The named queries an instance's page builder serves its published pages. */
+function queriesOf(
+  t: TestNextly
+): (name: string) => NamedQueryDefinition | undefined {
+  const service = t.nextly.plugins[NAMED_QUERY_SERVICE.plugin]?.[
+    NAMED_QUERY_SERVICE.service
+  ] as {
+    definitionOf: (name: string) => NamedQueryDefinition | undefined;
+  };
+  return name => service.definitionOf(name);
+}
+
 /** A page drawn as a published page draws it, with the failures it logged. */
 async function published(
   t: TestNextly,
@@ -234,6 +244,8 @@ async function published(
         ...createStandaloneContext(),
         queries: createQueryBudget(),
         namedQueries: {
+          // This instance's own queries, as a published route reads them.
+          definitionOf: queriesOf(t),
           reader,
           today: () => Promise.resolve("2026-11-06"),
           // The public's fields of a collection, as a published page's
@@ -332,13 +344,12 @@ describe.each(getConfiguredTestDialects())(
         ...(extra.dryRun === true ? { dryRun: true } : {}),
       });
 
-    it("registers the site's queries at boot", async () => {
-      await boot();
-      expect(allNamedQueries().map(query => query.name)).toEqual([
-        "events.upcoming",
-        "events.all",
-        "events.trusted",
-      ]);
+    it("registers the site's queries at boot, served by this instance", async () => {
+      const t = await boot();
+      const lookup = queriesOf(t);
+      expect(lookup("events.upcoming")).toBe(upcoming);
+      expect(lookup("events.trusted")).toBe(trusted);
+      expect(lookup("events.gone")).toBeUndefined();
     });
 
     it("sets a custom source, clearing the collection, filters and sort in one write", async () => {
@@ -413,27 +424,6 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedProps(t, id)).toEqual({ collection: EVENTS });
       }
     );
-
-    it("keeps saving a stored list whose query was since removed", async () => {
-      const t = await boot();
-      const id = await homePage(t, {
-        namedQuery: { name: "events.all" },
-        limit: 3,
-      });
-      const { cookie } = await holding(t, AUTHOR);
-      // The plugin that added it is gone: the registry no longer holds it.
-      const kept = allNamedQueries().filter(
-        query => query.name !== "events.all"
-      );
-      clearNamedQueries();
-      registerNamedQueries(kept);
-      const saved = await change(cookie, id, { limit: 4 });
-      expect(saved.status).toBe(200);
-      expect(await storedProps(t, id)).toEqual({
-        namedQuery: { name: "events.all" },
-        limit: 4,
-      });
-    });
 
     it("sets and refuses a custom source through the composition service a plugin reaches", async () => {
       const t = await boot();

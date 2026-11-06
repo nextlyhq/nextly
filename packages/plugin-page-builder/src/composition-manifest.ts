@@ -28,7 +28,6 @@ import {
   type ComponentDocument,
   type DocumentLimits,
   type RegionArea,
-  allNamedQueries,
   namedQueryDeclaration,
   type NamedQueryDeclaration,
 } from "@nextlyhq/blocks-engine";
@@ -305,6 +304,8 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
 export interface ManifestSetup {
   readonly store?: ComponentStore;
   readonly limits?: () => DocumentLimits;
+  /** This site's named queries; none are listed when absent. */
+  readonly namedQueries?: () => readonly NamedQueryDeclaration[];
 }
 
 /** What a manifest read is asked for. */
@@ -352,7 +353,7 @@ export async function readCompositionManifest(
     components,
     layouts: { defaultLayout: null, ...layouts },
     actions: manifestActions(),
-    namedQueries: allNamedQueries().map(manifestNamedQuery),
+    namedQueries: (setup.namedQueries?.() ?? []).map(manifestNamedQuery),
   };
 }
 

@@ -20,17 +20,18 @@
  * @module named-queries
  */
 import {
-  clearNamedQueries,
+  createNamedQueryRegistry,
   listFieldKind,
   NAMED_QUERY_TEXT_MAX,
   namedQueryNeedsInput,
   namedQueryParamNeedsInput,
-  registerNamedQueries,
   type BindingFieldShape,
   type NamedQueryDeclaration,
   type NamedQueryDefinition,
   type NamedQueryKnown,
   type NamedQueryParam,
+  type NamedQueryRegistry,
+  type NumberParam,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginContext,
@@ -43,6 +44,7 @@ import { z } from "nextly/zod";
 import { PAGE_BUILDER_PLUGIN } from "./blocks/registration-service";
 import { pluralLabelOf } from "./collection-labels";
 import { ENTRIES_LOCALE_MAX } from "./entries-contract";
+import { publicReadsNothing } from "./fields/list-query-judgement";
 import {
   NAMED_QUERIES_PARAMS,
   NAMED_QUERIES_ROUTE_PATH,
@@ -94,15 +96,16 @@ function slugsOf(entries: unknown): ReadonlySet<string> {
 }
 
 /**
- * Register every named query for this boot: the site's, then each plugin's
- * declared ones, into an emptied registry. Throws, naming the source, for a
- * query the engine refuses or a name taken twice.
+ * This boot's named queries: the site's, then each plugin's declared ones,
+ * in a registry of their own. Each page builder keeps its own, so two sites
+ * booted in one process never resolve each other's queries. Throws, naming
+ * the source, for a query the engine refuses or a name taken twice.
  */
 export function registerNamedQueriesAtBoot(
   ctx: Pick<PluginContext, "config" | "logger">,
   site: readonly NamedQueryDefinition[] | undefined
-): void {
-  clearNamedQueries();
+): NamedQueryRegistry {
+  const registry = createNamedQueryRegistry();
   const collections = slugsOf(ctx.config.collections);
   const singles = slugsOf(ctx.config.singles);
   const known: NamedQueryKnown = {
@@ -110,7 +113,7 @@ export function registerNamedQueriesAtBoot(
     single: slug => singles.has(slug),
   };
   const unknownReads = [
-    ...registerNamedQueries(site ?? [], { source: SITE_SOURCE, known })
+    ...registry.register(site ?? [], { source: SITE_SOURCE, known })
       .unknownReads,
   ];
   for (const declaration of collectDeclarations(
@@ -120,7 +123,7 @@ export function registerNamedQueriesAtBoot(
     const { queries, error } = namedQueriesIn(declaration);
     if (error !== undefined) throw new Error(error);
     unknownReads.push(
-      ...registerNamedQueries(queries, {
+      ...registry.register(queries, {
         source: declaration.source,
         known,
       }).unknownReads
@@ -132,6 +135,7 @@ export function registerNamedQueriesAtBoot(
         "A read of one that does not exist fails the query's list, which then shows its empty state."
     );
   }
+  return registry;
 }
 
 /** An input's declaration, as the editor draws its control. */
@@ -214,6 +218,32 @@ export function namedQueryItem(
   };
 }
 
+/**
+ * A number input's type and bounds as JSON Schema: those it declares, and
+ * for a whole number the safe range too, which the save holds it to
+ * (`Number.isSafeInteger`), clipped by any it declares.
+ */
+function numberBounds(param: NumberParam): Record<string, unknown> {
+  if (param.integer !== true) {
+    return {
+      type: "number",
+      ...(param.min === undefined ? {} : { minimum: param.min }),
+      ...(param.max === undefined ? {} : { maximum: param.max }),
+    };
+  }
+  return {
+    type: "integer",
+    minimum: Math.max(
+      param.min ?? Number.MIN_SAFE_INTEGER,
+      Number.MIN_SAFE_INTEGER
+    ),
+    maximum: Math.min(
+      param.max ?? Number.MAX_SAFE_INTEGER,
+      Number.MAX_SAFE_INTEGER
+    ),
+  };
+}
+
 /** One input as JSON Schema, for a client composing a list's inputs. */
 function inputSchema(param: NamedQueryParam): Record<string, unknown> {
   const titled = { title: param.label };
@@ -228,12 +258,7 @@ function inputSchema(param: NamedQueryParam): Record<string, unknown> {
         ),
       };
     case "number":
-      return {
-        ...titled,
-        type: param.integer === true ? "integer" : "number",
-        ...(param.min === undefined ? {} : { minimum: param.min }),
-        ...(param.max === undefined ? {} : { maximum: param.max }),
-      };
+      return { ...titled, ...numberBounds(param) };
     case "boolean":
       return { ...titled, type: "boolean" };
     case "choice":
@@ -283,7 +308,11 @@ export function namedQueryParamsSchema(
 export interface NamedQueriesReads {
   /** Every registered query. */
   readonly queries: () => readonly NamedQueryDeclaration[];
-  /** The fields of a collection the public may read; none or `undefined` when none. */
+  /**
+   * The fields of a collection the public may read, as `bindingFieldShapes`
+   * answers: `undefined` when the public may read none of it, an empty list
+   * when it may read the collection but none of its own fields.
+   */
   readonly publicFields: (
     slug: string,
     locale?: string
@@ -320,8 +349,12 @@ export async function readNamedQueries(
   const hidden = new Map<string, string>();
   await Promise.all(
     slugs.map(async slug => {
-      const fields = await reads.publicFields(slug, locale).catch(() => []);
-      if (fields === undefined || fields.length === 0) {
+      // A read that fails says nothing about access: judged as unreadable,
+      // so the author is warned rather than told all is well.
+      const fields = await reads
+        .publicFields(slug, locale)
+        .catch(() => undefined);
+      if (publicReadsNothing(fields)) {
         hidden.set(slug, await reads.collectionLabel(slug));
       }
     })

@@ -27,7 +27,11 @@
  * @experimental Settles when the composition API ships.
  * @module composition-service
  */
-import type { DocumentLimits, RetiredExposures } from "@nextlyhq/blocks-engine";
+import type {
+  DocumentLimits,
+  NamedQueryDeclaration,
+  RetiredExposures,
+} from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type PluginContext,
@@ -115,6 +119,8 @@ export interface CompositionServiceSetup {
     ctx: PluginRouteContext
   ) => (componentId: string) => Promise<RetiredExposures | null>;
   readonly templates: TemplateActionsSetup;
+  /** This site's named queries, which the manifest lists. */
+  readonly namedQueries?: () => readonly NamedQueryDeclaration[];
 }
 
 /**
