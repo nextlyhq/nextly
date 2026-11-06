@@ -47,7 +47,7 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
-import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
+import { keysNoUpdateStores } from "../../../lib/immutable-system-fields";
 import {
   DOCUMENT_OVERWRITE_KEY,
   DOCUMENT_VERSION_KEY,
@@ -1324,13 +1324,13 @@ const WRITE_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The keys of `data` the write paths' row strip takes out of every update to
- * the entity `target` names, asked of `stripImmutableSystemFields` itself:
- * its immutable system columns, the columns schema hooks contributed, and any
- * declared field with no column. The {@link WRITE_TRANSPORT_KEYS} are not
- * among them, being read before the strip and never stored. An update sending
- * one of these is stored without it, so a write that must be made whole is
- * refused for it where it arrives.
+ * The keys of `data` an update of the entity `target` names stores nowhere,
+ * asked of `keysNoUpdateStores`: its immutable system columns, the columns
+ * schema hooks contributed, and any field stored nowhere, but not a field the
+ * update writes to a table of its own (a field group, a many-to-many). The
+ * {@link WRITE_TRANSPORT_KEYS} are not among them, being read before the
+ * strip and never stored. An update sending one of these is stored without
+ * it, so a write that must be made whole is refused for it.
  */
 export async function unstoredWriteKeys(
   target: StoredFieldsTarget,
@@ -1347,15 +1347,12 @@ export async function unstoredWriteKeys(
     target,
     EVERY_FIELD
   );
-  const kept = stripImmutableSystemFields(
+  return keysNoUpdateStores(
     data,
     entity.kind,
     entity.tableName,
     entity.fields
-  );
-  return Object.keys(data).filter(
-    key => !(key in kept) && !WRITE_TRANSPORT_KEYS.has(key)
-  );
+  ).filter(key => !WRITE_TRANSPORT_KEYS.has(key));
 }
 
 /** The whole-write record of the write called with `context`, for this document. */

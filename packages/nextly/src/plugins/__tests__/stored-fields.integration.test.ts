@@ -489,6 +489,15 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as unknown as CollectionConfig,
           {
+            // A field group beside the body: an update stores its values in
+            // the group's own table, not in this row.
+            slug: "carded",
+            fields: [
+              { name: "body", type: "doc" },
+              { name: "teaser", type: "component", component: "teaser" },
+            ],
+          } as unknown as CollectionConfig,
+          {
             // A lifecycle with working drafts, whose `beforeChange` hook turns
             // a publish into a draft.
             slug: "flipped",
@@ -587,6 +596,12 @@ describe.each(getConfiguredTestDialects())(
                 ],
               }) as never
           ),
+        ],
+        fieldGroups: [
+          {
+            slug: "teaser",
+            fields: [{ name: "body", type: "text" }],
+          } as never,
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
@@ -2716,6 +2731,63 @@ describe.each(getConfiguredTestDialects())(
         expect(await systemValue(page, "body")).toEqual({
           kind: "value",
           value: { v: "whole" },
+        });
+      });
+
+      it("takes a field group an update stores in its own table, and refuses no field for it", async () => {
+        const id = await created("carded", { body: { v: 0 } });
+        const entry = { collection: "carded", id };
+        const hash = await systemHash(entry, "body");
+
+        await updateIfUnchanged(checked(owner), {
+          ...entry,
+          data: { body: { v: "with teaser" }, teaser: { body: "hi" } },
+          expect: { field: "body", form: "published", hash },
+        });
+
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: "with teaser" },
+        });
+        const row = (await t.nextly.findByID({
+          collection: "carded",
+          id,
+          overrideAccess: true,
+          depth: 1,
+        } as never)) as unknown as { teaser?: { body?: unknown } };
+        expect(row.teaser?.body).toBe("hi");
+      });
+
+      it("refuses a caller who may not read with the same answer whatever the data names, for an entry there or not", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const hash = await storedValueHash({ kind: "value", value: { v: 0 } });
+        const at = new Date(0).toISOString();
+        const documents = [
+          { collection: "pages", id },
+          { collection: "pages", id: "no-such-entry" },
+          { collection: "no-such-collection", id },
+        ];
+        const codes: string[] = [];
+        for (const document of documents) {
+          for (const data of [
+            { body: { v: "x" }, updatedAt: at },
+            { body: { v: "x" } },
+          ]) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(stranger, {
+                ...document,
+                data,
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isForbidden(refusal)).toBe(true);
+            codes.push((refusal as NextlyError).code);
+          }
+        }
+        expect(new Set(codes).size).toBe(1);
+        expect(await systemValue({ collection: "pages", id }, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
         });
       });
     });
