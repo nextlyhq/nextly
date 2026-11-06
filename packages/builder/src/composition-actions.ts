@@ -89,7 +89,8 @@ export type PageAction =
    * offset, each part set when given, removed when `null`, and kept as
    * stored when absent. The write is judged as an editor save is, so a limit
    * outside 1 to 100, a negative offset, a field the collection lacks or
-   * visitors can't see, and a related list nested too deep are refused.
+   * visitors can't see, a related list nested too deep, and a split into
+   * pages a page cannot serve are refused.
    */
   | {
       readonly kind: "set-list-query";
@@ -127,6 +128,13 @@ export interface ListQueryChange {
   readonly limit?: number | null;
   /** How many matching entries to skip, from 0. */
   readonly offset?: number | null;
+  /**
+   * Split into pages of `limit` entries, each at its own address
+   * (`/news/page/2`). One list on a page may be, and not one inside another
+   * list, one showing related entries, or one in a component or a Layout
+   * region; the write is refused naming the reason.
+   */
+  readonly paginate?: boolean | null;
 }
 
 /** Which part of a block an exposure targets: a prop, or its visibility. */
@@ -239,6 +247,7 @@ const pageActionOptions = [
       sort: z.string().max(2048).nullable().optional(),
       limit: z.number().nullable().optional(),
       offset: z.number().nullable().optional(),
+      paginate: z.boolean().nullable().optional(),
     }),
   }),
   z.strictObject({

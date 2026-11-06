@@ -1338,10 +1338,12 @@ export {
   isListFieldKind,
   listFieldKind,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   listRelationTarget,
   listSortText,
   outerListOf,
+  paginatedList,
   readListQuery,
 } from "./list-query";
 
@@ -1383,6 +1385,7 @@ export type {
   ListFilter,
   ListFilterOp,
   ListFilterScalar,
+  ListPageCode,
   ListQuery,
   ListQueryJudgement,
   ListQueryProblem,
@@ -1390,4 +1393,5 @@ export type {
   ListRelation,
   ListShapeCode,
   ListSortKey,
+  PaginatedList,
 } from "./list-query";
