@@ -31,6 +31,7 @@ import {
   COLLECTION_LIST_TYPE,
   defineBlock,
   type ListFilter,
+  type ListNamedQuery,
   type ListRelation,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
@@ -40,7 +41,8 @@ import { LIST_ACTION_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
-import { readList, type ListOutcome } from "./list-read";
+import { namedListBase, readList, type ListOutcome } from "./list-read";
+import { readNamedList } from "./named-read";
 
 export interface CollectionLoopProps {
   /** The collection queried, or the collection a related source's entries are in. */
@@ -59,6 +61,14 @@ export interface CollectionLoopProps {
   offset?: number;
   /** The to-many relation of the page's entry or the outer item to list. */
   relation?: ListRelation;
+  /**
+   * A custom source: a named query a developer registered, and a literal for
+   * each of its inputs. The list's whole source, so `collection`,
+   * `relation`, `filters` and `sort` are absent beside it.
+   *
+   * @experimental
+   */
+  namedQuery?: ListNamedQuery;
 }
 
 /**
@@ -143,6 +153,62 @@ function emptyMarks(
     : {};
 }
 
+/**
+ * The entries a list draws, and the context each is drawn with: the list's
+ * read for a collection or a relation, or its named query's run.
+ */
+interface ListRead {
+  readonly outcome: ListOutcome;
+  readonly itemContext: (item: Record<string, unknown>) => PageContext;
+}
+
+/**
+ * A list whose source is a named query, read; `undefined` for any other
+ * list. Claims nothing up front: each read the query makes claims its own.
+ */
+async function readNamedSource(
+  props: CollectionLoopProps,
+  ctx: PageContext,
+  nodeId: string
+): Promise<ListRead | "template" | undefined> {
+  const base = namedListBase(props);
+  if (base === undefined) return undefined;
+  if (ctx.namedQueries === undefined) return "template";
+  const itemOf =
+    (rowsCollection: string | undefined, query: string) =>
+    (item: Record<string, unknown>): PageContext => ({
+      ...ctx,
+      item,
+      itemQuery: query,
+      // A collection's entries bind as that collection's; rows of a declared
+      // schema bind as the query's, never as the outer list's collection.
+      itemSource: rowsCollection,
+    });
+  if ("blocking" in base) {
+    return {
+      outcome: {
+        items: [],
+        failed: true,
+        diagnostic: {
+          kind: "query-failed",
+          message: `This list couldn't load its entries, so visitors see its empty state. ${base.blocking}`,
+        },
+      },
+      itemContext: item => ({ ...ctx, item }),
+    };
+  }
+  const outcome = await readNamedList(
+    base.named,
+    { limit: base.limit, offset: base.offset },
+    { ...ctx, namedQueries: ctx.namedQueries },
+    nodeId
+  );
+  return {
+    outcome,
+    itemContext: itemOf(outcome.rowsCollection, base.named.name),
+  };
+}
+
 export async function renderCollectionLoop({
   props,
   node,
@@ -162,6 +228,17 @@ export async function renderCollectionLoop({
         {renderSlot("empty")}
       </div>
     );
+  }
+  // A custom source runs the developer's named query, as the page builder
+  // registered it, with a reader limited to what it declares.
+  const named = await readNamedSource(props, ctx, node.id);
+  if (named === "template") {
+    // No host runs named queries here, as no data source answers a
+    // collection: the template, once, so an author still sees it.
+    return <div className={className}>{renderSlot("children")}</div>;
+  }
+  if (named !== undefined) {
+    return drawList(named, { className, renderSlot, spacingMode, ctx });
   }
   // A cleared text field persists as an empty string, which is a collection
   // nobody named rather than a collection called "". Querying for it fails, the
@@ -194,6 +271,25 @@ export async function renderCollectionLoop({
     },
     claim: () => ctx.queries?.take() !== false,
   });
+  return drawList(
+    {
+      outcome,
+      itemContext: item => ({ ...ctx, item, itemSource: collection }),
+    },
+    { className, renderSlot, spacingMode, ctx }
+  );
+}
+
+/** A list drawn from its read: each entry with the template, or the empty state. */
+function drawList(
+  read: ListRead,
+  args: Pick<
+    BlockRenderArgs<CollectionLoopProps>,
+    "className" | "renderSlot" | "spacingMode" | "ctx"
+  >
+): ReactElement {
+  const { outcome, itemContext } = read;
+  const { className, renderSlot, spacingMode, ctx } = args;
   const note = diagnosticNote(outcome, ctx);
   const marks = emptyMarks(
     ctx,
@@ -213,9 +309,9 @@ export async function renderCollectionLoop({
           >
             {/* Drawn again per entry, with this entry on the context, so
                 anything inside the template reads its own values rather than
-                the first entry's. The collection goes with it, so an item
-                binding is checked against that collection's fields. */}
-            {renderSlot("children", { ...ctx, item, itemSource: collection })}
+                the first entry's. Its source goes with it, so an item
+                binding is checked against that source's fields. */}
+            {renderSlot("children", itemContext(item))}
           </div>
         ));
   // The note, when an author is looking, goes above what visitors see.

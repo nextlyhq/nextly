@@ -59,6 +59,8 @@ import {
   DOCUMENT_FORMAT_VERSION,
   isPlainRecord,
   migrateDocument,
+  namedQueryRowFields,
+  registeredNamedQueries,
   resolveComponentInstances,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -141,8 +143,17 @@ export function pageBindingRun(
 ): BindingRun {
   const shapes = bindings.fieldShapes;
   const schema: BindingSchemaSource = {
-    fieldsOf: ref =>
-      "site" in ref ? SITE_FIELD_SHAPES : shapes?.fieldsOf(ref),
+    fieldsOf: ref => {
+      if ("site" in ref) return SITE_FIELD_SHAPES;
+      // A named query's rows with their own field schema: the fields it
+      // declares, as the process registry holds it.
+      if ("query" in ref) {
+        return namedQueryRowFields(registeredNamedQueries(), ref.query, slug =>
+          shapes?.fieldsOf({ collection: slug })
+        );
+      }
+      return shapes?.fieldsOf(ref);
+    },
   };
   return createBindingRun({
     sources: {

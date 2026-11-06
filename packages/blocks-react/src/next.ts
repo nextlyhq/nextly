@@ -58,6 +58,7 @@ import {
   nextlySingleTags,
   nextlySiteSettingsTags,
   readPublicSiteSettings,
+  runInsideNamedQuery,
   slugToStaticParam,
 } from "nextly/runtime";
 import type {
@@ -100,6 +101,7 @@ import type {
   BlocksFieldShapes,
   BlocksPublicReader,
   BlocksSiteSettings,
+  NamedQueryHost,
   PageBindings,
   PageContext,
   QueryBudget,
@@ -592,6 +594,118 @@ function publicReaderFor(
               async () => await findSingle(query)
             ),
         }),
+  };
+}
+
+/** A day in a time zone, `YYYY-MM-DD`. */
+function dayIn(zone: string, at: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find(candidate => candidate.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/** How long a cached "today" may live before it is asked again, in seconds. */
+const TODAY_LIFETIME = 60;
+
+/**
+ * Today in the site's time zone, for a named query: cached, because a
+ * prerender under Cache Components refuses the current time outside the
+ * cache, and tagged with the site settings, whose time zone it is read in.
+ */
+async function todayFor(zone: string | undefined): Promise<string> {
+  const safe = safeTimeZone(zone).zone;
+  return await cachedFind(() => Promise.resolve(dayIn(safe, new Date())), {
+    tags: nextlySiteSettingsTags(),
+    keyParts: ["nextly-named-query-today", safe],
+    revalidate: TODAY_LIFETIME,
+  });
+}
+
+/**
+ * How a published page runs its lists' named queries: over the route's
+ * public reader, as an anonymous visitor reads, each run inside nextly's
+ * named-query frame, which refuses a trusted Direct API call from developer
+ * code. A run's result is cached like the page around it, keyed by its
+ * query, inputs and window, and tagged by everything the query DECLARES, so
+ * a write to any collection, Single or setting it may read refreshes the
+ * page, whether or not this run happened to read it.
+ */
+function namedQueryHostFor(args: {
+  readonly config: BlocksPageConfig;
+  readonly locale: string | undefined;
+  readonly window: number | false | undefined;
+  readonly budget: QueryBudget;
+  readonly context: RenderContext;
+}): NamedQueryHost {
+  const { config, locale, window, budget, context } = args;
+  const reader = publicReaderFor(config, locale, window);
+  let today: Promise<string> | undefined;
+  return {
+    reader: {
+      ...reader,
+      siteSettings: async () => {
+        const settings = await cachedFind(
+          async () => await readPublicSiteSettings(),
+          {
+            tags: nextlySiteSettingsTags(),
+            keyParts: ["nextly-public-site-settings", config.cacheScope ?? ""],
+            revalidate: await releaseBoundedRevalidate(window),
+          }
+        );
+        return { ...settings };
+      },
+    },
+    today: () => {
+      today ??= (async () =>
+        await todayFor(
+          config.timeZone ??
+            (await readSite(config, budget, window))?.timezone ??
+            undefined
+        ))();
+      return today;
+    },
+    fieldsOf: async collection =>
+      await cachedFieldShapes(
+        { collection },
+        { scope: config.cacheScope ?? "", locale, window }
+      ),
+    runInFrame: (name, run) => runInsideNamedQuery(name, run),
+    cache: async ({ declaration, key, read }) => {
+      const route = await releaseBoundedRevalidate(window);
+      const own = declaration.revalidate;
+      return await cachedFind(read, {
+        tags: [
+          ...(declaration.reads.collections ?? []).flatMap(slug =>
+            nextlyTags(slug)
+          ),
+          ...(declaration.reads.singles ?? []).flatMap(slug =>
+            nextlySingleTags(slug)
+          ),
+          ...(declaration.reads.site === true ? nextlySiteSettingsTags() : []),
+        ],
+        keyParts: ["nextly-named-query", config.cacheScope ?? "", ...key],
+        revalidate:
+          own === undefined
+            ? route
+            : route === false
+              ? own
+              : Math.min(route, own),
+      });
+    },
+    // The log names the page, the list and the query, under the reference
+    // an author is shown in place of the error.
+    report: failure => {
+      console.warn(
+        `[blocks] The named query "${failure.query}" in list "${failure.nodeId}" on "${context.collection}" page "${context.slug}" failed (${failure.code}), so the list shows its empty state. Reference ${failure.ref}.`,
+        ...(failure.error === undefined ? [] : [failure.error])
+      );
+    },
   };
 }
 
@@ -2602,6 +2716,14 @@ function blocksRouteConfig(
         resolveEntryPath,
         // The published page draws the Lucide set, vendored with this package.
         resolveIcon: resolveLucideIcon,
+        // A list whose source is a named query runs it as a visitor reads.
+        namedQueries: namedQueryHostFor({
+          config,
+          locale: context.locale,
+          window: listWindow,
+          budget,
+          context,
+        }),
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(

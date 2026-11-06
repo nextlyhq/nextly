@@ -3,6 +3,8 @@ import type {
   BindingIssue,
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
   RemotePatternInput,
   SpacingMode,
 } from "@nextlyhq/blocks-engine";
@@ -117,6 +119,87 @@ export interface BlocksPublicReader {
     locale?: string;
     select?: readonly string[];
   }): Promise<Record<string, unknown> | null>;
+}
+
+/**
+ * The reader a named query's own reader wraps: the shape both a published
+ * page and an editor's canvas supply. A published page passes the route's
+ * public reader; a canvas passes one reading with the editing person's
+ * access. Either way the strict key set holds (no status, no trusted read,
+ * no raw `where`), hidden fields are stripped by this reader, and what a
+ * query may read of it, and how many times, is decided by the wrapper.
+ *
+ * @experimental
+ */
+export interface ListBaseReader extends BlocksPublicReader {
+  /** The site settings the reader's caller may read, when it can read them. */
+  siteSettings?(): Promise<Readonly<Record<string, unknown>>>;
+}
+
+/** What one run of a named query gave, as a page's cache keeps it. */
+export interface NamedQueryRunData {
+  /** Projected to what the query declares, the key checked. */
+  readonly rows: readonly Record<string, unknown>[];
+  readonly total?: number;
+  /** How many reads it made, claimed again from a page that reuses it. */
+  readonly reads: number;
+}
+
+/** Why a named query's list drew its empty state. */
+export type NamedQueryFailureCode =
+  | "unknown"
+  | "params"
+  | "undeclared-read"
+  | "trusted-read"
+  | "budget"
+  | "timeout"
+  | "bad-rows"
+  | "threw";
+
+/** A named query's failure, as the host logs it. */
+export interface NamedQueryFailure {
+  readonly code: NamedQueryFailureCode;
+  readonly query: string;
+  /** The list block that drew its empty state. */
+  readonly nodeId: string;
+  /** The reference the editor shows in place of the error, `NQ-` and 6 hex. */
+  readonly ref: string;
+  /** What failed, for the log only; never shown to an author. */
+  readonly error?: unknown;
+}
+
+/**
+ * What a page renders a collection list's named query with: where queries
+ * are looked up, the reader each run wraps, and the host's cache, frame and
+ * log. Absent, a list whose source is a named query draws its template once,
+ * as a list with no data source does.
+ *
+ * @experimental
+ */
+export interface NamedQueryHost {
+  /** The registered query of a name; the engine's registry when absent. */
+  readonly definitionOf?: (name: string) => NamedQueryDefinition | undefined;
+  readonly reader: ListBaseReader;
+  /** Today in the site's time zone, `YYYY-MM-DD`, one answer per render. */
+  readonly today: () => Promise<string>;
+  /**
+   * The public field shapes of a collection, which rows that are its
+   * entries are projected to. A collection it cannot answer for keeps only
+   * each row's id and timestamps.
+   */
+  readonly fieldsOf?: (
+    collection: string
+  ) => Promise<readonly BindingFieldShape[] | undefined>;
+  /** Run a query's `run` inside the host's frame, which refuses trusted reads. */
+  readonly runInFrame?: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+  /** Keep a run's result across renders, tagged by everything it declares. */
+  readonly cache?: (request: {
+    readonly declaration: NamedQueryDeclaration;
+    readonly key: readonly string[];
+    readonly read: () => Promise<NamedQueryRunData>;
+  }) => Promise<NamedQueryRunData>;
+  /** Told about each failed run, for the server log. */
+  readonly report?: (failure: NamedQueryFailure) => void;
 }
 
 /**
@@ -421,6 +504,22 @@ export interface PageContext {
    * collection; their bindings are then judged by the values' own shapes.
    */
   itemSource?: string;
+  /**
+   * The named query {@link item} is a row of, set by a list whose source is
+   * one, so a binding to an item of a query with its own field schema is
+   * checked against the fields it declares, and a related list inside it is
+   * told it has no entry to read a relation of.
+   *
+   * @experimental
+   */
+  itemQuery?: string;
+  /**
+   * How a list whose source is a named query runs it. Absent, such a list
+   * draws its template once.
+   *
+   * @experimental
+   */
+  namedQueries?: NamedQueryHost;
   /**
    * What is left of this render's query allowance.
    *
