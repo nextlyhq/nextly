@@ -28,7 +28,10 @@ import { Button } from "@nextlyhq/ui";
 import { Trash2 } from "lucide-react";
 import { useState, useSyncExternalStore, type JSX } from "react";
 
-import { COMPONENTS_SLUG } from "../collections/components";
+// The list key from the isomorphic transfer contract, not the collection's
+// own module: that one declares the collection's fields, server code a
+// client bundle must not carry.
+import { TRANSFER_KIND_PATHS } from "../transfer/transfer-contract";
 
 import { DeleteComponentDialog } from "./DeleteComponentDialog";
 import { TransferImport } from "./transfer-import";
@@ -108,7 +111,7 @@ let registered = false;
 export function registerDeleteComponentAction(): void {
   if (registered) return;
   registered = true;
-  registerRowAction<Record<string, unknown>>(COMPONENTS_SLUG, {
+  registerRowAction<Record<string, unknown>>(TRANSFER_KIND_PATHS.component, {
     id: DELETE_ROW_ACTION_ID,
     label: "Delete component…",
     icon: <Trash2 className="h-4 w-4" aria-hidden="true" />,
