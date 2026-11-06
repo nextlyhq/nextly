@@ -222,8 +222,9 @@ function outranked(
 
 /**
  * A finished undo as shown: `left` while its run holds pages, read from the
- * newest read that reports it, else from its status when it ended; `undone`
- * once a read newer than that reports it holding none.
+ * newest read that reports it, else from what it was last seen holding;
+ * `undone` only once that is cleared with the run's final report
+ * (`useFinalReport`), so values a later retry skipped are never missed.
  */
 function finishedShown(
   own: Undone,
@@ -232,13 +233,7 @@ function finishedShown(
   const runId = own.runId;
   if (runId === undefined) return own;
   const now = removals?.find(removal => removal.runId === runId);
-  const fresh = removals !== undefined && removals !== own.endedUnder;
-  const held =
-    now !== undefined && !now.open && now.left > 0
-      ? now
-      : fresh
-        ? null
-        : own.held;
+  const held = now !== undefined && !now.open && now.left > 0 ? now : own.held;
   return held === null
     ? own
     : {
@@ -289,6 +284,59 @@ async function heldAtEnd(
   } catch {
     return null;
   }
+}
+
+/**
+ * Keep a finished undo's report whole while it holds pages: a read reporting
+ * it holding pages records that, and a newer read no longer reporting it
+ * (its pages written since, by a later retry) has the run's final report
+ * fetched, which names what that retry could not put back, before the undo
+ * is shown as done. A failed fetch is tried again on the next read.
+ */
+function useFinalReport(
+  own: UndoStep,
+  removals: readonly SiteBreakpointRemovalStatus[] | undefined,
+  setOwn: (update: (current: UndoStep) => UndoStep) => void,
+  latest: { readonly current: unknown }
+): void {
+  useEffect(() => {
+    if (own.kind !== "undone" || own.runId === undefined) return;
+    if (removals === undefined) return;
+    const runId = own.runId;
+    const now = removals.find(removal => removal.runId === runId);
+    const sameRun = (current: UndoStep): current is Undone =>
+      current.kind === "undone" && current.runId === runId;
+    if (now !== undefined && !now.open && now.left > 0) {
+      if (own.held === null) {
+        setOwn(current =>
+          sameRun(current) ? { ...current, held: now } : current
+        );
+      }
+      return;
+    }
+    if (own.held === null || now !== undefined) return;
+    if (removals === own.endedUnder) return;
+    let stopped = false;
+    carryOnBreakpointRemoval(runId).then(
+      answered => {
+        if (stopped || !answered.finished) return;
+        setOwn(current =>
+          sameRun(current)
+            ? {
+                ...current,
+                held: null,
+                skipped: answered.undo?.skipped ?? [],
+                endedUnder: latest.current,
+              }
+            : current
+        );
+      },
+      () => undefined
+    );
+    return () => {
+      stopped = true;
+    };
+  }, [own, removals, setOwn, latest]);
 }
 
 /**
@@ -375,6 +423,7 @@ export function useBreakpointUndo({
     [reread, refreshStyle, finish]
   );
   useFollowUndo(step, settle);
+  useFinalReport(own, removals, setOwn, latest);
 
   const confirm = (): void => {
     if (own.kind !== "confirm" || own.sending) return;

@@ -129,16 +129,21 @@ function DeviceRow({
 
 /**
  * Open the editor when the host asks (`editRequest` counted up), once per
- * request, and only when it may be opened.
+ * request, and only when it may be opened. A request made while the set is
+ * still loading (a read refetching) waits for it, so the one click is never
+ * lost; one made while editing is held, or the set can't be read, is
+ * answered by the disabled button's reason and not kept for later.
  */
 function useEditRequest(
   editRequest: number | undefined,
+  status: BreakpointManagerProps["status"],
   ready: boolean,
   open: () => void
 ): void {
   const asked = React.useRef(editRequest ?? 0);
   React.useEffect(() => {
     if (editRequest === undefined || editRequest === asked.current) return;
+    if (status === "loading") return;
     asked.current = editRequest;
     if (ready) open();
   });
@@ -234,7 +239,7 @@ export function BreakpointManager({
     setEditingState(next);
     onEditingChange?.(next);
   };
-  useEditRequest(editRequest, ready, () => setEditing(true));
+  useEditRequest(editRequest, status, ready, () => setEditing(true));
   // Whether this section's last save succeeded, to say so beside it.
   const [saved, setSaved] = React.useState(false);
   const held = useHeldWrite(value);

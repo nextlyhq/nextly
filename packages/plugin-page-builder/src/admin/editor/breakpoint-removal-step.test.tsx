@@ -1018,6 +1018,71 @@ describe("undoing a breakpoint removal in Settings", () => {
     expect(statusAsked).toHaveLength(1);
   });
 
+  it("reads the final report once the pages it left are written", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = async () => ({
+      message: "Undone.",
+      item: {
+        breakpoints: SET,
+        removal: {
+          runId: "undo-1",
+          finished: true,
+          left: 1,
+          undo: { undoes: "run-1", skipped: [] },
+        },
+      },
+    });
+    statusRead = reads([
+      {
+        runId: "undo-1",
+        undoes: "run-1",
+        labels: ["Mobile"],
+        open: false,
+        left: 1,
+        waitingOnDrafts: true,
+      },
+    ]);
+    show();
+    await undoMobile();
+    expect(
+      await screen.findByText("Mobile is back, except on 1 live version")
+    ).toBeTruthy();
+    // The draft is published; a later retry wrote the page, skipping a
+    // value set meanwhile. The read no longer reports the run.
+    carryOnAnswers = [
+      async () => ({
+        message: "Done.",
+        item: {
+          runId: "undo-1",
+          finished: true,
+          left: 0,
+          undo: {
+            undoes: "run-1",
+            skipped: [
+              {
+                kind: "collection",
+                slug: "pages",
+                id: "p-pricing",
+                name: "Pricing",
+                values: 1,
+                reason: "changed",
+              },
+            ],
+          },
+        },
+      }),
+    ];
+    siteRead = { ...siteRead, removals: [] };
+    reshow();
+    expect(
+      await screen.findByText(
+        "Mobile is back, except 1 value that changed after the removal"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("Mobile is back, with its styles")).toBeNull();
+    expect(carryOnAnswers).toHaveLength(0);
+  });
+
   it("says an undo that left pages on reopening Settings", async () => {
     siteRead = {
       ...siteRead,
