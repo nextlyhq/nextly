@@ -31,6 +31,7 @@ import {
   judgeNamedParams,
   NAMED_QUERY_TEXT,
   namedQueryDeclaration,
+  namedQueryRowFields,
   namedQueryTimeout,
   type BindingFieldShape,
   type ListNamedQuery,
@@ -366,10 +367,32 @@ async function execute(
  * the run and the binding checks of its rows share, so a list's items are
  * judged against the query that made them.
  */
-export function namedQueryLookup(
+function namedQueryLookup(
   host: Pick<NamedQueryHost, "definitionOf"> | undefined
 ): (name: string) => NamedQueryDefinition | undefined {
   return host?.definitionOf ?? (() => undefined);
+}
+
+/**
+ * The fields a row of the named query `query` carries, as a host's queries
+ * declare them: its own schema, or the public fields of the collection its
+ * rows are entries of (`collectionFields`). `undefined` when either is not
+ * known. The one reading a row's bindings and its blocks' visibility
+ * conditions share, so both judge a row by the same fields.
+ */
+export function queryRowFields(
+  host: Pick<NamedQueryHost, "definitionOf"> | undefined,
+  query: string,
+  collectionFields: (
+    collection: string
+  ) => readonly BindingFieldShape[] | undefined
+): readonly BindingFieldShape[] | undefined {
+  const lookup = namedQueryLookup(host);
+  return namedQueryRowFields(
+    { declarationOf: name => lookup(name) },
+    query,
+    collectionFields
+  );
 }
 
 /** What an error is, for a log: its code or its class, never its words. */

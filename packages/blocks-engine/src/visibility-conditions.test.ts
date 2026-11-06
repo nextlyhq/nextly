@@ -14,8 +14,14 @@ import type { BindingFieldShape } from "./binding-rules";
 import type { BlockNode } from "./document";
 import type { ListFields } from "./list-query";
 import {
+  defineNamedQuery,
+  namedQueryDeclaration,
+  type NamedQuerySource,
+} from "./named-query";
+import {
   canonicalConditions,
   conditionDemand,
+  conditionIssues,
   conditionScopeIn,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
@@ -707,6 +713,79 @@ describe("what a page's conditions read of its entry", () => {
     });
     expect(conditionScopeIn(list, "empty", page)).toBe(page);
     expect(conditionScopeIn({ type: "core/box" }, "children", page)).toBe(page);
+  });
+
+  it("says a custom source's children read its query's row", () => {
+    const list = {
+      type: "core/collection-loop",
+      props: { namedQuery: { name: "events.mine", params: {} } },
+    };
+    const page = { source: "entry" as const, collection: "pages" };
+    expect(conditionScopeIn(list, "children", page)).toEqual({
+      source: "item",
+      collection: undefined,
+      query: "events.mine",
+    });
+  });
+});
+
+describe("a condition on a custom source's row, at save", () => {
+  /** A query whose rows are a schema of its own: an id and a title. */
+  const mine = defineNamedQuery({
+    name: "events.mine",
+    label: "My events",
+    reads: { collections: ["events"] },
+    rows: {
+      key: "id",
+      fields: [
+        { name: "id", type: "text" },
+        { name: "title", type: "text" },
+      ],
+    },
+    run: () => Promise.resolve({ rows: [] }),
+  });
+  const queries: NamedQuerySource = {
+    declarationOf: name =>
+      name === mine.name ? namedQueryDeclaration(mine) : undefined,
+  };
+  const forest = (field: string) => [
+    {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: { namedQuery: { name: mine.name, params: {} } },
+      slots: {
+        children: [
+          {
+            id: "box",
+            type: "core/box",
+            version: 1,
+            props: {},
+            visibility: {
+              conditions: [[{ field, op: "equals", value: "Launch" }]],
+            },
+          },
+        ],
+      },
+    },
+  ];
+  const codesOf = (field: string, namedQueries?: NamedQuerySource) =>
+    conditionIssues(
+      forest(field),
+      namedQueries === undefined ? {} : { namedQueries }
+    ).map(issue => issue.code);
+
+  it("refuses a field the query's rows do not declare", () => {
+    expect(codesOf("venue", queries)).toEqual(["condition-field-unknown"]);
+  });
+
+  it("takes a field the query's rows declare", () => {
+    expect(codesOf("title", queries)).toEqual([]);
+  });
+
+  it("judges it by its operator alone without the site's queries", () => {
+    // The control: the refusal above comes from the query's declaration.
+    expect(codesOf("venue")).toEqual([]);
   });
 });
 

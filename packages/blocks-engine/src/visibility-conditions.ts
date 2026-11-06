@@ -35,6 +35,7 @@ import {
   type ListFields,
   type ListFieldSource,
 } from "./list-query";
+import type { NamedQuerySource } from "./named-query";
 import { isPlainRecord } from "./plain-record";
 import { conditionGatesOf, isConditionGated } from "./visibility";
 
@@ -1006,6 +1007,13 @@ export interface ConditionJudgement {
   /** How many nodes to visit at most, as the rest of validation is bounded. */
   readonly maxNodes?: number;
   readonly registry?: ConditionRegistry;
+  /**
+   * The site's named queries, for a block whose conditions read a row of a
+   * list whose source is one: judged against the fields its rows declare,
+   * or the public fields of the collection they are entries of. Absent,
+   * such a condition is judged by its operator alone.
+   */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /** One finding, before its severity is decided. */
@@ -1042,6 +1050,12 @@ export interface ConditionScope {
   readonly source: ConditionSource;
   /** `null` when the page has no such record; `undefined` when not known. */
   readonly collection: string | null | undefined;
+  /**
+   * The named query whose rows the item is, for a block in the per-entry
+   * slot of a list whose source is one: its rows' fields are what the
+   * block's conditions read.
+   */
+  readonly query?: string;
 }
 
 /**
@@ -1092,10 +1106,7 @@ function nodeProblems(
     sourceProblem(scope.source, registry) ??
     (scope.collection === null ? missingSource(scope.source) : undefined);
   if (whole !== undefined) return [{ problem: whole, identity: "" }];
-  const fields =
-    typeof scope.collection === "string"
-      ? judgement.fields?.fieldsOf(scope.collection)
-      : undefined;
+  const fields = scopeFields(scope, judgement);
   return groups.flat().flatMap(stored => {
     const judged = judgeCondition(stored, fields, registry);
     if (judged === undefined || !isProblem(judged)) return [];
@@ -1105,6 +1116,34 @@ function nodeProblems(
     const identity = `${stored.field}\u0000${op}\u0000${valueIdentity(stored.value)}`;
     return [{ problem: judged, identity }];
   });
+}
+
+/**
+ * The fields a scope's conditions read, where the judgement can say: its
+ * collection's, or, for a named query's row, the fields the query's rows
+ * declare, or those of the collection they are entries of. The same rows
+ * the list's item bindings are checked against, so a condition and a
+ * binding on one row agree on what it holds.
+ */
+function scopeFields(
+  scope: ConditionScope,
+  judgement: ConditionJudgement
+): ListFields | undefined {
+  if (typeof scope.collection === "string") {
+    return judgement.fields?.fieldsOf(scope.collection);
+  }
+  if (scope.query === undefined) return undefined;
+  const declaration = judgement.namedQueries?.declarationOf(scope.query);
+  if (declaration === undefined) return undefined;
+  const rows = declaration.rows;
+  if ("collection" in rows) return judgement.fields?.fieldsOf(rows.collection);
+  // A schema of its own: every field it declares is one a row carries, and
+  // one a visitor reads, since the reader projected the row to it.
+  return {
+    label: declaration.label,
+    declared: new Set(rows.fields.map(field => field.name)),
+    readable: rows.fields,
+  };
 }
 
 /** The findings about one gated node's conditions, judged at save. */
@@ -1156,9 +1195,13 @@ export function conditionScopeIn(
   if (node.type !== COLLECTION_LIST_TYPE || slot !== LIST_ENTRY_SLOT) {
     return scope;
   }
+  const { query } = readListQuery(node.props);
   return {
     source: "item",
-    collection: readListQuery(node.props).query.collection,
+    collection: query.collection,
+    // A custom source's rows are its query's, whatever collection they are
+    // entries of, so the item is read by that query.
+    ...(query.namedQuery === undefined ? {} : { query: query.namedQuery.name }),
   };
 }
 
