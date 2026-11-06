@@ -457,3 +457,55 @@ function billingTab() {
     component: TAB,
   } as const;
 }
+
+describe("a contribution whose component cannot be found", () => {
+  // Not in the generated component map, or never registered: the place says
+  // so where it would stand, and the registry names the path in a warning.
+  const MISSING = "@acme/a/admin#NotRegistered";
+
+  it("a block draws the place's fallback, and the path is named in a warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    meta.contributions = {
+      "user.detail": {
+        block: [{ builtIn: "content" }, block("acme-a.missing", MISSING)],
+      },
+    };
+
+    render(
+      <TargetSlot
+        place="user.detail"
+        context={CONTEXT}
+        builtIns={{ content: <div data-testid="page-content">content</div> }}
+      />
+    );
+
+    expect(screen.getByTestId("page-content")).toBeTruthy();
+    expect(
+      screen.getByText("This part of the page couldn't be loaded.")
+    ).toBeTruthy();
+    expect(
+      warn.mock.calls.some(([message]) => String(message).includes(MISSING))
+    ).toBe(true);
+  });
+
+  it("a tab's panel draws the place's fallback rather than standing empty", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    meta.contributions = {
+      "user.detail": {
+        tab: [{ ...billingTab(), component: MISSING }],
+      },
+    };
+    const user = userEvent.setup();
+
+    render(
+      <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">
+        <div data-testid="page-content">content</div>
+      </PlaceTabs>
+    );
+    await user.click(screen.getByRole("tab", { name: "Billing" }));
+
+    expect(
+      await screen.findByText("This part of the page couldn't be loaded.")
+    ).toBeTruthy();
+  });
+});
