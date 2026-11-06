@@ -1712,6 +1712,19 @@ function writtenByUpdate(
 }
 
 /**
+ * What an update replaced, as an in-transaction handler is shown it: on a save
+ * that accumulated onto a working draft, that prior draft, marked, as the
+ * activity record and `afterUpdate` compare against; else the document before
+ * the write. One answer for both update paths.
+ */
+function replacedByUpdate<T>(
+  previous: T,
+  priorDraft: Record<string, unknown> | undefined
+): T | Record<string, unknown> {
+  return priorDraft ? markedDraft(priorDraft) : previous;
+}
+
+/**
  * The update's patch without the stamp the write adds to it: `updatedAt` is
  * set by the write, never sent, so a validator is not shown it as sent.
  */
@@ -15518,7 +15531,10 @@ export class CollectionMutationService extends BaseService {
           operation: "update",
           id: params.entryId,
           data: writtenDocument,
-          originalData: previousDocument,
+          originalData: replacedByUpdate(
+            previousDocument,
+            priorWorkingDraftDocument
+          ),
           user: params.user,
           context: sharedContext,
         });
@@ -19871,7 +19887,10 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         id: entryId,
         data: writtenByUpdate(updatedDocument, workingDraftDocument),
-        originalData: previousDocument,
+        originalData: replacedByUpdate(
+          previousDocument,
+          priorWorkingDraftDocument
+        ),
         user: params.user,
         context: sharedContext,
       });

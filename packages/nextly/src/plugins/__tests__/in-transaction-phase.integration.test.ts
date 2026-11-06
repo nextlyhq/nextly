@@ -12,6 +12,9 @@
  *   status, and neither the entry nor the row is kept;
  * - the handler's `db` reads inside the write's transaction, so it sees the
  *   entry row the write has not committed yet;
+ * - on a repeat status-less save of a published entry with drafts, the
+ *   handler is handed the prior working draft as `originalData`, not the
+ *   unchanged live document;
  * - a version-conflict retry runs the handler again, and only the attempt that
  *   commits keeps its row; the retry is handed the shared context as it was,
  *   whatever a handler of the discarded attempt tried to do to it;
@@ -68,6 +71,14 @@ const orders = defineCollection({
   fields: [text({ name: "title" })],
 });
 
+/** A collection with drafts, whose status-less edits of a live entry are held. */
+const articles = defineCollection({
+  slug: "articles",
+  status: true,
+  versions: { drafts: true },
+  fields: [text({ name: "title" })],
+});
+
 /** A second collection, which no handler is registered for. */
 const notes = defineCollection({
   slug: "notes",
@@ -79,7 +90,7 @@ async function boot(dialect: TestDialect): Promise<PluginContext> {
   let captured: PluginContext | undefined;
   current = await createTestNextly({
     dialect,
-    collections: [orders, notes],
+    collections: [orders, notes, articles],
     plugins: [
       definePlugin({
         name: PLUGIN,
@@ -266,6 +277,58 @@ describeEachDialect("the in-transaction phase", dialect => {
     expect(await ledgerRows(ctx)).toEqual([{ entryId: id, op: "update" }]);
     const stored = await nextly().findByID({ collection: "orders", id });
     expect(stored?.title).toBe("after");
+  });
+
+  it("hands a repeat draft save the prior draft as originalData, on both update paths", async () => {
+    const ctx = await boot(dialect);
+    const created = await nextly().create({
+      collection: "articles",
+      data: { title: "live", status: "published" },
+    });
+    const id = String(created.item.id);
+    const seen: { before: unknown; beforeIsDraft: unknown; after: unknown }[] =
+      [];
+    ctx.hooks.onInTransaction(
+      "articles",
+      ({ operation, data, originalData }) => {
+        if (operation !== "update") return;
+        seen.push({
+          before: originalData?.title,
+          beforeIsDraft: originalData?._isWorkingDraft,
+          after: data?.title,
+        });
+      }
+    );
+
+    // Two status-less saves: each is held as the working draft, the second
+    // building on the first.
+    await nextly().update({
+      collection: "articles",
+      id,
+      data: { title: "draft one", _overwrite: true },
+    });
+    await nextly().update({
+      collection: "articles",
+      id,
+      data: { title: "draft two", _overwrite: true },
+    });
+    // And once more on a caller's transaction.
+    const collections = ctx.services.collections;
+    await collections.withTransaction(async tx => {
+      await collections.updateEntryInTransaction(
+        tx,
+        "articles",
+        id,
+        { title: "draft three", _overwrite: true },
+        {}
+      );
+    });
+
+    expect(seen).toEqual([
+      { before: "live", beforeIsDraft: undefined, after: "draft one" },
+      { before: "draft one", beforeIsDraft: true, after: "draft two" },
+      { before: "draft two", beforeIsDraft: true, after: "draft three" },
+    ]);
   });
 
   it("hands a retried attempt the context as it was, whatever a handler did to it", async () => {
