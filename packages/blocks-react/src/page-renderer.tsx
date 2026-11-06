@@ -932,7 +932,7 @@ export function PageRenderer({
   const { css, classes, scope } = resolvedStyles;
   // The rules of each block a list's item decides, served beside the first
   // instance a list draws, so a block no item shows publishes nothing.
-  const itemRules = itemDecidedRules(resolvedStyles, styleInput);
+  const itemRules = itemDecidedRules(resolvedStyles, styleInput, drawsNothing);
   const drawnBindings: BoundaryBindings | undefined =
     boundaryBindings === undefined || itemRules.size === 0
       ? boundaryBindings

@@ -403,7 +403,14 @@ function limitsOf(args: PrepareDocumentArgs): DocumentLimits {
 /** Passes 1 to 6: the envelope guard, repair, composition, migration, gating and address repair. */
 function stagesBeforeBindings(
   document: BlockDocument,
-  args: PrepareDocumentArgs
+  args: PrepareDocumentArgs,
+  /**
+   * The gating pass, once a route knows the entry; absent, every conditioned
+   * block is held back. Given one, a conditioned component instance is
+   * expanded too, carrying its conditions onto what replaces it, so it shows
+   * where its conditions hold.
+   */
+  decide?: (migrated: BlockDocument) => BlockDocument
 ): StagesBeforeBindings | null {
   if (
     typeof document !== "object" ||
@@ -421,7 +428,7 @@ function stagesBeforeBindings(
     args.definitions === undefined || args.definitions.size === 0
       ? EMPTY_DEFINITIONS
       : repairingLookup(args.definitions, limits),
-    { limits }
+    decide === undefined ? { limits } : { limits, conditioned: "carry" }
   );
   const { doc, rewritten } = migrateDocument(
     composed.document,
@@ -435,7 +442,7 @@ function stagesBeforeBindings(
   // would describe different pages.
   // Held rather than inlined: the caller compares stages by REFERENCE, and
   // running the pass twice would hand it a different object for the same state.
-  const gated = pruneHiddenNodes(doc);
+  const gated = decide === undefined ? pruneHiddenNodes(doc) : decide(doc);
   const visible = dedupeNodeIds(gated, node =>
     rendersOwnMarkup(node, args.resolver)
   );
@@ -596,15 +603,24 @@ export function regateDocument(
 ): RegatedDocument | null {
   const record = PREPARED.get(prepared);
   if (record === undefined) return null;
-  const decided = gateByConditions(record.stages.migrated, gate);
-  const visible = dedupeNodeIds(decided.document, node =>
-    rendersOwnMarkup(node, record.resolver)
-  );
-  const stages: StagesBeforeBindings = {
-    ...record.stages,
-    gated: decided.document,
-    deduped: visible,
+  const args: PrepareDocumentArgs = {
+    resolver: record.resolver,
+    limits: record.limits,
+    ...(record.definitions === undefined
+      ? {}
+      : { definitions: record.definitions }),
   };
+  // From the stored document again, so a conditioned component instance is
+  // composed now that something can decide it, through every pass in the
+  // same order; the decision itself is the gating pass's.
+  let issues: readonly ConditionIssue[] = [];
+  const stages = stagesBeforeBindings(record.document, args, migrated => {
+    const decided = gateByConditions(migrated, gate);
+    issues = decided.issues;
+    return decided.document;
+  });
+  if (stages === null) return null;
+  const visible = stages.deduped;
   const regated: PreparedDocument = Object.freeze({
     presented: pruneKnownPlaceholders(visible, record.resolver),
   });
@@ -613,7 +629,7 @@ export function regateDocument(
   // that kept it, which may be one a list's item decides.
   const held = gate === "keep-all" ? NOTHING_HELD : entryConditionedIn(visible);
   PREPARED.set(regated, { ...record, stages, held });
-  return { prepared: regated, issues: decided.issues };
+  return { prepared: regated, issues };
 }
 
 /**

@@ -62,8 +62,40 @@ describe("the sheet of a page decided by its entry", () => {
     // CONTROL: an unconditioned block's rules are in the sheet.
     expect(styles.css).toContain("#c09abc");
     expect(styles.css).not.toContain("#c05678");
-    expect(itemDecidedRules(styles, document).get("perItem")).toContain(
-      "#c05678"
-    );
+    expect(
+      itemDecidedRules(styles, document, () => false).get("perItem")
+    ).toContain("#c05678");
+  });
+
+  it("gives a nested conditioned block its own rules, apart from the block around it", () => {
+    const list = {
+      id: "l",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: {
+        children: [
+          {
+            ...coloured("outer", "#c01111", vip),
+            type: "core/box",
+            slots: {
+              children: [
+                coloured("nested", "#c02222", vip),
+                coloured("inside", "#c03333"),
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const document = doc(list);
+    const styles = resolvePageStyles(document, undefined, context, resolver);
+    const rules = itemDecidedRules(styles, document, () => false);
+    // The block around it carries its own rules and those of what it always
+    // draws, not those of a block whose own conditions decide it.
+    expect(rules.get("outer")).toContain("#c01111");
+    expect(rules.get("outer")).toContain("#c03333");
+    expect(rules.get("outer")).not.toContain("#c02222");
+    expect(rules.get("nested")).toContain("#c02222");
   });
 });

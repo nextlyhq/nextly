@@ -120,3 +120,32 @@ describe("a held block among repeated addresses", () => {
     expect(heldConditionsOf(regated!.prepared).has("x")).toBe(false);
   });
 });
+
+describe("a conditioned component placement", () => {
+  it("is composed once its conditions hold, rather than drawn as a placeholder", () => {
+    const placement = {
+      id: "p",
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId: "card" },
+      visibility: { conditions: vip },
+    } as BlockNode;
+    const card = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [heading("title", "From the card")],
+    } as BlockDocument;
+    const definitions = new Map([["card", card]]);
+    const stored = page(placement);
+    const prepared = prepareDocument(stored, { resolver, definitions });
+    // Held back until the entry is known.
+    expect(prepared?.presented.nodes).toEqual([]);
+    const regated = regateDocument(prepared!, { entry: entry("vip") });
+    const drawn = regated!.prepared.presented.nodes;
+    expect(drawn.map(node => node.type)).toEqual(["core/heading"]);
+    // The composed block carries the placement's conditions, held for the entry.
+    expect([...heldConditionsOf(regated!.prepared)]).toEqual([drawn[0]!.id]);
+    const failing = regateDocument(prepared!, { entry: entry("free") });
+    expect(failing!.prepared.presented.nodes).toEqual([]);
+  });
+});

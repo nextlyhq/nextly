@@ -877,27 +877,33 @@ function itemDecidedIds(document: BlockDocument): Set<string> {
  */
 export function itemDecidedRules(
   styles: PageStyles,
-  document: BlockDocument
+  document: BlockDocument,
+  drawsNothing: (node: BlockNode) => boolean
 ): ReadonlyMap<string, string> {
   const entries = readableGatedRules(styles);
   const found = new Map<string, string>();
   if (entries === undefined) return found;
-  const page: ConditionScope = { source: "entry", collection: undefined };
-  const gather = (node: BlockNode, into: string[]): void => {
+  // A block's own rules and those of every block inside it that it draws
+  // whenever it is drawn: not a nested conditioned block, whose rules go out
+  // when its own conditions hold, nor a block that draws nothing.
+  const gather = (node: BlockNode, into: string[], root: boolean): void => {
+    if (drawsNothing(node)) return;
+    if (!root && isConditionGated(node)) return;
     const rules = entries[node.id];
     if (isUsableGatedEntry(rules)) into.push(rules);
     for (const children of Object.values(node.slots ?? {})) {
-      for (const child of children) gather(child, into);
+      for (const child of children) gather(child, into, false);
     }
   };
+  const page: ConditionScope = { source: "entry", collection: undefined };
   const visit = (nodes: readonly BlockNode[], scope: ConditionScope): void => {
     for (const node of nodes) {
       if (scope.source === "item" && isConditionGated(node)) {
         const rules: string[] = [];
-        gather(node, rules);
+        gather(node, rules, true);
         if (rules.length > 0) found.set(node.id, rules.join("\n"));
-        continue;
       }
+      // On inside, so a conditioned block nested in this one has its own.
       for (const [slot, children] of Object.entries(node.slots ?? {})) {
         visit(children, conditionScopeIn(node, slot, scope));
       }

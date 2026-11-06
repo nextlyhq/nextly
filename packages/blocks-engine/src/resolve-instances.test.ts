@@ -4338,3 +4338,52 @@ describe("resolveComponentInstances and the loops it closes", () => {
     expect(result.loopsClosed).toEqual([]);
   });
 });
+
+describe("an instance carrying visibility conditions", () => {
+  const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+  const featured = [[{ field: "featured", op: "is_true" }]];
+  const card = component([
+    node("plain"),
+    node("own", { visibility: { conditions: featured } }),
+  ]);
+  const conditioned = (extra: Partial<BlockNode> = {}) =>
+    page([
+      instance("i1", "card", {}, { visibility: { conditions: vip }, ...extra }),
+    ]);
+
+  it("stands by default, for the pass that prunes hidden nodes", () => {
+    const result = resolveComponentInstances(conditioned(), defs({ card }));
+    expect(result.document.nodes.map(each => each.type)).toEqual([
+      COMPONENT_INSTANCE_TYPE,
+    ]);
+  });
+
+  it("is expanded when asked to carry, each root carrying the instance's conditions joined to its own", () => {
+    const result = resolveComponentInstances(conditioned(), defs({ card }), {
+      conditioned: "carry",
+    });
+    const roots = result.document.nodes;
+    expect(roots.map(each => each.type)).toEqual(["core/text", "core/text"]);
+    expect(roots[0]?.visibility?.conditions).toEqual(vip);
+    // Shown only where both hold: the instance's group joined with its own.
+    expect(roots[1]?.visibility?.conditions).toEqual([
+      [...vip[0]!, ...featured[0]!],
+    ]);
+    // Every root stays gated, so a reader deciding nothing still holds it back.
+    for (const root of roots) expect(isConditionGated(root)).toBe(true);
+  });
+
+  it("keeps the devices the instance hides on beside the conditions it carries", () => {
+    const result = resolveComponentInstances(
+      conditioned({
+        visibility: { conditions: vip, devices: { mobile: false } },
+      } as Partial<BlockNode>),
+      defs({ card }),
+      { conditioned: "carry" }
+    );
+    expect(result.document.nodes[0]?.visibility).toEqual({
+      devices: { mobile: false },
+      conditions: vip,
+    });
+  });
+});

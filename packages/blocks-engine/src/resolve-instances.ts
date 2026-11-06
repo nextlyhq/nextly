@@ -53,6 +53,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type Condition,
   type NodeVisibility,
   type ExposedProperty,
   type ExposedPropertyType,
@@ -274,6 +275,18 @@ export interface ResolveComponentOptions {
    * leaves it off, and its output carries no map.
    */
   exposures?: boolean;
+  /**
+   * What happens to an instance carrying visibility conditions. `"stand"`,
+   * the default, leaves it standing, gate and all, for the pass that prunes
+   * hidden nodes to remove: a reader that decides no condition composes
+   * nothing it will not serve. `"carry"` expands it, and every root that
+   * replaces it carries the instance's conditions joined to its own, for a
+   * reader that decides each condition against the entry or the list item:
+   * the composed tree then shows exactly where the instance would have.
+   *
+   * @experimental Settles with the editor's condition controls.
+   */
+  conditioned?: "stand" | "carry";
 }
 
 /** One instance that was left standing, and why. */
@@ -961,6 +974,7 @@ export function resolveComponentInstances(
     maxNodes: limits.maxNodes,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
     exposures: options.exposures === true,
+    carryConditions: options.conditioned === "carry",
     // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
     // document, and the composed tree IS the document every later pass walks —
     // the style compiler, the renderer, the SEO derivation. Starting a fresh
@@ -1010,6 +1024,8 @@ interface ResolveRun {
   maxComposedDepth: number;
   /** Whether composed nodes record the exposures that feed them. */
   exposures: boolean;
+  /** Whether an instance carrying conditions is expanded, carrying them. */
+  carryConditions: boolean;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
   /**
@@ -1671,7 +1687,7 @@ function expandInstance(
   // the later pass sees a tree with nothing left to prune. That is the
   // direction `visibility.ts` names as the unrecoverable one — content shown
   // to a reader it was withheld from cannot be taken back.
-  if (isConditionGated(instance)) return [instance];
+  if (isConditionGated(instance) && !run.carryConditions) return [instance];
 
   const componentId = componentIdOf(instance);
   if (componentId === undefined) {
@@ -1810,7 +1826,49 @@ function inlinedDefinition(
     ctx
   );
   if (inlined === null) return null;
-  return withInstanceDevices(inlined, instance);
+  return withInstanceConditions(
+    withInstanceDevices(inlined, instance),
+    instance
+  );
+}
+
+/**
+ * Carry an instance's visibility conditions onto the roots that replace it,
+ * for a resolution that expands conditioned instances (`conditioned:
+ * "carry"`). A root shows where the instance would have and where it would
+ * itself: each of the instance's groups joined with each of the root's, an
+ * OR of ANDs as both are stored. A root whose own conditions restrict nobody
+ * takes the instance's as they are; one whose conditions nothing can read is
+ * left as it is, still gated, so it fails closed rather than being served.
+ */
+function withInstanceConditions(
+  roots: ResolvedBlockNode[],
+  instance: ResolvedBlockNode
+): ResolvedBlockNode[] {
+  if (!isConditionGated(instance)) return roots;
+  const envelope = instance.visibility;
+  const outer = isPlainRecord(envelope) ? envelope.conditions : undefined;
+  // An instance gated by a shape nothing can read passes that shape on, so
+  // each root is gated by it too.
+  if (!Array.isArray(outer)) {
+    return roots.map(root => ({
+      ...root,
+      visibility: { ...(root.visibility ?? {}), conditions: outer as never },
+    }));
+  }
+  return roots.map(root => {
+    const own = root.visibility;
+    if (own !== undefined && own !== null && !isPlainRecord(own)) return root;
+    const inner = isConditionGated(root) ? own?.conditions : undefined;
+    if (inner !== undefined && !Array.isArray(inner)) return root;
+    const joined =
+      inner === undefined
+        ? (outer as Condition[][])
+        : (outer as Condition[][]).flatMap(group =>
+            (inner as Condition[][]).map(mine => [...group, ...mine])
+          );
+    return { ...root, visibility: { ...(own ?? {}), conditions: joined } };
+  });
 }
 
 /**
