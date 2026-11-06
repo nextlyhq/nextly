@@ -20,9 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 
-import type { StoredFragment } from "../breakpoint-removal/fragments";
 import type { OpenRemovalReader } from "../breakpoint-removal/lock-acceptance";
-import { fragmentsForValue } from "../breakpoint-removal/restore";
 import type { Removal } from "../breakpoint-removal/strip";
 
 import { layersLockIssues, withLockIssues } from "./layers-lock-judgement";
@@ -342,23 +340,28 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
       )
     ).toHaveLength(1);
   });
-  /** What removing Mobile kept of the hero, for the page's field `field`. */
-  const keptOfHero = (field: string): StoredFragment => ({
-    runId: "removal",
-    host: { kind: "collection", slug: "pages", id: "p1", path: [field] },
-    form: "published",
-    fragment: {
-      nodes: { hero: { styles: { base: { mobile: { color: "#222222" } } } } },
-    },
-    keptAt: new Date(),
-  });
-  /** An undo of that removal, open: it puts back what the rows kept. */
+  /** What removing Mobile kept of the hero. */
+  const keptOfHero = {
+    nodes: { hero: { styles: { base: { mobile: { color: "#222222" } } } } },
+  };
+  /**
+   * An undo of that removal, open: for the page's `field`, it puts the hero's
+   * Mobile value back into `current`, the value its walk writes.
+   */
   const undoing =
-    (rows: readonly StoredFragment[]): OpenRemovalReader =>
-    async () => ({
-      kind: "restore",
-      fragmentsFor: fragmentsForValue(rows, undefined),
-    });
+    (field: string, current: unknown = lockedStyled("dark", false)) =>
+    (): ReturnType<OpenRemovalReader> =>
+      Promise.resolve({
+        kind: "restore",
+        restoreFor: target =>
+          Promise.resolve(
+            target.slug === "pages" &&
+              target.id === "p1" &&
+              target.field === field
+              ? { current, fragments: [keptOfHero] }
+              : undefined
+          ),
+      });
   const strippedStored = writeTo(async () => ({
     kind: "value",
     value: lockedStyled("dark", false),
@@ -368,7 +371,7 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
     expect(
       await judged(
         lockedStyled("dark", true),
-        undoing([keptOfHero("content")]),
+        undoing("content"),
         strippedStored
       )
     ).toEqual([]);
@@ -378,7 +381,7 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
     expect(
       await judged(
         lockedStyled("light", true),
-        undoing([keptOfHero("content")]),
+        undoing("content"),
         strippedStored
       )
     ).toHaveLength(1);
@@ -386,9 +389,17 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
 
   it("refuses a restore of what was kept for another field", async () => {
     expect(
+      await judged(lockedStyled("dark", true), undoing("aside"), strippedStored)
+    ).toHaveLength(1);
+  });
+
+  it("refuses a restore into a stored form the undo's walk does not write", async () => {
+    // The walk writes another form (a draft that differs from this one), so
+    // putting its fragments back into this form is no write it makes.
+    expect(
       await judged(
         lockedStyled("dark", true),
-        undoing([keptOfHero("aside")]),
+        undoing("content", lockedStyled("other", false)),
         strippedStored
       )
     ).toHaveLength(1);

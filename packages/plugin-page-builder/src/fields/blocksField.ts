@@ -229,7 +229,7 @@ async function judgedAgainstStored<T extends { readonly code?: string }>(
   if (!again.some(issue => issue.code === CONTENT_ONLY_BREAK)) return again;
   const work = await openRemovalFor(openRemoval, write);
   if (work === null || write === undefined) return again;
-  const accepted = acceptedForms(stored, work, lockTargetOf(write, path));
+  const accepted = await acceptedForms(stored, work, lockTargetOf(write, path));
   return accepted.length === 0 ? again : judge([...stored, ...accepted]);
 }
 

@@ -16,7 +16,10 @@ import type { HostRead } from "../host-rewrite/rewrite";
 
 import type { StoredFragment } from "./fragments";
 import {
-  fragmentsForValue,
+  keptDocuments,
+  keptForValue,
+  type KeptDocument,
+  type KeptRows,
   restoreClasses,
   restoreDocument,
   skippedDocuments,
@@ -137,8 +140,9 @@ describe("restoreDocument", () => {
       "box",
       "narrow",
     ]);
-    // Its two values, one per state.
-    expect(restored.skipped).toBe(2);
+    // Its two values, one per state: deleted, not set again.
+    expect(restored.deleted).toBe(2);
+    expect(restored.skipped).toBe(0);
   });
 
   it("puts back only the removed device of a hide the author changed since", () => {
@@ -216,6 +220,26 @@ describe("restoreClasses", () => {
     expect(restored.skipped).toBe(0);
   });
 
+  it("takes out the override the strip recorded, though the code's class changed or went since", () => {
+    const fromCode = splitClass(coded, ids);
+    const fragment = {
+      classes: { "c-code": fromCode.removed ?? {} },
+      overridden: ["c-code"],
+      overrides: { "c-code": fromCode.entry },
+    };
+    const changed = {
+      ...coded,
+      styles: { base: { base: { color: "#changed" } } },
+    };
+    expect(
+      restoreClasses([fromCode.entry], [changed as never], fragment, ids).value
+    ).toEqual([]);
+    // Gone from the code: still taken out, and nothing counted lost.
+    const gone = restoreClasses([fromCode.entry], [], fragment, ids);
+    expect(gone.value).toEqual([]);
+    expect(gone.deleted).toBe(0);
+  });
+
   it("keeps an override the author changed since, filling only what it lacks", () => {
     const fromCode = splitClass(coded, ids);
     const edited = {
@@ -238,18 +262,24 @@ describe("restoreClasses", () => {
     ]);
   });
 
-  it("counts a class deleted since as skipped", () => {
+  it("counts the values of a class deleted since as deleted", () => {
     const restored = restoreClasses(
       [],
       [],
       {
-        classes: { "c-gone": { base: { mobile: { color: "#1" } } } },
+        classes: {
+          "c-gone": {
+            base: { mobile: { color: "#1" } },
+            hover: { mobile: { color: "#2" } },
+          },
+        },
         overridden: [],
       },
       ids
     );
     expect(restored.value).toEqual([]);
-    expect(restored.skipped).toBe(1);
+    expect(restored.deleted).toBe(2);
+    expect(restored.skipped).toBe(0);
   });
 });
 
@@ -272,19 +302,24 @@ const PAGE_HOST: HostAddress = {
   path: ["content"],
 };
 
-describe("fragmentsForValue", () => {
-  it("answers a value's fragments per form, and none for another field or document", () => {
+describe("keptForValue", () => {
+  it("answers a value's rows, and none for another field or document", () => {
     const rows = [
       keptRow(PAGE_HOST),
       keptRow(PAGE_HOST, "draft"),
       keptRow({ ...PAGE_HOST, path: ["aside"] }),
       keptRow({ ...PAGE_HOST, id: "p2" }),
     ];
-    const forValue = fragmentsForValue(rows, undefined);
     const value = { kind: "collection", slug: "pages", id: "p1" } as const;
-    expect(forValue({ ...value, field: "content" })).toHaveLength(2);
-    expect(forValue({ ...value, field: "body" })).toEqual([]);
-    expect(forValue({ ...value, id: "p3", field: "content" })).toEqual([]);
+    expect(
+      keptForValue(rows, { ...value, field: "content" }, undefined)
+    ).toEqual([rows[0], rows[1]]);
+    expect(keptForValue(rows, { ...value, field: "body" }, undefined)).toEqual(
+      []
+    );
+    expect(
+      keptForValue(rows, { ...value, id: "p3", field: "content" }, undefined)
+    ).toEqual([]);
   });
 
   it("matches the default language whether a write names it or not", () => {
@@ -292,7 +327,6 @@ describe("fragmentsForValue", () => {
       keptRow({ ...PAGE_HOST, locale: "en" }),
       keptRow({ ...PAGE_HOST, locale: "fr" }, "draft"),
     ];
-    const forValue = fragmentsForValue(rows, "en");
     const value = {
       kind: "collection",
       slug: "pages",
@@ -300,11 +334,96 @@ describe("fragmentsForValue", () => {
       field: "content",
     } as const;
     // A write in the default language names none; it is the `en` row's.
-    expect(forValue(value)).toEqual([[rows[0]?.fragment]]);
-    expect(forValue({ ...value, locale: "fr" })).toEqual([[rows[1]?.fragment]]);
-    expect(forValue({ ...value, locale: "de" })).toEqual([]);
+    expect(keptForValue(rows, value, "en")).toEqual([rows[0]]);
+    expect(keptForValue(rows, { ...value, locale: "fr" }, "en")).toEqual([
+      rows[1],
+    ]);
+    expect(keptForValue(rows, { ...value, locale: "de" }, "en")).toEqual([]);
   });
 });
+
+describe("keptDocuments", () => {
+  /** Rows in a store ordered by document key, read as the store pages them. */
+  function pagedStore(rows: readonly StoredFragment[]): {
+    kept: KeptRows;
+    largestRead: () => number;
+  } {
+    const keyOf = (row: StoredFragment) =>
+      row.host === null
+        ? ""
+        : `collection\u001f${row.host.slug}\u001f${row.host.id ?? ""}`;
+    const sorted = [...rows].sort((a, b) =>
+      keyOf(a) < keyOf(b) ? -1 : keyOf(a) > keyOf(b) ? 1 : 0
+    );
+    let largest = 0;
+    const read = (found: StoredFragment[]) => {
+      largest = Math.max(largest, found.length);
+      return Promise.resolve(found);
+    };
+    return {
+      kept: {
+        valuesAfter: (after, limit) =>
+          read(
+            sorted
+              .filter(row => after === null || keyOf(row) > after)
+              .slice(0, limit)
+          ),
+        forDocument: key => read(sorted.filter(row => keyOf(row) === key)),
+      },
+      largestRead: () => largest,
+    };
+  }
+
+  it("yields every document once with all its rows, a page at a time", async () => {
+    const host = (id: string): HostAddress => ({ ...PAGE_HOST, id });
+    // 60 small documents, one of 150 rows, and 60 more after it.
+    const rows = [
+      ...Array.from({ length: 60 }, (_, at) =>
+        keptRow(host(`a${String(at).padStart(3, "0")}`))
+      ),
+      ...Array.from({ length: 150 }, () => keptRow(host("m-big"))),
+      ...Array.from({ length: 60 }, (_, at) =>
+        keptRow(host(`z${String(at).padStart(3, "0")}`))
+      ),
+    ];
+    const { kept, largestRead } = pagedStore(rows);
+    const seen: KeptDocument[] = [];
+    for await (const document of keptDocuments(kept, null)) seen.push(document);
+    expect(seen).toHaveLength(121);
+    expect(new Set(seen.map(document => document.key)).size).toBe(121);
+    expect(seen.reduce((sum, document) => sum + document.rows.length, 0)).toBe(
+      270
+    );
+    expect(
+      seen.find(document => document.key.endsWith("m-big"))?.rows
+    ).toHaveLength(150);
+    // Never the whole removal in one read: a page, or one large document.
+    expect(largestRead()).toBe(150);
+  });
+
+  it("starts after the cursor a walk resumes from", async () => {
+    const rows = [
+      keptRow({ ...PAGE_HOST, id: "a" }),
+      keptRow({ ...PAGE_HOST, id: "b" }),
+    ];
+    const { kept } = pagedStore(rows);
+    const seen: string[] = [];
+    for await (const document of keptDocuments(
+      kept,
+      "collection\u001fpages\u001fa"
+    )) {
+      seen.push(document.key);
+    }
+    expect(seen).toEqual(["collection\u001fpages\u001fb"]);
+  });
+});
+
+/** One document's rows, as the walk of a removal's rows yields it. */
+async function* oneDocument(
+  rows: readonly StoredFragment[]
+): AsyncGenerator<KeptDocument> {
+  yield { key: "collection\u001fpages\u001fp1", rows };
+}
 
 describe("skippedDocuments", () => {
   /** A read of the page answering `published` live, with no draft. */
@@ -318,39 +437,58 @@ describe("skippedDocuments", () => {
   it("counts nothing for a page whose values are all back", async () => {
     expect(
       await skippedDocuments(
-        [keptRow(PAGE_HOST)],
+        oneDocument([keptRow(PAGE_HOST)]),
         reading({ kind: "value", value: ORIGINAL })
       )
     ).toEqual([]);
   });
 
-  it("counts a page changed since, with how many values stayed out", async () => {
+  it("counts a page changed since once per reason, with how many values stayed out", async () => {
     const { document } = stripped();
+    // Block `a` deleted, and the page's own Mobile gap set again.
     const without = {
       ...document,
       nodes: document.nodes.filter(node => node.id !== "a"),
+      settings: { styles: { base: { mobile: { gap: "9rem" } } } },
     } as BlockDocument;
     const edited = restoreDocument(without, [stripped().fragment]).value;
+    const page = { kind: "collection", slug: "pages", id: "p1" } as const;
     expect(
       await skippedDocuments(
-        [keptRow(PAGE_HOST)],
+        oneDocument([keptRow(PAGE_HOST)]),
         reading({ kind: "value", value: edited })
       )
     ).toEqual([
-      {
-        kind: "collection",
-        slug: "pages",
-        id: "p1",
-        values: 2,
-        reason: "changed",
-      },
+      { ...page, values: 1, reason: "changed" },
+      { ...page, values: 2, reason: "block-deleted" },
     ]);
+  });
+
+  it("counts a draft published or discarded since, and a page that cannot be read", async () => {
+    const all = restoreDocument(stripped().document, [stripped().fragment]);
+    const page = { kind: "collection", slug: "pages", id: "p1" } as const;
+    // A live page whose draft, kept from, is gone.
+    expect(
+      await skippedDocuments(
+        oneDocument([keptRow(PAGE_HOST, "draft")]),
+        reading({ kind: "value", value: ORIGINAL })
+      )
+    ).toEqual([{ ...page, values: all.restored, reason: "draft-gone" }]);
+    const unreadable = async (): Promise<HostRead> => {
+      throw new Error("the row cannot be read");
+    };
+    expect(
+      await skippedDocuments(oneDocument([keptRow(PAGE_HOST)]), unreadable)
+    ).toEqual([{ ...page, values: all.restored, reason: "unreadable" }]);
   });
 
   it("counts every value of a page deleted since as gone", async () => {
     const all = restoreDocument(stripped().document, [stripped().fragment]);
     expect(
-      await skippedDocuments([keptRow(PAGE_HOST)], reading({ kind: "absent" }))
+      await skippedDocuments(
+        oneDocument([keptRow(PAGE_HOST)]),
+        reading({ kind: "absent" })
+      )
     ).toEqual([
       {
         kind: "collection",
@@ -371,8 +509,8 @@ describe("skippedDocuments", () => {
       draft: null,
       liveState: null,
     });
-    expect(await skippedDocuments([keptRow(PAGE_HOST, "draft")], read)).toEqual(
-      []
-    );
+    expect(
+      await skippedDocuments(oneDocument([keptRow(PAGE_HOST, "draft")]), read)
+    ).toEqual([]);
   });
 });

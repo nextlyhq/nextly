@@ -58,14 +58,17 @@ export interface Restored<T> {
   readonly value: T;
   /** Values put back. */
   readonly restored: number;
-  /** Values that could not go back: changed or deleted since. */
+  /** Values that could not go back: something else is set there since. */
   readonly skipped: number;
+  /** Values that could not go back: their block or style is deleted since. */
+  readonly deleted: number;
 }
 
 /** Counts while putting values back. */
 interface Tally {
   restored: number;
   skipped: number;
+  deleted: number;
 }
 
 /**
@@ -217,7 +220,7 @@ function applyFragment(
     return node;
   });
   for (const [id, nodeFragment] of Object.entries(fragment.nodes)) {
-    if (!present.has(id)) tally.skipped += valuesIn(nodeFragment);
+    if (!present.has(id)) tally.deleted += valuesIn(nodeFragment);
   }
   let changed = false;
   const nodes = mapForest(current.nodes, node => {
@@ -250,7 +253,7 @@ export function restoreDocument(
   document: BlockDocument,
   fragments: readonly DocumentFragment[]
 ): Restored<BlockDocument> {
-  const tally: Tally = { restored: 0, skipped: 0 };
+  const tally: Tally = { restored: 0, skipped: 0, deleted: 0 };
   let current = document;
   for (const fragment of fragments) {
     current = applyFragment(current, fragment, tally);
@@ -269,6 +272,8 @@ function classIdOf(entry: unknown): string | undefined {
  * One stored class with its fragment put back where it holds nothing;
  * `undefined` when it is the override the strip stored of a code class,
  * untouched since, which is taken out so the code's class applies again.
+ * Untouched means equal to the override the strip recorded, or, for a row
+ * kept before that was recorded, to the code's class as it is now stripped.
  */
 function restoredClass(
   entry: unknown,
@@ -277,20 +282,47 @@ function restoredClass(
   strip: {
     readonly coded: NamedClass | undefined;
     readonly overridden: boolean;
+    /** The override recorded, when the row records one. */
+    readonly generated: { readonly entry: unknown } | undefined;
     readonly ids: ReadonlySet<string>;
   }
 ): unknown {
-  if (
-    strip.overridden &&
-    strip.coded !== undefined &&
-    sameStoredValue(entry, stripClass(strip.coded, strip.ids))
-  ) {
+  if (strip.overridden && untouchedOverride(entry, strip)) {
     tally.restored += valuesInStyles(removed);
     return undefined;
   }
   const record = isPlainRecord(entry) ? entry : {};
   const styles = restoreEnvelope(record.styles, removed, tally);
   return styles === record.styles ? entry : { ...record, styles };
+}
+
+/** Whether a stored entry is still the override the strip stored. */
+function untouchedOverride(
+  entry: unknown,
+  strip: {
+    readonly coded: NamedClass | undefined;
+    readonly generated: { readonly entry: unknown } | undefined;
+    readonly ids: ReadonlySet<string>;
+  }
+): boolean {
+  if (strip.generated !== undefined) {
+    return sameStoredValue(entry, strip.generated.entry);
+  }
+  return (
+    strip.coded !== undefined &&
+    sameStoredValue(entry, stripClass(strip.coded, strip.ids))
+  );
+}
+
+/** The override the strip recorded for class `id`, when the row has one. */
+function generatedOf(
+  fragment: ClassesFragment,
+  id: string
+): { readonly entry: unknown } | undefined {
+  const overrides = fragment.overrides;
+  return overrides !== undefined && Object.hasOwn(overrides, id)
+    ? { entry: overrides[id] }
+    : undefined;
 }
 
 /**
@@ -305,7 +337,7 @@ export function restoreClasses(
   fragment: ClassesFragment,
   ids: ReadonlySet<string>
 ): Restored<readonly unknown[]> {
-  const tally: Tally = { restored: 0, skipped: 0 };
+  const tally: Tally = { restored: 0, skipped: 0, deleted: 0 };
   const code = new Map(supplied.map(entry => [entry.id, entry]));
   const overridden = new Set(fragment.overridden);
   const next: unknown[] = [];
@@ -321,14 +353,19 @@ export function restoreClasses(
     const restored = restoredClass(entry, removed, tally, {
       coded: code.get(id),
       overridden: overridden.has(id),
+      generated: generatedOf(fragment, id),
       ids,
     });
     if (restored !== undefined) next.push(restored);
   }
   for (const id of Object.keys(fragment.classes)) {
-    // Gone since, and not a code class whose override was taken out.
-    if (!seen.has(id) && !(overridden.has(id) && code.has(id))) {
-      tally.skipped += 1;
+    // Gone since, and not an override taken out: one the strip recorded, or
+    // one of a class the code still supplies.
+    const takenOut =
+      overridden.has(id) &&
+      (generatedOf(fragment, id) !== undefined || code.has(id));
+    if (!seen.has(id) && !takenOut) {
+      tally.deleted += valuesInStyles(fragment.classes[id]);
     }
   }
   return { value: next, ...tally };
@@ -356,32 +393,92 @@ function hostKey(host: HostAddress): string {
   ]);
 }
 
+/** What an undo reads its removal's kept rows through, a part at a time. */
+export interface KeptRows {
+  /** Rows for stored values, by document key after `after`, at most `limit`. */
+  valuesAfter(after: string | null, limit: number): Promise<StoredFragment[]>;
+  /** One document's rows, the newest first. */
+  forDocument(documentKey: string): Promise<StoredFragment[]>;
+}
+
+/** How many kept rows one read takes: a page, never the whole removal. */
+const ROWS_PER_READ = 100;
+
+/** One document's kept rows, whole, the newest first. */
+export interface KeptDocument {
+  readonly key: string;
+  readonly rows: readonly StoredFragment[];
+}
+
 /**
- * The documents an undo walks: only those the removal kept something for,
- * each with every host it kept something for, in a stable order by document.
+ * The documents a removal kept something for, after `after` in key order,
+ * each with all its rows: read a page at a time, so a large removal is never
+ * held in memory at once. A page's last document may be cut short, so it is
+ * read again from the next page; a document with more rows than a page is
+ * read on its own.
  */
-export function fragmentSource(rows: readonly StoredFragment[]): HostSource {
-  const byDocument = new Map<string, Map<string, HostAddress>>();
-  for (const row of rows) {
+export async function* keptDocuments(
+  kept: KeptRows,
+  after: string | null
+): AsyncGenerator<KeptDocument> {
+  let cursor = after;
+  for (;;) {
+    const page = await kept.valuesAfter(cursor, ROWS_PER_READ);
+    const { whole, last } = documentsOf(page);
+    for (const document of whole) yield document;
+    if (last === undefined) return;
+    // One document fills the page: read it whole on its own.
+    if (whole.length === 0)
+      yield { key: last, rows: await kept.forDocument(last) };
+    cursor = whole.length === 0 ? last : (whole[whole.length - 1]?.key ?? last);
+  }
+}
+
+/**
+ * A page's rows by document, in order: the documents it holds whole, and the
+ * key of its last one when the page is full, which may be cut short and is
+ * read again from the next page; `undefined` when the page ends the rows.
+ */
+function documentsOf(page: readonly StoredFragment[]): {
+  whole: KeptDocument[];
+  last: string | undefined;
+} {
+  const byDocument = new Map<string, StoredFragment[]>();
+  for (const row of page) {
     if (!isValueFragment(row)) continue;
     const key = documentKeyOf(row.host);
-    const hosts = byDocument.get(key) ?? new Map<string, HostAddress>();
-    hosts.set(hostKey(row.host), row.host);
-    byDocument.set(key, hosts);
+    byDocument.set(key, [...(byDocument.get(key) ?? []), row]);
   }
-  const documents: HostDocument[] = [...byDocument]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([key, hosts]) => ({
-      key,
-      hosts: [...hosts.values()].map(host => ({
-        host,
-        access: "write" as const,
-      })),
-    }));
+  const documents = [...byDocument].map(([key, rows]) => ({ key, rows }));
+  if (page.length < ROWS_PER_READ) return { whole: documents, last: undefined };
+  return { whole: documents.slice(0, -1), last: documents.at(-1)?.key };
+}
+
+/** Each host a document's rows were kept for, once. */
+function hostsOf(rows: readonly StoredFragment[]): HostAddress[] {
+  const hosts = new Map<string, HostAddress>();
+  for (const row of rows) {
+    if (isValueFragment(row)) hosts.set(hostKey(row.host), row.host);
+  }
+  return [...hosts.values()];
+}
+
+/**
+ * The documents an undo walks: only those the removal kept something for,
+ * each with every host it kept something for, in the order of their keys.
+ */
+export function fragmentSource(kept: KeptRows): HostSource {
   return {
     async *documents(cursor) {
-      for (const document of documents) {
-        if (cursor === null || document.key > cursor) yield document;
+      for await (const { key, rows } of keptDocuments(kept, cursor)) {
+        const document: HostDocument = {
+          key,
+          hosts: hostsOf(rows).map(host => ({
+            host,
+            access: "write" as const,
+          })),
+        };
+        yield document;
       }
     },
     cursorOf: document => document.key,
@@ -390,21 +487,35 @@ export function fragmentSource(rows: readonly StoredFragment[]): HostSource {
   };
 }
 
-/**
- * The step an undo's walk writes each value with: its kept fragments for that
- * host and form put back, newest first (`rows` come newest first), and
- * `unchanged` when nothing goes back, which makes it idempotent. A value this
- * version cannot read is left, as the strip leaves one.
- */
-export function restoreStep(rows: readonly StoredFragment[]): HostStep {
+/** A document's kept fragments per host and form, newest first in each. */
+function byFormOf(
+  rows: readonly StoredFragment[]
+): Map<string, DocumentFragment[]> {
   const byForm = new Map<string, DocumentFragment[]>();
   for (const row of rows) {
     if (!isValueFragment(row)) continue;
     const key = formKey(row.host, row.form);
     byForm.set(key, [...(byForm.get(key) ?? []), row.fragment]);
   }
-  return (doc, form) => {
-    const fragments = byForm.get(formKey(form.host, form.form));
+  return byForm;
+}
+
+/**
+ * The step an undo's walk writes each value with: its kept fragments for that
+ * host and form put back, newest first, and `unchanged` when nothing goes
+ * back, which makes it idempotent. A document's rows are read when the walk
+ * reaches it, and kept while it walks that document's hosts. A value this
+ * version cannot read is left, as the strip leaves one.
+ */
+export function restoreStep(kept: KeptRows): HostStep {
+  let last: { key: string; byForm: Map<string, DocumentFragment[]> } | null =
+    null;
+  return async (doc, form) => {
+    const key = documentKeyOf(form.host);
+    if (last?.key !== key) {
+      last = { key, byForm: byFormOf(await kept.forDocument(key)) };
+    }
+    const fragments = last.byForm.get(formKey(form.host, form.form));
     if (fragments === undefined) return { kind: "unchanged" };
     const document = readStoredJson(doc);
     if (!isDocument(document)) return { kind: "unchanged" };
@@ -428,33 +539,24 @@ export interface ValueAddress {
 }
 
 /**
- * The kept fragments of one stored value, per stored form, newest first
- * within each: what a lock accepts an undo putting back into it. A row's
- * language and the value's are the same language when both name it, or when
- * one is absent and the other is the default one.
+ * The rows a document kept for one of its values: the same top-level field,
+ * in the same language. A row's language and the value's are the same when
+ * both name it, or when one is absent and the other is the default one.
  */
-export function fragmentsForValue(
+export function keptForValue(
   rows: readonly StoredFragment[],
+  value: ValueAddress,
   defaultLocale: string | undefined
-): (value: ValueAddress) => readonly (readonly DocumentFragment[])[] {
+): ValueFragment[] {
   const languageOf = (locale: string | undefined) => locale ?? defaultLocale;
-  return value => {
-    const byForm = new Map<string, DocumentFragment[]>();
-    for (const row of rows) {
-      if (!isValueFragment(row)) continue;
-      const host = row.host;
-      if (
-        documentKeyOf(host) !== documentKeyOf(value) ||
-        host.path.length !== 1 ||
-        host.path[0] !== value.field ||
-        languageOf(host.locale) !== languageOf(value.locale)
-      ) {
-        continue;
-      }
-      byForm.set(row.form, [...(byForm.get(row.form) ?? []), row.fragment]);
-    }
-    return [...byForm.values()];
-  };
+  return rows.filter(
+    (row): row is ValueFragment =>
+      isValueFragment(row) &&
+      documentKeyOf(row.host) === documentKeyOf(value) &&
+      row.host.path.length === 1 &&
+      row.host.path[0] === value.field &&
+      languageOf(row.host.locale) === languageOf(value.locale)
+  );
 }
 
 /** How many values a document's fragments hold: what is lost with it. */
@@ -485,18 +587,42 @@ function formValue(
 /** Why an undo could not put a document's values back. */
 type SkippedReason = SiteBreakpointUndoSkipped["reason"];
 
+/** One stored form's values that did not go back, for one reason. */
+interface SkippedValues {
+  readonly values: number;
+  readonly reason: SkippedReason;
+}
+
 /**
- * What an undo could not put back, per document, read once its walk is
- * finished: each kept value is put back again, without writing, into the
- * stored form as it is now. A value back in place is neither restored nor
- * skipped; one that differs, or whose block is gone, is skipped as changed
- * since; and every value of a form that is gone is skipped with it. A host
- * that cannot be read is counted as changed, since nothing can be said of it.
+ * What an undo could not put back, per document and reason, read once its
+ * walk is finished: each kept value is put back again, without writing, into
+ * the stored form as it is now. A value back in place is neither restored nor
+ * skipped; one set again since is `changed`; one whose block is deleted since
+ * is `block-deleted`; every value of a document deleted since is `gone`, of a
+ * draft published or discarded since `draft-gone`, and of a document that
+ * cannot be read `unreadable`, since nothing can be said of it.
  */
 export async function skippedDocuments(
-  rows: readonly StoredFragment[],
+  documents: AsyncIterable<KeptDocument>,
   read: (host: HostAddress) => Promise<HostRead>
 ): Promise<SiteBreakpointUndoSkipped[]> {
+  const byReason = new Map<string, SiteBreakpointUndoSkipped>();
+  for await (const { rows } of documents) {
+    for (const [key, skipped] of await skippedInDocument(rows, read)) {
+      byReason.set(key, {
+        ...skipped,
+        values: (byReason.get(key)?.values ?? 0) + skipped.values,
+      });
+    }
+  }
+  return [...byReason.values()];
+}
+
+/** One document's skipped values, by document and reason. */
+async function skippedInDocument(
+  rows: readonly StoredFragment[],
+  read: (host: HostAddress) => Promise<HostRead>
+): Promise<Map<string, SiteBreakpointUndoSkipped>> {
   const groups = new Map<
     string,
     {
@@ -516,43 +642,50 @@ export async function skippedDocuments(
     group.fragments.push(row.fragment);
     groups.set(key, group);
   }
-  const byDocument = new Map<string, SiteBreakpointUndoSkipped>();
+  const byReason = new Map<string, SiteBreakpointUndoSkipped>();
   for (const { host, form, fragments } of groups.values()) {
-    const skipped = await skippedIn(host, form, fragments, read);
-    if (skipped === undefined) continue;
-    const key = documentKeyOf(host);
-    const before = byDocument.get(key);
-    byDocument.set(key, {
-      kind: host.kind,
-      slug: host.slug,
-      ...(host.id === undefined ? {} : { id: host.id }),
-      values: (before?.values ?? 0) + skipped.values,
-      reason: before?.reason === "gone" ? "gone" : skipped.reason,
-    });
+    for (const skipped of await skippedIn(host, form, fragments, read)) {
+      const key = JSON.stringify([documentKeyOf(host), skipped.reason]);
+      byReason.set(key, {
+        kind: host.kind,
+        slug: host.slug,
+        ...(host.id === undefined ? {} : { id: host.id }),
+        values: (byReason.get(key)?.values ?? 0) + skipped.values,
+        reason: skipped.reason,
+      });
+    }
   }
-  return [...byDocument.values()];
+  return byReason;
 }
 
-/** What one stored form could not take back; `undefined` when it took all. */
+/** What one stored form could not take back, by reason; empty when it took all. */
 async function skippedIn(
   host: HostAddress,
   form: "published" | "draft",
   fragments: readonly DocumentFragment[],
   read: (host: HostAddress) => Promise<HostRead>
-): Promise<{ values: number; reason: SkippedReason } | undefined> {
-  let value: ReadValue | null;
+): Promise<SkippedValues[]> {
+  const all = (reason: SkippedReason): SkippedValues[] => [
+    { values: valuesInDocument(fragments), reason },
+  ];
+  let stored: HostRead;
   try {
-    value = formValue(await read(host), form);
+    stored = await read(host);
   } catch {
-    return { values: valuesInDocument(fragments), reason: "changed" };
+    return all("unreadable");
   }
-  if (value === null || value.kind === "absent") {
-    return { values: valuesInDocument(fragments), reason: "gone" };
+  if (stored.published.kind === "absent" && stored.draft === null) {
+    return all("gone");
   }
+  const value = formValue(stored, form);
+  if (value === null || value.kind === "absent") return all("draft-gone");
   const document = readStoredJson(value.value);
-  if (!isDocument(document)) {
-    return { values: valuesInDocument(fragments), reason: "changed" };
-  }
-  const { skipped } = restoreDocument(document, fragments);
-  return skipped === 0 ? undefined : { values: skipped, reason: "changed" };
+  if (!isDocument(document)) return all("unreadable");
+  const { skipped, deleted } = restoreDocument(document, fragments);
+  return [
+    ...(skipped === 0 ? [] : [{ values: skipped, reason: "changed" as const }]),
+    ...(deleted === 0
+      ? []
+      : [{ values: deleted, reason: "block-deleted" as const }]),
+  ];
 }

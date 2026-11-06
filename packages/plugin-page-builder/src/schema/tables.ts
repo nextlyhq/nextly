@@ -399,8 +399,15 @@ export const breakpointRemovalFragments: TableDefinition<
     fragment: col.json(),
     ...col.timestamps(),
   },
-  // Read and purged by run; the purge also reads by age.
-  { indexes: [{ columns: ["runId"] }, { columns: ["createdAt"] }] }
+  // Read and purged by run; the purge also reads by age; an undo reads a
+  // run's rows a document at a time, in document order.
+  {
+    indexes: [
+      { columns: ["runId"] },
+      { columns: ["createdAt"] },
+      { columns: ["runId", "documentKey"] },
+    ],
+  }
 );
 
 /** Every table this plugin declares, in creation order. */

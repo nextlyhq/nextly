@@ -5,31 +5,37 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  "name": "20261106_075203_474_add_breakpoint_removal_undoes",
+  "name": "20261106_094102_413_add_breakpoint_removal_undoes",
   "schemaVersion": 7,
-  "checksum": "c90217b272327b2215ae0bb1b838b43294c0c50c64ef46997c89ecaf2ba2878e",
+  "checksum": "c39bc6fd388d996081d23964a62b9bb1d59ee04c8b77529299f2f24597cea5e3",
   "dialects": {
     "postgresql": {
       "up": [
-        "ALTER TABLE \"page_builder__breakpoint_removals\" ADD COLUMN \"undoes\" bpchar(36)"
+        "ALTER TABLE \"page_builder__breakpoint_removals\" ADD COLUMN \"undoes\" bpchar(36)",
+        "CREATE INDEX IF NOT EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\" ON \"page_builder__breakpoint_removal_fragments\" (\"run_id\", \"document_key\")"
       ],
       "down": [
+        "DROP INDEX IF EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\"",
         "ALTER TABLE \"page_builder__breakpoint_removals\" DROP COLUMN \"undoes\""
       ]
     },
     "mysql": {
       "up": [
-        "ALTER TABLE `page_builder__breakpoint_removals` ADD COLUMN `undoes` char(36)"
+        "ALTER TABLE `page_builder__breakpoint_removals` ADD COLUMN `undoes` char(36)",
+        "CREATE INDEX `idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv` ON `page_builder__breakpoint_removal_fragments` (`run_id`, `document_key`)"
       ],
       "down": [
+        "DROP INDEX `idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv` ON `page_builder__breakpoint_removal_fragments`",
         "ALTER TABLE `page_builder__breakpoint_removals` DROP COLUMN `undoes`"
       ]
     },
     "sqlite": {
       "up": [
-        "ALTER TABLE \"page_builder__breakpoint_removals\" ADD COLUMN \"undoes\" text"
+        "ALTER TABLE \"page_builder__breakpoint_removals\" ADD COLUMN \"undoes\" text",
+        "CREATE INDEX IF NOT EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\" ON \"page_builder__breakpoint_removal_fragments\" (\"run_id\", \"document_key\")"
       ],
       "down": [
+        "DROP INDEX IF EXISTS \"idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv\"",
         "ALTER TABLE \"page_builder__breakpoint_removals\" DROP COLUMN \"undoes\""
       ]
     }
@@ -464,6 +470,14 @@ export default {
                 "created_at"
               ],
               "unique": false
+            },
+            {
+              "name": "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              "columns": [
+                "run_id",
+                "document_key"
+              ],
+              "unique": false
             }
           ],
           "foreignKeys": [],
@@ -894,6 +908,14 @@ export default {
                 "created_at"
               ],
               "unique": false
+            },
+            {
+              "name": "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              "columns": [
+                "run_id",
+                "document_key"
+              ],
+              "unique": false
             }
           ],
           "foreignKeys": [],
@@ -1322,6 +1344,14 @@ export default {
               "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
               "columns": [
                 "created_at"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              "columns": [
+                "run_id",
+                "document_key"
               ],
               "unique": false
             }

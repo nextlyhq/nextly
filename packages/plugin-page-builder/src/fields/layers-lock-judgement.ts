@@ -124,12 +124,15 @@ export async function layersLockIssues(
   if (changes.length === 0) return [];
   // Asked only once a lock is broken, so a write breaking none reads nothing.
   const work = await openRemovalFor(openRemoval, args.write);
-  if (
-    work !== null &&
-    acceptedForms([newest], work, lockTargetOf(args.write, args.path)).some(
-      accepted => layersLockChanges(value, accepted).length === 0
-    )
-  ) {
+  const accepted =
+    work === null
+      ? []
+      : await acceptedForms(
+          [newest],
+          work,
+          lockTargetOf(args.write, args.path)
+        );
+  if (accepted.some(form => layersLockChanges(value, form).length === 0)) {
     return [];
   }
   return layersLockIssuesFor(changes, args.path, label);

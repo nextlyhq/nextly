@@ -35,25 +35,29 @@ export interface SharedStylesNow {
 /**
  * The shared styles' values the undo could not put back, read again now
  * with the same restore it wrote (`restoreClasses`): a value back in place
- * counts for nothing, one changed or whose style is gone since is skipped.
+ * counts for nothing; one set again since is `changed`, and one whose style
+ * is deleted since `block-deleted`.
  */
 async function sharedStylesSkipped(
   service: BreakpointRemovalService,
   undone: BreakpointRun,
   styles: SharedStylesNow
-): Promise<SiteBreakpointUndoSkipped | undefined> {
-  const kept = (await service.kept(undone.id)).find(row => row.host === null);
-  if (kept?.form !== "site") return undefined;
+): Promise<SiteBreakpointUndoSkipped[]> {
+  const kept = await service.keptSharedStyles(undone.id);
+  if (kept?.form !== "site") return [];
   const tier = readStoredJson(styles.stored);
-  const { skipped } = restoreClasses(
+  const { skipped, deleted } = restoreClasses(
     Array.isArray(tier) ? tier : [],
     styles.supplied,
     kept.fragment,
     removedEver(undone)
   );
-  return skipped === 0
-    ? undefined
-    : { kind: "single", slug: styles.slug, values: skipped, reason: "changed" };
+  const of = (
+    values: number,
+    reason: SiteBreakpointUndoSkipped["reason"]
+  ): SiteBreakpointUndoSkipped[] =>
+    values === 0 ? [] : [{ kind: "single", slug: styles.slug, values, reason }];
+  return [...of(skipped, "changed"), ...of(deleted, "block-deleted")];
 }
 
 /**
@@ -71,14 +75,11 @@ export async function undoReport(
   const undone = await service.runById(undo.undoes);
   const shared =
     undone === null
-      ? undefined
+      ? []
       : await sharedStylesSkipped(service, undone, await styles());
   return {
     undoes: undo.undoes,
-    skipped: [
-      ...(shared === undefined ? [] : [shared]),
-      ...(await service.undoSkipped(undo.id)),
-    ],
+    skipped: [...shared, ...(await service.undoSkipped(undo.id))],
   };
 }
 

@@ -228,7 +228,7 @@ async function planUndo(
     now,
     breakpoints
   );
-  const site = (await service.kept(undone.id)).find(row => row.host === null);
+  const site = await service.keptSharedStyles(undone.id);
   const tier = readStoredJson(stored.classes);
   const classes =
     site?.form === "site"

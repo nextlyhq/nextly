@@ -11,7 +11,7 @@ import migration2 from "./20261104_063215_663_create_component_rewrite_runs";
 import migration3 from "./20261104_115414_028_create_site_options";
 import migration4 from "./20261105_064012_324_create_breakpoint_removals";
 import migration5 from "./20261106_064828_573_create_breakpoint_removal_fragments";
-import migration6 from "./20261106_075203_474_add_breakpoint_removal_undoes";
+import migration6 from "./20261106_094102_413_add_breakpoint_removal_undoes";
 
 export const migrations: PluginMigration[] = [
   migration0,

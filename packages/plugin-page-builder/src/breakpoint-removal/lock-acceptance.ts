@@ -24,25 +24,38 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 
+import { sameStoredValue } from "../stored-json";
+
 import type { ClassesFragment } from "./fragments";
 import { restoreDocument, type ValueAddress } from "./restore";
 import { stripDocument, type DocumentFragment, type Removal } from "./strip";
 
 /**
+ * What an open undo puts back into one stored value, as its walk would: the
+ * value as the walk reads it to write (the pending draft where there is one,
+ * the live row otherwise), and the fragments the removal kept of that form,
+ * newest first.
+ */
+export interface ValueRestore {
+  readonly current: unknown;
+  readonly fragments: readonly DocumentFragment[];
+}
+
+/**
  * The breakpoint work open now, as a lock judges a write against it:
  * - `strip`, a removal taking every value under its ids out;
  * - `restore`, an undo putting back what a removal kept, which differs per
- *   value: `fragmentsFor` answers, for one stored value, each stored form's
- *   kept fragments, newest first; and the shared styles' fragment with every
- *   id the removal took out, when it kept one.
+ *   value: `restoreFor` answers what it puts back into one value (`undefined`
+ *   where it kept nothing for it), and `classes` the shared styles' fragment
+ *   with every id the removal took out, when it kept one.
  */
 export type OpenWork =
   | { readonly kind: "strip"; readonly removal: Removal }
   | {
       readonly kind: "restore";
-      readonly fragmentsFor: (
+      readonly restoreFor: (
         target: ValueAddress
-      ) => readonly (readonly DocumentFragment[])[];
+      ) => Promise<ValueRestore | undefined>;
       readonly classes?: {
         readonly fragment: ClassesFragment;
         readonly ids: ReadonlySet<string>;
@@ -88,24 +101,25 @@ export function lockTargetOf(
 /**
  * The stored forms as the open work leaves them, for a lock to accept: one
  * per stored form it changes, and none where it changes nothing. A strip is
- * the same for every value; a restore puts back what this value's own forms
- * kept, each form's fragments tried in turn, so a write of either form is
- * accepted as exactly its own restore.
+ * the same for every value. A restore is the walk's own write: what was kept
+ * of the form the walk writes, put back into a stored form only when that
+ * form is the value the walk reads, so nothing it would not write is accepted.
  */
-export function acceptedForms(
+export async function acceptedForms(
   stored: readonly BlockDocument[],
   work: OpenWork,
   target: ValueAddress
-): BlockDocument[] {
+): Promise<BlockDocument[]> {
   if (work.kind === "strip") {
     return stored
       .map(form => stripDocument(form, work.removal))
       .filter((form, index) => form !== stored[index]);
   }
-  const kept = work.fragmentsFor(target);
-  return stored.flatMap(form =>
-    kept
-      .map(fragments => restoreDocument(form, fragments).value)
-      .filter(restored => restored !== form)
-  );
+  const restore = await work.restoreFor(target);
+  if (restore === undefined) return [];
+  return stored
+    .filter(form => sameStoredValue(form, restore.current))
+    .map(form => ({ form, restored: restoreDocument(form, restore.fragments) }))
+    .filter(({ form, restored }) => restored.value !== form)
+    .map(({ restored }) => restored.value);
 }

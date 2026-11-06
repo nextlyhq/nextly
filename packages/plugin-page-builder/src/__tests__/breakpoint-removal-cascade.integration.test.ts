@@ -1710,6 +1710,26 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({ code: "STALE_VERSION" });
     });
 
+    /**
+     * Run a job pass with the clock past the time any save of `runId` takes,
+     * measured from when the run was opened, which its UUIDv7 id carries: ids
+     * made while an earlier test moved the clock carry that later time.
+     */
+    async function passAfterItsSaveStopped(
+      jobPass: () => Promise<unknown>,
+      runId: string
+    ): Promise<void> {
+      const opened = Number.parseInt(runId.replace(/-/g, "").slice(0, 12), 16);
+      const later = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Math.max(opened, Date.now()) + 10 * 60 * 1000);
+      try {
+        await jobPass();
+      } finally {
+        later.mockRestore();
+      }
+    }
+
     /** Undo a removal through its route, as the person managing the site. */
     const undo = (cookie: string, runId: string) =>
       post(cookie, ["site", "breakpoints", "removal", "undo"], { runId });
@@ -1882,7 +1902,7 @@ describe.each(getConfiguredTestDialects())(
         });
         expect(byId.get(trimmed)).toMatchObject({
           values: 2,
-          reason: "changed",
+          reason: "block-deleted",
         });
         expect(byId.get(deleted)).toMatchObject({ values: 2, reason: "gone" });
         expect(report.skipped).toHaveLength(3);
@@ -2046,7 +2066,7 @@ describe.each(getConfiguredTestDialects())(
         expect(older.status).toBe(409);
         expect(older.body).toMatchObject({
           error: {
-            message: expect.stringContaining("can no longer be undone"),
+            message: expect.stringContaining("only the newest removal"),
           },
         });
         // CONTROL: the newest one, once.
@@ -2055,9 +2075,7 @@ describe.each(getConfiguredTestDialects())(
         const twice = await undo(cookie, second);
         expect(twice.status).toBe(409);
         expect(twice.body).toMatchObject({
-          error: {
-            message: expect.stringContaining("can no longer be undone"),
-          },
+          error: { message: expect.stringContaining("undone already") },
         });
         // Nothing is left open by a refusal.
         expect(await svc.openRun()).toBeNull();
@@ -2072,11 +2090,84 @@ describe.each(getConfiguredTestDialects())(
         try {
           await expect(svc.undo(third, "user:test")).rejects.toMatchObject({
             code: "CONFLICT",
+            publicMessage: expect.stringMatching(
+              /its 30 days to undo it ended on \d{1,2} [A-Z][a-z]+ \d{4}\./
+            ),
           });
         } finally {
           later.mockRestore();
         }
         expect(await svc.openRun()).toBeNull();
+      });
+
+      it("keeps what an open undo is still putting back past the window, in the removal job", async () => {
+        const { t, svc, cookie, fragments, jobPass } = await boot();
+        await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        const { store, age } = fragments();
+        const kept = (await store.forRun(removed)).length;
+        // An undo opened, its walk not finished, as the window closes.
+        await svc.undo(removed, "user:test");
+        await age(removed, FRAGMENTS_KEPT_DAYS + 1);
+        await jobPass();
+        expect(await store.forRun(removed)).toHaveLength(kept);
+        // CONTROL: with no undo open, the same pass deletes them.
+        const open = await svc.openRun();
+        await svc.abandon(open?.id ?? "");
+        await jobPass();
+        expect(await store.forRun(removed)).toEqual([]);
+      });
+
+      it("drops an undo whose request stopped before its set was stored, and publishes one whose set was", async () => {
+        const { t, svc, cookie, jobPass } = await boot();
+        const live = await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        const stopped = await svc.undo(removed, "user:test");
+        // Older than any request takes, its set never stored.
+        await passAfterItsSaveStopped(jobPass, stopped.id);
+        expect(await svc.runById(stopped.id)).toBeNull();
+        expect((await nodesOf(t, "pages", live))[0]).toEqual(
+          heading("a", styledAfter)
+        );
+        // CONTROL: one whose set was stored is published and walked.
+        const landed = await svc.undo(removed, "user:test");
+        await svc.retire(["mobile"]);
+        await t.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: { breakpoints: { viewport: [TABLET, MOBILE], container: [] } },
+          overrideAccess: true,
+          context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+        });
+        await passAfterItsSaveStopped(jobPass, landed.id);
+        expect(await svc.runById(landed.id)).toMatchObject({ open: false });
+        expect((await nodesOf(t, "pages", live))[0]).toEqual(
+          heading("a", styledAtMobile)
+        );
+      });
+
+      it("undoes a removal past a later one whose set never landed", async () => {
+        const { t, svc, cookie, jobPass } = await boot();
+        await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // A later removal of Tablet whose save stopped before storing its set,
+        // closed by the job having done nothing.
+        const stopped = await svc.begin(["tablet"], null, "user:test");
+        await passAfterItsSaveStopped(jobPass, stopped.id);
+        expect(await svc.runById(stopped.id)).toMatchObject({ open: false });
+
+        expect((await undo(cookie, removed)).status).toBe(200);
       });
 
       it("refuses, and drops, an undo whose breakpoints no longer fit the set", async () => {

@@ -385,7 +385,10 @@ describe("a locked shared style while a breakpoint removal is open", () => {
   });
   describe("while the removal's undo is open", () => {
     /** What removing Mobile kept of the style: its Mobile values. */
-    const kept = (overridden: readonly string[] = []) => ({
+    const kept = (
+      overridden: readonly string[] = [],
+      overrides?: Record<string, unknown>
+    ) => ({
       fragment: {
         classes: {
           [lockedCard.id]: {
@@ -394,15 +397,19 @@ describe("a locked shared style while a breakpoint removal is open", () => {
           },
         },
         overridden,
+        ...(overrides === undefined ? {} : { overrides }),
       },
       ids: new Set(["mobile"]),
     });
     const undoing =
-      (overridden?: readonly string[]): OpenRemovalReader =>
+      (
+        overridden?: readonly string[],
+        overrides?: Record<string, unknown>
+      ): OpenRemovalReader =>
       async () => ({
         kind: "restore",
-        fragmentsFor: () => [],
-        classes: kept(overridden),
+        restoreFor: () => Promise.resolve(undefined),
+        classes: kept(overridden, overrides),
       });
     /** The settings write of the undo, from the stripped style stored. */
     const undoWrite = (now: readonly unknown[]) => ({
@@ -440,6 +447,28 @@ describe("a locked shared style while a breakpoint removal is open", () => {
       // Not an override the removal stored: a locked style is not removed.
       expect(
         await wiredRefusal(undoWrite([]), undoing(), [lockedAtMobile])
+      ).toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("takes out the override the removal recorded, though the code's style changed since", async () => {
+      // The code now supplies the style differently: the override the
+      // removal stored is still the one it recorded, so it goes.
+      const changedInCode = {
+        ...lockedAtMobile,
+        styles: { base: { base: { color: "#0000ff" } } },
+      };
+      expect(
+        await wiredRefusal(
+          undoWrite([]),
+          undoing([lockedCard.id], { [lockedCard.id]: stripped }),
+          [changedInCode]
+        )
+      ).toBeUndefined();
+      // CONTROL: without the record, the changed code's strip is not it.
+      expect(
+        await wiredRefusal(undoWrite([]), undoing([lockedCard.id]), [
+          changedInCode,
+        ])
       ).toMatchObject({ code: "CONFLICT" });
     });
   });

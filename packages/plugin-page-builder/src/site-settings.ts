@@ -453,15 +453,22 @@ function strippedClassTier(
     .map(entry => ({ id: entry.id, split: splitClass(entry, ids) }))
     .filter(({ split }) => split.removed !== undefined);
   if (!changed && fromCode.length === 0) return undefined;
+  // Without a prototype too, for the same reason.
+  const overrides = Object.create(null) as Record<string, unknown>;
   for (const { id, split } of fromCode) {
     if (split.removed !== undefined) classes[id] = split.removed;
+    overrides[id] = split.entry;
   }
   return {
     tier: [
       ...(changed ? stripped : list),
       ...fromCode.map(({ split }) => split.entry),
     ],
-    fragment: { classes, overridden: fromCode.map(({ id }) => id) },
+    fragment: {
+      classes,
+      overridden: fromCode.map(({ id }) => id),
+      ...(fromCode.length === 0 ? {} : { overrides }),
+    },
   };
 }
 

@@ -706,9 +706,13 @@ export interface SiteBreakpointRemoval {
 export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
 
 /**
- * One document an undo could not put every value back into: `changed` since
- * the removal (a value set again, a block deleted), or `gone` (the document,
- * or the draft the value was taken from).
+ * Values an undo could not put back into one document, for one reason (a
+ * document may be listed once per reason):
+ * - `changed`: something else was set there after the removal;
+ * - `block-deleted`: their block (or shared style) was deleted after it;
+ * - `gone`: the document was deleted after it;
+ * - `draft-gone`: the draft they were taken from was published or discarded;
+ * - `unreadable`: the document cannot be read, so nothing is known of them.
  *
  * @experimental
  */
@@ -717,7 +721,12 @@ export interface SiteBreakpointUndoSkipped {
   readonly slug: string;
   readonly id?: string;
   readonly values: number;
-  readonly reason: "changed" | "gone";
+  readonly reason:
+    | "changed"
+    | "block-deleted"
+    | "gone"
+    | "draft-gone"
+    | "unreadable";
 }
 
 /**
