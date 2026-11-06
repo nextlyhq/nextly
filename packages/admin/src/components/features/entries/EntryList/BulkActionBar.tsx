@@ -51,6 +51,17 @@ export interface BulkActionBarProps {
   onClear: () => void;
   /** Singular/plural label used in the selected-count text */
   itemLabel?: string;
+  /**
+   * Plugins' declared bulk actions, in the order delivered, each already
+   * judged against the selection: drawn after the built-in actions, before
+   * the destructive one.
+   */
+  declaredActions?: readonly {
+    id: string;
+    label: string;
+    disabled: boolean;
+    onSelect: () => void;
+  }[];
 }
 
 // ============================================================================
@@ -86,6 +97,7 @@ export function BulkActionBar({
   isPublishing = false,
   onClear,
   itemLabel = "entry",
+  declaredActions = [],
 }: BulkActionBarProps): JSX.Element {
   // Each action is offered on its own permission, as the server answers it:
   // a user may hold one without the others. Publish / Unpublish are only
@@ -163,6 +175,19 @@ export function BulkActionBar({
             )}
           </>
         )}
+
+        {/* Plugins' declared bulk actions, run on the selected rows. */}
+        {declaredActions.map(action => (
+          <Button
+            key={action.id}
+            variant="outline"
+            size="sm"
+            onClick={action.onSelect}
+            disabled={action.disabled}
+          >
+            {action.label}
+          </Button>
+        ))}
 
         {/* Delete selected, only for a caller who may delete here. */}
         {offered.delete && (

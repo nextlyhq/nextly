@@ -31,7 +31,10 @@ import {
 
 import { Pencil, Trash2 } from "@admin/components/icons";
 import { RangeField } from "@admin/components/shared/range-field";
-import type { RowAction } from "@admin/components/ui/table/data-table";
+import type {
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import {
   ListView,
   type ListColumnsControl,
@@ -40,6 +43,8 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { BulkActionBar } from "./BulkActionBar";
+import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
+
 import type { TranslationListFilter } from "./entryFilters";
 import {
   buildEntryColumns,
@@ -151,6 +156,16 @@ export interface EntryTableProps {
    * rows its rule holds for.
    */
   declaredRowActions?: readonly RowAction<EntryRow>[];
+  /**
+   * Plugins' declared bulk actions, offered in the bulk bar on the rows
+   * selected, after the built-in ones.
+   */
+  declaredBulkActions?: readonly DeclaredBulkAction[];
+  /**
+   * Plugins' declared columns, in the order delivered, drawn after the
+   * collection's own columns.
+   */
+  declaredColumns?: readonly NextlyColumn<Record<string, unknown>>[];
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
   /** Created date upper bound (YYYY-MM-DD) */
@@ -259,6 +274,8 @@ export const EntryTable: ForwardRefExoticComponent<
     chosenPluginFilters,
     onPluginFilterChange,
     declaredRowActions,
+    declaredBulkActions,
+    declaredColumns,
     createdFrom = "",
     createdTo = "",
     updatedFrom = "",
@@ -288,10 +305,13 @@ export const EntryTable: ForwardRefExoticComponent<
 
   const columns = useMemo(
     () =>
-      buildEntryColumns(collection, columnsControl?.isColumnVisible, {
-        openInLocale: (entryId, locale) => onEdit(entryId, locale),
-      }),
-    [collection, columnsControl, onEdit]
+      [
+        ...buildEntryColumns(collection, columnsControl?.isColumnVisible, {
+          openInLocale: (entryId, locale) => onEdit(entryId, locale),
+        }),
+        ...(declaredColumns ?? []),
+      ],
+    [collection, columnsControl, onEdit, declaredColumns]
   );
 
   const titleField = useMemo(
@@ -582,6 +602,12 @@ export const EntryTable: ForwardRefExoticComponent<
             }
             isPublishing={isBulkPublishing}
             onClear={clear}
+            declaredActions={(declaredBulkActions ?? []).map(action => ({
+              id: action.id,
+              label: action.label,
+              disabled: action.isDisabled(selected),
+              onSelect: () => action.onSelect(selected),
+            }))}
           />
         ) : undefined
       }
