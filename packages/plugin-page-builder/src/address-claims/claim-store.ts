@@ -110,12 +110,26 @@ interface Pending {
 const pendingByTransaction = new WeakMap<object, Pending>();
 
 function pendingOf(tx: Tx): Pending {
-  let pending = pendingByTransaction.get(tx);
+  const key: object = sharedKeys.get(tx) ?? tx;
+  let pending = pendingByTransaction.get(key);
   if (pending === undefined) {
     pending = { gone: new Set(), written: new Map() };
-    pendingByTransaction.set(tx, pending);
+    pendingByTransaction.set(key, pending);
   }
   return pending;
+}
+
+/** The transaction each token stands for, where several tokens share one. */
+const sharedKeys = new WeakMap<Tx, object>();
+
+/**
+ * Keep what is written through `tx` with what other tokens of the same
+ * transaction wrote, under `key`: the in-transaction phase hands each
+ * handler call a token of its own and one key for the whole transaction, so
+ * pages saved in one batch see each other's claims.
+ */
+export function sharePending(tx: Tx, key: object): void {
+  sharedKeys.set(tx, key);
 }
 
 /**

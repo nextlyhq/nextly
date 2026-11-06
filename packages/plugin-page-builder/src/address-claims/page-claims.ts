@@ -10,6 +10,7 @@
  */
 import { paginatedList } from "@nextlyhq/blocks-engine";
 import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
+import { previewUrlFromTemplate } from "nextly/config";
 
 import { asDocument } from "../component-store-source";
 
@@ -28,7 +29,9 @@ const NONE: PageClaims = { addresses: [], spaces: [] };
 
 /**
  * The claims of the page `data` describes, as a save leaves it, in each of
- * `locales`.
+ * `locales`, at the address `pathTemplate` serves it at (the host's
+ * `pagePreviewPath`, such as `/blocks/{slug}`), or at its slug's own path
+ * where the host names none.
  *
  * Nothing while the save is held as a working draft (the live page keeps
  * what it holds), while the page is not published, or where its slug names
@@ -38,13 +41,22 @@ const NONE: PageClaims = { addresses: [], spaces: [] };
  */
 export function pageClaims(
   data: Readonly<Record<string, unknown>>,
-  locales: readonly string[]
+  locales: readonly string[],
+  pathTemplate?: string
 ): PageClaims {
   if (data._isWorkingDraft === true) return NONE;
   if (data.status !== "published") return NONE;
   const param = slugToStaticParam(data.slug);
   if (param === null) return NONE;
-  const path = `/${param.slug.map(encodeURIComponent).join("/")}`;
+  // Where the host serves its pages, by the interpolation its preview and
+  // the page search use, so a claim names the address a visitor requests.
+  const path =
+    pathTemplate === undefined
+      ? `/${param.slug.map(encodeURIComponent).join("/")}`
+      : previewUrlFromTemplate(pathTemplate, { pathFields: ["slug"] })(
+          data as Record<string, unknown>
+        );
+  if (path === null) return NONE;
   const addresses = locales.flatMap(locale => {
     const address = servedAddress(locale, path);
     return address === null ? [] : [address];

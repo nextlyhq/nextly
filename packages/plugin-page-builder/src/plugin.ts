@@ -1967,6 +1967,9 @@ export const pageBuilder = (
         },
         collection: slug =>
           ctx.services.collections.getCollection(slug, undefined as never),
+        ...(opts.pagePreviewPath === undefined
+          ? {}
+          : { pathTemplate: opts.pagePreviewPath }),
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -1974,6 +1977,9 @@ export const pageBuilder = (
           pages: pagesSlug,
           claims: claimsStore,
           locales: siteLocales(),
+          ...(opts.pagePreviewPath === undefined
+            ? {}
+            : { pathTemplate: opts.pagePreviewPath }),
           nextly: (await getCachedNextly()) as unknown as PagesReader,
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),

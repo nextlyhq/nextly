@@ -18,6 +18,7 @@ import {
   reconcileHolder,
   releaseClaims,
   type Claims,
+  sharePending,
   type DescribeHolder,
   type Holder,
   type Tx,
@@ -40,6 +41,8 @@ export interface PageClaimsDeps {
   readonly nextly: () => Promise<ReadsById>;
   /** A collection's configuration, for its label and title field. */
   readonly collection: (slug: string) => Promise<unknown>;
+  /** Where the host serves its pages (`pagePreviewPath`), if it says. */
+  readonly pathTemplate?: string;
 }
 
 /** The slice of the in-transaction write the hook reads. */
@@ -49,6 +52,8 @@ interface PageWrite {
   readonly data: unknown;
   readonly user?: unknown;
   readonly transaction: Tx;
+  /** The same for every call on one transaction. */
+  readonly transactionKey?: object;
 }
 
 /** Where the hook is registered: core's in-transaction phase. */
@@ -79,6 +84,11 @@ export async function holdPageClaims(
 ): Promise<void> {
   if (typeof write.id !== "string" && typeof write.id !== "number") return;
   const holder: Holder = { collection: deps.pages, id: String(write.id) };
+  // Every page saved in this transaction keeps its claims with the others',
+  // so two pages saved together see each other's.
+  if (write.transactionKey !== undefined) {
+    sharePending(write.transaction, write.transactionKey);
+  }
   if (write.operation === "delete") {
     await releaseClaims(deps.claims, write.transaction, holder);
     return;
@@ -90,7 +100,7 @@ export async function holdPageClaims(
     deps.claims,
     write.transaction,
     holder,
-    pageClaims(data, deps.locales()),
+    pageClaims(data, deps.locales(), deps.pathTemplate),
     describeFor(write.user, deps)
   );
 }

@@ -361,13 +361,19 @@ export interface InTransactionContext<T = Record<string, unknown>>
   /**
    * The write's transaction as `ctx.services.collections`' in-transaction
    * methods take it (`createEntryInTransaction` and the rest): their writes
-   * join the write's own. The same token for every handler call on one
-   * transaction, each entry of a batch included, so work keyed by it sees
-   * what the earlier calls did. It refuses once the handler has settled.
+   * join the write's own. It refuses once the handler has settled.
    *
    * @experimental
    */
   transaction: PluginCollectionTransaction;
+  /**
+   * The same object for every handler call on one transaction, each entry of
+   * a batch included, so state a plugin keeps by it (what it wrote, not yet
+   * committed) carries from one call to the next. It reaches nothing itself.
+   *
+   * @experimental
+   */
+  transactionKey: object;
 }
 
 /**
@@ -2116,8 +2122,8 @@ export function createPluginContext(
     if (known) return known;
     const runner: InTransactionRunner = (tx, write) =>
       bindToTransaction(tx, bound =>
-        withWriteTransactionToken(tx, async transaction => {
-          await handler({ ...write, db: bound, transaction });
+        withWriteTransactionToken(tx, async (transaction, transactionKey) => {
+          await handler({ ...write, db: bound, transaction, transactionKey });
         })
       );
     inTransactionRunners.set(handler, runner);

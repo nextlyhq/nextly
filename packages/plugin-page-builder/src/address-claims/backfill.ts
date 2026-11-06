@@ -36,6 +36,8 @@ export interface BackfillDeps {
   readonly pages: string;
   readonly claims: Claims;
   readonly locales: readonly string[];
+  /** Where the host serves its pages (`pagePreviewPath`), if it says. */
+  readonly pathTemplate?: string;
   readonly nextly: PagesReader;
   readonly withTransaction: <T>(work: (tx: Tx) => Promise<T>) => Promise<T>;
   readonly warn: (message: string, context: Record<string, unknown>) => void;
@@ -84,7 +86,7 @@ async function claimPage(
   row: Readonly<Record<string, unknown>>
 ): Promise<void> {
   const holder = { collection: deps.pages, id };
-  const wanted = pageClaims(row, deps.locales);
+  const wanted = pageClaims(row, deps.locales, deps.pathTemplate);
   if (wanted.addresses.length === 0) return;
   try {
     await deps.withTransaction(tx =>

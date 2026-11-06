@@ -67,11 +67,13 @@ describe.each(getConfiguredTestDialects())(
       captured = undefined;
     });
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      options: Parameters<typeof pageBuilder>[0] = {}
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
         plugins: [
-          pageBuilder(),
+          pageBuilder(options),
           definePlugin({
             name: "@t/page-claims",
             version: "1.0.0",
@@ -198,6 +200,12 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect(await held(t)).toEqual([]);
+    });
+
+    it("holds the address the host serves pages at", async () => {
+      const t = await boot({ pagePreviewPath: "/blocks/{slug}" });
+      const about = await publish(t, "About", "about");
+      expect(await held(t)).toEqual([`address /blocks/about ${about}`]);
     });
 
     it("moves the address when a published page's slug changes", async () => {
