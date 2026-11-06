@@ -1882,20 +1882,20 @@ async function withRelations(
  */
 async function readPublicEntry(args: {
   demand: SourceDemand;
-  entry: ContentEntry;
-  context: RenderContext;
+  slug: string;
+  entryId: unknown;
   entrySource: EntrySource;
   entryRef: BlocksFieldShapeRef;
   reads: SourceReads;
 }): Promise<PublicRecord> {
-  const { demand, entry, context, reads } = args;
+  const { demand, slug, reads } = args;
   let record: PublicRecord;
   if (args.entrySource === "single") {
-    record = await readSingle(reads, context.collection, demand.fields);
+    record = await readSingle(reads, slug, demand.fields);
   } else {
-    const id: unknown = entry.id;
+    const id = args.entryId;
     if (typeof id !== "string" && typeof id !== "number") return undefined;
-    record = await readById(reads, context.collection, id, demand.fields);
+    record = await readById(reads, slug, id, demand.fields);
   }
   return await withRelations(record, demand, args.entryRef, reads);
 }
@@ -1924,7 +1924,7 @@ async function readSingles(
  * pages that show them.
  */
 async function readSite(
-  config: BlocksPageConfig,
+  cacheScope: string | undefined,
   budget: QueryBudget,
   window: number | false | undefined
 ): Promise<BlocksSiteSettings | undefined> {
@@ -1932,7 +1932,7 @@ async function readSite(
   try {
     return await cachedFind(async () => await readPublicSiteSettings(), {
       tags: nextlySiteSettingsTags(),
-      keyParts: ["nextly-public-site-settings", config.cacheScope ?? ""],
+      keyParts: ["nextly-public-site-settings", cacheScope ?? ""],
       revalidate: await releaseBoundedRevalidate(window),
     });
   } catch {
@@ -1998,11 +1998,11 @@ async function listDayInputs(args: {
   const site =
     args.bindings?.site ??
     (args.config.timeZone === undefined
-      ? await readSite(args.config, args.budget, args.window)
+      ? await readSite(args.config.cacheScope, args.budget, args.window)
       : undefined);
   const timeZone =
     args.bindings?.timeZone ??
-    pageTimeZone(args.config, site ?? undefined, args.context);
+    pageTimeZone(args.config.timeZone, site ?? undefined, args.context);
   const cache: ReadCache = {
     scope: args.config.cacheScope ?? "",
     locale: args.context.locale,
@@ -2121,15 +2121,15 @@ async function readFieldShapes(
  * used.
  */
 function pageTimeZone(
-  config: BlocksPageConfig,
+  routeZone: string | undefined,
   site: BlocksSiteSettings | undefined,
-  context: RenderContext
+  where: { readonly collection: string; readonly slug: string }
 ): string | undefined {
-  const zone = config.timeZone ?? site?.timezone ?? undefined;
-  if (config.timeZone === undefined && zone !== undefined) {
+  const zone = routeZone ?? site?.timezone ?? undefined;
+  if (routeZone === undefined && zone !== undefined) {
     if (!safeTimeZone(zone).valid) {
       console.warn(
-        `[blocks] The site's time zone "${zone}" is not one this runtime knows, so bound date-times on "${context.collection}" page "${context.slug}" are shown in UTC.`
+        `[blocks] The site's time zone "${zone}" is not one this runtime knows, so bound date-times on "${where.collection}" page "${where.slug}" are shown in UTC.`
       );
     }
   }
@@ -2137,35 +2137,67 @@ function pageTimeZone(
 }
 
 /**
- * What a page's bindings read, read as the public reads it, or nothing when
- * the documents it draws hold no binding.
+ * What a binding-source read is given: the documents drawn, where the page's
+ * entry is and who reads it.
+ *
+ * @experimental Settles with the editor's binding sources.
+ */
+export interface BindingSourcesArgs {
+  /** The documents drawn, as the read pipeline prepared them. */
+  readonly documents: readonly BlockDocument[];
+  /** Whether the page's entry is a collection's entry or a Single. */
+  readonly entrySource: "collection" | "single";
+  /** The collection, or the Single, the page's entry belongs to. */
+  readonly slug: string;
+  /** The entry's id, for a collection's entry. */
+  readonly entryId?: unknown;
+  /** The page, for what is said about it: its address or its slug. */
+  readonly page: string;
+  /** The language the sources are read in. */
+  readonly locale?: string;
+  /**
+   * Who reads the entry, the Singles and each relation a path follows: a
+   * published page's public reader, or an editor's reader that reads as the
+   * person editing. The site settings and the field shapes are the public's
+   * whoever reads: the same for everyone, and holding no one's data.
+   */
+  readonly reader: BlocksPublicReader;
+  /** The page's read budget, which every source read claims from. */
+  readonly budget: QueryBudget;
+  /** The route's cache scope, for the public, shared reads. */
+  readonly cacheScope?: string;
+  /** The route's own time zone, which wins over the site's. */
+  readonly timeZone?: string;
+  /** The release window the public, shared reads are bounded by. */
+  readonly window?: number | false;
+}
+
+/**
+ * What a page's bindings read, through `args.reader`, or nothing when the
+ * documents it draws hold no binding.
  *
  * Asked of each document as the read pipeline prepared it: composed,
  * migrated, gated, de-duplicated and with its known placeholders removed, so
- * a node the page does not present claims no read.
+ * a node the page does not present claims no read. A published page passes
+ * its public reader; the editor's canvas passes a reader that reads as the
+ * person editing, so the two answer the same question by one implementation.
+ *
+ * @experimental Settles with the editor's binding sources.
  */
-async function readPageBindings(args: {
-  config: BlocksPageConfig;
-  entry: ContentEntry;
-  context: RenderContext;
-  documents: readonly BlockDocument[];
-  entrySource: EntrySource;
-  reader: BlocksPublicReader;
-  budget: QueryBudget;
-  window: number | false | undefined;
-}): Promise<PageBindings | undefined> {
-  const { config, context } = args;
+export async function readBindingSources(
+  args: BindingSourcesArgs
+): Promise<PageBindings | undefined> {
   // Prepared trees are already within the pipeline's caps, and a composed
   // tree may run deeper than a stored one, so no cap is applied again.
   const demand = bindingDemand(args.documents);
   if (!demand.any) return undefined;
   const entryRef: BlocksFieldShapeRef =
     args.entrySource === "single"
-      ? { single: context.collection }
-      : { collection: context.collection };
+      ? { single: args.slug }
+      : { collection: args.slug };
   const shapes = await readFieldShapes(entryRef, demand, args.documents, {
-    scope: config.cacheScope ?? "",
-    locale: context.locale,
+    scope: args.cacheScope ?? "",
+    locale: args.locale,
     window: args.window,
   });
   const reads: SourceReads = {
@@ -2177,8 +2209,10 @@ async function readPageBindings(args: {
     demand.entry === undefined
       ? undefined
       : await readPublicEntry({
-          ...args,
           demand: demand.entry,
+          slug: args.slug,
+          entryId: args.entryId,
+          entrySource: args.entrySource,
           entryRef,
           reads,
         });
@@ -2209,21 +2243,21 @@ function warnOfUnknownTimeZone(zone: string | undefined): void {
  * needs the site's zone, and the zone its date-times are shown in.
  */
 async function siteAndZone(
-  args: {
-    config: BlocksPageConfig;
-    context: RenderContext;
-    budget: QueryBudget;
-    window: number | false | undefined;
-  },
+  args: Pick<
+    BindingSourcesArgs,
+    "slug" | "page" | "budget" | "cacheScope" | "timeZone" | "window"
+  >,
   demand: BindingDemand
 ): Promise<{ site?: BlocksSiteSettings; timeZone?: string }> {
-  const { config } = args;
-  const needsZone = demand.formatsDates && config.timeZone === undefined;
+  const needsZone = demand.formatsDates && args.timeZone === undefined;
   const site =
     demand.site || needsZone
-      ? await readSite(config, args.budget, args.window)
+      ? await readSite(args.cacheScope, args.budget, args.window)
       : undefined;
-  const timeZone = pageTimeZone(config, site, args.context);
+  const timeZone = pageTimeZone(args.timeZone, site, {
+    collection: args.slug,
+    slug: args.page,
+  });
   return {
     ...(site === undefined ? {} : { site }),
     ...(timeZone === undefined ? {} : { timeZone }),
@@ -2342,15 +2376,20 @@ async function readPageInputs(args: {
   const presented = [page, ...drawnRegions].flatMap(part =>
     part.prepared === null ? [] : [part.prepared.presented]
   );
-  const bindings = await readPageBindings({
-    config,
-    entry,
-    context,
+  const bindings = await readBindingSources({
     documents: presented,
     entrySource: args.entrySource,
+    slug: context.collection,
+    entryId: entry.id,
+    page: context.slug,
+    ...(context.locale === undefined ? {} : { locale: context.locale }),
     reader: publicReaderFor(config, context.locale, args.window),
     budget,
-    window: args.window,
+    ...(config.cacheScope === undefined
+      ? {}
+      : { cacheScope: config.cacheScope }),
+    ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
+    ...(args.window === undefined ? {} : { window: args.window }),
   });
   return {
     definitions,

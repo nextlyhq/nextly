@@ -655,6 +655,10 @@ describe("the next entry", () => {
       "createPublicBlocksPage",
       "createPublicSinglePage",
       "createSinglePage",
+      // Added deliberately: what a page's bindings read, through whichever
+      // reader a route passes, so the editor's canvas reads its binding
+      // sources by the published page's own implementation.
+      "readBindingSources",
     ]);
   });
 });
