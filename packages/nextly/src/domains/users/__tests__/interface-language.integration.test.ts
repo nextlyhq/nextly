@@ -51,12 +51,16 @@ describe.each(getConfiguredTestDialects())(
     const cookies: Record<string, string> = {};
 
     /** A session cookie for `id`, as sign-in issues one. */
-    async function sessionFor(id: string, email: string): Promise<string> {
+    async function sessionFor(
+      id: string,
+      email: string,
+      name: string
+    ): Promise<string> {
       const token = await signAccessToken(
         buildClaims({
           userId: id,
           email,
-          name: null,
+          name,
           image: null,
           roleIds: [],
           sessionEpoch: 0,
@@ -142,8 +146,12 @@ describe.each(getConfiguredTestDialects())(
           data: { name: "Member", isActive: true },
         })
       ).item.id;
-      cookies.owner = await sessionFor(ownerId, "owner@example.com");
-      cookies.member = await sessionFor(memberId, "member@example.com");
+      cookies.owner = await sessionFor(ownerId, "owner@example.com", "Owner");
+      cookies.member = await sessionFor(
+        memberId,
+        "member@example.com",
+        "Member"
+      );
     }, 120_000);
 
     afterAll(async () => {
