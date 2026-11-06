@@ -307,6 +307,9 @@ holds the files. If a file was removed on purpose, record that with
 `nextly migrate:resolve --removed <file>`: the migration stays applied, later runs go on, and if
 its file returns it is never run again and is checked against its recorded checksum.
 `migrate:down` refuses to roll back such a migration while its file is absent.
+`nextly migrate:status` lists it as `applied (file removed)`, as information, where an applied
+migration whose file is gone with no removal recorded shows as `applied (file missing)`. The
+`--json` output carries the same value in `status`.
 
 ## Where the registry and the tables disagree
 

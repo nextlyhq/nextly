@@ -262,6 +262,29 @@ describe("migrate --dry-run", () => {
     });
   });
 
+  it("names an applied migration the folder lacks, as the refusal a real run makes, exit 3", async () => {
+    const repo = new SchemaEventsRepository(testDb.db, "sqlite");
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename: "20260102_000000_000_newer.sql",
+      sha256: "a".repeat(64),
+    });
+
+    await preview();
+
+    expect(
+      lines.filter(line =>
+        line.includes("would refuse before applying anything")
+      )
+    ).toEqual([
+      expect.stringMatching(
+        /^ {2}✖ a real run would refuse before applying anything \(exit code 3\): .*20260102_000000_000_newer\.sql/
+      ),
+    ]);
+  });
+
   it("reads an absent ledger as nothing applied, and creates none", async () => {
     testDb.sqlite.exec("DROP TABLE nextly_schema_events");
 

@@ -463,15 +463,27 @@ async function resolveRemoved(
       `${filename} is in the migrations folder, so there is no removal to record.`
     );
   }
-  const standing = migrationStanding(await args.repo.findFileApplies(filename));
+  // Its down section's attempts too, as every history check reads them.
+  const standing = migrationStanding([
+    ...(await args.repo.findFileApplies(filename)),
+    ...(await args.repo.findFileRollbacks(filename)),
+  ]);
   if (standing.unresolvedAttempt !== undefined) {
     throw refuse(
-      `${filename} has an attempt a newer build did not finish, so the database may hold part of it. Reverse what of it ran, then record it with \`nextly migrate:resolve --rolled-back ${filename} --file-missing\`.`
+      `${filename} has an attempt that did not finish, so the database may hold part of it. Record how it ended first: reverse what of it ran and run \`nextly migrate:resolve --failed-cleanup ${filename}\`, or, for a newer build's attempt at the file, \`nextly migrate:resolve --rolled-back ${filename} --file-missing\`.`
     );
   }
   if (standing.state !== "applied" || standing.outcome === undefined) {
     throw refuse(
       `${filename} is not applied, so its removal needs no record: a migration the ledger does not record applied is never counted as missing.`
+    );
+  }
+  // The checksum a returning file is held to: a row an earlier version wrote
+  // without one could not hold it, and the next run would record the
+  // returning file's checksum as if it matched.
+  if (!isRecordedChecksum(standing.outcome.sha256)) {
+    throw refuse(
+      `${filename}'s applied record carries no checksum, so a file that returns could not be checked against it. Put the file back as it was when it ran and run \`nextly migrate\` once, which records its checksum, then remove it and record the removal.`
     );
   }
   const removals = await args.repo.listFileRemovals();

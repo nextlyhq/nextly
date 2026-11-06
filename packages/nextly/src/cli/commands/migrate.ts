@@ -1002,6 +1002,7 @@ export async function previewMigrate(args: {
     logger
   );
   if (hasLedger) await previewChangedFiles(rows, args, logger);
+  await previewMissingFiles(args, logger);
   if (pendingModules.length + pendingFiles.length > 0) {
     await previewEventTriggers(args, logger);
   }
@@ -1083,6 +1084,25 @@ async function previewBeyondStep(
  * An applied file edited since it ran stops a real run before it applies
  * anything (`assertAppliedFilesUnchanged`), so the preview names it.
  */
+/**
+ * An applied app migration the folder lacks stops a real run before it
+ * applies anything, exit 3 (`assertAppliedFilesPresent`), so the preview
+ * names it, read-only.
+ */
+async function previewMissingFiles(
+  args: AppHistoryArgs,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const refusal = await historyRefusalIn(() =>
+    assertAppliedFilesPresent({ ...args, command: "nextly migrate" })
+  );
+  if (refusal !== undefined) {
+    logger.info(
+      `  ✖ a real run would refuse before applying anything (exit code 3): ${refusal}`
+    );
+  }
+}
+
 async function previewChangedFiles(
   rows: Parameters<typeof appliedChecksums>[1],
   args: { dialect: SupportedDialect; migrationsDir: string },
@@ -2577,6 +2597,38 @@ function appliedFilesChanged(
     next: "Restore each file as it was when it ran, and put the change in a new migration with `nextly migrate:create`. If the edit is intended and the database already stands as the file now says, accept it with `nextly migrate:resolve --applied <file>`, which compares the database with the file's snapshot (add `--skip-verify` where it has none).",
     context: { files: [...changed] },
   });
+}
+
+/** The codes the app history checks refuse with (`assertAppHistoryHolds`). */
+const HISTORY_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "MIGRATION_MISSING",
+  "MIGRATION_TAMPERED",
+  "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+]);
+
+/**
+ * The refusal `check` (one of the app history checks) makes, as a dry run
+ * reports it: its message, or undefined when the history holds. Any other
+ * error travels.
+ */
+export async function historyRefusalIn(
+  check: () => Promise<void>
+): Promise<string | undefined> {
+  try {
+    await check();
+    return undefined;
+  } catch (error) {
+    const refusal = historyRefusalOf(error);
+    if (refusal === undefined) throw error;
+    return refusal;
+  }
+}
+
+/** A history check's refusal (`HISTORY_REFUSAL_CODES`) as a dry run reports it: its message; undefined for any other error. */
+export function historyRefusalOf(error: unknown): string | undefined {
+  return NextlyError.is(error) && HISTORY_REFUSAL_CODES.has(error.code)
+    ? error.publicMessage
+    : undefined;
 }
 
 /**

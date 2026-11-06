@@ -710,6 +710,46 @@ describe("resolveMigration", () => {
       });
     });
 
+    it("refuses --removed for an applied row with no recorded checksum, which a returning file could not be held to", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      for (const sha256 of [null, "null"]) {
+        const file = `00${sha256 === null ? "4" : "5"}_legacy.sql`;
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: file,
+          sha256,
+          startedAt: new Date(1),
+        });
+        await expect(
+          resolveMigration({ mode: "removed", filename: file, ...base })
+        ).rejects.toMatchObject({
+          code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+          publicMessage: expect.stringContaining("checksum"),
+        });
+      }
+      expect(await repo.listFileRemovals()).toEqual([]);
+    });
+
+    it("refuses --removed over a rollback attempt that did not finish", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await applied(repo);
+      await repo.insertEvent({
+        eventType: "file_rollback",
+        status: "failed",
+        source: "cli-migrate",
+        filename: FILE,
+        startedAt: new Date(5),
+      });
+      await expect(
+        resolveMigration({ mode: "removed", filename: FILE, ...base })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+      expect(await repo.listFileRemovals()).toEqual([]);
+    });
+
     it("refuses --removed for a plugin module", async () => {
       const { base } = makeDeps(testDb, absent);
       await expect(

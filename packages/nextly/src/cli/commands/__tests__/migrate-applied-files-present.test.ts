@@ -13,7 +13,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
-import { assertAppliedFilesPresent, migrateExitCode } from "../migrate";
+import { NextlyError } from "../../../errors/nextly-error";
+import {
+  assertAppliedFilesPresent,
+  historyRefusalOf,
+  migrateExitCode,
+} from "../migrate";
 
 const PRESENT = "20260101_000000_000_init.sql";
 const NEWER = "20260102_000000_000_newer.sql";
@@ -112,6 +117,20 @@ describe("applied app migrations the folder lacks", () => {
     );
     expect(refusal).toMatchObject({ what: expect.stringContaining(OTHER) });
     expect((refusal as { what: string }).what).not.toContain(NEWER);
+  });
+
+  it("reports a history check's refusal for a dry run, and no other error", async () => {
+    await row(NEWER, "applied", 1);
+    const refusal = await check().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(historyRefusalOf(refusal)).toContain(NEWER);
+    expect(
+      historyRefusalOf(
+        new NextlyError({ code: "INTERNAL_ERROR", publicMessage: "boom" })
+      )
+    ).toBeUndefined();
   });
 
   it("counts no rolled-back migration, and no plugin's rows, as missing", async () => {

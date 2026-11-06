@@ -81,6 +81,7 @@ import { openMigrationCommand } from "../utils/command-prerequisites";
 
 import {
   assertAppHistoryHolds,
+  historyRefusalOf,
   maybeForceUnlock,
   migrateExitCode,
 } from "./migrate";
@@ -667,8 +668,9 @@ export async function baselineCore(
     dialect,
     async () => {
       // Under the lock, before the plan and the first write, from the ledger
-      // no other run changes now.
-      await assertAppHistoryHolds(history);
+      // no other run changes now. Read-only: any applied history stops the
+      // adoption anyway, so a refused baseline writes nothing.
+      await assertAppHistoryHolds({ ...history, recordChecksums: false });
       const planned = await planAdoption(deps);
       if (planned.kind !== "adopt") return planned;
       const { baseName, sqlContent, sqlPath } = planned;
@@ -814,6 +816,7 @@ export async function runMigrateBaseline(
       deferredExtends: configResult.deferredExtends,
     });
 
+    // A dry run reports a history refusal as the real run's, and exits 0.
     const result = await baselineCore({
       adapter,
       db,
@@ -830,7 +833,14 @@ export async function runMigrateBaseline(
       knownJunctions: resolved.knownJunctions,
       adoptUnknown: options.adoptUnknown,
       dryRun: options.dryRun === true,
+    }).catch((error: unknown) => {
+      const refusal =
+        options.dryRun === true ? historyRefusalOf(error) : undefined;
+      if (refusal === undefined) throw error;
+      reportPlan({ changes: [], refusals: [refusal] });
+      return undefined;
     });
+    if (result === undefined) return;
 
     if (result.kind === "would-baseline") {
       reportPlan({ changes: baselineChanges(result, cwd) });

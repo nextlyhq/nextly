@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../__tests__/fixtures/db";
 
-import { runReconcileCore } from "./upgrade";
+import { CliError } from "../errors";
+import { previewReconcileCore, runReconcileCore } from "./upgrade";
 
 // The schema lock is exercised against real databases in its own suites. These drive the upgrade steps
 // through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
@@ -88,6 +89,25 @@ describe("runReconcileCore", () => {
       )
     ).rejects.toMatchObject({ code: "NEXTLY_LEGACY_BOOKKEEPING_DETECTED" });
     expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it("reports, in a dry run, the history refusal a real run stops on, and plans nothing past it", async () => {
+    const missing = new CliError("MIGRATION_MISSING", {
+      what: "The ledger records 1 applied migration this build's migrations folder lacks.",
+      why: "A newer build has migrated this database.",
+      next: "Deploy the build that holds the file.",
+    });
+    const plan = await previewReconcileCore({
+      adapter: {
+        tableExists: () => Promise.resolve(false),
+        getDrizzle: () => testDb.db,
+        dropTable: () => Promise.resolve(),
+        getCapabilities: () => ({ dialect: "sqlite" }),
+      },
+      interactive: false,
+      checkAppHistory: () => Promise.reject(missing),
+    });
+    expect(plan).toEqual({ changes: [], refusals: [missing.publicMessage] });
   });
 
   it("runs the app history checks before the core reconcile, which a refusal leaves unrun", async () => {

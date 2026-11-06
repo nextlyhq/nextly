@@ -377,6 +377,40 @@ describe.each(LOCK_DIALECTS)(
       });
     }, 240_000);
 
+    it("refuses a baseline dry run on the history, and a refused baseline records no checksum", async () => {
+      rmSync(path(TWO));
+      const before = await databaseState();
+      const dry = await refusal(
+        baselineCore({
+          adapter: adapter as never,
+          db: adapter.getDrizzle(),
+          dialect,
+          migrationsDir,
+          logger,
+          dryRun: true,
+        })
+      );
+      expect(dry).toMatchObject({ code: "MIGRATION_MISSING", exit: 3 });
+      expect(await databaseState()).toEqual(before);
+
+      // An applied row an earlier version wrote without a checksum: the
+      // refused baseline leaves it as it was.
+      writeFile(
+        TWO,
+        [`CREATE TABLE ${P}_two (id integer)`],
+        [`DROP TABLE ${P}_two`]
+      );
+      const one = (await repo().findFileApplies(`${ONE}.sql`)).find(
+        row => row.status === "applied"
+      );
+      await adapter.executeQuery(
+        `UPDATE nextly_schema_events SET sha256 = NULL WHERE id = '${String(one?.id)}'`
+      );
+      const unrecorded = await databaseState();
+      expect(await baseline()).toMatchObject({ kind: "history-not-empty" });
+      expect(await databaseState()).toEqual(unrecorded);
+    }, 240_000);
+
     it("never runs a removed migration again when its file returns, and checks it against its recorded checksum", async () => {
       const text = readFileSync(path(TWO), "utf8");
       rmSync(path(TWO));
