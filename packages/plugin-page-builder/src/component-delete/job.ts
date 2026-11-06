@@ -51,7 +51,12 @@ import type {
   RewriteReport,
 } from "../host-rewrite/contract";
 import { documentKeyOf } from "../host-rewrite/contract";
-import type { DeletionRun, FenceStore } from "../host-rewrite/fence";
+import {
+  CLOSABLE_PHASES,
+  type DeletionRun,
+  type FenceStore,
+  type StoredPhase,
+} from "../host-rewrite/fence";
 import type { HostProgress } from "../host-rewrite/progress";
 import {
   runStarterOf,
@@ -88,7 +93,7 @@ export interface ComponentDeleteDeps extends NamingDeps {
   /** The caller, as the rewrite takes them. */
   readonly caller: RewriteCaller;
   readonly rewrite: ComponentDeleteRewriteService;
-  readonly runs: Pick<FenceStore, "runFor" | "advance" | "close">;
+  readonly runs: Pick<FenceStore, "runFor" | "advance" | "closeRun">;
   readonly nextly: Pick<Nextly, "find" | "findByID" | "delete">;
   /** May the caller do `action` on `resource`; `anyEntry` as `caller.can` takes it. */
   readonly may: (
@@ -148,14 +153,32 @@ export async function stepComponentDelete(
   if (held !== null && isMine(deps, held) && afterTheDelete(held)) {
     return carryOn(deps, held);
   }
-  await requireReadable(deps);
+  try {
+    await requireReadable(deps);
+  } catch (error) {
+    // A second request of the same person may have deleted it since the run
+    // was read: the run as it stands now answers.
+    const now = await deps.runs.runFor(deps.componentId, "delete");
+    if (now !== null && isMine(deps, now) && afterTheDelete(now)) {
+      return carryOn(deps, now);
+    }
+    throw error;
+  }
   if (held !== null && !isMine(deps, held)) throw someoneElse(deps);
   // A precondition of every step, judged for THIS component by core's own
   // gate: a rule that lets the caller delete some components does not let
   // them convert the copies of one it refuses. A delete they had open stops,
   // with nothing further converted.
   if (!(await deps.mayDeleteIt())) {
-    if (held !== null) await deps.runs.close(deps.componentId, "delete");
+    if (held !== null && !(await closeAt(deps, held, CLOSABLE_PHASES))) {
+      // Moved on since it was read. Deleted by a second request of theirs:
+      // the tombstone answers, and is never closed. Anything else is still
+      // refused.
+      const now = await deps.runs.runFor(deps.componentId, "delete");
+      if (now !== null && isMine(deps, now) && afterTheDelete(now)) {
+        return carryOn(deps, now);
+      }
+    }
     throw NextlyError.forbidden({
       logContext: {
         reason: "component-delete-not-granted",
@@ -222,7 +245,10 @@ async function preflight(
 ): Promise<ComponentDeleteAnswer> {
   const judged = await judge(deps, run.cursor);
   if (judged.blocked) {
-    await deps.runs.close(deps.componentId, "delete");
+    if (!(await closeAt(deps, run, ["preflight"]))) {
+      const moved = await fromNow(deps);
+      if (moved !== null) return moved;
+    }
     return answer(deps, "refused", {
       mayDelete: true,
       run: null,
@@ -270,8 +296,13 @@ async function convert(
   }
   const left = rows.filter(row => row.state === "left");
   if (left.length > 0) {
+    // Closed only while still done: a save re-queueing a document since sent
+    // it back to converting, and a second request may have moved it on.
+    if (!(await closeAt(deps, run, ["done"]))) {
+      const moved = await fromNow(deps);
+      if (moved !== null) return moved;
+    }
     const named = await leftDocuments(deps, left, report);
-    await deps.runs.close(deps.componentId, "delete");
     return answer(deps, "partly-done", {
       mayDelete: true,
       run: null,
@@ -309,7 +340,13 @@ async function deleteIt(
       });
     } catch (error) {
       if (await componentExists(deps)) {
-        await deps.runs.close(deps.componentId, "delete");
+        // The delete was refused and the component is there: the run goes
+        // back to `done`, by compare-and-set from `deleting`, and is closed
+        // from there, so no request ever closes a run at `deleting` or
+        // `deleted`. Lost to a second request that moved it, it is left.
+        if (await deps.runs.advance(run.id, "deleting", "done", null)) {
+          await closeAt(deps, run, ["done"]);
+        }
         throw error;
       }
     }
@@ -323,6 +360,33 @@ async function deleteIt(
   return answer(deps, "done", {
     mayDelete: true,
     run: { yours: true, step: "deleted" },
+  });
+}
+
+/** Close the run read as `run`, only while it is still at one of `at`. */
+function closeAt(
+  deps: ComponentDeleteDeps,
+  run: DeletionRun,
+  at: readonly StoredPhase[]
+): Promise<boolean> {
+  return deps.runs.closeRun(run.id, at);
+}
+
+/**
+ * The answer from the run as it stands now, for a request whose close missed:
+ * the caller's own delete carried on from where it is, or `null` when there is
+ * no run of theirs to answer from.
+ */
+async function fromNow(
+  deps: ComponentDeleteDeps
+): Promise<ComponentDeleteAnswer | null> {
+  const now = await deps.runs.runFor(deps.componentId, "delete");
+  if (now === null || !isMine(deps, now)) return null;
+  if (afterTheDelete(now)) return carryOn(deps, now);
+  return answer(deps, now.phase === "preflight" ? "preflight" : "running", {
+    mayDelete: true,
+    run: runInfo(deps, now),
+    progress: progressOf(await deps.rewrite.progress(deps.componentId)),
   });
 }
 
