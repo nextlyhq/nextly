@@ -1016,10 +1016,38 @@ describe("a shared-style write refused because the Single was saved meanwhile", 
       stillUsed
     );
     expect(write.mock.calls[1]?.[0]).toEqual([card, spare]);
-    // The index is asked again on the newest list; the stored documents,
-    // which do not depend on the Single, are walked once.
+    // The index and the stored documents are both asked again on the
+    // retry: a page saved meanwhile may use the style the index missed.
     expect(usage.source.health).toHaveBeenCalledTimes(2);
-    expect(stillUsed.uses).toHaveBeenCalledTimes(1);
+    expect(stillUsed.uses).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses on the retry when a page saved meanwhile uses the style", async () => {
+    const { store, write } = changingStoreOf([card, hero], [card, hero]);
+    const usage = usageOf(WHOLE);
+    const stillUsed = {
+      uses: vi
+        .fn<StillUsedCheck["uses"]>()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([{ kind: "collection", slug: "pages", id: "p1" }]),
+      firstReadable: async () => "Home",
+    };
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-hero"] }),
+          store,
+          usage.source,
+          new Set(),
+          stillUsed
+        )
+      )
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ code: "IN_USE" }] },
+    });
+    // The stale first write, and nothing after the second walk refused.
+    expect(write).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a removal when the style was locked meanwhile, writing nothing more", async () => {

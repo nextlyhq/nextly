@@ -667,7 +667,8 @@ async function refuseStoredUses(
  * A write refused because the Single was saved meanwhile is made again on
  * what is stored then: the stored entries and the index are asked again, and
  * only these styles are taken out of the newest list. The stored documents
- * are walked once, since what they hold does not depend on the Single.
+ * are walked again too: a page saved using a style between two attempts is
+ * one the index may not have counted, which is what the walk is there for.
  */
 export async function removeSharedStyles(
   req: Request,
@@ -686,7 +687,6 @@ export async function removeSharedStyles(
     ...new Set(parsed.data.ids),
   ] satisfies SharedStyleRemoveRequest["ids"];
   const gone = new Set(ids);
-  let walked = false;
   await retryOnStale(
     () => store.read(),
     async read => {
@@ -703,8 +703,7 @@ export async function removeSharedStyles(
       }
       // Only once the index found nothing: its refusals name every reason
       // cheaply, and this read walks every document the builder opens.
-      if (!walked) await refuseStoredUses(ids, stillUsed);
-      walked = true;
+      await refuseStoredUses(ids, stillUsed);
       await store.write(
         classes.filter(
           entry => typeof entry.id !== "string" || !gone.has(entry.id)
