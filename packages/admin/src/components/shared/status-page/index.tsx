@@ -7,6 +7,7 @@ import { ArrowLeft, LayoutDashboard } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES } from "@admin/constants/routes";
 import { entryBehindIsAdmin, isAdminPath } from "@admin/lib/admin-history";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 import { navigateTo } from "@admin/lib/navigation";
 
 /** A same-origin URL inside the admin, matched by whole path segment. */
@@ -101,6 +102,9 @@ export function StatusPage({
   title,
   description,
 }: StatusPageProps): React.JSX.Element {
+  // In the interface language, falling back to English where its catalog
+  // has no entry.
+  const t = useT();
   return (
     <PageContainer className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)]">
       <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-lg bg-card border border-border">
@@ -130,14 +134,14 @@ export function StatusPage({
             onClick={goBack}
           >
             <ArrowLeft className="h-4 w-4" />
-            Go back
+            {t("nextly.status.back")}
           </Button>
           <Button
             className="w-full sm:w-auto sm:min-w-[140px] gap-2 rounded-md font-medium"
             onClick={() => navigateTo(ROUTES.DASHBOARD)}
           >
             <LayoutDashboard className="h-4 w-4" />
-            Go to dashboard
+            {t("nextly.status.dashboard")}
           </Button>
         </div>
       </div>

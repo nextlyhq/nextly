@@ -26,6 +26,8 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   BrandingProvider: ({ children }: { children: React.ReactNode }) => (
     <>{children}</>
   ),
+  // The layout's translations read the plugins' catalogs from branding.
+  useBranding: () => ({}),
 }));
 
 // The tab title's provider reads branding and the open collection; neither is

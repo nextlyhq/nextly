@@ -317,6 +317,7 @@ export function isAllowedAttribute(name: string): boolean {
 export {
   EDITOR_NAMESPACE,
   INSTANCE_ATTRIBUTE,
+  LIST_ACTION_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
