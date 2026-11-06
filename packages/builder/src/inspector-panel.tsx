@@ -1176,6 +1176,9 @@ function ContentSurface({
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
+  // A block's own inspector knows nothing of bindings visitors will not see,
+  // so beside one, every such binding on the block is said above it.
+  const unreadable = useVisitorUnreadable(inspection.nodeId);
   const generated = (
     <ContentFields
       inspection={inspection}
@@ -1221,6 +1224,10 @@ function ContentSurface({
   return (
     <>
       {visibility}
+      <VisitorUnreadableNote
+        bindings={unreadable}
+        props={new Set(unreadable.map(binding => binding.prop))}
+      />
       <CustomInspectorBoundary fallback={generated}>
         <CustomInspector
           Inspector={Custom}

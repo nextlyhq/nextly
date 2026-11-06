@@ -132,4 +132,44 @@ describe("the bound props a visitor will not see", () => {
       ).size
     ).toBe(0);
   });
+
+  it("marks every binding to a source the public may read none of", () => {
+    // `contact` has no public field at all, so the published page reads none
+    // of it; the person editing reads it, so the host says it is unreadable.
+    const marked = visitorUnreadableBindings(
+      page(
+        heading("phone", {
+          text: {
+            $bind: "phone",
+            source: "single",
+            sourceKey: "contact",
+            fallback: "Call us",
+          },
+        }),
+        heading("tagline", {
+          text: { $bind: "tagline", source: "single", sourceKey: "footer" },
+        })
+      ),
+      {
+        schema,
+        entryRef,
+        unreadableSource: ref => "single" in ref && ref.single === "contact",
+      }
+    );
+    expect([...marked.keys()]).toEqual(["phone"]);
+    expect(marked.get("phone")).toEqual([
+      { prop: "text", path: "phone", fallback: { value: "Call us" } },
+    ]);
+    // The control: without the host's word, unknown shapes mark nothing.
+    expect(
+      visitorUnreadableBindings(
+        page(
+          heading("phone", {
+            text: { $bind: "phone", source: "single", sourceKey: "contact" },
+          })
+        ),
+        { schema, entryRef }
+      ).size
+    ).toBe(0);
+  });
 });

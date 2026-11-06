@@ -67,10 +67,22 @@ const OUTLINE_OUTSET_PX = 2;
 /** The badge's height, as the stylesheet draws it. */
 const BADGE_HEIGHT_PX = 22;
 
+/** Whether two rectangles share any area. */
+function overlaps(a: Rect, b: Rect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
 /** Where one block's mark is drawn, in the chrome's coordinates. */
 interface BadgePlace {
   /** The dashed outline around the block, just outside its box. */
   readonly outline: Rect;
+  /** The badge's right edge: the outline's, or the screen's when nearer. */
+  readonly right: number;
   /** The badge's top; its right edge is the outline's right edge. */
   readonly top: number;
   /**
@@ -146,6 +158,9 @@ export function VisitorUnreadableBadges({
       }
       const box = space.place(canvasContentRect(target, space.root));
       if (box.width === 0 && box.height === 0) continue;
+      // A block wholly off screen gets no badge: one the layer clips away
+      // would still be a stop for the keyboard, with nothing to see.
+      if (!overlaps(box, onScreen)) continue;
       const outline: Rect = {
         x: box.x - OUTLINE_OUTSET_PX,
         y: box.y - OUTLINE_OUTSET_PX,
@@ -155,6 +170,9 @@ export function VisitorUnreadableBadges({
       const inside = outline.y - onScreen.y < BADGE_HEIGHT_PX;
       next.set(id, {
         outline,
+        // In from the screen's right edge as far as the block runs past it,
+        // so a block scrolled partly off the side keeps its badge in view.
+        right: Math.min(outline.x + outline.width, onScreen.x + onScreen.width),
         // Sitting on the outline's top edge, its border shared with the
         // outline's, so the two read as one mark of this block.
         top: inside ? outline.y : outline.y - BADGE_HEIGHT_PX + 1,
@@ -217,7 +235,7 @@ export function VisitorUnreadableBadges({
               className="nx-visitor-unreadable__badge"
               data-inside={place.inside ? "" : undefined}
               data-dismissed={dismissed === id ? "" : undefined}
-              style={{ left: outline.x + outline.width, top: place.top }}
+              style={{ left: place.right, top: place.top }}
               onMouseLeave={() => {
                 if (dismissed === id) setDismissed(null);
               }}

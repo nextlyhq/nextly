@@ -54,6 +54,7 @@ export { PageRenderer } from "./page-renderer";
 export {
   bindingsFromWire,
   bindingsToWire,
+  noPublicFields,
   type WireBindings,
 } from "./binding-wire";
 export type { PageRendererProps } from "./page-renderer";

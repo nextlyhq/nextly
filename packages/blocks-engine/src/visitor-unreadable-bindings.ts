@@ -9,6 +9,11 @@
  * and the page falls back. This asks that same check, with the same public
  * shapes, so what the editor marks and what a visitor is served are one rule.
  *
+ * A source the public may read none of is not in those shapes at all, so its
+ * bindings are judged whole: the host says which sources the person editing
+ * reads that the public may not (`unreadableSource`), and every binding to
+ * one is marked.
+ *
  * Only the page's entry and its Singles are judged. The site settings are
  * read through their own public allowlist, the same for everyone, and a list
  * item's bindings are judged by the list's rows, not here.
@@ -17,8 +22,10 @@
  */
 import {
   checkBinding,
+  type BindingCheck,
   type BindingSchemaRef,
   type BindingSchemaSource,
+  type CheckedBinding,
 } from "./binding-rules";
 import type { BlockDocument } from "./document";
 import { walkForest } from "./forest-walk";
@@ -55,6 +62,43 @@ export interface VisitorUnreadableInput {
   readonly entryRef?: BindingSchemaRef;
   /** The blocks' declared props, so a fallback is judged as the page judges it. */
   readonly props?: BlockPropsLookup;
+  /**
+   * Whether a source exists for the person editing but the public may read
+   * none of it: the published page reads nothing of it and every binding to
+   * it falls back. Absent, no source is judged whole.
+   */
+  readonly unreadableSource?: (ref: BindingSchemaRef) => boolean;
+}
+
+/** The schema ref a checked binding's source is read under, when judged here. */
+function sourceRefOf(
+  binding: CheckedBinding,
+  entryRef: BindingSchemaRef | undefined
+): BindingSchemaRef | undefined {
+  if (binding.source === "entry") return entryRef;
+  if (binding.source === "single" && binding.sourceKey !== undefined) {
+    return { single: binding.sourceKey };
+  }
+  return undefined;
+}
+
+/** A binding the page would fill, whose whole source the public may not read. */
+function unreadableWhole(
+  check: BindingCheck,
+  prop: string,
+  input: VisitorUnreadableInput
+): VisitorUnreadableBinding | undefined {
+  if (check.outcome !== "resolve" || input.unreadableSource === undefined) {
+    return undefined;
+  }
+  const { binding } = check;
+  const ref = sourceRefOf(binding, input.entryRef);
+  if (ref === undefined || !input.unreadableSource(ref)) return undefined;
+  return {
+    prop,
+    path: binding.path,
+    ...(binding.fallback === undefined ? {} : { fallback: binding.fallback }),
+  };
 }
 
 /** The shapes judged here: the site settings never are. */
@@ -88,6 +132,11 @@ function unreadableOn(
       schema,
       refs,
     });
+    const whole = unreadableWhole(check, prop, input);
+    if (whole !== undefined) {
+      marked.push(whole);
+      continue;
+    }
     if (check.outcome !== "fallback") continue;
     const missing = check.issues.find(
       issue => issue.code === "binding-field-missing"

@@ -2229,17 +2229,21 @@ async function readFieldShapes(
   cache: ReadCache
 ): Promise<BlocksFieldShapes> {
   const known = new Map<string, readonly BindingFieldShape[] | undefined>();
+  // Lookups that failed: asked once, and not recorded. A recorded `undefined`
+  // means the source has no field a visitor may read (or no such source), an
+  // answer an editor's canvas acts on; a failed lookup is no answer at all.
+  const failed = new Set<string>();
   const fetch = async (ref: BlocksFieldShapeRef) => {
     const key = shapeRefKey(ref);
-    if (known.has(key)) return known.get(key);
-    let shapes: readonly BindingFieldShape[] | undefined;
+    if (known.has(key) || failed.has(key)) return known.get(key);
     try {
-      shapes = await cachedFieldShapes(ref, cache);
+      const shapes = await cachedFieldShapes(ref, cache);
+      known.set(key, shapes);
+      return shapes;
     } catch {
-      shapes = undefined;
+      failed.add(key);
+      return undefined;
     }
-    known.set(key, shapes);
-    return shapes;
   };
   const sources: [BlocksFieldShapeRef, SourceDemand][] = [
     ...(demand.entry === undefined

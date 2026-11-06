@@ -25,6 +25,7 @@ import {
   type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
 import {
+  noPublicFields,
   prepareDocumentForRead,
   registeredBlocks,
   type PageStyleCascade,
@@ -959,10 +960,14 @@ export function useBoundCanvasRender(
   >;
 } {
   const { document, regions } = drawn;
+  const pageTree = useMemo(
+    () => drawnTree(document, canvasRender.definitions, canvasRender),
+    [document, canvasRender]
+  );
   const trees = useMemo(
     () =>
       [
-        drawnTree(document, canvasRender.definitions, canvasRender),
+        pageTree,
         ...regions.map(region =>
           drawnTree(
             region.document,
@@ -971,29 +976,35 @@ export function useBoundCanvasRender(
           )
         ),
       ].filter((tree): tree is BlockDocument => tree !== null),
-    [document, regions, canvasRender]
+    [pageTree, regions, canvasRender]
   );
   const bindings = useCanvasBindings(trees, locale, component);
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),
     [canvasRender, bindings]
   );
-  // Judged on the author's own document, whose blocks the canvas can point
-  // at; a binding inside a component's definition or a Layout region is
-  // theirs to say, in their own editors.
-  const visitorUnreadable = useMemo(
-    () =>
-      bindings.fieldShapes === undefined
-        ? NONE_UNREADABLE
-        : visitorUnreadableBindings(document, {
-            schema: bindings.fieldShapes,
-            ...(bindings.entryRef === undefined
-              ? {}
-              : { entryRef: bindings.entryRef }),
-            props: { get: getBlock },
-          }),
-    [document, bindings]
-  );
+  // Judged on the page's tree as the canvas draws it (repaired, composed and
+  // gated by the renderer's own pipeline), so a mark lands on the block that
+  // is drawn; a Layout region's bindings are its own editor's to say.
+  const visitorUnreadable = useMemo(() => {
+    const shapes = bindings.fieldShapes;
+    if (shapes === undefined || pageTree === null) return NONE_UNREADABLE;
+    return visitorUnreadableBindings(pageTree, {
+      schema: shapes,
+      ...(bindings.entryRef === undefined
+        ? {}
+        : { entryRef: bindings.entryRef }),
+      props: { get: getBlock },
+      // A source the person editing read, of which the public may read no
+      // field: the published page reads none of it.
+      unreadableSource: ref => {
+        if ("site" in ref) return false;
+        const read =
+          "single" in ref ? bindings.singles?.get(ref.single) : bindings.entry;
+        return (read ?? null) !== null && noPublicFields(shapes, ref);
+      },
+    });
+  }, [pageTree, bindings]);
   return { canvasRender: bound, visitorUnreadable };
 }
 
