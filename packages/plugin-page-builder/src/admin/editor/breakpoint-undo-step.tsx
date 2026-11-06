@@ -120,9 +120,13 @@ function SkippedItem({ line }: { line: SkippedLine }): JSX.Element {
       {line.href === undefined ? (
         <span className="text-foreground">{line.name}</span>
       ) : (
+        // Underlined always, beside names that are not links; in a new tab,
+        // so Settings stays where it is.
         <a
           href={line.href}
-          className="text-primary underline-offset-2 hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-primary underline underline-offset-2"
         >
           {line.name}
         </a>
