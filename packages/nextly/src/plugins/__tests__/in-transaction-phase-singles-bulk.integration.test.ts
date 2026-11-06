@@ -5,7 +5,8 @@
  * - A Single's update runs the handlers registered under `single:<slug>`, as
  *   an `update`: the handler's row commits with the save, a handler that
  *   throws aborts it with its own status and keeps nothing, and a
- *   version-conflict retry runs it again, keeping one row.
+ *   version-conflict retry runs it again, keeping one row. The save takes its
+ *   handlers once: one registered while it is under way waits for the next.
  * - Publishing every language of a Single or of a collection entry runs the
  *   phase too, as an `update`, and a throwing handler aborts the publish.
  * - A batch sharing one transaction (`createEntries`, `updateEntries`,
@@ -15,13 +16,14 @@
  * - A batch that gives each entry a transaction of its own
  *   (`bulkUpdateEntries`) fails only the entry whose handler refused.
  */
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../config";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
 import { VersionConflictError } from "../../domains/versions/version-conflict";
 import { NextlyError } from "../../errors/nextly-error";
+import { HookRegistry } from "../../hooks/hook-registry";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import {
@@ -40,6 +42,7 @@ import { describeEachDialect } from "./helpers/dialect-matrix";
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -187,6 +190,40 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
     });
 
     expect(seen).toEqual([{ collection: BANNER_KEY, operation: "update" }]);
+    expect(await ledgerRows(ctx)).toEqual([
+      { target: BANNER_KEY, op: "update" },
+    ]);
+  });
+
+  it("runs only the handlers a Single's update took when it began", async () => {
+    const ctx = await boot(dialect);
+    const handed: unknown[] = [];
+    const late: InTransactionHandler = async write => {
+      handed.push(write.data?.headline);
+      await keepLedger(write);
+    };
+    // The seam: right after the save asks the registry for its handlers, a
+    // plugin registers one, as a concurrent request could.
+    const presence = HookRegistry.prototype.hasInTransaction;
+    vi.spyOn(HookRegistry.prototype, "hasInTransaction").mockImplementationOnce(
+      function (this: HookRegistry, target: string) {
+        const answer = presence.call(this, target);
+        ctx.hooks.onInTransaction(BANNER_KEY, late);
+        return answer;
+      }
+    );
+
+    await handle().nextly.updateSingle({
+      slug: BANNER,
+      data: { headline: "first" },
+    });
+    await handle().nextly.updateSingle({
+      slug: BANNER,
+      data: { headline: "second" },
+    });
+
+    // Not handed the first save, assembled for no handler; run on the next.
+    expect(handed).toEqual(["second"]);
     expect(await ledgerRows(ctx)).toEqual([
       { target: BANNER_KEY, op: "update" },
     ]);
