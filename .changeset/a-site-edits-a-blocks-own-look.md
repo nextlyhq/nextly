@@ -50,7 +50,9 @@ site's own looks carried in. `overlaidStyles()`, the layering the editor uses
 for Detach, now lives in the engine and also lays an own look over its base.
 A second own look for one block type is reported (`duplicate-own-look`) instead
 of being ignored silently, and a stored shared style may share an own look's
-name.
+name. Own looks are read under an allowance of their own, so seeding
+them never pushes a worn look past the look cap, and a block's own look is kept
+whatever its variation is named.
 
 An own look stays with its site. A page builder export never carries one, and
 an import leaves out any a file holds, so importing an item never changes the

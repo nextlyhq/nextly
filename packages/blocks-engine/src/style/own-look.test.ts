@@ -8,6 +8,7 @@ import {
   blockDefaultsOf,
   isDefaultLook,
   isUsableNamedClass,
+  namedClassesRead,
   usableNamedClasses,
   type NamedClass,
 } from "./named-class";
@@ -137,5 +138,32 @@ describe("a block's own look in the stylesheet", () => {
       "core/button": colour("purple"),
     });
     expect(warnings[0]?.message).toContain("look:core/button:main");
+  });
+});
+
+describe("own looks and the library caps", () => {
+  it("never take a worn look's place under the look cap", () => {
+    // One own look and one worn look for each of 300 block types, own looks
+    // first, as the code tier seeds them: every worn look is still read.
+    const types = Array.from({ length: 300 }, (_, at) => `acme/block${at}`);
+    const own = types.map((blockType, at) => ({
+      id: `look:${blockType}:main`,
+      slug: `own${at}`,
+      orderIndex: at,
+      blockType,
+      isDefault: true as const,
+      styles: {},
+    }));
+    const worn = types.map((blockType, at) => ({
+      id: `look:${blockType}:alt`,
+      slug: `worn${at}`,
+      orderIndex: at,
+      blockType,
+      styles: colour("red"),
+    }));
+    const read = namedClassesRead([...own, ...worn]);
+    expect(read.filter(entry => !isDefaultLook(entry))).toHaveLength(300);
+    expect(read.filter(isDefaultLook)).toHaveLength(300);
+    expect(usableNamedClasses([...own, ...worn])).toHaveLength(300);
   });
 });

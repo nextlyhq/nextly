@@ -58,6 +58,29 @@ describe("a block type's looks, as the site receives them", () => {
     ]);
   });
 
+  it("keeps an own look whatever its name, under a slug made writable", () => {
+    const named = {
+      name: "core/button",
+      editor: {
+        variations: [
+          { name: "Primary Choice!", isDefault: true as const },
+          // A worn look's name must already be writable.
+          { name: "Big Bold!", styles: colour("red") },
+        ],
+      },
+    };
+    expect(
+      blockOwnLooks([named]).map(look => [look.id, look.slug, look.isDefault])
+    ).toEqual([
+      [
+        lookClassId("core/button", "Primary Choice!"),
+        "button-primary-choice",
+        true,
+      ],
+    ]);
+    expect(blockLooks([named])).toEqual([]);
+  });
+
   it("refuses a block's own look that also states styles: its styles are the base", () => {
     const both = {
       name: "core/button",

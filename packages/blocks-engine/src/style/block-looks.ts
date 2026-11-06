@@ -17,6 +17,7 @@ import type { BlockVariation } from "../block";
 
 import {
   isUsableNamedClass,
+  MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
   type NamedClass,
 } from "./named-class";
@@ -45,6 +46,20 @@ function lookSlug(blockType: string, name: string): string {
     ? blockType.slice("core/".length)
     : blockType.replace("/", "-");
   return `${type}-${name}`;
+}
+
+/**
+ * The slug an own look is stored under: its look slug, lowercased, with every
+ * run of characters a class name can't hold made one dash and the ends
+ * trimmed, so "Primary Choice" gives `button-primary-choice`. Never emitted,
+ * so it only has to pass the library's own checks.
+ */
+function ownLookSlug(blockType: string, name: string): string {
+  return lookSlug(blockType, name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, MAX_NAMED_CLASS_NAME_LENGTH)
+    .replace(/^-+|-+$/g, "");
 }
 
 /**
@@ -99,7 +114,11 @@ function lookOf(
 ): NamedClass | undefined {
   const own = variation.isDefault === true;
   if (own === (variation.styles !== undefined)) return undefined;
-  const slug = lookSlug(blockType, variation.name);
+  // An own look is never written to CSS, so any name the block gives it is
+  // kept, under a slug made writable; a worn look's name must already be one.
+  const slug = own
+    ? ownLookSlug(blockType, variation.name)
+    : lookSlug(blockType, variation.name);
   if (!NAMED_CLASS_SLUG_RE.test(slug)) return undefined;
   const look: NamedClass = {
     id: lookClassId(blockType, variation.name),
