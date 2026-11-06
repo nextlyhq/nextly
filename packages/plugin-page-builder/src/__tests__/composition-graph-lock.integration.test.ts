@@ -83,6 +83,19 @@ const pause = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
+/** The entry service's write inside a transaction its caller opened. */
+interface CallerTransactionEntries {
+  updateEntryInTransaction(
+    tx: Parameters<Parameters<TestNextly["adapter"]["transaction"]>[0]>[0],
+    params: {
+      collectionName: string;
+      entryId: string;
+      overrideAccess?: boolean;
+    },
+    body: Record<string, unknown>
+  ): Promise<{ success: boolean }>;
+}
+
 /**
  * Holds one write inside its transaction until let go, and says when a
  * marked write has passed its validation.
@@ -303,6 +316,50 @@ describe.each(getConfiguredTestDialects())(
       expect(
         codesOf(two.status === "rejected" ? two.reason : undefined)
       ).toEqual(["depth-exceeded"]);
+    });
+
+    it("refuses the second half of a loop saved in a transaction its caller opened", async () => {
+      // A caller's own transaction keeps the caller's isolation: on MySQL,
+      // REPEATABLE READ, whose reads answer from the snapshot its first read
+      // took, before the held write committed. Judged on that snapshot, the
+      // second half of the loop would pass.
+      const t = await boot();
+      const a = await component(t, "a", [text("t1")]);
+      const b = await component(t, "b", [text("t2")]);
+      const entries = (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): CallerTransactionEntries;
+        }
+      ).getEntryService();
+
+      const [one, two] = await interleaved(
+        a,
+        () => setContent(t, a, [placing("n1", b)]),
+        "n2-in-caller-transaction",
+        () =>
+          t.adapter.transaction(async tx => {
+            const result = await entries.updateEntryInTransaction(
+              tx,
+              {
+                collectionName: COMPONENTS_SLUG,
+                entryId: b,
+                overrideAccess: true,
+              },
+              {
+                content: document("component", [
+                  placing("n2-in-caller-transaction", a),
+                ]),
+                _overwrite: true,
+              }
+            );
+            if (!result.success) throw new Error(JSON.stringify(result));
+            return result;
+          })
+      );
+
+      expect(one.status).toBe("fulfilled");
+      expect(two.status).toBe("rejected");
+      expect(await storedContent(t, b)).not.toContain(a);
     });
 
     it.skipIf(dialect === "sqlite")(

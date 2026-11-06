@@ -27,9 +27,25 @@
  * MySQL, which counts the rows an update changed rather than the ones it
  * matched, still answers that one was locked.
  *
+ * ## A transaction whose reads are older than the lock
+ *
+ * Holding the lock is only half of it: what the write then reads must be what
+ * committed before it got the lock. Core opens a write's own transaction at
+ * READ COMMITTED for that, but a write made in a transaction its caller opened
+ * keeps the caller's isolation, and under MySQL's default, REPEATABLE READ,
+ * every read answers from the snapshot the transaction's first read took. So
+ * the lock is taken with a compare-and-set on the row's value as this
+ * transaction reads it: a writer that committed since the snapshot changed the
+ * value, the update matches nothing, and the row is read again. Under READ
+ * COMMITTED the second read sees that writer's value and the lock is taken.
+ * Under a snapshot it sees the same old value, and the write is refused as a
+ * conflict to save again, rather than judged against a graph it cannot see.
+ * PostgreSQL under REPEATABLE READ refuses such an update itself.
+ *
  * @module composition-graph-lock
  */
-import { eq } from "@nextlyhq/plugin-sdk/db";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { and, eq } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -51,19 +67,39 @@ type Dialect = Parameters<typeof isUniqueViolation>[0];
  * Where the row is not there yet (the start-up step below has not run, or
  * failed), it is inserted, which locks it as well. Two first writes inserting
  * it at once meet the unique index on `name`, and the one that loses fails
- * rather than going on unlocked.
+ * rather than going on unlocked. A transaction reading from a snapshot older
+ * than the last writer that held the lock is refused (see the module).
  */
 export async function holdCompositionGraph(
-  db: Pick<PluginTransaction, "update" | "insert" | "table">,
+  db: Pick<PluginTransaction, "select" | "update" | "insert" | "table">,
   dialect: Dialect
 ): Promise<void> {
   if (dialect === "sqlite") return;
-  const value = globalThis.crypto.randomUUID();
-  const held = await db
-    .update(siteOptions, { value })
-    .where(eq(db.table(siteOptions).name, COMPOSITION_GRAPH_LOCK));
-  if (held > 0) return;
-  await db.insert(siteOptions, { name: COMPOSITION_GRAPH_LOCK, value });
+  const name = () => eq(db.table(siteOptions).name, COMPOSITION_GRAPH_LOCK);
+  let seen: string | undefined;
+  for (;;) {
+    const row = await db.select(siteOptions).where(name()).first();
+    const value = globalThis.crypto.randomUUID();
+    if (row === null) {
+      await db.insert(siteOptions, { name: COMPOSITION_GRAPH_LOCK, value });
+      return;
+    }
+    const held = await db
+      .update(siteOptions, { value })
+      .where(and(name(), eq(db.table(siteOptions).value, row.value)) ?? name());
+    if (held > 0) return;
+    // The same value read twice, and still not the stored one: the reads
+    // answer from a snapshot older than the writer that changed it.
+    if (seen === row.value) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "This save raced another change to the page builder's components. Save it again.",
+        logContext: { cause: "composition-graph-snapshot-older-than-lock" },
+      });
+    }
+    seen = row.value;
+  }
 }
 
 /**

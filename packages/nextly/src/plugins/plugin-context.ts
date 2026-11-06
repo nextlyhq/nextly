@@ -25,6 +25,7 @@ import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { StoredReads } from "../domains/collections/services/stored-field-read";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { JobRegistry } from "../domains/jobs/job-registry";
@@ -48,6 +49,7 @@ import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus, isReservedEventName } from "../events/event-bus";
 import type { Action, Decision, Filter } from "../filters";
 import { getFilterRegistry } from "../filters";
+import { singleHookNamespace } from "../hooks/register-single-hooks";
 import type {
   BeforeOperationHandler,
   HookContextPhase,
@@ -373,13 +375,22 @@ export interface InTransactionContext<T = Record<string, unknown>>
    *
    * Collection writes that run in-transaction handlers read committed on every
    * dialect, so a handler that serializes its writes with a row lock reads what
-   * committed before it took the lock. A Single's write reads at the
-   * dialect's default.
+   * committed before it took the lock. A Single's write, and a write inside a
+   * transaction its caller opened, read at that transaction's isolation.
    */
   readStored(
     fieldType: string,
     target: PluginStoredValueTarget
   ): Promise<PluginStoredValue>;
+  /**
+   * The paths of the written document's fields of a type this plugin
+   * contributes, as its schema stands in this transaction: at the top level
+   * and through named groups, as `readStored` names them (`hero.body`). A
+   * repeater's rows and a field-group instance are not walked. A target that
+   * names no language reads the app's default language: the write's own
+   * language is not part of what this phase is handed.
+   */
+  fieldPaths(fieldType: string): Promise<readonly string[]>;
 }
 
 /**
@@ -2128,9 +2139,14 @@ export function createPluginContext(
     if (known) return known;
     const runner: InTransactionRunner = (tx, write) =>
       bindToTransaction(tx, async bound => {
-        const read = storedReadOn(tx);
+        const read = storedReadOn(tx, write.collection);
         try {
-          await handler({ ...write, db: bound, readStored: read.readStored });
+          await handler({
+            ...write,
+            db: bound,
+            readStored: read.readStored,
+            fieldPaths: read.fieldPaths,
+          });
         } finally {
           read.settle();
         }
@@ -2139,12 +2155,48 @@ export function createPluginContext(
     return runner;
   };
 
-  // The stored read an in-transaction handler is handed: on the write's own
+  // How the phase names a Single's write: `single:<slug>`.
+  const SINGLE_TARGET_PREFIX = singleHookNamespace("");
+  // The stored reads an in-transaction handler is handed: on the write's own
   // transaction, scoped to the field types this plugin contributes, as a
-  // validator's is scoped to its own. Refused once the handler settles, so a
+  // validator's is scoped to its own, and sharing one registry lookup per
+  // collection for the whole handler. Refused once the handler settles, so a
   // read kept past it cannot reach a transaction that has moved on.
-  const storedReadOn = (tx: TransactionContext) => {
+  const storedReadOn = (tx: TransactionContext, written: string) => {
     let settled = false;
+    let reads: StoredReads | undefined;
+    const refuseUnless = (fieldType: string, ownType: boolean) => {
+      if (!settled && ownType) return;
+      throw NextlyError.internal({
+        logContext: {
+          reason: settled
+            ? "in-transaction-read-after-settle"
+            : "in-transaction-read-of-another-field-type",
+          plugin: pluginName,
+          fieldType,
+        },
+      });
+    };
+    // Loaded on first use, as the phase is, and checked again once loaded: a
+    // read started as the handler returned must not reach the transaction.
+    const open = async (fieldType: string) => {
+      const own = plugin?.contributes?.fieldTypes ?? [];
+      refuseUnless(
+        fieldType,
+        own.some(entry => entry.type === fieldType)
+      );
+      const { storedReadsOn } = await import(
+        "../domains/collections/services/stored-field-read"
+      );
+      refuseUnless(fieldType, true);
+      reads ??= storedReadsOn({
+        db: tx,
+        executor: tx.getDrizzle(),
+        defaultLocale:
+          getServiceFn("config").localization?.defaultLocale ?? null,
+      });
+      return reads;
+    };
     return {
       settle: () => {
         settled = true;
@@ -2152,35 +2204,15 @@ export function createPluginContext(
       readStored: async (
         fieldType: string,
         target: PluginStoredValueTarget
-      ): Promise<PluginStoredValue> => {
-        const own = plugin?.contributes?.fieldTypes ?? [];
-        if (settled || !own.some(entry => entry.type === fieldType)) {
-          throw NextlyError.internal({
-            logContext: {
-              reason: settled
-                ? "in-transaction-read-after-settle"
-                : "in-transaction-read-of-another-field-type",
-              plugin: pluginName,
-              fieldType,
-            },
-          });
-        }
-        // Loaded on first use, as the phase is: a process whose handlers never
-        // read loads nothing more.
-        const { readStoredField } = await import(
-          "../domains/collections/services/stored-field-read"
-        );
-        return readStoredField(
-          {
-            db: tx,
-            executor: tx.getDrizzle(),
-            defaultLocale:
-              getServiceFn("config").localization?.defaultLocale ?? null,
-          },
-          fieldType,
-          target
-        );
-      },
+      ): Promise<PluginStoredValue> =>
+        (await open(fieldType)).read(fieldType, target),
+      fieldPaths: async (fieldType: string): Promise<readonly string[]> =>
+        (await open(fieldType)).fieldPaths(
+          written.startsWith(SINGLE_TARGET_PREFIX)
+            ? { single: written.slice(SINGLE_TARGET_PREFIX.length) }
+            : { collection: written },
+          fieldType
+        ),
     };
   };
 

@@ -48,9 +48,6 @@ import { usageTableOf, usageTableRows } from "./usage-index-tables";
 /** How a Single's writes are named to the in-transaction phase. */
 const SINGLE_PREFIX = "single:";
 
-/** How deep into named groups a blocks value is looked for. */
-const MOST_GROUP_DEPTH = 4;
-
 /**
  * Judge every write that changes a blocks value again in its transaction,
  * under the graph lock. `setup` is read per write: it exists once the plugin is
@@ -79,7 +76,9 @@ async function rejudgedIssues(
   const data = write.data;
   const original = write.originalData;
   const statusChanged = !sameStoredValue(data.status, original?.status);
-  const changed = forestPaths(data).filter(
+  // Every blocks field the collection declares, from its schema: a value
+  // shaped like a document in another field is no blocks value.
+  const changed = (await write.fieldPaths(BLOCKS_TYPE)).filter(
     path =>
       statusChanged ||
       !sameStoredValue(valueAt(data, path), valueAt(original, path))
@@ -93,8 +92,6 @@ async function rejudgedIssues(
     inTransaction: true,
     readStored: target => write.readStored(BLOCKS_TYPE, target),
   };
-  const fields = await blocksFieldsAmong(changed, fieldWrite);
-  if (fields.length === 0) return [];
 
   await holdCompositionGraph(write.db, dialect);
   const judging: CompositionSetup = {
@@ -114,7 +111,7 @@ async function rejudgedIssues(
       ? undefined
       : data.status;
   const issues: { path: string; code: string; message: string }[] = [];
-  for (const path of fields) {
+  for (const path of changed) {
     issues.push(
       ...(await compositionGraphIssues(
         readStoredJson(valueAt(data, path)),
@@ -131,27 +128,6 @@ async function rejudgedIssues(
   return issues;
 }
 
-/**
- * The paths whose value is a blocks forest, at the top level and inside named
- * groups, as `readStored` names them (`hero.body`). Keys core adds to a
- * document (`_isWorkingDraft`) are not fields.
- */
-function forestPaths(data: Record<string, unknown>, depth = 0): string[] {
-  const paths: string[] = [];
-  for (const [key, value] of Object.entries(data)) {
-    if (key.startsWith("_")) continue;
-    const parsed = readStoredJson(value);
-    if (isPlainRecord(parsed) && Array.isArray(parsed.nodes)) {
-      paths.push(key);
-    } else if (isPlainRecord(parsed) && depth < MOST_GROUP_DEPTH) {
-      for (const inner of forestPaths(parsed, depth + 1)) {
-        paths.push(`${key}.${inner}`);
-      }
-    }
-  }
-  return paths;
-}
-
 /** The value at a dotted path, or undefined where the path holds none. */
 function valueAt(
   data: Record<string, unknown> | undefined,
@@ -164,35 +140,6 @@ function valueAt(
     at = record[segment];
   }
   return at;
-}
-
-/**
- * Which of the paths are blocks fields. The stored read is scoped to the
- * blocks field type and refuses any other field, so a JSON value shaped like
- * a forest is told apart from a blocks value by the declaration, not by its
- * shape. A field this cannot read (a language store not ready) is left to the
- * validation.
- */
-async function blocksFieldsAmong(
-  paths: readonly string[],
-  write: PluginFieldWrite
-): Promise<string[]> {
-  if (write.id === undefined) return [];
-  const fields: string[] = [];
-  for (const path of paths) {
-    try {
-      await write.readStored({
-        collection: write.slug,
-        id: write.id,
-        field: path,
-        form: "draft",
-      });
-      fields.push(path);
-    } catch {
-      // Not a blocks field, or not one readable here.
-    }
-  }
-  return fields;
 }
 
 /**
