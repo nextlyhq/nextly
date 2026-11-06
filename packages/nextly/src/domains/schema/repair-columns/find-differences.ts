@@ -10,9 +10,12 @@
 //
 // @module domains/schema/repair-columns/find-differences
 
+import { sql } from "drizzle-orm";
+
 import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import type { ColumnSpec } from "../pipeline/diff/types";
 import {
@@ -24,6 +27,7 @@ import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
 import { classifyDifference, planDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
+import type { ColumnConversionPlan } from "./conversion/types";
 import { differenceCause } from "./difference-cause";
 import type {
   ColumnFinding,
@@ -265,8 +269,18 @@ export async function findColumnDifferences(args: {
       configured: namedBy(entity.configured, entity),
     })
   );
-  const live = await readLiveTables(db, dialect, planned);
+  let live: LiveTables;
+  try {
+    live = await readLiveTables(db, dialect, planned);
+  } catch (error) {
+    if (!isDatabaseHeld(error, dialect)) throw error;
+    // Another connection holds the whole database, so no table's definition can be read: every
+    // column each entity names is reported, and whether it differs is unknown.
+    return planned.flatMap(definitionUnreadableFindings);
+  }
 
+  // A table's row count is the same for each of its columns, so it is read once per table.
+  const countRows = rowCounter(db, dialect);
   const findings: ColumnFinding[] = [];
   for (const { entity, applied, configured } of planned) {
     if (entity.applied === null || applied === null) {
@@ -280,7 +294,8 @@ export async function findColumnDifferences(args: {
         entity.applied.origin,
         applied,
         live,
-        dialect
+        dialect,
+        countRows
       ))
     );
     if (configured !== null) {
@@ -290,6 +305,56 @@ export async function findColumnDifferences(args: {
     }
   }
   return findings;
+}
+
+/**
+ * Whether a read failed because another connection holds the whole database: SQLite's busy or
+ * locked answer, which it gives in exclusive locking mode, and which names no table. Read from the
+ * driver's code or message on the error or a cause, since Drizzle wraps the driver's error.
+ */
+function isDatabaseHeld(error: unknown, dialect: SupportedDialect): boolean {
+  if (dialect !== "sqlite") return false;
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && typeof link === "object" && link !== null;
+    depth++
+  ) {
+    const { code, message } = link as { code?: unknown; message?: unknown };
+    if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return true;
+    if (
+      typeof message === "string" &&
+      /database (?:table )?is locked/i.test(message)
+    ) {
+      return true;
+    }
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * One record for each column an entity names, where the table's definition could not be read: each
+ * column its applied definition names, then each one only its configured definition names (a field
+ * the configuration adds), once each.
+ */
+function definitionUnreadableFindings({
+  entity,
+  applied,
+  configured,
+}: PlannedEntity): ColumnFinding[] {
+  const named = new Map<string, NamedColumn>();
+  for (const column of [...(applied ?? []), ...(configured ?? [])]) {
+    const key =
+      `${column.location.table}.${column.location.column}`.toLowerCase();
+    if (!named.has(key)) named.set(key, column);
+  }
+  return [...named.values()].map(column => ({
+    kind: "definition-unreadable",
+    location: column.location,
+    ...ownedBy(entity.plugin),
+    expected: column.expected,
+  }));
 }
 
 /**
@@ -339,7 +404,8 @@ async function appliedColumnFindings(
   origin: RepairColumnOrigin,
   applied: readonly NamedColumn[],
   live: LiveTables,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  countRows: (table: string) => Promise<number>
 ): Promise<ColumnFinding[]> {
   const findings: ColumnFinding[] = [];
   for (const column of applied) {
@@ -358,15 +424,59 @@ async function appliedColumnFindings(
       ...liveNamesOf(live, finding.location),
     };
     const judgement = await classifyDifference(db, dialect, difference);
+    // What the conversion would run and what the new type cannot keep, read from the same live
+    // table, so the report can say both and block what cannot be carried.
+    const conversion = await planDifference(db, dialect, difference, judgement);
     findings.push({
       ...finding,
       judgement,
-      // What the conversion would run and what the new type cannot keep, read from the same live
-      // table, so the report can say both and block what cannot be carried.
-      conversion: await planDifference(db, dialect, difference, judgement),
+      conversion,
+      rowsRewritten: await rowsRewrittenBy(
+        countRows,
+        difference.liveTable,
+        conversion
+      ),
     });
   }
   return findings;
+}
+
+/**
+ * The rows a conversion rewrites: the table's every row where the database rewrites or copies the
+ * table to run it, none where it changes the column in place, and null with no conversion. Counted
+ * here because the judgement does not always read the rows: a change every value keeps, into a
+ * nullable column, reads none.
+ */
+async function rowsRewrittenBy(
+  countRows: (table: string) => Promise<number>,
+  table: string,
+  conversion: ColumnConversionPlan | null
+): Promise<number | null> {
+  if (conversion === null) return null;
+  if (!conversion.rewritesTable) return 0;
+  return countRows(table);
+}
+
+/**
+ * How many rows a table holds, read at most once per table for one run: each column of a table
+ * whose conversion rewrites it rewrites the same rows, and a count can scan the whole table.
+ */
+function rowCounter(
+  db: unknown,
+  dialect: SupportedDialect
+): (table: string) => Promise<number> {
+  const counted = new Map<string, Promise<number>>();
+  return table => {
+    const known = counted.get(table);
+    if (known !== undefined) return known;
+    const count = querySqlRows<{ n: unknown }>(
+      db,
+      dialect,
+      sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}`
+    ).then(([row]) => Number(row?.n ?? 0));
+    counted.set(table, count);
+    return count;
+  };
 }
 
 /**
@@ -406,6 +516,7 @@ function judgeAppliedColumn(
     aspects,
     judgement: null,
     conversion: null,
+    rowsRewritten: null,
     cause: differenceCause({
       field: column.field,
       kind: entity.kind,
