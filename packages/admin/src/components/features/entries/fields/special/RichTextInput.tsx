@@ -259,30 +259,42 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
             field, and reaches assistive technology as a toolbar with a dozen
             unusable buttons. The other structured inputs already drop their
             controls this way; this one greyed them instead. */}
-        {isEditable ? <RichTextToolbar features={field.features} /> : null}
+        {isEditable ? (
+          <div className="sticky top-16 z-20 rounded-t-md border-b border-input bg-background shadow-sm">
+            <RichTextToolbar features={field.features} />
+          </div>
+        ) : null}
 
         {/* Main editor area */}
         <div className="relative" ref={setEditorAnchor}>
-          <RichTextPlugin
-            contentEditable={
-              <ContentEditable
-                className={cn(
-                  "min-h-[200px] pt-8 pl-12 pr-4 pb-4 outline-none prose prose-sm dark:prose-invert max-w-none",
-                  !isEditable && "cursor-not-allowed opacity-60"
-                )}
-                aria-label={field.label || name}
-                aria-describedby={
-                  field.admin?.description ? `${name}-description` : undefined
-                }
-              />
+          <div
+            className={
+              isEditable
+                ? "max-h-[60vh] overflow-y-auto overscroll-contain"
+                : undefined
             }
-            placeholder={
-              <div className="absolute top-8 left-12 text-muted-foreground pointer-events-none select-none">
-                {placeholder}
-              </div>
-            }
-            ErrorBoundary={LexicalErrorBoundary}
-          />
+          >
+            <RichTextPlugin
+              contentEditable={
+                <ContentEditable
+                  className={cn(
+                    "min-h-[200px] pt-8 pl-12 pr-4 pb-4 outline-none prose prose-sm dark:prose-invert max-w-none",
+                    !isEditable && "cursor-not-allowed opacity-60"
+                  )}
+                  aria-label={field.label || name}
+                  aria-describedby={
+                    field.admin?.description ? `${name}-description` : undefined
+                  }
+                />
+              }
+              placeholder={
+                <div className="absolute top-8 left-12 text-muted-foreground pointer-events-none select-none">
+                  {placeholder}
+                </div>
+              }
+              ErrorBoundary={LexicalErrorBoundary}
+            />
+          </div>
         </div>
 
         {/* Core Plugins */}
