@@ -130,7 +130,10 @@ export const standardWebhooks: InboundWebhookScheme = {
     const signature = headers.get(STANDARD_SIGNATURE);
     if (id === null || timestamp === null || signature === null) return null;
     if (!WHOLE_SECONDS.test(timestamp)) {
-      throw new TypeError("webhook-timestamp is not whole seconds");
+      // Caught by the verifier, which answers "malformed".
+      throw NextlyError.invalidInput({
+        message: "webhook-timestamp is not a whole number of seconds.",
+      });
     }
     const signatures = signature
       .split(" ")

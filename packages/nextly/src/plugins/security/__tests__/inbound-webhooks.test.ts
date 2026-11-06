@@ -513,7 +513,8 @@ describe("ctx.security.webhooks.verify", () => {
     return new Request("https://site.example/api/plugins/shop/webhooks", {
       method: "POST",
       headers: delivery.headers,
-      body: delivery.bytes,
+      // A copy over a plain ArrayBuffer, as a request body takes.
+      body: new Uint8Array(delivery.bytes),
     });
   }
 
