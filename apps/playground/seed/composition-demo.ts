@@ -482,7 +482,7 @@ export function heroPatternDocument(heroImage: string | null): BlockDocument {
                       "core/image",
                       {
                         mediaId: heroImage,
-                        alt: "A page open in the Nextly editor, with the block palette beside the canvas",
+                        alt: "A laptop on a desk showing the Nextly dashboard, beside a notebook and puzzle pieces",
                         loading: "eager",
                       },
                       {
@@ -629,7 +629,6 @@ function welcomePageBody(cardId: string): BlockNode[] {
               "core/quote",
               {
                 text: "The page a visitor gets is the page the author built.",
-                attribution: "How Nextly serves a page",
               },
               {
                 styles: styled({

@@ -326,13 +326,14 @@ function isDuplicateRefusal(error: unknown): boolean {
  * The demo site's welcome page (`seed/composition-demo`), offered on every
  * run for the reason the kitchen-sink page is: it is keyed on slugs nothing
  * else writes and leaves an existing page alone. Its hero image is the seed's
- * own, uploaded only when the page is about to be made.
+ * own, with no words in the picture to argue with the headline, uploaded only
+ * when the page is about to be made.
  */
 async function seedDemoSite(nextly: DemoStore): Promise<{ created: number }> {
   return seedCompositionDemo(nextly, {
     heroImage: async () =>
-      (await seedMedia(nextly, ["sample-1.webp"])).idByFilename.get(
-        "sample-1.webp"
+      (await seedMedia(nextly, ["hero-desk.webp"])).idByFilename.get(
+        "hero-desk.webp"
       ) ?? null,
   });
 }
