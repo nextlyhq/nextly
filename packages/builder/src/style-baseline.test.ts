@@ -79,9 +79,16 @@ const CSS_WIDE = new Set([
   "revert-layer",
 ]);
 
-/** The compat key a property is tracked under. */
+/**
+ * The compat key a property is tracked under. A custom property the engine
+ * writes (a background's overlay, which its image reads through `color-mix`,
+ * itself widely available) is tracked as every custom property is, under one
+ * key for them all.
+ */
 function propertyKey(cssProperty: string): string {
-  return `css.properties.${cssProperty}`;
+  return cssProperty.startsWith("--")
+    ? "css.properties.custom-property"
+    : `css.properties.${cssProperty}`;
 }
 
 /**
@@ -140,6 +147,12 @@ function catalogOfferables(): Offerable[] {
             : [];
       for (const keyword of keywords)
         add({ cssProperty: leaf.cssProperty, keyword });
+      // The declarations a keyword writes beside its own reach a page just
+      // the same, so each property they use is held to the same bar.
+      if (leaf.kind === "keyword") {
+        for (const expansion of Object.values(leaf.expands ?? {}).flat())
+          add({ cssProperty: expansion.property });
+      }
     }
   }
   return out;

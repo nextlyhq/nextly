@@ -1,4 +1,6 @@
 import {
+  blockDefaultsOf,
+  overlaidStyles,
   compilePageCss,
   declaresNoMarkup,
   hasItemBindings,
@@ -210,16 +212,28 @@ export function blockBasesFor(
   document: BlockDocument,
   blocks: BlockResolver,
   stated?: Readonly<Record<string, NodeStyles>>,
-  spacingMode?: SpacingMode
+  spacingMode?: SpacingMode,
+  /**
+   * The site's edits to its block types' own looks, laid over each base the
+   * model chose, so the order is: the base (frozen under Classic), then the
+   * site's edit of it, then a look, a shared style and the block's own values.
+   */
+  siteDefaults?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
   // A derived default follows the spacing model; a stated record is the
   // caller's own choice and is narrowed as it is.
-  return perUsedType(
+  const bases = perUsedType(
     document,
     blocks,
     definition => blockBaseUnder(definition, spacingMode),
     stated
   );
+  if (siteDefaults === undefined) return bases;
+  const edited = perUsedType(document, blocks, () => undefined, siteDefaults);
+  for (const [type, edit] of Object.entries(edited)) {
+    bases[type] = overlaidStyles(bases[type], edit);
+  }
+  return bases;
 }
 
 /**
@@ -453,7 +467,11 @@ function compileContextFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockBases,
-      styleContext.spacingMode
+      styleContext.spacingMode,
+      // The site's edits to its blocks' own looks, which its class library
+      // holds as default looks: read here, so every page compiled from that
+      // library, canvas or published, lays them over the same bases.
+      blockDefaultsOf(styleContext.namedClasses)
     ),
     blockParts: blockPartsFor(
       storedDocument ?? document,

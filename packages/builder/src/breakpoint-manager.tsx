@@ -39,7 +39,7 @@ export interface BreakpointManagerProps {
    * Persist the edited set. See {@link BreakpointEditorProps.onSave} — a promise
    * is awaited and a resolved string is shown as a refusal.
    */
-  onSave: (next: BreakpointSet) => void | Promise<string | undefined>;
+  onSave: (next: BreakpointSet) => void | Promise<string | null | undefined>;
   /**
    * What the SAVED set's read has actually done — not merely whether it is done.
    *
@@ -65,6 +65,27 @@ export interface BreakpointManagerProps {
   onEditingChange?: (editing: boolean) => void;
   /** Told when a save of the set starts and settles; see the editor's. */
   onSavingChange?: (saving: boolean) => void;
+  /**
+   * Why the breakpoints cannot be edited right now, when the host knows one
+   * the saved set's read cannot (a removal still being carried out, say):
+   * Edit breakpoints is disabled, saying why. Absent, `status` decides.
+   */
+  blocked?: string;
+}
+
+/**
+ * Why Edit breakpoints is disabled, or `undefined` while it may be used: the
+ * host's own reason first, then what the saved set's read has done.
+ */
+function editUnavailable(
+  status: BreakpointManagerProps["status"],
+  blocked: string | undefined
+): string | undefined {
+  if (blocked !== undefined) return blocked;
+  if (status === "ready") return undefined;
+  return status === "loading"
+    ? "Available once the site's saved styles have loaded."
+    : "Your site's saved styles could not be read, so editing them here could overwrite them.";
 }
 
 /**
@@ -77,8 +98,9 @@ export function BreakpointManager({
   status,
   onEditingChange,
   onSavingChange,
+  blocked,
 }: BreakpointManagerProps): React.JSX.Element {
-  const ready = status === "ready";
+  const ready = status === "ready" && blocked === undefined;
   const [editing, setEditingState] = React.useState(false);
   const setEditing = (next: boolean): void => {
     setEditingState(next);
@@ -144,11 +166,14 @@ export function BreakpointManager({
   }, [readArrived]);
   const authored = authoredBreakpoints(stillStale ? pendingWrite.wrote : value);
 
-  const persist = async (next: BreakpointSet): Promise<string | undefined> => {
+  const persist = async (
+    next: BreakpointSet
+  ): Promise<string | null | undefined> => {
     // Narrowed rather than passed through: `onSave` may return nothing at all,
     // and `void` is not `undefined` to the checker even though it is at runtime.
     const answered = await onSave(next);
-    const outcome = typeof answered === "string" ? answered : undefined;
+    const outcome =
+      typeof answered === "string" || answered === null ? answered : undefined;
     // Held only on success. A refused write changed nothing, so there is no
     // newer set for the read to catch up to.
     if (outcome === undefined) {
@@ -169,6 +194,8 @@ export function BreakpointManager({
         onSave={persist}
         onClose={() => setEditing(false)}
         {...(onSavingChange === undefined ? {} : { onSavingChange })}
+        // A reason that arrives while editing holds the open editor too.
+        {...(blocked === undefined ? {} : { blocked })}
       />
     );
   }
@@ -208,13 +235,7 @@ export function BreakpointManager({
           // Disabled rather than hidden until the saved set is read: opened
           // on the host's defaults, a save would overwrite the site's real
           // breakpoints with a set it never chose.
-          title={
-            ready
-              ? undefined
-              : status === "loading"
-                ? "Available once the site's saved styles have loaded."
-                : "Your site's saved styles could not be read, so editing them here could overwrite them."
-          }
+          title={editUnavailable(status, blocked)}
         >
           Edit breakpoints
         </Button>

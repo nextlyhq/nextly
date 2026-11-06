@@ -69,6 +69,7 @@ import type {
   PluginStoredValueTarget,
 } from "@nextlyhq/plugin-sdk";
 
+import type { OpenRemovalReader } from "../breakpoint-removal/lock-acceptance";
 import {
   componentCycleRefusal,
   formsChangedBy,
@@ -90,6 +91,7 @@ import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import { isForest } from "./blocks-document";
+import type { ListFieldsReader } from "./list-query-judgement";
 import {
   LAYERS_LOCK_CHANGED,
   placedLockMessage,
@@ -210,6 +212,13 @@ export interface CompositionSetup {
    */
   readonly fencedComponents?: () => Promise<FencedComponents>;
   /**
+   * The breakpoint removal that is open, if any: while one is, a Layers or
+   * `contentOnly` lock accepts exactly the stored value with the removed
+   * breakpoints' values stripped (`breakpoint-removal/lock-acceptance`).
+   * Absent, no lock accepts anything more than it always did.
+   */
+  readonly openBreakpointRemoval?: OpenRemovalReader;
+  /**
    * What the site defines that a page refers to by id, from ONE read of its
    * style, so every reference in a write is judged against the same version
    * of it. Asked at most once per write, and only when a reference needs it.
@@ -217,6 +226,12 @@ export interface CompositionSetup {
    * site style cannot be read, and then nothing is refused.
    */
   readonly siteDefinitions?: () => Promise<SiteDefinitions>;
+  /**
+   * The fields a collection declares and the public may read, for judging
+   * what a page's collection lists filter and sort by. Absent where the
+   * schema cannot be read, and then lists are judged by their shape alone.
+   */
+  readonly listFields?: ListFieldsReader;
 }
 
 /** What the site defines that a page refers to by id. */

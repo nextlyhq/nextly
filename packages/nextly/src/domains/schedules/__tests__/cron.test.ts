@@ -87,12 +87,15 @@ describe("reading a cron expression", () => {
     );
   });
 
-  it("says an expression that can never fire has no next or latest fire", () => {
-    expect(next("0 0 30 2 *", "2026-01-01T00:00:00.000Z")).toBeUndefined();
-    expect(latest("0 0 30 2 *", "2026-01-01T00:00:00.000Z")).toBeUndefined();
-    expect(
-      latest("0 0 30 2 *", "2026-01-01T00:00:00.000Z", "Europe/Berlin")
-    ).toBeUndefined();
+  it("finds a fire as rare as a Sunday 29 February, decades away either side", () => {
+    // `*/7` is Sunday alone, and written from `*` it must match with the date:
+    // 2032 is the next; looking back from 2059 reaches past eight years to it.
+    expect(next("0 0 29 2 */7", "2026-01-01T00:00:00.000Z")).toBe(
+      "2032-02-29T00:00:00.000Z"
+    );
+    expect(latest("0 0 29 2 */7", "2059-12-31T00:00:00.000Z")).toBe(
+      "2032-02-29T00:00:00.000Z"
+    );
   });
 
   it("answers no time for a moment that is not one, in any zone", () => {
@@ -119,6 +122,11 @@ describe("reading a cron expression", () => {
     ["FOO * * * *"],
     ["* * * * MON-FOO"],
     ["@reboot"],
+    // A date no month has: it would never fire.
+    ["0 0 30 2 *"],
+    ["0 0 31 4,6,9,11 *"],
+    // A step too large to be a number.
+    ["*/9999999999999999999999 * * * *"],
     ["@every 5m"],
   ])("refuses %j", source => {
     let thrown: unknown;

@@ -30,6 +30,8 @@
  * ```
  */
 
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 import { sql, type SQL } from "drizzle-orm";
@@ -54,11 +56,13 @@ import {
 } from "../../domains/schema/pipeline/schema-lock";
 import { describeError, immediateMessage } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import {
   createCliAdapter,
+  openDryRunAdapter,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
@@ -73,6 +77,10 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
+import {
+  discoverMigrationGroups,
+  getSortedBaseNames,
+} from "../utils/migration-discovery";
 import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import { commandRun } from "./command-run";
@@ -103,6 +111,13 @@ export interface MigrateFreshCommandOptions {
    * @default false
    */
   seed?: boolean;
+
+  /**
+   * `--dry-run`: name every table a real run drops and each migration it runs
+   * again, from the database opened read-only, and change nothing. It drops
+   * nothing, so it asks for no consent.
+   */
+  dryRun?: boolean;
 
   /**
    * Refused whenever it is given: it never consents to deleting data.
@@ -204,6 +219,11 @@ export async function runMigrateFresh(
 
   logger.keyValue("Dialect", getDialectDisplayName(dialect));
 
+  if (options.dryRun === true) {
+    await previewMigrateFresh(options, dbValidation, configResult, context);
+    return;
+  }
+
   // Step 3: Show warning and get confirmation
   logger.newline();
   logger.warn("This command will DROP ALL TABLES in your database.");
@@ -293,6 +313,79 @@ export async function runMigrateFresh(
 }
 
 /**
+ * What `migrate:fresh` would do, named and not done: each table it drops, as
+ * `discoverTables` finds them for the real run, then each migration file it
+ * runs again, in the order `nextly migrate` runs them.
+ */
+async function previewMigrateFresh(
+  options: ResolvedMigrateFreshOptions,
+  dbValidation: ReturnType<typeof requireDatabaseEnv>,
+  configResult: Awaited<ReturnType<typeof loadConfigOrExit>>,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const opened = await openDryRunAdapter({
+    dialect: dbValidation.dialect,
+    databaseUrl: dbValidation.databaseUrl,
+    logger: options.verbose ? logger : undefined,
+  });
+  // A database that is not there is one a real run makes and finds empty, so
+  // it has no tables to drop and every migration still to run.
+  const adapter = "missing" in opened ? undefined : opened;
+  try {
+    const tables =
+      adapter === undefined
+        ? []
+        : await tablesToDrop(
+            adapter as unknown as DrizzleAdapter,
+            dbValidation.dialect
+          );
+    const migrationsDir = resolve(
+      options.cwd ?? process.cwd(),
+      configResult.config.db.migrationsDir
+    );
+    const migrations = getSortedBaseNames(
+      await discoverMigrationGroups(migrationsDir)
+    );
+    reportDryRun(logger, {
+      changes: [
+        ...tables.map(table => ({
+          action: "remove" as const,
+          target: `table ${table}`,
+        })),
+        {
+          action: "run" as const,
+          target: "the core tables' setup, as nextly migrate does",
+        },
+        ...migrations.map(name => ({
+          action: "run" as const,
+          target: `migration ${name}`,
+        })),
+        // The order a real run takes them in: on MySQL, a reconciliation pass
+        // that fills what a migration set is missing, before the seeders.
+        ...(options.seed && dbValidation.dialect === "mysql"
+          ? [
+              {
+                action: "run" as const,
+                target:
+                  "the MySQL schema reconciliation that adds tables or columns the migrations left out",
+              },
+            ]
+          : []),
+        ...(options.seed
+          ? [{ action: "run" as const, target: "the seeders" }]
+          : []),
+      ],
+      notes: [
+        "A real run also applies the configured plugins' migration modules, which a dry run does not list.",
+      ],
+    });
+  } finally {
+    await adapter?.disconnect();
+  }
+}
+
+/**
  * Drop every table but the lock's own, re-apply every migration, and seed
  * when asked: the part of the command the schema lock is held for.
  */
@@ -370,6 +463,19 @@ async function dropAndReapply(
 // ============================================================================
 
 /**
+ * The tables `migrate:fresh` drops: every table but the lock's own, whose
+ * rows this run holds (`LOCK_TABLES`). A dry run names exactly these.
+ */
+async function tablesToDrop(
+  adapter: StatementRunner,
+  dialect: SupportedDialect
+): Promise<string[]> {
+  return (await discoverTables(adapter, dialect)).filter(
+    table => !LOCK_TABLES.has(table)
+  );
+}
+
+/**
  * Drop all tables from the database
  */
 async function dropAllTables(
@@ -379,10 +485,7 @@ async function dropAllTables(
 ): Promise<MigrateFreshResult> {
   const { logger } = context;
 
-  // Every table but the lock's own: this run holds its rows (`LOCK_TABLES`).
-  const tables = (await discoverTables(adapter, dialect)).filter(
-    table => !LOCK_TABLES.has(table)
-  );
+  const tables = await tablesToDrop(adapter, dialect);
 
   if (tables.length === 0) {
     return {

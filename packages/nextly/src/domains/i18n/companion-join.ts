@@ -860,6 +860,12 @@ function sourceMovedAfterTarget(source: TableAlias, target: TableAlias): SQL {
   return sql`${source}.${stamp} > ${target}.${stamp}`;
 }
 
+/**
+ * The key a read attaches the per-language translation overview under
+ * (`?translation-status=1`), unless the caller names another.
+ */
+export const TRANSLATION_OVERVIEW_KEY = "_translations";
+
 /** Per-locale translation state for one entry (i18n M7 — translation-status overview). */
 export interface LocaleTranslationMeta {
   /**
@@ -1072,7 +1078,7 @@ export async function populateTranslationStatus(
     hasStatus,
   } = args;
   const idKey = args.idKey ?? "id";
-  const outKey = args.outKey ?? "_translations";
+  const outKey = args.outKey ?? TRANSLATION_OVERVIEW_KEY;
   if (args.readiness !== "ready") return;
   if (rows.length === 0 || locales.length === 0) return;
 

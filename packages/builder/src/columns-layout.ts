@@ -19,7 +19,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { offeredTiers } from "./canvas-width";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import {
   readStyleValue,
   styleClearOp,
@@ -144,7 +144,7 @@ function stylesAfter(
  * styles the one before left, and the last op that changed anything carries
  * them all, since a style op holds the node's whole styles.
  */
-function chained(
+export function chainedStyleOp(
   node: BlockNode,
   steps: readonly {
     readonly address: StyleAddress;
@@ -306,7 +306,7 @@ export function planLayout(
   const value = inheritsAnother
     ? (defaultTemplate(row) ?? null)
     : (layout.template ?? null);
-  const style = chained(row, [
+  const style = chainedStyleOp(row, [
     { address: { ...at, property: "gridTemplateColumns", path: [] }, value },
   ]);
   return {
@@ -516,5 +516,5 @@ export function planStack(
       }
     );
   }
-  return chained(row, steps);
+  return chainedStyleOp(row, steps);
 }

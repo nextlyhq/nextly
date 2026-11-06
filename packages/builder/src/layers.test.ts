@@ -25,6 +25,8 @@ import {
   layerLabel,
   layersOf,
   pathTo,
+  regionsTo,
+  slotRowsIn,
 } from "./layers";
 
 const base = {
@@ -525,5 +527,82 @@ describe("hiddenHere", () => {
     expect(box?.hiddenHere).toBe(true);
     expect(box?.children[0]?.hiddenHere).toBe(false);
     expect(box?.children[0]?.hiddenWith).toBe("Hero");
+  });
+});
+
+describe("a collection list's regions", () => {
+  const list = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            { id: "card", type: "core/heading", version: 1, props: {} },
+          ],
+          empty: [
+            {
+              id: "none",
+              type: "core/heading",
+              version: 1,
+              props: {},
+              name: "No posts",
+            },
+          ],
+        },
+      },
+    ],
+  } as BlockDocument;
+
+  it("names both regions on the list, and the one each child sits in", () => {
+    const [row] = layersOf(list);
+    expect(row?.slotRows?.map(each => each.label)).toEqual([
+      "Each entry",
+      "When empty",
+    ]);
+    expect(row?.children.map(child => [child.id, child.slot])).toEqual([
+      ["card", "children"],
+      ["none", "empty"],
+    ]);
+  });
+
+  it("opens the region a match sits in, as it opens the list", () => {
+    const tree = layersOf(list);
+    const emptyRow = tree[0]?.slotRows?.[1]?.rowId;
+    const found = filterLayers(tree, "No posts");
+    expect(found.expand).toEqual(["list", emptyRow]);
+    expect(regionsTo(list, "none")).toEqual([
+      { parentId: "list", slot: "empty", rowId: emptyRow },
+    ]);
+    expect(slotRowsIn(tree).get(emptyRow ?? "")).toEqual({
+      parentId: "list",
+      slot: "empty",
+    });
+    expect(slotRowsIn(tree).has("list")).toBe(false);
+  });
+
+  it("gives each region row an id no block of the document has", () => {
+    // A stored id may be any string, a row's own spelling too.
+    const taken = {
+      ...list,
+      nodes: [
+        ...list.nodes,
+        {
+          id: "nx-slot:empty:list",
+          type: "core/heading",
+          version: 1,
+          props: {},
+        },
+      ],
+    } as BlockDocument;
+    const tree = layersOf(taken);
+    const rowIds = tree[0]?.slotRows?.map(row => row.rowId) ?? [];
+    expect(rowIds).toHaveLength(2);
+    expect(rowIds).not.toContain("nx-slot:empty:list");
+    expect(slotRowsIn(tree).has("nx-slot:empty:list")).toBe(false);
   });
 });

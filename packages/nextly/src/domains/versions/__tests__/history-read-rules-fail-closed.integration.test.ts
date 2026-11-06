@@ -86,7 +86,12 @@ async function documentWithRules(dialect: TestDialect) {
   const id = (created.data as { id: string }).id;
   await handler.updateEntry(
     { collectionName: "posts", entryId: id, overrideAccess: true },
-    { title: "T2", guarded: "G-2", banner: { heading: "H2", secret: "S-2" } }
+    {
+      title: "T2",
+      guarded: "G-2",
+      banner: { heading: "H2", secret: "S-2" },
+      _overwrite: true,
+    }
   );
   return id;
 }

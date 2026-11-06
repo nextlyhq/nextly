@@ -66,13 +66,17 @@ export const WEBHOOK_EVENT_WILDCARD = "*";
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
 
 /**
- * What an endpoint can subscribe to: a specific event type or the wildcard
- * (all-and-future). Distinct from {@link WebhookEventType} because only the
- * subscription list accepts the wildcard.
+ * What an endpoint can subscribe to: one of core's event types, a type a
+ * plugin declares (`contributes.webhookEvents`, a string in the plugin's
+ * namespace), or the wildcard (all-and-future). Distinct from
+ * {@link WebhookEventType} because only the subscription list accepts the
+ * wildcard and plugins' types. Which strings are accepted is the event-type
+ * registry's to say, when a subscription is written.
  */
 export type WebhookEventSubscription =
   | WebhookEventType
-  | typeof WEBHOOK_EVENT_WILDCARD;
+  | typeof WEBHOOK_EVENT_WILDCARD
+  | (string & Record<never, never>);
 
 /** Resource families an event can be about. */
 export const WEBHOOK_RESOURCE_KINDS = [

@@ -93,9 +93,8 @@ import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
 import type { CommandContext } from "../program";
-import { openCommandAdapter, type SupportedDialect } from "../utils/adapter";
-import { requireDatabaseEnv } from "../utils/command-prerequisites";
-import { loadConfig } from "../utils/config-loader";
+import type { SupportedDialect } from "../utils/adapter";
+import { openMigrationCommand } from "../utils/command-prerequisites";
 import {
   askToDeleteInTerminal,
   deletionSource,
@@ -1220,28 +1219,11 @@ export async function runMigrateDown(
   const { logger } = context;
   logger.header("Migrate Down");
 
-  const dbValidation = requireDatabaseEnv(logger);
-  const dialect = dbValidation.dialect;
-
-  const configResult = await loadConfig({
-    configPath: options.config,
-    cwd: options.cwd,
-    debug: options.verbose,
-  });
-  const cwd = options.cwd ?? process.cwd();
-  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-
-  const adapter = await openCommandAdapter(
-    {
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-      logger: options.verbose ? logger : undefined,
-      dryRun: options.dryRun,
-    },
-    logger
-  );
+  const opened = await openMigrationCommand(options, logger);
   // A dry run whose database is not there has said so, and ends here.
-  if (adapter === undefined) return;
+  if (opened === undefined) return;
+  const { dbValidation, configResult, migrationsDir, adapter } = opened;
+  const dialect = dbValidation.dialect;
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();

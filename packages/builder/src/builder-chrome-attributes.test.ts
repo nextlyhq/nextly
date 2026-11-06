@@ -117,6 +117,33 @@ describe("the empty-container affordance is keyed off the exported constants", (
   });
 });
 
+describe("an empty container's area yields to what the block sets", () => {
+  it("gives its clickable height at no specificity, so an authored min height wins", () => {
+    /*
+     * The area's selector outranks a block's own class, so a min height on
+     * the box rule would beat the author's: an empty Section set to Full
+     * screen would stay 2.75rem tall on the canvas while the page draws it
+     * the screen's height. Held apart, under `:where()`, it applies only
+     * where the block sets none.
+     */
+    const css = collapsed(SHEET);
+    const box = new RegExp(
+      `${ruleFor(EMPTY_CONTAINER_SELECTOR).source}[^}]*\\}`
+    ).exec(css)?.[0];
+    expect(box).toBeDefined();
+    expect(box).not.toContain("min-height");
+    expect(css).toContain(
+      `:where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }`
+    );
+    // Selected, the empty block matches the selection's safeguard too, which
+    // yields the same way: choosing Full screen selects the Section.
+    expect(css).toMatch(
+      /:where\(\.nx-canvas \[data-nx-selected\]:empty\) \{ min-height: 2px; \}/
+    );
+    expect(css).not.toMatch(/\*\/ \.nx-canvas \[data-nx-selected\]:empty \{/);
+  });
+});
+
 describe("the canvas keeps the platform's own callout for text", () => {
   it("restores the touch callout the menu trigger suppresses", () => {
     /*

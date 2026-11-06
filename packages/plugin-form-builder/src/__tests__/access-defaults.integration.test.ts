@@ -197,7 +197,7 @@ describe.each(getConfiguredTestDialects())(
           nextly.update({
             collection: "forms",
             id: formId,
-            data: { name: "Renamed" },
+            data: { name: "Renamed", _overwrite: true },
             overrideAccess: false,
             user: staff,
           })
@@ -215,7 +215,7 @@ describe.each(getConfiguredTestDialects())(
       const updated = await nextly.update({
         collection: "forms",
         id: formId,
-        data: { name: "Renamed" },
+        data: { name: "Renamed", _overwrite: true },
         overrideAccess: false,
         user: editor,
       });

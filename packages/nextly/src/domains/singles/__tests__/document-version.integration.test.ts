@@ -198,14 +198,14 @@ describe.each(getConfiguredTestDialects())(
       const first = revOf(
         await singlesOf(t).update(
           PLAIN,
-          { notice: "a" },
+          { notice: "a", _overwrite: true },
           { overrideAccess: true }
         )
       );
       const second = revOf(
         await singlesOf(t).update(
           PLAIN,
-          { notice: "b" },
+          { notice: "b", _rev: first },
           { overrideAccess: true }
         )
       );
@@ -219,10 +219,18 @@ describe.each(getConfiguredTestDialects())(
       await readRev(t, PLAIN);
       const revs = await Promise.all([
         singlesOf(t)
-          .update(PLAIN, { notice: "x" }, { overrideAccess: true })
+          .update(
+            PLAIN,
+            { notice: "x", _overwrite: true },
+            { overrideAccess: true }
+          )
           .then(revOf),
         singlesOf(t)
-          .update(PLAIN, { notice: "y" }, { overrideAccess: true })
+          .update(
+            PLAIN,
+            { notice: "y", _overwrite: true },
+            { overrideAccess: true }
+          )
           .then(revOf),
       ]);
       expect([...revs].sort()).toEqual(["2", "3"]);
@@ -233,7 +241,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Site", contact: "c" },
+        { siteName: "Site", contact: "c", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       const english = await readRev(t, PREFS, "en");
@@ -246,7 +254,7 @@ describe.each(getConfiguredTestDialects())(
 
       const spanish = await singlesOf(t).update(
         PREFS,
-        { siteName: "Sitio" },
+        { siteName: "Sitio", _overwrite: true },
         { locale: "es", overrideAccess: true }
       );
       expect(revOf(spanish)).toBe(`${main}.es:1`);
@@ -260,14 +268,19 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Live", contact: "c", status: "published" },
+        {
+          siteName: "Live",
+          contact: "c",
+          status: "published",
+          _overwrite: true,
+        },
         { locale: "en", overrideAccess: true }
       );
       const before = await mainRow(t, PREFS);
 
       const held = await singlesOf(t).update(
         PREFS,
-        { contact: "held edit" },
+        { contact: "held edit", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
 
@@ -278,7 +291,11 @@ describe.each(getConfiguredTestDialects())(
       expect(revOf(held)).toBe(await readRev(t, PREFS, "en"));
 
       // Discarding it changes what a reader of the draft sees.
-      await singlesOf(t).discardWorkingDraft({ slug: PREFS, locale: "en" });
+      await singlesOf(t).discardWorkingDraft({
+        slug: PREFS,
+        locale: "en",
+        version: { _rev: revOf(held) },
+      });
       expect(Number((await mainRow(t, PREFS))._revision)).toBe(
         Number(after._revision) + 1
       );
@@ -288,13 +305,18 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Live", contact: "c", status: "published" },
+        {
+          siteName: "Live",
+          contact: "c",
+          status: "published",
+          _overwrite: true,
+        },
         { locale: "en", overrideAccess: true }
       );
       const held = revOf(
         await singlesOf(t).update(
           PREFS,
-          { contact: "held edit" },
+          { contact: "held edit", _overwrite: true },
           { locale: "en", overrideAccess: true }
         )
       );
@@ -306,6 +328,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: String((await mainRow(t, PREFS)).id),
         locale: "en",
         user: { id: "system-check", roles: ["super-admin"] } as never,
+        version: { _rev: held },
       });
       expect(removed).toBe(1);
       const answered = (document as Record<string, unknown>)._rev;
@@ -318,7 +341,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await readRev(t, UNTRANSLATED, "en")).toBe("1");
       const saved = await singlesOf(t).update(
         UNTRANSLATED,
-        { code: "b" },
+        { code: "b", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       expect(revOf(saved)).toBe("2");
@@ -329,7 +352,12 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Site", contact: "c", status: "published" },
+        {
+          siteName: "Site",
+          contact: "c",
+          status: "published",
+          _overwrite: true,
+        },
         {
           locale: "en",
           overrideAccess: true,
@@ -338,14 +366,17 @@ describe.each(getConfiguredTestDialects())(
       );
       await singlesOf(t).update(
         PREFS,
-        { contact: "held" },
+        { contact: "held", _overwrite: true },
         {
           locale: "en",
           overrideAccess: true,
           actor: { type: "user", id: "writer" },
         }
       );
-      await singlesOf(t).publishAllLocales(PREFS, { overrideAccess: true });
+      await singlesOf(t).publishAllLocales(PREFS, {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
       const rows = await t.adapter.select<{ snapshot?: unknown }>(
         "nextly_versions",
         {}
@@ -367,18 +398,19 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Site", contact: "c" },
+        { siteName: "Site", contact: "c", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Sitio" },
+        { siteName: "Sitio", _overwrite: true },
         { locale: "es", overrideAccess: true }
       );
       const before = await readRev(t, PREFS, "*");
 
       const published = await singlesOf(t).publishAllLocales(PREFS, {
         overrideAccess: true,
+        data: { _rev: before },
       });
 
       const after = await readRev(t, PREFS, "*");
@@ -429,7 +461,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Site", contact: "c" },
+        { siteName: "Site", contact: "c", _overwrite: true },
         {
           locale: "en",
           overrideAccess: true,
@@ -438,7 +470,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await singlesOf(t).update(
         PREFS,
-        { siteName: "Sitio" },
+        { siteName: "Sitio", _overwrite: true },
         {
           locale: "es",
           overrideAccess: true,
