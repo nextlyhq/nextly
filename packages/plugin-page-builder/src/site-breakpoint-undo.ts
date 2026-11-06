@@ -290,10 +290,10 @@ async function writeUndo(
       }
       throw error;
     }
-    if (landed === undefined) {
-      await service.publish(undo.id).catch(() => undefined);
-      throw error;
-    }
+    // Unknown: the undo stays preparing, and the request fails. Recovery
+    // publishes it once the site's breakpoints read as the set it recorded,
+    // and drops it otherwise (`service`): never walked unverified.
+    if (landed === undefined) throw error;
     removal.cascade.logError?.(
       "[page-builder] a breakpoint undo's write threw after its set was " +
         "stored; the undo goes on.",
@@ -327,15 +327,13 @@ async function undoRemoval(
   }
   const plan = await planUndo(removal, ctx, service, undone);
   const undo = await service.undo(runId, runStarterOf(ctx), plan.breakpoints);
-  try {
-    // Before the set is stored, as a re-add retires the claims on what it
-    // defines again (`retireReadded`): the removal gives up its ids.
-    await service.retire([...plan.ids]);
-  } catch (error) {
-    await service.abandon(undo.id);
-    throw error;
-  }
   await writeUndo({ ctx, nextly, removal, service, undo }, plan);
+  // Stored: the removal gives up its claims on the ids the site defines
+  // again, as a re-add does. Only now, so an undo whose write is refused
+  // leaves the removal holding what it still protects; meanwhile its ids are
+  // defined, so it strips nothing under them. A failure here leaves the undo
+  // preparing, for recovery to retire and publish.
+  await service.retire([...plan.ids]);
   await service.publish(undo.id);
   await ctx.audit?.write({
     kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,

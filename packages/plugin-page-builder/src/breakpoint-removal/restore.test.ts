@@ -179,8 +179,22 @@ describe("restoreDocument", () => {
         }
       ).base.mobile
     ).toEqual({ color: "#newest" });
-    // The older one met the newer value: changed since, as far as it knows.
-    expect(restored.skipped).toBe(1);
+    // One value, decided by the newest fragment: the older one is not
+    // counted again, as skipped or otherwise.
+    expect(restored.restored).toBe(1);
+    expect(restored.skipped).toBe(0);
+  });
+
+  it("counts a value stripped twice once, on a block deleted since", () => {
+    const { document, fragment } = stripped();
+    const without = {
+      ...document,
+      nodes: document.nodes.filter(node => node.id !== "a"),
+    } as BlockDocument;
+    const once = restoreDocument(without, [fragment]);
+    const twice = restoreDocument(without, [fragment, fragment]);
+    expect(once.deleted).toBe(2);
+    expect(twice.deleted).toBe(2);
   });
 });
 
@@ -234,10 +248,12 @@ describe("restoreClasses", () => {
     expect(
       restoreClasses([fromCode.entry], [changed as never], fragment, ids).value
     ).toEqual([]);
-    // Gone from the code: still taken out, and nothing counted lost.
+    // Gone from the code: still taken out, and its values counted lost with
+    // it, not put back.
     const gone = restoreClasses([fromCode.entry], [], fragment, ids);
     expect(gone.value).toEqual([]);
-    expect(gone.deleted).toBe(0);
+    expect(gone.deleted).toBe(1);
+    expect(gone.restored).toBe(0);
   });
 
   it("keeps an override the author changed since, filling only what it lacks", () => {
@@ -498,6 +514,18 @@ describe("skippedDocuments", () => {
         reason: "gone",
       },
     ]);
+  });
+
+  it("counts each value of a page deleted since once, however often it was kept", async () => {
+    const once = await skippedDocuments(
+      oneDocument([keptRow(PAGE_HOST)]),
+      reading({ kind: "absent" })
+    );
+    const twice = await skippedDocuments(
+      oneDocument([keptRow(PAGE_HOST), keptRow(PAGE_HOST)]),
+      reading({ kind: "absent" })
+    );
+    expect(twice).toEqual(once);
   });
 
   it("reads a value kept from a page with no lifecycle back from its one row", async () => {

@@ -650,9 +650,15 @@ export function breakpointRemovalService(
         // An undo is published only once its set is stored: its walk puts
         // values back whatever the site defines, so one whose set never
         // landed is dropped, and can be made again.
-        if (open.undoes !== null && !(await undoLanded(install(), open))) {
-          await store.abandon(open.id);
-          return;
+        if (open.undoes !== null) {
+          if (!(await undoLanded(install(), open))) {
+            await store.abandon(open.id);
+            return;
+          }
+          // Its set is stored: its removal gives up its claims, as the
+          // undo's own request would have once its write landed.
+          const undone = await store.runById(open.undoes);
+          if (undone !== null) await store.retire([...removedEver(undone)]);
         }
         await store.publish(open.id);
       }
