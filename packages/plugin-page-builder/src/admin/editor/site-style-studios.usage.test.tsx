@@ -67,6 +67,7 @@ vi.mock("../variables-client", async () => {
                   documents: 1,
                   byKind: { ...NONE, pages: 1 },
                   sharedStyles: ["c-card"],
+                  blockDefaults: [],
                   complete: true,
                 },
               ])

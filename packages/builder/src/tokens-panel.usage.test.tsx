@@ -81,12 +81,14 @@ const NONE = { pages: 0, components: 0, patterns: 0, layouts: 0 };
 function reach(
   documents: number,
   sharedStyles: readonly string[] = [],
-  complete = true
+  complete = true,
+  blockDefaults: readonly string[] = []
 ): VariableReach {
   return {
     documents,
     byKind: { ...NONE, pages: documents },
     sharedStyles,
+    blockDefaults,
     complete,
   };
 }
@@ -340,6 +342,55 @@ describe("removing a variable in use", () => {
     expect(openSharedStyle).toHaveBeenCalledWith("c-card");
 
     expect(within(editor).getByText("and 2 you can’t open")).toBeDefined();
+  });
+
+  it("names a block type's default style, with nowhere to open, and lists it in Show all", async () => {
+    const button: VariableUse = {
+      id: "core/button",
+      title: "Button",
+      collection: "",
+      kind: "block-default",
+    };
+    const pages: VariableUse[] = Array.from({ length: 5 }, (_, at) => ({
+      id: `p${String(at)}`,
+      title: `Page ${String(at)}`,
+      collection: "pages",
+      kind: "pages",
+    }));
+    const usage = host({
+      // Five pages and the Button's default style: six places.
+      reaches: () => ({
+        "color.brand": reach(5, [], true, ["core/button"]),
+      }),
+      // The block defaults come after the shared styles, before the pages,
+      // so the Button is listed among the first five.
+      uses: [button, ...pages],
+    });
+    render(<Hosted usage={usage} />);
+    const editor = await openEditor(/^Brand.*Used in 6 places$/);
+    expect(within(editor).getByText("Used in 6 places")).toBeDefined();
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      within(editor).getByRole("heading", {
+        name: "Brand can't be removed while it's in use.",
+      })
+    ).toBeDefined();
+    const item = await within(editor).findByText("Button");
+    // Named, not a link or a button: there is no document to open.
+    expect(item.tagName).toBe("SPAN");
+    expect(within(editor).queryByRole("link", { name: "Button" })).toBeNull();
+    expect(within(editor).queryByRole("button", { name: "Button" })).toBeNull();
+    expect(item.closest("li")?.textContent).toBe(
+      "Button · block default style"
+    );
+    const places = () =>
+      editor.querySelectorAll(".nx-vars-refusal__uses li").length;
+    expect(places()).toBe(5);
+    fireEvent.click(within(editor).getByRole("button", { name: "Show all 6" }));
+    expect(places()).toBe(6);
+    expect(within(editor).getByText("Button").closest("li")?.textContent).toBe(
+      "Button · block default style"
+    );
   });
 
   it("names a shared style without a way to it when the host gives none", async () => {

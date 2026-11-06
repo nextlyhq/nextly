@@ -52,9 +52,18 @@ function usageFromResponse(
 }
 
 /**
+ * Whether a place is a document, with a Page Builder view of its own: not a
+ * shared style, which opens in the Design panel, nor a block type's default
+ * style, which has nowhere to open.
+ */
+function opensAsDocument(kind: VariableUseItem["kind"]): boolean {
+  return kind !== "shared-style" && kind !== "block-default";
+}
+
+/**
  * One where-used page as the tab reads it. A document carries where its Page
- * Builder view opens; a shared style is opened in the Design panel instead,
- * so it carries none.
+ * Builder view opens; a shared style or a block type's default style carries
+ * none.
  */
 function usesFromResponse(
   body: UsesList<VariableUseItem> | undefined
@@ -65,9 +74,9 @@ function usesFromResponse(
     // Kept: an id is unique only within its collection.
     collection: item.collection,
     kind: item.kind,
-    ...(item.kind === "shared-style"
-      ? {}
-      : { href: documentBuilderPath(item.collection, item.id) }),
+    ...(opensAsDocument(item.kind)
+      ? { href: documentBuilderPath(item.collection, item.id) }
+      : {}),
   }));
 }
 

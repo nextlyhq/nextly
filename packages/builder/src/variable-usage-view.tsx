@@ -218,7 +218,8 @@ function InUse({
 /**
  * One place: a page or component as a link to it, "Homepage · page"; a
  * shared style as a way to it in Shared styles, with what it sets with the
- * variable, "Card · shared style · sets text colour".
+ * variable, "Card · shared style · sets text colour"; a block type's default
+ * style by name alone, "Button · block default style".
  */
 function UseRow({
   use,
@@ -229,6 +230,17 @@ function UseRow({
   identity: string;
   usage: VariableUsageHere;
 }): React.JSX.Element {
+  if (use.kind === "block-default") {
+    // A block type's own default style: named, with nowhere to open.
+    return (
+      <>
+        <span className="nx-shared-styles__use-title">{use.title}</span>
+        <span className="nx-shared-styles__meta">
+          {" · block default style"}
+        </span>
+      </>
+    );
+  }
   if (use.kind === "shared-style") {
     const open = usage.access.openSharedStyle;
     return (

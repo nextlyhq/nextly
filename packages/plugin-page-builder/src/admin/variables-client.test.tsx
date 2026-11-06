@@ -72,16 +72,21 @@ const NONE = { pages: 0, components: 0, patterns: 0, layouts: 0 };
 
 describe("reading how widely variables are used", () => {
   it("asks for the variables named, and hands back each by identity", async () => {
-    const usage = (documents: number, sharedStyles: string[]) => ({
+    const usage = (
+      documents: number,
+      sharedStyles: string[],
+      blockDefaults: string[] = []
+    ) => ({
       documents,
       byKind: { ...NONE, pages: documents },
       sharedStyles,
+      blockDefaults,
       complete: false,
     });
     // Parsed from JSON, as the transport parses it, so `__proto__` arrives
     // as an own key: an identity naming a prototype key is still a variable.
     readAnswer = JSON.parse(
-      `{"whole":false,"counting":true,"mayCount":true,"variables":{"color.brand":${JSON.stringify(usage(12, ["c-card", "c-hero"]))},"__proto__":${JSON.stringify(usage(1, []))}}}`
+      `{"whole":false,"counting":true,"mayCount":true,"variables":{"color.brand":${JSON.stringify(usage(12, ["c-card", "c-hero"], ["core/button"]))},"__proto__":${JSON.stringify(usage(1, []))}}}`
     );
     const { result } = renderHook(() => useVariablesClient());
     const read = await result.current.usage(
@@ -95,8 +100,9 @@ describe("reading how widely variables are used", () => {
     expect(read.whole).toBe(false);
     expect(read.counting).toBe(true);
     expect(read.mayCount).toBe(true);
+    // The block types whose default styles name it travel with the rest.
     expect(read.variables.get("color.brand")).toEqual(
-      usage(12, ["c-card", "c-hero"])
+      usage(12, ["c-card", "c-hero"], ["core/button"])
     );
     expect(read.variables.get("__proto__")?.documents).toBe(1);
   });
@@ -110,7 +116,7 @@ describe("reading how widely variables are used", () => {
 });
 
 describe("reading where a variable is used", () => {
-  it("asks for the page named, gives each document where it opens, and a shared style none", async () => {
+  it("asks for the page named, gives each document where it opens, and a shared style or block default none", async () => {
     readAnswer = {
       items: [
         {
@@ -118,6 +124,12 @@ describe("reading where a variable is used", () => {
           title: "Card",
           collection: "site-style",
           kind: "shared-style",
+        },
+        {
+          id: "core/button",
+          title: "Button",
+          collection: "",
+          kind: "block-default",
         },
         { id: "p 1", title: "Home", collection: "pages", kind: "pages" },
         {
@@ -149,6 +161,13 @@ describe("reading where a variable is used", () => {
           title: "Card",
           collection: "site-style",
           kind: "shared-style",
+        },
+        // A block type's default style: nowhere to open, so no address.
+        {
+          id: "core/button",
+          title: "Button",
+          collection: "",
+          kind: "block-default",
         },
         {
           id: "p 1",

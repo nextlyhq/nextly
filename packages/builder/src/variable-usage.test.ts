@@ -26,16 +26,18 @@ import {
 
 const NONE = { pages: 0, components: 0, patterns: 0, layouts: 0 };
 
-/** A reach of `documents` pages and these shared styles. */
+/** A reach of `documents` pages, these shared styles and these block defaults. */
 function reach(
   documents: number,
   sharedStyles: readonly string[] = [],
-  complete = true
+  complete = true,
+  blockDefaults: readonly string[] = []
 ): VariableReach {
   return {
     documents,
     byKind: { ...NONE, pages: documents },
     sharedStyles,
+    blockDefaults,
     complete,
   };
 }
@@ -49,6 +51,15 @@ describe("the count at the end of a row", () => {
       zero: false,
       floor: false,
     });
+  });
+
+  it("counts the block types whose default styles name it as places too", () => {
+    // 2 documents, 1 shared style and 2 block types: 5 places.
+    expect(
+      variableCount(reach(2, ["c-card"], true, ["core/button", "core/heading"]))
+        .words
+    ).toBe("Used in 5 places");
+    expect(variableCount(reach(0, [], true, ["core/button"])).text).toBe("1");
   });
 
   it("says one place in the singular", () => {
@@ -92,6 +103,8 @@ describe("what Remove may do", () => {
   it("refuses while anything uses it, a shared style alone included", () => {
     expect(variableRemoval(reach(3))).toBe("in-use");
     expect(variableRemoval(reach(0, ["c-card"]))).toBe("in-use");
+    // A block type's default style alone is a use as well.
+    expect(variableRemoval(reach(0, [], true, ["core/button"]))).toBe("in-use");
     // A floor above zero is a use, whatever the rest of the count says.
     expect(variableRemoval(reach(1, [], false))).toBe("in-use");
   });
@@ -109,6 +122,9 @@ describe("the editor's status line", () => {
   it("says how widely it is used, at least while that is a floor", () => {
     expect(variableStatus(reach(14))).toBe("Used in 14 places");
     expect(variableStatus(reach(0, ["c-card"]))).toBe("Used in 1 place");
+    expect(variableStatus(reach(1, [], true, ["core/button"]))).toBe(
+      "Used in 2 places"
+    );
     expect(variableStatus(reach(2, [], false))).toBe(
       "Used in at least 2 places"
     );

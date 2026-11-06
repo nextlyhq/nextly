@@ -10,8 +10,9 @@
  * ## Places
  *
  * A variable is used in documents (pages, components, sections, layouts)
- * whose blocks or settings name it, and in shared styles whose own styles
- * name it. The places it is used are the two together. While some pages are
+ * whose blocks or settings name it, in shared styles whose own styles name
+ * it, and in block types whose default styles name it. The places it is used
+ * are the three together. While some pages are
  * still being counted the documents are a floor, and so are the places.
  *
  * @module variable-usage
@@ -42,6 +43,11 @@ export interface VariableReach {
   readonly byKind: Readonly<Record<SharedStyleKind, number>>;
   /** The ids of the shared styles whose own styles name it. */
   readonly sharedStyles: readonly string[];
+  /**
+   * The block types (`core/button`) whose own default styles name it: each
+   * a place, though there is no document to open.
+   */
+  readonly blockDefaults: readonly string[];
   /** False makes `documents`, and so the places, a floor: "at least". */
   readonly complete: boolean;
 }
@@ -63,12 +69,15 @@ export interface VariablesUsage {
 }
 
 /**
- * Which kind of place a variable is used in: a document's kind, or a shared
- * style.
+ * Which kind of place a variable is used in: a document's kind, a shared
+ * style, or a block type's default style.
  *
  * @experimental Settles with the Variables tab's usage.
  */
-export type VariableUseKind = SharedStyleKind | "shared-style";
+export type VariableUseKind =
+  | SharedStyleKind
+  | "shared-style"
+  | "block-default";
 
 /**
  * One place a variable is used.
@@ -76,13 +85,19 @@ export type VariableUseKind = SharedStyleKind | "shared-style";
  * @experimental Settles with the Variables tab's usage.
  */
 export interface VariableUse {
-  /** A document's id, unique within its collection, or a shared style's id. */
+  /**
+   * A document's id, unique within its collection; a shared style's id; or a
+   * block type (`core/button`).
+   */
   readonly id: string;
   readonly title: string;
-  /** The collection holding the document, or the site style's. */
+  /** The collection holding the document, the site style's, or empty for a block type. */
   readonly collection: string;
   readonly kind: VariableUseKind;
-  /** Where a document opens, when the host can say. A shared style has none. */
+  /**
+   * Where a document opens, when the host can say. A shared style and a
+   * block type's default style have none.
+   */
   readonly href?: string;
 }
 
@@ -127,9 +142,14 @@ export interface VariablesAccess {
   readonly openSharedStyle?: (classId: string) => void;
 }
 
-/** How many places use a variable: its documents and its shared styles. */
+/**
+ * How many places use a variable: its documents, its shared styles, and the
+ * block types whose default styles name it.
+ */
 function variablePlaces(reach: VariableReach): number {
-  return reach.documents + reach.sharedStyles.length;
+  return (
+    reach.documents + reach.sharedStyles.length + reach.blockDefaults.length
+  );
 }
 
 /** "1 place", "14 places". */
