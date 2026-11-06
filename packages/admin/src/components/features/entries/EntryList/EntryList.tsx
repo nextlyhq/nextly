@@ -877,6 +877,12 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
                 rows: declaredActions.opened.rows,
                 onClose: declaredActions.close,
               }}
+              fallback={
+                <p className="text-sm text-muted-foreground">
+                  This action&apos;s component isn&apos;t available in this
+                  admin.
+                </p>
+              }
             />
           ) : null}
         </DialogContent>

@@ -155,6 +155,45 @@ describe("the list's declared row actions", () => {
     expect(toastSpy.success).toHaveBeenCalled();
   });
 
+  it("offers no action on a row the list returned without an id", () => {
+    const { result } = renderHook(
+      () => useDeclaredRowActions<{ id?: string; status?: string }>("tickets"),
+      { wrapper }
+    );
+    expect(result.current.rowActions[0].isVisible?.({ status: "open" })).toBe(
+      false
+    );
+  });
+
+  it("sends nothing when an action is chosen again on a row before it answers", async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    postSpy.mockReturnValue(new Promise(resolve => (answer = resolve)));
+    const { result } = renderHook(
+      () => useDeclaredRowActions<{ id: string; status?: string }>("tickets"),
+      { wrapper }
+    );
+    const row = { id: "1", status: "open" };
+    await act(async () => {
+      result.current.rowActions[0].onSelect(row);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // Shown as busy while it runs, and a second choice sends nothing.
+    expect(result.current.rowActions[0].isDisabled?.(row)).toBe(true);
+    await act(async () => {
+      result.current.rowActions[0].onSelect(row);
+      await Promise.resolve();
+    });
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      answer({ message: "Escalated." });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.rowActions[0].isDisabled?.(row)).toBe(false);
+  });
+
   it("says the route's refusal in its own words", async () => {
     postSpy.mockRejectedValue(
       Object.assign(new Error("This action isn't available for this entry."), {
