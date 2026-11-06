@@ -827,7 +827,7 @@ contributes: {
         collections: ["tickets"], // every collection's page when absent
         label: "SLA",
         component: "@acme/support/admin#Sla",
-        after: "status", // straight after the built-in Status section
+        after: "status", // after the built-in Status section, as close as it can
       },
       {
         id: "acme-support.escalate",
@@ -845,8 +845,11 @@ contributes: {
 ```
 
 **Order.** At each place, each kind's contributions are ordered by `order`
-(lower first, 100 when absent), or placed straight `before` or `after` another
-contribution's id or a built-in part's name. A contribution may take a
+(lower first, 100 when absent), or relative to another contribution's id or a
+built-in part's name: `after: A` places it after A, as close to A as the other
+contributions' order allows, and straight after A when nothing competes, and
+`before` is the same on the other side. A contribution that must come between
+them keeps its place there. A contribution may take a
 built-in part's place with `replaces`. The edit page's side panel names its
 four built-in sections, in order: `status`, `publishing`, `language` and
 `details`.

@@ -8,9 +8,12 @@
  * the first time a tie broke differently.
  *
  * A contribution is placed by number (lower first, 100 when it gives none, as
- * the menu orders), or next to another contribution or a built-in part it
- * names: `after` puts it straight after that one, `before` straight before
- * it, ahead of anything placed only by number. Built-in parts keep their order
+ * the menu orders), or relative to another contribution or a built-in part it
+ * names: `after: A` places it after A, as close to A as the other
+ * constraints allow, and straight after A when nothing competes; `before` is
+ * the same on the other side. An order, then, and nearness, not a promise of
+ * adjacency: another contribution ordered between the two keeps its place.
+ * Built-in parts keep their order
  * among themselves, and come before contributions of the same number; ties
  * among contributions break by id. A contribution may take a built-in part's
  * place with `replaces`, and is then ordered where that part was.
@@ -202,9 +205,9 @@ function graphNodes(
 /**
  * The graph's edges, from what comes first to what follows it, and apart from
  * them the ones a contribution asked for, weighted: an `after`, a follower
- * asking to come straight after what it names, outweighs a `before`, which
- * asks only to come straight before. So what a contribution is anchored to is
- * followed by it first. Refuses a reference to nothing there.
+ * asking to come after what it names, outweighs a `before` when both are free
+ * at once. So what a contribution is anchored to is followed by it as soon as
+ * nothing else must come between. Refuses a reference to nothing there.
  */
 function graphEdges(
   items: readonly OrderableContribution[],
@@ -261,8 +264,8 @@ function graphEdges(
 
 /**
  * Kahn's algorithm. What a node frees is placed straight after it, what it
- * was anchored to first, so `after` means next to; otherwise the
- * lowest-ranked free node goes next. Answers the order and the nodes placed;
+ * was anchored to first, so `after` keeps a contribution as near as the
+ * order allows; otherwise the lowest-ranked free node goes next. Answers the order and the nodes placed;
  * a node left unplaced is on or behind a cycle.
  */
 function placed(

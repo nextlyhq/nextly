@@ -141,6 +141,24 @@ describe("orderContributions", () => {
     ).toEqual(["+acme-support.a", "+acme-support.b", ...BUILT_INS]);
   });
 
+  it("places a contribution after the one it follows, past one that must come between them", () => {
+    // `after` is an order and nearness, not adjacency: D must come before B,
+    // so it stays between A and B rather than the order being refused.
+    expect(
+      names(
+        orderContributions(
+          [
+            c("acme-support.a", { order: 10 }),
+            c("acme-support.b", { after: "acme-support.a" }),
+            c("acme-support.d", { before: "acme-support.b" }),
+          ],
+          [],
+          SCOPE
+        )
+      )
+    ).toEqual(["+acme-support.a", "+acme-support.d", "+acme-support.b"]);
+  });
+
   it("refuses a reference to nothing there", () => {
     expect(
       refusalOf(() =>

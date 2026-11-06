@@ -292,9 +292,17 @@ interface AdminContributionBase {
   place: AdminPlaceId;
   /** Lower first; 100 when absent, as the menu orders. */
   order?: number;
-  /** Straight before this contribution's id, or a built-in part's name. */
+  /**
+   * Before this contribution's id, or a built-in part's name: as close to it
+   * as the other contributions' order allows, straight before it when nothing
+   * competes.
+   */
   before?: string;
-  /** Straight after this contribution's id, or a built-in part's name. */
+  /**
+   * After this contribution's id, or a built-in part's name: as close to it
+   * as the other contributions' order allows, straight after it when nothing
+   * competes.
+   */
   after?: string;
   /** A built-in part of the same kind at this place, whose place it takes. */
   replaces?: string;
