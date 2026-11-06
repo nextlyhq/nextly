@@ -227,28 +227,47 @@ export interface SentenceRows<Draft> {
 }
 
 /**
+ * Each stored row's key for its draft: what the row holds, and how many rows
+ * holding the same came before it. Keyed by content rather than position, so
+ * a draft stays with its row when another row is written or removed and the
+ * rows after it move up, and goes once its own row is written, since the row
+ * then holds something else.
+ */
+function draftKeysOf<Stored>(stored: readonly Stored[]): string[] {
+  const seen = new Map<string, number>();
+  return stored.map(each => {
+    const text = JSON.stringify(each) ?? "";
+    const count = seen.get(text) ?? 0;
+    seen.set(text, count + 1);
+    return `${text}\u0000${String(count)}`;
+  });
+}
+
+/**
  * The rows of a stored list being edited: each stored row, with any draft
- * over it, then the new rows not yet complete. A draft is dropped once the
- * stored list changes, since the change is the draft written.
+ * over it, then the new rows not yet complete. A draft stays with its row
+ * when another row is written or removed, and goes once its own row is
+ * written, since the row then holds the draft.
  */
 export function useSentenceRows<Stored, Draft>(
   stored: readonly Stored[],
   toDraft: (stored: Stored) => Draft,
   empty: Draft
 ): SentenceRows<Draft> {
+  // Drafts over stored rows, by each row's content key: a draft whose row no
+  // longer holds what it did is simply never read again.
   const [overStored, setOverStored] = React.useState<
-    ReadonlyMap<number, Draft>
+    ReadonlyMap<string, Draft>
   >(() => new Map());
   const [added, setAdded] = React.useState<
     ReadonlyArray<{ key: string; draft: Draft }>
   >([]);
   const [openKey, setOpenKey] = React.useState<string | null>(null);
-  const storedText = JSON.stringify(stored);
-  React.useEffect(() => setOverStored(new Map()), [storedText]);
+  const draftKeys = draftKeysOf(stored);
   const nextKey = React.useRef(0);
   const rows: ShownRow<Draft>[] = [
     ...stored.map((each, index) => {
-      const draft = overStored.get(index);
+      const draft = overStored.get(draftKeys[index] ?? "");
       return {
         key: `stored:${String(index)}`,
         index,
@@ -263,6 +282,19 @@ export function useSentenceRows<Stored, Draft>(
       drafted: true,
     })),
   ];
+  // Only the drafts still over a stored row are kept when one is set, so the
+  // map never holds more than the rows shown.
+  const setDraft = (index: number, draft: Draft | undefined): void => {
+    const live = new Set(draftKeys);
+    const at = draftKeys[index];
+    setOverStored(current => {
+      const next = new Map([...current].filter(([key]) => live.has(key)));
+      if (at === undefined) return next;
+      if (draft === undefined) next.delete(at);
+      else next.set(at, draft);
+      return next;
+    });
+  };
   return {
     rows,
     openKey,
@@ -277,11 +309,7 @@ export function useSentenceRows<Stored, Draft>(
     change: (row, draft, completed) => {
       const index = row.index ?? stored.length;
       if (completed) {
-        setOverStored(current => {
-          const next = new Map(current);
-          next.delete(index);
-          return next;
-        });
+        if (row.index !== undefined) setDraft(row.index, undefined);
         if (row.index === undefined) {
           setAdded(current => current.filter(each => each.key !== row.key));
           if (openKey === row.key) setOpenKey(`stored:${String(index)}`);
@@ -295,8 +323,7 @@ export function useSentenceRows<Stored, Draft>(
           )
         );
       } else {
-        const at = row.index;
-        setOverStored(current => new Map(current).set(at, draft));
+        setDraft(row.index, draft);
       }
       return index;
     },
@@ -304,6 +331,8 @@ export function useSentenceRows<Stored, Draft>(
       if (openKey === row.key) setOpenKey(null);
       if (row.index === undefined) {
         setAdded(current => current.filter(each => each.key !== row.key));
+      } else {
+        setDraft(row.index, undefined);
       }
       return row.index;
     },
