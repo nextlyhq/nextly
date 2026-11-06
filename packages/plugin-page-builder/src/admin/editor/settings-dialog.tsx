@@ -93,7 +93,11 @@ import {
   useBreakpointRemoval,
   type BreakpointRemoval,
 } from "./use-breakpoint-removal";
-import { useBreakpointUndo, type BreakpointUndo } from "./use-breakpoint-undo";
+import {
+  useBreakpointUndo,
+  type BreakpointUndo,
+  type UndoStep,
+} from "./use-breakpoint-undo";
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -642,6 +646,16 @@ function SiteSettings({
   );
 }
 
+/** Whether an undo, going or finished, puts back removal `runId`. */
+function undoes(step: UndoStep, runId: string): boolean {
+  return (
+    (step.kind === "undoing" ||
+      step.kind === "undone" ||
+      step.kind === "left") &&
+    step.undoes === runId
+  );
+}
+
 /**
  * What the Site tab shows of a removal and its undo above the breakpoint
  * list: the step that takes the list's place while one asks or works (a
@@ -685,19 +699,24 @@ function BreakpointSteps({
       ? removal.step.runId
       : undefined;
   const offered = undo.offered;
+  // A finished removal this tab saw gives way to its undo, going or done, so
+  // the tab never says at once that a breakpoint was removed and is back.
+  const undoneHere = shownRun !== undefined && undoes(undo.step, shownRun);
   return (
     <>
-      <RemovalStatusRow
-        removal={removal}
-        {...(offered !== undefined && shownRun === offered.runId
-          ? {
-              offer: {
-                hint: undoableHint(offered),
-                undo: () => undo.ask(offered),
-              },
-            }
-          : {})}
-      />
+      {undoneHere ? null : (
+        <RemovalStatusRow
+          removal={removal}
+          {...(offered !== undefined && shownRun === offered.runId
+            ? {
+                offer: {
+                  hint: undoableHint(offered),
+                  undo: () => undo.ask(offered),
+                },
+              }
+            : {})}
+        />
+      )}
       <UndoStatusRow
         undo={undo}
         offerHere={shownRun === undefined && removal.step.kind !== "resumed"}

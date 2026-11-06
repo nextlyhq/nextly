@@ -20,7 +20,9 @@ import { Actions, RefusedStep, WorkingStep } from "./breakpoint-removal-step";
 import {
   undoableWords,
   undoConfirmWords,
+  skippedLine,
   undoingWords,
+  undoLeftWords,
   undoneWords,
   undoRefusedWords,
   undoResumedWords,
@@ -175,23 +177,26 @@ export function UndoStatusRow({
       <Row state="resumed" icon="going" title={words.title} hint={words.hint} />
     );
   }
-  if (step.kind === "undone") {
-    const words = undoneWords(step.labels, step.skipped);
+  if (step.kind === "undone" || step.kind === "left") {
+    // One that left pages says so first; what stayed out for good follows.
+    const words =
+      step.kind === "undone"
+        ? undoneWords(step.labels, step.skipped)
+        : {
+            ...undoLeftWords(step.status),
+            lines: step.skipped.map(entry =>
+              skippedLine(entry, step.status.labels)
+            ),
+          };
     return (
       <Row
-        state="undone"
-        icon={words.lines.length === 0 ? "done" : "left"}
+        state={step.kind}
+        icon={
+          step.kind === "undone" && words.lines.length === 0 ? "done" : "left"
+        }
         title={words.title}
         hint={words.hint}
-        below={
-          words.lines.length === 0 ? null : (
-            <ul className="mt-1.5 text-sm">
-              {words.lines.map(line => (
-                <SkippedItem key={`${line.name}|${line.why}`} line={line} />
-              ))}
-            </ul>
-          )
-        }
+        below={<SkippedList lines={words.lines} />}
       />
     );
   }
@@ -217,6 +222,22 @@ export function UndoStatusRow({
     );
   }
   return null;
+}
+
+/** The documents an undo could not put back, under its row; none, nothing. */
+function SkippedList({
+  lines,
+}: {
+  lines: readonly SkippedLine[];
+}): JSX.Element | null {
+  if (lines.length === 0) return null;
+  return (
+    <ul className="mt-1.5 text-sm">
+      {lines.map(line => (
+        <SkippedItem key={`${line.name}|${line.why}`} line={line} />
+      ))}
+    </ul>
+  );
 }
 
 /** A status row: its icon, its words, and what follows them. */

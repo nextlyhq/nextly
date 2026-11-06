@@ -12,6 +12,7 @@ import type { SiteBreakpointUndoSkipped } from "../../library-contract";
 import {
   skippedLine,
   undoConfirmWords,
+  undoLeftWords,
   undoneWords,
   undoRefusedWords,
 } from "./breakpoint-undo-flow";
@@ -59,12 +60,15 @@ describe("skippedLine", () => {
     );
   });
 
-  it("calls the shared styles by what they are, unlinked", () => {
+  it("calls the shared styles by what they are, unlinked, under any slug", () => {
+    // Registered under a slug of the site's own: the server's mark, not the
+    // slug, says what they are.
     expect(
       skippedLine(
         {
           kind: "single",
-          slug: "site-style",
+          slug: "brand-styles",
+          sharedStyles: true,
           values: 1,
           reason: "block-deleted",
         },
@@ -76,10 +80,54 @@ describe("skippedLine", () => {
     });
   });
 
+  it("takes a Single slugged site-style without the mark for a page", () => {
+    expect(
+      skippedLine(
+        {
+          kind: "single",
+          slug: "site-style",
+          name: "Site style",
+          values: 1,
+          reason: "block-deleted",
+        },
+        ["Mobile"]
+      )
+    ).toEqual({
+      name: "Site style",
+      href: "/admin/singles/site-style",
+      why: "1 value was on a block deleted after the removal",
+    });
+  });
+
   it("names a page the person may not open without linking it", () => {
     const { name: _named, ...unnamed } = skipped({});
     expect(skippedLine(unnamed, ["Mobile"]).name).toBe("A page you can't open");
     expect(skippedLine(unnamed, ["Mobile"]).href).toBeUndefined();
+  });
+});
+
+describe("undoLeftWords", () => {
+  it("says what is owed under drafts, never all back", () => {
+    expect(
+      undoLeftWords({ labels: ["Mobile"], left: 3, waitingOnDrafts: true })
+    ).toEqual({
+      title: "Mobile is back, except on 3 live versions",
+      hint: "Each has a draft waiting to be published, and gets Mobile's styles back once that draft is published or discarded.",
+    });
+  });
+
+  it("says entries it couldn't change yet apart from drafts", () => {
+    expect(
+      undoLeftWords({
+        labels: ["Mobile", "Tablet"],
+        left: 1,
+        waitingOnDrafts: false,
+      })
+    ).toEqual({
+      title:
+        "Mobile and Tablet are back, except on 1 entry it couldn't change yet",
+      hint: "It gets Mobile and Tablet's styles back once it can be changed.",
+    });
   });
 });
 

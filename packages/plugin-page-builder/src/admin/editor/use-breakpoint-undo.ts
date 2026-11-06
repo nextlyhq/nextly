@@ -9,7 +9,10 @@
  * removal route until it has; one Settings finds still going is followed the
  * same way, shown as a row while editing waits for it. It ends `undone`, with
  * every document it could not put every value back into and why, or
- * `refused`, with the server's words.
+ * `refused`, with the server's words. An undo that left pages it can't write
+ * yet (a live page under a pending draft) shows `left` until the read says
+ * it holds none, never as all back. A finished undo gives way to anything
+ * newer the read reports: another run going, or a newer removal on offer.
  *
  * Beside the removal's own steps (`use-breakpoint-removal`), which leave an
  * undo's run to this.
@@ -28,6 +31,7 @@ import {
 } from "../../library-contract";
 import {
   carryOnBreakpointRemoval,
+  readBreakpointRemoval,
   undoBreakpointRemoval,
 } from "../breakpoint-removal-client";
 
@@ -45,14 +49,21 @@ export type UndoStep =
   | {
       readonly kind: "undoing";
       readonly runId: string;
+      /** The removal it undoes. */
+      readonly undoes: string;
       readonly labels: readonly string[];
       readonly ids: readonly string[];
       /** Whether this tab started it, rather than finding it going. */
       readonly own: boolean;
     }
+  | Undone
   | {
-      readonly kind: "undone";
-      readonly labels: readonly string[];
+      /** Finished, but holding pages it puts back once it can write them. */
+      readonly kind: "left";
+      readonly runId: string;
+      readonly undoes: string;
+      /** The run as the server reports it: its labels and what it left. */
+      readonly status: SiteBreakpointRemovalStatus;
       readonly ids: readonly string[];
       readonly skipped: readonly SiteBreakpointUndoSkipped[];
     }
@@ -66,6 +77,22 @@ export type UndoStep =
        */
       readonly fit: boolean;
     };
+
+/** An undo this tab saw finish. */
+interface Undone {
+  readonly kind: "undone";
+  /** Its run; absent for an undo with nothing to walk. */
+  readonly runId: string | undefined;
+  /** The removal it undid. */
+  readonly undoes: string;
+  readonly labels: readonly string[];
+  readonly ids: readonly string[];
+  readonly skipped: readonly SiteBreakpointUndoSkipped[];
+  /** Its run's status when it ended holding pages; `null` when it held none. */
+  readonly held: SiteBreakpointRemovalStatus | null;
+  /** The read held when it ended, which may still report its run open. */
+  readonly endedUnder: unknown;
+}
 
 /** What the undo is handed. */
 export interface BreakpointUndoOptions {
@@ -126,32 +153,142 @@ function reasonOf(error: unknown): string {
     : "The removal could not be undone.";
 }
 
+/** A run the read reports, when it is an undo's. */
+function undoOf(
+  status: SiteBreakpointRemovalStatus
+): (SiteBreakpointRemovalStatus & { readonly undoes: string }) | undefined {
+  return status.undoes === undefined
+    ? undefined
+    : { ...status, undoes: status.undoes };
+}
+
+const IDLE: UndoStep = { kind: "idle" };
+
 /**
- * The step on screen: this tab's own; else an undo the read reports going,
- * followed and shown as a row.
+ * What the read alone shows: an undo going (another tab's, or an earlier
+ * visit's), followed; else one that finished leaving pages, said until it
+ * holds none.
+ */
+function fromRead(
+  removals: readonly SiteBreakpointRemovalStatus[] | undefined,
+  undoable: SiteBreakpointUndoable | null | undefined
+): UndoStep {
+  const undos = (removals ?? []).flatMap(removal => undoOf(removal) ?? []);
+  const going = undos.find(undo => undo.open);
+  if (going !== undefined) {
+    return {
+      kind: "undoing",
+      runId: going.runId,
+      undoes: going.undoes,
+      labels: going.labels,
+      ids: undoable?.runId === going.undoes ? undoable.ids : [],
+      own: false,
+    };
+  }
+  const held = undos.find(undo => undo.left > 0);
+  return held === undefined
+    ? IDLE
+    : {
+        kind: "left",
+        runId: held.runId,
+        undoes: held.undoes,
+        status: held,
+        ids: [],
+        skipped: [],
+      };
+}
+
+/**
+ * Whether the read reports something newer than an undo this tab saw finish:
+ * another run open, its own open again in a read newer than the one it ended
+ * under (a write brought values back), or another removal on offer. The
+ * removal it undid is never offered again, so any offer is newer.
+ */
+function outranked(
+  own: Undone,
+  removals: readonly SiteBreakpointRemovalStatus[] | undefined,
+  undoable: SiteBreakpointUndoable | null | undefined
+): boolean {
+  const open = removals?.some(
+    removal =>
+      removal.open &&
+      (removal.runId !== own.runId || removals !== own.endedUnder)
+  );
+  if (open === true) return true;
+  return (
+    undoable !== null && undoable !== undefined && undoable.runId !== own.undoes
+  );
+}
+
+/**
+ * A finished undo as shown: `left` while its run holds pages, read from the
+ * newest read that reports it, else from its status when it ended; `undone`
+ * once a read newer than that reports it holding none.
+ */
+function finishedShown(
+  own: Undone,
+  removals: readonly SiteBreakpointRemovalStatus[] | undefined
+): UndoStep {
+  const runId = own.runId;
+  if (runId === undefined) return own;
+  const now = removals?.find(removal => removal.runId === runId);
+  const fresh = removals !== undefined && removals !== own.endedUnder;
+  const held =
+    now !== undefined && !now.open && now.left > 0
+      ? now
+      : fresh
+        ? null
+        : own.held;
+  return held === null
+    ? own
+    : {
+        kind: "left",
+        runId,
+        undoes: own.undoes,
+        status: held,
+        ids: own.ids,
+        skipped: own.skipped,
+      };
+}
+
+/**
+ * The step on screen: this tab's own while it is under way; its finished one
+ * until the read reports something newer; else what the read shows.
  */
 function shownUndo(
   own: UndoStep,
   removals: readonly SiteBreakpointRemovalStatus[] | undefined,
   undoable: SiteBreakpointUndoable | null | undefined
 ): UndoStep {
-  if (own.kind !== "idle") return own;
-  const going = removals?.find(
-    removal => removal.open && removal.undoes !== undefined
-  );
-  if (going === undefined) return own;
-  return {
-    kind: "undoing",
-    runId: going.runId,
-    labels: going.labels,
-    ids:
-      undoable !== null &&
-      undoable !== undefined &&
-      undoable.runId === going.undoes
-        ? undoable.ids
-        : [],
-    own: false,
-  };
+  if (
+    own.kind === "confirm" ||
+    own.kind === "refused" ||
+    own.kind === "undoing"
+  ) {
+    return own;
+  }
+  if (own.kind === "undone" && !outranked(own, removals, undoable)) {
+    return finishedShown(own, removals);
+  }
+  return fromRead(removals, undoable);
+}
+
+/**
+ * What a finished undo's run holds: its status when it left pages, `null`
+ * when it holds none. Read from the run, never from the last call's own
+ * count, which counts that call alone; a failed read answers `null`, and the
+ * Settings read that follows says what it holds.
+ */
+async function heldAtEnd(
+  runId: string | undefined
+): Promise<SiteBreakpointRemovalStatus | null> {
+  if (runId === undefined) return null;
+  try {
+    const status = await readBreakpointRemoval(runId);
+    return status !== null && !status.open && status.left > 0 ? status : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -182,7 +319,7 @@ function useFollowUndo(
 
 /** The breakpoints put back, by id, as the list tags them. */
 function putBackOf(step: UndoStep): ReadonlyMap<string, string> {
-  if (step.kind !== "undone") return new Map();
+  if (step.kind !== "undone" && step.kind !== "left") return new Map();
   return new Map(step.ids.map(id => [id, "put back"]));
 }
 
@@ -197,23 +334,45 @@ export function useBreakpointUndo({
   // The step being followed, for its settle to name what it put back: kept
   // beside the callback rather than in its dependencies.
   const followed = useRef(step);
+  // The read on hand when an undo ends, which may be from before it did.
+  const latest = useRef(removals);
   useEffect(() => {
     followed.current = step;
+    latest.current = removals;
   });
+
+  // Ends an undo: what its run still holds is read first, so a finished
+  // undo that left pages is never shown as all back.
+  const finish = useCallback(
+    async (
+      ended: Pick<Undone, "runId" | "undoes" | "labels" | "ids" | "skipped">
+    ): Promise<void> => {
+      const held = await heldAtEnd(ended.runId);
+      setOwn({
+        kind: "undone",
+        ...ended,
+        held,
+        endedUnder: latest.current,
+      });
+    },
+    []
+  );
 
   const settle = useCallback(
     (answered: SiteBreakpointRemoval) => {
       const was = followed.current;
+      if (was.kind !== "undoing") return;
       reread();
       refreshStyle();
-      setOwn({
-        kind: "undone",
-        labels: was.kind === "undoing" ? was.labels : [],
-        ids: was.kind === "undoing" ? was.ids : [],
+      void finish({
+        runId: was.runId,
+        undoes: was.undoes,
+        labels: was.labels,
+        ids: was.ids,
         skipped: answered.undo?.skipped ?? [],
       });
     },
-    [reread, refreshStyle]
+    [reread, refreshStyle, finish]
   );
   useFollowUndo(step, settle);
 
@@ -227,8 +386,9 @@ export function useBreakpointUndo({
         reread();
         const run = saved.removal;
         if (run === undefined || run.finished) {
-          setOwn({
-            kind: "undone",
+          void finish({
+            runId: run?.runId,
+            undoes: target.runId,
             labels: target.labels,
             ids: target.ids,
             skipped: run?.undo?.skipped ?? [],
@@ -237,6 +397,7 @@ export function useBreakpointUndo({
           setOwn({
             kind: "undoing",
             runId: run.runId,
+            undoes: target.runId,
             labels: target.labels,
             ids: target.ids,
             own: true,
@@ -261,7 +422,8 @@ export function useBreakpointUndo({
         ? undoable
         : undefined,
     ask: target => {
-      if (own.kind !== "idle") return;
+      // Offered only while nothing else is shown, a finished undo outranked.
+      if (step.kind !== "idle") return;
       setOwn({ kind: "confirm", target, sending: false });
     },
     back: () => {

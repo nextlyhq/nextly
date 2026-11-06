@@ -735,6 +735,11 @@ export interface SiteBreakpointUndoSkipped {
    * not read, or one deleted since.
    */
   readonly name?: string;
+  /**
+   * Set on the site's shared styles, whatever slug their Single is
+   * registered under, so the person is told of them as such.
+   */
+  readonly sharedStyles?: true;
   readonly values: number;
   readonly reason:
     | "changed"

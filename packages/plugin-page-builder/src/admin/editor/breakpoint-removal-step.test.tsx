@@ -979,6 +979,115 @@ describe("undoing a breakpoint removal in Settings", () => {
     ).toBeTruthy();
   });
 
+  it("says an undo that left pages under drafts is not all back yet", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = async () => ({
+      message: "Undone.",
+      item: {
+        breakpoints: SET,
+        removal: {
+          runId: "undo-1",
+          finished: true,
+          left: 1,
+          undo: { undoes: "run-1", skipped: [] },
+        },
+      },
+    });
+    // The run's own status, read when it ends: one live page left.
+    statusRead = reads([
+      {
+        runId: "undo-1",
+        undoes: "run-1",
+        labels: ["Mobile"],
+        open: false,
+        left: 1,
+        waitingOnDrafts: true,
+      },
+    ]);
+    show();
+    await undoMobile();
+    expect(
+      await screen.findByText("Mobile is back, except on 1 live version")
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "It has a draft waiting to be published, and gets Mobile's styles back once that draft is published or discarded."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("Mobile is back, with its styles")).toBeNull();
+    expect(statusAsked).toHaveLength(1);
+  });
+
+  it("says an undo that left pages on reopening Settings", async () => {
+    siteRead = {
+      ...siteRead,
+      undoable: null,
+      removals: [
+        {
+          runId: "undo-1",
+          undoes: "run-1",
+          labels: ["Mobile"],
+          open: false,
+          left: 2,
+          waitingOnDrafts: true,
+        },
+      ],
+    };
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    expect(
+      await screen.findByText("Mobile is back, except on 2 live versions")
+    ).toBeTruthy();
+  });
+
+  it("gives a finished undo's row up to a newer removal on offer", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = undone(true);
+    show();
+    await undoMobile();
+    expect(
+      await screen.findByText("Mobile is back, with its styles")
+    ).toBeTruthy();
+    // Another tab removes Tablet; the read offers that removal now.
+    siteRead = {
+      ...siteRead,
+      undoable: {
+        runId: "run-2",
+        ids: ["tablet"],
+        labels: ["Tablet"],
+        removedAt: "2026-11-06T10:00:00.000Z",
+        until: "2026-12-06T10:00:00.000Z",
+      },
+    };
+    reshow();
+    expect(
+      await screen.findByText("Tablet was removed on 6 November")
+    ).toBeTruthy();
+    expect(screen.queryByText("Mobile is back, with its styles")).toBeNull();
+  });
+
+  it("shows no removal row beside the undo of that removal", async () => {
+    dryRunAnswer = dryRun({
+      ...mobile(),
+      documents: { named: [], unnamed: 0 },
+    });
+    show();
+    await removeMobile();
+    expect(await screen.findByText("Mobile was removed")).toBeTruthy();
+    // The read now offers that removal, on its own row.
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = undone(true);
+    reshow();
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Put Mobile back" })
+    );
+    expect(
+      await screen.findByText("Mobile is back, with its styles")
+    ).toBeTruthy();
+    expect(screen.queryByText("Mobile was removed")).toBeNull();
+  });
+
   it("says an undo Settings finds going, and holds Edit while it lasts", async () => {
     siteRead = {
       ...siteRead,

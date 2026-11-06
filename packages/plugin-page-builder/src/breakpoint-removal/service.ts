@@ -477,12 +477,15 @@ async function undoLanded(
  * newest one (`newestRemoval`), not undone already, and within the days what
  * it took out is kept for, read from its id. Rows are kept after the run
  * opens, so they outlive this window, never the other way round. Answers the
- * refusal to throw, or when the window ends.
+ * refusal to throw, or when the window ends. `scanned` is the newest removal
+ * when the caller has already looked for it, so the scan, which reads kept
+ * rows per removal, runs once per judgement.
  */
 async function undoJudged(
   installed: RemovalInstall,
   all: readonly BreakpointRun[],
-  runId: string
+  runId: string,
+  scanned?: { readonly newest: BreakpointRun | undefined }
 ): Promise<
   { refusal: NextlyError } | { refusal?: undefined; at: number; ends: number }
 > {
@@ -490,11 +493,14 @@ async function undoJudged(
   if (run === undefined || run.open || run.undoes !== null) {
     return { refusal: cannotUndo("not-a-done-removal", runId) };
   }
-  const newest = await newestRemoval(
-    all,
-    id => fragmentStore(installed.db).keptAny(id),
-    installed.definedBreakpoints
-  );
+  const newest =
+    scanned !== undefined
+      ? scanned.newest
+      : await newestRemoval(
+          all,
+          id => fragmentStore(installed.db).keptAny(id),
+          installed.definedBreakpoints
+        );
   if (newest?.id !== runId) {
     return { refusal: cannotUndo("a-newer-removal", runId) };
   }
@@ -709,7 +715,8 @@ export function breakpointRemovalService(
         installed.definedBreakpoints
       );
       if (newest === undefined) return null;
-      const judged = await undoJudged(installed, all, newest.id);
+      // Judged against the scan just made, not a second one.
+      const judged = await undoJudged(installed, all, newest.id, { newest });
       return judged.refusal === undefined
         ? {
             run: newest,

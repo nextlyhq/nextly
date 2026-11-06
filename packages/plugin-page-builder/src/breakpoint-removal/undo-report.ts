@@ -56,7 +56,19 @@ async function sharedStylesSkipped(
     values: number,
     reason: SiteBreakpointUndoSkipped["reason"]
   ): SiteBreakpointUndoSkipped[] =>
-    values === 0 ? [] : [{ kind: "single", slug: styles.slug, values, reason }];
+    values === 0
+      ? []
+      : [
+          // Marked, so the person is told of the shared styles whatever slug
+          // their Single is registered under.
+          {
+            kind: "single",
+            slug: styles.slug,
+            sharedStyles: true,
+            values,
+            reason,
+          },
+        ];
   return [...of(skipped, "changed"), ...of(deleted, "block-deleted")];
 }
 

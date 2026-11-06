@@ -10,11 +10,12 @@
  * @experimental
  */
 import type {
+  SiteBreakpointRemovalStatus,
   SiteBreakpointUndoSkipped,
   SiteBreakpointUndoable,
 } from "../../library-contract";
 
-import { joinNames, type StatusWords } from "./breakpoint-removal-flow";
+import { count, joinNames, type StatusWords } from "./breakpoint-removal-flow";
 
 /** "1 value" or "3 values". */
 function values(n: number): string {
@@ -107,9 +108,6 @@ export interface SkippedLine {
   readonly why: string;
 }
 
-/** The Single the site's shared styles are stored in. */
-const SHARED_STYLES_SINGLE = "site-style";
-
 /** What a document is, by where it is stored, for a sentence about it. */
 function documentWord(entry: SiteBreakpointUndoSkipped): string {
   if (entry.kind === "single") return "page";
@@ -125,8 +123,7 @@ function documentWord(entry: SiteBreakpointUndoSkipped): string {
 /** Why a document's values stayed out, the count first. */
 function whyOf(entry: SiteBreakpointUndoSkipped, names: string): string {
   const n = entry.values;
-  const sharedStyle =
-    entry.kind === "single" && entry.slug === SHARED_STYLES_SINGLE;
+  const sharedStyle = entry.sharedStyles === true;
   switch (entry.reason) {
     case "changed":
       return `${values(n)} set again for ${names} after the removal`;
@@ -144,7 +141,7 @@ function whyOf(entry: SiteBreakpointUndoSkipped, names: string): string {
 /** Where a document opens in the admin. */
 function hrefOf(entry: SiteBreakpointUndoSkipped): string | undefined {
   if (entry.kind === "single") {
-    return entry.slug === SHARED_STYLES_SINGLE
+    return entry.sharedStyles === true
       ? undefined
       : `/admin/singles/${encodeURIComponent(entry.slug)}`;
   }
@@ -163,7 +160,9 @@ export function skippedLine(
 ): SkippedLine {
   const names = joinNames(labels);
   const why = whyOf(entry, names);
-  if (entry.kind === "single" && entry.slug === SHARED_STYLES_SINGLE) {
+  // Marked by the server, which knows the slug the shared styles' Single is
+  // registered under; the slug alone is never taken for it.
+  if (entry.sharedStyles === true) {
     return { name: "Shared styles", why };
   }
   const word = documentWord(entry);
@@ -193,6 +192,34 @@ export function undoneWords(
     title: `${names} ${one ? "is" : "are"} back, except ${values(total)} that changed after the removal`,
     hint: "These kept what was set after the removal, so nothing anyone did since was overwritten:",
     lines: (skipped ?? []).map(entry => skippedLine(entry, labels)),
+  };
+}
+
+/**
+ * What a finished undo says while it holds pages it can't write yet: back,
+ * except there, and what puts their styles back. Never "all back" while the
+ * site still owes them.
+ */
+export function undoLeftWords(
+  status: Pick<
+    SiteBreakpointRemovalStatus,
+    "labels" | "left" | "waitingOnDrafts"
+  >
+): StatusWords {
+  const names = joinNames(status.labels);
+  const one = status.labels.length === 1;
+  const is = one ? "is" : "are";
+  // Drafts wait on pages, components, patterns and Layouts alike, so the
+  // row speaks of live versions, as the removal's own row does.
+  if (status.waitingOnDrafts) {
+    return {
+      title: `${names} ${is} back, except on ${count(status.left, "live version", "live versions")}`,
+      hint: `${status.left === 1 ? "It has a draft" : "Each has a draft"} waiting to be published, and gets ${names}'s styles back once that draft is published or discarded.`,
+    };
+  }
+  return {
+    title: `${names} ${is} back, except on ${count(status.left, "entry it couldn't change yet", "entries it couldn't change yet")}`,
+    hint: `${status.left === 1 ? "It gets" : "They get"} ${names}'s styles back once ${status.left === 1 ? "it" : "they"} can be changed.`,
   };
 }
 

@@ -63,7 +63,7 @@ export function joinNames(names: readonly string[]): string {
 }
 
 /** `n` and its noun, singular for one. */
-function count(n: number, one: string, many: string): string {
+export function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
