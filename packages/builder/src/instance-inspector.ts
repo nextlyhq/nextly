@@ -42,7 +42,7 @@ import type { RefusalWording } from "./drag-refusal";
 import type { SavedComponent } from "./inserter";
 import { lockSourceOf, type BlockIdentity, type LockView } from "./inspector";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp, NodePatch } from "./ops";
+import type { BuilderOp, NodePatch } from "./op-vocabulary";
 import { instanceProps, storedComponentId } from "./placement-props";
 
 /**
@@ -64,6 +64,7 @@ export const EDITABLE_EXPOSED_TYPES = [
   "link",
   "visibility",
   "image",
+  "richText",
 ] as const;
 
 /** One exposed property, with everything a row needs to draw itself. */

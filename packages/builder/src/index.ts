@@ -125,7 +125,7 @@ export {
   type BuilderOp,
   type NodePatch,
   type OpPosition,
-} from "./ops";
+} from "./op-vocabulary";
 
 /**
  * @experimental The editor shell's props.
@@ -144,16 +144,15 @@ export type { BuilderShellProps, PanelView } from "./builder-shell";
  * @experimental The shell's own decisions: which panels the rail offers, the
  * bounds handed to the panel library, and the preference port.
  *
- * `DEFAULT_PREFERENCES` travels with them for a host that mirrors ONE
- * preference outside the shell — `BuilderShellProps.onShowEmptyElementsChange`
- * reports `showEmptyElements` after the shell has read it, which is later than
- * such a host's own first render. Reading the default from here rather than
- * restating `true` is what keeps that first render honest, and keeps it that
- * way if the default here ever changes.
+ * `DEFAULT_PREFERENCES` travels with them for a host that mirrors a
+ * preference outside the shell — the zoom and the editing breakpoint are
+ * reported after the shell has read them, which is later than such a host's
+ * own first render. Reading the default from here rather than restating it is
+ * what keeps that first render honest, and keeps it that way if the default
+ * here ever changes.
  */
 export {
   DEFAULT_PREFERENCES,
-  EMPTY_ELEMENTS_ATTRIBUTE,
   LEFT_PANELS,
   MIN_CANVAS_WIDTH,
   MIN_SHELL_WIDTH,
@@ -222,6 +221,7 @@ export {
   blockAllowedAt,
   registryBlockSource,
   registrySlotSource,
+  slotsShowingEmpty,
   // The engine spells the placement destination, and this package re-exports
   // that spelling rather than a second one: the drop and region types below are
   // written in terms of it, and a consumer holding one has to be able to hand it
@@ -418,6 +418,15 @@ export {
   writeZoom,
   type CanvasZoom,
 } from "./canvas-zoom";
+
+/**
+ * @experimental The device an author edits at once the device they chose is
+ * removed from the site's breakpoints.
+ *
+ * Pure, so it is on this entry beside the zoom model: a host keeps the set it
+ * last drew with and asks this when a new one arrives.
+ */
+export { fallbackBreakpoint } from "./canvas-width";
 
 export {
   BLOCK_GROUP,

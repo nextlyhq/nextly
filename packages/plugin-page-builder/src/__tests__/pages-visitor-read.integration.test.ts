@@ -99,7 +99,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: PAGES,
         id: liveId,
-        data: { title: "Pending edit" },
+        data: { title: "Pending edit", _overwrite: true },
         draft: true,
       } as never);
       draftId = idOf(
@@ -142,6 +142,8 @@ describe.each(getConfiguredTestDialects())(
       const one = await visit(["collections", PAGES, "entries", liveId]);
       expect(one.status).toBe(200);
       expect(Object.keys((await one.json()) as Doc).sort()).toEqual([
+        // The version reaches every reader, and names no person.
+        "_rev",
         "content",
         "createdAt",
         "firstPublishedAt",

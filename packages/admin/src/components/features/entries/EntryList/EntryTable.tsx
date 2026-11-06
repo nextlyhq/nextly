@@ -47,7 +47,12 @@ import {
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import { useEntryBulkActions } from "./useEntryBulkActions";
-import { rowId, useEntrySelection, type EntryRow } from "./useEntrySelection";
+import {
+  rowId,
+  useEntrySelection,
+  type EntryRow,
+  type EntryVersions,
+} from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -99,15 +104,19 @@ export interface EntryTableProps {
   /** Callback for bulk delete operation */
   onBulkDelete: (entryIds: string[]) => void;
   /** Callback for bulk update operation */
-  onBulkUpdate?: (entryIds: string[], data: Record<string, unknown>) => void;
+  onBulkUpdate?: (
+    entryIds: string[],
+    data: Record<string, unknown>,
+    versions: EntryVersions
+  ) => void;
   /**
    * Callback for bulk publish (sets `status: "published"` on every selected
    * entry). The bar gates the button on `collection.status === true`, so
    * passing this for non-status collections is harmless but unused.
    */
-  onBulkPublish?: (entryIds: string[]) => void;
+  onBulkPublish?: (entryIds: string[], versions: EntryVersions) => void;
   /** Callback for bulk unpublish (sets `status: "draft"`). Same gating. */
-  onBulkUnpublish?: (entryIds: string[]) => void;
+  onBulkUnpublish?: (entryIds: string[], versions: EntryVersions) => void;
   /** Whether a bulk publish/unpublish request is in flight. */
   isBulkPublishing?: boolean;
   /**
@@ -212,7 +221,7 @@ export const EntryTable: ForwardRefExoticComponent<
   // Rows are selectable only when some bulk action is offered on them, and a
   // row's Delete only with the delete permission.
   const offered = useEntryBulkActions(collection);
-  const { selection, selected, selectAll, clear } = useEntrySelection(
+  const { selection, selected, versions, selectAll, clear } = useEntrySelection(
     offered.any
   );
 
@@ -484,13 +493,19 @@ export const EntryTable: ForwardRefExoticComponent<
             collection={collection}
             onDelete={() => onBulkDelete(selected)}
             onUpdate={
-              onBulkUpdate ? data => onBulkUpdate(selected, data) : undefined
+              onBulkUpdate
+                ? data => onBulkUpdate(selected, data, versions)
+                : undefined
             }
             onPublish={
-              onBulkPublish ? () => onBulkPublish(selected) : undefined
+              onBulkPublish
+                ? () => onBulkPublish(selected, versions)
+                : undefined
             }
             onUnpublish={
-              onBulkUnpublish ? () => onBulkUnpublish(selected) : undefined
+              onBulkUnpublish
+                ? () => onBulkUnpublish(selected, versions)
+                : undefined
             }
             isPublishing={isBulkPublishing}
             onClear={clear}

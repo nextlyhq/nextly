@@ -170,7 +170,8 @@ test.describe("the canvas's images and buttons", () => {
     await openBuilder(page, await seed(page));
     const frame = canvasFrame(page);
     await canvasBlock(page, "address").click();
-    const alt = page.getByRole("textbox", { name: "Alt text" });
+    // The image stores its own alt text, so the field is the Custom one.
+    const alt = page.getByRole("textbox", { name: "Custom alt text" });
     await alt.fill("An edited description");
     await alt.press("Enter");
     await expect(

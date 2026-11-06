@@ -142,6 +142,8 @@ export interface DocumentActionBindingsInput {
    * action is told when it is chosen.
    */
   currentValues?: () => Record<string, unknown>;
+  /** Whether the form holds unsaved edits, told to a contributed action with its values. */
+  currentDirty?: () => boolean;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -312,6 +314,18 @@ export interface StoreReadiness {
    * and anything the handler did would stand without it.
    */
   writesSettled(): Promise<boolean>;
+  /**
+   * Gives the store a check to make once every handler has run and every
+   * tracked write has settled, immediately before it writes, with nothing
+   * awaited in between. A handler that judged the work (asked a question
+   * about it, say) checks there that the work is still what it judged: the
+   * handlers after it, and the writes the store waits for, give the author
+   * time to change it. A check answering `false` runs every handler again;
+   * work still changing after a few rounds is refused.
+   *
+   * @experimental
+   */
+  checkBeforeWrite(check: () => boolean): void;
 }
 
 const CANCELLED: DocumentActionOutcome = {
@@ -440,6 +454,7 @@ export function useDocumentActionBindings({
   writesRefused = false,
   contributedActions = [],
   currentValues,
+  currentDirty,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -601,7 +616,8 @@ export function useDocumentActionBindings({
     isReadingHistory || writesRefused
       ? []
       : heldUnderLock(contributedActions, documentLocked),
-    currentValues
+    currentValues,
+    currentDirty
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>

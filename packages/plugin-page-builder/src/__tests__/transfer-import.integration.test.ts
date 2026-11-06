@@ -177,6 +177,13 @@ const refuse = { breakpoints: false };
 /** Set to have "another save" empty the shared styles right after one is written. */
 const overwrite: { classes: boolean; site?: TestNextly } = { classes: false };
 
+/**
+ * Set to have "another save" of the site style land just before the import's
+ * first site-style write: after the import read the style, before its write
+ * is made.
+ */
+const interleave = { beforeStyleWrite: false };
+
 /** A plugin recording, for every component create, whether it was judged. */
 const recorder = definePlugin({
   name: "@t/transfer-recorder",
@@ -192,14 +199,22 @@ const recorder = definePlugin({
       overwrite.classes = false;
       await overwrite.site?.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { classes: [] },
+        data: { classes: [], _overwrite: true },
         overrideAccess: true,
       });
     });
-    ctx.hooks.on("beforeUpdate", `single:${SITE_STYLE_SLUG}`, hook => {
+    ctx.hooks.on("beforeUpdate", `single:${SITE_STYLE_SLUG}`, async hook => {
       const data = (hook as { data?: Record<string, unknown> }).data;
       if (refuse.breakpoints && data?.breakpoints !== undefined) {
         throw new Error("This site refuses breakpoint changes.");
+      }
+      if (interleave.beforeStyleWrite) {
+        interleave.beforeStyleWrite = false;
+        await overwrite.site?.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: { classes: [], _overwrite: true },
+          overrideAccess: true,
+        });
       }
       return data;
     });
@@ -226,6 +241,7 @@ describe.each(getConfiguredTestDialects())(
       judged.length = 0;
       refuse.breakpoints = false;
       overwrite.classes = false;
+      interleave.beforeStyleWrite = false;
       overwrite.site = current;
       // The instance's first user is its super admin, so it is made here and
       // never acts: every author below holds only what it is granted.
@@ -337,7 +353,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: SOURCE_BREAKPOINTS },
+        data: { breakpoints: SOURCE_BREAKPOINTS, _overwrite: true },
       });
       const { cookie } = await holding(t, WRITES_EVERYTHING);
 
@@ -424,6 +440,7 @@ describe.each(getConfiguredTestDialects())(
             classes: [
               { id: "c-card", slug: "card", orderIndex: 0, styles: {} },
             ],
+            _overwrite: true,
           },
         });
         await t.nextly.media.delete({ id: site.mediaId });
@@ -738,6 +755,7 @@ describe.each(getConfiguredTestDialects())(
               ],
               container: [],
             },
+            _overwrite: true,
           },
         });
         const author = await holding(t, slugs);
@@ -886,6 +904,7 @@ describe.each(getConfiguredTestDialects())(
               ],
               container: [],
             },
+            _overwrite: true,
           },
         });
         const answer = await post(cookie, ["transfer", "import"], {
@@ -937,6 +956,7 @@ describe.each(getConfiguredTestDialects())(
             nodes: [heading("h")],
             exposed: [exposure("kept")],
           },
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1060,7 +1080,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: SOURCE_BREAKPOINTS },
+        data: { breakpoints: SOURCE_BREAKPOINTS, _overwrite: true },
       });
       const { cookie } = await holding(
         t,
@@ -1147,6 +1167,38 @@ describe.each(getConfiguredTestDialects())(
       expect(unchanged(await snapshot(t))).toEqual(unchanged(before));
     });
 
+    it("imports nothing when the site style is saved between its read and its write", async () => {
+      // The append sends the version the site style was read at, so a save
+      // landing in between refuses it rather than being replaced by it.
+      const { file } = await exported("components", s => s.outer);
+      const t = await boot();
+      const { cookie } = await holding(t, WRITES_EVERYTHING);
+      const before = await snapshot(t);
+      const drop = {
+        breakpoints: Object.fromEntries(
+          file.breakpoints.map(entry => [entry.id, "drop" as const])
+        ),
+      };
+      const seen = await preview(cookie, file, drop);
+      expect(seen.ready).toBe(true);
+
+      interleave.beforeStyleWrite = true;
+      const answer = await post(cookie, ["transfer", "import"], {
+        file,
+        choices: drop,
+        expect: seen.fingerprint,
+      });
+
+      expect(answer.status).toBe(409);
+      expect(interleave.beforeStyleWrite).toBe(false);
+      const unchanged = (raw: string) => {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        delete parsed.style;
+        return parsed;
+      };
+      expect(unchanged(await snapshot(t))).toEqual(unchanged(before));
+    });
+
     it("adds a variable by its stable id when this site has another under the same name", async () => {
       const t = await boot();
       await t.nextly.updateSingle({
@@ -1162,6 +1214,7 @@ describe.each(getConfiguredTestDialects())(
               },
             ],
           },
+          _overwrite: true,
         },
       });
       const { cookie } = await holding(t, WRITES_EVERYTHING);

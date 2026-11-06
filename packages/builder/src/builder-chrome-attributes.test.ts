@@ -3,13 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
-import { EMPTY_ELEMENTS_ATTRIBUTE } from "./shell-state";
 
 /**
- * The canvas's stylesheet keys the empty-container affordance off two markers —
+ * The canvas's stylesheet keys the empty-container affordance off markers —
  * `SLOTS_ATTRIBUTE` from `@nextlyhq/blocks-react` and this package's own
- * `EMPTY_ELEMENTS_ATTRIBUTE` — and a stylesheet has no module system, so it
- * cannot import either constant. Its selectors spell them out as literal
+ * chrome and canvas classes — and a stylesheet has no module system, so it
+ * cannot import those constants. Its selectors spell them out as literal
  * strings instead, which makes the CSS and the constants two independent
  * copies of one spelling: correct only for as long as nobody renames either
  * constant, and a rename is silent when it happens. TypeScript still compiles
@@ -107,10 +106,6 @@ describe("the empty-container affordance is keyed off the exported constants", (
     expect(collapsed(SHEET)).toMatch(ruleFor(EMPTY_CONTAINER_SELECTOR));
   });
 
-  it("guards the affordance behind the hide-preference's attribute and value, by the constant", () => {
-    expect(SHEET).toContain(`[${EMPTY_ELEMENTS_ATTRIBUTE}="hidden"]`);
-  });
-
   it("finds nothing for a marker that was never written", () => {
     /*
      * The control. `toContain` over a file this size passes for the wrong
@@ -119,6 +114,33 @@ describe("the empty-container affordance is keyed off the exported constants", (
      * that the search can come out empty at all.
      */
     expect(SHEET).not.toContain("[data-nx-nonexistent-marker]");
+  });
+});
+
+describe("an empty container's area yields to what the block sets", () => {
+  it("gives its clickable height at no specificity, so an authored min height wins", () => {
+    /*
+     * The area's selector outranks a block's own class, so a min height on
+     * the box rule would beat the author's: an empty Section set to Full
+     * screen would stay 2.75rem tall on the canvas while the page draws it
+     * the screen's height. Held apart, under `:where()`, it applies only
+     * where the block sets none.
+     */
+    const css = collapsed(SHEET);
+    const box = new RegExp(
+      `${ruleFor(EMPTY_CONTAINER_SELECTOR).source}[^}]*\\}`
+    ).exec(css)?.[0];
+    expect(box).toBeDefined();
+    expect(box).not.toContain("min-height");
+    expect(css).toContain(
+      `:where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }`
+    );
+    // Selected, the empty block matches the selection's safeguard too, which
+    // yields the same way: choosing Full screen selects the Section.
+    expect(css).toMatch(
+      /:where\(\.nx-canvas \[data-nx-selected\]:empty\) \{ min-height: 2px; \}/
+    );
+    expect(css).not.toMatch(/\*\/ \.nx-canvas \[data-nx-selected\]:empty \{/);
   });
 });
 

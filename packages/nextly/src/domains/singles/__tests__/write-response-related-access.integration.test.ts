@@ -86,7 +86,7 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: authorId },
+      { siteName: "Acme", author: authorId, _overwrite: true },
       { user: { id: "writer-1" }, routeAuthorized: true }
     );
 
@@ -149,7 +149,11 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: (author.data as { id: string }).id },
+      {
+        siteName: "Acme",
+        author: (author.data as { id: string }).id,
+        _overwrite: true,
+      },
       { user: { id: "writer-1" }, routeAuthorized: true }
     );
 
@@ -207,7 +211,11 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: (author.data as { id: string }).id },
+      {
+        siteName: "Acme",
+        author: (author.data as { id: string }).id,
+        _overwrite: true,
+      },
       { routeAuthorized: true }
     );
 
@@ -226,7 +234,7 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: authorId },
+      { siteName: "Acme", author: authorId, _overwrite: true },
       { overrideAccess: true }
     );
 

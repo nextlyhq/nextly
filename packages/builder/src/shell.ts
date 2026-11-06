@@ -230,7 +230,11 @@ export type { SavedPattern } from "./inserter";
  * would offer two ways to mount one feature that must agree about when the
  * saved set has actually been read.
  */
-export { authoredBreakpoints, sameBreakpoints } from "./breakpoints";
+export {
+  authoredBreakpoints,
+  BASE_DEVICE_LABEL,
+  sameBreakpoints,
+} from "./breakpoints";
 export { BreakpointManager } from "./breakpoint-manager";
 export type { BreakpointManagerProps } from "./breakpoint-manager";
 

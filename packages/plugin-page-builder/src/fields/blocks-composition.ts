@@ -69,6 +69,7 @@ import type {
   PluginStoredValueTarget,
 } from "@nextlyhq/plugin-sdk";
 
+import type { OpenRemovalReader } from "../breakpoint-removal/lock-acceptance";
 import {
   componentCycleRefusal,
   formsChangedBy,
@@ -95,6 +96,7 @@ import {
   placedLockMessage,
   variantLockMessage,
 } from "./layers-lock-wording";
+import type { ListFieldsReader } from "./list-query-judgement";
 import {
   composedFormsRead,
   lockBaselines,
@@ -210,11 +212,34 @@ export interface CompositionSetup {
    */
   readonly fencedComponents?: () => Promise<FencedComponents>;
   /**
-   * The ids of the classes the site defines, its code's and its stored ones,
-   * read per write. A write adding a reference to any other is refused.
-   * Absent where the site style cannot be read, and then nothing is refused.
+   * The breakpoint removal that is open, if any: while one is, a Layers or
+   * `contentOnly` lock accepts exactly the stored value with the removed
+   * breakpoints' values stripped (`breakpoint-removal/lock-acceptance`).
+   * Absent, no lock accepts anything more than it always did.
    */
-  readonly siteClassIds?: () => Promise<ReadonlySet<string>>;
+  readonly openBreakpointRemoval?: OpenRemovalReader;
+  /**
+   * What the site defines that a page refers to by id, from ONE read of its
+   * style, so every reference in a write is judged against the same version
+   * of it. Asked at most once per write, and only when a reference needs it.
+   * A write adding a reference to anything else is refused. Absent where the
+   * site style cannot be read, and then nothing is refused.
+   */
+  readonly siteDefinitions?: () => Promise<SiteDefinitions>;
+  /**
+   * The fields a collection declares and the public may read, for judging
+   * what a page's collection lists filter and sort by. Absent where the
+   * schema cannot be read, and then lists are judged by their shape alone.
+   */
+  readonly listFields?: ListFieldsReader;
+}
+
+/** What the site defines that a page refers to by id. */
+export interface SiteDefinitions {
+  /** The classes the compiler applies: the code's and the stored ones. */
+  readonly classIds: ReadonlySet<string>;
+  /** The breakpoints the stylesheet is emitted under, the base included. */
+  readonly breakpointIds: ReadonlySet<string>;
 }
 
 /** Which document a write is to: a collection or a single, its slug, an id. */

@@ -198,7 +198,8 @@ const CASES: readonly Case[] = [
     props: { src: "/example.jpg", alt: "An example image" },
     edit: {
       kind: "type",
-      label: "Alt text",
+      // The image stores its own alt text, so the field is the Custom one.
+      label: "Custom alt text",
       prop: "alt",
       value: "An edited description",
       stored: "An edited description",
@@ -269,7 +270,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/collection-loop",
-    label: "Collection loop",
+    label: "Collection list",
     props: { collection: "posts", limit: 3 },
     slots: true,
     edit: {

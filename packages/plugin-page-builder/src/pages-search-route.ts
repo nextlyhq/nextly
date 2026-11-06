@@ -64,9 +64,11 @@ import {
 } from "nextly/reserved-filter-keys";
 import { z } from "nextly/zod";
 
+import { labelOf, pluralLabelOf } from "./collection-labels";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { documentVersionOf } from "./document-version";
 import {
   NO_MATCH,
   searchOn,
@@ -76,6 +78,7 @@ import {
 import {
   entryOf,
   findAsCaller,
+  readSavedAsCaller,
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "./entry-reads";
@@ -83,6 +86,8 @@ import { acceptedKinds, acceptsKind } from "./fields/blocks-options";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 import { editorBlocksFields } from "./nested-blocks-fields";
 import {
+  PAGE_ADDRESS_PARAMS,
+  PAGE_ADDRESS_ROUTE_PATH,
   PAGES_SEARCH_CURSOR_MAX,
   PAGES_SEARCH_EXCLUDE_SEPARATOR,
   PAGES_SEARCH_LIMIT_DEFAULT,
@@ -91,6 +96,7 @@ import {
   PAGES_SEARCH_MAX,
   PAGES_SEARCH_PARAMS,
   PAGES_SEARCH_ROUTE_PATH,
+  type PageAddressResponse,
   type PageItem,
   type PageReference,
   type PageState,
@@ -540,38 +546,16 @@ const LIVE_SCHEMA_STATES: ReadonlySet<string> = new Set(["synced", "applied"]);
  * A record that carries none is read: nothing says it is not live, and a read
  * that fails anyway drops only that collection (see `searchCollection`).
  */
-function schemaIsLive(record: Record<string, unknown>): boolean {
+export function schemaIsLive(record: Record<string, unknown>): boolean {
   const state = record.migrationStatus;
   return typeof state !== "string" || LIVE_SCHEMA_STATES.has(state);
 }
 
 /** A record's slug, when it has a usable one. */
-function slugOf(record: Record<string, unknown>): string | undefined {
+export function slugOf(record: Record<string, unknown>): string | undefined {
   return typeof record.slug === "string" && record.slug !== ""
     ? record.slug
     : undefined;
-}
-
-/**
- * The label the registry listing already resolved (the singular name, or the
- * slug where there is none), rather than a second rule here.
- */
-function labelOf(record: Record<string, unknown>, slug: string): string {
-  return typeof record.label === "string" && record.label !== ""
-    ? record.label
-    : slug;
-}
-
-/** The plural name a registry record holds (`labels.plural`), if any. */
-function pluralLabelOf(record: Record<string, unknown>): {
-  pluralLabel?: string;
-} {
-  const labels = record.labels;
-  if (typeof labels !== "object" || labels === null) return {};
-  const plural = (labels as { plural?: unknown }).plural;
-  return typeof plural === "string" && plural !== ""
-    ? { pluralLabel: plural }
-    : {};
 }
 
 /** One as-caller list read, as the search asks the Direct API for it. */
@@ -1103,6 +1087,7 @@ export function pageItemOf(
   const entry = entryOf(row, source.title?.name);
   if (entry === undefined) return undefined;
   const status = source.lifecycle ? statusOf(row) : undefined;
+  const rev = documentVersionOf(row);
   return {
     id: entry.id,
     collection: source.slug,
@@ -1113,6 +1098,7 @@ export function pageItemOf(
     field: source.field,
     title: entry.title,
     ...(status === undefined ? {} : { status }),
+    ...(rev === undefined ? {} : { rev }),
     ...pathOf(row, source),
   };
 }
@@ -1439,6 +1425,116 @@ function directPagesSearchReads(
     pagePath: () => pagePath,
     find: args => findAsCaller(ctx, args),
     warn: (message, context) => ctx.logger.warn(message, context),
+  };
+}
+
+/**
+ * The search's reads, and one more the address needs: a page read as it is
+ * SAVED, its working draft included, since a Save that does not publish
+ * stores one.
+ */
+export interface PageAddressReads extends PagesSearchReads {
+  readSaved(args: {
+    readonly collection: string;
+    readonly id: string;
+    readonly select: Record<string, boolean>;
+    readonly locale?: string;
+  }): Promise<Record<string, unknown> | null>;
+}
+
+/** One page's address, as the route will read it once its query is checked. */
+export interface PageAddressRequest {
+  readonly page: PageReference;
+  /** The language the page's fields are read in, when the request names one. */
+  readonly locale?: string;
+}
+
+/** The address query, as zod reads it: a collection and an id, each bounded. */
+const addressQuerySchema = z.object({
+  [PAGE_ADDRESS_PARAMS.collection]: z.string().min(1).max(EXCLUDE_PART_MAX),
+  [PAGE_ADDRESS_PARAMS.id]: z.string().min(1).max(EXCLUDE_PART_MAX),
+  [PAGE_ADDRESS_PARAMS.locale]: optionalText(PAGES_SEARCH_LOCALE_MAX),
+});
+
+/** Read the address route's query, or refuse it, naming the parameter. */
+export function parsePageAddressQuery(url: string | URL): PageAddressRequest {
+  const query = parseRouteQuery(
+    url,
+    Object.values(PAGE_ADDRESS_PARAMS),
+    addressQuerySchema,
+    "page address"
+  );
+  const locale = query[PAGE_ADDRESS_PARAMS.locale];
+  return {
+    page: {
+      collection: query[PAGE_ADDRESS_PARAMS.collection],
+      id: query[PAGE_ADDRESS_PARAMS.id],
+    },
+    ...(locale === undefined ? {} : { locale }),
+  };
+}
+
+/**
+ * Where one page is served, as it is saved: the pages search's own resolution
+ * (the host's `pagePreviewPath`, the fields it names read as the caller, and
+ * {@link pathOf}), asked of a single row, so Settings and the search can never
+ * name a page's address two ways.
+ *
+ * Read as the caller, so a page they may not read has no address here, as it
+ * has no row in the search. Only the plugin's own Pages have one: another
+ * collection's address is the host's own code.
+ */
+export async function readPageAddress(
+  request: PageAddressRequest,
+  reads: PageAddressReads
+): Promise<PageAddressResponse> {
+  const primary = reads.pagesCollection();
+  const template = reads.pagePath?.();
+  if (template === undefined || request.page.collection !== primary) {
+    return { path: null };
+  }
+  const records = await reads.collections();
+  const source = pageCollectionIn(records, reads.stores(), primary);
+  if (source === undefined) return { path: null };
+  const pathFields = templateFields(template, recordNamed(records, primary));
+  const row = await reads.readSaved({
+    collection: primary,
+    id: request.page.id,
+    select: {
+      id: true,
+      ...Object.fromEntries(pathFields.map(name => [name, true] as const)),
+    },
+    ...(request.locale === undefined ? {} : { locale: request.locale }),
+  });
+  if (row === null) return { path: null };
+  return {
+    path: pathOf(row, { ...source, pathTemplate: template }).path ?? null,
+  };
+}
+
+/**
+ * The address route's declaration: authenticated, like the search, with each
+ * read's access core's.
+ */
+export function pageAddressRoute(
+  store: ComponentStore = DEFAULT_COMPONENT_STORE,
+  /** Where the plugin's own pages are served (`pagePreviewPath`), if stated. */
+  pagePath?: string
+): {
+  method: "GET";
+  path: string;
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "GET",
+    path: PAGE_ADDRESS_ROUTE_PATH,
+    handler: async (req, ctx) =>
+      Response.json(
+        await readPageAddress(parsePageAddressQuery(req.url), {
+          ...directPagesSearchReads(ctx, store, pagePath),
+          readSaved: args => readSavedAsCaller(ctx, args),
+        })
+      ),
   };
 }
 

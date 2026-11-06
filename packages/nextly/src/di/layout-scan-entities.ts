@@ -16,16 +16,13 @@ import { loadDynamicTables } from "./load-dynamic-tables";
  * Every Builder entity a registry holds that the configuration does not declare (`declared`, by
  * table name): one the configuration also declares is judged as the configuration describes it.
  * A registry that is not there yet, as on a fresh database, holds nothing laid out before the
- * setting; one that is there but cannot be read refuses under the setting, since its entities
- * cannot be judged.
+ * setting; one that is there but cannot be read refuses, whatever the setting: the boot's own
+ * earlier read of it may have succeeded and registered its entities for one layout, and the scan
+ * is what tells whether the database holds the other.
  */
 export async function readLayoutScanEntities(
   adapter: DrizzleAdapter,
-  declared: ReadonlySet<string>,
-  // Whether the setting is on. Only then does an unread registry refuse: boot would register its
-  // entities per language over values their main tables may still hold, and serve those blank.
-  // With it off an unread entity is not registered at all, so there is nothing to protect.
-  perLanguage: boolean
+  declared: ReadonlySet<string>
 ): Promise<LaidOutEntity[]> {
   const entities: LaidOutEntity[] = [];
   const registries: Array<
@@ -34,8 +31,12 @@ export async function readLayoutScanEntities(
     ["collection", "dynamic_collections"],
     ["single", "dynamic_singles"],
   ];
+  // Which of its two names the component registry carries is a catalog read. One that fails is
+  // not a database without components, so it refuses as an unread registry does.
   const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter).catch(
-    () => undefined
+    (error: unknown) => {
+      throw unreadRegistry("component", error);
+    }
   );
   if (fieldGroupRegistry) registries.push(["component", fieldGroupRegistry]);
   for (const [kind, registry] of registries) {
@@ -60,22 +61,22 @@ export async function readLayoutScanEntities(
     // The loader records a failed read rather than throwing it, so the entities it could not
     // read would otherwise go unjudged and the boot carry on over them.
     const unread = failures.find(failure => failure.scope === "read");
-    if (unread && perLanguage) {
-      throw new NextlyError({
-        code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
-        publicMessage:
-          `The Schema Builder's ${registry} registry could not be read, so whether its ` +
-          `entities keep their translatable values as experimental.perLanguageStorage lays ` +
-          `them out cannot be checked. Restart once the database answers.`,
-        logContext: {
-          registry,
-          error:
-            unread.error instanceof Error
-              ? unread.error.message
-              : String(unread.error),
-        },
-      });
-    }
+    if (unread) throw unreadRegistry(registry, unread.error);
   }
   return entities;
+}
+
+/** The refusal of a boot whose Schema Builder registry (`registry`) could not be read. */
+function unreadRegistry(registry: string, error: unknown): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
+    publicMessage:
+      `The Schema Builder's ${registry} registry could not be read, so whether its entities ` +
+      `keep their translatable values as experimental.perLanguageStorage lays them out cannot ` +
+      `be checked. Restart once the database answers.`,
+    logContext: {
+      registry,
+      error: error instanceof Error ? error.message : String(error),
+    },
+  });
 }

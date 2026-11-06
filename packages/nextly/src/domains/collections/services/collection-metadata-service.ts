@@ -28,7 +28,10 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
-import { applyCollectionSchemaChange } from "../../schema/services/collection-schema-apply";
+import {
+  applyCollectionSchemaChange,
+  refuseNewCollectionIndexNamesTaken,
+} from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
@@ -452,6 +455,25 @@ export class CollectionMetadataService extends BaseService {
       // recorded, so a change the database refuses leaves no file, no registry row and nothing
       // reported as applied.
       if (this.isDevelopment()) {
+        // An index name the new table takes may already be held elsewhere, where the create's
+        // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
+        try {
+          await refuseNewCollectionIndexNamesTaken(this.adapter, {
+            slug: data.name,
+            tableName: artifacts.tableName,
+            fields: artifacts.metadata.fields,
+            localized: data.localized === true,
+          });
+        } catch (refusal: unknown) {
+          return errorToMetadataResult(
+            refusal,
+            {
+              statusCode: 400,
+              defaultMessage: "The collection's indexes could not be created",
+            },
+            this.dialect
+          );
+        }
         try {
           // The artefact carries the registry-row upsert so the committed file
           // recreates it where the Builder has never run. This database gets

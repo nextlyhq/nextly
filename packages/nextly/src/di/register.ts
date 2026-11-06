@@ -295,6 +295,7 @@ import {
   type Container,
   type RestoredRegistrations,
 } from "./container";
+import { withDevelopmentStartSchemaLock } from "./development-start-schema-lock";
 import { readLayoutScanEntities } from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
@@ -959,25 +960,17 @@ async function registerServicesOnce(
     resolvedLogger
   );
 
-  const schemaRegistry = await initializeSchemaRegistry(
-    adapter,
-    bootExtensionSchema,
-    transformedConfig
-  );
-
-  // Publish the webhook recording policy from the config INDEPENDENTLY of the
-  // schema registry. `registerConfigTablesInResolver` (below) only runs when the
-  // registry initialized, but the recording opt-out must hold even in the
-  // executeQuery fallback path taken when it does not — otherwise a
-  // `webhooks: false` collection (e.g. form submissions) would silently record
-  // PII-bearing events despite the opt-out.
-  publishWebhookRecordingPolicies(transformedConfig);
+  // Before the hold below, and touching no database: the lock writes its rows
+  // through the table resolver this sets.
+  const staticRegistry = await createSchemaRegistry(adapter);
 
   // Empty the `globalThis`-pinned widget registries before anything registers
   // into them, so a dev-server hot reload re-registering the same ids never
   // collides with itself while a genuine duplicate within one boot still
   // fails loudly. This is the one place both of Nextly's boot paths funnel
-  // through, so it is the one place the reset needs wiring.
+  // through, so it is the one place the reset needs wiring. It runs before the
+  // schema hold below: it touches no database, so a start that stops at the
+  // lock has still cleared the previous boot's widgets.
   //
   // Deliberately a reset and nothing more. Collection sources are DERIVED from
   // the collection registry, which is registered in Layer 3 and populated by
@@ -992,183 +985,219 @@ async function registerServicesOnce(
     transformedConfig.admin?.dashboard
   );
 
-  // Before any step that writes to the database or the registry: the Builder
-  // reconcile and the code-first sync below would otherwise add a refused
-  // plugin's fields and tables before the refusal.
-  await assertBootPluginInstallStates(
-    transformedConfig,
-    adapter,
-    adapterDrizzleDb,
-    resolvedLogger
-  );
-
-  await publishStoredRecordingPolicies(adapter, transformedConfig);
-
-  await registerConfigTablesQuietly(
-    schemaRegistry,
-    transformedConfig,
-    adapter,
-    resolvedLogger
-  );
-
-  installConfigFieldFunctions(transformedConfig);
-
-  // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
-  // removed. The legacy preview path now uses pipeline/preview.ts +
-  // legacy-preview/translate.ts (no DI lookup); the apply path uses
-  // applyDesiredSchema (already DI-wired). bumpSchemaVersion is now
-  // called directly from the dispatcher's apply handler after a
-  // successful pipeline apply (was previously wired via
-  // SchemaChangeService.setOnApplySuccess). PR 4 deleted the legacy
-  // service classes themselves.
-
-  // F8 PR 5: MigrationJournal — records every pipeline apply
-  // (success/failure/abort) into nextly_migration_journal. Construction
-  // is dialect-aware: the same DB instance + dialect the adapter wraps.
-  await registerMigrationJournal(adapter, resolvedLogger);
-
-  container.registerSingleton<Logger>("logger", () => resolvedLogger);
-  container.registerSingleton<NextlyServiceConfig>(
-    "config",
-    () => transformedConfig
-  );
-  // Where limits on the limit store contract count: memory by default, the
-  // database, or an app's own store, as `rateLimit.store` selects. Built on
-  // first use; what it runs on its own stops when the services are released.
-  container.registerSingleton<LimitStore>("limitStore", () => {
-    const selected = selectLimitStore(
-      transformedConfig.rateLimit?.limitStore ?? "memory",
-      {
-        adapter,
-        secret: env.NEXTLY_SECRET,
-        maxEntries: transformedConfig.rateLimit?.maxEntries,
-      }
-    );
-    globalForReg.__nextly_closeLimitStore = selected.close;
-    return selected.store;
-  });
-  // Where core's own limits count. An app's store of the older contract keeps
-  // serving them, as it did before the limit store existed; without one they
-  // count in the selected store, so on the database store every instance
-  // counts one budget.
-  container.registerSingleton<RateLimitStore>("coreRateLimitStore", () =>
-    coreRateLimitStoreFor(
-      transformedConfig.rateLimit?.store,
-      () => container.get<LimitStore>("limitStore"),
-      env.NEXTLY_SECRET
-    )
-  );
-  // Beside the config rather than in it: what the boot granted, decided once
-  // when the plugin list was resolved. The auth router builds its plugin
-  // contexts from this entry, as `initializePlugins` does from the same value.
-  container.registerSingleton<PluginGrants>("pluginGrants", () => pluginGrants);
-
-  const { mediaStorage, storage } = registerBootMediaStorage(
-    storagePlugins,
-    resolvedLogger
-  );
-
-  // ----------------------------------------
-  // Layer 3: Domain Service Registrations
-  // ----------------------------------------
-  // Before any schema work, a database laid out for the other choice of the setting is refused:
-  // with it on, the push that follows would plan to drop translatable columns a database laid out
-  // before the setting still holds on its main tables; with it off, reads would ask main tables
-  // for columns the setting kept per language.
-  await refuseMixedStorageInConfig(
-    adapter,
-    transformedConfig,
-    transformedConfig.perLanguageStorage === true
-  );
-  const ctx: RegistrationContext = {
-    adapter,
-    adapterDrizzleDb,
-    logger: resolvedLogger,
-    config: transformedConfig,
-    basePath: resolvedBasePath,
-    languages: new LanguageRegistry({
-      configured: transformedConfig.localization,
-      reader: storedLanguageReader(adapter),
-      // A site keeping every translatable field per language stores its values under one language
-      // even before it declares any.
-      implicitLanguage: transformedConfig.perLanguageStorage === true,
-    }),
-    schemasDir,
-    migrationsDir,
-    storage,
-    mediaStorage,
-    imageProcessor,
-    hookRegistry,
-    passwordHasher,
-  };
-
-  // Reachable by name for the request path, which refreshes it, and for code that asks which
-  // languages the site has without a service of its own.
-  container.registerSingleton<LanguageRegistry>(
-    "languageRegistry",
-    () => ctx.languages
-  );
-  container.registerSingleton<LanguageSettingsService>(
-    "languageSettingsService",
-    // With the content cache, so a committed change also flushes the cached content reads that
-    // were resolved in the previous default language.
-    () =>
-      new LanguageSettingsService(
-        adapter,
-        ctx.languages,
-        ctx.logger,
-        languageChangeContentCache()
-      )
-  );
-
-  registerDomainServices(ctx);
-
-  // After the services are registered, so the workflows can be judged from
-  // inside the reconcile: on the definitions it is about to write, before it
-  // writes them, and before the code-first syncs below.
-  const workflows = await reconcileBuilderTargets({
-    adapter,
-    logger: resolvedLogger,
-    schemaRegistry,
-    transformedConfig,
-    transformedPlugins,
-    deferredExtends,
-    unresolvedRelations,
-    unresolvedPermissions,
-    beforeWrites: changedComponents =>
-      judgeWorkflows(transformedConfig, changedComponents),
-  });
-
-  await syncCodeFirstEntities(
+  // Every schema write a development start makes runs inside one hold of the
+  // schema lock, waiting for a migration or sync another process is running:
+  // the registry's initialisation, which creates the core schema on a new
+  // database and a translated entity's missing translation table; the Builder
+  // reconcile and the code-first sync, which write registry rows and storage;
+  // and the extension tables' preparation. One hold from the first of them to
+  // the last, so no other process changes the schema between two of them; the
+  // first start's own lock, taken inside it, runs in this claim. Production
+  // reaches its schema through migrations and takes no lock here.
+  const schemaRegistry = await withDevelopmentStartSchemaLock(
     adapter,
     resolvedLogger,
-    transformedConfig,
-    workflows
-  );
+    async () => {
+      const registry = await initializeSchemaRegistry(
+        adapter,
+        staticRegistry,
+        bootExtensionSchema,
+        transformedConfig
+      );
 
-  await runBootMigrations(config, transformedConfig, deferredExtends, {
-    adapter,
-    logger: resolvedLogger,
-  });
+      // Publish the webhook recording policy from the config INDEPENDENTLY of the
+      // schema registry. `registerConfigTablesInResolver` (below) only runs when the
+      // registry initialized, but the recording opt-out must hold even in the
+      // executeQuery fallback path taken when it does not — otherwise a
+      // `webhooks: false` collection (e.g. form submissions) would silently record
+      // PII-bearing events despite the opt-out.
+      publishWebhookRecordingPolicies(transformedConfig);
 
-  // The stored language list is read before any plugin starts and before registration publishes:
-  // until its first read the registry knows no stored languages, and a plugin's `init` writing
-  // through the services, or a request served in that gap, would read a site with languages as
-  // one without, sending translated values to the main table. After the boot migrations, so the
-  // table exists; a read that fails for any other reason fails the boot.
-  await ctx.languages.refresh({ force: true });
+      // Before any step that writes to the database or the registry: the Builder
+      // reconcile and the code-first sync below would otherwise add a refused
+      // plugin's fields and tables before the refusal.
+      await assertBootPluginInstallStates(
+        transformedConfig,
+        adapter,
+        adapterDrizzleDb,
+        resolvedLogger
+      );
 
-  await assertBootPluginSchemaVersions(
-    transformedConfig,
-    adapter,
-    adapterDrizzleDb,
-    resolvedLogger
-  );
+      await publishStoredRecordingPolicies(adapter, transformedConfig);
 
-  await prepareExtensionTablesForInit(
-    adapter,
-    resolvedLogger,
-    bootExtensionSchema
+      await registerConfigTablesQuietly(
+        registry,
+        transformedConfig,
+        adapter,
+        resolvedLogger
+      );
+
+      installConfigFieldFunctions(transformedConfig);
+
+      // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
+      // removed. The legacy preview path now uses pipeline/preview.ts +
+      // legacy-preview/translate.ts (no DI lookup); the apply path uses
+      // applyDesiredSchema (already DI-wired). bumpSchemaVersion is now
+      // called directly from the dispatcher's apply handler after a
+      // successful pipeline apply (was previously wired via
+      // SchemaChangeService.setOnApplySuccess). PR 4 deleted the legacy
+      // service classes themselves.
+
+      // F8 PR 5: MigrationJournal — records every pipeline apply
+      // (success/failure/abort) into nextly_migration_journal. Construction
+      // is dialect-aware: the same DB instance + dialect the adapter wraps.
+      await registerMigrationJournal(adapter, resolvedLogger);
+
+      container.registerSingleton<Logger>("logger", () => resolvedLogger);
+      container.registerSingleton<NextlyServiceConfig>(
+        "config",
+        () => transformedConfig
+      );
+      // Where limits on the limit store contract count: memory by default, the
+      // database, or an app's own store, as `rateLimit.store` selects. Built on
+      // first use; what it runs on its own stops when the services are released.
+      container.registerSingleton<LimitStore>("limitStore", () => {
+        const selected = selectLimitStore(
+          transformedConfig.rateLimit?.limitStore ?? "memory",
+          {
+            adapter,
+            secret: env.NEXTLY_SECRET,
+            maxEntries: transformedConfig.rateLimit?.maxEntries,
+          }
+        );
+        globalForReg.__nextly_closeLimitStore = selected.close;
+        return selected.store;
+      });
+      // Where core's own limits count. An app's store of the older contract keeps
+      // serving them, as it did before the limit store existed; without one they
+      // count in the selected store, so on the database store every instance
+      // counts one budget.
+      container.registerSingleton<RateLimitStore>("coreRateLimitStore", () =>
+        coreRateLimitStoreFor(
+          transformedConfig.rateLimit?.store,
+          () => container.get<LimitStore>("limitStore"),
+          env.NEXTLY_SECRET
+        )
+      );
+      // Beside the config rather than in it: what the boot granted, decided once
+      // when the plugin list was resolved. The auth router builds its plugin
+      // contexts from this entry, as `initializePlugins` does from the same value.
+      container.registerSingleton<PluginGrants>(
+        "pluginGrants",
+        () => pluginGrants
+      );
+
+      const { mediaStorage, storage } = registerBootMediaStorage(
+        storagePlugins,
+        resolvedLogger
+      );
+
+      // Before any schema work, a database laid out for the other choice of the setting is refused:
+      // with it on, the push that follows would plan to drop translatable columns a database laid
+      // out before the setting still holds on its main tables; with it off, reads would ask main
+      // tables for columns the setting kept per language.
+      await refuseMixedStorageInConfig(
+        adapter,
+        transformedConfig,
+        transformedConfig.perLanguageStorage === true
+      );
+
+      // ----------------------------------------
+      // Layer 3: Domain Service Registrations
+      // ----------------------------------------
+      const ctx: RegistrationContext = {
+        adapter,
+        adapterDrizzleDb,
+        logger: resolvedLogger,
+        config: transformedConfig,
+        basePath: resolvedBasePath,
+        languages: new LanguageRegistry({
+          configured: transformedConfig.localization,
+          reader: storedLanguageReader(adapter),
+          // A site keeping every translatable field per language stores its values under one
+          // language even before it declares any.
+          implicitLanguage: transformedConfig.perLanguageStorage === true,
+        }),
+        schemasDir,
+        migrationsDir,
+        storage,
+        mediaStorage,
+        imageProcessor,
+        hookRegistry,
+        passwordHasher,
+      };
+
+      // Reachable by name for the request path, which refreshes it, and for code that asks which
+      // languages the site has without a service of its own.
+      container.registerSingleton<LanguageRegistry>(
+        "languageRegistry",
+        () => ctx.languages
+      );
+      container.registerSingleton<LanguageSettingsService>(
+        "languageSettingsService",
+        // With the content cache, so a committed change also flushes the cached content reads that
+        // were resolved in the previous default language.
+        () =>
+          new LanguageSettingsService(
+            adapter,
+            ctx.languages,
+            ctx.logger,
+            languageChangeContentCache()
+          )
+      );
+
+      registerDomainServices(ctx);
+
+      // After the services are registered, so the workflows can be judged from
+      // inside the reconcile: on the definitions it is about to write, before it
+      // writes them, and before the code-first syncs below.
+      const workflows = await reconcileBuilderTargets({
+        adapter,
+        logger: resolvedLogger,
+        schemaRegistry: registry,
+        transformedConfig,
+        transformedPlugins,
+        deferredExtends,
+        unresolvedRelations,
+        unresolvedPermissions,
+        beforeWrites: changedComponents =>
+          judgeWorkflows(transformedConfig, changedComponents),
+      });
+
+      await syncCodeFirstEntities(
+        adapter,
+        resolvedLogger,
+        transformedConfig,
+        workflows
+      );
+
+      await runBootMigrations(config, transformedConfig, deferredExtends, {
+        adapter,
+        logger: resolvedLogger,
+      });
+
+      // The stored language list is read before any plugin starts and before registration publishes:
+      // until its first read the registry knows no stored languages, and a plugin's `init` writing
+      // through the services, or a request served in that gap, would read a site with languages as
+      // one without, sending translated values to the main table. After the boot migrations, so the
+      // table exists; a read that fails for any other reason fails the boot.
+      await ctx.languages.refresh({ force: true });
+
+      await assertBootPluginSchemaVersions(
+        transformedConfig,
+        adapter,
+        adapterDrizzleDb,
+        resolvedLogger
+      );
+
+      await prepareExtensionTablesForInit(
+        adapter,
+        resolvedLogger,
+        bootExtensionSchema
+      );
+
+      return registry;
+    }
   );
 
   await checkForeignKeysToCodeFirstTables(adapter, bootExtensionSchema);
@@ -2856,24 +2885,19 @@ async function resolveAdapter(
 }
 
 /**
- * Sets up the SchemaRegistry with static system tables AND dynamic
- * collections/singles/components so that Drizzle CRUD queries work for
- * every table in every adapter context (CLI + API routes).
+ * Creates the SchemaRegistry with the static system tables and makes it the
+ * adapter's table resolver, touching no database.
  *
- * Static tables come from compile-time Drizzle schema definitions.
- * Dynamic tables come from the `dynamic_collections`, `dynamic_singles`,
- * and `dynamic_components` DB tables and are generated at runtime.
+ * Separate from {@link initializeSchemaRegistry} because the schema lock
+ * writes its rows through the resolver: the development start takes the lock
+ * after this and before that, so every schema write of the start runs inside
+ * it. `undefined` when the registry could not be set up, as
+ * `initializeSchemaRegistry` then returns too.
  */
-async function initializeSchemaRegistry(
-  adapter: DrizzleAdapter,
-  extensionSchema: ExtensionSchema | undefined,
-  /** What the configuration declares, so an entity removed from code is told apart. */
-  declared: Pick<NextlyServiceConfig, "collections" | "singles">
+async function createSchemaRegistry(
+  adapter: DrizzleAdapter
 ): Promise<SchemaRegistry | undefined> {
   try {
-    const { declaredSlugsOf } = await import(
-      "../domains/dynamic-collections/services/removed-from-code"
-    );
     const { SchemaRegistry } = await import("../database/schema-registry");
     const { getDialectTables } = await import("../database/index");
     const { getFieldGroupRegistryAliases } = await import(
@@ -2894,6 +2918,37 @@ async function initializeSchemaRegistry(
       ...getFieldGroupRegistryAliases(dialect),
     });
     adapter.setTableResolver(registry);
+    return registry;
+  } catch {
+    // SchemaRegistry setup failed entirely — adapter falls back to
+    // executeQuery for basic operations.
+    return undefined;
+  }
+}
+
+/**
+ * Completes the SchemaRegistry {@link createSchemaRegistry} set up with the
+ * dynamic collections/singles/components, so that Drizzle CRUD queries work
+ * for every table in every adapter context (CLI + API routes), running
+ * first-run setup on a new database first.
+ *
+ * Static tables come from compile-time Drizzle schema definitions.
+ * Dynamic tables come from the `dynamic_collections`, `dynamic_singles`,
+ * and `dynamic_components` DB tables and are generated at runtime.
+ */
+async function initializeSchemaRegistry(
+  adapter: DrizzleAdapter,
+  registry: SchemaRegistry | undefined,
+  extensionSchema: ExtensionSchema | undefined,
+  /** What the configuration declares, so an entity removed from code is told apart. */
+  declared: Pick<NextlyServiceConfig, "collections" | "singles">
+): Promise<SchemaRegistry | undefined> {
+  if (registry === undefined) return undefined;
+  try {
+    const { declaredSlugsOf } = await import(
+      "../domains/dynamic-collections/services/removed-from-code"
+    );
+    const dialect = adapter.getCapabilities().dialect;
 
     // Step 1.5 (F8 PR 6): first-run static-table push. Probes for
     // `nextly_migration_journal` and, if missing, creates the static
@@ -5121,9 +5176,32 @@ async function refuseMixedStorageInConfig(
   entities.push(
     ...(await readLayoutScanEntities(
       adapter,
-      new Set(entities.map(entity => entity.tableName)),
-      perLanguage
+      new Set(entities.map(entity => entity.tableName))
     ))
   );
   await refuseMixedStorage(adapter, entities, perLanguage);
+  // With no languages declared in the configuration or in Settings, the site would serve the
+  // implicit language alone: refused where its per-language tables hold others, so translations
+  // never read as gone after a `localization` block is removed.
+  if (perLanguage && config.localization === undefined) {
+    const [
+      { refuseUndeclaredLanguages },
+      { IMPLICIT_LANGUAGE, localizationFromStoredLanguages },
+      { storedLanguageReader },
+    ] = await Promise.all([
+      import("../domains/i18n/per-language-storage-layout"),
+      import("../domains/i18n/config/stored-languages"),
+      import("../domains/i18n/stored-language-reader"),
+    ]);
+    const stored = localizationFromStoredLanguages(
+      await storedLanguageReader(adapter).rows()
+    );
+    if (stored === undefined) {
+      await refuseUndeclaredLanguages(
+        adapter,
+        entities,
+        IMPLICIT_LANGUAGE.code
+      );
+    }
+  }
 }

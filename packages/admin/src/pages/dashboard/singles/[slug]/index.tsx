@@ -31,9 +31,8 @@ import {
   removedEntityHasNoTable,
 } from "@admin/components/features/entries/removed-from-code-notice";
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
-import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
+import { useScheduleDocumentAction } from "@admin/components/features/releases/ScheduleDocumentAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
-import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
 import {
   SingleForm,
   type SingleSchema,
@@ -61,6 +60,7 @@ import {
 } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { staleVersionOf } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 
@@ -208,7 +208,11 @@ export default function SingleEditPage({
   // backend resolves it). Switching triggers a refetch (useSingleDocument is keyed by locale) and
   // routes saves to the chosen language. Inert for non-localized singles.
   const { locale, changeLocale, seedFromLocale, clearSeed } = useEditorLocale();
-  const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+  const {
+    defaultLocale,
+    enabled: localizationEnabled,
+    locales,
+  } = useLocalization();
 
   // Fetch Single schema (field definitions)
   const {
@@ -249,20 +253,13 @@ export default function SingleEditPage({
    * produces is only read once those guards pass; while the schema or the
    * document is still loading it reports no action, which is correct.
    */
-  // The reader's own pin of this Single, offered beside "Add to release".
+  // The reader's own pin of this Single, offered beside "Schedule…".
   const pin = usePinAction(
     document && slug ? { targetType: "single", targetSlug: slug } : null
   );
-  const release = useAddToReleaseAction({
-    scopeKind: "single",
-    scopeSlug: slug,
-    entryId: document?.id,
-    lifecycleEnabled: schema?.status,
-    onDefaultLocale: !isNonDefaultLocale,
-  });
-  // The Publish split's other way to publish: at a time, in a release of its
-  // own named after the Single.
-  const schedule = useSchedulePublishAction({
+  // Schedule…, on the Publish split: on its own at a time, with a release or
+  // in a new one. A release of its own is named after the Single.
+  const schedule = useScheduleDocumentAction({
     scopeKind: "single",
     scopeSlug: slug,
     entryId: document?.id,
@@ -273,6 +270,11 @@ export default function SingleEditPage({
     // With no drafts, a save of a live Single is published at once.
     savesGoLive:
       schema?.draftsEnabled !== true && document?.status === "published",
+    // A release moves every language of a translated Single together.
+    languages:
+      localizationEnabled && schema?.localized === true
+        ? locales.map(each => each.label)
+        : undefined,
   });
 
   // Update mutation — routes the save to the active language's companion row.
@@ -445,7 +447,6 @@ export default function SingleEditPage({
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame>
-          {release.dialog}
           {schedule.dialog}
           <SingleForm
             /* Under the editor's header, for the reason the entry editor
@@ -492,9 +493,6 @@ export default function SingleEditPage({
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
-                    ...(release.contributed === null
-                      ? []
-                      : [release.contributed]),
                     ...(pin === null ? [] : [pin]),
                   ]
             }
@@ -573,13 +571,23 @@ function useSingleSaveFailure(args: {
   });
   return useCallback(
     (error: unknown, form: RefusedForm | undefined) => {
+      // A save made from an older version: the editor's conflict tells the
+      // author who changed it and offers what to do, so no toast says it
+      // twice. The Single is read again, so the current version reaches the
+      // editor, whose form keeps the refused edits until the author chooses.
+      if (staleVersionOf(error)) {
+        void queryClient.invalidateQueries({
+          queryKey: singleDocumentKeys.detail(slug),
+        });
+        return;
+      }
       if (!recover(error, form)) {
         toast.error(
           error instanceof Error ? error.message : "Failed to save changes"
         );
       }
     },
-    [recover]
+    [recover, queryClient, slug]
   );
 }
 

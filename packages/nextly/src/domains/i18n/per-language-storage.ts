@@ -15,7 +15,13 @@ import { NextlyError } from "../../errors/nextly-error";
 // module in more than one server module graph, and HMR evaluates it again, so a module-local value
 // lets the boot publish to one copy while a read or a reload asks another.
 const globalForStorage = globalThis as unknown as {
-  __nextly_perLanguageStorage?: { enabled: boolean; chosen: boolean };
+  __nextly_perLanguageStorage?: {
+    enabled: boolean;
+    chosen: boolean;
+    // Whether the choice was taken from a config read rather than a boot, so a later read of an
+    // edited config in the same process is judged as a reload is.
+    adopted?: boolean;
+  };
 };
 globalForStorage.__nextly_perLanguageStorage ??= {
   enabled: false,
@@ -27,16 +33,24 @@ const state = globalForStorage.__nextly_perLanguageStorage;
 export function setPerLanguageStorage(enabled: boolean): void {
   state.enabled = enabled;
   state.chosen = true;
+  state.adopted = false;
 }
 
 /**
  * Adopt a configuration's choice in a process that reads its config without booting a site, such
- * as a CLI command, whose DDL must lay tables out as the site does. A process that already chose,
- * at boot, keeps its choice: a running site's reload reads the config again, and it is the reload
- * that decides whether a changed choice is refused.
+ * as a CLI command, whose DDL must lay tables out as the site does. A later read of the config in
+ * the same process, as `db:sync --watch` reloading an edited config, is refused when it changes the
+ * choice, as a running site's reload is. A process that chose at boot keeps its choice: a running
+ * site's reload reads the config again, and it is the reload that decides whether a changed choice
+ * is refused.
  */
 export function adoptPerLanguageStorage(enabled: boolean | undefined): void {
-  if (!state.chosen) setPerLanguageStorage(enabled === true);
+  if (!state.chosen) {
+    setPerLanguageStorage(enabled === true);
+    state.adopted = true;
+    return;
+  }
+  if (state.adopted === true) assertPerLanguageStorageUnchanged(enabled);
 }
 
 /**
@@ -46,6 +60,7 @@ export function adoptPerLanguageStorage(enabled: boolean | undefined): void {
 export function _resetPerLanguageStorage(): void {
   state.enabled = false;
   state.chosen = false;
+  state.adopted = false;
 }
 
 /** Whether every translatable field is kept per language from the start. Defaults to false. */

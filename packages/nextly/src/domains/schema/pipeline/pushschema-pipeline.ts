@@ -101,7 +101,11 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
-import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
+import {
+  assertLiveCounts,
+  assertPreCleanupAccepted,
+  withAddedColumnsLeftToTighten,
+} from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
@@ -117,12 +121,14 @@ import type {
   MigrationJournalSummary,
   Notifier,
   PreCleanupExecutor,
+  PreCleanupField,
   PreRenameExecutor,
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
 import { builtByFor } from "./registered-collections";
+import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import {
   sqliteRebuiltTables,
@@ -132,6 +138,7 @@ import {
 } from "./sql-templates/sqlite-rebuild";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
+import { uniqueColumnLookup } from "./unique-columns";
 
 // F5 PR 4: produces a copy of `desired` where any field targeted by a
 // make_optional resolution has its `required` flag flipped to false (or
@@ -346,6 +353,9 @@ function withoutSqliteDropsLeftToRebuild(
  */
 function preCleanupFailure(err: unknown): Error {
   if (err instanceof PromptCancelledError) return err;
+  // A refusal is not a failed statement: pre-cleanup's checks refuse before it runs any, and the
+  // refusal carries the column and the reason, which a DDL wrapper would replace with its message.
+  if (NextlyError.isValidation(err)) return err;
   return new DdlExecutionError(
     err instanceof Error ? err.message : String(err),
     err
@@ -836,6 +846,8 @@ export class PushSchemaPipeline {
         countRows: table => countRowsHelper(db, dialect, table),
         countLongerThan: (table, column, length) =>
           countLongerThanHelper(db, dialect, table, column, length),
+        // "Fill with one value" is not offered for a column the schema makes unique.
+        isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
         dialect,
       });
 
@@ -896,8 +908,18 @@ export class PushSchemaPipeline {
       // their SQL from these ops, so an unpatched add_column would still say
       // NOT NULL despite the admin's resolution — failing the apply on a
       // populated table or landing the column as required.
-      const allResolvedOps = applyMakeOptionalToOperations(
-        renameResolvedOps,
+      //
+      // A NEW required column answered with a value (or with deleting the rows
+      // it leaves empty) is added, nullable, by pre-cleanup ahead of its fill,
+      // so every later phase plans only its NOT NULL instead of adding it
+      // again — read once here so routing, rebuild approval and the emitted
+      // DDL all see the same operations.
+      const allResolvedOps = withAddedColumnsLeftToTighten(
+        applyMakeOptionalToOperations(
+          renameResolvedOps,
+          dispatchResult.resolutions,
+          classificationResult.events
+        ),
         dispatchResult.resolutions,
         classificationResult.events
       );
@@ -918,6 +940,15 @@ export class PushSchemaPipeline {
               .map(c => c.tableName.toLowerCase())
           )
         );
+
+      // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
+      // every column the answered plan makes NOT NULL, not only those the classifier raised.
+      await refuseNotNullOverNulls(
+        args,
+        classificationResult,
+        dispatchResult,
+        resolvedOps
+      );
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //
@@ -1099,7 +1130,9 @@ export class PushSchemaPipeline {
         // patches collections + singles + components — keeping the two in
         // sync so a future classifier-on-singles event has field metadata
         // to validate provide_default values against.
-        const aggregatedFields: Array<{ name: string; type: string }> = [
+        // Each tagged with its entity's table, so a fill is judged by the field on the event's own
+        // table.
+        const aggregatedFields: PreCleanupField[] = [
           ...Object.values(desired.collections),
           ...Object.values(desired.singles),
           ...Object.values(desired.components),
@@ -1109,13 +1142,27 @@ export class PushSchemaPipeline {
               (f): f is typeof f & { name: string } =>
                 typeof f.name === "string"
             )
-            .map(f => ({ name: f.name, type: f.type }))
+            .map(f => ({
+              tableName: c.tableName,
+              name: f.name,
+              type: f.type,
+            }))
         );
         try {
           assertPreCleanupAccepted({
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
             fields: aggregatedFields,
+            desiredSnapshot,
+            dialect,
+          });
+          // Judged again on the rows as they stand after the prompt, inside this transaction and
+          // before Phase C: on MySQL its renames and drops commit as they run.
+          await assertLiveCounts({
+            tx,
+            resolutions: dispatchResult.resolutions,
+            events: classificationResult.events,
+            operations: resolvedOps,
             dialect,
           });
         } catch (err) {
@@ -1161,6 +1208,7 @@ export class PushSchemaPipeline {
             desiredSnapshot,
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
+            operations: resolvedOps,
             fields: aggregatedFields,
             dialect,
           });
@@ -1422,7 +1470,13 @@ export class PushSchemaPipeline {
         // filterUnsafeStatements; the fast path bypasses that filter (its
         // statements come from approved operations), so it gets the same
         // refusal applied directly to its drops.
-        const pluginMigrated = await pluginMigratedTableSet(db, dialect);
+        //
+        // Read through `tx`, the handle this apply runs on. On PostgreSQL and
+        // MySQL that is the apply's own transaction, so the registry read
+        // stays on its connection instead of taking a second one from the
+        // pool while the transaction is open. On SQLite, which applies with
+        // no transaction, `tx` is the database handle itself.
+        const pluginMigrated = await pluginMigratedTableSet(tx, dialect);
         const unlocked = useFastPath
           ? pluginMigrated
             ? emittedStatements.filter(

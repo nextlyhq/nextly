@@ -106,9 +106,8 @@ import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
-import { entryWriteContext } from "../../collections/services/stored-field-read";
+import * as storedFieldRead from "../../collections/services/stored-field-read";
 import {
-  recordOverwriteEvent,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -138,6 +137,7 @@ import {
   readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { forgetRecoveryPointIn } from "../../i18n/forget-recovery-point";
 import {
   languagesChangedConflict,
   languagesGoingLiveFrom,
@@ -195,8 +195,9 @@ import {
 } from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
-import { overwriteRecordOf } from "../../versions/overwrite-record";
+import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import { hasLifecycle } from "../../versions/recorded-status";
+import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   outOfDateSharedFields,
@@ -215,6 +216,8 @@ import {
   type DocumentRevisionState,
   givenOf,
   judgedLanguage,
+  judgedLanguageStates,
+  languagesJudged,
   type PartState,
   poolRevisionReader,
   refuseIfLanguageMoved,
@@ -345,6 +348,29 @@ class SingleStatusTransitionDeniedError extends NextlyError {
     this.name = "SingleStatusTransitionDeniedError";
   }
 }
+
+/**
+ * How a rewrite of one language's pending change is judged: the version its
+ * request gave, the Single's table and translation table, and the language it
+ * is judged on (none where the Single keeps no translations).
+ */
+type SinglePendingChangeJudging = {
+  check: VersionCheck;
+  table: string;
+  languagesTable: string | null;
+  locale: string | undefined;
+};
+
+/**
+ * What a rewrite of a pending change found out of date inside its transaction
+ * leaves for its answer once that rolls back: the refusal's holder, the
+ * judging, and the document the lock was taken on.
+ */
+type PendingChangeStale = {
+  holder: StaleWriteHolder;
+  judging?: SinglePendingChangeJudging;
+  lockedId?: string;
+};
 
 /**
  * SingleMutationService
@@ -651,7 +677,8 @@ export class SingleMutationService extends BaseService {
     singleMeta: DynamicSingleRecord,
     companion: CompanionSchema,
     params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0],
-    grants: () => Promise<CallerGrants>
+    grants: () => Promise<CallerGrants>,
+    version: { judging: SinglePendingChangeJudging; stale: PendingChangeStale }
   ): Promise<{
     taken: string[];
     remaining: string[];
@@ -667,6 +694,13 @@ export class SingleMutationService extends BaseService {
     );
     if (!found) return null;
     const { ref, locale, pending } = found;
+    // Judged under the lock, before the change is written.
+    const before = await this.refuseIfPendingChangeMoved(
+      tx,
+      version.judging,
+      ref.entryId,
+      version.stale
+    );
     const { live, shared, views, byHand } = await this.liveSharedDocument(
       tx,
       singleMeta,
@@ -714,6 +748,17 @@ export class SingleMutationService extends BaseService {
         { id: ref.entryId },
         actorForWrite(params.actor ?? null, params.user)
       );
+      // Saved over a change since the read, by choice: recorded with it.
+      await this.recordOverwriteIfAsked(
+        tx,
+        version.judging.check,
+        {
+          slug: params.slug,
+          id: ref.entryId,
+          options: { user: params.user, actor: params.actor },
+        },
+        { ...before, locale: version.judging.locale }
+      );
     }
     // A save of the pending change, in its history like any other.
     await this.recordSingleSave(
@@ -752,10 +797,18 @@ export class SingleMutationService extends BaseService {
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The version the pending change was read at (`_rev`) and the overwrite
+     * choice (`_overwrite`): taking the live values saves the change, so it is
+     * judged as a save of it is.
+     */
+    version?: Readonly<Record<string, unknown>>;
   }): Promise<SingleResult<TakenLiveValues>> {
     // Refused first when the Single is removed from code, before any hook or
     // read of its document, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("single", params.slug);
+    // Set by a refusal inside the transaction, answered once it rolls back.
+    const stale: PendingChangeStale = { holder: {} };
     try {
       const accessDenied = await checkSingleAccess({
         slug: params.slug,
@@ -786,10 +839,17 @@ export class SingleMutationService extends BaseService {
         params.authenticatedScope,
         this.fieldRuleVisitor
       );
+      stale.judging = singleMeta
+        ? await this.pendingChangeJudging(params, singleMeta)
+        : undefined;
+      const judging = stale.judging;
       const took =
-        singleMeta && companion
+        singleMeta && companion && judging
           ? await this.adapter.transaction(tx =>
-              this.takeLiveInTx(tx, singleMeta, companion, params, grants)
+              this.takeLiveInTx(tx, singleMeta, companion, params, grants, {
+                judging,
+                stale,
+              })
             )
           : null;
       if (!took) {
@@ -814,6 +874,14 @@ export class SingleMutationService extends BaseService {
       );
       return { success: true, statusCode: 200, data };
     } catch (error) {
+      // Out of date: answered after the rollback, from the Single as it is now.
+      const refused = await this.staleRefusalAfterRollback(params, stale);
+      if (refused) {
+        return {
+          ...buildSingleErrorResult(refused, "Failed to take the live values"),
+          data: undefined,
+        };
+      }
       return {
         // A write the database is not migrated for answers as such.
         ...buildSingleErrorResult(
@@ -867,6 +935,12 @@ export class SingleMutationService extends BaseService {
      */
     entryId?: string;
     /**
+     * The version the pending change was read at (`_rev`) and the overwrite
+     * choice (`_overwrite`): discarding a colleague's newer change from an
+     * old view would lose it, so a discard is judged as a save of it is.
+     */
+    version?: Readonly<Record<string, unknown>>;
+    /**
      * Told the version the discard left the document at, read on its
      * transaction and spelled for `locale`: for a caller that answers with
      * the document, so the version it hands back is the one this discard
@@ -895,6 +969,9 @@ export class SingleMutationService extends BaseService {
         },
       });
     }
+    // Set by a refusal inside the transaction, answered once it rolls back.
+    const judging = await this.pendingChangeJudging(params, singleMeta);
+    const stale: PendingChangeStale = { holder: {}, judging };
 
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter
@@ -921,11 +998,26 @@ export class SingleMutationService extends BaseService {
           scopeSlug: params.slug,
           entryId,
         };
-        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-          discardedRef,
-          draftLocale
+        const { removed, judged: before } = await removePendingChangeJudged(
+          tx,
+          { ref: discardedRef, locale: draftLocale },
+          judging.check,
+          () => this.refuseIfPendingChangeMoved(tx, judging, entryId, stale),
+          { main: undefined, language: undefined }
         );
-        await releaseSharedBase(tx, discardedRef, draftLocale);
+        // The author's unsaved work recorded in the discarded language goes
+        // with it; their work recorded in another language stays.
+        // Only where a pending change was removed: a discard that found none
+        // threw nothing away, and the point is then the only copy of the work.
+        if (removed > 0) {
+          await forgetRecoveryPointIn(tx, {
+            ref: discardedRef,
+            author: params.user?.id,
+            slot: draftLocale,
+            documentLocalized: singleMeta.localized === true,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          });
+        }
         // In the Single's history only when there was a draft to discard.
         if (removed > 0) {
           // A reader of the pending change now sees the live document, so the
@@ -935,6 +1027,17 @@ export class SingleMutationService extends BaseService {
             singleMeta.tableName,
             { id: entryId },
             actorForWrite(params.actor ?? null, params.user)
+          );
+          // Discarded over a change since the read, by choice: recorded.
+          await this.recordOverwriteIfAsked(
+            tx,
+            judging.check,
+            {
+              slug: params.slug,
+              id: entryId,
+              options: { user: params.user, actor: params.actor },
+            },
+            { ...before, locale: judging.locale }
           );
           if (params.onVersion) {
             // Asked of the catalog on this transaction, which a missing table
@@ -975,6 +1078,9 @@ export class SingleMutationService extends BaseService {
         return removed;
       })
       .catch(async (error: unknown) => {
+        // Out of date: answered after the rollback, from the Single as it is now.
+        const refused = await this.staleRefusalAfterRollback(params, stale);
+        if (refused) throw refused;
         // A discard the database is not migrated for answers as such. Its
         // transaction rolls back whole, so a failure never follows a kept write.
         throw await asNotMigrated(
@@ -1276,6 +1382,124 @@ export class SingleMutationService extends BaseService {
 
   /** A save in this Single's history; see `recordSaveEvent`. */
   /**
+   * How a rewrite of one language's pending change is judged (taking the live
+   * values into it, or discarding it): from the version its request carries,
+   * on the Single's own row and the pending change's language. Decided before
+   * the transaction, so a version that names another language is refused as
+   * the validation error it is before anything is read under the lock.
+   *
+   * @throws The validation error of a version that is not one, or that
+   *   names no version of the pending change's language.
+   */
+  private async pendingChangeJudging(
+    params: {
+      slug: string;
+      locale?: string | null;
+      version?: Readonly<Record<string, unknown>>;
+    },
+    singleMeta: DynamicSingleRecord
+  ): Promise<SinglePendingChangeJudging> {
+    const check = versionCheckFor(
+      { ...params.version },
+      {
+        exempt: releaseRunExemptFor({
+          scopeKind: "single",
+          scopeSlug: params.slug,
+        }),
+      }
+    );
+    const companion = this.translationsOf(singleMeta);
+    const ready =
+      companion !== null &&
+      (await resolveCompanionReadiness(this.adapter, {
+        companionTableName: companion.companionTableName,
+        mainTableName: singleMeta.tableName,
+        localizedColumns: companion.localizedFields.map(f => f.column),
+      })) === "ready";
+    const languagesTable = translationTableOf(companion, ready);
+    const draftLocale = workingDraftLocale({
+      documentLocalized: singleMeta.localized === true,
+      requestLocale: params.locale ?? null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    return {
+      check,
+      table: singleMeta.tableName,
+      languagesTable,
+      locale: judgedLanguage(
+        givenOf(check),
+        languagesTable === null ? undefined : (draftLocale ?? undefined)
+      ),
+    };
+  }
+
+  /**
+   * Judge a rewrite of a pending change under the Single's lock, before it
+   * writes: the Single's own row, which every save of the change moves, and
+   * the change's language. Throws when out of date, rolling the rewrite back;
+   * returns the rows as they stood, for an overwrite's record of whom it
+   * replaced.
+   */
+  private async refuseIfPendingChangeMoved(
+    tx: TransactionContext,
+    judging: SinglePendingChangeJudging,
+    id: string,
+    stale: PendingChangeStale
+  ): Promise<{
+    main: DocumentRevisionState | undefined;
+    language: PartState | undefined;
+  }> {
+    stale.lockedId = id;
+    const locales = judging.locale === undefined ? undefined : [judging.locale];
+    const main = await refuseIfMainMoved(
+      tx,
+      this.adapter.dialect,
+      judging.check,
+      {
+        table: judging.table,
+        id,
+        languages: languagesJudged(judging.languagesTable, locales),
+      },
+      stale.holder
+    );
+    return { main, language: judgedLanguageStates(main, locales)?.[0] };
+  }
+
+  /**
+   * The refusal of a pending change's rewrite found out of date inside its
+   * transaction, read from the Single as it is now that the transaction has
+   * rolled back; undefined when it was not.
+   */
+  private async staleRefusalAfterRollback(
+    params: {
+      slug: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    stale: PendingChangeStale
+  ): Promise<NextlyError | undefined> {
+    const check = stale.judging?.check;
+    if (!stale.holder.at || !stale.lockedId || check?.kind !== "judge") {
+      return undefined;
+    }
+    return staleVersionErrorFor(poolRevisionReader(this.adapter), {
+      dialect: this.adapter.dialect,
+      scopeKind: "single",
+      slug: params.slug,
+      id: stale.lockedId,
+      given: check.given,
+      at: stale.holder.at,
+      reader: {
+        user: params.user,
+        trusted: fieldTrustOf(params),
+        authenticatedScope: params.authenticatedScope,
+      },
+    });
+  }
+
+  /**
    * Record an overwrite in this Single's history, when the update said to
    * overwrite: whatever the Single keeps, in the write's transaction, so a
    * save that cannot record it is not kept either. Whom it replaced is read
@@ -1288,23 +1512,22 @@ export class SingleMutationService extends BaseService {
     before: {
       main: DocumentRevisionState | undefined;
       language: PartState | undefined;
+      /** Every language's row, for a write over all of them at once. */
+      languages?: readonly PartState[];
       locale: string | undefined;
     }
   ): Promise<void> {
-    if (check.kind !== "overwrite") return;
-    await recordOverwriteEvent(
+    await recordOverwriteIfAsked(
       tx,
       { adapter: this.adapter },
+      check,
       {
         subject: { kind: "single", slug: target.slug, id: target.id },
         actor: actorForWrite(target.options.actor ?? null, target.options.user),
         personName: target.options.user?.name ?? null,
         locale: before.locale ?? null,
-        ...overwriteRecordOf(check, {
-          main: before.main?.main,
-          language: before.language,
-        }),
-      }
+      },
+      before
     );
   }
 
@@ -1738,7 +1961,7 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
         // Before the transaction opens, so on the pool.
-        write: entryWriteContext({
+        write: storedFieldRead.entryWriteContext({
           kind: "single",
           slug,
           ...(args.writeLocale === undefined
@@ -2028,13 +2251,42 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      // Probe the companion `_locales` table's existence on the POOLED adapter
+      // BEFORE the write transaction opens. Two reasons it must be here and not
+      // inside the transaction: with a single-connection pool the transaction
+      // holds the only connection, so a pooled probe inside it would deadlock;
+      // and probing on the transaction connection would abort the whole
+      // transaction on Postgres when the not-yet-migrated table is absent. The
+      // in-transaction companion reads are skipped when this is false.
+      const companionReadiness =
+        companion && writeLocale !== undefined
+          ? await resolveCompanionReadiness(this.adapter, {
+              companionTableName: companion.companionTableName,
+              mainTableName: singleMeta.tableName,
+              localizedColumns: companion.localizedFields.map(f => f.column),
+            })
+          : undefined;
+      const companionPhysicallyExists = companionReadiness === "ready";
       // A translated save is judged on its own language too, so the version
       // must name it; one from a read of another language is refused here,
       // before anything is written.
-      const judgedLocale = judgedLanguage(givenOf(versionCheck), writeLocale);
+      // Judged on its language only where the translation table is ready, as
+      // a read names a language only then: a version a read gave before the
+      // table existed names none, and the save it is sent with writes the
+      // main row alone.
+      // A save in another language than the default, with no table to go to,
+      // is judged on that language all the same, and so refused here, before
+      // any hook runs, as a version from another language's read.
+      const judgedLocale = judgedLanguage(
+        givenOf(versionCheck),
+        companionPhysicallyExists ||
+          writeLocale !== this.localization?.defaultLocale
+          ? writeLocale
+          : undefined
+      );
       // A sweep of every language is judged on each, so its version must
       // name each; one that does not is refused before any hook runs.
-      if (sweepAllLocales && companion) {
+      if (sweepAllLocales && companion && companionPhysicallyExists) {
         assertVersionNamesEvery(
           givenOf(versionCheck),
           this.localization?.locales.map(l => l.code) ?? []
@@ -2043,7 +2295,9 @@ export class SingleMutationService extends BaseService {
       // Every language a refusal's current version names: the one the save
       // is judged on, or for a sweep of every language, each of them.
       const judgedLanguages =
-        companion && (judgedLocale !== undefined || sweepAllLocales)
+        companion &&
+        companionPhysicallyExists &&
+        (judgedLocale !== undefined || sweepAllLocales)
           ? {
               table: companion.companionTableName,
               locales: sweepAllLocales
@@ -2599,22 +2853,6 @@ export class SingleMutationService extends BaseService {
       // from the callback (not assigned to an outer variable), so the value read
       // below is only ever the committed result. A localized single writes
       // `mainPayload` (translatable columns moved to the companion).
-      // Probe the companion `_locales` table's existence on the POOLED adapter
-      // BEFORE the write transaction opens. Two reasons it must be here and not
-      // inside the transaction: with a single-connection pool the transaction
-      // holds the only connection, so a pooled probe inside it would deadlock;
-      // and probing on the transaction connection would abort the whole
-      // transaction on Postgres when the not-yet-migrated table is absent. The
-      // in-transaction companion reads are skipped when this is false.
-      const companionReadiness =
-        companion && writeLocale !== undefined
-          ? await resolveCompanionReadiness(this.adapter, {
-              companionTableName: companion.companionTableName,
-              mainTableName: singleMeta.tableName,
-              localizedColumns: companion.localizedFields.map(f => f.column),
-            })
-          : undefined;
-      const companionPhysicallyExists = companionReadiness === "ready";
 
       // A write to every language that publishes is asked about each language
       // it puts live ({@link askPublishInEachLanguage}): before any hook ran
@@ -2720,27 +2958,28 @@ export class SingleMutationService extends BaseService {
             const attemptComponentFields: Record<string, unknown> = {
               ...componentFieldData,
             };
-            // True only when THIS transaction inserted the row AND seeded the
-            // default-locale companion with the localized defaults. The version
-            // snapshot overlay below is gated on it, not on `autoCreated`: two
-            // first writes can race so that this request enters with
-            // `autoCreated === true` but then adopts a row another writer already
-            // inserted (the `committed` branch), in which case it did NOT seed —
-            // the companion may already hold that writer's real translations, and
-            // overlaying schema defaults would let a restore overwrite them.
+            // Whether THIS transaction inserted the row, and whether it also
+            // seeded the default-locale companion with the localized defaults.
+            // Not `autoCreated`: two first writes can race so that this request
+            // adopts a row another writer inserted (the `committed` branch). It
+            // seeded nothing then, the companion may hold that writer's real
+            // translations a snapshot overlay of defaults would let a restore
+            // overwrite, and that row is what a conditional write is judged by.
+            let insertedHere = false;
             let didSeedCompanionDefaults = false;
-            // First-write auto-create, committed atomically with the update. A
-            // failed update/component/companion/version write rolls the insert
-            // back rather than orphaning a default row, and no compensating
-            // delete is needed. Idempotent: a `beforeUpdate` hook that read the
-            // Single may already have auto-created the row (via `get`), and a
-            // version-conflict retry re-enters this closure — in both cases the
-            // existing row is reused instead of inserting a duplicate.
+            // First-write auto-create, atomic with the update: a failed write
+            // rolls the insert back, with no compensating delete. Idempotent: a
+            // hook's read (`get`) may have auto-created the row, and a retry
+            // re-enters here; either way the existing row is reused. A
+            // conditional write reads it under locks (see `firstWriteRead`).
             if (autoCreated && pendingAutoCreateValues) {
-              const committed = await tx.selectOne<SingleDocument>(
-                singleMeta.tableName,
-                {}
-              );
+              const committed =
+                await storedFieldRead.firstWriteRead<SingleDocument>(
+                  tx,
+                  singleMeta,
+                  options.context,
+                  () => tx.selectOne<SingleDocument>(singleMeta.tableName, {})
+                );
               if (committed) {
                 existingDoc = committed;
               } else {
@@ -2762,9 +3001,9 @@ export class SingleMutationService extends BaseService {
                   (existingDoc as { status?: string }).status,
                   seedCompanionExists
                 );
-                // The seed persists defaults only when the companion physically
-                // exists; track that this transaction actually seeded so the
-                // snapshot overlay records defaults that were really written.
+                // The seed persists defaults only where the companion exists,
+                // and the snapshot overlay records only defaults truly written.
+                insertedHere = true;
                 didSeedCompanionDefaults = seedCompanionExists;
                 // The Single's first history event: this write created its
                 // document.
@@ -2937,6 +3176,14 @@ export class SingleMutationService extends BaseService {
                 languages: judgedLanguages,
               },
               staleWrite
+            );
+            // A conditional write is judged here, under the lock, against the
+            // value as committed now (a row it inserted, as absent); a refused
+            // one writes nothing. Thrown as is, and unwrapped below.
+            await storedFieldRead.holdStoredExpectation(
+              options.context,
+              { kind: "single", slug, createdHere: insertedHere },
+              { tx, localization: this.localization, locale: options.locale }
             );
             // The save's language row as it stood before this save wrote it,
             // for an overwrite's history; set where the row is written below.
@@ -3880,7 +4127,7 @@ export class SingleMutationService extends BaseService {
               // reads the same language's stored values and sees the save's
               // status as the Single's own fields do.
               write: {
-                ...entryWriteContext({
+                ...storedFieldRead.entryWriteContext({
                   kind: "single",
                   slug,
                   ...(writeLocale === undefined ? {} : { locale: writeLocale }),

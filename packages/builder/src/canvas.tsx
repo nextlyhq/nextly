@@ -49,6 +49,7 @@ import {
 import {
   INSTANCE_ATTRIBUTE,
   layoutPartSheets,
+  LIST_ACTION_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   sharedStyleInputs,
@@ -511,6 +512,16 @@ function isChrome(target: EventTarget | null): boolean {
   return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
 }
 
+/** The action a list's note offers, when a press landed on it. */
+function listActionOf(target: EventTarget | null): string | null {
+  if (!isElement(target)) return null;
+  return (
+    target
+      .closest(`[${LIST_ACTION_ATTRIBUTE}]`)
+      ?.getAttribute(LIST_ACTION_ATTRIBUTE) ?? null
+  );
+}
+
 /**
  * How a pointer event on the canvas resolves to a node id, or to nothing.
  *
@@ -624,6 +635,32 @@ export function isOutermostForAddress(
   // no outline and no rectangle for a drag.
   if (!ownedByCanvas(host, container)) return true;
   return host.getAttribute(INSTANCE_ATTRIBUTE) !== address;
+}
+
+/**
+ * Every element standing for each of `addresses` on this canvas: the
+ * outermost per address, in document order. What a toolbar or a gap measures a
+ * block by, so that a component placement whose definition draws several
+ * top-level elements is measured as all of them rather than as its first.
+ * Only this canvas's own: a canvas nested inside a block (component edit
+ * mode) scopes ids to its own document, which may reuse an address from out
+ * here.
+ */
+export function outermostElementsOf(
+  root: HTMLElement,
+  addresses: ReadonlySet<string>
+): Map<string, Element[]> {
+  const drawn = new Map<string, Element[]>();
+  for (const element of nodeElements(root)) {
+    if (!ownedByCanvas(element, root)) continue;
+    const address = nodeAddressOf(element);
+    if (address === null || !addresses.has(address)) continue;
+    if (!isOutermostForAddress(element, address, root)) continue;
+    const elements = drawn.get(address) ?? [];
+    elements.push(element);
+    drawn.set(address, elements);
+  }
+  return drawn;
 }
 
 /**
@@ -824,11 +861,14 @@ function useCanvasMarkers(
         // Whether the engine would refuse to move this node, asked from the set
         // rather than from the document per element: this walk re-runs on every
         // change to the rendered tree, and a tree search per element would make
-        // that quadratic on a large page.
+        // that quadratic on a large page. Asked by the ADDRESS, as the selection
+        // pass above is: a placement's parts carry a re-minted id the document
+        // does not hold, and the lock that holds them is the placement's.
+        const address = nodeAddressOf(element);
         setMark(
           element,
           LOCKED_ATTRIBUTE,
-          id === null ? undefined : lockedIds.get(id)
+          address === null ? undefined : lockedIds.get(address)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -987,6 +1027,102 @@ function setMark(
   else element.setAttribute(attribute, value);
 }
 
+/**
+ * The marks the site's surface puts on the canvas root, written before paint:
+ * the nearest theme marker above it (`useNearestThemeMarker`), and whether the
+ * site's ground is fully opaque.
+ *
+ * Only an opaque ground is repeated on the rendered page as well as the
+ * canvas: painted twice, an opaque ground looks exactly as it does once, while
+ * a translucent one would darken where the layers overlap. Judged from the
+ * colour the root's background RESOLVES to, because the host's own CSS can
+ * set the token's property to something the token set does not say. The
+ * token set's answer stands where the resolved colour says nothing: one that
+ * cannot be read, or one fully transparent, which is what a root painting no
+ * ground of its own resolves to (a page the site serves), and a transparent
+ * ground repeated on the page paints nothing either way.
+ */
+/**
+ * The alpha of a computed colour written as a function this module's colour
+ * reader does not otherwise read — `color(display-p3 0 0 0 / 0.5)`, which a
+ * browser can keep in a computed value — from its `/ alpha` part, 1 without
+ * one; `undefined` for anything that is not a colour function.
+ */
+function computedAlphaOf(text: string): number | undefined {
+  const call = /^[a-z-]+\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const alpha = (call[1] ?? "").split("/")[1];
+  return alpha === undefined ? 1 : fractionOf(alpha.trim(), 1);
+}
+
+function useSiteSurfaceMarks(
+  rootRef: React.RefObject<HTMLElement | null>,
+  opaqueByTokens: boolean
+): void {
+  useNearestThemeMarker(rootRef);
+  const tokens = useRef(opaqueByTokens);
+  tokens.current = opaqueByTokens;
+  // On every render: a render is what brings new site styles.
+  useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (root !== null) markGround(root, tokens.current);
+  });
+  /*
+   * And on what changes the ground with no render, subscribed once for the
+   * root rather than on every render:
+   *
+   * - the site's mode: the theme marker rewrites the root's
+   *   `data-nx-site-theme` from an observer of its own, and the device's
+   *   colour scheme changes on its own. A light ground and a dark one can
+   *   differ in whether they are opaque;
+   * - the canvas's window resizing, or the canvas itself: a site can override
+   *   the ground under a width or height query, which a resized frame
+   *   crosses, and under a container query, which a canvas drawn without a
+   *   frame crosses as the layout around it changes.
+   */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const view = root.ownerDocument.defaultView;
+    const mark = (): void => markGround(root, tokens.current);
+    const Observer = view?.MutationObserver;
+    const theme =
+      typeof Observer === "function" ? new Observer(() => mark()) : null;
+    theme?.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-nx-site-theme"],
+    });
+    const scheme = view?.matchMedia?.("(prefers-color-scheme: dark)");
+    scheme?.addEventListener("change", mark);
+    view?.addEventListener("resize", mark);
+    const Sizes = view?.ResizeObserver;
+    const size = typeof Sizes === "function" ? new Sizes(() => mark()) : null;
+    size?.observe(root);
+    return () => {
+      theme?.disconnect();
+      scheme?.removeEventListener("change", mark);
+      view?.removeEventListener("resize", mark);
+      size?.disconnect();
+    };
+  }, [rootRef]);
+}
+
+/**
+ * Mark whether the site's ground is fully opaque, from the colour the root's
+ * background resolves to; the token set's answer where that says nothing.
+ */
+function markGround(root: HTMLElement, opaqueByTokens: boolean): void {
+  const resolved = (
+    root.ownerDocument.defaultView?.getComputedStyle(root).backgroundColor ?? ""
+  ).trim();
+  const alpha = alphaOf(resolved) ?? computedAlphaOf(resolved);
+  setFlag(
+    root,
+    "data-nx-site-ground-opaque",
+    alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
+  );
+}
+
 function setFlag(element: Element, attribute: string, wanted: boolean): void {
   if (wanted === element.hasAttribute(attribute)) return;
   if (wanted) element.setAttribute(attribute, "");
@@ -1023,7 +1159,8 @@ function useCanvasPointer(
   onDoubleClick:
     | ((event: React.MouseEvent<HTMLDivElement>) => void)
     | undefined,
-  marked: readonly string[]
+  marked: readonly string[],
+  onListSortField?: (id: string) => void
 ): {
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
@@ -1033,12 +1170,24 @@ function useCanvasPointer(
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (onSelect === undefined || isChrome(event.target)) return;
+      const id = nodeIdFromEvent(event.target);
+      // A list note's "Choose a field", pressed or activated from the
+      // keyboard: the host selects the list and takes the author to its sort,
+      // in place of the plain selection a click inside the list makes.
+      if (
+        id !== null &&
+        onListSortField !== undefined &&
+        listActionOf(event.target) === "choose-sort-field"
+      ) {
+        onListSortField(id);
+        return;
+      }
       // A click on the canvas background resolves to null, which CLEARS the
       // selection rather than being ignored. Ignoring it leaves an inspector
       // showing a node the author believes they have deselected.
-      onSelect(nodeIdFromEvent(event.target), selectionModeFor(event));
+      onSelect(id, selectionModeFor(event));
     },
-    [onSelect]
+    [onSelect, onListSortField]
   );
   const doubleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1201,6 +1350,12 @@ export interface CanvasProps {
    * reading modifiers off a later render's event would read a different click.
    */
   onSelect?: (id: string | null, mode: SelectionMode) => void;
+  /**
+   * Raised with a collection list's id when its note's "Choose a field" is
+   * pressed, for the host to select the list and take the author to its
+   * sort. Absent, the press selects the list as any click inside it does.
+   */
+  onListSortField?: (id: string) => void;
   /**
    * Everything else the renderer needs, passed through untouched.
    *
@@ -1771,12 +1926,14 @@ function useSelectionPointer({
   selectedId,
   onSelect,
   onDoubleClick,
+  onListSortField,
   dragPointerDown,
 }: {
   selectedIds: CanvasProps["selectedIds"];
   selectedId: string | null;
   onSelect: CanvasProps["onSelect"];
   onDoubleClick: CanvasProps["onDoubleClick"];
+  onListSortField: CanvasProps["onListSortField"];
   dragPointerDown:
     | ((event: React.PointerEvent<HTMLDivElement>) => void)
     | undefined;
@@ -1785,7 +1942,12 @@ function useSelectionPointer({
     () => markedIds(selectedIds, selectedId),
     [selectedIds, selectedId]
   );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const pointer = useCanvasPointer(
+    onSelect,
+    onDoubleClick,
+    marked,
+    onListSortField
+  );
   const canvasPointerDown = pointer.onPointerDown;
   const pointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1966,6 +2128,7 @@ export function Canvas({
   dragHandlers,
   drag,
   onDoubleClick,
+  onListSortField,
   overlay,
   regions,
 }: CanvasProps): JSX.Element {
@@ -1982,11 +2145,12 @@ export function Canvas({
     selectedId,
     onSelect,
     onDoubleClick,
+    onListSortField,
     dragPointerDown: dragHandlers?.onPointerDown,
   });
 
-  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
+  useSiteSurfaceMarks(root, surface?.opaqueGround === true);
   // The scale the page is painted at, for chrome drawn inside it to undo.
   const canvasScale = useCanvasFrame().scale;
 
@@ -2049,15 +2213,10 @@ export function Canvas({
        * not rendered here: see that hook.
        */
       /*
-       * Whether the site's ground is fully opaque, in every mode. Only then
-       * does the rendered page carry the ground as well as the canvas: painted
-       * twice, an opaque ground looks exactly as it does once, while a
-       * translucent one would darken where the layers overlap. See the page
-       * root's rule in `builder-chrome.css` for why the page wants it.
+       * `data-nx-site-ground-opaque`, whether the site's ground is fully
+       * opaque, is written onto this element by `useSiteSurfaceMarks` from the
+       * colour it resolves to, not rendered here: see that hook.
        */
-      data-nx-site-ground-opaque={
-        surface?.opaqueGround === true ? "" : undefined
-      }
       /*
        * What the pointer means, for the cursor.
        *

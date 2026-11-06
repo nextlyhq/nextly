@@ -295,7 +295,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `collections/${POSTS}/entries/${id}`,
           callers[without],
-          { title: `${title} changed`, status: "published" }
+          { title: `${title} changed`, status: "published", _overwrite: true }
         );
         expect(res.status).toBe(403);
         // Neither the title sent with the publish nor the status is stored.
@@ -328,6 +328,7 @@ for (const dialect of getConfiguredTestDialects()) {
         const res = await rest("PATCH", `singles/${BANNER}`, callers[without], {
           headline: `${without} banner`,
           status: "published",
+          _overwrite: true,
         });
         expect(res.status).toBe(403);
         // Neither the content sent with the publish nor the status is stored.
@@ -353,7 +354,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `collections/${POSTS}/entries/${id}`,
           callers[granted],
-          { status: "published" }
+          { status: "published", _overwrite: true }
         );
         expect(updated.status).toBe(200);
         expect(await stored(t, POSTS, updatedTitle)).toMatchObject([
@@ -375,6 +376,7 @@ for (const dialect of getConfiguredTestDialects()) {
           {
             headline: `${granted} banner`,
             status: "published",
+            _overwrite: true,
           }
         );
         expect(single.status).toBe(200);
@@ -382,7 +384,7 @@ for (const dialect of getConfiguredTestDialects()) {
         // Back to a draft, so the next caller's refusal is seen on a draft.
         await t.nextly.updateSingle({
           slug: BANNER,
-          data: { status: "draft" },
+          data: { status: "draft", _overwrite: true },
         });
       });
     });

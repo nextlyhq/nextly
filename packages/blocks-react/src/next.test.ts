@@ -220,6 +220,71 @@ describe("createBlocksPage", () => {
     expect(props.context?.entry).toMatchObject({ slug: "about" });
   });
 
+  it("lets a list tell an author previewing a working draft what it could not read, and nobody else", async () => {
+    const preview = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({
+        slug: "about",
+        content: document,
+        _isWorkingDraft: true,
+      }),
+    });
+    expect(preview.context?.diagnostics).toBe(true);
+
+    const published = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+    });
+    expect(published.context?.diagnostics).toBe(false);
+  });
+
+  it("gives a list filtering by a day the site's time zone, and only then", async () => {
+    const dayList: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: {
+            collection: "posts",
+            filters: [
+              {
+                field: "publishedAt",
+                op: "greater_than_equal",
+                value: "2026-09-01",
+              },
+            ],
+          },
+        },
+      ],
+    };
+    // The core blocks, as a site registers them: a block the route does not
+    // know is not drawn, so its reads are not asked for.
+    const filtered = await render({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      timeZone: "Asia/Karachi",
+      nextly: reader({ slug: "about", content: dayList }),
+    });
+    expect(filtered.context?.timeZone).toBe("Asia/Karachi");
+    expect(filtered.context?.fieldShapes).toBeDefined();
+
+    const plain = await render({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      timeZone: "Asia/Karachi",
+      nextly: reader({ slug: "about", content: document }),
+    });
+    expect(plain.context?.timeZone).toBeUndefined();
+    expect(plain.context?.fieldShapes).toBeUndefined();
+  });
+
   it("reports the locale the ROUTE read in, not one inferred from the row", async () => {
     // The companion overlay copies localized values onto the entry without
     // stamping which locale produced them, so a row-derived locale is absent on

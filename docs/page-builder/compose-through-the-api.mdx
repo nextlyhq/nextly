@@ -1,0 +1,244 @@
+---
+title: Compose pages through the API
+description: Insert patterns, place components, edit a component's fields and variants, and choose a page's Layout from a script, with a dry run before each change.
+---
+
+Everything an editor does to compose a page can be done through the API: insert a
+pattern, place a component, change a placement's values or variant, choose a page's
+Layout, and edit a component's exposed fields and variants. A script or an agent can
+ask what a change would do before making it.
+
+<Callout type="warn">
+  These routes are experimental: their requests and answers may still change
+  before they are marked stable.
+</Callout>
+
+The routes are plugin routes under `/admin/api/plugins/@nextlyhq/plugin-page-builder`.
+They run as the caller, signed in or with an API key, with the same checks as the
+admin, and answer in the usual `{ message, item }` shape. Start by reading the
+[manifest](#read-the-manifest): it lists every id the actions take.
+
+## Read the manifest
+
+```http
+GET /admin/api/plugins/@nextlyhq/plugin-page-builder/manifest
+```
+
+The manifest describes what the caller may compose with, read as the caller:
+
+- **`collections`**: where pages, patterns, components and Layouts live on this site,
+  under the names it gave them, and `componentField`, the field a component's
+  definition is stored in.
+- **`patterns.items`**: each pattern's `id`, `title`, and `granularity` where it has one.
+- **`components.items`**: each component's `id` and `title`, with the `fields` a
+  placement may set (`id`, `label`, `type`, and `options` for a select), the `slots` it
+  may fill, and its `variants` (`id` and `label`). Every component lists all three, empty
+  where it has none.
+- **`layouts.items`**: each Layout's `id`, `title`, whether it is `published`, whether it
+  `isDefault`, and the `regions` it draws (`area` and `componentId`). `layouts.defaultLayout`
+  is the site default's id. A Layout being removed is left out, since a page cannot
+  choose it.
+- **`actions`**: the actions below, each with its `path`, every `kind` it takes and the
+  JSON Schema of its `request` body.
+
+Each part says whether the caller could read it. A part whose collection the caller may
+not read answers `readable: false` with no items, and the rest is still answered.
+`truncated: true` means the site holds more than one read returns, under the same bounds
+the editor's panels read with. `?locale=fr` reads component and Layout text
+in that language.
+
+Every id a page action takes comes from here: `place-component` takes a component's `id`,
+`variant` takes a variant's `id` (not its label, which can change), `values` is keyed by a
+field's `id`, and `set-layout` takes a Layout's `id`. So do a definition edit's field,
+slot and variant ids. An edit that points at a block inside the component (`expose` and
+`retarget-exposure`) names it by its `nodeId` in the definition: read the component's row
+from `collections.components`, where `componentField` holds the definition. The manifest's schema is published as `compositionManifestSchema`, so
+a client can validate what it reads:
+
+```ts
+import { compositionManifestSchema } from "@nextlyhq/plugin-page-builder";
+
+const manifest = compositionManifestSchema.parse(await response.json());
+const card = manifest.components.items.find(item => item.title === "Card");
+const dark = card?.variants.find(variant => variant.label === "Dark");
+```
+
+## How every action works
+
+- **`dryRun: true`** answers what the action would write, and whether the site would
+  accept it, and writes nothing. The write is made as the caller and rolled back, so
+  the site's own checks answer: field rules over the whole page, locks, component
+  loops and the caller's rights. Why the site would refuse it is in `item.refusals`,
+  empty when it would accept it. The answer shows the item as the save would store it,
+  after the site's hooks.
+- **Hooks run for a dry run's write too**, with `context["pageBuilder.transferJudgement"]`
+  set to `true`. A hook with an effect a rollback cannot undo, such as sending a message,
+  should skip it then and act on the write that commits.
+- **`item.fingerprint`** names the stored item the answer was planned against. Send it
+  back as **`expect`** and the action applies only to that item: one that changed since
+  answers `409`; plan again. An action is also refused with `409` when someone else saves
+  the item between the action's read and its write.
+- **`item.by`** says who the action ran as: `{ kind: "user", userId }`, or
+  `{ kind: "api-key", userId, apiKeyId }`. The item's content events, its history and
+  the webhook and activity trails record the change the same way: against the person,
+  or against the API key itself rather than its owner.
+- **`publish: true`** publishes the item with the change and needs the publish right.
+  Without it the change is saved to the item's working draft, as the editor saves it.
+
+An action the site refuses answers `422`, with each reason in the error's
+`data.errors`, and writes nothing.
+
+## Change a page
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/pages/actions
+Content-Type: application/json
+
+{
+  "page": { "collection": "pages", "id": "<page id>" },
+  "action": { "kind": "insert-pattern", "patternId": "<pattern id>" },
+  "dryRun": true
+}
+```
+
+`page` may also name the blocks `field` (`content` by default) and, for a translated
+field, the `locale`; a field that holds no blocks is refused. The caller needs **update**
+on the page's collection. A collection with a Draft/Published lifecycle but no working
+drafts saves an edit straight onto the published entry, so there the caller needs
+**publish** too. `action` is one of:
+
+| `kind`                 | Fields                                      | What it does                                                                                                                    |
+| ---------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `insert-pattern`       | `patternId`, `at?`                          | Copies a published pattern's blocks into the page, as the editor's insert panel does.                                           |
+| `place-component`      | `componentId`, `variant?`, `values?`, `at?` | Places a component by reference, with a variant's id and values keyed by exposed field id.                                      |
+| `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                               |
+| `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                            |
+| `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
+| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`. See below.                   |
+
+`at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
+inside a block; without it the block goes at the end of the page. The answer holds the
+`ops` the change makes, the page's blocks as it leaves them (`document`) or its Layout
+fields (`layout`), and `insertedId`, the new block's id for the next action to address.
+New blocks get fresh ids on every write, as in the editor, so the ids in a dry run's
+answer are not the ones an apply stores: address what the apply's own answer names.
+
+`set-list-query` changes the query of the Collection list whose id is `listId`. Each part
+of `query` is set when given, removed when `null`, and kept as stored when absent, so
+`{ "sort": "-publishedAt", "offset": null }` sets the sort and stops skipping entries. The
+parts are stored as the block stores them: `collection` is a slug; `relation` is
+`{ "of": "entry" | "item", "field" }`, a to-many relation of the page's entry or of the
+outer list's item; `filters` is a list of `{ "field", "op", "value" }` rows an entry must
+all meet, `op` one of `equals`, `not_equals`, `greater_than`, `greater_than_equal`,
+`less_than`, `less_than_equal`, `contains`, `in`, `not_in` and `exists`, and a day written
+`"2026-09-01"`; `sort` is comma-separated keys, `-` for descending (`"-publishedAt,title"`);
+`limit` is 1 to 100 and `offset` 0 or more. The write is judged as the editor's save is: a
+field the collection lacks or visitors can't see, a filter on a field holding several values
+and a related list nested more than one level deep are refused, in the words the editor
+shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
+
+## Change a component's definition
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/components/:id/definition
+Content-Type: application/json
+
+{ "action": { "kind": "add-variant", "label": "Dark" }, "dryRun": true }
+```
+
+Where the component store translates its definition field, an edit changes the default
+language's definition.
+
+The caller needs **update** on components; where `componentReadiness` names a collection
+of the site's own for them, the route edits that collection's document field and needs
+**update** there. Each edit is held to the rules of the
+component's own view: a variant's label is unique, ids are stable and never handed out
+twice, a removed field's id is never reused, and a value must fit its field.
+
+| `kind`                | Fields                                                 |
+| --------------------- | ------------------------------------------------------ |
+| `expose`              | `label`, `nodeId`, and `propPath` or `visibility`      |
+| `rename-exposure`     | `exposureId`, `label`                                  |
+| `retarget-exposure`   | `exposureId`, `nodeId`, and `propPath` or `visibility` |
+| `remove-exposure`     | `exposureId`                                           |
+| `remove-exposed-slot` | `slotId`                                               |
+| `add-variant`         | `label`                                                |
+| `rename-variant`      | `variantId`, `label`                                   |
+| `delete-variant`      | `variantId`                                            |
+| `set-variant-value`   | `variantId`, `exposureId`, `value`                     |
+| `reset-variant-value` | `variantId`, `exposureId`                              |
+
+The answer holds the `definition` as the edit leaves it, `targetId` (the field, slot or
+variant made or changed), `warnings`, and, when a removed field emptied variants,
+`prunedVariants`. A refused edit answers `422` with the planner's reason as the error
+code, such as `label-taken`.
+
+## Other routes with a dry run
+
+- `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save,
+  with `refusals` saying why the site would refuse it.
+- [Making a Layout the default and removing one](/docs/page-builder/layouts) both take
+  `dryRun`, and their answers carry `by`.
+- [Importing a file](/docs/page-builder/moving-between-sites#through-the-api) takes
+  `dryRun` and `expect` in the same way.
+
+## Validate and plan an action yourself
+
+The actions' schemas and planners are published from `@nextlyhq/builder/ops`, which
+loads on a server and in a browser alike. The routes parse their bodies with the same
+schemas, so an action the schema refuses is one the route refuses:
+
+```ts
+import {
+  definitionActionSchema,
+  pageActionSchema,
+  planDefinitionAction,
+} from "@nextlyhq/builder/ops";
+import { registryBlockSource } from "@nextlyhq/blocks-engine";
+
+const action = definitionActionSchema.parse({
+  kind: "add-variant",
+  label: "Dark",
+});
+// The edit the route would make to this definition, or the planner's refusal.
+const plan = planDefinitionAction(definition, action, {
+  definitions: registryBlockSource(),
+});
+```
+
+`pageActionJsonSchema()` and `definitionActionJsonSchema()` give the same schemas as
+JSON Schema, for a tool that registers them as inputs. The editor's planners are
+published there too: `planInsertPattern`, `planSaveAsPattern`, `planSaveAsComponent`,
+`planExposeProperty`, `planAddVariant` and the rest.
+
+## Call the actions from your own server code
+
+A plugin route serving a request of its own, such as an endpoint an agent connects to,
+reaches the same actions without an HTTP round trip, through the page builder's
+`composition` service:
+
+```ts
+import {
+  COMPOSITION_SERVICE,
+  PAGE_BUILDER_PLUGIN,
+  type CompositionService,
+} from "@nextlyhq/plugin-page-builder";
+
+// Inside your plugin's route handler, with its `ctx`:
+const composition = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[
+  COMPOSITION_SERVICE
+] as CompositionService;
+
+const manifest = await composition.manifest(ctx);
+const { message, item } = await composition.pageAction(ctx, {
+  page: { collection: "pages", id: pageId },
+  action: { kind: "choose-variant", instanceId, variant: "v-dark" },
+  dryRun: true,
+});
+```
+
+The first argument is the route context of the request being served: each call runs as
+that caller, with every check its route makes, the definition route's **update** right
+included, and answers what the route answers. A call with no signed-in caller is refused.
+Pass the context Nextly gave your handler, never one built by hand. Outside a plugin the
+service is `nextly.plugins["@nextlyhq/plugin-page-builder"].composition`.

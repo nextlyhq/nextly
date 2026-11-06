@@ -20,6 +20,7 @@
  * @module admin/editor/settings-dialog
  */
 import {
+  BASE_DEVICE_LABEL,
   BreakpointManager,
   EDITOR_WORDS,
   type BuilderShellProps,
@@ -56,6 +57,7 @@ import { AlertCircle, Check, Loader2, TriangleAlert } from "lucide-react";
 import {
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentProps,
   type JSX,
@@ -68,6 +70,10 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
+import {
+  pageAddressPath,
+  type PageAddressResponse,
+} from "../../pages-search-contract";
 import type { PublishReadinessResponse } from "../../publish-readiness-contract";
 import {
   askReadiness,
@@ -77,7 +83,10 @@ import {
   type PublishChoice,
 } from "../publish-offer";
 
+import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
+import type { SettingsAddress } from "./settings-address";
 import type { SharePreview } from "./share-preview";
+import { useBreakpointRemoval } from "./use-breakpoint-removal";
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -104,11 +113,19 @@ export interface SettingsDialogProps extends DialogState {
    * and a line says the SEO plugin adds them.
    */
   seoFields: boolean;
-  /** The site's breakpoints: what is saved, how to save, whether it is read. */
+  /**
+   * The page whose address to show, or null for a page never saved, which
+   * has no address to read yet.
+   */
+  address?: SettingsAddress | null;
+  /**
+   * The site's breakpoints: what is saved, how to save, whether it is read,
+   * and how to read the site's style again once a removal has changed it.
+   */
   breakpoints: Pick<
     ComponentProps<typeof BreakpointManager>,
     "value" | "onSave" | "status"
-  >;
+  > & { refresh: () => void };
 }
 
 /**
@@ -131,6 +148,7 @@ export function SettingsDialog({
   pageLayout = null,
   share,
   seoFields,
+  address = null,
   breakpoints,
 }: SettingsDialogProps): JSX.Element {
   const site = usePluginRoute<SiteSettingsRead>({
@@ -192,6 +210,11 @@ export function SettingsDialog({
                 pageLayout={pageLayout}
                 share={share}
                 seoFields={seoFields}
+                address={
+                  address === null ? null : (
+                    <AddressLine address={address} open={open} />
+                  )
+                }
               />
             </TabsContent>
             {siteTab ? (
@@ -207,6 +230,7 @@ export function SettingsDialog({
                   breakpoints={breakpoints}
                   onEditingBreakpoints={leave.setEditing}
                   onSavingBreakpoints={leave.setSaving}
+                  onClose={() => leave.request({ kind: "close" })}
                 />
               </TabsContent>
             ) : null}
@@ -305,11 +329,13 @@ function SiteTab({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onClose,
 }: {
   site: ReturnType<typeof usePluginRoute<SiteSettingsRead>>;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onClose: () => void;
 }): JSX.Element | null {
   if (site.data === undefined) {
     return site.error === null ? null : (
@@ -347,29 +373,108 @@ function SiteTab({
           site.refetch();
           return typeof answer === "string" ? answer : undefined;
         },
+        refresh: breakpoints.refresh,
       }}
       onEditingBreakpoints={onEditingBreakpoints}
       onSavingBreakpoints={onSavingBreakpoints}
+      onClose={onClose}
     />
   );
 }
 
 /**
- * The page's own fields, the Layout it is drawn inside, then how a shared link
- * to it would look.
+ * Where the page is served, as it is saved: read from the server, which
+ * resolves it as the pages search does, never built here from the slug, so
+ * it names the address visitors reach rather than a guess at it.
+ *
+ * A slug changed since the last save does not move it: the line says this is
+ * the saved address and that it changes when the page is saved. Nothing shows
+ * while it is read, or where the page has no address (another collection, a
+ * site that states none, a page whose fields cannot fill it yet).
+ */
+function AddressLine({
+  address,
+  open,
+}: {
+  address: SettingsAddress;
+  open: boolean;
+}): JSX.Element | null {
+  const read = usePluginRoute<PageAddressResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: pageAddressPath(address.page, address.locale),
+    staleTime: 0,
+    enabled: open,
+  });
+  // Read again after each save, whichever field it changed: the host's path
+  // can name more than the slug, and the query's own key would not move.
+  const { refetch } = read;
+  const revisionSeen = useRef(address.savedRevision);
+  useEffect(() => {
+    if (revisionSeen.current === address.savedRevision) return;
+    revisionSeen.current = address.savedRevision;
+    void refetch();
+  }, [address.savedRevision, refetch]);
+  if (read.data === undefined) {
+    return read.error === null ? null : (
+      <p className="text-xs text-muted-foreground">
+        {"This page's address could not be read."}
+      </p>
+    );
+  }
+  const path = read.data.path;
+  if (path === null) return null;
+  return (
+    // Drawn as the Address field's own line, right under it, rather than as
+    // a section of its own: it is the same address, written out in full.
+    <section
+      aria-label="Address on your site"
+      className="space-y-1 text-xs text-muted-foreground"
+    >
+      <p>
+        On your site:{" "}
+        <span
+          className="break-all font-mono text-sm text-foreground"
+          data-page-address=""
+        >
+          {path}
+        </span>
+      </p>
+      {address.slugChanged ? (
+        <p role="status">
+          This is the saved address. It changes when you save the page.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The page's own fields, its address, the Layout it is drawn inside, then how
+ * a shared link to it would look.
  */
 function ThisPage({
   pageFields,
   pageLayout,
   share,
   seoFields,
+  address,
 }: Pick<
   SettingsDialogProps,
   "pageFields" | "pageLayout" | "share" | "seoFields"
->): JSX.Element {
+> & {
+  /** The page's address line, or null where it has none to show. */
+  address: ReactNode | null;
+}): JSX.Element {
   return (
     <div className="space-y-6 pt-4">
-      {pageFields === null ? null : <section>{pageFields}</section>}
+      {/* The address line sits with the page's own fields, under the
+          Address field it writes out. */}
+      {pageFields === null && address === null ? null : (
+        <section className="space-y-2">
+          {pageFields}
+          {address}
+        </section>
+      )}
       {pageLayout ?? null}
       <section aria-labelledby="settings-share-title" className="space-y-2">
         <h3 id="settings-share-title" className="text-sm font-semibold">
@@ -430,13 +535,42 @@ function SiteSettings({
   breakpoints,
   onEditingBreakpoints,
   onSavingBreakpoints,
+  onClose,
 }: {
   read: SiteSettingsRead;
   reread: () => void;
   breakpoints: SettingsDialogProps["breakpoints"];
   onEditingBreakpoints: (editing: boolean) => void;
   onSavingBreakpoints: (saving: boolean) => void;
+  onClose: () => void;
 }): JSX.Element {
+  const { refresh, ...manager } = breakpoints;
+  const removal = useBreakpointRemoval({
+    current: manager.value,
+    save: async next => {
+      const answer = await manager.onSave(next);
+      return typeof answer === "string" ? answer : undefined;
+    },
+    removals: read.removals,
+    reread,
+    refreshStyle: refresh,
+  });
+  // The editor's own save is hidden under a removal's steps while they ask
+  // before saving: then leaving waits only on a request a step has out, and
+  // a confirmation on screen can be left, asking first as a draft is.
+  const [editorSaving, setEditorSaving] = useState(false);
+  const saving = removal.takesOver ? removal.inFlight : editorSaving;
+  useEffect(() => {
+    onSavingBreakpoints(saving);
+  }, [saving, onSavingBreakpoints]);
+  // Reloaded, the editor starts again from the stored set, with no draft.
+  const steps = {
+    ...removal,
+    reload: (): void => {
+      onEditingBreakpoints(false);
+      removal.reload();
+    },
+  };
   return (
     <div className="space-y-6 pt-4">
       <Alert variant="warning">
@@ -456,13 +590,35 @@ function SiteSettings({
           Widths your styles can change at. Each applies at that width and
           below.
         </p>
-        <BreakpointManager
-          {...breakpoints}
-          onEditingChange={onEditingBreakpoints}
-          onSavingChange={onSavingBreakpoints}
-        />
+        {removal.takesOver ? (
+          <RemovalStepPanel
+            removal={steps}
+            current={manager.value}
+            baseLabel={BASE_DEVICE_LABEL}
+            onClose={onClose}
+          />
+        ) : (
+          <RemovalStatusRow removal={steps} />
+        )}
+        {/* Kept mounted under a step, so Back returns to the draft as it was. */}
+        <div hidden={removal.takesOver}>
+          <BreakpointManager
+            key={removal.generation}
+            {...manager}
+            onSave={removal.save}
+            {...(removal.blocked === undefined
+              ? {}
+              : { blocked: removal.blocked })}
+            onEditingChange={editing => {
+              onEditingBreakpoints(editing);
+              removal.editing(editing);
+            }}
+            onSavingChange={setEditorSaving}
+          />
+        </div>
       </section>
-      <DefaultLayout read={read} reread={reread} />
+      {/* The step has the tab to itself while it asks or works. */}
+      {removal.takesOver ? null : <DefaultLayout read={read} reread={reread} />}
     </div>
   );
 }

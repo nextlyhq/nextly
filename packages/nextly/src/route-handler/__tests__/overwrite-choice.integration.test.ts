@@ -42,6 +42,8 @@ const NOTES = "ow_notes";
 const LOGGED = "ow_logged";
 /** Translated, so a save writes one language's row. */
 const DOCS = "ow_docs";
+/** Translated, with a status every language can be moved to at once. */
+const PAGES = "ow_pages";
 const SETTINGS = "ow_settings";
 
 const ANA = { id: "user-ow-ana", name: "Ana", email: "ana@ow.test" };
@@ -92,6 +94,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title", localized: true }),
           text({ name: "note", localized: false }),
         ],
+      }),
+      defineCollection({
+        slug: PAGES,
+        localized: true,
+        status: true,
+        access: OPEN,
+        fields: [text({ name: "title", localized: true })],
       }),
     ],
     singles: [
@@ -495,6 +504,43 @@ describe.each(getConfiguredTestDialects())(
       const [event] = await overwritesOf(t, subjectOf(DOCS, id));
       expect(event).toMatchObject({
         payload: { replaced: { kind: "person", id: CLEO.id } },
+      });
+    }, 120_000);
+
+    it("names whoever changed another language when an overwrite moves every language", async () => {
+      const t = await boot(dialect);
+      const id = String((await create(t, PAGES, { title: "en" })).id);
+      await saveAs(t, CLEO, PAGES, id, { title: "es", _overwrite: true }, "es");
+      // Read as every language, then Cleo changes only Spanish again.
+      const every = String(
+        docOf(
+          await t.nextly.findByID({
+            collection: PAGES as never,
+            id,
+            locale: "*",
+          } as never)
+        )._rev
+      );
+      await saveAs(t, CLEO, PAGES, id, { title: "es 2", _rev: every }, "es");
+
+      await saveAs(
+        t,
+        ANA,
+        PAGES,
+        id,
+        { status: "published", _rev: every, _overwrite: true },
+        "*"
+      );
+
+      // The sweep moved Spanish too, so the record reads every language's row
+      // as it stood before the write, not only the one a save would write.
+      const [event] = await overwritesOf(t, subjectOf(PAGES, id));
+      expect(event).toMatchObject({
+        actorId: ANA.id,
+        payload: {
+          given: "stale",
+          replaced: { kind: "person", id: CLEO.id },
+        },
       });
     }, 120_000);
 

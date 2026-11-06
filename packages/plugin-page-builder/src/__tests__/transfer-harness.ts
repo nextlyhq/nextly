@@ -112,29 +112,62 @@ export async function holding(
 
 /** POST to one of the plugin's routes. */
 export async function post(
-  cookie: string,
+  /** A session cookie, or an API key sent as a bearer token. */
+  as: string | { readonly bearer: string },
   route: readonly string[],
   body: unknown = {}
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  return call("POST", as, route, { body });
+}
+
+/**
+ * Call a plugin's route through Nextly's own request handler: this plugin's
+ * unless another is named, with a body for a POST.
+ */
+export async function call(
+  method: "GET" | "POST",
+  /** A session cookie, or an API key sent as a bearer token. */
+  as: string | { readonly bearer: string },
+  route: readonly string[],
+  options: {
+    readonly body?: unknown;
+    readonly plugin?: string;
+    readonly query?: string;
+  } = {}
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const handlers = createDynamicHandlers();
-  const url = `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}/${route.join("/")}`;
-  const response = await handlers.POST(
-    new Request(url, {
-      method: "POST",
-      headers: {
-        cookie: `${cookie}; nextly_csrf=${CSRF}`,
-        "x-csrf-token": CSRF,
-        origin: ORIGIN,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
+  const plugin = options.plugin ?? PAGE_BUILDER_PLUGIN_NAME;
+  const url = `${ORIGIN}/api/plugins/${plugin}/${route.join("/")}${options.query ?? ""}`;
+  const auth: Record<string, string> =
+    typeof as === "string"
+      ? { cookie: `${as}; nextly_csrf=${CSRF}`, "x-csrf-token": CSRF }
+      : { authorization: `Bearer ${as.bearer}` };
+  const context = {
+    params: Promise.resolve({
+      params: ["plugins", ...plugin.split("/"), ...route],
     }),
-    {
-      params: Promise.resolve({
-        params: ["plugins", ...PAGE_BUILDER_PLUGIN_NAME.split("/"), ...route],
-      }),
-    }
-  );
+  };
+  const response =
+    method === "GET"
+      ? await handlers.GET(
+          new Request(url, {
+            method: "GET",
+            headers: { ...auth, origin: ORIGIN },
+          }),
+          context
+        )
+      : await handlers.POST(
+          new Request(url, {
+            method: "POST",
+            headers: {
+              ...auth,
+              origin: ORIGIN,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(options.body ?? {}),
+          }),
+          context
+        );
   const text = await response.text();
   return {
     status: response.status,
@@ -174,7 +207,8 @@ export const SOURCE_BREAKPOINTS: BreakpointSet = {
 };
 
 /**
- * A source site: a shared style using a variable under a breakpoint, an image,
+ * A source site: a shared style using a variable under a breakpoint, an edit
+ * of the image's own look, an image,
  * two components (one placing the other), a pattern placing the outer one and
  * a Layout whose header is the outer one.
  */
@@ -196,8 +230,19 @@ export async function sourceSite(t: TestNextly): Promise<SourceSite> {
           styles: { base: { tablet: { color: { $token: "color.brand" } } } },
         },
         { id: "c-unused", slug: "unused", orderIndex: 1, styles: {} },
+        // The site's edit of the image's own look. It stays with this site:
+        // an export never carries it, nor the variable only it uses.
+        {
+          id: "look:core/image:square",
+          slug: "image-square",
+          orderIndex: 2,
+          blockType: "core/image",
+          isDefault: true,
+          styles: { base: { base: { color: { $token: "color.unused" } } } },
+        },
       ],
       breakpoints: SOURCE_BREAKPOINTS,
+      _overwrite: true,
     },
   });
   const media = await t.nextly.media.upload({

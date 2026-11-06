@@ -75,6 +75,39 @@ describe("generateMigration under per-language storage", () => {
     expect(sql).toContain(`CREATE TABLE IF NOT EXISTS "dc_notes_locales"`);
   });
 
+  // A file that seeds existing content records the language it is in, and a migration file must
+  // not depend on whichever database the developer reached: with the setting on and no
+  // `localization` block, the default is declared in the config or the file is refused.
+  it("refuses to seed existing content under the setting until the config declares its default language", async () => {
+    setPerLanguageStorage(false);
+    await generated(migrationsDir);
+    setPerLanguageStorage(true);
+    const seed = (defaultLocale?: string) =>
+      generateMigration({
+        name: "store_per_language",
+        dialect: "sqlite",
+        migrationsDir,
+        ...(defaultLocale === undefined ? {} : { defaultLocale }),
+        collections: [notes],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date("2026-10-31T12:00:00.000Z"),
+      });
+
+    await expect(seed()).rejects.toThrow(/declare `localization`/i);
+
+    await seed("fr");
+    const sql = (
+      await Promise.all(
+        (await readdir(migrationsDir))
+          .filter(f => f.endsWith(".sql"))
+          .map(f => readFile(resolve(migrationsDir, f), "utf-8"))
+      )
+    ).join("\n");
+    expect(sql).toContain(`'fr'`);
+  });
+
   it("generates it as before with the setting off", async () => {
     setPerLanguageStorage(false);
     const { mainColumns, sql } = await generated(migrationsDir);

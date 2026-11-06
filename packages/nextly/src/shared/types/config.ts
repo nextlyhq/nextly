@@ -1475,7 +1475,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.
     webhookAuditEnabled: config.webhooks?.audit ?? false,
-    // Only `true` turns it on, so a stray value never moves a site's storage.
-    perLanguageStorage: config.experimental?.perLanguageStorage === true,
+    // Only `true` turns it on, so a stray value never moves a site's storage. A config sanitized
+    // already, as the CLI sanitizes an export written with `defineConfig` again, carries the
+    // result instead of the `experimental` block, and keeps it.
+    perLanguageStorage:
+      config.experimental?.perLanguageStorage === true ||
+      (config as { perLanguageStorage?: unknown }).perLanguageStorage === true,
   };
 }

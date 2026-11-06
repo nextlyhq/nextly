@@ -10,8 +10,10 @@
  * reached the end; a write that re-queues a document during it sends the run
  * back to its converting walk.
  *
- * Every write is made as the person the run belongs to, writes only the blocks
- * field, and carries the hash of the value it was computed from, so a write
+ * Every write is made by the writer the run is walked with (as the person the
+ * run belongs to, or as the system for a run no one person owns), writes only
+ * the blocks field, and carries the hash of the value it was computed from, so
+ * a write
  * that would overwrite somebody's edit is refused and the host is read again
  * (see `expectations`). Doubt never reads as "nothing to do": a host that
  * cannot be read, read to the end, or addressed is reported as left.
@@ -31,7 +33,7 @@ import {
   type RewriteReport,
   type StepOutcome,
 } from "./contract";
-import type { DeletionRun, FenceStore } from "./fence";
+import type { RunPhase } from "./fence";
 import type { HostState, ProgressStore } from "./progress";
 import { scannedOutcomes } from "./scan";
 import { storedHash } from "./stored-hash";
@@ -51,6 +53,13 @@ export interface HostCandidate {
   readonly access: HostAccess;
   /** For a `scan`: the paths whose values have hosts of their own. */
   readonly excluded?: readonly (readonly string[])[];
+  /**
+   * Read in this language only because whether the value is stored per
+   * language is unknown: the same value read in two languages may be one
+   * stored value. Absent where the value is known to be stored per language,
+   * or where there is no language.
+   */
+  readonly maybeShared?: true;
 }
 
 /** One document and its hosts: every blocks field, in every language. */
@@ -88,6 +97,11 @@ export interface HostRead {
    * not public. Writing a public row means publishing it again in that state.
    */
   readonly liveState: string | null;
+  /**
+   * The row's version as this read gave it, which the write made from the
+   * read sends back; absent from a server that issues none.
+   */
+  readonly rev?: string;
 }
 
 /** Reads one host's stored forms, as the system. Throws when it cannot. */
@@ -103,6 +117,11 @@ export interface HostWrite {
   readonly publishAs?: string;
   /** The form the value was computed from, and its hash. */
   readonly expected: { readonly form: HostForm; readonly hash: string };
+  /**
+   * The row's version as it was read: sent with the write, so a save of the
+   * row since the read refuses the write, which the run reports as changed.
+   */
+  readonly rev?: string;
 }
 
 /** What a write came to. Anything unexpected is thrown. */
@@ -115,9 +134,36 @@ export type WriteResult =
 /** Makes one write as the person the run belongs to. */
 export type HostWriter = (write: HostWrite) => Promise<WriteResult>;
 
+/**
+ * A run as the walk reads it: which walk it is on, and where its final walk
+ * stopped. Every kind of run is walked by these alone, so a component's runs
+ * and a breakpoint removal's share one walk.
+ */
+export interface WalkedRun {
+  readonly id: string;
+  readonly phase: RunPhase;
+  /** Where the final walk stopped, or `null` before it started. */
+  readonly cursor: string | null;
+}
+
+/**
+ * The table a run is moved through, narrowed to what the walk asks of it: the
+ * run read again by id, and a phase moved by compare-and-set (see
+ * `FenceStore.advance` for the contract each store keeps).
+ */
+export interface RunStore {
+  runById(runId: string): Promise<WalkedRun | null>;
+  advance(
+    runId: string,
+    from: RunPhase,
+    to: RunPhase,
+    cursor: string | null
+  ): Promise<boolean>;
+}
+
 /** Everything a run is walked with. */
 export interface RewriteDeps {
-  readonly fence: Pick<FenceStore, "runById" | "advance">;
+  readonly fence: RunStore;
   readonly progress: Pick<ProgressStore, "record" | "all" | "reopenLeft">;
   readonly source: HostSource;
   readonly read: HostReader;
@@ -178,7 +224,7 @@ interface Walk {
   readonly deps: RewriteDeps;
   readonly args: RewriteArgs;
   readonly tally: Tally;
-  readonly run: DeletionRun;
+  readonly run: WalkedRun;
 }
 
 /**
@@ -332,8 +378,8 @@ async function finalWalk(walk: Walk): Promise<boolean> {
  */
 async function retryLeft(
   deps: RewriteDeps,
-  run: DeletionRun
-): Promise<DeletionRun | null> {
+  run: WalkedRun
+): Promise<WalkedRun | null> {
   if (!(await deps.progress.reopenLeft(run.id))) return null;
   return { ...run, phase: "converting", cursor: null };
 }
@@ -481,6 +527,7 @@ async function decideLive(
         ? { mode: "save" as const }
         : { mode: "publish" as const, publishAs: read.liveState }),
       expected: { form, hash: await storedHash(read.published.value) },
+      ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
 }
@@ -536,6 +583,7 @@ async function decideWithDraft(
       value: outcome.value,
       mode: "save",
       expected: { form: "draft", hash: await storedHash(draft.value) },
+      ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
 }

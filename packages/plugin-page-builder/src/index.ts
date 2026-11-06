@@ -234,3 +234,53 @@ export type { BlockRegistrationService } from "./blocks/registration-service";
 // Block authors take both from `@nextlyhq/plugin-sdk/blocks`, where the export
 // is covered by the SDK's stability ledger.
 export type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
+
+// The composition API's requests and answers, for a script or an agent that
+// calls the routes rather than the editor. Experimental, as the routes are.
+export {
+  DEFINITION_ACTIONS_ROUTE_PATH,
+  definitionActionPath,
+  PAGE_ACTIONS_ROUTE_PATH,
+} from "./composition-actions-contract";
+export type {
+  ActionPosition,
+  DefinitionAction,
+  DefinitionActionRequest,
+  DefinitionActionResult,
+  ExposureTargetInput,
+  ListQueryChange,
+  PageAction,
+  PageActionRequest,
+  PageActionResult,
+} from "./composition-actions-contract";
+export type { ActionBy } from "./component-actions-contract";
+export type { ActionAnswer } from "./composition-route-kit";
+// What a client reads before composing: the site's patterns, components and
+// Layouts by the ids the actions take, and the actions with their schemas.
+export {
+  compositionManifestSchema,
+  MANIFEST_FORMAT_VERSION,
+  MANIFEST_LOCALE_PARAM,
+  MANIFEST_ROUTE_PATH,
+} from "./composition-manifest";
+export type {
+  CompositionManifest,
+  ManifestAction,
+  ManifestComponent,
+  ManifestLayout,
+  ManifestPattern,
+  ManifestRequest,
+  ManifestTier,
+} from "./composition-manifest";
+// The same actions and manifest for code serving a request of its own, as
+// `nextly.plugins["@nextlyhq/plugin-page-builder"].composition`.
+export { COMPOSITION_SERVICE } from "./composition-service";
+export type {
+  CompositionCaller,
+  CompositionService,
+} from "./composition-service";
+export type {
+  SavePatternDryRun,
+  SavePatternDryRunResponse,
+  StoredPageAddress,
+} from "./library-contract";

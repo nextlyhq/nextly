@@ -52,6 +52,39 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly choiceStyle?: (choice: C) => React.CSSProperties | undefined;
   /** A class each entry carries beside the list's own. */
   readonly choiceClassName?: string;
+  /**
+   * How many entries the list holds before it offers a search, when a list
+   * needs a figure of its own rather than the pickers' shared one.
+   */
+  readonly searchFrom?: number;
+  /**
+   * Drawn between the search and the rows: a group with nothing to offer,
+   * said where its rows would be.
+   */
+  readonly leading?: React.ReactNode;
+}
+
+/**
+ * The entries matching `query`, ignoring case, in the order the rows are
+ * DRAWN: grouped, a list draws group by group, and the row it opens on and
+ * the one an arrow moves to have to be the ones the author sees there, not
+ * the next in the order they were given.
+ */
+function drawnChoices<C extends ListedChoice>(
+  choices: readonly C[],
+  query: string,
+  groups: ChoiceListProps<C>["groups"]
+): readonly C[] {
+  const needle = query.trim().toLowerCase();
+  const matching =
+    needle === ""
+      ? choices
+      : choices.filter(choice => choice.label.toLowerCase().includes(needle));
+  return groups === undefined
+    ? matching
+    : groups.flatMap(({ group }) =>
+        matching.filter(choice => choice.group === group)
+      );
 }
 
 export function ChoiceList<C extends ListedChoice>({
@@ -66,24 +99,13 @@ export function ChoiceList<C extends ListedChoice>({
   choiceTitle,
   choiceStyle,
   choiceClassName,
+  searchFrom = SEARCH_FROM,
+  leading,
 }: ChoiceListProps<C>): React.JSX.Element {
   const listId = React.useId();
   const [query, setQuery] = React.useState("");
-  const searchable = choices.length > SEARCH_FROM;
-  const needle = query.trim().toLowerCase();
-  const matching =
-    needle === ""
-      ? choices
-      : choices.filter(choice => choice.label.toLowerCase().includes(needle));
-  // In the order the rows are DRAWN: grouped, a list draws group by group,
-  // and the row it opens on and the one an arrow moves to have to be the
-  // ones the author sees there, not the next in the order they were given.
-  const shown =
-    groups === undefined
-      ? matching
-      : groups.flatMap(({ group }) =>
-          matching.filter(choice => choice.group === group)
-        );
+  const searchable = choices.length > searchFrom;
+  const shown = drawnChoices(choices, query, groups);
   const [active, setActive] = React.useState(() =>
     Math.max(
       0,
@@ -174,6 +196,7 @@ export function ChoiceList<C extends ListedChoice>({
           />
         </div>
       ) : null}
+      {leading}
       <ul
         ref={list}
         id={listId}

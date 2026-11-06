@@ -173,6 +173,7 @@ async function seedSwing(t: TestNextly): Promise<string> {
         kind: "component",
         nodes: [heading("s1")],
       },
+      _overwrite: true,
     },
     overrideAccess: true,
   });
@@ -297,7 +298,7 @@ describe.each(getConfiguredTestDialects())(
       t.nextly.update({
         collection: "posters" as never,
         id,
-        data: { hero } as never,
+        data: { hero, _overwrite: true } as never,
         overrideAccess: true,
       });
 
@@ -306,7 +307,7 @@ describe.each(getConfiguredTestDialects())(
       t.nextly.update({
         collection: "posters" as never,
         id,
-        data: { status: "published" } as never,
+        data: { status: "published", _overwrite: true } as never,
         overrideAccess: true,
       });
 
@@ -458,7 +459,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "banners" as never,
         id: String(made.item.id),
-        data: { badge: { title: "Held", probe: "seen" } } as never,
+        data: {
+          badge: { title: "Held", probe: "seen" },
+          _overwrite: true,
+        } as never,
         ...(locale === undefined ? {} : { locale }),
         overrideAccess: true,
       });

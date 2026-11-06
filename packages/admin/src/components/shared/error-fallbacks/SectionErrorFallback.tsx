@@ -4,6 +4,7 @@ import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type React from "react";
 
 import { AlertCircle, RefreshCw } from "@admin/components/icons";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 
 /**
  * SectionErrorFallback Component Props
@@ -22,7 +23,7 @@ export interface SectionErrorFallbackProps {
 
   /**
    * Optional title for the error message
-   * @default "Error loading section"
+   * @default "Error loading section", in the interface language
    */
   title?: string;
 
@@ -104,17 +105,19 @@ export interface SectionErrorFallbackProps {
 export function SectionErrorFallback({
   error,
   reset,
-  title = "Error loading section",
+  title,
   description,
   showDetails = true,
 }: SectionErrorFallbackProps): React.ReactElement {
-  const defaultDescription =
-    "An error occurred while loading this section. Please try again.";
+  // The fallback's own strings read in the interface language; a caller's
+  // title and description are shown as given.
+  const t = useT();
+  const defaultDescription = t("nextly.errors.section.description");
 
   return (
     <Alert variant="destructive" aria-live="assertive">
       <AlertCircle className="h-4 w-4" />
-      <AlertTitle>{title}</AlertTitle>
+      <AlertTitle>{title ?? t("nextly.errors.section.title")}</AlertTitle>
       <AlertDescription className="space-y-3">
         <p className="text-sm">{description || defaultDescription}</p>
 
@@ -122,7 +125,7 @@ export function SectionErrorFallback({
         {process.env.NODE_ENV === "development" && showDetails && error && (
           <details className="text-xs">
             <summary className="cursor-pointer font-medium">
-              Error details
+              {t("nextly.errors.section.details")}
             </summary>
             <pre className="mt-2 overflow-auto rounded-md bg-destructive/10 p-2">
               {error.message}
@@ -140,7 +143,7 @@ export function SectionErrorFallback({
               className="flex items-center gap-2"
             >
               <RefreshCw className="h-3 w-3" />
-              Try Again
+              {t("nextly.errors.section.retry")}
             </Button>
           </div>
         )}

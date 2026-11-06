@@ -215,6 +215,32 @@ describe("catalogFrom", () => {
     });
   });
 
+  it("offers a block once, not once per look", () => {
+    // A look (a variation with styles) and the block's own named look are
+    // picked for a block already on the page, so the Add panel lists the
+    // block, and its insert presets, and no row per look.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/card",
+        editor: {
+          variations: [
+            { name: "primary", label: "Primary", isDefault: true },
+            {
+              name: "outline",
+              label: "Outline",
+              styles: { base: { base: { color: "red" } } },
+            },
+            { name: "loud", props: { tone: "shout" } },
+          ],
+        },
+      },
+    ]);
+    expect(
+      entries.filter(each => each.kind === "block").map(each => each.id)
+    ).toEqual(["acme/card", "acme/card#loud"]);
+  });
+
   it("gives an entry its own props, so the definition cannot be reached through it", () => {
     const defaults = { tone: "plain" };
     const entries = catalog([

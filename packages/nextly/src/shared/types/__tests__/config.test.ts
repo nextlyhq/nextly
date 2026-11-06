@@ -47,6 +47,16 @@ describe("sanitizeConfig — per-language storage", () => {
       }).perLanguageStorage
     ).toBe(false);
   });
+
+  // The CLI sanitizes the config export again, and an export written with `defineConfig` is
+  // sanitized already: the setting must survive that, or the CLI lays tables out without it.
+  it("keeps the setting when an already-sanitized config is sanitized again", () => {
+    const once = sanitizeConfig({ experimental: { perLanguageStorage: true } });
+    expect(
+      sanitizeConfig(once as unknown as Parameters<typeof sanitizeConfig>[0])
+        .perLanguageStorage
+    ).toBe(true);
+  });
 });
 
 describe("preview config survives the boot pipeline", () => {

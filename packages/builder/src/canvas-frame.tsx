@@ -76,11 +76,7 @@ import {
   frameViewportOf,
   rootInFrameViewport,
 } from "./geometry-dom";
-import {
-  BUILDER_CHROME_CLASS,
-  CANVAS_ROOT_CLASS,
-  EMPTY_ELEMENTS_ATTRIBUTE,
-} from "./shell-state";
+import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "./shell-state";
 import { SiteChromeCues } from "./site-chrome-cues";
 
 /**
@@ -226,8 +222,6 @@ export interface CanvasFrameProps {
    * out, the page shows whatever the site applies by default.
    */
   theme?: string;
-  /** Whether empty containers draw their placeholder. Shown by default. */
-  showEmptyElements?: boolean;
   /**
    * The language the page's content is written in, as `lang` on the frame's
    * root element: a frame's document does not inherit the language of the
@@ -980,9 +974,10 @@ function useFrameViewport(
  * The markers on the frame's root element that rules inside the frame key on.
  *
  * - The site's theme, where a site's dark tokens are switched by it.
- * - The editor chrome class with the shell's empty-elements preference, so
- *   the one selector that decides whether an empty container shows its
- *   placeholder answers the same in the frame as in the editor's document.
+ * - The editor chrome class, so the one selector that gives an empty
+ *   container its placeholder answers the same in the frame as in the
+ *   editor's document. Empty containers always show, so nothing else about
+ *   them is stated.
  * - The admin's tokens the page's own chrome reads (see `usePageTokens`).
  * - The page's language and direction: those named, else the page's own, else
  *   the editor document's, so a site page keeps the language it states.
@@ -990,12 +985,7 @@ function useFrameViewport(
 function usePageMarkers(
   frame: HTMLIFrameElement | null,
   page: Document | null,
-  {
-    theme,
-    showEmptyElements = true,
-    lang,
-    dir,
-  }: Pick<CanvasFrameProps, "theme" | "showEmptyElements" | "lang" | "dir">
+  { theme, lang, dir }: Pick<CanvasFrameProps, "theme" | "lang" | "dir">
 ): void {
   usePageTokens(frame, page);
   useIsomorphicLayoutEffect(() => {
@@ -1006,14 +996,9 @@ function usePageMarkers(
     // Named, the editor's theme; otherwise whatever the page itself states,
     // which on a page the site serves is the site's own, live mode.
     stateMarker(root, "data-nx-theme", theme);
-    stateAttribute(
-      root,
-      EMPTY_ELEMENTS_ATTRIBUTE,
-      showEmptyElements ? undefined : "hidden"
-    );
     stateMarker(root, "lang", lang, editorRoot?.lang);
     stateMarker(root, "dir", dir, editorRoot?.dir);
-  }, [frame, page, theme, showEmptyElements, lang, dir]);
+  }, [frame, page, theme, lang, dir]);
 }
 
 /**
@@ -1092,6 +1077,28 @@ const PAGE_CHROME_TOKENS: readonly {
   {
     selector: `.nx-canvas-region__content, [${SITE_CHROME_ATTRIBUTE}]`,
     tokens: ["--nx-builder-region-opacity"],
+  },
+  {
+    // A collection list's note to its author holds the admin's words alone,
+    // so it may take the admin's face as well as its colours.
+    selector: "[data-nx-list-diagnostic]",
+    tokens: [
+      // The focus ring of the note's one action.
+      "--nx-builder-select",
+      "--nx-builder-warning",
+      "--nx-builder-danger",
+      "--nx-builder-surface-raised",
+      "--nx-builder-text",
+      "--nx-builder-scheme",
+      "--font-sans",
+      "--radius-sm",
+    ],
+  },
+  {
+    // A list drawing its empty state holds the site's content, so its tag
+    // reads only the editor's own names.
+    selector: "[data-nx-list-shows]",
+    tokens: ["--nx-builder-select", "--nx-builder-select-text"],
   },
   {
     selector: ".nx-canvas-region__badge, .nx-canvas-region__tag",

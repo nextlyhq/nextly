@@ -169,7 +169,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { content: hero(["body"]), status: "published" },
+        data: {
+          content: hero(["body"]),
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
     }
@@ -180,7 +184,10 @@ describe.each(getConfiguredTestDialects())(
       const noteId = await note(t, heroId);
       await t.nextly.updateSingle({
         slug: HOMEPAGE,
-        data: { content: page(heroId, { title: "Old", body: "Kept" }) },
+        data: {
+          content: page(heroId, { title: "Old", body: "Kept" }),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
 
@@ -201,6 +208,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           title: "Edited",
           content: page(heroId, { title: "Old", body: "Kept" }),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -211,7 +219,10 @@ describe.each(getConfiguredTestDialects())(
       // So does a Single's.
       await t.nextly.updateSingle({
         slug: HOMEPAGE,
-        data: { content: page(heroId, { title: "Old", body: "Kept" }) },
+        data: {
+          content: page(heroId, { title: "Old", body: "Kept" }),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       const single = (await t.nextly.findSingle({
@@ -249,7 +260,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { content: exposing([]), status: "published" },
+        data: { content: exposing([]), status: "published", _overwrite: true },
         overrideAccess: true,
       });
 
@@ -272,7 +283,10 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id: noteId,
-            data: { content: page(heroId, { title: "Old", body: "Kept" }) },
+            data: {
+              content: page(heroId, { title: "Old", body: "Kept" }),
+              _overwrite: true,
+            },
           },
         ]
       );
@@ -292,7 +306,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: heroId,
-        data: { content: hero(["body"]) },
+        data: { content: hero(["body"]), _overwrite: true },
         overrideAccess: true,
       });
 
@@ -300,7 +314,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: NOTES,
         id: noteId,
-        data: { content: page(heroId, { title: "Old", body: "Kept" }) },
+        data: {
+          content: page(heroId, { title: "Old", body: "Kept" }),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       expect(overridesOf((await storedNote(t, noteId)).content)).toEqual({
@@ -318,7 +335,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: heroId,
-        data: { content: hero(["title", "body"]), status: "published" },
+        data: {
+          content: hero(["title", "body"]),
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
 
@@ -356,7 +377,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: NOTES,
         id: noteId,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
 

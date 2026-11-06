@@ -126,6 +126,10 @@ describe("the adapter transaction the plugin context hands the store", () => {
       async afterCommit(effect: () => unknown): Promise<void> {
         await effect();
       }
+      // Outside any transaction, so the write is not refused.
+      transactionOpenInFlow(): boolean {
+        return false;
+      }
     }
     const adapter = new Adapter();
     const db = {

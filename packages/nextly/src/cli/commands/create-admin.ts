@@ -62,6 +62,7 @@ import {
   superAdminRoleHeld,
 } from "../../domains/users/services/last-super-admin";
 import { NextlyError } from "../../errors/nextly-error";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { failWithError, printCliError, type CliError } from "../errors";
 import {
   adminEmailInUse,
@@ -76,7 +77,11 @@ import {
 // Types only: the program hands this module its context factory, so this
 // module adds no runtime import of the program that registers it.
 import type { CommandContext, GlobalOptions } from "../program";
-import { createCliAdapter } from "../utils/adapter";
+import {
+  createCliAdapter,
+  openDryRunAdapter,
+  type MissingDatabase,
+} from "../utils/adapter";
 import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import { answered } from "../utils/prompt-cancelled";
@@ -154,6 +159,36 @@ export async function createFirstAdministrator(
   } finally {
     await claim.release();
   }
+}
+
+/**
+ * What creating the first administrator would do, asked through the same
+ * steps and written by none of them: no setup claim is taken, so a web setup
+ * running at the same moment is not seen. Each refusal is the real run's, in
+ * its words.
+ */
+export async function previewFirstAdministrator(
+  setup: FirstAdminSetup,
+  details: FirstAdminDetails
+): Promise<DryRunPlan> {
+  const refusal = (await setup.administratorExists())
+    ? REFUSALS["administrator-exists"]()
+    : (await setup.accountExists(details.email))
+      ? REFUSALS["email-in-use"]()
+      : undefined;
+  if (refusal) return { changes: [], refusals: [refusal.what] };
+  return {
+    changes: [
+      {
+        action: "write",
+        target: `the first administrator, ${details.email}, with the super-admin role and its permissions`,
+      },
+      { action: "remove", target: "the setup token, spent" },
+    ],
+    notes: [
+      "A dry run takes no setup claim, so a web setup running at the same moment is not seen.",
+    ],
+  };
 }
 
 /** The narrow view of the query builder the email check reads through. */
@@ -258,14 +293,24 @@ export interface CreateAdminIo {
    * with exit 130 rather than returning.
    */
   ask(message: string): Promise<string | null>;
-  /** Connect to the install's database: its steps, and how to let it go. */
-  connect(): Promise<{ setup: FirstAdminSetup; close(): Promise<void> }>;
+  /**
+   * Connect to the install's database: its steps, and how to let it go.
+   * `readOnly` opens it as a dry run does, and a database that is not there
+   * comes back as `missing` instead of being made.
+   */
+  connect(
+    readOnly?: boolean
+  ): Promise<
+    { setup: FirstAdminSetup; close(): Promise<void> } | MissingDatabase
+  >;
 }
 
 /** The flags the command takes. There is no password flag, by design. */
 export interface CreateAdminOptions {
   email?: string;
   name?: string;
+  /** `--dry-run`: run the checks and name what would be created, create nothing. */
+  dryRun?: boolean;
 }
 
 const EmailSchema = z.string().trim().email();
@@ -348,14 +393,39 @@ export async function runCreateAdmin(
 ): Promise<number> {
   const { logger } = context;
   const details = await gatherDetails(options, io);
-  if ("problem" in details) return refuse(logger, details.problem);
-  const connection = await io.connect();
+  if ("problem" in details) {
+    // A dry run names it as the real run's refusal, and exits 0.
+    if (options.dryRun === true) {
+      reportDryRun(logger, { changes: [], refusals: [details.problem.what] });
+      return 0;
+    }
+    return refuse(logger, details.problem);
+  }
+  const dryRun = options.dryRun === true;
+  const connection = await io.connect(dryRun);
+  // A dry run whose database is not there names that as the refusal.
+  if ("missing" in connection) {
+    reportDryRun(logger, { changes: [], refusals: [connection.missing] });
+    return 0;
+  }
   try {
     // The connect loads the install's config, which publishes the configured
     // minimum the password rule judges against — so the check runs after it,
     // not before, or an install that raised its minimum would be judged by
     // the default.
     const strength = validatePasswordStrength(details.password);
+    if (dryRun) {
+      reportDryRun(
+        logger,
+        strength.ok
+          ? await previewFirstAdministrator(connection.setup, details)
+          : {
+              changes: [],
+              refusals: [adminPasswordTooWeak(strength.errors).what],
+            }
+      );
+      return 0;
+    }
     if (!strength.ok) {
       return refuse(logger, adminPasswordTooWeak(strength.errors));
     }
@@ -374,10 +444,12 @@ export async function runCreateAdmin(
  * Connect to the database the install's environment names, with the system
  * tables registered so the account services can resolve them.
  */
-export async function connectToInstall(context: CommandContext): Promise<{
-  setup: FirstAdminSetup;
-  close(): Promise<void>;
-}> {
+export async function connectToInstall(
+  context: CommandContext,
+  readOnly = false
+): Promise<
+  { setup: FirstAdminSetup; close(): Promise<void> } | MissingDatabase
+> {
   const { logger } = context;
   // The config first, as every command that reads the database loads it: it
   // publishes the configured PostgreSQL schema the connection resolves in, so
@@ -398,10 +470,16 @@ export async function connectToInstall(context: CommandContext): Promise<{
   const database = databaseEnvOrThrow();
   const dialectSetting = database.dialect;
   // A failure here already carries its code: `createCliAdapter` gives it one.
-  const cli = await createCliAdapter({
+  // A dry run opens read-only, and a database that is not there is answered.
+  const connection = {
     dialect: dialectSetting,
     databaseUrl: database.databaseUrl,
-  });
+  };
+  const opened = readOnly
+    ? await openDryRunAdapter(connection)
+    : await createCliAdapter(connection);
+  if ("missing" in opened) return opened;
+  const cli = opened;
   const adapter = cli as unknown as DrizzleAdapter;
   const { dialect } = adapter.getCapabilities();
   const registry = new SchemaRegistry(dialect);
@@ -426,7 +504,7 @@ function processIo(context: CommandContext): CreateAdminIo {
     // Ctrl+C at either prompt ends the run with exit 130 (`answered`).
     askSecret: async message => answered(await p.password({ message })),
     ask: async message => answered(await p.text({ message })),
-    connect: () => connectToInstall(context),
+    connect: readOnly => connectToInstall(context, readOnly),
   };
 }
 

@@ -51,6 +51,8 @@ let writeBehaviour: () => Promise<unknown> = async () => ({ id: "1" });
  */
 let issuesAnswer: readonly ValidationIssue[] = [];
 const writes: Record<string, unknown>[] = [];
+/** Whether each write, in order, said to overwrite; kept apart from `writes`. */
+const overwrites: unknown[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
@@ -58,6 +60,8 @@ let refetches = 0;
 let readFails = false;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
+/** What the form's storing gate was handed to wait for, in order. */
+const tracked: { label: string; settled: Promise<unknown> }[] = [];
 
 // The stored style arrives through the editor's one read of the plugin's
 // route; that read's own request is asserted in `site-style-read.test`.
@@ -86,8 +90,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return writeBehaviour();
   },
   validationIssues: () => issuesAnswer,
-  // The form's storing gate, absent here: nothing is tracked.
-  useTrackedWrite: () => () => {},
+  // The form's storing gate, recording each write it is handed to wait for.
+  useTrackedWrite: () => (label: string, settled: Promise<unknown>) => {
+    tracked.push({ label, settled });
+  },
   readPluginRoute: async () => undefined,
   useUpdateSingleDocument: (
     _slug: string,
@@ -97,7 +103,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     writeOptions = options;
     return {
       mutateAsync: async (data: Record<string, unknown>) => {
-        writes.push(data);
+        const { _overwrite, ...sections } = data;
+        overwrites.push(_overwrite);
+        writes.push(sections);
         return writeBehaviour();
       },
       isPending: false,
@@ -132,10 +140,12 @@ beforeEach(() => {
   writeBehaviour = async () => ({ id: "1" });
   issuesAnswer = [];
   writes.length = 0;
+  overwrites.length = 0;
   routeWrites.length = 0;
   refetches = 0;
   readFails = false;
   writeOptions = undefined;
+  tracked.length = 0;
 });
 
 describe("reading the site style", () => {
@@ -237,6 +247,61 @@ describe("saving the space between blocks", () => {
     });
     expect(verdict).toMatchObject({ saved: false });
     expect(refetches).toBe(0);
+  });
+});
+
+describe("a save across two studios", () => {
+  it("stores both sections, refusing neither", async () => {
+    // A page save releases each studio's held edit at once. The server is
+    // modelled as the Single's update judges a write: one that names neither
+    // the current version nor an overwrite is refused. Both writes are this
+    // editor's, so both must be stored.
+    let current = 3;
+    readAnswer = {
+      data: {
+        tokens: null,
+        fonts: null,
+        classes: null,
+        breakpoints: null,
+        _rev: "3",
+      },
+      isPending: false,
+      error: null,
+    };
+    writeBehaviour = async () => {
+      const sent = writes[writes.length - 1] ?? {};
+      const overwrite = overwrites[overwrites.length - 1];
+      if (overwrite !== true && sent._rev !== String(current)) {
+        throw Object.assign(
+          new Error("This document changed since the version you gave."),
+          {
+            status: 409,
+            code: "STALE_VERSION",
+            data: { currentVersion: String(current) },
+          }
+        );
+      }
+      current += 1;
+      return { id: "1", _rev: String(current) };
+    };
+    const tokens = renderHook(() => useSaveSiteStyle());
+    const fonts = renderHook(() => useSaveSiteStyle());
+
+    let results: unknown[] = [];
+    await act(async () => {
+      results = await Promise.all([
+        tokens.result.current.save("tokens", { tokens: [] }),
+        fonts.result.current.save("fonts", []),
+      ]);
+    });
+
+    expect(results).toEqual([
+      { saved: true, issues: {} },
+      { saved: true, issues: {} },
+    ]);
+    // Last writer wins, on purpose: each write says so, and names no version.
+    expect(writes).toEqual([{ tokens: { tokens: [] } }, { fonts: [] }]);
+    expect(overwrites).toEqual([true, true]);
   });
 });
 
@@ -661,6 +726,30 @@ describe("a save inside the editor, as a step of its history", () => {
       await steps[0]?.undo();
     });
     expect(writes.at(-1)).toEqual({ classes: [] });
+  });
+
+  it("hands the storing gate a correction back to the stored value, after a refusal", async () => {
+    // A refused save leaves the form's gate holding a refusal. Typing the
+    // stored value back is a save like any other to the gate: tracked, so
+    // the gate's latest word on the section is that it saved, and Save works.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    writeBehaviour = async () => {
+      throw new Error("refused");
+    };
+    await act(async () => {
+      await result.current.save("classes", [{ id: "a", slug: "a" }]);
+    });
+    const refused = tracked.length;
+    expect(refused).toBeGreaterThan(0);
+
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      await result.current.save("classes", []);
+    });
+    expect(tracked.length).toBe(refused + 1);
+    await expect(tracked.at(-1)?.settled).resolves.toBeUndefined();
   });
 
   it("records no step for a save that leaves the section as it was", async () => {

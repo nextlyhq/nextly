@@ -389,18 +389,22 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await expect(field).toHaveText(HEADING);
   },
   10: async page => {
-    const field = await fieldOf(page, "ea-heading", "text");
-    await editField(page, "ea-heading", "text");
-    await page.keyboard.type("Discard me");
-    await expect(field).toHaveText("Discard me");
+    // Inside a section, so the second Escape has a parent to select.
+    const field = await fieldOf(page, "ea-inner", "text");
+    await editField(page, "ea-inner", "text");
+    await page.keyboard.type(" kept");
+    await expect(field).toContainText("kept");
     await page.keyboard.press("Escape");
+    // The edit ends with the words kept, and the block still selected.
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
-    await expect(field).toHaveText(HEADING);
-    // Cancelling wrote nothing: an undo now has nothing of this edit to bring
-    // back, where a cancel that wrote the words and then wrote the old ones
-    // over them would surface "Discard me" here.
+    await expect(field).toContainText("kept");
+    await expect.poll(() => selection(page)).toEqual(["ea-inner"]);
+    // The second Escape goes up a level, as it does with no edit open.
+    await page.keyboard.press("Escape");
+    await expect.poll(() => selection(page)).toEqual(["ea-section"]);
+    // Written once, through the store: one undo takes the words back.
     await page.keyboard.press(UNDO);
-    await expect(field).toHaveText(HEADING);
+    await expect(field).toHaveText("Inside the section");
   },
   11: async page => {
     const field = await fieldOf(page, "ea-first", "text");
@@ -455,10 +459,10 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await page.keyboard.type("zzz");
     await expect(field).toContainText("zzz");
     await page.keyboard.press("Escape");
+    // The edit ends with the words kept, rendered back from what was stored.
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
-    await expect(field).not.toContainText("zzz");
-    expect(await field.innerHTML()).toBe(before);
-    // And left no history behind, as for plain text.
+    await expect(field).toContainText("zzz");
+    // Written once: one undo puts the passage back as it was.
     await page.keyboard.press(UNDO);
     await expect(field).not.toContainText("zzz");
     expect(await field.innerHTML()).toBe(before);
