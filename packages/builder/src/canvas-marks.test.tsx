@@ -23,6 +23,7 @@ import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { Canvas } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
+import { markLookReach } from "./look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 
 /**
@@ -304,6 +305,25 @@ describe("selection marks", () => {
     expect(
       halosIn(container).map(mark => mark.hasAttribute("data-locked"))
     ).toEqual([true, false]);
+  });
+
+  it("draws a dashed reach mark on each block a look edit reaches, and clears it", async () => {
+    const { container } = render(
+      <Canvas
+        document={leaves}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId={null}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    const reachIn = () =>
+      container.querySelectorAll('.nx-canvas-mark[data-mark="look-reach"]');
+    // What the inspector writes while a look is edited on its own.
+    act(() => markLookReach(container, new Set(["a", "b"])));
+    await waitFor(() => expect(reachIn()).toHaveLength(2));
+    act(() => markLookReach(container, null));
+    await waitFor(() => expect(reachIn()).toHaveLength(0));
   });
 
   it("marks a placement's exposed parts, but not one that is selected", async () => {

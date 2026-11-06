@@ -236,10 +236,12 @@ export interface ContentServices {
   ) => Promise<ListEntriesCount | undefined>;
   /**
    * The collection the document being edited is an entry of, so a list on
-   * it can show the entry's related entries. Absent where the document is
-   * not a collection's entry, such as a Single.
+   * it can show the entry's related entries. `null` where the document is
+   * known to be no collection's entry, such as a Single, so a list there
+   * showing the entry's related entries is refused as the save refuses it;
+   * absent where that is not known.
    */
-  readonly entryCollection?: string;
+  readonly entryCollection?: string | null;
   /**
    * A media item by its id, read with the signed-in author's own access, so a
    * stored file is shown by its picture and name rather than as "a file".

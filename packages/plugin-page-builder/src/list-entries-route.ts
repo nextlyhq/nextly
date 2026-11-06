@@ -19,6 +19,11 @@
  *
  * @module list-entries-route
  */
+import {
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
+  readListQuery,
+} from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 import { z } from "nextly/zod";
@@ -36,6 +41,48 @@ const FIELD = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 
 /** One literal a filter compares with. */
 const SCALAR = z.union([z.string(), z.number().finite(), z.boolean()]);
+
+/**
+ * Whether a sort as sent is within the bounds the engine holds a stored sort
+ * to: a string no longer than a stored sort, or a list of no more keys than
+ * one sorts by. Asked of the value as it arrives, before any of it is read.
+ */
+function withinSortBounds(sort: unknown): boolean {
+  if (typeof sort === "string") return sort.length <= LIST_MAX_SORT_LENGTH;
+  return !Array.isArray(sort) || sort.length <= LIST_MAX_SORT_KEYS;
+}
+
+/**
+ * A sort as a list stores it, judged by the engine's own reading of a stored
+ * sort (`readListQuery`), in the string form or the one-key-per-entry list
+ * form, read as the same keys joined. The bounds that reading holds a stored
+ * sort to are checked first and stop the check there, so a sort past them is
+ * refused before its keys are parsed, joined or read: the length of the
+ * string, the number of keys in a list, and the length of each key.
+ */
+const SORT = z
+  .unknown()
+  .refine(withinSortBounds, {
+    message: "The sort is longer than any a list stores.",
+    abort: true,
+  })
+  .pipe(
+    z.union([
+      z.string(),
+      z.array(
+        z.string().max(LIST_MAX_SORT_LENGTH, {
+          message: "A sort key is longer than any a list stores.",
+          abort: true,
+        })
+      ),
+    ])
+  )
+  .refine(
+    sort =>
+      readListQuery({ sort: typeof sort === "string" ? sort : sort.join(",") })
+        .problems.length === 0,
+    { message: "The sort is not one a list stores." }
+  );
 
 /**
  * The read, as the renderer sends it. Bounded as the reader bounds it, so a
@@ -59,9 +106,7 @@ const ListEntriesBody = z
           // A list's own rows, and the `in` row a related list adds.
           .max(21)
           .optional(),
-        sort: z
-          .union([z.string().max(1000), z.array(z.string()).max(50)])
-          .optional(),
+        sort: SORT.optional(),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
         page: z.number().int().min(1).optional(),

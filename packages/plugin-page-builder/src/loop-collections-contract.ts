@@ -22,6 +22,22 @@ import type { PaginationMeta } from "nextly";
 /** Where the inspector lists a loop's collections, under this plugin's namespace. */
 export const LOOP_COLLECTIONS_ROUTE_PATH = "/loop-collections";
 
+/** The query the route takes: the language the fields are judged in. */
+export const LOOP_COLLECTIONS_PARAMS = { locale: "locale" } as const;
+
+/**
+ * The route's path, asking in `locale`, the language being edited: a field's
+ * public read rule may depend on the language, and a save judges the page's
+ * lists in the language it writes, so the menu offers what that save takes.
+ */
+export function loopCollectionsPath(locale?: string): string {
+  if (locale === undefined || locale === "") return LOOP_COLLECTIONS_ROUTE_PATH;
+  const params = new URLSearchParams({
+    [LOOP_COLLECTIONS_PARAMS.locale]: locale,
+  });
+  return `${LOOP_COLLECTIONS_ROUTE_PATH}?${params.toString()}`;
+}
+
 /** One choice of a choice field, as stored and as an author reads it. */
 export interface LoopFieldOption {
   readonly value: string;

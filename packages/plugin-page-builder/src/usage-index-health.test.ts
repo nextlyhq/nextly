@@ -127,6 +127,7 @@ describe("reading how much of the index is there", () => {
     // gets an exact count rather than a floor.
     const { read } = reader({ bucketCount: 0, truncated: false });
     const scope = {
+      scope: "collection",
       entity: "pages",
       field: "content",
       locale: "",
@@ -159,6 +160,7 @@ describe("reading how much of the index is there", () => {
     // was supplied" would satisfy it while reporting a half-walked site whole.
     const { read } = reader({ bucketCount: 0, truncated: false });
     const walked = {
+      scope: "collection",
       entity: "pages",
       field: "content",
       locale: "",
@@ -192,6 +194,7 @@ describe("reading how much of the index is there", () => {
     // different remedies, and only this one never resolves on its own.
     const { read } = reader({ bucketCount: 0, truncated: false });
     const scope = {
+      scope: "collection",
       entity: "pages",
       field: "content",
       locale: "",
@@ -237,6 +240,7 @@ describe("reading how much of the index is there", () => {
       return { buckets: [], truncated: false };
     };
     const scope = {
+      scope: "collection",
       entity: "pages",
       field: "content",
       locale: "",
@@ -268,6 +272,7 @@ describe("reading how much of the index is there", () => {
 
 describe("a failed maintenance write, and a derivation that moved", () => {
   const scope = {
+    scope: "collection",
     entity: "pages",
     field: "content",
     locale: "",

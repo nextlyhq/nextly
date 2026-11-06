@@ -405,6 +405,8 @@ describe("the runner's own writes after a unit's statements", () => {
     const pg = new PgDialect();
     const fake = {
       getCapabilities: () => ({ dialect }),
+      // No transaction is open around the unit, so it may run.
+      transactionOpenInFlow: () => false,
       transaction: async <T>(
         work: (ctx: {
           execute: (statement: string) => Promise<unknown[]>;

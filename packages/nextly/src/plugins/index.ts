@@ -67,6 +67,16 @@ export type {
   TxOption,
 } from "./security/one-time-secrets";
 export type { OpaqueSecrets } from "./security/opaque-secrets";
+export {
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type PluginReceivedWebhooks,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
+} from "./security/inbound-webhooks";
 
 // What each hook point carries, by name; a plugin augments the map.
 export type {
@@ -120,6 +130,8 @@ export type {
   PluginDocumentView,
   PluginFieldTypeDocumentView,
   PluginAdminPlaceDeclaration,
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";

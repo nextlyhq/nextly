@@ -55,12 +55,14 @@ export interface UsageRun {
 }
 
 /** The bookkeeping as health reads it, from one snapshot. */
-export interface UsageBookkeepingSnapshot {
+export interface UsageBookkeepingSnapshot<TProbe> {
   /** The derivation the current run walks under, or `null` when none started. */
   generation: string | null;
   dirty: boolean;
   /** The scope keys the current run has walked whole. */
   done: ReadonlySet<string>;
+  /** What the caller's own read found, in the same snapshot. */
+  probed: TProbe;
 }
 
 /** The bookkeeping's operations. Every write that belongs to a pass is fenced. */
@@ -77,15 +79,24 @@ export interface UsageBookkeeping {
   /** Clear the dirty mark, once the run has walked every scope. Fenced. */
   finish(token: string): Promise<void>;
   /**
-   * Run a write made outside these tables (an index row through the Direct
-   * API) only while `token` is current, holding the run row for its length so
-   * a newer run cannot start until it has landed.
+   * Run an index write only while `token` is current, in the transaction that
+   * checks it, holding the run row for its length so a newer run cannot start
+   * until it has landed. The write goes through `tx`, so it commits with the
+   * check or not at all.
    */
-  fenced<T>(token: string, write: () => Promise<T>): Promise<T>;
+  fenced<T>(
+    token: string,
+    write: (tx: PluginTransaction) => Promise<T>
+  ): Promise<T>;
   /** A maintenance write failed: mark the index dirty and start a new run. */
   markDirty(): Promise<void>;
-  /** The bookkeeping health reads, all from one snapshot. */
-  snapshot(): Promise<UsageBookkeepingSnapshot>;
+  /**
+   * The bookkeeping health reads, and `probe`'s own read of the index rows,
+   * all from one snapshot, so the rows are the ones the recorded run left.
+   */
+  snapshot<TProbe>(
+    probe: (tx: PluginTransaction) => Promise<TProbe>
+  ): Promise<UsageBookkeepingSnapshot<TProbe>>;
 }
 
 /** The refusal a replaced pass's write meets. */
@@ -166,6 +177,19 @@ async function dropOtherRuns(
 ): Promise<void> {
   const p = tx.table(usageProgress);
   await tx.delete(usageProgress).where(ne(p.token, token));
+}
+
+/**
+ * Forget every run's progress on one scope, through the transaction it is
+ * handed: for a scope that no longer exists, so one that comes back under the
+ * same key is walked again rather than read as walked.
+ */
+export async function forgetScopeProgress(
+  tx: Pick<PluginTransaction, "delete" | "table">,
+  scopeKey: string
+): Promise<void> {
+  const p = tx.table(usageProgress);
+  await tx.delete(usageProgress).where(eq(p.scopeKey, scopeKey));
 }
 
 /** One scope's progress row, written whether or not it exists yet. */
@@ -282,7 +306,7 @@ export function usageBookkeeping(
           .where(onlyWhen(eq(r.name, RUN), eq(r.token, token)));
       }),
 
-    fenced: (token, write) => fencedWrite(token, () => write()),
+    fenced: (token, write) => fencedWrite(token, write),
 
     markDirty: () =>
       retryOnFirstInsert(dialect, () =>
@@ -312,12 +336,17 @@ export function usageBookkeeping(
         })
       ),
 
-    snapshot: () =>
+    snapshot: probe =>
       db.transaction(
         async tx => {
           const row = await readRun(tx);
           if (row === null) {
-            return { generation: null, dirty: false, done: new Set<string>() };
+            return {
+              generation: null,
+              dirty: false,
+              done: new Set<string>(),
+              probed: await probe(tx),
+            };
           }
           const p = tx.table(usageProgress);
           const rows = await tx
@@ -328,11 +357,13 @@ export function usageBookkeeping(
             generation: row.generation,
             dirty: row.dirty,
             done: new Set(rows.map(progress => progress.scopeKey)),
+            probed: await probe(tx),
           };
         },
         // Every read above from one moment. At READ COMMITTED a run started
         // between reading the run row and its progress would pair one run's
-        // row with another's progress.
+        // row with another's progress, and the index rows probed after them
+        // could be a later run's.
         { isolation: "snapshot" }
       ),
   };

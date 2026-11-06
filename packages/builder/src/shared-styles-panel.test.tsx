@@ -172,7 +172,7 @@ describe("the list", () => {
     expect(row(/^hero, \.nx-c-hero/)).toBeTruthy();
   });
 
-  it("lists no look among the shared styles", async () => {
+  it("lists no look among the shared styles, only among the block looks", async () => {
     const outline: NamedClass = {
       id: "look:core/button:outline",
       slug: "button-outline",
@@ -183,7 +183,112 @@ describe("the list", () => {
     };
     await panel({ library: [CARD, outline] });
     expect(row(/^Card, \.nx-c-card/)).toBeTruthy();
-    expect(screen.queryByText("Outline")).toBeNull();
+    const shared = screen.getByRole("region", { name: "Shared styles" });
+    expect(within(shared).queryByText("Outline")).toBeNull();
+    // It is listed with its block type's looks instead.
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(within(looks).getByText("Outline")).toBeTruthy();
+  });
+
+  it("lists each block type's own look first, with a Default chip and no count, and edits a look on a click", async () => {
+    const primary: NamedClass = {
+      id: "look:core/button:primary",
+      slug: "button-primary",
+      label: "Primary",
+      orderIndex: 0,
+      blockType: "core/button",
+      isDefault: true,
+      styles: {},
+    };
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 1,
+      blockType: "core/button",
+      styles: {},
+    };
+    const onEditLook = vi.fn();
+    await panel({
+      library: [CARD, primary, outline],
+      looks: {
+        onEdit: onEditLook,
+        editing: { id: outline.id, blockType: "core/button" },
+      },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    const rows = within(looks).getAllByRole("button");
+    expect(rows.map(each => each.textContent)).toEqual([
+      expect.stringMatching(/^ButtonPrimaryown lookDefault$/),
+      expect.stringMatching(/^ButtonOutline\.nx-l-button-outline/),
+    ]);
+    // The own look says what it covers, on hover and to a screen reader.
+    expect(rows[0]?.getAttribute("aria-description")).toBe(
+      "Default · every Button starts from this look; other looks are laid on top"
+    );
+    expect(rows.map(each => each.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "true",
+    ]);
+    fireEvent.click(rows[0] as HTMLElement);
+    expect(onEditLook).toHaveBeenCalledWith({
+      id: primary.id,
+      blockType: "core/button",
+    });
+  });
+
+  it("reads a worn look's count with the styles' and says it in the row's name", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    const { access, usageReads } = accessOf({
+      styles: { [outline.id]: reach({ pages: 3 }) },
+    });
+    await panel({
+      library: [CARD, outline],
+      access,
+      looks: { onEdit: () => {}, editing: null },
+    });
+    // One read for the tab: the styles and the worn look together.
+    expect(usageReads).toHaveLength(1);
+    expect(usageReads[0]).toEqual([CARD.id, outline.id]);
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(
+      within(looks)
+        .getByRole("button", { name: /^Outline, \.nx-l-button-outline, / })
+        .getAttribute("aria-label")
+    ).toMatch(/3 pages/);
+  });
+
+  it("finds a look by a value it sets, as it finds a shared style", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: { base: { base: { opacity: 0.25 } } },
+    };
+    const text: NamedClass = {
+      ...outline,
+      id: "look:core/button:text",
+      slug: "button-text",
+      label: "Text",
+      orderIndex: 1,
+      styles: {},
+    };
+    await panel({ library: [CARD, outline, text] });
+    fireEvent.change(screen.getByRole("searchbox", { name: /Search/ }), {
+      target: { value: "0.25" },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(within(looks).getByText("Outline")).toBeTruthy();
+    expect(within(looks).queryByText("Text")).toBeNull();
   });
 
   it("says how to make one when there are none, with no + to create an empty one", async () => {
