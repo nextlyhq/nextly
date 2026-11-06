@@ -37,7 +37,12 @@ import { PageRenderer } from "../page-renderer";
 import { createBlockResolver } from "../resolver";
 
 import { coreBlocks } from "./index";
-import { namedQueryFailureLine, scopedReader } from "./named-read";
+import { listItemKey } from "./collection-loop";
+import {
+  namedQueryFailureLine,
+  readNamedList,
+  scopedReader,
+} from "./named-read";
 
 const node = (
   id: string,
@@ -714,6 +719,62 @@ describe("a list whose source is a named query", () => {
     expect(note(element)).toContain("Upcoming events stopped with an error");
     expect(made.failures.map(failure => failure.code)).toEqual(["threw"]);
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("draws nothing of a collection visitors may read none of, though a kept result holds rows", async () => {
+    const run = vi.fn<NamedQueryDefinition["run"]>(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const definition = {
+      ...eventsQuery(run),
+      rows: { collection: "events" },
+    } as NamedQueryDefinition;
+    // Kept from before the collection was closed to visitors.
+    const kept: NamedQueryHost["cache"] = () =>
+      Promise.resolve({ rows: [{ id: "e1" }, { id: "e2" }], reads: 0 });
+    const { element, host: made } = await draw(definition, {
+      host: { fieldsOf: () => Promise.resolve(undefined), cache: kept },
+    });
+    expect(headings(element)).toEqual([]);
+    expect(element.innerHTML).not.toContain("e1");
+    expect(note(element)).toContain(
+      "Upcoming events lists entries of events, which visitors can't read"
+    );
+    expect(made.failures.map(failure => failure.code)).toEqual(["rows-hidden"]);
+    expect(run).not.toHaveBeenCalled();
+    // A collection visitors may read, with every own field hidden, still
+    // draws its rows by their ids.
+    const readable = await draw(definition, {
+      host: { fieldsOf: () => Promise.resolve([]), cache: kept },
+    });
+    expect(emptyShown(readable.element)).toBe(false);
+  });
+
+  it("keys each row by the field its query declares", async () => {
+    const definition = eventsQuery(
+      () => Promise.resolve({ rows: [{ slug: "b", title: "B" }] }),
+      {
+        rows: {
+          key: "slug",
+          fields: [
+            { name: "slug", type: "text" },
+            { name: "title", type: "text" },
+          ],
+        },
+      }
+    );
+    const outcome = await readNamedList(
+      { name: "events.upcoming", params: { city: "lahore" } },
+      { limit: 10, offset: 0 },
+      context({
+        namedQueries: host(definition, base({})),
+      }) as PageContext & { namedQueries: NamedQueryHost },
+      "list"
+    );
+    expect(outcome.rowKey).toBe("slug");
+    expect(listItemKey({ slug: "b" }, 0, outcome.rowKey)).toBe("b");
+    // Keyed by an id it does not have, the row would fall back to its place.
+    expect(listItemKey({ slug: "b" }, 0)).toBe(0);
   });
 
   it("logs a failure by its code and reference, never the error's words", () => {

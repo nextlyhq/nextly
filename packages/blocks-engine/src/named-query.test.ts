@@ -154,6 +154,21 @@ describe("a named query's declaration", () => {
       "65 reads; at most 64",
     ],
     [
+      "a bound read from an unset variable",
+      { params: { n: param.number({ label: "N", min: Number("") / 0 }) } },
+      "not a finite number",
+    ],
+    [
+      "an infinite bound",
+      { params: { n: param.number({ label: "N", max: Infinity }) } },
+      "not a finite number",
+    ],
+    [
+      "a whole-number input's bound that is not a safe whole number",
+      { params: { n: param.number({ label: "N", integer: true, min: 1.5 }) } },
+      "not a safe whole number",
+    ],
+    [
       "a choice value no list could store",
       {
         params: {

@@ -37,7 +37,6 @@ import {
   type DocumentLimits,
   type LayoutRegion,
   type ListQuery,
-  type NamedQueryDefinition,
   type RemotePatternInput,
   type SeoImageCandidate,
   type SiteSheetInput,
@@ -94,7 +93,6 @@ import {
   createQueryBudget,
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
-  NAMED_QUERY_SERVICE,
 } from "./context";
 import type {
   BindingIssuesHandler,
@@ -106,6 +104,7 @@ import type {
   BlocksPublicReader,
   BlocksSiteSettings,
   NamedQueryHost,
+  NamedQueryLookup,
   PageBindings,
   PageContext,
   QueryBudget,
@@ -402,6 +401,16 @@ export interface BlocksPageConfig
    */
   timeZone?: string;
   /**
+   * The site's named queries, which its pages' collection lists may take as
+   * their source: `namedQueriesOf(pageBuilderPlugin)` from
+   * `@nextlyhq/plugin-page-builder`, the queries that page builder
+   * registered for this site. Absent, the route knows of none, and a list
+   * naming one shows its empty state.
+   *
+   * @experimental
+   */
+  namedQueries?: NamedQueryLookup;
+  /**
    * The caps this site holds its documents to, used while repairing a stored
    * shape. Passed to the renderer AND used when deriving metadata, so a site
    * that raised `maxNodes` for long pages does not have its metadata derived
@@ -645,29 +654,25 @@ function deploymentIdentity(
 }
 
 /**
- * The named queries the route's own Nextly instance registered, read from
- * its page builder's service: each site its own, so two sites served from
- * one process never resolve each other's queries. Nothing for an instance
- * without the page builder, whose lists' queries are then not set up.
+ * The site's time zone, for a named query's day: the route's, else the one
+ * the site settings name, UTC only when they name none. Settings that could
+ * not be read (the page's reads spent, or the read failing) are not settings
+ * that name no zone: that refuses, and the list draws its empty state rather
+ * than run a query on another zone's day.
  */
-function instanceNamedQueries(
-  config: BlocksPageConfig
-): (name: string) => NamedQueryDefinition | undefined {
-  return name => {
-    const instance = readerFor(config) as { readonly plugins?: unknown };
-    const plugins = instance.plugins;
-    if (typeof plugins !== "object" || plugins === null) return undefined;
-    const service = (
-      plugins as Record<string, Record<string, unknown> | undefined>
-    )[NAMED_QUERY_SERVICE.plugin]?.[NAMED_QUERY_SERVICE.service];
-    const definitionOf = (service as { definitionOf?: unknown } | undefined)
-      ?.definitionOf;
-    return typeof definitionOf === "function"
-      ? (definitionOf as (name: string) => NamedQueryDefinition | undefined)(
-          name
-        )
-      : undefined;
-  };
+async function siteZone(
+  config: BlocksPageConfig,
+  budget: QueryBudget,
+  window: number | false | undefined
+): Promise<string | undefined> {
+  if (config.timeZone !== undefined) return config.timeZone;
+  const site = await readSite(config, budget, window);
+  if (site === undefined) {
+    throw new Error(
+      "The site settings could not be read, so the site's time zone, and today in it, is not known."
+    );
+  }
+  return site.timezone ?? undefined;
 }
 
 /** How long a cached "today" may live before it is asked again, in seconds. */
@@ -707,7 +712,9 @@ function namedQueryHostFor(args: {
   const reader = publicReaderFor(config, locale, window);
   let today: Promise<string> | undefined;
   return {
-    definitionOf: instanceNamedQueries(config),
+    // The site's own queries, as the route was handed them: none when it
+    // was handed none, so a list naming one shows its empty state.
+    definitionOf: name => config.namedQueries?.definitionOf(name),
     reader: {
       ...reader,
       siteSettings: async () => {
@@ -724,11 +731,7 @@ function namedQueryHostFor(args: {
     },
     today: () => {
       today ??= (async () =>
-        await todayFor(
-          config.timeZone ??
-            (await readSite(config, budget, window))?.timezone ??
-            undefined
-        ))();
+        await todayFor(await siteZone(config, budget, window)))();
       return today;
     },
     fieldsOf: async collection =>

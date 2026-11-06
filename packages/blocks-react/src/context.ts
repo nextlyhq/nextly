@@ -154,6 +154,7 @@ export type NamedQueryFailureCode =
   | "budget"
   | "timeout"
   | "bad-rows"
+  | "rows-hidden"
   | "threw";
 
 /** A named query's failure, as the host logs it. */
@@ -169,17 +170,14 @@ export interface NamedQueryFailure {
 }
 
 /**
- * Where a Nextly instance hands out the named queries its page builder
- * registered: the plugin and the service name, as `nextly.plugins` keys
- * them. The page builder registers the service under it; a published route
- * reads its site's queries from it.
+ * Where a site's named queries are looked up by name, run function included:
+ * the page builder that registered them hands one out per site.
  *
  * @experimental
  */
-export const NAMED_QUERY_SERVICE: {
-  readonly plugin: "@nextlyhq/plugin-page-builder";
-  readonly service: "namedQueries";
-} = { plugin: "@nextlyhq/plugin-page-builder", service: "namedQueries" };
+export interface NamedQueryLookup {
+  definitionOf(name: string): NamedQueryDefinition | undefined;
+}
 
 /**
  * What a page renders a collection list's named query with: where queries

@@ -16,7 +16,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   COMPONENT_DOCUMENT_FIELD,
-  NAMED_QUERY_SERVICE,
+  type NamedQueryLookup,
 } from "@nextlyhq/blocks-react";
 import {
   definePlugin,
@@ -1251,6 +1251,28 @@ function singlesDeclaringBlocksIn(
   return found;
 }
 
+/** The named queries each page builder this process made registers. */
+const sitesQueries = new WeakMap<PluginDefinition, NamedQueryLookup>();
+
+/**
+ * The named queries the page builder `plugin` registers for its site, run
+ * functions included: what a route rendering that site's pages takes as its
+ * `namedQueries`. Bound to that one page builder, so two sites served from
+ * one process never resolve each other's queries. Nothing for a plugin that
+ * is not a page builder.
+ *
+ * ```ts
+ * export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
+ * // app/[...slug]/page.tsx
+ * createBlocksPage({ ..., namedQueries: namedQueriesOf(builder) });
+ * ```
+ *
+ * @experimental
+ */
+export function namedQueriesOf(plugin: PluginDefinition): NamedQueryLookup {
+  return sitesQueries.get(plugin) ?? { definitionOf: () => undefined };
+}
+
 export const pageBuilder = (
   opts: PageBuilderOptions = {}
 ): PluginDefinition => {
@@ -1269,9 +1291,14 @@ export const pageBuilder = (
    * and every pass resolves the API itself.
    */
   let installed: BackfillHost | null = null;
-  // This page builder's named queries, rebuilt on each boot: its own, so two
-  // sites booted in one process never resolve each other's.
+  // This page builder's named queries: the site's own from the start, so a
+  // route built before boot already knows them, and rebuilt with the ones
+  // plugins declare on each boot. Its own, so two sites in one process never
+  // resolve each other's.
   let namedQueries: NamedQueryRegistry = createNamedQueryRegistry();
+  namedQueries.register(opts.namedQueries ?? [], {
+    source: "pageBuilder({ namedQueries })",
+  });
   const namedQuerySource: NamedQuerySource = {
     declarationOf: name => namedQueries.declarationOf(name),
   };
@@ -1627,7 +1654,7 @@ export const pageBuilder = (
         removalLogger?.error(message, meta),
     },
   };
-  return definePlugin({
+  const plugin = definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
@@ -2170,12 +2197,6 @@ export const pageBuilder = (
             templates: { guard: requireTemplateGuard },
             namedQueries: namedQueryDeclarations,
           }),
-        // This site's named queries, for its published pages' renderer: the
-        // query a list names, run function included, from this instance's
-        // own registry.
-        [NAMED_QUERY_SERVICE.service]: () => ({
-          definitionOf: (name: string) => namedQueries.definitionOf(name),
-        }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(
@@ -2679,4 +2700,11 @@ export const pageBuilder = (
       },
     },
   });
+  // The route a site renders its pages with reads this page builder's own
+  // queries through `namedQueriesOf`: bound to this definition, never to a
+  // registry another site's boot can replace.
+  sitesQueries.set(plugin, {
+    definitionOf: name => namedQueries.definitionOf(name),
+  });
+  return plugin;
 };

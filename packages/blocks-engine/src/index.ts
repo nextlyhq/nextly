@@ -1339,6 +1339,7 @@ export {
   listFieldKind,
   listKindSortable,
   listQueryIssues,
+  namesListSource,
   listRelationTarget,
   listSortText,
   outerListOf,

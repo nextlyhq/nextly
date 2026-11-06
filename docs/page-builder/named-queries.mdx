@@ -85,7 +85,26 @@ import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 
 import { upcomingEvents } from "./app/named-queries";
 
-export const plugins = [pageBuilder({ namedQueries: [upcomingEvents] })];
+export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
+```
+
+Then hand the route that renders the site's pages that page builder's queries, with
+`namedQueriesOf`. Each page builder keeps its own, so two sites served from one process
+never run each other's queries. A route handed none knows of none, and a list that names
+a query shows its empty state.
+
+```ts
+// app/[...slug]/page.tsx
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { namedQueriesOf } from "@nextlyhq/plugin-page-builder";
+
+import { builder } from "../../nextly.config";
+
+const route = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  namedQueries: namedQueriesOf(builder),
+});
 ```
 
 A plugin declares its own beside its blocks, in

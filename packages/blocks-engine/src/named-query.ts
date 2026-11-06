@@ -791,6 +791,36 @@ function textShapeProblem(param: TextParam, at: string): string | undefined {
     : `${at}'s maxLength is not a whole number from 1 to ${String(NAMED_QUERY_TEXT_MAX)}`;
 }
 
+/**
+ * Why a number input's bounds are not ones its values can be judged by: each
+ * present bound a finite number (a safe whole number for a whole-number
+ * input), and the least no greater than the most. A bound read from an unset
+ * variable is `NaN`, which every comparison fails.
+ */
+function numberShapeProblem(
+  param: NumberParam,
+  at: string
+): string | undefined {
+  const whole = param.integer === true;
+  for (const [name, bound] of [
+    ["min", param.min],
+    ["max", param.max],
+  ] as const) {
+    if (bound === undefined) continue;
+    const fits = whole
+      ? Number.isSafeInteger(bound)
+      : typeof bound === "number" && Number.isFinite(bound);
+    if (!fits) {
+      return `${at}'s ${name} is ${describeValue(bound)}, not a ${whole ? "safe whole number" : "finite number"}`;
+    }
+  }
+  return param.min !== undefined &&
+    param.max !== undefined &&
+    param.min > param.max
+    ? `${at}'s min is above its max`
+    : undefined;
+}
+
 /** Why a choice input's options cannot be drawn. */
 function choiceShapeProblem(
   param: ChoiceParam,
@@ -834,10 +864,7 @@ const SHAPE_RULES: {
   ) => string | undefined;
 } = {
   text: textShapeProblem,
-  number: (param, at) =>
-    param.min !== undefined && param.max !== undefined && param.min > param.max
-      ? `${at}'s min is above its max`
-      : undefined,
+  number: numberShapeProblem,
   boolean: () => undefined,
   choice: choiceShapeProblem,
   day: () => undefined,

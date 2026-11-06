@@ -588,22 +588,33 @@ function readNamedQuery(
  * Why a stored custom source sits beside another source, or nothing. Empty
  * filters and an empty sort name nothing, so they do not count.
  */
+/**
+ * Whether a list's props name a source besides a custom one: a collection,
+ * related entries, filters or a sort. Empty filters, an empty sort and a
+ * blank collection name nothing, as `readListQuery` reads them. The one
+ * answer the save and a write that sets a custom source both ask.
+ */
+export function namesListSource(
+  record: Readonly<Record<string, unknown>>
+): boolean {
+  const stored = (value: unknown) => value !== undefined && value !== null;
+  const filters = record.filters;
+  const sort = record.sort;
+  return (
+    collectionOf(record.collection) !== undefined ||
+    stored(record.relation) ||
+    (Array.isArray(filters) ? filters.length > 0 : stored(filters)) ||
+    (typeof sort === "string" ? sort.trim() !== "" : stored(sort))
+  );
+}
+
 function sourceConflict(
-  record: Readonly<Record<string, unknown>>,
-  collection: string | undefined
+  record: Readonly<Record<string, unknown>>
 ): ListQueryProblem | undefined {
   if (record.namedQuery === undefined || record.namedQuery === null) {
     return undefined;
   }
-  const stored = (value: unknown) => value !== undefined && value !== null;
-  const filters = record.filters;
-  const sort = record.sort;
-  const others =
-    collection !== undefined ||
-    stored(record.relation) ||
-    (Array.isArray(filters) ? filters.length > 0 : stored(filters)) ||
-    (typeof sort === "string" ? sort.trim() !== "" : stored(sort));
-  return others
+  return namesListSource(record)
     ? {
         prop: "namedQuery",
         code: "list-source-conflict",
@@ -723,7 +734,7 @@ export function readListQuery(props: unknown): {
     "problem" in sorted ? sorted.problem : undefined,
     isProblem(relation) ? relation : undefined,
     isProblem(named) ? named : undefined,
-    sourceConflict(record, collection),
+    sourceConflict(record),
   ].filter((problem): problem is ListQueryProblem => problem !== undefined);
   return {
     query: {

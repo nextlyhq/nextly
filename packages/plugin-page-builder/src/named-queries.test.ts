@@ -10,10 +10,7 @@ import {
   judgeNamedParams,
   param,
 } from "@nextlyhq/blocks-engine";
-import { NAMED_QUERY_SERVICE } from "@nextlyhq/blocks-react";
 import { describe, expect, it, vi } from "vitest";
-
-import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 
 import {
   namedQueryItem,
@@ -21,6 +18,7 @@ import {
   readNamedQueries,
   registerNamedQueriesAtBoot,
 } from "./named-queries";
+import { namedQueriesOf, pageBuilder } from "./plugin";
 
 const run = () => Promise.resolve({ rows: [] });
 
@@ -112,8 +110,24 @@ describe("named queries at boot", () => {
     );
   });
 
-  it("serves the queries under the name a published route reads them by", () => {
-    expect(NAMED_QUERY_SERVICE.plugin).toBe(PAGE_BUILDER_PLUGIN_NAME);
+  it("hands each page builder's own queries to the route that renders its site", () => {
+    const siteA = pageBuilder({ namedQueries: [upcoming] });
+    const siteB = pageBuilder({
+      namedQueries: [{ ...upcoming, label: "Site B's events" }, fromPlugin],
+    });
+    expect(namedQueriesOf(siteA).definitionOf("events.upcoming")).toBe(
+      upcoming
+    );
+    expect(namedQueriesOf(siteA).definitionOf("venues.all")).toBeUndefined();
+    expect(namedQueriesOf(siteB).definitionOf("events.upcoming")?.label).toBe(
+      "Site B's events"
+    );
+    // A plugin that is no page builder hands out none.
+    expect(
+      namedQueriesOf({ name: "@acme/other" } as never).definitionOf(
+        "events.upcoming"
+      )
+    ).toBeUndefined();
   });
 
   it("names both sources when a plugin takes the site's name", () => {
