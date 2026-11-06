@@ -574,6 +574,47 @@ describe("what site code loads", () => {
     expect(check).toEqual({ checked: true, findings: [] });
   });
 
+  it("never lets a nonce allow code whose attributes hold markup", async () => {
+    // CSP refuses a nonce to an element whose attribute holds `<script`.
+    const marked: SiteCodeEntry = {
+      tag: "script",
+      attrs: { "data-template": "<script>" },
+      text: "a()",
+    };
+    expect(
+      await blockedBy("script-src 'nonce-x'", [marked], [], { siteNonce: true })
+    ).toEqual(["script-src"]);
+    expect(
+      await blockedBy("script-src 'nonce-x'", [inline("a()")], [], {
+        siteNonce: true,
+      })
+    ).toEqual([]);
+  });
+
+  it("restricts a connection hint only under default-src", async () => {
+    const hint: SiteCodeEntry = {
+      tag: "link",
+      attrs: { rel: "preconnect", href: "https://api.example" },
+    };
+    expect(await blockedBy("img-src 'none'", [hint])).toEqual([]);
+  });
+
+  it("reads a numeric port as a number", async () => {
+    expect(
+      await blockedBy("script-src https://cdn.example:0443", [
+        loaded("https://cdn.example/a.js"),
+      ])
+    ).toEqual([]);
+  });
+
+  it("reads an integrity algorithm in any case", async () => {
+    expect(
+      await blockedBy("script-src 'strict-dynamic' 'sha384-abc'", [
+        loaded(GTAG, { integrity: "SHA384-abc" }),
+      ])
+    ).toEqual([]);
+  });
+
   it("warns rather than errs under a Report-Only policy", async () => {
     const check = await checkSiteCodeAgainstCsp(
       { policy: "script-src 'self'", reportOnly: true, siteOrigin: ORIGIN },
@@ -757,6 +798,30 @@ describe("adding what site code needs to a policy", () => {
       mergeSiteCodeIntoCsp("style-src 'nonce-x'", facts, { siteNonce: true })
     ).toBe(
       "style-src 'nonce-x'; style-src-elem 'nonce-x' https://fonts.example/a.css"
+    );
+  });
+
+  it("adds the hash of code no nonce can allow, whatever nonce the site passes", async () => {
+    const marked: SiteCodeEntry = {
+      tag: "script",
+      attrs: { "data-template": "<script>" },
+      text: "a()",
+    };
+    const facts = await siteCodeFacts([marked], ORIGIN);
+    expect(
+      mergeSiteCodeIntoCsp("script-src 'nonce-x'", facts, { siteNonce: true })
+    ).toBe(
+      `script-src 'nonce-x'; script-src-elem 'nonce-x' '${await cspHash("a()")}'`
+    );
+  });
+
+  it("adds 'self' for a load from a site served at an IP address", async () => {
+    const facts = await siteCodeFacts(
+      [loaded("/analytics.js")],
+      "https://127.0.0.1"
+    );
+    expect(mergeSiteCodeIntoCsp("default-src 'none'", facts)).toBe(
+      `default-src 'none'; script-src-elem ${await loaderHash()} 'self'`
     );
   });
 
