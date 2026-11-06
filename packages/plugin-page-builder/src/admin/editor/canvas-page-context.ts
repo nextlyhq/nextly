@@ -24,6 +24,7 @@
  *
  * @module canvas-page-context
  */
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import {
   createQueryBudget,
   createStandaloneContext,
@@ -95,12 +96,18 @@ function canvasQueryBudget(): CanvasQueryBudget {
  * The collection a document is an entry of, as its lists judge a related
  * source: the collection's slug for an entry; `null` for a Single, whose
  * page has no entry a related list could read, so the inspector refuses
- * such a list as the save does; nothing while no document is known.
+ * such a list as the save does; nothing while no document is known, nor for
+ * a component, which is drawn on the pages placing it and judged with each
+ * of them as the entry, as its save judges it.
  */
 export function listEntryCollectionOf(
-  identity: { readonly kind: string; readonly slug: string } | null
+  identity: { readonly kind: string; readonly slug: string } | null,
+  document?: unknown
 ): string | null | undefined {
   if (identity === null) return undefined;
+  if (isPlainRecord(document) && document.kind === "component") {
+    return undefined;
+  }
   if (identity.kind === "single") return null;
   return identity.kind === "collection" ? identity.slug : undefined;
 }
@@ -113,7 +120,9 @@ export function listEntryCollectionOf(
  */
 export function useCanvasPageContext(
   listsShowingEmpty?: ReadonlySet<string>,
-  locale?: string
+  locale?: string,
+  /** The document being edited, whose kind decides whether it is an entry. */
+  document?: unknown
 ): PageContext {
   const readMedia = useMediaResolver();
   const budget = useMemo(canvasQueryBudget, []);
@@ -126,7 +135,8 @@ export function useCanvasPageContext(
   // of its related entries reads the relation as a visitor reads the entry:
   // again, through the canvas's reader, never from the form's values.
   const identity = useDocumentIdentity();
-  const entryCollection = listEntryCollectionOf(identity) ?? undefined;
+  const entryCollection =
+    listEntryCollectionOf(identity, document) ?? undefined;
   const entryId =
     identity?.kind === "collection" ? identity.documentId : undefined;
   // The language's one set of list reads, which the inspector's count shares.
