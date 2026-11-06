@@ -349,6 +349,7 @@ describe.each(getConfiguredTestDialects())(
         await rest(PUBLISHER, "PATCH", entry, {
           status: "draft",
           title: "edited",
+          _overwrite: true,
         })
       ).toBe(403);
       expect(await stored(POSTS, id)).toMatchObject({
@@ -357,7 +358,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(
-        await rest(PUBLISHER, "PATCH", entry, { status: "published" })
+        await rest(PUBLISHER, "PATCH", entry, {
+          status: "published",
+          _overwrite: true,
+        })
       ).toBe(200);
       expect((await stored(POSTS, id)).status).toBe("published");
     });
@@ -370,7 +374,7 @@ describe.each(getConfiguredTestDialects())(
         as(PUBLISHER).update({
           collection: POSTS,
           id,
-          data: { status: "published", title: "edited" },
+          data: { status: "published", title: "edited", _overwrite: true },
         } as never)
       ).rejects.toThrow();
       expect(await stored(POSTS, id)).toMatchObject({
@@ -381,7 +385,7 @@ describe.each(getConfiguredTestDialects())(
       await as(PUBLISHER).update({
         collection: POSTS,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await stored(POSTS, id)).status).toBe("published");
     });
@@ -395,7 +399,7 @@ describe.each(getConfiguredTestDialects())(
         collections.updateEntry(
           POSTS,
           id,
-          { status: "published", title: "edited" },
+          { status: "published", title: "edited", _overwrite: true },
           asPlugin(PUBLISHER)
         )
       ).rejects.toThrow();
@@ -407,7 +411,7 @@ describe.each(getConfiguredTestDialects())(
       await collections.updateEntry(
         POSTS,
         id,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         asPlugin(PUBLISHER)
       );
       expect((await stored(POSTS, id)).status).toBe("published");
@@ -421,8 +425,11 @@ describe.each(getConfiguredTestDialects())(
       const result = await pluginServices().collections.updateMany(
         POSTS,
         [
-          { id: plain, data: { status: "published" } },
-          { id: edited, data: { status: "published", title: "changed" } },
+          { id: plain, data: { status: "published", _overwrite: true } },
+          {
+            id: edited,
+            data: { status: "published", title: "changed", _overwrite: true },
+          },
         ],
         asPlugin(PUBLISHER)
       );
@@ -467,7 +474,7 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       await trusted().updateSingle({
         slug: HOME,
-        data: { headline: "h", status: "draft" },
+        data: { headline: "h", status: "draft", _overwrite: true },
       } as never);
       const single = ["singles", HOME];
       const home = async () =>
@@ -480,12 +487,16 @@ describe.each(getConfiguredTestDialects())(
         await rest(PUBLISHER, "PATCH", single, {
           status: "published",
           headline: "edited",
+          _overwrite: true,
         })
       ).toBe(403);
       expect(await home()).toMatchObject({ headline: "h", status: "draft" });
 
       expect(
-        await rest(PUBLISHER, "PATCH", single, { status: "published" })
+        await rest(PUBLISHER, "PATCH", single, {
+          status: "published",
+          _overwrite: true,
+        })
       ).toBe(200);
       expect((await home()).status).toBe("published");
     });
@@ -501,6 +512,7 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await rest(PUBLISHER, "PATCH", ["collections", NOTES, "entries", id], {
           status: "published",
+          _overwrite: true,
         })
       ).toBe(403);
       expect((await stored(NOTES, id)).status).toBe("open");
@@ -512,7 +524,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted().update({
         collection: POSTS,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
 
       // An editor who may update and not publish names only the status the
@@ -520,12 +532,14 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await rest(EDITOR, "PATCH", ["collections", POSTS, "entries", id], {
           status: "published",
+          _overwrite: true,
         })
       ).toBe(403);
       // The control: the same editor's write naming a field is an update.
       expect(
         await rest(EDITOR, "PATCH", ["collections", POSTS, "entries", id], {
           title: "edited",
+          _overwrite: true,
         })
       ).toBe(200);
     });
@@ -539,18 +553,26 @@ describe.each(getConfiguredTestDialects())(
       // Every gate refuses this caller, so each write is refused; the
       // refusal names the action the body asks, not update.
       expect
-        .soft(await restRefusal(READER, entry, { status: "published" }))
+        .soft(
+          await restRefusal(READER, entry, {
+            status: "published",
+            _overwrite: true,
+          })
+        )
         .toEqual({ status: 403, message: "You can't publish this posts." });
       expect
         .soft(
-          await restRefusal(READER, ["singles", HOME], { status: "published" })
+          await restRefusal(READER, ["singles", HOME], {
+            status: "published",
+            _overwrite: true,
+          })
         )
         .toEqual({ status: 403, message: "You can't publish Home." });
       expect
         .soft(
           await restRefusal(READER, ["collections", POSTS, "entries"], {
             where: { id: { equals: id } },
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           })
         )
         .toEqual({ status: 403, message: "You can't publish posts." });
@@ -559,10 +581,15 @@ describe.each(getConfiguredTestDialects())(
       await trusted().update({
         collection: POSTS,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect
-        .soft(await restRefusal(READER, entry, { status: "draft" }))
+        .soft(
+          await restRefusal(READER, entry, {
+            status: "draft",
+            _overwrite: true,
+          })
+        )
         .toEqual({
           status: 403,
           message: "You can't unpublish this posts.",
@@ -572,7 +599,11 @@ describe.each(getConfiguredTestDialects())(
       // A write naming a field is an edit, refused as one.
       expect
         .soft(
-          await restRefusal(READER, entry, { status: "draft", title: "edited" })
+          await restRefusal(READER, entry, {
+            status: "draft",
+            title: "edited",
+            _overwrite: true,
+          })
         )
         .toEqual({ status: 403, message: "You can't edit this posts." });
       // Where a collection has no lifecycle its status is a field, so a write
@@ -591,7 +622,7 @@ describe.each(getConfiguredTestDialects())(
               "entries",
               String((item as { id: unknown }).id),
             ],
-            { status: "published" }
+            { status: "published", _overwrite: true }
           )
         )
         .toEqual({ status: 403, message: "You can't edit this notes." });
@@ -607,12 +638,18 @@ describe.each(getConfiguredTestDialects())(
       // the write asks: naming the action would confirm the entry exists.
       const missing = { status: 404, message: "Not found." };
       expect(
-        await restRefusal(STRANGER, entry, { status: "published" })
+        await restRefusal(STRANGER, entry, {
+          status: "published",
+          _overwrite: true,
+        })
       ).toEqual(missing);
       // The control: an ordinary update by the same caller is answered alike.
-      expect(await restRefusal(STRANGER, entry, { title: "edited" })).toEqual(
-        missing
-      );
+      expect(
+        await restRefusal(STRANGER, entry, {
+          title: "edited",
+          _overwrite: true,
+        })
+      ).toEqual(missing);
       expect((await stored(POSTS, id)).status).toBe("draft");
     });
 
@@ -622,7 +659,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted().update({
         collection: POSTS,
         id: live,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       const other = await draft(POSTS, "other");
 
@@ -632,8 +669,8 @@ describe.each(getConfiguredTestDialects())(
       const result = await pluginServices().collections.updateMany(
         POSTS,
         [
-          { id: live, data: { status: "published" } },
-          { id: other, data: { title: "edited" } },
+          { id: live, data: { status: "published", _overwrite: true } },
+          { id: other, data: { title: "edited", _overwrite: true } },
         ],
         asPlugin(EDITOR)
       );
@@ -654,7 +691,12 @@ describe.each(getConfiguredTestDialects())(
       await as(PUBLISHER).update({
         collection: POSTS,
         id,
-        data: { status: "published", id, createdAt: SENT_SYSTEM_VALUE },
+        data: {
+          status: "published",
+          id,
+          createdAt: SENT_SYSTEM_VALUE,
+          _overwrite: true,
+        },
       } as never);
 
       expect((await stored(POSTS, id)).status).toBe("published");
@@ -665,7 +707,7 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       await trusted().updateSingle({
         slug: HOME,
-        data: { headline: "h", status: "draft" },
+        data: { headline: "h", status: "draft", _overwrite: true },
       } as never);
       handedToHooks = [];
 
@@ -673,6 +715,7 @@ describe.each(getConfiguredTestDialects())(
         await rest(PUBLISHER, "PATCH", ["singles", HOME], {
           status: "published",
           updatedAt: SENT_SYSTEM_VALUE,
+          _overwrite: true,
         })
       ).toBe(200);
 
@@ -692,7 +735,7 @@ describe.each(getConfiguredTestDialects())(
         as(MAINTAINER).update({
           collection: FILTERED,
           id,
-          data: { status: "published", title: "edited" },
+          data: { status: "published", title: "edited", _overwrite: true },
         } as never)
       ).rejects.toThrow();
       expect(await stored(FILTERED, id)).toMatchObject({
@@ -704,7 +747,7 @@ describe.each(getConfiguredTestDialects())(
       await as(MAINTAINER).update({
         collection: FILTERED,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await stored(FILTERED, id)).status).toBe("published");
     });
@@ -718,7 +761,7 @@ describe.each(getConfiguredTestDialects())(
           collection: FRENCH_INVOLVED,
           id,
           locale: "de",
-          data: { title: "de" },
+          data: { title: "de", _overwrite: true },
         } as never);
         return id;
       };
@@ -728,7 +771,7 @@ describe.each(getConfiguredTestDialects())(
         await trusted().updateSingle({
           slug: FRENCH_INVOLVED_HOME,
           locale,
-          data: { headline: locale },
+          data: { headline: locale, _overwrite: true },
         } as never);
       }
       const entry = (id: string) => [
@@ -740,7 +783,9 @@ describe.each(getConfiguredTestDialects())(
 
       // Publishing every language, as a caller who may also update.
       expect(
-        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
+        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {
+          _overwrite: true,
+        })
       ).toBe(200);
       expect((await stored(FRENCH_INVOLVED, viaRoute)).status).toBe(
         "published"
@@ -750,7 +795,7 @@ describe.each(getConfiguredTestDialects())(
           MAINTAINER,
           "POST",
           ["singles", FRENCH_INVOLVED_HOME, "publish-all"],
-          {}
+          { _overwrite: true }
         )
       ).toBe(200);
       // A status-only write to every language, as a caller who may only
@@ -760,7 +805,7 @@ describe.each(getConfiguredTestDialects())(
           PUBLISHER,
           "PATCH",
           entry(viaPatch),
-          { status: "published" },
+          { status: "published", _overwrite: true },
           "?locale=*"
         )
       ).toBe(200);
@@ -774,10 +819,12 @@ describe.each(getConfiguredTestDialects())(
         collection: FRENCH_INVOLVED,
         id: viaRoute,
         locale: "fr",
-        data: { title: "fr" },
+        data: { title: "fr", _overwrite: true },
       } as never);
       expect(
-        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
+        await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {
+          _overwrite: true,
+        })
       ).toBe(403);
     });
 
@@ -795,7 +842,7 @@ describe.each(getConfiguredTestDialects())(
           EDITOR,
           "POST",
           ["collections", NOTES, "entries", id, "publish-all"],
-          {}
+          { _overwrite: true }
         )
       ).toBe(200);
       expect((await stored(NOTES, id)).status).toBe("open");
@@ -816,6 +863,7 @@ describe.each(getConfiguredTestDialects())(
           entryId: id,
           overrideAccess: false,
           user: { id: userId } as never,
+          data: { _overwrite: true },
         });
 
       // A caller who may not update learns nothing, the publisher included.
@@ -835,8 +883,8 @@ describe.each(getConfiguredTestDialects())(
       const result = await pluginServices().collections.updateMany(
         FILTERED,
         [
-          { id: a, data: { status: "published" } },
-          { id: b, data: { status: "published" } },
+          { id: a, data: { status: "published", _overwrite: true } },
+          { id: b, data: { status: "published", _overwrite: true } },
         ],
         asPlugin(MAINTAINER)
       );
@@ -852,7 +900,7 @@ describe.each(getConfiguredTestDialects())(
       await as(MAINTAINER).update({
         collection: FILTERED,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
 
       expect((await stored(FILTERED, id)).status).toBe("published");
@@ -863,7 +911,7 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       await trusted().updateSingle({
         slug: HOME,
-        data: { headline: "h", status: "draft" },
+        data: { headline: "h", status: "draft", _overwrite: true },
       } as never);
       ruleAsks.homePublish = 0;
       const singles = current!.getService("singleEntryService") as unknown as {
@@ -876,7 +924,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = await singles.update(
         HOME,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { user: { id: PUBLISHER }, overrideAccess: false }
       );
 
@@ -896,6 +944,7 @@ describe.each(getConfiguredTestDialects())(
           reads += 1;
           return reads <= 2 ? "published" : "draft";
         },
+        _overwrite: true,
       };
 
       await as(PUBLISHER).update({
@@ -943,7 +992,7 @@ describe.each(getConfiguredTestDialects())(
       // by the publish gate, before its row is locked.
       const result = await pluginServices().collections.updateMany(
         POSTS,
-        [{ id, data: { status: "published" } }],
+        [{ id, data: { status: "published", _overwrite: true } }],
         asPlugin(EDITOR)
       );
 
@@ -961,6 +1010,7 @@ describe.each(getConfiguredTestDialects())(
           reads += 1;
           return "published";
         },
+        _overwrite: true,
       };
 
       const result = await pluginServices().collections.updateMany(
@@ -983,7 +1033,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await pluginServices().collections.updateMany(
         FILTERED,
-        [{ id, data: { status: "published" } }],
+        [{ id, data: { status: "published", _overwrite: true } }],
         asPlugin(MAINTAINER)
       );
 
@@ -1012,7 +1062,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await pluginServices().collections.updateMany(
         FILTERED,
-        [{ id, data: { status: "published" } }],
+        [{ id, data: { status: "published", _overwrite: true } }],
         asPlugin(MAINTAINER)
       );
 
@@ -1033,7 +1083,7 @@ describe.each(getConfiguredTestDialects())(
             as(PUBLISHER).update({
               collection: POSTS,
               id,
-              data: { status: "published" },
+              data: { status: "published", _overwrite: true },
             } as never)
           ).rejects.toThrow();
           expect(await stored(POSTS, id)).toMatchObject({
@@ -1045,7 +1095,7 @@ describe.each(getConfiguredTestDialects())(
           await trusted().update({
             collection: POSTS,
             id,
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           } as never);
           expect((await stored(POSTS, id)).title).toBe(SET_BY_A_HOOK);
         });
@@ -1057,7 +1107,7 @@ describe.each(getConfiguredTestDialects())(
 
           const result = await pluginServices().collections.updateMany(
             POSTS,
-            [{ id, data: { status: "published" } }],
+            [{ id, data: { status: "published", _overwrite: true } }],
             asPlugin(PUBLISHER)
           );
 
@@ -1071,7 +1121,7 @@ describe.each(getConfiguredTestDialects())(
           hookEdits = undefined;
           const plain = await pluginServices().collections.updateMany(
             POSTS,
-            [{ id, data: { status: "published" } }],
+            [{ id, data: { status: "published", _overwrite: true } }],
             asPlugin(PUBLISHER)
           );
           expect(plain.successful).toBe(1);
@@ -1081,7 +1131,7 @@ describe.each(getConfiguredTestDialects())(
           await boot(dialect);
           await trusted().updateSingle({
             slug: HOME,
-            data: { headline: "h", status: "draft" },
+            data: { headline: "h", status: "draft", _overwrite: true },
           } as never);
           const home = async () =>
             (await trusted().findSingle({ slug: HOME } as never)) as {
@@ -1093,6 +1143,7 @@ describe.each(getConfiguredTestDialects())(
           expect(
             await rest(PUBLISHER, "PATCH", ["singles", HOME], {
               status: "published",
+              _overwrite: true,
             })
           ).toBe(403);
           expect(await home()).toMatchObject({
@@ -1105,6 +1156,7 @@ describe.each(getConfiguredTestDialects())(
           expect(
             await rest(PUBLISHER, "PATCH", ["singles", HOME], {
               status: "published",
+              _overwrite: true,
             })
           ).toBe(200);
         });
@@ -1366,7 +1418,7 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       await trusted().updateSingle({
         slug: HOME,
-        data: { headline: "h", status: "draft" },
+        data: { headline: "h", status: "draft", _overwrite: true },
       } as never);
 
       expect(

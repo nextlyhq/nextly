@@ -12,10 +12,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  backfillScopeKey,
+  GONE_SCOPES_SWEPT_KEY,
+} from "./usage-backfill-scope";
+import {
   backfillScopes,
   backfillSurvey,
+  forgetGoneScopes,
+  goneScopes,
   type BackfillHost,
 } from "./usage-backfill-wiring";
+import type { UsageRowReader } from "./usage-count";
 
 const NOT_USED = () => {
   throw new Error("the scope enumeration should not have reached this");
@@ -29,11 +36,11 @@ function host(over: Partial<BackfillHost>): BackfillHost {
       fields: [{ name: "content", type: "blocks" }],
     }),
     hasDrafts: () => false,
+    singles: async () => [],
     locales: () => [],
     limits: NOT_USED as never,
-    slugs: NOT_USED as never,
+    db: NOT_USED as never,
     bookkeeping: NOT_USED as never,
-    ownIndexReader: NOT_USED as never,
     ...over,
   };
 }
@@ -119,6 +126,79 @@ describe("enumerating the scopes a site currently has", () => {
 
     expect(scopes).toHaveLength(4);
   });
+
+  it("walks each Single holding blocks, in both forms, under its own scope", async () => {
+    const scopes = await backfillScopes(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          { slug: "home", fields: [{ name: "content", type: "blocks" }] },
+        ],
+      })
+    );
+
+    expect(scopes.map(s => `${s.scope}:${s.entity}:${s.variant}`)).toEqual([
+      "single:home:published",
+      "single:home:draft",
+    ]);
+  });
+
+  it("reads a Single whose fields' languages are unknown in every language", async () => {
+    // Its field flags are not on the surface a plugin reads, so a field is
+    // read per language rather than a translation being missed.
+    const scopes = await backfillScopes(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          {
+            slug: "home",
+            fields: [{ name: "content", type: "blocks" }],
+            localized: true,
+            languagesUnknown: true,
+          },
+        ],
+        locales: () => ["en", "fr"],
+      })
+    );
+
+    expect(
+      scopes.filter(s => s.variant === "published").map(s => s.locale)
+    ).toEqual(["en", "fr"]);
+  });
+
+  it("reads a blocks field in a nameless group per language when a Single's languages are unknown", async () => {
+    // The group is presentational, so the field is stored at the top level;
+    // marked per language only at the top, it read as shared and a
+    // translation's components were missed.
+    const scopes = await backfillScopes(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          {
+            slug: "home",
+            fields: [
+              { type: "group", fields: [{ name: "content", type: "blocks" }] },
+            ],
+            localized: true,
+            languagesUnknown: true,
+          },
+        ],
+        locales: () => ["en", "fr"],
+      })
+    );
+
+    expect(
+      scopes.filter(s => s.variant === "published").map(s => s.locale)
+    ).toEqual(["en", "fr"]);
+  });
+
+  it("REFUSES when the Singles registry cannot be read", async () => {
+    // As for collections: answering no Singles would call a site whose
+    // homepage is a Single whole without having walked it.
+    await expect(
+      backfillScopes(host({ singles: async () => undefined }))
+    ).rejects.toThrow(/could not read the Singles registry/);
+  });
 });
 
 /**
@@ -174,6 +254,28 @@ describe("reporting content no scope can cover", () => {
     expect(survey.unaddressable).toBe(true);
   });
 
+  it("reports a Single whose blocks field is nested", async () => {
+    const survey = await backfillSurvey(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          {
+            slug: "home",
+            fields: [
+              {
+                type: "group",
+                name: "hero",
+                fields: [{ type: "blocks", name: "content" }],
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    expect(survey.unaddressable).toBe(true);
+  });
+
   it("CONTROL: an ordinary site reports nothing out of reach", async () => {
     // Without this, reporting every site as unreachable would satisfy both
     // cases above and withhold completeness from every installation for ever.
@@ -188,5 +290,185 @@ describe("reporting content no scope can cover", () => {
     expect(await backfillScopes(one)).toEqual(
       (await backfillSurvey(one)).scopes
     );
+  });
+});
+
+/** A table of `pages` pages of `size` rows, read as the row reader reads it. */
+function rowsOf(pages: number, size: number, last: Record<string, unknown>) {
+  const all: Record<string, unknown>[] = [];
+  for (let n = 0; n < pages * size; n += 1) {
+    all.push({
+      id: `r${String(n).padStart(6, "0")}`,
+      scope: "single",
+      entity: "home",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+  }
+  all.push({ ...last, id: "r999999" });
+  const asked: (string | undefined)[] = [];
+  const rows: UsageRowReader = async args => {
+    asked.push(args.after);
+    // The predicate honoured as the table store honours it, so a sweep
+    // that asks a narrower question reads fewer rows here too.
+    const matching = all.filter(row =>
+      Object.entries(args.where).every(([column, predicate]) =>
+        "equals" in predicate
+          ? row[column] === predicate.equals
+          : predicate.in.includes(String(row[column]))
+      )
+    );
+    const start =
+      args.after === undefined
+        ? 0
+        : matching.findIndex(row => row.id === args.after) + 1;
+    const items = matching.slice(start, start + size);
+    return { items, hasNext: start + size < matching.length };
+  };
+  return { rows, asked };
+}
+
+describe("finding the rows of scopes that are gone", () => {
+  const HOME = backfillScopeKey({
+    scope: "single",
+    entity: "home",
+    field: "content",
+    locale: "",
+    variant: "published",
+  });
+
+  it("reads to the end of the table, however many pages that takes", async () => {
+    // Past the hundred pages a fixed bound once stopped at, with only the
+    // last row naming a Single that is gone.
+    const { rows, asked } = rowsOf(150, 2, {
+      scope: "single",
+      entity: "retired",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    const gone = await goneScopes(rows, new Set([HOME]));
+
+    expect(gone.map(scope => scope.entity)).toEqual(["retired"]);
+    // Each page after the first starts after the last id the one before read.
+    expect(asked.slice(0, 3)).toEqual([undefined, "r000001", "r000003"]);
+  });
+
+  it("CONTROL: finds nothing gone when every row's Single is live", async () => {
+    const { rows } = rowsOf(3, 2, {
+      scope: "single",
+      entity: "home",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect(await goneScopes(rows, new Set([HOME]))).toEqual([]);
+  });
+
+  it("finds a collection's scope that is gone, as a Single's", async () => {
+    // A collection that lost its blocks field, or stopped storing it in a
+    // language, leaves rows no walk visits, as a removed Single does.
+    const { rows } = rowsOf(2, 2, {
+      scope: "collection",
+      entity: "pages",
+      field: "content",
+      locale: "fr",
+      variant: "published",
+    });
+
+    const gone = await goneScopes(rows, new Set([HOME]));
+
+    expect(gone).toEqual([
+      {
+        scope: "collection",
+        entity: "pages",
+        field: "content",
+        locale: "fr",
+        variant: "published",
+      },
+    ]);
+  });
+});
+
+describe("forgetting the scopes that are gone", () => {
+  it("reads nothing on a swept run's later pass when nothing it recorded is gone", async () => {
+    // The sweep runs on every jobs pass; reading every row of both tables
+    // each time would cost a site whose content stays put a table scan a pass.
+    const fenced: unknown[] = [];
+    const host = new Proxy({} as BackfillHost, {
+      get: (_target, name) => {
+        throw new Error(`the cleanup read the host's ${String(name)}`);
+      },
+    });
+    const home = {
+      scope: "single" as const,
+      entity: "home",
+      field: "content",
+      locale: "",
+      variant: "published" as const,
+    };
+
+    await forgetGoneScopes(
+      host,
+      [home],
+      async write => {
+        fenced.push(write);
+        return undefined as never;
+      },
+      {
+        completed: new Set([backfillScopeKey(home), GONE_SCOPES_SWEPT_KEY]),
+        markSwept: async () => {
+          throw new Error("a swept run recorded its sweep again");
+        },
+      }
+    );
+
+    expect(fenced).toEqual([]);
+  });
+
+  it("sweeps a run with nothing left to walk, whose progress names no scope", async () => {
+    // A failed write started a new run, discarding the old one's progress,
+    // and the site's last blocks field went: no scope to walk, no progress
+    // naming one, and rows of the removed field still in the table. The
+    // absence of progress is no proof the tables are clean.
+    const fenced: unknown[] = [];
+    let swept = 0;
+    const host = {
+      collectionSlugs: async () => [],
+      singles: async () => [],
+      locales: () => [],
+    } as unknown as BackfillHost;
+    const { rows } = rowsOf(1, 1, {
+      scope: "collection",
+      entity: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    await forgetGoneScopes(
+      host,
+      [],
+      async write => {
+        fenced.push(write);
+        return undefined as never;
+      },
+      {
+        completed: new Set(),
+        markSwept: async () => {
+          swept += 1;
+        },
+      },
+      () => rows
+    );
+
+    // Both scopes the table holds rows for, the Single's and the removed
+    // field's, are named by nothing now: each is forgotten in its own fenced
+    // transaction, and the run records its sweep.
+    expect(fenced).toHaveLength(2);
+    expect(swept).toBe(1);
   });
 });

@@ -22,6 +22,10 @@ import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
+import {
   useEntries,
   useBulkDeleteEntries,
   useBulkUpdateEntries,
@@ -71,6 +75,13 @@ import {
   type ChosenForCollection,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import {
+  chosenPluginFilters,
+  listFiltersFor,
+  pluginFilterParamValues,
+  pluginFilterWheres,
+  writePluginFilterParams,
+} from "./plugin-filters";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryVersions } from "./useEntrySelection";
 
@@ -187,6 +198,46 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   const searchParams = useSearchParams();
   const whereParam = getSearchParam(searchParams, "where");
 
+  // The filters plugins offer this list, and the options the page's URL has
+  // chosen among them (`?pf=<filter>:<value>`), each resolved by name against
+  // what was declared, so a `pf` naming anything else is ignored.
+  const { plugins } = useBranding();
+  const pluginFilters = useMemo(
+    () => listFiltersFor(plugins, collectionSlug),
+    [plugins, collectionSlug]
+  );
+  const chosenPluginFilterOptions = useMemo(
+    () =>
+      chosenPluginFilters(pluginFilters, pluginFilterParamValues(searchParams)),
+    [pluginFilters, searchParams]
+  );
+  // The filters are declared in the signed-in workspace meta, so until it
+  // arrives a `pf` in the URL resolves to nothing. The list waits for it
+  // rather than requesting, and showing, the rows the filter would remove;
+  // if it never arrives, the list says so and is not read at all, since the
+  // list without the filter is not the one the link asks for.
+  const {
+    isPending: pluginFiltersPending,
+    isUnavailable: pluginFiltersUnavailable,
+  } = useBrandingStatus();
+  const choosesPluginFilter = pluginFilterParamValues(searchParams).length > 0;
+  const awaitsPluginFilters = pluginFiltersPending && choosesPluginFilter;
+  const lostPluginFilters =
+    !pluginFiltersPending && pluginFiltersUnavailable && choosesPluginFilter;
+  // The page returns to the first whenever the choice changes, however it
+  // changed: a choice in the toolbar, or the back button restoring an older
+  // one. Kept on the page alone, a narrower choice would ask for a page past
+  // its last.
+  const pluginFilterChoice = JSON.stringify(
+    [...chosenPluginFilterOptions].sort(([a], [b]) => a.localeCompare(b))
+  );
+  const [pagedPluginFilterChoice, setPagedPluginFilterChoice] =
+    useState(pluginFilterChoice);
+  if (pagedPluginFilterChoice !== pluginFilterChoice) {
+    setPagedPluginFilterChoice(pluginFilterChoice);
+    setPage(1);
+  }
+
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -280,8 +331,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       updatedTo,
       translated: translationFilter,
       readsTranslationState: asksTranslationStatus,
+      pluginWheres: pluginFilterWheres(
+        pluginFilters,
+        chosenPluginFilterOptions
+      ),
     });
   }, [
+    pluginFilters,
+    chosenPluginFilterOptions,
     whereParam,
     status,
     createdFrom,
@@ -300,11 +357,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Fetch entries with pagination and filters
   const {
     data: entriesResponse,
-    isLoading: entriesLoading,
+    isLoading: entriesRequestLoading,
     error: entriesError,
   } = useEntries({
     collectionSlug,
-    enabled: !tableGone,
+    enabled: !tableGone && !awaitsPluginFilters && !lostPluginFilters,
     params: {
       page,
       limit,
@@ -318,6 +375,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       translationStatus: wantsTranslationStatus || undefined,
     },
   });
+  // A request held for the filters is still loading: a disabled query reports
+  // no loading, which would draw the empty state over a list not yet read.
+  const entriesLoading = entriesRequestLoading || awaitsPluginFilters;
 
   // ---------------------------------------------------------------------------
   // Mutations
@@ -486,6 +546,18 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       setPage(1); // Reset to first page on status change
     },
     [collectionSlug]
+  );
+
+  const handlePluginFilterChange = useCallback(
+    (name: string, value: string | null) => {
+      const next = new Map(chosenPluginFilterOptions);
+      if (value === null) next.delete(name);
+      else next.set(name, value);
+      // Kept in the URL, which the list reads back: the choice survives a
+      // reload and a shared link, and the request and the page follow the URL.
+      writePluginFilterParams(pluginFilters, next);
+    },
+    [chosenPluginFilterOptions, pluginFilters]
   );
 
   const handleTranslationFilterChange = useCallback(
@@ -696,7 +768,15 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       {/* Content — a plugin List override replaces the default table (D23) */}
       {listViewPath ? (
         <PluginSlot path={listViewPath} props={injectionProps} />
-      ) : tableGone ? null : entriesError ? (
+      ) : tableGone ? null : lostPluginFilters ? (
+        <Alert variant="destructive">
+          <AlertDescription>
+            This link chooses a plugin&apos;s filter, and the filters
+            couldn&apos;t be loaded, so the list isn&apos;t shown. Reload the
+            page to try again.
+          </AlertDescription>
+        </Alert>
+      ) : entriesError ? (
         // A list the server refused says so in its own words where the rows
         // would be. Without this a failed read has no rows and is not
         // loading, which draws the empty state and calls the collection empty.
@@ -705,7 +785,12 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
             {apiErrorMessage(entriesError, "The entries couldn't be loaded.")}
           </AlertDescription>
         </Alert>
-      ) : entries.length === 0 && !entriesLoading && !search ? (
+      ) : entries.length === 0 &&
+        !entriesLoading &&
+        !search &&
+        whereFilter === undefined ? (
+        // Only an unfiltered list is empty. A filtered one with no rows keeps
+        // its table, and with it the toolbar that clears the filter.
         <EntryEmptyState
           collectionName={labels.plural}
           singularName={labels.singular}
@@ -734,6 +819,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           onStatusChange={handleStatusChange}
           translationFilter={translationFilter}
           onTranslationFilterChange={handleTranslationFilterChange}
+          pluginFilters={pluginFilters}
+          chosenPluginFilters={chosenPluginFilterOptions}
+          onPluginFilterChange={handlePluginFilterChange}
           createdFrom={createdFrom}
           createdTo={createdTo}
           updatedFrom={updatedFrom}

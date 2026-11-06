@@ -487,7 +487,7 @@ describe.each(getConfiguredTestDialects())(
           user: { id: AUTHOR },
           overrideAccess: false,
         } as never,
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
     /** The members of a new release, added on a trusted call as the author's. */
@@ -536,7 +536,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: "de",
           },
-          { title: german, status: "draft" }
+          { title: german, status: "draft", _overwrite: true }
         );
         return id;
       };
@@ -566,7 +566,11 @@ describe.each(getConfiguredTestDialects())(
         });
         const id = String(created.item.id);
         // Held as a pending change: the entry is live.
-        await t.nextly.update({ collection: DRAFTED, id, data: edit } as never);
+        await t.nextly.update({
+          collection: DRAFTED,
+          id,
+          data: { ...edit, _overwrite: true },
+        } as never);
         return id;
       };
       const givenAway = await seed({ owner: OTHER });

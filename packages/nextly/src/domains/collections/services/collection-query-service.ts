@@ -156,6 +156,7 @@ import {
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
   TRANSLATION_FILTER_STATES,
+  TRANSLATION_OVERVIEW_KEY,
   fillCompanionFields,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
@@ -5540,6 +5541,14 @@ export class CollectionQueryService extends BaseService {
           if (DOCUMENT_REVISION_COLUMN in expandedEntry) {
             draftEntry[DOCUMENT_REVISION_COLUMN] =
               expandedEntry[DOCUMENT_REVISION_COLUMN];
+          }
+          // Every language's status is the document's, not the pending
+          // change's: the overview read for the live document stays on the
+          // document the read hands back, so the editor still tells every
+          // language while the one being edited holds a change.
+          if (TRANSLATION_OVERVIEW_KEY in expandedEntry) {
+            draftEntry[TRANSLATION_OVERVIEW_KEY] =
+              expandedEntry[TRANSLATION_OVERVIEW_KEY];
           }
           expandedEntry = draftEntry;
           draftOverlaid = true;

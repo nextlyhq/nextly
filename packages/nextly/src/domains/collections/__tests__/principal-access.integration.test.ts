@@ -263,7 +263,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "verified_only",
             id: entryId,
-            data: { title: "changed" },
+            data: { title: "changed", _overwrite: true },
             principal: unverified,
           })
         ).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
@@ -448,7 +448,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "members_only",
         id: staffRow,
-        data: { title: "edited by a person" },
+        data: { title: "edited by a person", _overwrite: true },
         principal: member,
       });
 

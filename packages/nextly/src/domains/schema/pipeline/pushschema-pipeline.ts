@@ -1470,7 +1470,13 @@ export class PushSchemaPipeline {
         // filterUnsafeStatements; the fast path bypasses that filter (its
         // statements come from approved operations), so it gets the same
         // refusal applied directly to its drops.
-        const pluginMigrated = await pluginMigratedTableSet(db, dialect);
+        //
+        // Read through `tx`, the handle this apply runs on. On PostgreSQL and
+        // MySQL that is the apply's own transaction, so the registry read
+        // stays on its connection instead of taking a second one from the
+        // pool while the transaction is open. On SQLite, which applies with
+        // no transaction, `tx` is the database handle itself.
+        const pluginMigrated = await pluginMigratedTableSet(tx, dialect);
         const unlocked = useFastPath
           ? pluginMigrated
             ? emittedStatements.filter(

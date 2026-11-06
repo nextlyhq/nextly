@@ -69,10 +69,10 @@ After a map change in development, the request that finds the map out of date is
 being served when the map is rewritten, so that one render can still draw the new widget's
 card in its error state. The rewritten map is what the next render loads.
 
-**`next dev` keeps the map current once the admin layout calls the check.** New apps import the
-map in their admin page; the layout's call is two lines to add. An app made from an older
-template has neither, so a plugin's components are not registered: its widget cards draw their
-error state, and its other components draw empty, until it adds them:
+**`next dev` keeps the map current once the admin layout calls the check.** New apps do both:
+their admin page imports the map and their admin layout calls the check. An app made from an
+older template may have neither, so a plugin's components are not registered: its widget cards
+draw their error state, and its other components draw empty, until it adds them:
 
 ```tsx
 // src/app/admin/[[...params]]/page.tsx: with the other imports
@@ -80,13 +80,32 @@ import "../../../types/generated/plugin-admin-imports.generated";
 ```
 
 ```tsx
-// src/app/admin/[[...params]]/layout.tsx: make the layout async, then
+// src/app/admin/[[...params]]/layout.tsx
+import { connection } from "next/server";
+import { Suspense } from "react";
 import { checkAdminComponents } from "nextly/runtime";
+
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
-// ...inside the layout, before it returns:
-await checkAdminComponents({ config, registeredComponentPaths });
+
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={null}>
+      <ForThisRequest>{children}</ForThisRequest>
+    </Suspense>
+  );
+}
+
+async function ForThisRequest({ children }: { children: React.ReactNode }) {
+  await connection();
+  await checkAdminComponents({ config, registeredComponentPaths });
+  return children;
+}
 ```
+
+Keep anything your layout already renders, such as branding styles, around the `<Suspense>`
+element. The check goes in the component beneath the boundary because, under Cache
+Components, request work outside one fails the build.
 
 Then run `npx nextly generate:types` once and commit the two generated files. The paths
 assume the default types location (`./src/types/generated/`); use the folder your
@@ -377,6 +396,37 @@ const key = userId === null ? null : `my-plugin.layout:${userId}`;
 
 This hook is experimental while its first consumer settles. Its name and its
 `string | null` answer are meant to stay.
+
+### Translating your strings
+
+A plugin declares its admin strings in `contributes.translations`, by interface language and
+then by key, and its components read them with `usePluginTranslate()` from
+`@nextlyhq/plugin-sdk/admin`:
+
+```tsx
+// In definePlugin({ ... })
+contributes: {
+  translations: {
+    en: { "acme-shop.cart.title": "Cart", "acme-shop.cart.count": "{count} items" },
+    fr: { "acme-shop.cart.title": "Panier" },
+  },
+}
+
+// In a component
+const t = usePluginTranslate();
+t("acme-shop.cart.title"); // "Panier" in French, "Cart" in English
+t("acme-shop.cart.count", { count: 3 }); // "3 items"
+```
+
+Every key begins with your plugin's admin slug and a dot (`@acme/shop` is `acme-shop`). A string
+is read in the interface language, then English, then the key itself. Startup refuses a key
+outside your namespace, a malformed key or language, a language not spelled as browsers report it
+(`pt-BR`, not `pt-br`), a value that isn't text, and a key another plugin declares. A disabled
+plugin's strings are still served, since its field editors still show. The admin's own strings begin with `nextly.`, so a plugin slugged `nextly` can
+declare none. The strings reach signed-in readers only, so they are not yet on the sign-in
+screen.
+
+This surface is experimental while its first consumer settles.
 
 ## Dashboard widgets
 

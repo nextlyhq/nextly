@@ -858,6 +858,13 @@ export type BreakpointId = string;
  */
 export interface TokenRef {
   $token: string;
+  /**
+   * A factor the token's value is scaled by, for a length or a number: a
+   * button's Small padding is its padding token times 0.75. Written as
+   * `calc(var(<token>) * times)`, so it follows the site's token and its
+   * prefix wherever either changes. From 0.25 to 4.
+   */
+  times?: number;
 }
 
 /**

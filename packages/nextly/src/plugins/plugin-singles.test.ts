@@ -177,6 +177,7 @@ describe("the context's service names and the resolver that answers them", () =>
       "adapter",
       "jobRegistry",
       "jobsDatabase",
+      "webhookFastDrainScheduler",
     ]);
   });
 

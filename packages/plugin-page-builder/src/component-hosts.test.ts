@@ -7,8 +7,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { indexHostFinder } from "./component-hosts";
+import type { UsageRowReader } from "./usage-count";
 import type { UsageIndexHealth } from "./usage-index-health";
 
 const WHOLE: UsageIndexHealth = {
@@ -28,28 +28,24 @@ const row = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** A Direct API answering `find` from pages of rows, recording what it was asked. */
-function api(pages: unknown[][]) {
+/** A row reader answering from pages of rows, recording what it was asked. */
+function reader(pages: unknown[][]) {
   const asked: Record<string, unknown>[] = [];
-  const nextly = {
-    find: async (args: Record<string, unknown>) => {
-      asked.push(args);
-      const page = Number(args.page ?? 1);
-      return {
-        items: pages[page - 1] ?? [],
-        meta: { hasNext: page < pages.length },
-      };
-    },
-  } as unknown as ClassUsageDirectApi;
-  return { nextly, asked };
+  const rows: UsageRowReader = async args => {
+    asked.push(args);
+    return {
+      items: pages[args.page - 1] ?? [],
+      hasNext: args.page < pages.length,
+    };
+  };
+  return { rows, asked };
 }
 
 function finder(pages: unknown[][], health: UsageIndexHealth = WHOLE) {
-  const { nextly, asked } = api(pages);
+  const { rows, asked } = reader(pages);
   return {
     hostsOf: indexHostFinder({
-      nextly: async () => nextly,
-      indexCollection: "nx_pb_component_usage",
+      rows: () => rows,
       health: async () => health,
     }),
     asked,
@@ -71,18 +67,16 @@ describe("finding a component's hosts in the usage index", () => {
     });
   });
 
-  it("asks for references to this component only, as the system", async () => {
+  it("asks for references to this component only", async () => {
     const { hostsOf, asked } = finder([[row()]]);
 
     await hostsOf.placing(["hero"]);
 
     expect(asked[0]).toMatchObject({
-      collection: "nx_pb_component_usage",
       where: {
         componentId: { in: ["hero"] },
         kind: { equals: "reference" },
       },
-      overrideAccess: true,
     });
   });
 
@@ -114,9 +108,34 @@ describe("finding a component's hosts in the usage index", () => {
     expect((await hostsOf.placing(["hero"])).complete).toBe(true);
   });
 
-  it("is a floor when a row names something other than a collection entry", async () => {
+  it("lists a Single by its slug, apart from an entry of a collection of that name", async () => {
     const { hostsOf } = finder([
-      [row(), row({ scope: "single", entityKey: "" }), row({ entity: "" })],
+      [row(), row({ scope: "single", entity: "pages", entityKey: "" })],
+    ]);
+
+    expect(await hostsOf.placing(["hero"])).toEqual({
+      hosts: [
+        { slug: "pages", id: "home", field: "content", localized: false },
+        {
+          slug: "pages",
+          id: "",
+          field: "content",
+          localized: false,
+          single: true,
+        },
+      ],
+      complete: true,
+    });
+  });
+
+  it("is a floor when a row names no document it can address", async () => {
+    const { hostsOf } = finder([
+      [
+        row(),
+        row({ entity: "" }),
+        row({ scope: "single", entity: "home", entityKey: "stray" }),
+        row({ scope: "collection", entityKey: "" }),
+      ],
     ]);
 
     const answer = await hostsOf.placing(["hero"]);

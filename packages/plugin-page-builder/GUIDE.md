@@ -229,7 +229,7 @@ The builder has three areas:
 
 | Area                 | What it's for                                                                                                                                                                                                                                            |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Left — Blocks**    | The nineteen building blocks: Heading, Text, Button, Section, Box, Columns, Column, Card, Image, Gallery, Embed, List, Quote, Accordion, Accordion item, Divider, Spacer, Form and Collection loop. Click **Insert** (or drag) to add one to the canvas. |
+| **Left — Blocks**    | The nineteen building blocks: Heading, Text, Button, Section, Box, Columns, Column, Card, Image, Gallery, Embed, List, Quote, Accordion, Accordion item, Divider, Spacer, Form and Collection list. Click **Insert** (or drag) to add one to the canvas. |
 | **Middle — Canvas**  | A live preview of your page. Click any block to select it. Use the **Desktop / Tablet / Mobile** buttons on top to preview different screen sizes.                                                                                                       |
 | **Right — Settings** | When a block is selected, its options appear here (e.g. a Heading's text and level H1–H6), organized into **Content**, **Style**, and **Advanced** tabs.                                                                                                 |
 

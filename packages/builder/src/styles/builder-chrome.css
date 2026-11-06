@@ -125,11 +125,18 @@
  * above it, and the chrome it draws (a Layout's region badge and tag) reads
  * these tokens too. It takes them only when nothing above it declares them,
  * and at zero specificity, so inside the shell it inherits the shell's values
- * untouched and its own rules below still win where they apply.
+ * untouched and its own rules below still win where they apply. The layer the
+ * editor draws over the canvas is the fourth, for the same reason: it is in
+ * the host's document, beside the frame rather than inside it, and the empty
+ * section prompt's plate on it reads these tokens. It takes no part in the
+ * dark picks below: its editing hues follow the page's own scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and the surface, border and text
+ * tokens here follow the admin's `.dark` through the `--nx-*` they name.
  */
 .nx-builder-tokens,
 .nx-builder-chrome,
-:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+:where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
@@ -152,6 +159,14 @@
    * admin's from here.
    */
   --nx-builder-scheme: light;
+  /*
+   * What a collection list's note on the canvas is drawn in: amber where its
+   * sort fell back, red where its read failed. Builder names, so the frame
+   * can hand them to the note alone without a site's own token of the same
+   * name being replaced.
+   */
+  --nx-builder-warning: var(--nx-warning);
+  --nx-builder-danger: var(--nx-destructive);
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
@@ -267,7 +282,8 @@
    */
   .nx-builder-tokens,
   .nx-builder-chrome,
-  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+  :where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
   }
@@ -1449,6 +1465,106 @@
 .nx-editing-bar__chip[aria-disabled="true"] {
   color: color-mix(in srgb, var(--nx-builder-shared) 55%, transparent);
   cursor: not-allowed;
+}
+
+/*
+ * The inspector while a look is edited on its own: the look's name, then a bar
+ * in the shared colour saying who the edit reaches and the way back, then the
+ * Style controls. A chip is text and a border, as the editing bar's are.
+ */
+.nx-look-inspector__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding-block-end: 0.75rem;
+  border-block-end: 1px solid var(--nx-border);
+  margin-block-end: 0.75rem;
+}
+
+.nx-look-inspector__name {
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-look-inspector__kind {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+  padding: 0.625rem;
+  margin-block-end: 0.875rem;
+  border: 1px solid var(--nx-builder-shared);
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--nx-builder-shared) 7%, transparent);
+  font-size: var(--text-xs);
+}
+
+.nx-look-bar__line,
+.nx-look-bar__note {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.nx-look-bar__label,
+.nx-look-bar__reach {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar__chip {
+  display: inline-block;
+  padding: 1px 0.4375rem;
+  border: 1px solid currentColor;
+  border-radius: 0.3125rem;
+  box-shadow: inset 0 0 0 1px currentColor;
+  color: var(--nx-builder-shared);
+  font-weight: 600;
+}
+
+.nx-look-bar__note {
+  color: var(--nx-foreground);
+}
+
+/* Why the look's values can't be changed, beside the held controls. */
+.nx-look-bar__held {
+  margin: 0;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-look-bar__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-look-bar__back:hover {
+  background: var(--nx-muted);
+}
+
+.nx-look-bar__back:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+.nx-look-bar__key {
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-block-end-width: 2px;
+  border-radius: 0.25rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
 }
 
 .nx-editing-bar__chip-wrap {
@@ -2924,21 +3040,20 @@
  * seen and what is announced reading off one value.
  */
 /*
- * The chosen one in the panel's text colour at 600, beside the others' muted
- * 500: the accent fill alone measured about 1.7:1 against the unselected
- * background in dark, under 3:1.
+ * The chosen one filled with the panel's own text colour, its label in the
+ * panel's background, at 600: the most contrast either mode has, for the
+ * label and for the fill against the panel. Not the accent, which is the
+ * site's brand colour, set at run time with a foreground only when the site
+ * names one, so a fill of it can sit under any label at any contrast (an
+ * orange brand measured 1.83:1 under white in dark).
  */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
-.nx-style-inspector__toggle > button[aria-checked="true"] {
-  background: var(--nx-accent);
-  color: var(--nx-foreground);
+.nx-style-inspector__toggle > button[aria-checked="true"],
+.nx-segment__option[aria-checked="true"],
+.nx-icon-choice__option[aria-checked="true"] {
+  background: var(--nx-foreground);
+  color: var(--nx-background);
   font-weight: 600;
-}
-
-/* A step lighter in dark, so its fill is told from the panel's black too. */
-.dark .nx-style-inspector__toggle > button[aria-pressed="true"],
-.dark .nx-style-inspector__toggle > button[aria-checked="true"] {
-  background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground));
 }
 
 /*
@@ -3827,6 +3942,16 @@
 .nx-canvas-mark[data-mark="exposed"] {
   outline: 1px dashed var(--nx-builder-component);
   outline-offset: -2px;
+}
+
+/*
+ * The blocks an edit to the look being edited reaches, while a look is edited
+ * on its own from the Design panel: dashed in the shared colour, outside each
+ * block, as a reach rather than a selection.
+ */
+.nx-canvas-mark[data-mark="look-reach"] {
+  outline: 2px dashed var(--nx-builder-shared);
+  outline-offset: 3px;
 }
 
 .nx-canvas-mark[data-mark="drop-parent"] {
@@ -6168,8 +6293,31 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /* The words shorten in a narrow container, and the "+" stays whole. */
-.nx-empty-container-appenders__button > svg {
+/*
+ * The words and the "+" sit on a plate of the editor's raised surface, never
+ * on the box's own ground: the box is drawn over the site's page, whose colour
+ * the editor does not choose, and its muted text holds its contrast only
+ * against the editor's own surface, in either theme. Opaque for that reason.
+ */
+.nx-empty-container-appenders__plate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+}
+.nx-empty-container-appenders__plate > svg {
   flex: none;
+}
+.nx-empty-container-appenders__button:hover
+  .nx-empty-container-appenders__plate,
+.nx-empty-container-appenders__button:focus-visible
+  .nx-empty-container-appenders__plate {
+  color: var(--nx-builder-text);
 }
 
 .nx-empty-container-appenders__words {
@@ -6510,6 +6658,59 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-shared-styles__lock {
   color: var(--nx-muted-foreground);
+}
+
+/* The Block looks group above the shared styles: one heading per block type,
+   then its looks, each drawn as a small block of its type on the row's left.
+   A chosen row (the look the inspector edits) is ringed in the selection
+   colour, as a chosen look tile is. */
+.nx-block-looks__type-head {
+  margin: 0.5rem 0 0.125rem;
+  padding: 0 2px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-block-looks__type-count {
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-block-looks__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-block-looks__row {
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  border-radius: var(--radius-sm);
+  border-bottom: 0;
+}
+
+.nx-block-looks__row[aria-pressed="true"] {
+  background: var(--nx-muted);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-select);
+}
+
+.nx-block-looks__row:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: -2px;
+}
+
+/* The specimen's stage, at the row's size rather than a tile's. */
+.nx-block-looks__specimen .nx-look-tile__stage {
+  block-size: 2.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+/* The own look's chip: what it covers is its tooltip and description. */
+.nx-block-looks__default {
+  color: var(--nx-foreground);
 }
 
 /* The note that counts are minimums, under the list's head, and the row
@@ -8823,14 +9024,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   background: transparent;
 }
 
-.nx-columns-layout__stack {
+.nx-segment {
   display: inline-flex;
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
 
-.nx-columns-layout__stack-option {
+.nx-segment__option {
   block-size: var(--nx-builder-control-height);
   padding: 0 0.625rem;
   border: 0;
@@ -8841,16 +9042,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   cursor: pointer;
 }
 
-.nx-columns-layout__stack-option:last-child {
+.nx-segment__option:last-child {
   border-inline-end: 0;
 }
 
-.nx-columns-layout__stack-option[aria-checked="true"] {
-  background: var(--nx-muted);
-  font-weight: 600;
-}
-
-.nx-columns-layout__stack-option:focus-visible {
+.nx-segment__option:focus-visible {
   outline: 2px solid var(--nx-accent);
   outline-offset: -2px;
 }
@@ -9096,15 +9292,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: none;
 }
 
-.nx-icon-choice__option:not(:disabled):hover,
+/* Not over the chosen one, whose fill says which is chosen. */
+.nx-icon-choice__option:not(:disabled):not([aria-checked="true"]):hover,
 .nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
   color: var(--nx-foreground);
   background: var(--nx-muted);
-}
-
-.nx-icon-choice__option[aria-checked="true"] {
-  color: var(--nx-accent-foreground);
-  background: var(--nx-accent);
 }
 
 /*
@@ -9158,4 +9350,428 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+}
+
+/*
+ * A collection list's query, as one group in the Content tab: Source, then a
+ * titled group each for Filters, Sort, How many and When nothing matches,
+ * titled as the Advanced summary is, a rule above each.
+ */
+.nx-list-query {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.nx-list-query__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-list-query__title {
+  margin: 0;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-list-query__hint {
+  margin-top: -0.25rem;
+}
+
+/* Under a field's control rather than under its label. */
+.nx-list-query__indented {
+  padding-inline-start: calc(6.5rem + 0.5rem);
+}
+
+/* A refused value spans its row when the row has no label column. */
+.nx-list-query__group > .nx-list-query__error,
+.nx-list-filter > .nx-list-query__error,
+.nx-list-sort > .nx-list-query__error {
+  grid-column: 1 / -1;
+}
+
+.nx-list-query__icon {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+/* A refused value's control, marked as the field the error names. */
+.nx-font-pick[data-invalid] .nx-font-pick__trigger,
+.nx-list-query input[aria-invalid="true"] {
+  border-color: var(--nx-destructive);
+}
+
+/* Add filter, Add sort: a quiet action at the start of its group. */
+.nx-list-query__add {
+  align-self: flex-start;
+  gap: 0.375rem;
+  padding-inline: 0.25rem;
+  font-weight: 500;
+}
+
+/* The field menu's rows: the field, and the kind of value on the right. */
+.nx-list-query__field-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.nx-list-query__field-kind {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* What a menu leaves out, said once at its foot; a group with nothing. */
+.nx-list-query__menu-foot,
+.nx-list-query__menu-note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-query__menu-foot {
+  border-top: 1px solid var(--nx-border);
+}
+
+/* Inset as the list below it is, so its heading, set in from there as a
+   group's heading is, lines up with "Collections". */
+.nx-list-query__menu-note {
+  padding-inline: 0.25rem;
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/* The note's words, set in from the inset as an option's words are. */
+.nx-list-query__menu-text {
+  margin: 0;
+  padding-inline: 0.5rem;
+}
+
+.nx-list-query__kbd {
+  margin-inline-start: auto;
+  padding-inline-start: 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-query__filters,
+.nx-list-query__sort {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * One filter, closed: its sentence on one 28px line, the field in medium
+ * weight, the operator muted and the value in full ink, cut short with the
+ * whole sentence in its title; the remove button beside it.
+ */
+.nx-list-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__line {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 28px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--nx-builder-font-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-list-filter__line:hover {
+  background: var(--nx-muted);
+}
+
+.nx-list-filter__line:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-list-filter__line > svg {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-filter[data-invalid] > .nx-list-filter__line {
+  border-color: var(--nx-destructive);
+}
+
+.nx-list-filter__sentence {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-list-filter__field {
+  font-weight: 500;
+}
+
+.nx-list-filter__op {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-filter__said[data-missing] {
+  color: var(--nx-destructive);
+}
+
+/*
+ * One filter, open: a bordered card holding exactly its controls, the field
+ * on its first line and the operator and value on its second.
+ */
+.nx-list-filter[data-open] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.375rem;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+}
+
+.nx-list-filter[data-open][data-invalid] {
+  border-color: var(--nx-destructive);
+}
+
+.nx-list-filter__head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__head > .nx-font-pick {
+  flex: 1;
+}
+
+.nx-list-filter__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.375rem;
+  min-width: 0;
+  padding-inline-start: calc(24px + 0.25rem);
+}
+
+.nx-list-filter__op-pick {
+  flex: none;
+  width: 7.5rem;
+}
+
+/* "has a value" and "is empty" take no value, so the operator takes the line. */
+.nx-list-filter__op-pick[data-wide] {
+  flex: 1;
+  width: auto;
+}
+
+.nx-list-filter__body > :not(.nx-list-filter__op-pick) {
+  flex: 1;
+  min-width: 0;
+}
+
+.nx-list-filter__chips,
+.nx-list-filter__entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.25rem 0.125rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-list-filter__chip > button {
+  display: inline-flex;
+  padding: 0.125rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-list-filter__chip > button:focus-visible {
+  outline: 2px solid var(--nx-ring);
+}
+
+.nx-list-filter__checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-list-filter__check {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-foreground);
+}
+
+/* The entry picker takes the row under the operator, named for a screen
+   reader by the field it chooses for, as the row already shows it. */
+.nx-list-filter__entry {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+/* The picker is stacked, one column; its name is said by the row already,
+   so it is kept for a screen reader only. */
+.nx-list-filter__entry .nx-inspector__field-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * One sort key: its handle, its field, its direction in words and its menu,
+ * on one row. Dragged, the row it would land at is marked.
+ */
+.nx-list-sort {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 7.25rem auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
+
+.nx-list-sort[data-dragging] {
+  background: var(--nx-muted);
+}
+
+.nx-list-sort__handle {
+  display: inline-flex;
+  color: var(--nx-muted-foreground);
+  cursor: grab;
+  touch-action: none;
+}
+
+.nx-list-sort[data-dragging] .nx-list-sort__handle {
+  cursor: grabbing;
+}
+
+.nx-list-sort__direction {
+  width: 100%;
+  white-space: nowrap;
+}
+
+/* The group's icons, at the inspector's icon size, over a control's own. */
+.nx-list-query .lucide {
+  width: 14px;
+  height: 14px;
+}
+
+/* The window: a number with what it counts after it, inside the field. */
+.nx-list-query__bound {
+  position: relative;
+  min-width: 0;
+}
+
+.nx-list-query__bound[data-suffixed] input {
+  padding-inline-end: 3.75rem;
+}
+
+.nx-list-query__suffix {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0.75rem;
+  display: flex;
+  align-items: center;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/* Canvas shows: two words, taking the control column. */
+.nx-inspector__field[data-content-control="canvasShows"]
+  > .nx-style-inspector__toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/*
+ * A collection list's region in Layers: "Each entry" and "When empty",
+ * muted, as regions rather than blocks, with how many blocks each holds.
+ */
+.nx-layer-row[data-nx-layer-slot] .nx-layer-row__label,
+.nx-layer-row__slot-mark {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-layer-row__count {
+  margin-inline-start: auto;
+  padding-inline-end: 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The exposed part being edited in place: a solid ring in the component
+ * colour, so the passage the caret is in reads apart from the placement's
+ * other parts, which dim while it is open.
+ */
+.nx-canvas-mark[data-mark="exposed"][data-editing] {
+  outline: 2px solid var(--nx-builder-component);
+  outline-offset: 0;
+}
+
+.nx-canvas-mark[data-mark="exposed"][data-dimmed] {
+  opacity: 0.4;
+}
+
+/*
+ * A passage field that cannot be edited here (held while the canvas edits it,
+ * or with no editor to open): a muted fill and border, so it does not look
+ * like a field waiting for input. Its focus ring stays for the keyboard.
+ */
+.nx-inspector__rich-text[aria-readonly="true"] {
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+  color: var(--nx-muted-foreground);
+  cursor: default;
 }

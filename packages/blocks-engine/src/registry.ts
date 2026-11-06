@@ -10,7 +10,12 @@
  * at boot with a named error rather than producing broken pages later.
  */
 import type { AnyBlockDefinition, BlockSupports } from "./block";
-import { COMPONENT_INSTANCE_TYPE, isBlockType, isPartName } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  isBlockType,
+  isPartName,
+  isTokenRef,
+} from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
@@ -329,9 +334,9 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
     const usable =
       typeof gap === "string" ||
       gap === 0 ||
-      (isPlainRecord(gap) &&
-        typeof gap.$token === "string" &&
-        Object.keys(gap).length === 1);
+      // A token reference, scaled or not: what it may carry beside the
+      // name is the style values' rule, which `childGapIssues` applies.
+      isTokenRef(gap);
     if (!usable) {
       fail(
         "NEXTLY_BLOCK_INVALID",

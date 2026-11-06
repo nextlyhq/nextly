@@ -102,7 +102,11 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     // succeed before the failure is injected.
     const first = await singles.update(
       "preferences",
-      { headline: "Original headline", seo: { heading: "Original SEO" } },
+      {
+        headline: "Original headline",
+        seo: { heading: "Original SEO" },
+        _overwrite: true,
+      },
       { overrideAccess: true }
     );
     expect(first.success).toBe(true);
@@ -116,7 +120,11 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
 
     const second = await singles.update(
       "preferences",
-      { headline: "Changed headline", seo: { heading: "Changed SEO" } },
+      {
+        headline: "Changed headline",
+        seo: { heading: "Changed SEO" },
+        _overwrite: true,
+      },
       { overrideAccess: true }
     );
 
@@ -145,7 +153,11 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     // Seed an initial value while the component table still exists.
     const first = await singles.update(
       "preferences",
-      { headline: "Original headline", seo: { heading: "Original SEO" } },
+      {
+        headline: "Original headline",
+        seo: { heading: "Original SEO" },
+        _overwrite: true,
+      },
       { overrideAccess: true }
     );
     expect(first.success).toBe(true);
@@ -160,7 +172,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
 
     const scalar = await singles.update(
       "preferences",
-      { headline: "Scalar-only change" },
+      { headline: "Scalar-only change", _overwrite: true },
       { overrideAccess: true }
     );
 
