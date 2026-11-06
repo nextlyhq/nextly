@@ -6,7 +6,7 @@
  * action runs is untouched, and a plugin list rewritten after boot does not
  * unbind a route.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   grantTo,
@@ -349,6 +349,46 @@ describe.each(getConfiguredTestDialects())(
       } finally {
         unregisterHook("beforeRead", TICKETS, scope);
       }
+    });
+
+    it("answers a row read that fails as its own failure, with nothing run", async () => {
+      await boot(dialect);
+      const handler = current!.getService("collectionsHandler") as unknown as {
+        listEntries: (...args: unknown[]) => Promise<unknown>;
+      };
+      // A busy database keeps its code and status, so a client can retry.
+      const busy = vi.spyOn(handler, "listEntries").mockResolvedValueOnce({
+        success: false,
+        statusCode: 503,
+        code: "DATABASE_BUSY",
+        message: "The database is busy.",
+      });
+      try {
+        expect(
+          await post("/escalate", {
+            action: "acme-support.escalate",
+            rows: one("mine open"),
+          })
+        ).toMatchObject({ status: 503, code: "DATABASE_BUSY" });
+      } finally {
+        busy.mockRestore();
+      }
+      // A read that throws is answered as the handler's failures are, not
+      // left to escape the dispatcher.
+      const broken = vi
+        .spyOn(handler, "listEntries")
+        .mockRejectedValueOnce(new Error("adapter: connection reset"));
+      try {
+        expect(
+          await post("/escalate", {
+            action: "acme-support.escalate",
+            rows: one("mine open"),
+          })
+        ).toMatchObject({ status: 500 });
+      } finally {
+        broken.mockRestore();
+      }
+      expect(ran).toEqual([]);
     });
 
     it("leaves a route no action runs as it was", async () => {
