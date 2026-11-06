@@ -2147,9 +2147,22 @@ export function createPluginContext(
             readStored: read.readStored,
             fieldPaths: read.fieldPaths,
           });
-        } finally {
-          read.settle();
+        } catch (error) {
+          // The handler's own failure is the write's; reads it left running
+          // are waited for, so none outlives the transaction.
+          await read.settle();
+          throw error;
         }
+        const unawaited = await read.settle();
+        if (unawaited === undefined) return;
+        throw unawaited instanceof Error
+          ? unawaited
+          : NextlyError.internal({
+              logContext: {
+                reason: "in-transaction-read-failed-after-handler",
+                plugin: pluginName,
+              },
+            });
       });
     inTransactionRunners.set(handler, runner);
     return runner;
@@ -2197,21 +2210,46 @@ export function createPluginContext(
       });
       return reads;
     };
+    // Every read accepted before the handler settled, until it settles, so
+    // the transaction ends only once they have finished, as the bound
+    // database waits for statements the handler started and did not await.
+    const inFlight = new Set<Promise<unknown>>();
+    const tracked = <T>(work: Promise<T>): Promise<T> => {
+      inFlight.add(work);
+      const forget = () => inFlight.delete(work);
+      void work.then(forget, forget);
+      return work;
+    };
     return {
-      settle: () => {
+      /**
+       * Refuse further reads, wait for the ones still running, and answer
+       * the first failure among them: one the handler never awaited, which
+       * fails the write as an unawaited statement does.
+       */
+      settle: async (): Promise<unknown> => {
         settled = true;
+        const outcomes = await Promise.allSettled([...inFlight]);
+        const failed = outcomes.find(
+          (outcome): outcome is PromiseRejectedResult =>
+            outcome.status === "rejected"
+        );
+        return failed?.reason;
       },
-      readStored: async (
+      readStored: (
         fieldType: string,
         target: PluginStoredValueTarget
       ): Promise<PluginStoredValue> =>
-        (await open(fieldType)).read(fieldType, target),
-      fieldPaths: async (fieldType: string): Promise<readonly string[]> =>
-        (await open(fieldType)).fieldPaths(
-          written.startsWith(SINGLE_TARGET_PREFIX)
-            ? { single: written.slice(SINGLE_TARGET_PREFIX.length) }
-            : { collection: written },
-          fieldType
+        tracked(open(fieldType).then(reads => reads.read(fieldType, target))),
+      fieldPaths: (fieldType: string): Promise<readonly string[]> =>
+        tracked(
+          open(fieldType).then(reads =>
+            reads.fieldPaths(
+              written.startsWith(SINGLE_TARGET_PREFIX)
+                ? { single: written.slice(SINGLE_TARGET_PREFIX.length) }
+                : { collection: written },
+              fieldType
+            )
+          )
         ),
     };
   };
