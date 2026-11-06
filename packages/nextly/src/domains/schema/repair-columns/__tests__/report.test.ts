@@ -578,6 +578,28 @@ describe("a table whose wait ran out", () => {
   });
 });
 
+describe("a column that differs and also has a pending change", () => {
+  it("gives two records, each with its own outcome, so the repair and the migration stay apart", () => {
+    const pending: ColumnFinding = {
+      kind: "pending-migration",
+      location,
+      applied: { type: "jsonb", nullable: true },
+      configured: { type: "text", nullable: true },
+      live: { type: "text", nullable: true },
+    };
+    const records = [record(textToJson), record(pending)];
+    expect(records.map(r => [r.column, r.outcome])).toEqual([
+      ["links", "would-convert"],
+      ["links", "pending-migration"],
+    ]);
+    // The repair keeps its statements; the pending change shows none.
+    expect(records[0].conversion).not.toBeNull();
+    expect(records[1].conversion).toBeNull();
+    const counts = countOutcomes(records);
+    expect(counts["would-convert"] + counts["pending-migration"]).toBe(2);
+  });
+});
+
 describe("the summary", () => {
   it("counts each outcome, naming every outcome in the counts and only the present ones in the text", () => {
     const records = [

@@ -279,6 +279,8 @@ export async function findColumnDifferences(args: {
     return planned.flatMap(definitionUnreadableFindings);
   }
 
+  // A table's row count is the same for each of its columns, so it is read once per table.
+  const countRows = rowCounter(db, dialect);
   const findings: ColumnFinding[] = [];
   for (const { entity, applied, configured } of planned) {
     if (entity.applied === null || applied === null) {
@@ -292,7 +294,8 @@ export async function findColumnDifferences(args: {
         entity.applied.origin,
         applied,
         live,
-        dialect
+        dialect,
+        countRows
       ))
     );
     if (configured !== null) {
@@ -331,15 +334,22 @@ function isDatabaseHeld(error: unknown, dialect: SupportedDialect): boolean {
 }
 
 /**
- * One record for each column an entity names, as last applied, or as configured for an entity no
- * migration has applied yet, where the table's definition could not be read.
+ * One record for each column an entity names, where the table's definition could not be read: each
+ * column its applied definition names, then each one only its configured definition names (a field
+ * the configuration adds), once each.
  */
 function definitionUnreadableFindings({
   entity,
   applied,
   configured,
 }: PlannedEntity): ColumnFinding[] {
-  return (applied ?? configured ?? []).map(column => ({
+  const named = new Map<string, NamedColumn>();
+  for (const column of [...(applied ?? []), ...(configured ?? [])]) {
+    const key =
+      `${column.location.table}.${column.location.column}`.toLowerCase();
+    if (!named.has(key)) named.set(key, column);
+  }
+  return [...named.values()].map(column => ({
     kind: "definition-unreadable",
     location: column.location,
     ...ownedBy(entity.plugin),
@@ -394,7 +404,8 @@ async function appliedColumnFindings(
   origin: RepairColumnOrigin,
   applied: readonly NamedColumn[],
   live: LiveTables,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  countRows: (table: string) => Promise<number>
 ): Promise<ColumnFinding[]> {
   const findings: ColumnFinding[] = [];
   for (const column of applied) {
@@ -421,8 +432,7 @@ async function appliedColumnFindings(
       judgement,
       conversion,
       rowsRewritten: await rowsRewrittenBy(
-        db,
-        dialect,
+        countRows,
         difference.liveTable,
         conversion
       ),
@@ -438,19 +448,35 @@ async function appliedColumnFindings(
  * nullable column, reads none.
  */
 async function rowsRewrittenBy(
-  db: unknown,
-  dialect: SupportedDialect,
+  countRows: (table: string) => Promise<number>,
   table: string,
   conversion: ColumnConversionPlan | null
 ): Promise<number | null> {
   if (conversion === null) return null;
   if (!conversion.rewritesTable) return 0;
-  const [row] = await querySqlRows<{ n: unknown }>(
-    db,
-    dialect,
-    sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}`
-  );
-  return Number(row?.n ?? 0);
+  return countRows(table);
+}
+
+/**
+ * How many rows a table holds, read at most once per table for one run: each column of a table
+ * whose conversion rewrites it rewrites the same rows, and a count can scan the whole table.
+ */
+function rowCounter(
+  db: unknown,
+  dialect: SupportedDialect
+): (table: string) => Promise<number> {
+  const counted = new Map<string, Promise<number>>();
+  return table => {
+    const known = counted.get(table);
+    if (known !== undefined) return known;
+    const count = querySqlRows<{ n: unknown }>(
+      db,
+      dialect,
+      sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}`
+    ).then(([row]) => Number(row?.n ?? 0));
+    counted.set(table, count);
+    return count;
+  };
 }
 
 /**

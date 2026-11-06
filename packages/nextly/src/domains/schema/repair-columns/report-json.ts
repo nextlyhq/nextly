@@ -48,7 +48,10 @@ export interface RepairColumnsResult {
   dialect: SupportedDialect;
   schemaLock: SchemaLockState;
   records: RepairRecord[];
-  /** How many columns have each outcome, every outcome named, and how many in all. */
+  /**
+   * How many records have each outcome, every outcome named, and how many in all. A record is one
+   * difference of one column, so a column that also has a pending change counts once for each.
+   */
   summary: { total: number; outcomes: OutcomeCounts };
 }
 

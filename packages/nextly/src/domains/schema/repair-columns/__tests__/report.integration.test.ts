@@ -28,6 +28,7 @@ import { introspectLiveColumns } from "../../pipeline/diff/introspect-live";
 import { getSchemaLockDdl, withSchemaLock } from "../../pipeline/schema-lock";
 import type { SupportedDialect } from "../../services/field-column-descriptor";
 import type { RepairRecord } from "../report";
+import { findColumnDifferences } from "../find-differences";
 import { dryRunReport } from "../run-report";
 import type { RepairEntity } from "../types";
 
@@ -237,6 +238,42 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("counts a table's rows once for all the columns whose conversion rewrites it", async () => {
+      await createTable(FIELDS, true);
+      await insertRows(ROWS);
+      // The handle the report reads through, with each row count it sends counted.
+      let counts = 0;
+      const drizzle = handle.adapter.getDrizzle() as object;
+      const counted = new Proxy(drizzle, {
+        get(target, key, receiver) {
+          const value: unknown = Reflect.get(target, key, receiver);
+          if (typeof value !== "function") return value;
+          return (...args: unknown[]) => {
+            if (
+              (key === "execute" || key === "all") &&
+              JSON.stringify(args[0]).includes("COUNT(*) AS")
+            ) {
+              counts += 1;
+            }
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        },
+      });
+      const findings = await findColumnDifferences({
+        db: counted,
+        dialect,
+        entities: [entity(FIELDS)],
+      });
+      const rewriting = findings.filter(
+        f => f.kind === "differs" && f.conversion?.rewritesTable === true
+      );
+      // MySQL rewrites the table for both the type change and the NOT NULL drop, so the count is
+      // asked for twice there; PostgreSQL rewrites only for the type change, and SQLite has only
+      // the NOT NULL drop.
+      expect(rewriting).toHaveLength(dialect === "mysql" ? 2 : 1);
+      expect(counts).toBe(1);
+    });
+
     it("reports while the schema lock is held by another process", async () => {
       await createTable(FIELDS, true);
       await insertRows(1);
@@ -377,12 +414,22 @@ describe("repair-columns dry run on SQLite held by another connection", () => {
     const document = await dryRunReport({
       adapter: reader,
       dialect: "sqlite",
-      entities: [entity(FIELDS)],
+      // A field the configuration adds and no migration has applied yet is named too.
+      entities: [
+        {
+          ...entity(FIELDS),
+          configured: {
+            fields: [...FIELDS, f({ name: "subtitle", type: "text" })],
+            localized: false,
+            origin: "collection",
+          },
+        },
+      ],
       nextlyVersion: "test",
     });
     const records = document.result?.records ?? [];
     expect(records.map(r => r.column).sort()).toEqual(
-      ["author", "links", "title"].sort()
+      ["author", "links", "subtitle", "title"].sort()
     );
     for (const record of records) {
       expect(record).toMatchObject({
@@ -398,7 +445,7 @@ describe("repair-columns dry run on SQLite held by another connection", () => {
       });
       expect(record.expected).not.toBeNull();
     }
-    expect(document.result?.summary.outcomes["unavailable-locked"]).toBe(3);
+    expect(document.result?.summary.outcomes["unavailable-locked"]).toBe(4);
     expect(document).toMatchObject({ ok: false, exitCode: 2 });
     // The lock tables could not be read either, so whether a schema change runs is unknown.
     expect(document.result?.schemaLock.state).toBe("unknown");

@@ -66,7 +66,16 @@ export interface ReasonRecord {
   rows: { first: RowKey[]; count: number } | null;
 }
 
-/** One column of one table, with its outcome and every fact behind it. */
+/**
+ * One difference of one column of one table, with its outcome and every fact behind it.
+ *
+ * A column has at most two records, and they are kept apart on purpose: how its live column
+ * differs from its field as last applied, which a repair converts towards, and a change to the
+ * field the configuration holds and no migration has applied, which is left to that migration.
+ * Merging them would give one record two things to act on and two outcomes to choose between,
+ * and would hide the repair the pending migration needs first, since that migration was written
+ * for the column as last applied.
+ */
 export interface RepairRecord {
   outcome: Outcome;
   entity: { kind: RepairEntityKind; slug: string };
