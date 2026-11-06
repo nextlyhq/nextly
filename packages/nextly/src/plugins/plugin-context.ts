@@ -668,6 +668,10 @@ export interface PluginContext {
    * declares in `contributes.webhookEvents`, for delivery to the endpoints
    * subscribed to them. Present on every context: a plugin that declares no
    * types has every type refused by name.
+   *
+   * Required, like the context's other members: `createPluginContext` and
+   * `createTestNextly` provide it, and a context built by hand, such as a
+   * test double typed as `PluginContext`, adds a `webhooks` of its own.
    */
   webhooks: PluginWebhooksApi;
 

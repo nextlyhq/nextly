@@ -19,6 +19,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
+import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import { linkedTransaction } from "../../plugins/database/plugin-transaction-link";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
@@ -26,6 +27,7 @@ import type { TxOption } from "../../plugins/security/one-time-secrets";
 import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
 import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 
+import type { WebhookFastDrainScheduler } from "./after-drain";
 import { webhookEventTypes } from "./event-type-registry";
 import {
   recordMutationEvent,
@@ -37,9 +39,16 @@ import type { PluginEventType } from "./types";
 export interface PluginWebhookEvent extends TxOption {
   /** A type this plugin declares in `contributes.webhookEvents`. */
   type: string;
-  /** The plugin's own id for what the event is about, e.g. an order's. */
+  /**
+   * The plugin's own id for what the event is about, e.g. an order's. At most
+   * 191 characters, the width every dialect keeps it in.
+   */
   id?: string;
-  /** What subscribers receive as the event's `data`. */
+  /**
+   * What subscribers receive as the event's `data`, sent as JSON: what JSON
+   * drops (an `undefined`, a function) is dropped before the changed fields
+   * are worked out, and what it cannot hold (a `bigint`, a cycle) is refused.
+   */
   data: Record<string, unknown>;
   /** The prior state, for a change; its changed fields are worked out from it. */
   previous?: Record<string, unknown> | null;
@@ -68,12 +77,22 @@ type RecordingAdapter = Pick<
   "transaction" | "transactionOpenInFlow"
 >;
 
+/**
+ * The longest id kept: MySQL holds `nextly_events.resource_id` as
+ * `varchar(191)` (`schemas/webhooks/mysql.ts`), so a longer one would be
+ * refused or cut there while the other dialects kept it whole.
+ */
+const RESOURCE_ID_MAX_LENGTH = 191;
+
+/** An object as it travels in a delivery, after a JSON round trip. */
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+
 /** The shape of a recorded event, checked at the plugin boundary. */
 const pluginWebhookEventSchema = z.object({
   type: z.string().min(1),
-  id: z.string().min(1).optional(),
-  data: z.record(z.string(), z.unknown()),
-  previous: z.record(z.string(), z.unknown()).nullable().optional(),
+  id: z.string().min(1).max(RESOURCE_ID_MAX_LENGTH).optional(),
+  data: jsonObjectSchema,
+  previous: jsonObjectSchema.nullable().optional(),
   tx: z.unknown().optional(),
 });
 
@@ -92,6 +111,35 @@ function isOwnEventType(
   return webhookEventTypes().some(
     entry => entry.owner === pluginName && entry.type === type
   );
+}
+
+/**
+ * `value` as it will be delivered: through a JSON round trip, so the envelope's
+ * changed fields are worked out from exactly what subscribers receive. A
+ * value JSON cannot hold is refused, naming the field, before anything is
+ * written, rather than failing the write and the plugin's transaction with it.
+ */
+function asDelivered(
+  pluginName: string,
+  field: "data" | "previous",
+  value: Record<string, unknown>
+): Record<string, unknown> {
+  let text: string;
+  try {
+    text = JSON.stringify(value);
+  } catch {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: field,
+          code: "INVALID_WEBHOOK_EVENT",
+          message: `\`${field}\` must be JSON: it holds a bigint or refers to itself.`,
+        },
+      ],
+      logContext: { operation: OPERATION, plugin: pluginName, field },
+    });
+  }
+  return jsonObjectSchema.parse(JSON.parse(text));
 }
 
 /** Refuse an event that is malformed or not of one of the plugin's own types. */
@@ -123,7 +171,15 @@ function checkedEvent(
       logContext: { operation: OPERATION, plugin: pluginName, type },
     });
   }
-  return { ...parsed.data, type };
+  return {
+    ...parsed.data,
+    type,
+    data: asDelivered(pluginName, "data", parsed.data.data),
+    previous:
+      parsed.data.previous == null
+        ? null
+        : asDelivered(pluginName, "previous", parsed.data.previous),
+  };
 }
 
 /** The recorder's arguments for one checked event. */
@@ -139,11 +195,21 @@ function recordArgs(
       ...(event.id === undefined ? {} : { id: event.id }),
     },
     data: event.data,
-    previous: event.previous ?? null,
+    previous: event.previous,
     // The plugin chose what `data` carries: there is no field config whose
     // secret fields would have to be stripped from it.
     fields: [],
   };
+}
+
+/**
+ * Offer the fast drain, as core's write paths do once their event commits, so
+ * a plugin's event is delivered as promptly as theirs. Read per call, and
+ * absent where webhooks are not registered.
+ */
+function offerFastDrain(): void {
+  if (!container.has("webhookFastDrainScheduler")) return;
+  container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler").offer();
 }
 
 /**
@@ -162,17 +228,22 @@ export function createPluginWebhooks(
       const checked = checkedEvent(pluginName, event);
       const args = recordArgs(pluginName, checked);
       if (checked.tx !== undefined) {
-        await linkedTransaction(checked.tx, OPERATION).run(adapterTx =>
+        const link = linkedTransaction(checked.tx, OPERATION);
+        const recorded = await link.run(adapterTx =>
           recordMutationEvent(adapterTx, args)
         );
+        // Held until the plugin's transaction commits, and never run if it
+        // rolls back: there is nothing to deliver for a discarded event.
+        if (recorded) link.afterCommit(offerFastDrain);
         return;
       }
       const transactions = adapter();
       assertNoOpenTransaction(transactions, OPERATION);
-      await runAdapterTransaction<boolean, TransactionContext>(
+      const recorded = await runAdapterTransaction<boolean, TransactionContext>(
         run => transactions.transaction(ctx => run(ctx)),
         ctx => recordMutationEvent(ctx, args)
       );
+      if (recorded) offerFastDrain();
     },
   };
 }
