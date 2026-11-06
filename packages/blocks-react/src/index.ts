@@ -14,6 +14,7 @@
  * @module index
  */
 export type {
+  AccordionTitleLevel,
   BindingIssuesHandler,
   BlockHostPolicy,
   BlockRenderArgs,
