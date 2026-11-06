@@ -38,7 +38,7 @@ export interface NoticeListResponse {
 export type MarkNoticesRead = { ids: string[] } | { all: true };
 
 /** The notices shown at once in the bell. */
-export const NOTICES_PAGE_SIZE = 20;
+const NOTICES_PAGE_SIZE = 20;
 
 export const noticesApi = {
   list: (): Promise<NoticeListResponse> =>
