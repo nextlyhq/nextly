@@ -2333,22 +2333,46 @@ async function readSite(
 }
 
 /**
+ * The collection a named query's rows are entries of, by the queries the
+ * route was handed, or undefined for rows of a schema of their own and a
+ * query the route does not know. Rows are told apart as every reader of
+ * them tells them apart, by whether they hold `fields`.
+ */
+type RowsCollectionOf = (query: string) => string | undefined;
+
+function rowsCollectionOf(config: BlocksPageConfig): RowsCollectionOf {
+  return name => {
+    const rows = config.namedQueries?.definitionOf(name)?.rows;
+    return rows === undefined || "fields" in rows ? undefined : rows.collection;
+  };
+}
+
+/**
  * The collections the page's lists read that `wanted` keeps, each list's
- * query read as the engine reads it. One walk for every question about the
- * page's lists, so no two of them disagree about which lists a page holds.
+ * query read as the engine reads it: its collection, or, for a custom
+ * source, the collection its query's rows are entries of (`rowsOf`), whose
+ * fields its items bind and decide conditions by. One walk for every
+ * question about the page's lists, so no two of them disagree about which
+ * lists a page holds.
  */
 function listCollectionsWhere(
   documents: readonly BlockDocument[],
   wanted: (query: ListQuery, list: BlockNode) => boolean,
-  run?: BindingRun
+  run: BindingRun | undefined,
+  rowsOf: RowsCollectionOf
 ): Set<string> {
   const found = new Set<string>();
   const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     if (node.type === collectionLoop.name) {
       const { query } = readListQuery(listPropsAsBound(node, run));
-      if (query.collection !== undefined && wanted(query, node)) {
-        found.add(query.collection);
+      const collection =
+        query.collection ??
+        (query.namedQuery === undefined
+          ? undefined
+          : rowsOf(query.namedQuery.name));
+      if (collection !== undefined && wanted(query, node)) {
+        found.add(collection);
       }
     }
     for (const children of Object.values(node.slots ?? {})) {
@@ -2374,8 +2398,11 @@ function listPropsAsBound(
 }
 
 /** The collections the page's lists draw, whose items its bindings read. */
-function listCollections(documents: readonly BlockDocument[]): Set<string> {
-  return listCollectionsWhere(documents, () => true);
+function listCollections(
+  documents: readonly BlockDocument[],
+  rowsOf: RowsCollectionOf
+): Set<string> {
+  return listCollectionsWhere(documents, () => true, undefined, rowsOf);
 }
 
 /**
@@ -2386,14 +2413,16 @@ function listCollections(documents: readonly BlockDocument[]): Set<string> {
  */
 function listsComparingDays(
   documents: readonly BlockDocument[],
-  run: BindingRun | undefined
+  run: BindingRun | undefined,
+  rowsOf: RowsCollectionOf
 ): Set<string> {
   return listCollectionsWhere(
     documents,
     (query, list) =>
       query.filters.some(row => isListDay(row.value)) ||
       conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).any,
-    run
+    run,
+    rowsOf
   );
 }
 
@@ -2405,7 +2434,8 @@ function listsComparingDays(
  */
 function listsNeedZone(
   documents: readonly BlockDocument[],
-  run: BindingRun | undefined
+  run: BindingRun | undefined,
+  rowsOf: RowsCollectionOf
 ): boolean {
   return (
     listCollectionsWhere(
@@ -2413,7 +2443,8 @@ function listsNeedZone(
       (query, list) =>
         query.filters.some(row => isListDay(row.value)) ||
         conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).ordersValues,
-      run
+      run,
+      rowsOf
     ).size > 0
   );
 }
@@ -2439,9 +2470,10 @@ async function listDayInputs(args: {
     args.bindings === undefined
       ? undefined
       : pageBindingRun(args.bindings, args.context.locale, args.resolver);
-  const collections = listsComparingDays(args.documents, run);
+  const rowsOf = rowsCollectionOf(args.config);
+  const collections = listsComparingDays(args.documents, run, rowsOf);
   if (collections.size === 0) return {};
-  const timeZone = listsNeedZone(args.documents, run)
+  const timeZone = listsNeedZone(args.documents, run, rowsOf)
     ? await listZone(args)
     : undefined;
   const cache: ReadCache = {
@@ -2538,7 +2570,8 @@ async function readFieldShapes(
   entryRef: BlocksFieldShapeRef,
   demand: BindingDemand,
   documents: readonly BlockDocument[],
-  cache: ReadCache
+  cache: ReadCache,
+  rowsOf: RowsCollectionOf
 ): Promise<BlocksFieldShapes> {
   const known = new Map<string, readonly BindingFieldShape[] | undefined>();
   const fetch = async (ref: BlocksFieldShapeRef) => {
@@ -2569,7 +2602,7 @@ async function readFieldShapes(
       if (target !== undefined) await fetch({ collection: target });
     }
   }
-  for (const collection of listCollections(documents)) {
+  for (const collection of listCollections(documents, rowsOf)) {
     await fetch({ collection });
   }
   return { fieldsOf: ref => known.get(refKey(ref)) };
@@ -2625,11 +2658,18 @@ async function readPageBindings(args: {
     args.entrySource === "single"
       ? { single: context.collection }
       : { collection: context.collection };
-  const shapes = await readFieldShapes(entryRef, demand, args.documents, {
-    scope: config.cacheScope ?? "",
-    locale: context.locale,
-    window: args.window,
-  });
+  const shapes = await readFieldShapes(
+    entryRef,
+    demand,
+    args.documents,
+    {
+      scope: config.cacheScope ?? "",
+      locale: context.locale,
+      window: args.window,
+    },
+    // A custom source's items bind as entries of its rows' collection.
+    rowsCollectionOf(config)
+  );
   const reads: SourceReads = {
     reader: args.reader,
     budget: args.budget,
