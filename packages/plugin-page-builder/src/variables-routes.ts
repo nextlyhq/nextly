@@ -351,6 +351,15 @@ export function variableUsesPagesMax(placesBesideDocuments: number): number {
   );
 }
 
+/** Shared styles in id order, two looks of one id in block-type order. */
+function byIdThenType(a: VariableUseItem, b: VariableUseItem): number {
+  const ids = a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  if (ids !== 0) return ids;
+  const left = a.blockType ?? "";
+  const right = b.blockType ?? "";
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 /**
  * The places a variable is used, a page of twenty at a time: the shared
  * styles naming it, by id, then the block types whose default styles name
@@ -384,8 +393,11 @@ export async function readVariableUses(
       title: style.name,
       collection: siteStyleSlug,
       kind: "shared-style" as const,
+      // A look's type, without which two types' own looks of one id could
+      // not be told apart, nor the right one opened.
+      ...(style.blockType === undefined ? {} : { blockType: style.blockType }),
     }))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    .sort(byIdThenType);
   // In type order already, as the walk reads the registry.
   const defaults: VariableUseItem[] = (
     blockDefaultsUsing(blocks(), new Set([id])).get(id) ?? []

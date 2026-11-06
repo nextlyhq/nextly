@@ -43,11 +43,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## Availability
 
-| | |
+|            |                                                                                                 |
 | ---------- | ----------------------------------------------------------------------------------------------- |
-| Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
-| Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
-| Permission | Editing a page requires update access to the collection holding it |
+| Package    | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app                      |
+| Status     | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
+| Permission | Editing a page requires update access to the collection holding it                              |
 
 ## Install
 
@@ -397,11 +397,18 @@ In the editor, the list's Content tab edits its query:
 - **Sort**: one row per key, each with its direction in words (Newest first, A–Z, Highest
   first). Entries with the same values keep a fixed order, and entries with no value come
   last.
-- **How many**: Number of items (1 to 100) and Skip the first. Under Number of items the
-  selected list says how many entries match and how many show, for example "4 entries
-  match, so 3 show.", counted as you read them on the canvas.
+- **How many**: Number of items (1 to 100), Skip the first, and Split into pages. Under
+  Number of items the selected list says how many entries match and how many show, for
+  example "4 entries match, so 3 show.", counted as you read them on the canvas. Under
+  Split into pages, while it is on, it says how many pages that makes, for example "24
+  entries match, so 3 pages of 10." See [Splitting a list into pages](#splitting-a-list-into-pages).
 - **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
   state, which visitors see when no entry matches.
+
+A prop bound to the page's own entry or to a Single shows, on the canvas, the value you could
+see in the admin, your drafts included, read with your own access; one you may not read shows
+its fallback. The published page reads the same sources as a visitor. The site settings and the
+fields a binding is checked against are the public's on both.
 
 The canvas draws each list with the entries you could see in the admin: your drafts
 included, and only the entries and fields your own access lets you read. The published
@@ -413,6 +420,36 @@ fallen-back sort's note has a **Choose a field** button that takes the author to
 Near midnight the canvas may differ from the published page for a day filter: the canvas
 compares days in UTC, the published page in the site's time zone. The same query can be
 set through the API with [`set-list-query`](/docs/page-builder/compose-through-the-api).
+
+### Splitting a list into pages
+
+Turn on **Split into pages** and the list shows Number of items entries on each page, each
+page at its own address: the list on `/news` shows its first page there, the second at
+`/news/page/2`, the third at `/news/page/3`, and so on. Under its entries the list draws
+links to the previous and next pages and the page numbers, as ordinary links a visitor can
+share and a search engine can follow. The links are parts of the list (Pages, Page link,
+Current page and Page gap), so the Style tab styles them as it styles the list; by default
+they are outlined boxes, with the current page filled in the site's primary colour.
+
+- Skip the first is applied once, before paging: with 25 entries, 10 skipped and 10 on a
+  page, page 1 shows entries 11 to 20 and page 2 entries 21 to 25, the last.
+- `/news/page/1` redirects permanently to `/news`, so the first page has one address. A
+  number past the last page, or written any other way (`/page/0`, `/page/02`,
+  `/page/1.5`), answers not found.
+- When no entry matches, `/news` shows the list's empty state and every later page is not
+  found.
+- Each page has its own canonical URL. On a public route, every page that exists at build
+  is pre-rendered, within the route's `staticParamsLimit`; a page that comes to exist later,
+  as the list grows, renders on its first visit and is cached from then on.
+- An entry stored at such an address (a page whose slug is `news/page/2`) is served as
+  itself, ahead of the list's page.
+
+One list on a page can be split into pages, so the page's address names one list's page.
+The save is refused, naming the reason, for a second list split into pages on the same
+page, a list split into pages inside another list (it repeats once per outer entry, with no
+address of its own), a list of related entries (they have no count of pages), and a list in
+a component or a Layout region (each shows on many pages). A list on a Single's page shows
+its first page only, since a Single's route serves no later pages.
 
 The loop reads through the route's **public reader**, which every blocks route binds to each
 render. With no `data` option the loop reads through it directly, so a published page lists

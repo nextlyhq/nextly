@@ -47,6 +47,7 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
+import { keysNoUpdateStores } from "../../../lib/immutable-system-fields";
 import {
   DOCUMENT_OVERWRITE_KEY,
   DOCUMENT_VERSION_KEY,
@@ -1159,6 +1160,10 @@ export interface PinnedExpectation {
   readonly expect: StoredExpectation;
   /** Set once the expectation held under the row lock of the write's own transaction. */
   checked: boolean;
+  /** Every key of the data the write sent. */
+  readonly sentKeys: readonly string[];
+  /** Set once the write path judged those keys (see {@link refuseUnstoredKeys}). */
+  keysJudged?: boolean;
   /**
    * The write is made whole or not at all (see {@link refuseUnlessWhole}).
    * Set for a write made under field rules.
@@ -1322,6 +1327,46 @@ const WRITE_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
   DOCUMENT_OVERWRITE_KEY,
 ]);
 
+/**
+ * Refuse with `INVALID_INPUT` a conditional write naming a key no update of
+ * this entity stores, asked of `keysNoUpdateStores` with the entity's own
+ * table and fields: an immutable system column, a column schema hooks
+ * contributed, a field stored nowhere, or another spelling of a field kept in
+ * its own table. Nothing happens for any other write. The
+ * {@link WRITE_TRANSPORT_KEYS} are not among them, being read before the
+ * strip and never stored.
+ *
+ * Called by a write path once its access to the entry has been judged and
+ * before any hook runs or anything is written: a caller who may not update
+ * the entry is refused by that judgment alike, whatever the data names, so
+ * the answer tells them nothing of the table's columns. Only then is the
+ * write's data judged, which {@link holdStoredExpectation} requires under the
+ * row lock.
+ */
+export function refuseUnstoredKeys(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  entity: {
+    readonly tableName: string;
+    readonly fields: Parameters<typeof keysNoUpdateStores>[3];
+  }
+): void {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin === undefined || !sameDocument(pin.document, document)) return;
+  const unstored = keysNoUpdateStores(
+    Object.fromEntries(pin.sentKeys.map(key => [key, true])),
+    document.kind,
+    entity.tableName,
+    entity.fields
+  ).filter(key => !WRITE_TRANSPORT_KEYS.has(key));
+  if (unstored.length > 0) {
+    throw NextlyError.invalidInput({
+      message: `A conditional write cannot write ${unstored.map(key => `"${key}"`).join(", ")}: an update never stores ${unstored.length === 1 ? "it" : "them"}, so the write would be made in part.`,
+    });
+  }
+  pin.keysJudged = true;
+}
+
 /** The whole-write record of the write called with `context`, for this document. */
 function wholeWriteFor(
   context: Record<string, unknown> | undefined,
@@ -1354,6 +1399,18 @@ export async function holdStoredExpectation(
 ): Promise<void> {
   const pin = context === undefined ? undefined : expectations.get(context);
   if (pin === undefined || !sameDocument(pin.document, document)) return;
+  // A write whose path never judged the keys it sent, after its access, was
+  // never judged at all: refused under the lock, so it rolls back.
+  if (pin.keysJudged !== true) {
+    refused.refusal = NextlyError.internal({
+      logContext: {
+        reason: "conditional-write-keys-not-judged",
+        kind: document.kind,
+        slug: document.slug,
+      },
+    });
+    throw refused.refusal;
+  }
   // A write that must be made whole, whose path never judged its final
   // payload through `refuseUnlessWhole`, was never judged whole: refused
   // under the lock, so it rolls back rather than landing unjudged.

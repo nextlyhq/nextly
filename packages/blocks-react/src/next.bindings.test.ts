@@ -522,10 +522,10 @@ describe("a routed page's bindings", () => {
     expect(html).toContain("Public");
   });
 
-  it("a binding on a node the page withholds or de-duplicates claims no read", async () => {
-    // A condition-gated heading and a later node reusing the list's address:
-    // neither reaches the page, so neither may spend the one claim the list
-    // needs.
+  it("a binding on a node the page de-duplicates claims no read", async () => {
+    // A later node reusing the list's address never reaches the page, so it
+    // may not spend the one claim the list needs. (A conditioned block may
+    // show once its entry is read, so its bindings do read: covered below.)
     const entryBound = (id: string, extra: Record<string, unknown> = {}) => ({
       id,
       type: "core/heading",
@@ -539,11 +539,6 @@ describe("a routed page's bindings", () => {
         formatVersion: DOCUMENT_FORMAT_VERSION,
         kind: "page",
         nodes: [
-          entryBound("gated", {
-            visibility: {
-              conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
-            },
-          }),
           {
             id: "loop",
             type: "core/collection-loop",
@@ -1030,5 +1025,302 @@ describe("a routed page's bindings", () => {
     expectTypeOf<NextlyBindingFieldShape>().toExtend<BindingFieldShape>();
     expectTypeOf<BindingSourceRef>().toExtend<BlocksFieldShapeRef>();
     expectTypeOf<BlocksFieldShapeRef>().toExtend<BindingSourceRef>();
+  });
+});
+
+describe("a page's blocks shown by their visibility conditions", () => {
+  /** A heading shown only when `conditions` hold for the page's entry. */
+  const shownWhen = (id: string, text: string, conditions: unknown) => ({
+    id,
+    type: "core/heading",
+    version: 1,
+    props: { text, level: "h2" },
+    visibility: { conditions },
+  });
+  const page = (...nodes: Record<string, unknown>[]): BlockDocument =>
+    JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes,
+      })
+    ) as BlockDocument;
+  const base = { collections: ["pages"], field: "content", blocks };
+
+  beforeEach(() => {
+    runtime.shapes.set("collection:pages", [{ name: "title", type: "text" }]);
+  });
+
+  it("draws a block whose conditions hold for the public entry and leaves the other out", async () => {
+    const nextly = instance(
+      page(
+        shownWhen("yes", "Shown to everyone", [
+          [{ field: "title", op: "equals", value: "Public" }],
+        ]),
+        shownWhen("no", "Never shown", [
+          [{ field: "title", op: "equals", value: "Elsewhere" }],
+        ])
+      )
+    );
+    const { html } = await renderedPage(createBlocksPage, base, nextly);
+    expect(html).toContain("Shown to everyone");
+    expect(html).not.toContain("Never shown");
+  });
+
+  it("decides by the entry as the public reads it, never the route's own read", async () => {
+    // The route's row says "Trusted"; the public's says "Public".
+    const { html } = await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("trusted", "Only for trusted", [
+            [{ field: "title", op: "equals", value: "Trusted" }],
+          ])
+        )
+      )
+    );
+    expect(html).not.toContain("Only for trusted");
+  });
+
+  it("reads the entry once, for the fields its conditions check, though nothing binds it", async () => {
+    const nextly = instance(
+      page(shownWhen("yes", "Shown", [[{ field: "title", op: "exists" }]]))
+    );
+    runtime.reads = [];
+    await renderedPage(createBlocksPage, base, nextly);
+    expect(publicReads(nextly)).toEqual([
+      expect.objectContaining({
+        collection: "pages",
+        select: { id: true, title: true },
+      }),
+    ]);
+    // Cached under the collection's tags, so editing a field a condition
+    // checks refreshes the page and its show-or-hide with it.
+    const { nextlyTags } = await import("nextly/runtime");
+    expect(
+      runtime.reads.some(read =>
+        nextlyTags("pages").every(tag => read.tags.includes(tag))
+      )
+    ).toBe(true);
+  });
+
+  it("reads the field shapes of the collection a bound list draws, for its items' conditions", async () => {
+    // The list's collection is filled from the entry's title ("Public"); the
+    // stored "posts" is only the fallback beside the binding.
+    const nextly = instance(
+      page({
+        id: "loop",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 1 },
+        bindings: { collection: { $bind: "title" } },
+        slots: {
+          children: [
+            shownWhen("pill", "Featured", [[{ field: "title", op: "exists" }]]),
+          ],
+        },
+      })
+    );
+    await renderedPage(createBlocksPage, base, nextly);
+    // Read only from the stored "posts" before, so the bound list's items
+    // had no shapes and every condition failed closed.
+    expect(runtime.judged).toContain("shapes collection:Public");
+  });
+
+  it("reads the site's zone for a list's item conditions only when one orders a date", async () => {
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "rating", type: "number" },
+      { name: "publishedAt", type: "date" },
+    ]);
+    const listWith = (field: string, op: string, value?: unknown) =>
+      instance(
+        page({
+          id: "loop",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 1 },
+          slots: {
+            children: [
+              shownWhen("pill", "Featured", [
+                [
+                  {
+                    field,
+                    op,
+                    ...(value === undefined ? {} : { value }),
+                  },
+                ],
+              ]),
+            ],
+          },
+        })
+      );
+    const siteRead = () =>
+      runtime.tags.some(tags =>
+        nextlySiteSettingsTags().every(tag => tags.includes(tag))
+      );
+    // A text match needs the item's field shapes, never the zone, so it
+    // spends none of the page's budget on the site and its list still draws.
+    runtime.tags = [];
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { ...base, maxQueries: 2 },
+      listWith("title", "equals", "Public")
+    );
+    expect(siteRead()).toBe(false);
+    expect(html).toContain("Featured");
+    // Nor does ordering a number, which compares no day.
+    runtime.tags = [];
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("rating", "greater_than", 3)
+    );
+    expect(siteRead()).toBe(false);
+    // CONTROL: ordering a date reads it.
+    runtime.tags = [];
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("publishedAt", "greater_than", "2026-01-01")
+    );
+    expect(siteRead()).toBe(true);
+  });
+
+  it("prepares a conditioned page three times, never a fourth for metadata's question", async () => {
+    await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      )
+    );
+    // Once as stored, once with every conditioned block kept for the reads,
+    // once decided by the entry. Metadata's own question about the Layout
+    // isn't asked by a render, so it prepares nothing more.
+    expect(runtime.pipelineRuns).toBe(3);
+  });
+
+  it("prepares a conditioned page three times for its metadata too, reusing the page kept for its question", async () => {
+    const route = createBlocksPage({
+      ...base,
+      nextly: instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      ) as never,
+      metadata: (_entry, _context, derived) => ({
+        title: derived.title ?? "Page",
+      }),
+    });
+    runtime.pipelineRuns = 0;
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    // The page kept to ask whether it reads anything is the one its reads
+    // are taken from: a fourth preparation would be the same work again.
+    expect(runtime.pipelineRuns).toBe(3);
+  });
+
+  it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { html } = await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("hidden", "Hidden field", [
+            [{ field: "secret", op: "exists" }],
+          ])
+        )
+      )
+    );
+    expect(html).not.toContain("Hidden field");
+    expect(
+      warn.mock.calls.some(([message]) =>
+        String(message).includes("condition-field-unknown")
+      )
+    ).toBe(true);
+  });
+
+  it("describes the page in its metadata by the blocks it draws", async () => {
+    let title: string | undefined;
+    const route = createBlocksPage({
+      ...base,
+      nextly: instance(
+        page(
+          {
+            id: "h1",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Members area", level: "h1" },
+            visibility: {
+              conditions: [
+                [{ field: "title", op: "equals", value: "Elsewhere" }],
+              ],
+            },
+          },
+          {
+            id: "h2",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Public area", level: "h1" },
+            visibility: {
+              conditions: [[{ field: "title", op: "equals", value: "Public" }]],
+            },
+          }
+        )
+      ) as never,
+      metadata: (_entry, _context, derived) => {
+        title = derived.title;
+        return {};
+      },
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    expect(title).toBe("Public area");
+  });
+});
+
+describe("the route's log of conditions it can't check", () => {
+  it("counts blocks, not conditions, and names each code", async () => {
+    runtime.shapes.set("collection:pages", [{ name: "title", type: "text" }]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "one",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Two bad conditions", level: "h2" },
+            visibility: {
+              conditions: [
+                [
+                  { field: "secret", op: "exists" },
+                  { field: "other", op: "exists" },
+                ],
+              ],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      instance(content)
+    );
+    const said = warn.mock.calls
+      .map(([message]) => String(message))
+      .find(message => message.includes("visibility conditions"));
+    expect(said).toContain("1 block(s)");
+    expect(said).toContain("condition-field-unknown x2");
   });
 });

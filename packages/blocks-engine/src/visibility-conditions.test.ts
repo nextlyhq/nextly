@@ -15,6 +15,8 @@ import type { BlockNode } from "./document";
 import type { ListFields } from "./list-query";
 import {
   canonicalConditions,
+  conditionDemand,
+  conditionScopeIn,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
   CONDITION_MAX,
@@ -26,6 +28,7 @@ import {
   evaluateConditions,
   type ConditionRegistry,
   type ConditionSubject,
+  withConditions,
 } from "./visibility-conditions";
 
 const READABLE: readonly BindingFieldShape[] = [
@@ -625,5 +628,207 @@ describe("conditions stored before they were evaluated", () => {
     expect(
       codes([[{ field: "publishedAt", op: "eq", value: "2026-11-01" }]])
     ).toEqual(["condition-unsuited"]);
+  });
+});
+
+describe("setting a block's conditions", () => {
+  const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+
+  it("replaces the conditions and keeps the devices", () => {
+    expect(
+      withConditions(
+        {
+          conditions: [[{ field: "old", op: "exists" }]],
+          devices: { mobile: false },
+        },
+        vip
+      )
+    ).toEqual({ conditions: vip, devices: { mobile: false } });
+  });
+
+  it("stores nothing for a block shown everywhere to everyone", () => {
+    expect(withConditions({ conditions: vip }, undefined)).toBeUndefined();
+    expect(withConditions({ conditions: vip }, [])).toBeUndefined();
+    expect(withConditions(undefined, [])).toBeUndefined();
+    expect(
+      withConditions({ conditions: vip, devices: { mobile: false } }, [])
+    ).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
+  it("stores nothing for groups that let everyone through, an empty group among them", () => {
+    // An AND of nothing always holds, so a group with no conditions lets
+    // everyone through whatever the other groups say.
+    expect(withConditions({ conditions: vip }, [[]])).toBeUndefined();
+    expect(withConditions(undefined, [[], ...vip])).toBeUndefined();
+    expect(withConditions({ devices: { mobile: false } }, [[]])).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
+  it("replaces a visibility nothing can read, keeping none of it", () => {
+    const unreadable = "hidden" as unknown as Parameters<
+      typeof withConditions
+    >[0];
+    expect(withConditions(unreadable, undefined)).toBeUndefined();
+    expect(withConditions(unreadable, vip)).toEqual({ conditions: vip });
+  });
+
+  it("copies what it stores, so a later edit to the input changes nothing", () => {
+    const groups = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const stored = withConditions(undefined, groups);
+    groups[0]![0]!.value = "free";
+    expect(stored).toEqual({ conditions: vip });
+  });
+});
+
+describe("what a page's conditions read of its entry", () => {
+  const gated = (id: string, conditions: unknown, slots?: unknown) => ({
+    id,
+    type: "core/box",
+    version: 1,
+    props: {},
+    visibility: { conditions },
+    ...(slots === undefined ? {} : { slots }),
+  });
+
+  it("names the entry fields every entry-scoped condition checks, once each", () => {
+    const demand = conditionDemand([
+      gated("a", [[{ field: "tier", op: "equals", value: "vip" }]]),
+      gated("b", [
+        [{ field: "tier", op: "exists" }],
+        [{ field: "rating", op: "gt", value: 3 }],
+      ]),
+    ]);
+    expect([...demand.entryFields].sort()).toEqual(["rating", "tier"]);
+    expect(demand.any).toBe(true);
+  });
+
+  it("leaves out conditions a list's item decides, but not those in its empty state", () => {
+    const list = {
+      id: "l",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: {
+        children: [gated("in", [[{ field: "title", op: "exists" }]])],
+        empty: [gated("e", [[{ field: "tier", op: "exists" }]])],
+      },
+    };
+    const demand = conditionDemand([list]);
+    expect([...demand.entryFields]).toEqual(["tier"]);
+    expect(demand.any).toBe(true);
+  });
+
+  it("asks for the site's day only when a condition orders a value", () => {
+    expect(
+      conditionDemand([gated("a", [[{ field: "tier", op: "exists" }]])])
+        .ordersValues
+    ).toBe(false);
+    expect(
+      conditionDemand([
+        gated("a", [
+          [{ field: "publishedAt", op: "less_than", value: "2026-01-01" }],
+        ]),
+      ]).ordersValues
+    ).toBe(true);
+  });
+
+  it("names the fields its conditions order by, so a reader knowing their shapes can tell a day", () => {
+    const demand = conditionDemand([
+      gated("a", [
+        [
+          { field: "publishedAt", op: "less_than", value: "2026-01-01" },
+          { field: "rating", op: "gt", value: 3 },
+          { field: "tier", op: "exists" },
+        ],
+      ]),
+    ]);
+    expect([...(demand.orderedFields ?? [])].sort()).toEqual([
+      "publishedAt",
+      "rating",
+    ]);
+  });
+
+  it("asks nothing of a page with no conditions, or ones that restrict nobody", () => {
+    expect(
+      conditionDemand([
+        gated("a", [[]]),
+        { id: "b", type: "core/box", version: 1, props: {} },
+      ])
+    ).toEqual({
+      any: false,
+      entryFields: new Set(),
+      ordersValues: false,
+      orderedFields: new Set(),
+    });
+  });
+
+  it("says where a list's children read: the item in its per-entry slot only", () => {
+    const list = {
+      type: "core/collection-loop",
+      props: { collection: "posts" },
+    };
+    const page = { source: "entry" as const, collection: "pages" };
+    expect(conditionScopeIn(list, "children", page)).toEqual({
+      source: "item",
+      collection: "posts",
+    });
+    expect(conditionScopeIn(list, "empty", page)).toBe(page);
+    expect(conditionScopeIn({ type: "core/box" }, "children", page)).toBe(page);
+  });
+});
+
+describe("a block expanded from conditioned component placements", () => {
+  // Five one-condition groups on each side: multiplied into one OR of ANDs
+  // they would be 25 groups of two, 50 conditions, past the per-block limit.
+  const ratings = [1, 2, 3, 4, 5].map(value => [
+    { field: "rating", op: "equals", value },
+  ]);
+  const titles = ["t1", "t2", "t3", "t4", "t5"].map(value => [
+    { field: "title", op: "equals", value },
+  ]);
+  const expanded = {
+    id: "n1",
+    visibility: { conditions: titles, within: [{ conditions: ratings }] },
+  } as Pick<BlockNode, "id" | "visibility">;
+  const judged = (values: Record<string, unknown>) =>
+    evaluateConditions(expanded, { source: "entry", subject: subject(values) });
+
+  it("is shown when its own conditions and every placement's hold, however many groups each has", () => {
+    // The product the gates replace would be past the limit.
+    expect(ratings.length * titles.length * 2).toBeGreaterThan(CONDITION_MAX);
+    expect(judged({ rating: 3, title: "t4" })).toEqual({
+      shown: true,
+      issues: [],
+    });
+  });
+
+  it("is hidden when a placement's conditions fail, though its own hold", () => {
+    expect(judged({ rating: 9, title: "t4" }).shown).toBe(false);
+    // CONTROL: and when its own fail, though the placement's hold.
+    expect(judged({ rating: 3, title: "t9" }).shown).toBe(false);
+  });
+
+  it("asks the entry for the fields every placement reads", () => {
+    const demand = conditionDemand([
+      { type: "core/text", version: 1, props: {}, ...expanded },
+    ] as BlockNode[]);
+    expect([...demand.entryFields].sort()).toEqual(["rating", "title"]);
+  });
+
+  it("fails closed when what the placements left can't be read", () => {
+    const result = evaluateConditions(
+      { id: "n1", visibility: { within: "hidden" } } as unknown as Pick<
+        BlockNode,
+        "id" | "visibility"
+      >,
+      { source: "entry", subject: subject({}) }
+    );
+    expect(result.shown).toBe(false);
+    expect(result.issues.map(issue => issue.code)).toEqual([
+      "condition-malformed",
+    ]);
   });
 });

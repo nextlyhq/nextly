@@ -13,7 +13,7 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement, ReactNode } from "react";
+import { startTransition, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -596,6 +596,211 @@ describe("a plugin's replacement over time", () => {
     act(() => forFirst.close("deleted"));
     expect(onDelete).not.toHaveBeenCalled();
     expect(deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it("ignores a section's late report for the entry it was drawn for once another is shown", async () => {
+    const onDelete = vi.fn();
+    const drawAgain = renderLive(entry as never, onDelete);
+    await screen.findByText("Used by 2 pages");
+    const forFirst = section.current!;
+    expect(forFirst.entryId).toBe("l1");
+
+    // The route moves to another entry, where the author starts editing.
+    const second = { ...(entry as object), id: "l2", title: "Other layout" };
+    drawAgain(second);
+    await waitFor(() => expect(section.current?.entryId).toBe("l2"));
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Not saved yet");
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const remove = vi.spyOn(queryClient, "removeQueries");
+
+    // The first entry's section reports late: it deleted, then changed, it.
+    act(() => forFirst.documentChanged("deleted"));
+    act(() => forFirst.documentChanged("changed"));
+
+    // Nothing leaves the second entry.
+    expect(onDelete).not.toHaveBeenCalled();
+    // The first entry's own caches are refreshed, as what the plugin did to
+    // it stands; nothing is refreshed for the second.
+    const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        ["entries", "list", "layouts"],
+        ["entries", "detail", "layouts", "l1"],
+      ])
+    );
+    expect(keys).not.toContainEqual(["entries", "detail", "layouts", "l2"]);
+    expect(remove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryKey: ["entries", "detail", "layouts", "l1"],
+      })
+    );
+    // And no expectation was armed on the second entry: its next newer
+    // version is someone else's and replaces the unsaved text.
+    drawAgain({
+      ...second,
+      summary: "Theirs",
+      updatedAt: "2026-10-04T09:00:00Z",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Theirs"
+      )
+    );
+  });
+
+  it("ignores a section's late report once its editor has unmounted, and another opened", async () => {
+    // Leaving the entry page unmounts the editor; opening another document
+    // mounts a new one. The first editor's section reporting late must not
+    // reach either, beyond refreshing its own entry's caches.
+    const onDeleteFirst = vi.fn();
+    const first = render(
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={entry}
+        mode="edit"
+        onDelete={onDeleteFirst}
+      />,
+      { wrapper: Providers }
+    );
+    await screen.findByText("Used by 2 pages");
+    const forFirst = section.current!;
+    first.unmount();
+
+    const onDeleteSecond = vi.fn();
+    render(
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={{ ...(entry as object), id: "l2" } as never}
+        mode="edit"
+        onDelete={onDeleteSecond}
+      />,
+      { wrapper: Providers }
+    );
+    await waitFor(() => expect(section.current?.entryId).toBe("l2"));
+    const remove = vi.spyOn(queryClient, "removeQueries");
+
+    act(() => forFirst.documentChanged("deleted"));
+
+    expect(onDeleteFirst).not.toHaveBeenCalled();
+    expect(onDeleteSecond).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryKey: ["entries", "detail", "layouts", "l1"],
+      })
+    );
+  });
+
+  it("leaves the entry on a deletion reported from it in another language", async () => {
+    // Deleting removes the entry in every language, so the deletion is the
+    // one now shown too, whichever language its section was drawn in.
+    const onDelete = vi.fn();
+    const element = (locale: string) => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={entry}
+        mode="edit"
+        locale={locale}
+        onDelete={onDelete}
+      />
+    );
+    const view = render(element("en"), { wrapper: Providers });
+    await screen.findByText("Used by 2 pages");
+    const inEnglish = section.current!;
+
+    view.rerender(element("es"));
+    act(() => inEnglish.documentChanged("deleted"));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("judges a late report by the editor on screen, not by a render that has not landed", async () => {
+    // Moving to another entry inside a transition that suspends leaves the
+    // first entry on screen while the next is being drawn. A report from the
+    // first entry's section is still about the document shown, so a
+    // deletion leaves it; an identity moved while rendering would drop it.
+    const SUSPENDS = "test/layouts#SuspendingUsage";
+    let resume: () => void = () => {};
+    const waiting = new Promise<void>(done => {
+      resume = done;
+    });
+    function SuspendingUsage(props: DocumentPanelSectionProps) {
+      if (props.entryId === "l2") throw waiting;
+      section.current = props;
+      return <p>Used by 2 pages</p>;
+    }
+    registerComponent(SUSPENDS, SuspendingUsage as never);
+    plugins.current = [
+      {
+        ...LAYOUTS_PLUGIN,
+        panelSections: [
+          { slug: "layouts", title: "Used by", component: SUSPENDS },
+        ],
+      },
+    ];
+    const onDelete = vi.fn();
+    const element = (current: object) => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={current as never}
+        mode="edit"
+        onDelete={onDelete}
+      />
+    );
+    const view = render(element(entry as object), { wrapper: Providers });
+    await screen.findByText("Used by 2 pages");
+    const forFirst = section.current!;
+
+    act(() => {
+      startTransition(() => {
+        view.rerender(element({ ...(entry as object), id: "l2" }));
+      });
+    });
+    // Still the first entry on screen: the next one has not landed.
+    expect(section.current?.entryId).toBe("l1");
+    act(() => forFirst.documentChanged("deleted"));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    resume();
+    unregisterComponent(SUSPENDS);
+  });
+
+  it("arms no own-change expectation from a section drawn in another language", async () => {
+    // The author switches language while a section's write is on its way.
+    const element = (locale: string, current: object) => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={current as never}
+        mode="edit"
+        locale={locale}
+      />
+    );
+    const view = render(element("en", entry as object), {
+      wrapper: Providers,
+    });
+    await screen.findByText("Used by 2 pages");
+    const inEnglish = section.current!;
+
+    view.rerender(element("es", entry as object));
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Sin guardar");
+
+    // The English section reports its change late.
+    act(() => inEnglish.documentChanged("changed"));
+    // Someone else's newer version of the Spanish copy replaces the unsaved
+    // text: no expectation was armed on it.
+    view.rerender(
+      element("es", {
+        ...(entry as object),
+        summary: "Suyo",
+        updatedAt: "2026-10-04T09:00:00Z",
+      })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Suyo"
+      )
+    );
   });
 
   it("ignores a close from a replacement that already closed, once another has opened", async () => {

@@ -29,8 +29,10 @@ export type {
   BlocksQuery,
   BlocksResult,
   DefaultDataProviderOptions,
+  ListPageContext,
   PageBindings,
   PageContext,
+  PageIssue,
   QueryBudget,
   ReactBlockDefinition,
   ResolvedIcon,
@@ -38,6 +40,7 @@ export type {
 } from "./context";
 export {
   createDefaultDataProvider,
+  isBindingIssue,
   createQueryBudget,
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
@@ -46,6 +49,13 @@ export {
 } from "./context";
 
 export { PageRenderer } from "./page-renderer";
+// Binding sources read on a server, carried to the editor's canvas and read
+// back there. `@experimental` with the editor's binding sources.
+export {
+  bindingsFromWire,
+  bindingsToWire,
+  type WireBindings,
+} from "./binding-wire";
 export type { PageRendererProps } from "./page-renderer";
 // Re-exported because `PageRendererProps.siteStyles` NAMES it, and a prop a
 // consumer cannot type is a prop they cannot pass without reaching past this
@@ -150,6 +160,8 @@ export type {
   BindingFormatter,
   BindingIssue,
   BindingIssueCode,
+  ConditionIssue,
+  ConditionIssueCode,
   BindingRun,
   BindingSchemaRef,
   BindingSchemaSource,
@@ -241,6 +253,11 @@ export {
  * surface listing a page's parts beside a picture of it.
  */
 export { prepareDocumentAsDrawn } from "./prepare-document";
+/**
+ * @experimental The collections a page's lists draw, whose field shapes judge
+ * their items' bindings: one walk for the published route and the editor.
+ */
+export { listCollections } from "./list-collections";
 export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";

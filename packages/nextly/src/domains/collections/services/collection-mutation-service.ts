@@ -435,6 +435,7 @@ import {
   fieldAccessPass,
   holdStoredExpectation,
   refuseUnlessWhole,
+  refuseUnstoredKeys,
 } from "./stored-field-read";
 import {
   prepareWriteMatch,
@@ -13653,6 +13654,18 @@ export class CollectionMutationService extends BaseService {
       }
 
       const tableName = collectionTableName(collection, params.collectionName);
+      // A conditional write naming a key no update stores is refused here: its
+      // access has been judged, so a caller who may not update is refused
+      // alike whatever it names, and no hook has run.
+      refuseUnstoredKeys(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        { tableName, fields }
+      );
 
       // A version below the one the entry already held when it was read is
       // certainly out of date, since a counter only goes up: refused here,

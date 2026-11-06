@@ -26,6 +26,8 @@ import {
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { asOverwrite } from "../document-version";
+
 import {
   claimKey,
   pathOf,
@@ -340,11 +342,13 @@ async function lock(
       });
     }
   }
+  // Held by writing it, whatever it stores: the write is the lock, not a
+  // change made from a read, so it says to overwrite.
   await claims.services.collections.updateEntryInTransaction(
     tx,
     claims.slug,
     row.id,
-    { path: pathOf(list) }
+    asOverwrite({ path: pathOf(list) })
   );
 }
 

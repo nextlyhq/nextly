@@ -150,8 +150,19 @@ export interface CanvasListReads {
  * drafts and protected fields included.
  */
 const READS = new Map<string, CanvasListReads>();
-/** The person whose reads `READS` holds, so another's are dropped first. */
-let readsFor: string | null | undefined;
+/**
+ * The person whose reads `READS` holds, so another's are dropped first.
+ * Always a person known by id: reads made before the signed-in person is
+ * known are never kept, so none is held under an identity two people share.
+ */
+let readsFor: string | undefined;
+
+/** A fresh set of list reads in `locale`, keeping only its own answers. */
+function listReadsIn(locale: string | undefined): CanvasListReads {
+  const terms: CanvasListTerms = locale === undefined ? {} : { locale };
+  const data = canvasListData();
+  return { terms, data, count: canvasListCount(data, terms) };
+}
 
 /**
  * The canvas's list reads for `userId`, the signed-in person, in `locale`, the
@@ -167,6 +178,10 @@ export function canvasListReadsIn(
   locale: string | undefined,
   userId: string | null
 ): CanvasListReads {
+  // The route answers whoever the session cookie names, so while the person
+  // is not known by id, each ask gets reads of its own that nothing keeps:
+  // a sign-in under way cannot be handed the previous account's rows.
+  if (userId === null) return listReadsIn(locale);
   if (readsFor !== userId) {
     READS.clear();
     readsFor = userId;
@@ -174,9 +189,7 @@ export function canvasListReadsIn(
   const key = locale ?? "";
   let reads = READS.get(key);
   if (reads === undefined) {
-    const terms: CanvasListTerms = locale === undefined ? {} : { locale };
-    const data = canvasListData();
-    reads = { terms, data, count: canvasListCount(data, terms) };
+    reads = listReadsIn(locale);
     READS.set(key, reads);
   }
   return reads;

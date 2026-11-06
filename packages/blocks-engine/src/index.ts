@@ -623,7 +623,11 @@ export { overlaidStyles } from "./style/overlaid-styles";
  * split, so the decision is published rather than restated.
  */
 export { authoredText, isAuthoredText } from "./authored-text";
-export { declaresNoMarkup, isConditionGated } from "./visibility";
+export {
+  declaresNoMarkup,
+  isConditionGated,
+  storedVisibilityOf,
+} from "./visibility";
 // Per-device visibility as an author works with it: each device's resolved
 // state, a hide that stays on one device, and the stored values carried across
 // a change of the site's breakpoints. Public because the editor writes the eye
@@ -1338,10 +1342,12 @@ export {
   isListFieldKind,
   listFieldKind,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   listRelationTarget,
   listSortText,
   outerListOf,
+  paginatedList,
   readListQuery,
 } from "./list-query";
 
@@ -1349,6 +1355,8 @@ export {
 // classes, the evaluator the renderer asks, and their save-time judgement.
 export {
   canonicalConditions,
+  conditionDemand,
+  conditionScopeIn,
   CONDITION_FIELD_CODES,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
@@ -1360,9 +1368,11 @@ export {
   conditionIssues,
   conditionOp,
   evaluateConditions,
+  withConditions,
 } from "./visibility-conditions";
 export type {
   ConditionDayStart,
+  ConditionDemand,
   ConditionEvaluation,
   ConditionFieldKind,
   ConditionInput,
@@ -1372,6 +1382,7 @@ export type {
   ConditionOp,
   ConditionRegistry,
   ConditionRenderClass,
+  ConditionScope,
   ConditionSource,
   ConditionSubject,
 } from "./visibility-conditions";
@@ -1383,6 +1394,7 @@ export type {
   ListFilter,
   ListFilterOp,
   ListFilterScalar,
+  ListPageCode,
   ListQuery,
   ListQueryJudgement,
   ListQueryProblem,
@@ -1390,4 +1402,5 @@ export type {
   ListRelation,
   ListShapeCode,
   ListSortKey,
+  PaginatedList,
 } from "./list-query";

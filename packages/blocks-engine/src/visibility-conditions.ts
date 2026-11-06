@@ -20,7 +20,12 @@
  * @module visibility-conditions
  */
 import { isEmptyBoundValue, type BindingFieldShape } from "./binding-rules";
-import type { BlockDocument, BlockNode } from "./document";
+import type {
+  BlockDocument,
+  BlockNode,
+  Condition,
+  NodeVisibility,
+} from "./document";
 import { withHeldSeverity } from "./held-findings";
 import { describeValue, pointer } from "./issue-text";
 import {
@@ -36,7 +41,7 @@ import {
   type ListFieldSource,
 } from "./list-query";
 import { isPlainRecord } from "./plain-record";
-import { isConditionGated } from "./visibility";
+import { conditionGatesOf, isConditionGated } from "./visibility";
 
 /**
  * The operators a condition may use, spelled as a list's filter spells them
@@ -864,8 +869,25 @@ export function evaluateConditions(
 ): ConditionEvaluation {
   if (!isConditionGated(node)) return { shown: true, issues: [] };
   const nodeId = typeof node.id === "string" ? node.id : "";
+  // Every gate must hold: the block's own conditions and those of each
+  // component placement it was expanded from, judged one set at a time so
+  // none is multiplied into another.
+  const issues: ConditionIssue[] = [];
+  for (const gate of conditionGatesOf(node.visibility)) {
+    const evaluation = evaluateGate(nodeId, gate, input);
+    if (!evaluation.shown) return evaluation;
+    issues.push(...evaluation.issues);
+  }
+  return { shown: true, issues };
+}
+
+/** One gate's envelope judged: its groups, an OR of ANDs, for the subject. */
+function evaluateGate(
+  nodeId: string,
+  envelope: unknown,
+  input: ConditionInput
+): ConditionEvaluation {
   const registry = input.registry ?? CONDITION_REGISTRY;
-  const envelope: unknown = node.visibility;
   const groups = isPlainRecord(envelope)
     ? readGroups(envelope.conditions)
     : undefined;
@@ -1016,8 +1038,12 @@ export const CONDITION_FIELD_CODES: ReadonlySet<string> =
     "condition-source-unavailable",
   ]);
 
-/** Where a block's conditions read: its source, and that source's collection. */
-interface ConditionScope {
+/**
+ * Where a block's conditions read: its source, and that source's collection.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export interface ConditionScope {
   readonly source: ConditionSource;
   /** `null` when the page has no such record; `undefined` when not known. */
   readonly collection: string | null | undefined;
@@ -1122,10 +1148,13 @@ interface ConditionVisit {
 /**
  * Where a child in `slot` of `node` reads. Only a list's per-entry slot is
  * drawn once per entry, so only it reads the list's item; its empty state,
- * like every other slot, reads what the list itself reads.
+ * like every other slot, reads what the list itself reads. The one rule, for
+ * the save's judgement and the renderer's gating alike.
+ *
+ * @experimental Settles with the editor's condition controls.
  */
-function scopeIn(
-  node: Readonly<Record<string, unknown>>,
+export function conditionScopeIn(
+  node: { readonly type?: unknown; readonly props?: unknown },
   slot: string,
   scope: ConditionScope
 ): ConditionScope {
@@ -1150,7 +1179,7 @@ function childVisits(
   for (const name of Object.keys(slots).reverse()) {
     const children = slots[name];
     if (!Array.isArray(children)) continue;
-    const inner = scopeIn(node, name, scope);
+    const inner = conditionScopeIn(node, name, scope);
     for (let index = children.length - 1; index >= 0; index -= 1) {
       visits.push({
         node: children[index],
@@ -1227,4 +1256,126 @@ export function conditionIssues(
     judgement.stored,
     forest => walkConditionFindings(forest, judgement)
   );
+}
+
+/**
+ * A node's visibility with its conditions replaced: the groups given, or
+ * none when they restrict nobody, by the rule that gates a node: `undefined`,
+ * no groups, or a group with no conditions, which always holds and so lets
+ * everyone through. Everything else the visibility holds, such as which
+ * devices show the block, is kept. `undefined` when nothing is left
+ * to store, so a block shown everywhere to everyone stores no visibility.
+ * The one writer, for the editor and the API alike.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function withConditions(
+  visibility: NodeVisibility | undefined,
+  conditions: readonly (readonly Condition[])[] | undefined
+): NodeVisibility | undefined {
+  // A visibility nothing can read, a string or a list, is replaced whole:
+  // none of it can be kept.
+  const { conditions: _old, ...rest } = isPlainRecord(visibility)
+    ? visibility
+    : {};
+  // Asked of the gate itself, so what is stored is what restricts.
+  const restricts =
+    conditions !== undefined &&
+    isConditionGated({ visibility: { conditions } });
+  const kept = !restricts
+    ? rest
+    : {
+        ...rest,
+        conditions: conditions.map(group => group.map(c => ({ ...c }))),
+      };
+  return Object.keys(kept).length === 0 ? undefined : kept;
+}
+
+/**
+ * What a forest's conditions read of the page's entry, so a route reads the
+ * entry once for its bindings and its conditions alike.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export interface ConditionDemand {
+  /** Whether any block's conditions restrict anybody, of any scope. */
+  readonly any: boolean;
+  /** The entry fields entry-scoped conditions check. */
+  readonly entryFields: ReadonlySet<string>;
+  /**
+   * Whether an entry-scoped condition orders a value, which may compare days
+   * and so needs the site's time zone. Derived from {@link orderedFields}.
+   */
+  readonly ordersValues: boolean;
+  /**
+   * The fields entry-scoped conditions order by. Only a date one compares
+   * days, so a reader that knows the fields' shapes asks for the zone only
+   * when one of these is a date. Always set by `conditionDemand`; optional
+   * so a demand built by hand without it still type-checks, and read as
+   * none when absent.
+   */
+  readonly orderedFields?: ReadonlySet<string>;
+}
+
+/** The fields one entry-scoped node's conditions read, and those they order by. */
+function demandOf(
+  node: Readonly<Record<string, unknown>>,
+  fields: Set<string>,
+  ordered: Set<string>
+): void {
+  // Every gate's fields: the block's own and those of the placements it was
+  // expanded from, since each is judged against the same entry.
+  const storedConditions = conditionGatesOf(node.visibility).flatMap(gate =>
+    isPlainRecord(gate) ? (readGroups(gate.conditions)?.flat() ?? []) : []
+  );
+  for (const stored of storedConditions) {
+    fields.add(stored.field);
+    const op = conditionOp(stored.op);
+    if (op === "greater_than" || op === "less_than") ordered.add(stored.field);
+  }
+}
+
+/**
+ * What the conditions in a forest read of the page's entry. Conditions a
+ * list's item decides read the item, which a list already holds whole, so
+ * they ask nothing of the entry. Iterative and bounded, reading only plain
+ * records.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function conditionDemand(
+  nodes: readonly unknown[],
+  maxNodes: number = Number.MAX_SAFE_INTEGER
+): ConditionDemand {
+  const entryFields = new Set<string>();
+  const orderedFields = new Set<string>();
+  let any = false;
+  let left = maxNodes;
+  const page: ConditionScope = { source: "entry", collection: undefined };
+  const stack: ConditionVisit[] = [];
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    stack.push({ node: nodes[index], path: "", scope: page });
+  }
+  for (
+    let visit = stack.pop();
+    visit !== undefined && left > 0;
+    visit = stack.pop()
+  ) {
+    left -= 1;
+    const { node, scope } = visit;
+    if (!isPlainRecord(node)) continue;
+    if (isConditionGated(node)) {
+      any = true;
+      if (scope.source === "entry") {
+        demandOf(node, entryFields, orderedFields);
+      }
+    }
+    stack.push(...childVisits(node, "", scope));
+  }
+  return {
+    any,
+    entryFields,
+    ordersValues: orderedFields.size > 0,
+    orderedFields,
+  };
 }

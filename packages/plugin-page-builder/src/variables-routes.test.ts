@@ -382,6 +382,46 @@ describe("where a variable is used", () => {
     expect(body.meta).toMatchObject({ total: 4, hiddenCount: 2 });
   });
 
+  it("names each block type's look apart when two types' own looks share an id", async () => {
+    // Two block types' own looks may carry one id: each is its own place,
+    // named with its type, so the right one can be opened.
+    const look = (blockType: string) => ({
+      ...styleNaming("look-default", "Default", "t-accent"),
+      blockType,
+    });
+    const body = await uses(
+      "id=t-accent",
+      [],
+      [
+        look("core/heading"),
+        look("core/button"),
+        styleNaming("c-card", "Card", "t-accent"),
+      ]
+    );
+    expect(body.items).toEqual([
+      {
+        id: "c-card",
+        title: "Card",
+        collection: "renamed_site-style",
+        kind: "shared-style",
+      },
+      {
+        id: "look-default",
+        title: "Default",
+        collection: "renamed_site-style",
+        kind: "shared-style",
+        blockType: "core/button",
+      },
+      {
+        id: "look-default",
+        title: "Default",
+        collection: "renamed_site-style",
+        kind: "shared-style",
+        blockType: "core/heading",
+      },
+    ]);
+  });
+
   it("pages the shared styles and the documents as one list", async () => {
     const styles = Array.from({ length: 15 }, (_, n) =>
       styleNaming(`c-${String(n).padStart(2, "0")}`, `S${n}`, "t-accent")
