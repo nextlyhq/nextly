@@ -381,11 +381,15 @@ In the editor, the list's Content tab edits its query:
   last.
 - **How many**: Number of items (1 to 100) and Skip the first. Under Number of items the
   selected list says how many entries match and how many show, for example "4 entries
-  match, so 3 show.", counted as a visitor reads them.
+  match, so 3 show.", counted as you read them on the canvas.
 - **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
   state, which visitors see when no entry matches.
 
-The canvas draws each list with the entries a visitor would see. When a stored sort falls
+The canvas draws each list with the entries you could see in the admin: your drafts
+included, and only the entries and fields your own access lets you read. The published
+page reads the same list as a visitor: published entries and public fields only, so a
+draft you see on the canvas never appears there. A filter or sort the published page
+would refuse is refused on the canvas too. When a stored sort falls
 back to id order or the read fails, the canvas says so in a note only the author sees; a
 fallen-back sort's note has a **Choose a field** button that takes the author to the sort.
 Near midnight the canvas may differ from the published page for a day filter: the canvas
