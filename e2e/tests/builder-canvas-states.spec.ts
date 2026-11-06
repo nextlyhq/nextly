@@ -322,11 +322,12 @@ async function pixelAt(page: Page, x: number, y: number): Promise<string> {
 }
 
 /**
- * A mark's ring and the ground beneath it, both as rendered: one pixel just
- * inside the mark's edge, where its ring is drawn, read once as the author
- * sees it and once with the editor's layer hidden and the page's text made
- * transparent. What is judged is then what is on screen: the ring whatever
- * property or element draws it, against a colour, an image or a gradient the
+ * A mark's ring and the ground beneath it. The ring is the outline of the
+ * mark the author can see (a layer can hold others that are not drawn), read
+ * as the browser resolved it: a one- or two-pixel line beside a halo, so a
+ * single sampled pixel is the halo or a blend rather than the ring. The ground
+ * is rendered, one pixel inside the mark's edge with the editor's layer hidden
+ * and the page's text made transparent: a colour, an image or a gradient the
  * block paints, and never a glyph that happens to sit at that point.
  */
 async function ringAndGround(
@@ -342,7 +343,9 @@ async function ringAndGround(
   if (box === null) throw new Error("the mark is not laid out");
   const x = box.x + 1;
   const y = box.y + box.height / 2;
-  const ring = await pixelAt(page, x, y);
+  const ring = await mark.evaluate(
+    element => getComputedStyle(element).outlineColor
+  );
   const layer = canvasLayer(page);
   const frameBody = canvasFrame(page).locator("body");
   await layer.evaluate(element => {
