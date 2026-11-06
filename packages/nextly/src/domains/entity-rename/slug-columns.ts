@@ -666,6 +666,40 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
   },
 ];
 
+/**
+ * A registry whose rows store field configurations, in its `fields` column: what a relationship
+ * names as its target is a slug inside it (`relationTo`, the Builder shape's `options.target`).
+ * A rename rewrites those targets (`relationship-targets`), and the test that reads the core
+ * schema asks this list about every table with a `fields` column, so a new store of field
+ * configurations can't be left out.
+ */
+export interface StoredFieldConfiguration {
+  table: string;
+  /** Who made each row: `ui` for the Schema Builder, whose rows a rename may rewrite. */
+  sourceColumn: "source";
+  fieldsColumn: "fields";
+}
+
+/** Every registry that stores field configurations: collections, Singles and field groups. */
+export const STORED_FIELD_CONFIGURATIONS: readonly StoredFieldConfiguration[] =
+  [
+    {
+      table: "dynamic_collections",
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+    {
+      table: "dynamic_singles",
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+    {
+      table: STORAGE_FORMAT.registryTable,
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+  ];
+
 /** The declared columns a rename moves or deletes rows by, in order. */
 export function renamedSlugColumns(): RenamedSlugColumn[] {
   return SLUG_COLUMNS.filter(

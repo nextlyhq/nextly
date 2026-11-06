@@ -33,9 +33,10 @@ export interface StoredCollectionFields {
 /**
  * A stored `fields` value, from either form a driver returns. Text that is not
  * JSON throws, as it does where the registries read it: read as no fields, it
- * would let through a rename that a relationship in it forbids.
+ * would let through a rename that a relationship in it forbids. Shared with the
+ * rename's other reader of stored fields (`relationship-targets`).
  */
-function fieldsOf(value: unknown): unknown[] {
+export function fieldsOf(value: unknown): unknown[] {
   const parsed: unknown =
     typeof value === "string" ? (JSON.parse(value) as unknown) : value;
   return Array.isArray(parsed) ? parsed : [];

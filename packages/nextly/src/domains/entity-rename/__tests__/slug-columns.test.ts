@@ -18,6 +18,7 @@ import { entityPermissionSpelling } from "../../auth/services/entity-permission-
 import { reviewStateKey } from "../../workflows/review-state-repository";
 import {
   SLUG_COLUMNS,
+  STORED_FIELD_CONFIGURATIONS,
   renamedSlugColumns,
   type FollowingSlugColumn,
   type RenamedSlugColumn,
@@ -238,6 +239,39 @@ describe("what a rename writes again from the new slug", () => {
           part,
         }),
       });
+    }
+  });
+});
+
+describe("stored field configurations", () => {
+  /** Every core table with a `fields` column: each stores field configurations a rename reads. */
+  function fieldsTablesInSchema(dialect: SupportedDialect): string[] {
+    return getCoreSchema(dialect)
+      .tables.filter(table =>
+        table.columns.some(column => column.name === "fields")
+      )
+      .map(table => table.name)
+      .sort();
+  }
+
+  it.each(DIALECTS)(
+    "declares every %s table with a fields column, so a rename moves the relationship targets it stores",
+    dialect => {
+      expect(fieldsTablesInSchema(dialect)).toEqual(
+        STORED_FIELD_CONFIGURATIONS.map(registry => registry.table).sort()
+      );
+    }
+  );
+
+  it.each(DIALECTS)("names %s columns each declared registry has", dialect => {
+    const tables = getCoreSchema(dialect).tables;
+    for (const registry of STORED_FIELD_CONFIGURATIONS) {
+      const columns = tables
+        .find(table => table.name === registry.table)
+        ?.columns.map(column => column.name);
+      expect(columns).toEqual(
+        expect.arrayContaining([registry.fieldsColumn, registry.sourceColumn])
+      );
     }
   });
 });
