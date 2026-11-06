@@ -212,11 +212,18 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     [pluginFilters, searchParams]
   );
   // The filters are declared in the signed-in workspace meta, so until it
-  // settles a `pf` in the URL resolves to nothing. The list waits for it
-  // rather than requesting, and showing, the rows the filter would remove.
-  const { isPending: pluginFiltersPending } = useBrandingStatus();
-  const awaitsPluginFilters =
-    pluginFiltersPending && pluginFilterParamValues(searchParams).length > 0;
+  // arrives a `pf` in the URL resolves to nothing. The list waits for it
+  // rather than requesting, and showing, the rows the filter would remove;
+  // if it never arrives, the list says so and is not read at all, since the
+  // list without the filter is not the one the link asks for.
+  const {
+    isPending: pluginFiltersPending,
+    isUnavailable: pluginFiltersUnavailable,
+  } = useBrandingStatus();
+  const choosesPluginFilter = pluginFilterParamValues(searchParams).length > 0;
+  const awaitsPluginFilters = pluginFiltersPending && choosesPluginFilter;
+  const lostPluginFilters =
+    !pluginFiltersPending && pluginFiltersUnavailable && choosesPluginFilter;
   // The page returns to the first whenever the choice changes, however it
   // changed: a choice in the toolbar, or the back button restoring an older
   // one. Kept on the page alone, a narrower choice would ask for a page past
@@ -354,7 +361,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     error: entriesError,
   } = useEntries({
     collectionSlug,
-    enabled: !tableGone && !awaitsPluginFilters,
+    enabled: !tableGone && !awaitsPluginFilters && !lostPluginFilters,
     params: {
       page,
       limit,
@@ -761,7 +768,15 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       {/* Content — a plugin List override replaces the default table (D23) */}
       {listViewPath ? (
         <PluginSlot path={listViewPath} props={injectionProps} />
-      ) : tableGone ? null : entriesError ? (
+      ) : tableGone ? null : lostPluginFilters ? (
+        <Alert variant="destructive">
+          <AlertDescription>
+            This link chooses a plugin&apos;s filter, and the filters
+            couldn&apos;t be loaded, so the list isn&apos;t shown. Reload the
+            page to try again.
+          </AlertDescription>
+        </Alert>
+      ) : entriesError ? (
         // A list the server refused says so in its own words where the rows
         // would be. Without this a failed read has no rows and is not
         // loading, which draws the empty state and calls the collection empty.

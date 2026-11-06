@@ -17,7 +17,7 @@ import {
   snapshotFilter,
 } from "../domains/collections/query/filter-shape";
 import { NextlyError } from "../errors/nextly-error";
-import { SLUG_PATTERN } from "../shared/slug-pattern";
+import { judgeConfiguredAddress } from "../shared/address-rule";
 
 import type { PluginListFilterDeclaration } from "./admin-contributions";
 import { isWellFormedAdminPlaceName } from "./admin-places";
@@ -42,19 +42,8 @@ function filterProblem(declared: unknown): string | undefined {
   const { label, collections, options } = declared as Record<string, unknown>;
   if (typeof label !== "string" || label.trim() === "")
     return "it has no label";
-  if (
-    collections !== undefined &&
-    !(
-      Array.isArray(collections) &&
-      // The one shape a collection slug takes, so a name no collection can
-      // have ("Tickets", " posts") is refused rather than offered nowhere.
-      collections.every(
-        slug => typeof slug === "string" && SLUG_PATTERN.test(slug)
-      )
-    )
-  ) {
-    return "its `collections` is not a list of collection slugs: lower-case letters, digits, dashes and underscores, starting with a letter";
-  }
+  const collectionsProblem = collectionsScopeProblem(collections);
+  if (collectionsProblem) return collectionsProblem;
   if (!Array.isArray(options) || options.length === 0) {
     return "it offers no options";
   }
@@ -62,6 +51,28 @@ function filterProblem(declared: unknown): string | undefined {
   for (const option of options as unknown[]) {
     const problem = optionProblem(option, values);
     if (problem) return problem;
+  }
+  return undefined;
+}
+
+/**
+ * What makes a filter's `collections` unusable, or `undefined`. Each slug is
+ * judged by the one address rule, as configuration's own collection addresses
+ * are, so a name no collection can have ("Tickets", one past the length limit)
+ * is refused rather than offered on no list. Only what configuration could
+ * never have made is refused: a collection may already exist under an address
+ * the rule now refuses for new ones, and a filter may name it.
+ */
+function collectionsScopeProblem(collections: unknown): string | undefined {
+  if (collections === undefined) return undefined;
+  if (!Array.isArray(collections)) {
+    return "its `collections` is not a list of collection slugs";
+  }
+  for (const slug of collections as unknown[]) {
+    const refusal = judgeConfiguredAddress("collection", slug);
+    if (refusal) {
+      return `its \`collections\` names no collection: ${refusal.message}`;
+    }
   }
   return undefined;
 }

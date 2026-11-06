@@ -50,7 +50,7 @@ const { useEntries, tableProps, plugins, table, branding } = vi.hoisted(() => ({
   // needs it, the list's tests only what the list hands it.
   table: { real: false },
   // Whether the signed-in meta, which declares the filters, is still on its way.
-  branding: { pending: false },
+  branding: { pending: false, unavailable: false },
 }));
 
 // Hoisted, so it applies to the whole file: the stub records what the list
@@ -103,7 +103,7 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   useBranding: () => ({ plugins: plugins.list }),
   useBrandingStatus: () => ({
     isPending: branding.pending,
-    isUnavailable: false,
+    isUnavailable: branding.unavailable,
     isBrandingUnavailable: false,
   }),
 }));
@@ -193,6 +193,7 @@ describe("the entry list with a plugin's filter", () => {
     tableProps.mockClear();
     plugins.list = [{ name: "@acme/support", listFilters: [STATE] }];
     branding.pending = false;
+    branding.unavailable = false;
   });
 
   /** Every read answers with no rows. */
@@ -253,6 +254,32 @@ describe("the entry list with a plugin's filter", () => {
     rerender(<EntryList collectionSlug="tickets" />);
     expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
     expect(lastRead().where).toEqual({ state: { equals: "open" } });
+  });
+
+  it("reads nothing, and says why, when the filters a link chooses never arrive", () => {
+    // The workspace meta failed with nothing cached: no filter is declared,
+    // and the list without the link's filter is not the one it asks for.
+    branding.unavailable = true;
+    plugins.list = [];
+    useEntries.mockImplementation(() => ({
+      data: undefined,
+      isLoading: false,
+    }));
+    at("?pf=acme-support.state:open");
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(useEntries.mock.calls.every(([o]) => o.enabled === false)).toBe(
+      true
+    );
+    expect(screen.getByText(/filters\s+couldn.t be loaded/)).toBeTruthy();
+    expect(tableProps).not.toHaveBeenCalled();
+  });
+
+  it("reads a list whose URL chooses no plugin filter when the filters never arrive", () => {
+    branding.unavailable = true;
+    at("");
+    render(<EntryList collectionSlug="tickets" />);
+    expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
   });
 
   it("does not hold a list whose URL chooses no plugin filter", () => {

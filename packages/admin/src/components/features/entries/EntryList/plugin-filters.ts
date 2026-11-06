@@ -15,17 +15,13 @@ import { setSearchParams } from "@admin/lib/navigation";
 import type { SearchParams } from "@admin/lib/search-params";
 import type { PluginMetadata } from "@admin/types/branding";
 
-/** A filter the toolbar offers, as its plugin declared it. */
-export interface OfferedListFilter {
-  name: string;
-  label: string;
-  collections?: string[];
-  options: Array<{
-    value: string;
-    label: string;
-    where: Record<string, unknown>;
-  }>;
-}
+/**
+ * A filter the toolbar offers, as its plugin declared it: the metadata's own
+ * type, so the toolbar reads the contract the server publishes.
+ */
+export type OfferedListFilter = NonNullable<
+  PluginMetadata["listFilters"]
+>[number];
 
 /** The URL parameter a chosen option is kept in. */
 const PLUGIN_FILTER_PARAM = "pf";

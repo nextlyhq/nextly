@@ -175,6 +175,11 @@ describe("the filters plugins declare for the entry list", () => {
       { ...OPEN, collections: ["Tickets"] },
     ],
     ["a collection slug with a space", { ...OPEN, collections: [" tickets"] }],
+    [
+      "a collection slug past the address rule's length",
+      { ...OPEN, collections: [`t${"x".repeat(50)}`] },
+    ],
+    ["an empty collection slug", { ...OPEN, collections: [""] }],
     ["a declaration that is not an object", "acme-support.state"],
   ])("refuses %s, naming the plugin", (_case, declared) => {
     expect(
@@ -206,6 +211,20 @@ describe("the filters plugins declare for the entry list", () => {
     // One level shallower fits joined, and is accepted.
     expect(() => snapshotFilter({ and: [nestedWhere(30)] })).not.toThrow();
     expect(withWhere(nestedWhere(30))).toHaveLength(1);
+  });
+
+  it("accepts a collection slug an existing collection may already have", () => {
+    // The address rule refuses a repeated or trailing separator for a new
+    // collection only: one configured before the rule may still exist.
+    const [accepted] = contributedListFilters([
+      plugin("@acme/support", [
+        { ...OPEN, collections: ["help__tickets", `t${"x".repeat(49)}`] },
+      ]),
+    ]);
+    expect(accepted?.collections).toEqual([
+      "help__tickets",
+      `t${"x".repeat(49)}`,
+    ]);
   });
 
   it("refuses filters that are not a list", () => {
