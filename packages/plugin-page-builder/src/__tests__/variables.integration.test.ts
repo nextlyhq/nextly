@@ -14,7 +14,10 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
@@ -29,8 +32,15 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import type { StoredDocuments } from "../shared-style-rescan";
+import type { SharedStyleUsageSource } from "../shared-styles-routes";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
+import {
+  removeVariables,
+  siteStyleVariableStore,
+  variableRemovalChecks,
+} from "../variables-routes";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
@@ -94,6 +104,40 @@ function backfillTick(plugin: PluginDefinition): () => Promise<unknown> {
       } as never
     );
 }
+
+/** The slice of the Direct API the remove route's store reads and writes. */
+type VariableApi = Parameters<typeof siteStyleVariableStore>[1];
+
+/**
+ * The usage index's answer, and the stored documents, of a site whose
+ * variables no page uses. The index and the rescan are driven over HTTP
+ * above; these cases are about the Single's write and the shared styles.
+ */
+const NOTHING_USED: SharedStyleUsageSource = {
+  health: async () => ({
+    coversExistingDocuments: true,
+    anyUndetermined: false,
+  }),
+  documentsUsingEach: async ids =>
+    new Map(ids.map(id => [id, { collections: [], complete: true }])),
+  kindOf: () => "pages",
+};
+const NO_DOCUMENTS: StoredDocuments = {
+  collections: async () => [],
+  singles: async () => [],
+  rowsAfter: async () => ({ items: [], hasNext: false }),
+  rowForms: async () => [],
+  singleForms: async () => [],
+};
+
+/** The removal's checks over those: the shared styles are the site's own. */
+const CHECKS = variableRemovalChecks({
+  usage: NOTHING_USED,
+  blocks: () => [],
+  documents: async () => NO_DOCUMENTS,
+  limits: DEFAULT_LIMITS,
+  pathOf: id => id,
+});
 
 describe.each(getConfiguredTestDialects())(
   "variables (%s)",
@@ -388,6 +432,89 @@ describe.each(getConfiguredTestDialects())(
         "Still used on Home. Remove it from that page first."
       );
       expect(await storedIds(t)).toContain("t-spare");
+    });
+
+    /**
+     * The remove route's store over the Direct API, with `foreign` saved to
+     * the Single just before the route's first write: a fixed interleave,
+     * not a race.
+     */
+    function interleaved(t: TestNextly, foreign: Record<string, unknown>) {
+      const real = t.nextly as unknown as VariableApi;
+      const writes = { count: 0 };
+      const api: VariableApi = {
+        findSingle: args => real.findSingle(args),
+        updateSingle: async args => {
+          writes.count += 1;
+          if (writes.count === 1) {
+            await t.nextly.updateSingle({
+              slug: SITE_STYLE_SLUG,
+              data: { ...foreign, _overwrite: true },
+              overrideAccess: true,
+            });
+          }
+          return real.updateSingle(args);
+        },
+      };
+      const store = siteStyleVariableStore(
+        { self: { singles: {}, collections: {} }, user: null } as never,
+        api,
+        undefined
+      );
+      return { store, writes };
+    }
+
+    const removeRequest = (ids: string[]) =>
+      new Request(`${ORIGIN}/x`, {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      });
+
+    it("removes a variable when another save adds one first, keeping both changes", async () => {
+      const { t } = await boot();
+      const added = variable("t-added", "Added");
+      const { store, writes } = interleaved(t, {
+        tokens: { tokens: [accent, styled, spare, added] },
+      });
+      const answer = await removeVariables(
+        removeRequest(["t-spare"]),
+        store,
+        new Set(),
+        CHECKS
+      );
+      expect(answer.status).toBe(200);
+      // Refused once as made from a replaced version, then made again.
+      expect(writes.count).toBe(2);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-added"]);
+    });
+
+    it("refuses a removal as in use when a shared style saved first starts using the variable", async () => {
+      const { t } = await boot();
+      const naming = {
+        id: "c-new",
+        slug: "new",
+        label: "New",
+        orderIndex: 1,
+        styles: { base: { base: { color: { $token: "t-spare" } } } },
+      };
+      const { store, writes } = interleaved(t, { classes: [card, naming] });
+      await expect(
+        removeVariables(removeRequest(["t-spare"]), store, new Set(), CHECKS)
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "t-spare",
+              code: "IN_USE",
+              message: "Spare is used by the shared style New.",
+            },
+          ],
+        },
+      });
+      // Judged again on the newest read, so its write was never made.
+      expect(writes.count).toBe(1);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-spare"]);
     });
 
     it("fills the variable index for pages the backfill walks again", async () => {

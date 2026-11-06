@@ -6,10 +6,12 @@
  * asks for and what it makes of each answer; the integration suite drives the
  * same route over HTTP against a local catalogue.
  */
-import { describe, expect, it } from "vitest";
+import type { FontFaceDef } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { describe, expect, it, vi } from "vitest";
 
 import { resolveFontOptions } from "./options";
-import { siteFontRoutes } from "./routes";
+import { appendNewFaces, siteFontRoutes } from "./routes";
 
 const API = "https://api.example.test";
 
@@ -131,5 +133,93 @@ describe("the catalogue route's popularity", () => {
     const items = await readItems(route, fetch);
     expect(asked.filter(path => path === "/v1/stats")).toHaveLength(2);
     expect(items.find(item => item.id === "lora")?.popularity).toBe(52_000);
+  });
+});
+
+/** A face of Lora at `weight`, its file at `id`. */
+const lora = (weight: string, id: string): FontFaceDef => ({
+  family: "Lora",
+  weight,
+  style: "normal",
+  unicodeRange: "U+0000-00FF",
+  src: [{ url: `/api/media/${id}/raw`, format: "woff2" }],
+});
+
+/**
+ * The site style's Single holding each of `docs` in turn, at version 1, 2,
+ * …; a write sent with any version but the newest is refused as stale.
+ */
+function singleOver(...docs: { fonts: unknown[] }[]) {
+  let at = 0;
+  const findSingle = vi.fn(async () => {
+    const doc = docs[Math.min(at, docs.length - 1)];
+    at += 1;
+    return { ...doc, _rev: String(Math.min(at, docs.length)) };
+  });
+  const updateSingle = vi.fn(
+    async (args: { data: Record<string, unknown> }): Promise<unknown> => {
+      if (args.data._rev !== String(docs.length)) {
+        throw NextlyError.staleVersion({
+          data: { currentVersion: String(docs.length) },
+        });
+      }
+      return {};
+    }
+  );
+  return { findSingle, updateSingle };
+}
+
+describe("appending an add's faces to the site's fonts", () => {
+  const brand = {
+    family: "Brand",
+    src: [{ url: "/api/media/brand/raw", format: "woff2" }],
+  };
+
+  it("appends again to what is stored after a save refused the first write", async () => {
+    const api = singleOver({ fonts: [] }, { fonts: [brand] });
+    const added = [lora("400", "m1"), lora("700", "m2")];
+    expect(await appendNewFaces(api, "site-style", added, {})).toEqual(added);
+    expect(api.updateSingle).toHaveBeenCalledTimes(2);
+    // The second write keeps the face saved meanwhile, with its version.
+    expect(api.updateSingle.mock.calls[1]?.[0].data).toEqual({
+      fonts: [brand, ...added],
+      _rev: "2",
+    });
+  });
+
+  it("leaves out a face another add stored meanwhile, and answers only those appended", async () => {
+    const theirs = lora("400", "theirs");
+    const api = singleOver({ fonts: [] }, { fonts: [theirs] });
+    const mine = [lora("400", "m1"), lora("700", "m2")];
+    expect(await appendNewFaces(api, "site-style", mine, {})).toEqual([
+      mine[1],
+    ]);
+    expect(api.updateSingle.mock.calls[1]?.[0].data).toEqual({
+      fonts: [theirs, mine[1]],
+      _rev: "2",
+    });
+  });
+
+  it("writes nothing more when every face was stored meanwhile", async () => {
+    const api = singleOver(
+      { fonts: [] },
+      { fonts: [lora("400", "t1"), lora("700", "t2")] }
+    );
+    const mine = [lora("400", "m1"), lora("700", "m2")];
+    expect(await appendNewFaces(api, "site-style", mine, {})).toEqual([]);
+    expect(api.updateSingle).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers the stale refusal once three writes in all were refused", async () => {
+    const api = singleOver(
+      { fonts: [] },
+      { fonts: [] },
+      { fonts: [] },
+      { fonts: [] }
+    );
+    await expect(
+      appendNewFaces(api, "site-style", [lora("400", "m1")], {})
+    ).rejects.toMatchObject({ code: "STALE_VERSION" });
+    expect(api.updateSingle).toHaveBeenCalledTimes(3);
   });
 });

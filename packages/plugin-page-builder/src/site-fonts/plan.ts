@@ -95,8 +95,11 @@ export function readAddFontBody(raw: unknown): AddSiteFontRequest {
   return parsed.data;
 }
 
-/** Whether a stored face is the one a planned face would add. */
-function sameFace(
+/**
+ * Whether a stored face is the one a planned face would add: the one test of
+ * a face already on the site, for the plan and for the write that appends.
+ */
+export function sameFace(
   stored: FontFaceDef,
   planned: Omit<FontFaceDef, "src">
 ): boolean {

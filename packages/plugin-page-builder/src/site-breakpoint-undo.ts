@@ -43,7 +43,6 @@ import {
 } from "./library-contract";
 import {
   currentStyle,
-  isStaleVersion,
   MANAGE_SITE_PERMISSION,
   NOT_WALKED,
   refuseReadding,
@@ -60,6 +59,7 @@ import {
 } from "./site-settings";
 import { siteBreakpoints } from "./site-style";
 import { checkStoredBreakpoints } from "./site-style-record";
+import { isStaleVersion } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 
 /** The audit kind an undo of a removal is recorded under. */
