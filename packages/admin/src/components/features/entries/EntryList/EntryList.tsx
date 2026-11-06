@@ -217,6 +217,19 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   const { isPending: pluginFiltersPending } = useBrandingStatus();
   const awaitsPluginFilters =
     pluginFiltersPending && pluginFilterParamValues(searchParams).length > 0;
+  // The page returns to the first whenever the choice changes, however it
+  // changed: a choice in the toolbar, or the back button restoring an older
+  // one. Kept on the page alone, a narrower choice would ask for a page past
+  // its last.
+  const pluginFilterChoice = JSON.stringify(
+    [...chosenPluginFilterOptions].sort(([a], [b]) => a.localeCompare(b))
+  );
+  const [pagedPluginFilterChoice, setPagedPluginFilterChoice] =
+    useState(pluginFilterChoice);
+  if (pagedPluginFilterChoice !== pluginFilterChoice) {
+    setPagedPluginFilterChoice(pluginFilterChoice);
+    setPage(1);
+  }
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
@@ -534,10 +547,8 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       if (value === null) next.delete(name);
       else next.set(name, value);
       // Kept in the URL, which the list reads back: the choice survives a
-      // reload and a shared link, and the request follows the URL.
+      // reload and a shared link, and the request and the page follow the URL.
       writePluginFilterParams(pluginFilters, next);
-      // Reset to the first page, as for the list's own filters.
-      setPage(1);
     },
     [chosenPluginFilterOptions, pluginFilters]
   );

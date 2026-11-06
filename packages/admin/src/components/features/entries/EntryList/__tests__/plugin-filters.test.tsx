@@ -315,6 +315,37 @@ describe("the entry list with a plugin's filter", () => {
     expect(lastRead().page).toBe(1);
   });
 
+  it("returns to the first page when the back button restores another choice", () => {
+    at("?pf=acme-support.state:open");
+    render(<EntryList collectionSlug="tickets" />);
+    const props = tableProps.mock.calls.at(-1)?.[0] as {
+      onPageChange: (page: number) => void;
+    };
+    act(() => props.onPageChange(2));
+    expect(lastRead().page).toBe(3);
+
+    act(() => {
+      at("?pf=acme-support.state:closed");
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    expect(lastRead().where).toEqual({ state: { equals: "closed" } });
+    expect(lastRead().page).toBe(1);
+  });
+
+  it("keeps its page while the choice stands", () => {
+    at("?pf=acme-support.state:open");
+    render(<EntryList collectionSlug="tickets" />);
+    const props = tableProps.mock.calls.at(-1)?.[0] as {
+      onPageChange: (page: number) => void;
+    };
+    act(() => props.onPageChange(2));
+    act(() => {
+      at("?pf=acme-support.state:open&other=1");
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    expect(lastRead().page).toBe(3);
+  });
+
   it("ignores a pf that names no declared filter or option", () => {
     at("?pf=acme-support.state:everything&pf=other.filter:open&pf=nonsense");
     render(<EntryList collectionSlug="tickets" />);
