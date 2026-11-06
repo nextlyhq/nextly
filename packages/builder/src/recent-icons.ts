@@ -70,6 +70,14 @@ export function rememberIcon(
  */
 const watchers = new WeakMap<PreferenceStore, Set<() => void>>();
 
+/*
+ * The list each store holds for this session, as last remembered: what the
+ * controls draw. Kept beside the store rather than read back from it, so a
+ * store that refuses the write (private browsing, a full quota) still shows
+ * the choice under Recent for the rest of the session, in every control.
+ */
+const sessionLists = new WeakMap<PreferenceStore, string>();
+
 function watch(store: PreferenceStore, onChange: () => void): () => void {
   const set = watchers.get(store) ?? new Set<() => void>();
   watchers.set(store, set);
@@ -95,14 +103,19 @@ export function useRecentIcons(
         store === undefined ? () => undefined : watch(store, onChange),
       [store]
     ),
-    () => storedText(store),
+    () =>
+      store === undefined
+        ? null
+        : (sessionLists.get(store) ?? storedText(store)),
     () => null
   );
   const list = React.useMemo(() => idsIn(raw), [raw]);
   const remember = React.useCallback(
     (id: string) => {
       if (store === undefined) return;
-      rememberIcon(store, readRecentIcons(store), id);
+      const current = sessionLists.get(store) ?? storedText(store);
+      const next = rememberIcon(store, idsIn(current), id);
+      sessionLists.set(store, JSON.stringify(next));
       for (const onChange of watchers.get(store) ?? []) onChange();
     },
     [store]

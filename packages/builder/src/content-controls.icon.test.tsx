@@ -265,6 +265,31 @@ describe("an icon prop in the Content tab", () => {
     ).toBeDefined();
   });
 
+  it("keeps a choice under Recent for the session when the store refuses it", async () => {
+    // A store that cannot keep anything, as private browsing or a full quota
+    // leaves one: the choice is still offered under Recent, in this control
+    // and in every other one on screen.
+    const store = {
+      read: () => null,
+      write: () => {
+        throw new Error("The quota is full.");
+      },
+    };
+    mount(
+      {},
+      { contentServices: { recentIcons: store }, props: ["icon", "badge"] }
+    );
+    const [first, second] = await screen.findAllByRole("button", {
+      name: /: none chosen$/,
+    });
+    fireEvent.click(first!);
+    fireEvent.click(await screen.findByRole("option", { name: "Truck" }));
+    fireEvent.click(second!);
+    expect(
+      await screen.findByRole("option", { name: "Truck, recent" })
+    ).toBeDefined();
+  });
+
   it("offers no Recent row where the host keeps no store", async () => {
     mount({});
     fireEvent.click(

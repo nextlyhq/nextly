@@ -63,7 +63,10 @@ function renderIconSvg(
             strokeLinecap: "round" as const,
             strokeLinejoin: "round" as const,
           }
-        : {})}
+        : // A filled icon says it has no stroke, so a page's styles setting
+          // one on its SVGs or an ancestor cannot outline it: stroke is
+          // inherited.
+          { stroke: "none" })}
       focusable="false"
       {...(named
         ? { role: "img", "aria-label": options.label }

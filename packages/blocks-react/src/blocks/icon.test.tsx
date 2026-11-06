@@ -132,6 +132,21 @@ describe("core/icon", () => {
     expect(resolveEntryPath).toHaveBeenCalledWith("pages", "p1");
   });
 
+  it("draws a filled icon with no stroke, so a page's stroke cannot outline it", async () => {
+    const filled = {
+      id: "acme:dot",
+      name: "dot",
+      body: '<circle cx="12" cy="12" r="6"/>',
+      viewBox: "0 0 24 24",
+      stroked: false,
+    };
+    const svg = (
+      await draw({ icon: "acme:dot" }, async () => filled)
+    ).querySelector("svg");
+    expect(svg?.getAttribute("fill")).toBe("currentColor");
+    expect(svg?.getAttribute("stroke")).toBe("none");
+  });
+
   it("says an icon's name as words", () => {
     expect(iconSpokenName("circle-arrow-out-up-right")).toBe(
       "Circle arrow out up right"
