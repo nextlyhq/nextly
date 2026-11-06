@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  changedByOf,
   layoutExists,
   publishedLayoutIds,
   readLayoutSettings,
@@ -99,5 +100,16 @@ describe("writing the settings from a read of them", () => {
     });
 
     expect(written).toEqual([{ defaultLayout: "b", _overwrite: true }]);
+  });
+});
+
+describe("who chose the default, as the settings record it", () => {
+  it("names an API key as the key, and a person as the person", () => {
+    expect(
+      changedByOf({ kind: "api-key", userId: "owner-1", apiKeyId: "key-1" })
+    ).toBe("api-key:key-1");
+    expect(changedByOf({ kind: "user", userId: "person-1" })).toBe(
+      "user:person-1"
+    );
   });
 });

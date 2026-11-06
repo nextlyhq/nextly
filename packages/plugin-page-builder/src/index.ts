@@ -240,6 +240,7 @@ export type {
   DefinitionActionRequest,
   DefinitionActionResult,
   ExposureTargetInput,
+  ListQueryChange,
   PageAction,
   PageActionRequest,
   PageActionResult,

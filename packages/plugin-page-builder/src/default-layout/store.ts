@@ -10,6 +10,7 @@
  */
 import type { Nextly } from "nextly";
 
+import type { ActionBy } from "../component-actions-contract";
 import {
   asOverwrite,
   documentVersionOf,
@@ -45,8 +46,11 @@ export interface LayoutSettings {
   readonly defaultLayout: string | null;
   readonly seededLayout: string | null;
   /**
-   * Who made the current default, by user id; null for a default the plugin
-   * set itself (the seed, or the repair) or one recorded before this existed.
+   * Who made the current default, as {@link changedByOf} writes it:
+   * `user:<id>` for a person, `api-key:<id>` for an API key. A bare id is a
+   * person's, recorded before the kind was written. Null for a default the
+   * plugin set itself (the seed, or the repair) or one recorded before this
+   * existed.
    */
   readonly defaultLayoutChangedBy: string | null;
   /**
@@ -54,6 +58,16 @@ export interface LayoutSettings {
    * read sends back; absent when the document was never stored.
    */
   readonly rev: string | undefined;
+}
+
+/**
+ * Who chose a default, as the settings record it: the API key itself for a
+ * key, never its owner, so a key's choice is told apart from the person's.
+ */
+export function changedByOf(by: ActionBy): string {
+  return by.kind === "api-key" && by.apiKeyId !== undefined
+    ? `api-key:${by.apiKeyId}`
+    : `user:${by.userId}`;
 }
 
 /**

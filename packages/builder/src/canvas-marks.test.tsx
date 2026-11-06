@@ -388,6 +388,53 @@ describe("selection marks", () => {
     );
   });
 
+  it("rings the exposed part being edited, and dims the placement's other ones", async () => {
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [{ id: "host", type: "acme/placed", version: 1, props: {} }],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="place"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    const part = (id: string) =>
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="${id}"]`);
+    const exposedMarks = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="exposed"]'
+        )
+      );
+    act(() => {
+      part("part-1")?.setAttribute(EXPOSED_ATTRIBUTE, "");
+      part("part-2")?.setAttribute(EXPOSED_ATTRIBUTE, "");
+    });
+    await waitFor(() => expect(exposedMarks()).toHaveLength(2));
+    expect(exposedMarks().some(mark => mark.hasAttribute("data-dimmed"))).toBe(
+      false
+    );
+    // What the canvas writes on the element it is editing.
+    act(() => {
+      part("part-2")?.setAttribute("data-nx-editing", "content");
+    });
+    await waitFor(() =>
+      expect(
+        exposedMarks().map(mark => [
+          mark.hasAttribute("data-editing"),
+          mark.hasAttribute("data-dimmed"),
+        ])
+      ).toEqual([
+        [false, true],
+        [true, false],
+      ])
+    );
+  });
+
   it("puts a placement's tag inside its frame at the top of what is on screen, wherever that is in the page", async () => {
     // Scrolled 600px down: the screen shows the page from 600 on, and the
     // placement sits just below the screen's top, far down the page.

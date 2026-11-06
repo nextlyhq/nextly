@@ -96,6 +96,7 @@ import {
   placedLockMessage,
   variantLockMessage,
 } from "./layers-lock-wording";
+import type { ListFieldsReader } from "./list-query-judgement";
 import {
   composedFormsRead,
   lockBaselines,
@@ -227,6 +228,12 @@ export interface CompositionSetup {
    * site style cannot be read, and then nothing is refused.
    */
   readonly siteDefinitions?: () => Promise<SiteDefinitions>;
+  /**
+   * The fields a collection declares and the public may read, for judging
+   * what a page's collection lists filter and sort by. Absent where the
+   * schema cannot be read, and then lists are judged by their shape alone.
+   */
+  readonly listFields?: ListFieldsReader;
 }
 
 /** What the site defines that a page refers to by id. */

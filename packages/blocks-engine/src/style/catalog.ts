@@ -26,6 +26,14 @@ import type {
   TokenKind,
   UrlLeaf,
 } from "./catalog-types";
+import {
+  DISCLOSURE_ICON_EXPANSIONS,
+  DISCLOSURE_ICON_PROPERTY,
+  DISCLOSURE_ICONS,
+  DISCLOSURE_POSITION_EXPANSIONS,
+  DISCLOSURE_POSITION_PROPERTY,
+  DISCLOSURE_POSITIONS,
+} from "./disclosure";
 import { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./overlay";
 
 // --- Leaf constructors ------------------------------------------------------
@@ -708,6 +716,27 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "upper-roman",
     ]),
     summary: "The marker drawn beside each list item.",
+  },
+  {
+    property: "disclosureIcon",
+    // Its own group, offered only by a block whose children are disclosures
+    // (an Accordion): each keyword writes its sections' title rows, so on any
+    // other block it would style nothing.
+    group: "disclosure",
+    shape: {
+      ...keyword(DISCLOSURE_ICON_PROPERTY, DISCLOSURE_ICONS),
+      expands: DISCLOSURE_ICON_EXPANSIONS,
+    },
+    summary: "The icon each section shows beside its title.",
+  },
+  {
+    property: "disclosurePosition",
+    group: "disclosure",
+    shape: {
+      ...keyword(DISCLOSURE_POSITION_PROPERTY, DISCLOSURE_POSITIONS),
+      expands: DISCLOSURE_POSITION_EXPANSIONS,
+    },
+    summary: "Whether the icon sits before or after each section's title.",
   },
   {
     property: "textDecoration",

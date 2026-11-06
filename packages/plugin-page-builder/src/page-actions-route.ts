@@ -8,6 +8,8 @@
  *   values if given.
  * - **set-placement-values** and **choose-variant** change one placement.
  * - **set-layout** chooses the page's Layout, or switches it off.
+ * - **set-list-query** changes a collection list's source, filters, sort,
+ *   limit and offset, as the list's inspector does.
  *
  * Each is read, planned and written as the caller. The stored page is read as
  * its working draft, as the editor opens it, and written back as a draft
@@ -27,6 +29,7 @@
  */
 import {
   applyOps,
+  COLLECTION_LIST_TYPE,
   COMPONENT_INSTANCE_TYPE,
   findNode,
   isComponentInstance,
@@ -54,6 +57,7 @@ import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
   PAGE_ACTIONS_ROUTE_PATH,
+  type ListQueryChange,
   type PageAction,
   type PageActionRequest,
   type PageActionResult,
@@ -424,6 +428,10 @@ async function opsFor(
           ),
         ],
       };
+    case "set-list-query":
+      return {
+        ops: [listQueryUpdate(document, action.listId, action.query)],
+      };
     case "choose-variant":
       return {
         ops: [
@@ -541,6 +549,30 @@ function placementUpdate(
     id: instanceId,
     patch: { props: change({ ...node.props }) },
   };
+}
+
+/**
+ * The update op that changes one collection list's query: each part given
+ * is set, each `null` removed, and the rest of its props kept as stored.
+ */
+function listQueryUpdate(
+  document: BlockDocument,
+  listId: string,
+  change: ListQueryChange
+): BuilderOp {
+  const node = findNode(document.nodes, listId);
+  if (node === undefined || node.type !== COLLECTION_LIST_TYPE) {
+    throw refusedAction([
+      `There is no collection list "${listId}" on this page.`,
+    ]);
+  }
+  const props: Record<string, unknown> = { ...node.props };
+  for (const [part, value] of Object.entries(change)) {
+    if (value === undefined) continue;
+    if (value === null) delete props[part];
+    else props[part] = value;
+  }
+  return { kind: "update", id: listId, patch: { props } };
 }
 
 /** A placement's props with values set and some fields reset to what they inherit. */

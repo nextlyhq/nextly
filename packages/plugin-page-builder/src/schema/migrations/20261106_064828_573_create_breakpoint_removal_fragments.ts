@@ -5,39 +5,27 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261106_064811_678_create_usage_index_tables",
+  name: "20261106_064828_573_create_breakpoint_removal_fragments",
   schemaVersion: 6,
-  checksum: "0cbdf9ad6b983bd026d8a42178c69c9c052b270a775b2de854b7eade40ed7615",
+  checksum: "2188b3de23d90100d49a761b4b970cc76f7c0d698e08ee95b2da7c49b5bcf20c",
   dialects: {
     postgresql: {
       up: [
-        'CREATE TABLE "page_builder__class_usage" (\n  "id" text PRIMARY KEY NOT NULL,\n  "scope" text NOT NULL,\n  "entity" text NOT NULL,\n  "entity_key" text NOT NULL,\n  "field" text NOT NULL,\n  "locale" text NOT NULL,\n  "variant" text NOT NULL,\n  "class_id" text NOT NULL\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__class_usage_entity_entity_key_178r965" ON "page_builder__class_usage" ("entity", "entity_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__class_usage_class_id" ON "page_builder__class_usage" ("class_id")',
-        'CREATE TABLE "page_builder__component_usage" (\n  "id" text PRIMARY KEY NOT NULL,\n  "scope" text NOT NULL,\n  "entity" text NOT NULL,\n  "entity_key" text NOT NULL,\n  "field" text NOT NULL,\n  "locale" text NOT NULL,\n  "variant" text NOT NULL,\n  "kind" text NOT NULL,\n  "component_id" text NOT NULL\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__component_usage_entity_entity_key_178r965" ON "page_builder__component_usage" ("entity", "entity_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__component_usage_component_id" ON "page_builder__component_usage" ("component_id")',
+        'CREATE TABLE "page_builder__breakpoint_removal_fragments" (\n  "id" text PRIMARY KEY NOT NULL,\n  "run_id" bpchar(36) NOT NULL,\n  "document_key" text NOT NULL,\n  "host" jsonb,\n  "form" text NOT NULL,\n  "fragment" jsonb NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__breakpoint_removal_fragments_run_id" ON "page_builder__breakpoint_removal_fragments" ("run_id");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__breakpoint_removal_fragments_created_at" ON "page_builder__breakpoint_removal_fragments" ("created_at")',
       ],
-      down: [
-        'DROP TABLE "page_builder__component_usage" CASCADE',
-        'DROP TABLE "page_builder__class_usage" CASCADE',
-      ],
+      down: ['DROP TABLE "page_builder__breakpoint_removal_fragments" CASCADE'],
     },
     mysql: {
       up: [
-        "CREATE TABLE `page_builder__class_usage` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `scope` varchar(16) NOT NULL,\n  `entity` varchar(255) NOT NULL,\n  `entity_key` varchar(255) NOT NULL,\n  `field` varchar(255) NOT NULL,\n  `locale` varchar(64) NOT NULL,\n  `variant` varchar(16) NOT NULL,\n  `class_id` varchar(255) NOT NULL\n);\nCREATE INDEX `idx_page_builder__class_usage_entity_entity_key_178r965` ON `page_builder__class_usage` (`entity`, `entity_key`);\nCREATE INDEX `idx_page_builder__class_usage_class_id` ON `page_builder__class_usage` (`class_id`)",
-        "CREATE TABLE `page_builder__component_usage` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `scope` varchar(16) NOT NULL,\n  `entity` varchar(255) NOT NULL,\n  `entity_key` varchar(255) NOT NULL,\n  `field` varchar(255) NOT NULL,\n  `locale` varchar(64) NOT NULL,\n  `variant` varchar(16) NOT NULL,\n  `kind` varchar(16) NOT NULL,\n  `component_id` varchar(512) NOT NULL\n);\nCREATE INDEX `idx_page_builder__component_usage_entity_entity_key_178r965` ON `page_builder__component_usage` (`entity`, `entity_key`);\nCREATE INDEX `idx_page_builder__component_usage_component_id` ON `page_builder__component_usage` (`component_id`)",
+        "CREATE TABLE `page_builder__breakpoint_removal_fragments` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `run_id` char(36) NOT NULL,\n  `document_key` varchar(512) NOT NULL,\n  `host` json,\n  `form` varchar(16) NOT NULL,\n  `fragment` json NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE INDEX `idx_page_builder__breakpoint_removal_fragments_run_id` ON `page_builder__breakpoint_removal_fragments` (`run_id`);\nCREATE INDEX `idx_page_builder__breakpoint_removal_fragments_created_at` ON `page_builder__breakpoint_removal_fragments` (`created_at`)",
       ],
-      down: [
-        "DROP TABLE `page_builder__component_usage`",
-        "DROP TABLE `page_builder__class_usage`",
-      ],
+      down: ["DROP TABLE `page_builder__breakpoint_removal_fragments`"],
     },
     sqlite: {
       up: [
-        'CREATE TABLE "page_builder__class_usage" (\n  "id" text PRIMARY KEY NOT NULL,\n  "scope" text NOT NULL,\n  "entity" text NOT NULL,\n  "entity_key" text NOT NULL,\n  "field" text NOT NULL,\n  "locale" text NOT NULL,\n  "variant" text NOT NULL,\n  "class_id" text NOT NULL\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__class_usage_entity_entity_key_178r965" ON "page_builder__class_usage" ("entity", "entity_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__class_usage_class_id" ON "page_builder__class_usage" ("class_id")',
-        'CREATE TABLE "page_builder__component_usage" (\n  "id" text PRIMARY KEY NOT NULL,\n  "scope" text NOT NULL,\n  "entity" text NOT NULL,\n  "entity_key" text NOT NULL,\n  "field" text NOT NULL,\n  "locale" text NOT NULL,\n  "variant" text NOT NULL,\n  "kind" text NOT NULL,\n  "component_id" text NOT NULL\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__component_usage_entity_entity_key_178r965" ON "page_builder__component_usage" ("entity", "entity_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__component_usage_component_id" ON "page_builder__component_usage" ("component_id")',
+        'CREATE TABLE "page_builder__breakpoint_removal_fragments" (\n  "id" text PRIMARY KEY NOT NULL,\n  "run_id" text NOT NULL,\n  "document_key" text NOT NULL,\n  "host" text,\n  "form" text NOT NULL,\n  "fragment" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__breakpoint_removal_fragments_run_id" ON "page_builder__breakpoint_removal_fragments" ("run_id");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__breakpoint_removal_fragments_created_at" ON "page_builder__breakpoint_removal_fragments" ("created_at")',
       ],
-      down: [
-        'DROP TABLE "page_builder__component_usage"',
-        'DROP TABLE "page_builder__class_usage"',
-      ],
+      down: ['DROP TABLE "page_builder__breakpoint_removal_fragments"'],
     },
   },
   snapshot: {
@@ -386,7 +374,7 @@ export default {
           checks: [],
         },
         {
-          name: "page_builder__class_usage",
+          name: "page_builder__breakpoint_removal_fragments",
           columns: [
             {
               name: "id",
@@ -395,115 +383,53 @@ export default {
               primaryKey: true,
             },
             {
-              name: "scope",
+              name: "run_id",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: false,
+            },
+            {
+              name: "document_key",
               type: "text",
               nullable: false,
             },
             {
-              name: "entity",
+              name: "host",
+              type: "jsonb",
+              nullable: true,
+            },
+            {
+              name: "form",
               type: "text",
               nullable: false,
             },
             {
-              name: "entity_key",
-              type: "text",
+              name: "fragment",
+              type: "jsonb",
               nullable: false,
             },
             {
-              name: "field",
-              type: "text",
+              name: "created_at",
+              type: "timestamp",
               nullable: false,
+              default: "now()",
             },
             {
-              name: "locale",
-              type: "text",
+              name: "updated_at",
+              type: "timestamp",
               nullable: false,
-            },
-            {
-              name: "variant",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "class_id",
-              type: "text",
-              nullable: false,
+              default: "now()",
             },
           ],
           indexes: [
             {
-              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
-              columns: ["entity", "entity_key"],
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
               unique: false,
             },
             {
-              name: "idx_page_builder__class_usage_class_id",
-              columns: ["class_id"],
-              unique: false,
-            },
-          ],
-          foreignKeys: [],
-          checks: [],
-        },
-        {
-          name: "page_builder__component_usage",
-          columns: [
-            {
-              name: "id",
-              type: "text",
-              nullable: false,
-              primaryKey: true,
-            },
-            {
-              name: "scope",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "entity",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "entity_key",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "field",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "locale",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "variant",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "kind",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "component_id",
-              type: "text",
-              nullable: false,
-            },
-          ],
-          indexes: [
-            {
-              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
-              columns: ["entity", "entity_key"],
-              unique: false,
-            },
-            {
-              name: "idx_page_builder__component_usage_component_id",
-              columns: ["component_id"],
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
               unique: false,
             },
           ],
@@ -853,7 +779,7 @@ export default {
           checks: [],
         },
         {
-          name: "page_builder__class_usage",
+          name: "page_builder__breakpoint_removal_fragments",
           columns: [
             {
               name: "id",
@@ -862,115 +788,52 @@ export default {
               primaryKey: true,
             },
             {
-              name: "scope",
-              type: "varchar(16)",
+              name: "run_id",
+              type: "char(36)",
               nullable: false,
             },
             {
-              name: "entity",
-              type: "varchar(255)",
-              nullable: false,
-            },
-            {
-              name: "entity_key",
-              type: "varchar(255)",
-              nullable: false,
-            },
-            {
-              name: "field",
-              type: "varchar(255)",
-              nullable: false,
-            },
-            {
-              name: "locale",
-              type: "varchar(64)",
-              nullable: false,
-            },
-            {
-              name: "variant",
-              type: "varchar(16)",
-              nullable: false,
-            },
-            {
-              name: "class_id",
-              type: "varchar(255)",
-              nullable: false,
-            },
-          ],
-          indexes: [
-            {
-              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
-              columns: ["entity", "entity_key"],
-              unique: false,
-            },
-            {
-              name: "idx_page_builder__class_usage_class_id",
-              columns: ["class_id"],
-              unique: false,
-            },
-          ],
-          foreignKeys: [],
-          checks: [],
-        },
-        {
-          name: "page_builder__component_usage",
-          columns: [
-            {
-              name: "id",
-              type: "varchar(36)",
-              nullable: false,
-              primaryKey: true,
-            },
-            {
-              name: "scope",
-              type: "varchar(16)",
-              nullable: false,
-            },
-            {
-              name: "entity",
-              type: "varchar(255)",
-              nullable: false,
-            },
-            {
-              name: "entity_key",
-              type: "varchar(255)",
-              nullable: false,
-            },
-            {
-              name: "field",
-              type: "varchar(255)",
-              nullable: false,
-            },
-            {
-              name: "locale",
-              type: "varchar(64)",
-              nullable: false,
-            },
-            {
-              name: "variant",
-              type: "varchar(16)",
-              nullable: false,
-            },
-            {
-              name: "kind",
-              type: "varchar(16)",
-              nullable: false,
-            },
-            {
-              name: "component_id",
+              name: "document_key",
               type: "varchar(512)",
               nullable: false,
             },
+            {
+              name: "host",
+              type: "json",
+              nullable: true,
+            },
+            {
+              name: "form",
+              type: "varchar(16)",
+              nullable: false,
+            },
+            {
+              name: "fragment",
+              type: "json",
+              nullable: false,
+            },
+            {
+              name: "created_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
+            {
+              name: "updated_at",
+              type: "timestamp",
+              nullable: false,
+              default: "CURRENT_TIMESTAMP",
+            },
           ],
           indexes: [
             {
-              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
-              columns: ["entity", "entity_key"],
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
               unique: false,
             },
             {
-              name: "idx_page_builder__component_usage_component_id",
-              columns: ["component_id"],
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
               unique: false,
             },
           ],
@@ -1320,7 +1183,7 @@ export default {
           checks: [],
         },
         {
-          name: "page_builder__class_usage",
+          name: "page_builder__breakpoint_removal_fragments",
           columns: [
             {
               name: "id",
@@ -1329,115 +1192,52 @@ export default {
               primaryKey: true,
             },
             {
-              name: "scope",
+              name: "run_id",
               type: "text",
               nullable: false,
             },
             {
-              name: "entity",
+              name: "document_key",
               type: "text",
               nullable: false,
             },
             {
-              name: "entity_key",
+              name: "host",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "form",
               type: "text",
               nullable: false,
             },
             {
-              name: "field",
+              name: "fragment",
               type: "text",
               nullable: false,
             },
             {
-              name: "locale",
-              type: "text",
+              name: "created_at",
+              type: "integer",
               nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
             {
-              name: "variant",
-              type: "text",
+              name: "updated_at",
+              type: "integer",
               nullable: false,
-            },
-            {
-              name: "class_id",
-              type: "text",
-              nullable: false,
+              default: "(strftime('%s', 'now'))",
             },
           ],
           indexes: [
             {
-              name: "idx_page_builder__class_usage_entity_entity_key_178r965",
-              columns: ["entity", "entity_key"],
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id",
+              columns: ["run_id"],
               unique: false,
             },
             {
-              name: "idx_page_builder__class_usage_class_id",
-              columns: ["class_id"],
-              unique: false,
-            },
-          ],
-          foreignKeys: [],
-          checks: [],
-        },
-        {
-          name: "page_builder__component_usage",
-          columns: [
-            {
-              name: "id",
-              type: "text",
-              nullable: false,
-              primaryKey: true,
-            },
-            {
-              name: "scope",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "entity",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "entity_key",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "field",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "locale",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "variant",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "kind",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "component_id",
-              type: "text",
-              nullable: false,
-            },
-          ],
-          indexes: [
-            {
-              name: "idx_page_builder__component_usage_entity_entity_key_178r965",
-              columns: ["entity", "entity_key"],
-              unique: false,
-            },
-            {
-              name: "idx_page_builder__component_usage_component_id",
-              columns: ["component_id"],
+              name: "idx_page_builder__breakpoint_removal_fragments_created_at",
+              columns: ["created_at"],
               unique: false,
             },
           ],
