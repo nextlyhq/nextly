@@ -39,6 +39,7 @@
  * @module fields/blocks-composition
  */
 import {
+  COLLECTION_LIST_TYPE,
   componentIdsIn,
   compositionFaults,
   contentOnlyExposures,
@@ -47,6 +48,7 @@ import {
   nodeLocks,
   placementValueIssues,
   placementVariantIssues,
+  readListQuery,
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
@@ -1132,6 +1134,8 @@ async function judgeHosts(args: {
       "the usage index cannot list every document placing it, so only those it lists were judged"
     );
   }
+  // Every host's lists name the same few collections: each is read once.
+  const listFields = onceEach(setup.listFields);
   for (const host of listed.hosts) {
     await judgeOneHost({
       host,
@@ -1143,8 +1147,29 @@ async function judgeHosts(args: {
       setup,
       work,
       tally,
+      listFields,
     });
   }
+}
+
+/**
+ * A fields reader that reads each collection in each language once, for a
+ * save judging many hosts; `undefined` where there is no schema to read.
+ */
+function onceEach(
+  read: ListFieldsReader | undefined
+): ListFieldsReader | undefined {
+  if (read === undefined) return undefined;
+  const asked = new Map<string, ReturnType<ListFieldsReader>>();
+  return (collection, locale) => {
+    const key = `${collection}\u0000${locale ?? ""}`;
+    let answer = asked.get(key);
+    if (answer === undefined) {
+      answer = read(collection, locale);
+      asked.set(key, answer);
+    }
+    return answer;
+  };
 }
 
 type Tally = ReturnType<typeof hostTally>;
@@ -1297,6 +1322,8 @@ function ruleBroken(code: string, setup: CompositionSetup): string {
       return "a locked slot would hold other blocks than it starts with";
     case "locked-slot-content-only":
       return "a locked slot that allows only content changes would have its design or settings changed";
+    case LIST_BROKEN:
+      return "a collection list would be given a source, filter or sort it can't use";
     default:
       return "a block would sit where it is not allowed to";
   }
@@ -1373,6 +1400,8 @@ async function judgeOneHost(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   tally: Tally;
+  /** The schema the host's lists are judged against, read once per save. */
+  listFields: ListFieldsReader | undefined;
 }): Promise<void> {
   const { host, self, document, draft, read, write, setup, work, tally } = args;
   // A localized field holds a document per language, and the read is refused
@@ -1410,7 +1439,70 @@ async function judgeOneHost(args: {
     return;
   }
   reportWhatBroke({ host, stored, before, after, setup, tally });
+  await reportListsBroken({
+    host,
+    stored,
+    before,
+    after,
+    setup,
+    tally,
+    listFields: args.listFields,
+  });
 }
+
+/**
+ * The collection lists the save would newly break in one host, as the host
+ * composes them before and after it: an edit can aim a placement's existing
+ * value at a list's sort or filters, move the list to another collection, or
+ * change what a variant sets, and the page is then read with a list the
+ * canvas and the published page refuse. A problem the host's lists already
+ * composed to before the save is the host's, not this save's.
+ *
+ * Judged as the host is drawn: in every language, since the reference is not
+ * in a localized field, and with the host's collection as the entry its page
+ * shows. A host that is itself a component is no page, so an entry's relation
+ * there is judged by its shape alone; the pages placing it are judged too.
+ */
+async function reportListsBroken(args: {
+  host: HostRef;
+  stored: BlockDocument;
+  before: ComposedWithLibrary;
+  after: ComposedWithLibrary;
+  setup: CompositionSetup;
+  tally: Tally;
+  listFields: ListFieldsReader | undefined;
+}): Promise<void> {
+  const { host, stored, before, after, setup, tally, listFields } = args;
+  const found = await composedListQueryIssues(
+    after.composition.document,
+    stored,
+    host.slug === setup.store.collection ? {} : { entryCollection: host.slug },
+    {
+      ...(listFields === undefined ? {} : { fieldsOf: listFields }),
+      maxNodes: setup.limits.maxNodes,
+      // What the host composed to before this save stands for its stored
+      // form: a problem it held there is kept.
+      storedForms: () =>
+        Promise.resolve({
+          forms: [before.composition.document],
+          readable: true,
+        }),
+    }
+  );
+  for (const issue of found) {
+    tally.broke(host, {
+      code: LIST_BROKEN,
+      instanceId: issue.placement,
+      // The log names the placement and the list's problem; the refusal
+      // names neither, as for every other host fault.
+      message: `Placement "${issue.placement}": ${issue.message}`,
+      signature: `${issue.code}\u0000${issue.message}`,
+    });
+  }
+}
+
+/** The host fault of a collection list a component save would break. */
+const LIST_BROKEN = "collection-list";
 
 /**
  * What the save does to one host that was not wrong with it already.
@@ -1576,6 +1668,13 @@ interface SelectionFootprint {
    * what every placement picking it draws, with nothing else moved.
    */
   readonly lockFaults: ReadonlyMap<string, number>;
+  /**
+   * Each collection list the selection draws, by id, with its query as the
+   * engine reads it. A list moved to another collection, or given other
+   * filters or a sort by a variant, can make a host's own values for it
+   * name fields it no longer may, with nothing a placement rule reads moved.
+   */
+  readonly lists: string;
 }
 
 /** The footprint of `document` stored as `self`, selection by selection. */
@@ -1621,6 +1720,7 @@ async function footprintOf(
           LOCK_FAULTS.has(fault.code)
         )
       ),
+      lists: listQueries(nodes, setup),
     });
   }
   return {
@@ -1629,6 +1729,24 @@ async function footprintOf(
     slots: exposedSlots(document, setup, locks),
     exposures: exposedProperties(document, locks),
   };
+}
+
+/**
+ * Each collection list of a composed tree, by id, with its query and its
+ * problems as {@link readListQuery} reads them, as one comparable string.
+ */
+function listQueries(
+  nodes: readonly BlockNode[],
+  setup: CompositionSetup
+): string {
+  const lists: string[] = [];
+  eachComposed(nodes, setup, entry => {
+    if (entry?.type !== COLLECTION_LIST_TYPE) return;
+    lists.push(
+      `${String(entry.id)}|${JSON.stringify(readListQuery(entry.props))}`
+    );
+  });
+  return lists.sort().join("\n");
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
@@ -1863,6 +1981,8 @@ function selectionWorsens(
   // Any change to what the placement rule reads may break a host, in either
   // direction a host cannot be told apart from here, so it is judged.
   if (after.placement !== before.placement) return true;
+  // Any list that changed may now refuse what a host gives it.
+  if (after.lists !== before.lists) return true;
   if (after.depth > before.depth) return true;
   if (after.componentDepth > before.componentDepth) return true;
   for (const type of after.rootTypes) {
