@@ -214,7 +214,7 @@ const CASES: PathCase[] = [
         e.updateEntryInTransaction(
           tx as never,
           { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-          { title: "b" }
+          { title: "b", _overwrite: true }
         )
       );
       return [id];
@@ -247,8 +247,8 @@ const CASES: PathCase[] = [
       await e.updateEntries(
         { collectionName: COLLECTION, overrideAccess: true },
         [
-          { id: id1, data: { title: "a2" } },
-          { id: id2, data: { title: "b2" } },
+          { id: id1, data: { title: "a2", _overwrite: true } },
+          { id: id2, data: { title: "b2", _overwrite: true } },
         ]
       );
       return [id1, id2];
@@ -266,6 +266,7 @@ const CASES: PathCase[] = [
         collectionName: COLLECTION,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       return [id];
     },

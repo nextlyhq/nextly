@@ -152,7 +152,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "es",
         },
-        { title: "hola", status: "published" }
+        { title: "hola", status: "published", _overwrite: true }
       );
       const read = (await t.nextly.findByID({
         collection: POSTS as never,
@@ -214,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
       ) as unknown as SingleEntryService;
       await singles.update(
         BANNER,
-        { notice: "hello" },
+        { notice: "hello", _overwrite: true },
         { overrideAccess: true }
       );
       const read = (await singles.get(BANNER, { overrideAccess: true }))

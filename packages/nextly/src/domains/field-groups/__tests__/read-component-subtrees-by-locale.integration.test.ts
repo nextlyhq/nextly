@@ -99,7 +99,7 @@ async function boot(dialect: TestDialect): Promise<string> {
       overrideAccess: true,
       locale: "es",
     },
-    { hero: { heading: "Hola hero", tone: "warm" } }
+    { hero: { heading: "Hola hero", tone: "warm" }, _overwrite: true }
   );
   expect(spanish.success, JSON.stringify(spanish)).toBe(true);
   return id;

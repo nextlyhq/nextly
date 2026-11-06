@@ -64,7 +64,7 @@ describeEachDialect("making another language the default", dialect => {
         overrideAccess: true,
         locale: "fr",
       },
-      { heading: "Bonjour" }
+      { heading: "Bonjour", _overwrite: true }
     );
     expect(french.success, JSON.stringify(french)).toBe(true);
     return id;

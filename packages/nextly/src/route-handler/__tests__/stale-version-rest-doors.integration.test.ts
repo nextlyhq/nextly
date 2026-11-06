@@ -124,7 +124,7 @@ function update(
       overrideAccess: true,
       ...(locale ? { locale } : {}),
     },
-    data
+    { ...data, _overwrite: true }
   );
 }
 
@@ -191,7 +191,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = singlesOf(t);
       await singles.update(
         BANNER,
-        { headline: "hello" },
+        { headline: "hello", _overwrite: true },
         {
           locale: "en",
           overrideAccess: true,
@@ -199,7 +199,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await singles.update(
         BANNER,
-        { headline: "hola" },
+        { headline: "hola", _overwrite: true },
         {
           locale: "es",
           overrideAccess: true,
@@ -218,7 +218,7 @@ describe.each(getConfiguredTestDialects())(
       const read = await revOf();
       await singles.update(
         BANNER,
-        { headline: "hola otra vez" },
+        { headline: "hola otra vez", _overwrite: true },
         {
           locale: "es",
           overrideAccess: true,

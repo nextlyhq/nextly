@@ -270,7 +270,7 @@ const CASES: readonly Case[] = [
   },
   {
     type: "core/collection-loop",
-    label: "Collection loop",
+    label: "Collection list",
     props: { collection: "posts", limit: 3 },
     slots: true,
     edit: {

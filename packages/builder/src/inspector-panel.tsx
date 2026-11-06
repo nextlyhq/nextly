@@ -50,6 +50,7 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import { CanvasPassageContext, type CanvasPassage } from "./canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
   ComponentFieldsContext,
@@ -140,6 +141,12 @@ export type BlockInspectorResolver = (
 ) => React.ComponentType<BlockInspectorProps> | undefined;
 
 export interface InspectorPanelProps {
+  /**
+   * The component placement's exposed passage the canvas is editing in place,
+   * whose field the inspector holds meanwhile; `null` or omitted while the
+   * canvas edits none.
+   */
+  canvasPassage?: CanvasPassage | null;
   /**
    * The canvas root, forwarded to the style tab.
    *
@@ -552,12 +559,15 @@ function surfaceFor(
 export function InspectorPanel({
   componentFields,
   componentVariants,
+  canvasPassage = null,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
   return (
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
       <ComponentVariantsContext.Provider value={componentVariants}>
-        <SelectionInspector {...panel} />
+        <CanvasPassageContext.Provider value={canvasPassage}>
+          <SelectionInspector {...panel} />
+        </CanvasPassageContext.Provider>
       </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
   );
@@ -634,6 +644,17 @@ function SelectionInspector({
    * resetting would silently discard what it restored.
    */
   const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
+  // A list's sort asked for from its canvas note is on the Content tab, so
+  // the author is taken there, once per ask, from wherever they were.
+  // Each ask moves the tab once: a new style-state setter is no new ask.
+  const asked = editor.sortFieldAsked?.seq;
+  const onStyleStateChange = styleState?.onChange;
+  const answeredAsk = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (asked === undefined || asked === answeredAsk.current) return;
+    answeredAsk.current = asked;
+    tabChangeHandler(setTab, onStyleStateChange)("content");
+  }, [asked, onStyleStateChange]);
 
   const commit = React.useCallback(
     (name: string, value: unknown): BlockDocument | null => {
@@ -1118,6 +1139,8 @@ function ContentSurface({
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
+      document={editor.document}
+      listView={listViewOf(editor, inspection.nodeId)}
     />
   );
   const Custom =
@@ -1282,6 +1305,41 @@ class CustomInspectorBoundary extends React.Component<
   }
 }
 
+/** Whether the canvas draws a list's empty state, and the way to switch it. */
+interface ListView {
+  readonly showsEmpty: boolean;
+  readonly onShowEmpty: (empty: boolean) => void;
+  /** The count of the latest ask to fix this list's sort, when it has one. */
+  readonly sortFieldAsked: number | undefined;
+}
+
+/** A block's list view, where the editor keeps one. */
+function listViewOf(editor: EditorState, nodeId: string): ListView | undefined {
+  const show = editor.showListEmpty;
+  if (show === undefined) return undefined;
+  return {
+    showsEmpty: editor.listsShowingEmpty?.has(nodeId) === true,
+    onShowEmpty: empty => show(nodeId, empty),
+    sortFieldAsked:
+      editor.sortFieldAsked?.id === nodeId
+        ? editor.sortFieldAsked.seq
+        : undefined,
+  };
+}
+
+/** What a group is told of the list view: none drawn empty when none is kept. */
+function listGroupView(listView: ListView | undefined): {
+  showsEmpty: boolean;
+  onShowEmpty: ListView["onShowEmpty"] | undefined;
+  sortFieldAsked: number | undefined;
+} {
+  return {
+    showsEmpty: listView?.showsEmpty === true,
+    onShowEmpty: listView?.onShowEmpty,
+    sortFieldAsked: listView?.sortFieldAsked,
+  };
+}
+
 /** The Content tab: one field per declared prop, or the note that there are none. */
 function ContentFields({
   inspection,
@@ -1291,8 +1349,14 @@ function ContentFields({
   fields,
   writable,
   onCommitMany,
+  document,
+  listView,
 }: {
   inspection: BlockInspection;
+  /** The document the block is in, for a group that reads around it. */
+  document: BlockDocument;
+  /** Whether the canvas draws this block's empty state, and the switch. */
+  listView?: ListView | undefined;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   /** Several props written as one edit, for a block's prop groups. */
   onCommitMany: (
@@ -1370,6 +1434,9 @@ function ContentFields({
                 services,
                 placedWith: inspection.placedWith,
                 onCommitMany,
+                document,
+                nodeId: inspection.nodeId,
+                ...listGroupView(listView),
               })}
             </React.Fragment>
           );

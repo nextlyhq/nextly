@@ -60,8 +60,10 @@ import {
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
   classNameOf,
+  isDefaultLook,
   isLook,
   NAMED_CLASS_SLUG_RE,
+  ownLooksRead,
 } from "./named-class";
 import {
   blockPartClassName,
@@ -2349,10 +2351,28 @@ export function compilePageCss(
   // the library could not use and those can be primitives: `[null, null]` is two entries needing
   // two separate repairs, and a lookup keyed by the entry answers with the first position for
   // both, sending an editor to a class it has already fixed.
+  // The own looks the bases are laid from, one per block type: any other is reported below.
+  const ownRead = new Set<NamedClass>(ownLooksRead(library));
   const orderedPositions = orderedNamedClassPositions(library);
   for (const position of orderedPositions) {
     const cls = library[position];
     if (written.has(position)) continue;
+    // A block's own look is read as its type's base edits, never written as a class: not dropped.
+    // A second one for the same type is never read, and is said so.
+    if (isUsableNamedClass(cls) && isDefaultLook(cls)) {
+      if (ownRead.has(cls)) {
+        ownRead.delete(cls);
+        continue;
+      }
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/classes", String(position)),
+        code: "duplicate-own-look",
+        severity: "warning",
+        message: `The class ${describeValue(cls.id)} is another own look for ${describeValue(cls.blockType)} blocks, so it was not read; the first one in the library's order is.`,
+        suggestion: "Keep one own look per block type, and remove the other.",
+      });
+      continue;
+    }
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
     // the two structural ones is a name another class already took.
