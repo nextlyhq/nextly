@@ -321,7 +321,10 @@ describe("PlaceTabs", () => {
   it("a shown tab that is no longer sent gives the content back", async () => {
     meta.contributions = {
       "user.detail": {
-        tab: [billingTab(), { ...billingTab(), id: "acme-a.usage", label: "Usage" }],
+        tab: [
+          billingTab(),
+          { ...billingTab(), id: "acme-a.usage", label: "Usage" },
+        ],
       },
     };
     const user = userEvent.setup();

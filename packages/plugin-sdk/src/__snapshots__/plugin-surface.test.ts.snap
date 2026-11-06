@@ -107,6 +107,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "PILL_LABEL (value)",
   "PillState (type)",
   "PlaceContributionProps (type)",
+  "PlaceProps (type)",
   "PlaceTabs (value)",
   "PlaceTabsProps (type)",
   "PluginAdminContributions (type)",

@@ -40,11 +40,12 @@ expectTypeOf<"colection.list">().not.toExtend<AdminPlaceId>();
 expectTypeOf<string>().not.toExtend<AdminPlaceId>();
 
 // The renderer a plugin's page draws its place with takes the place's own
-// context, so a page handing it the wrong ids does not compile.
+// context, or `null` while the page does not know it yet, so a page handing it
+// the wrong ids does not compile.
 expectTypeOf<
   TargetSlotProps<"acme-billing.invoice">["context"]
->().toEqualTypeOf<{ invoiceId: string }>();
+>().toEqualTypeOf<{ invoiceId: string } | null>();
 expectTypeOf<TargetSlotProps<"user.detail">["context"]>().toEqualTypeOf<{
   userId: string;
   shownUserId: string;
-}>();
+} | null>();
