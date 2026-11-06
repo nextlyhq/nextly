@@ -79,7 +79,7 @@ const timestamped: InboundWebhookScheme = {
     if (t === undefined || !/^\d+$/.test(t)) throw new Error("no timestamp");
     return {
       timestamp: Number(t),
-      signed: `${t}.${new TextDecoder().decode(bytes)}`,
+      signed: Buffer.concat([Buffer.from(`${t}.`), bytes]),
       signatures: parts
         .filter(([key]) => key === "v1")
         .map(([, value]) => Buffer.from(value, "hex")),
@@ -373,6 +373,31 @@ describe("verifying an inbound webhook", () => {
     ).toBe("mismatch");
   });
 
+  it("an empty signature never matches, even against a scheme whose signing gives nothing", () => {
+    // `v1,A` is valid base64 for zero bytes.
+    const sent = standardDelivery();
+    const empty = {
+      ...sent,
+      headers: new Headers({
+        ...Object.fromEntries(sent.headers),
+        "webhook-signature": "v1,A",
+      }),
+    };
+    const signsNothing: InboundWebhookScheme = {
+      ...standardWebhooks,
+      sign: () => new Uint8Array(),
+    };
+    expect(
+      reasonOf(
+        verifyWebhookDelivery(
+          empty,
+          { scheme: signsNothing, secrets: [SECRET] },
+          AT
+        )
+      )
+    ).toBe("mismatch");
+  });
+
   it("rotation: old and new secrets both verify while both are listed; a removed one does not", () => {
     // The common scheme: signed with the old secret, or with both as a sender
     // signs through a rotation.
@@ -526,6 +551,35 @@ describe("ctx.security.webhooks.verify", () => {
     });
     expect(result).toMatchObject({ verified: true, body: BODY });
     expect(await req.text()).toBe(BODY);
+  });
+
+  it("stops reading a body that streams past the limit, and leaves the request readable", async () => {
+    let pulled = 0;
+    const chunks = 100;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        if (pulled > chunks) controller.close();
+        else controller.enqueue(new TextEncoder().encode("abcd"));
+      },
+    });
+    const sent = standardDelivery();
+    const req = new Request("https://site.example/api/plugins/shop/webhooks", {
+      method: "POST",
+      headers: sent.headers,
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    const result = await webhooks.verify(req, {
+      scheme: standardWebhooks,
+      secrets: [SECRET],
+      maxBytes: 16,
+    });
+    expect(reasonOf(result)).toBe("too-large");
+    // Read no further than the chunk that passed the limit.
+    expect(pulled).toBeLessThan(10);
+    // The handler can still read the whole request.
+    expect((await req.text()).length).toBe(chunks * 4);
   });
 
   it("a body over the limit is refused as too-large: 1 MiB, unless the call sets another", async () => {

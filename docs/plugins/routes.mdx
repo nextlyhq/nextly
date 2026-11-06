@@ -327,6 +327,11 @@ definePlugin({
             ctx.logger.warn("Refused an orders webhook", { reason: result.reason });
             return new Response(null, { status: 401 });
           }
+          // The same delivery can arrive twice: a sender's retry, or a
+          // replay within the tolerance. Act on each delivery id once.
+          if (result.deliveryId && (await seen(result.deliveryId))) {
+            return new Response(null, { status: 204 });
+          }
           const event = JSON.parse(result.body);
           // ...
           return new Response(null, { status: 204 });
@@ -338,14 +343,15 @@ definePlugin({
 ```
 
 Use `result.body`, the bytes that were verified, rather than reading the request
-again. `verify` reads a copy, so the request stays readable, but only the
+again. `seen` stands for your own record of the delivery ids you have handled:
+a verified delivery can still be a repeat, so handle each id once. `verify` reads a copy, so the request stays readable, but only the
 verified body is known to be what the sender signed.
 
 What core checks, whatever the scheme:
 
 - **Age.** A delivery signed more than 5 minutes away from now, either way, is
-  refused as `expired`. Set `toleranceSeconds` to change that. It must be a
-  finite number, so freshness can't be turned off.
+  refused as `expired`. Set `toleranceSeconds` to change that; it must be a
+  finite number.
 - **Signatures.** Every signature the delivery presents is compared with every
   secret you pass, as bytes, in constant time. A delivery signed with the old
   secret or the new one verifies while you pass both.
@@ -377,7 +383,8 @@ const providerScheme: InboundWebhookScheme = {
     if (t === undefined || !/^\d+$/.test(t)) throw new Error("no timestamp"); // malformed
     return {
       timestamp: Number(t),
-      signed: `${t}.${new TextDecoder().decode(bytes)}`,
+      // The exact bytes sent, not text decoded and encoded again.
+      signed: Buffer.concat([Buffer.from(`${t}.`), bytes]),
       signatures: parts
         .filter(([key]) => key === "v1")
         .map(([, value]) => Buffer.from(value, "hex")),
@@ -392,8 +399,10 @@ alone, returns `timestamp: "none"`. It has to say so: a scheme that leaves the
 timestamp out is refused as `malformed`. Its verified result says
 `freshness: "unchecked"`, against `"checked"` for every other delivery.
 **Such a delivery has no replay protection here**: someone who captured one can
-send it again, and it still verifies. Require `result.freshness === "checked"`
-wherever a replay would do harm.
+send it again at any time, and it still verifies. A `"checked"` delivery can be
+replayed too, but only within the tolerance. Either way, handle each delivery id
+once, and require `result.freshness === "checked"` wherever a replay outside
+that window would do harm.
 
 ## Middleware (D27)
 

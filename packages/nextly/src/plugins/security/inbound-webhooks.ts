@@ -200,6 +200,9 @@ function anySecretSigned(
       // A secret the scheme cannot use signs nothing: the others may.
       continue;
     }
+    // A signing that gives nothing proves nothing: two empty values are
+    // equal, and an empty signature is easy to send.
+    if (expected.length === 0) continue;
     for (const presented of reading.signatures) {
       // Lengths first: `timingSafeEqual` throws on unequal ones, and a
       // signature's length is no secret.
@@ -266,8 +269,8 @@ export function verifyWebhookDelivery(
 }
 
 /**
- * `request`'s body, from a copy, read no further than `maxBytes`, or `null`
- * when it is longer: a large body is never held whole.
+ * `request`'s body, from a copy, or `null` when it is longer than `maxBytes`:
+ * reading stops at the chunk that passes the bound.
  */
 async function readBounded(
   request: Request,
