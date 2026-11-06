@@ -519,7 +519,6 @@ export const NAMED_QUERY_TEXT: {
   readonly counted: (matching: number, shown: number) => string;
   readonly uncounted: (query: string) => string;
   readonly nestedRelated: string;
-  readonly paginated: string;
 } = {
   unknown: name =>
     `"${name}" isn't set up on this site any more, so visitors see the empty state. Choose another source.`,
@@ -558,8 +557,6 @@ export const NAMED_QUERY_TEXT: {
     `${query} doesn't count its entries, so this list can't be split into pages. Turn this off, or ask a developer to make it return a total.`,
   nestedRelated:
     "The list around this one shows a custom source's rows, which have no related entries. Choose a collection.",
-  paginated:
-    "A custom source's list can't be split into pages yet. Turn off Split into pages, or choose a collection.",
 };
 
 /** One problem with a list's stored inputs, judged against a declaration. */
