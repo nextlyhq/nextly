@@ -9,7 +9,7 @@
  * services and has yet to seed them. And while this boot is between
  * registering the services and seeding, a boot that finds them registered
  * waits for it. The seeding gate here is the real one; only the seeding itself
- * and the drift check are stood in for.
+ * is stood in for.
  */
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -18,7 +18,6 @@ const seeding = new Promise<void>(resolve => {
   finishSeeding = resolve;
 });
 const seedPermissionsAndRolePresets = vi.fn(() => seeding);
-let driftCheck: Promise<void> = Promise.resolve();
 
 vi.mock("../init/seed-permissions", async importOriginal => ({
   ...(await importOriginal<typeof import("../init/seed-permissions")>()),
@@ -26,10 +25,6 @@ vi.mock("../init/seed-permissions", async importOriginal => ({
 }));
 vi.mock("../init/post-init-tasks", () => ({
   runPostInitTasks: vi.fn(async () => undefined),
-}));
-vi.mock("../init/drift-check", async importOriginal => ({
-  ...(await importOriginal<typeof import("../init/drift-check")>()),
-  runDriftCheck: vi.fn(() => driftCheck),
 }));
 
 const { defineConfig } = await import("../collections/config/define-config");
@@ -40,7 +35,6 @@ const { awaitBootSeeding, holdBootSeeding } = await import(
 const { isServicesRegistered } = await import("../di");
 
 afterEach(async () => {
-  driftCheck = Promise.resolve();
   await shutdownNextly();
 });
 
@@ -89,22 +83,28 @@ it("waits for the boot that registered the services to seed them", async () => {
 
 it("holds the gate from before it registers the services until it has seeded", async () => {
   finishSeeding();
-  let finishDriftCheck: () => void = () => {};
-  driftCheck = new Promise<void>(resolve => {
-    finishDriftCheck = resolve;
-  });
+  let finishThisSeeding: () => void = () => {};
+  seedPermissionsAndRolePresets.mockClear();
+  seedPermissionsAndRolePresets.mockImplementationOnce(
+    () =>
+      new Promise<void>(resolve => {
+        finishThisSeeding = resolve;
+      })
+  );
 
-  // Registered, then held up in the drift check, before it seeds.
+  // Registered, then held up in its own seeding.
   const booting = getNextly({ config: defineConfig({}) });
-  await vi.waitFor(() => expect(isServicesRegistered()).toBe(true), {
-    timeout: 30_000,
-  });
+  await vi.waitFor(
+    () => expect(seedPermissionsAndRolePresets).toHaveBeenCalled(),
+    { timeout: 30_000 }
+  );
+  expect(isServicesRegistered()).toBe(true);
 
   // What the request-path boot does on finding the services registered.
   const otherBoot = awaitBootSeeding();
   expect(await stillPending(otherBoot)).toBe(true);
 
-  finishDriftCheck();
+  finishThisSeeding();
   await booting;
   await otherBoot;
 });

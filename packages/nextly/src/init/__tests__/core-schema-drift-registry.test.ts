@@ -7,13 +7,24 @@
  * the one it does have is never looked at, and every single start reports the
  * core schema as behind — a warning about a database that is correct, which an
  * operator cannot act on and will learn to ignore.
+ *
+ * In a development start, the only one that compares the core schema with the
+ * database.
  */
-import { describe, expect, it, vi, beforeAll } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/manifest";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { warnIfCoreSchemaIsBehind } from "../first-run";
 import { loadDialectTables } from "../../database/dialect-tables";
+
+// The core schema is compared in a development start only.
+beforeAll(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+afterAll(() => {
+  vi.unstubAllEnvs();
+});
 
 // The postgresql tables this file reads; the unit setup loads only
 // the run's own dialect, as an app's adapter would.
