@@ -9,8 +9,11 @@
  * screen, the admin's own strings are all there is, which is what they are.
  *
  * The language is the signed-in person's own choice, then the browser's, then
- * English. It is asked for only on a signed-in screen: on the signed-out ones
- * there is nobody to ask about, and the browser's language is used. Kept
+ * English. It is asked for only on a private screen whose session is known to
+ * be signed in: the shared session query the private-route guard reads, so a
+ * signed-out visitor opening a private address, while the guard decides where
+ * to send them, asks nothing of `/me`. Until then, and on the signed-out
+ * screens, the browser's language is used. Kept
  * apart from the language content is edited in, which the editor holds.
  *
  * @module context/providers/AdminI18nProvider
@@ -18,6 +21,7 @@
 import { useMemo, type ReactNode } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useAuthSession } from "@admin/hooks/queries/useAuthSession";
 import { useStoredInterfaceLanguage } from "@admin/hooks/useInterfaceLanguage";
 import { I18nProvider } from "@admin/lib/i18n/I18nProvider";
 import { mergeCatalogs } from "@admin/lib/i18n/merge-catalogs";
@@ -28,11 +32,14 @@ export function AdminI18nProvider({
   signedIn = false,
 }: {
   children: ReactNode;
-  /** Whether a person is signed in on this screen, so there is a choice to read. */
+  /** Whether this is a private screen, where a signed-in person's choice may be read. */
   signedIn?: boolean;
 }): ReactNode {
   const { plugins } = useBranding();
-  const stored = useStoredInterfaceLanguage(signedIn);
+  const session = useAuthSession();
+  const stored = useStoredInterfaceLanguage(
+    signedIn && session.data?.isAuthenticated === true
+  );
   const catalogs = useMemo(
     () => mergeCatalogs(BUILT_IN_CATALOGS, plugins ?? []),
     [plugins]
