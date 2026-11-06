@@ -576,11 +576,9 @@ describe("a collection list's notes and tag in the canvas frame", () => {
       "calc(0.8125rem / var(--nx-canvas-zoom, 1))"
     );
     // Each is the theme's own, so it follows light and dark.
-    expect(
-      ruleFor(
-        ".nx-builder-tokens,\n.nx-builder-chrome,\n:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))"
-      )
-    ).toContain("--nx-builder-warning: var(--nx-warning)");
+    expect(ruleFor(TOKENS)).toContain(
+      "--nx-builder-warning: var(--nx-warning)"
+    );
   });
 
   it("tags a list drawing its empty state with why, at the admin's size", () => {
