@@ -353,6 +353,64 @@ function mountableRoutes(
     : undefined;
 }
 
+/**
+ * The plugin that contributes each declared collection slug, the first where
+ * two do. Disabled plugins count: their collections are still served.
+ */
+function collectionContributors(
+  plugins: readonly PluginDefinition[]
+): Map<string, PluginDefinition> {
+  const contributors = new Map<string, PluginDefinition>();
+  for (const plugin of plugins) {
+    for (const slug of pluginCollectionSlugs(plugin)) {
+      if (!contributors.has(slug)) contributors.set(slug, plugin);
+    }
+  }
+  return contributors;
+}
+
+/**
+ * The slug a filter's named collection is served under. A collection is
+ * renamed by the host through the plugin that contributes it, so the slug is
+ * resolved through that plugin's rename map: the filter's own plugin when it
+ * contributes the collection, else the plugin that does. A slug no plugin
+ * contributes names one of the app's collections, as written.
+ */
+function servedCollectionSlug(
+  owner: PluginDefinition,
+  slug: string,
+  contributors: ReadonlyMap<string, PluginDefinition>
+): string {
+  const contributor = pluginCollectionSlugs(owner).includes(slug)
+    ? owner
+    : contributors.get(slug);
+  return contributor ? renamedSlug(contributor.renameMap ?? {}, slug) : slug;
+}
+
+/**
+ * A plugin's entry-list filters for the admin, from the reduction the boot
+ * check runs, so the admin is offered exactly the filters that passed it;
+ * each named collection under the slug the admin serves it as, so a renamed
+ * collection's list still offers it.
+ */
+function listFiltersMeta(
+  plugin: PluginDefinition,
+  contributors: ReadonlyMap<string, PluginDefinition>
+): PluginListFilterDeclaration[] {
+  return contributedListFilters([plugin]).map(
+    ({ plugin: _owner, collections, ...filter }) => ({
+      ...filter,
+      ...(collections
+        ? {
+            collections: collections.map(slug =>
+              servedCollectionSlug(plugin, slug, contributors)
+            ),
+          }
+        : {}),
+    })
+  );
+}
+
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
   pluginOverrides: Record<string, PluginOverride> | undefined
@@ -370,6 +428,7 @@ export function buildPluginAdminMeta(
   // Served regardless of enabled state, as `fieldTypes` and `clientConfig`
   // are: a disabled plugin's field editors still mount and read their strings.
   const translations = collectPluginTranslations(plugins);
+  const contributors = collectionContributors(plugins);
 
   return plugins.map(plugin => {
     const slug = pluginAdminSlug(plugin.name);
@@ -475,22 +534,7 @@ export function buildPluginAdminMeta(
         ({ plugin: _owner, ...view }) => view
       );
       if (documentViews.length > 0) meta.documentViews = documentViews;
-      // From the reduction the boot check runs, so the admin is offered
-      // exactly the filters that passed it.
-      // Each named collection under the slug the admin serves it as, after
-      // the host's rename map, so a renamed collection's list still offers it.
-      const listFilters = contributedListFilters([plugin]).map(
-        ({ plugin: _owner, collections, ...filter }) => ({
-          ...filter,
-          ...(collections
-            ? {
-                collections: collections.map(slug =>
-                  renamedSlug(plugin.renameMap ?? {}, slug)
-                ),
-              }
-            : {}),
-        })
-      );
+      const listFilters = listFiltersMeta(plugin, contributors);
       if (listFilters.length > 0) meta.listFilters = listFilters;
     }
 

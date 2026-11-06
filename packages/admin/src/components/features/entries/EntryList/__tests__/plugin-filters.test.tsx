@@ -29,16 +29,28 @@ const STATE: OfferedListFilter = {
   ],
 };
 
-const { useEntries, tableProps, plugins, table } = vi.hoisted(() => ({
-  useEntries: vi.fn((_options: { params: Record<string, unknown> }) => ({
-    data: undefined,
-    isLoading: true,
-  })),
+/** A read the stubbed `useEntries` answers with. */
+interface EntriesRead {
+  data: unknown;
+  isLoading: boolean;
+}
+
+const LOADING: EntriesRead = { data: undefined, isLoading: true };
+
+const { useEntries, tableProps, plugins, table, branding } = vi.hoisted(() => ({
+  useEntries: vi.fn(
+    (_options: {
+      params: Record<string, unknown>;
+      enabled?: boolean;
+    }): EntriesRead => ({ data: undefined, isLoading: true })
+  ),
   tableProps: vi.fn((_props: Record<string, unknown>) => undefined),
   plugins: { list: [] as unknown[] },
   // Whether the stubbed table draws the real one: the toolbar's own test
   // needs it, the list's tests only what the list hands it.
   table: { real: false },
+  // Whether the signed-in meta, which declares the filters, is still on its way.
+  branding: { pending: false },
 }));
 
 // Hoisted, so it applies to the whole file: the stub records what the list
@@ -89,6 +101,11 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
     typeof import("@admin/context/providers/BrandingProvider")
   >()),
   useBranding: () => ({ plugins: plugins.list }),
+  useBrandingStatus: () => ({
+    isPending: branding.pending,
+    isUnavailable: false,
+    isBrandingUnavailable: false,
+  }),
 }));
 
 /** The params of the list's latest read. */
@@ -172,8 +189,77 @@ describe("the toolbar", () => {
 describe("the entry list with a plugin's filter", () => {
   beforeEach(() => {
     useEntries.mockClear();
+    useEntries.mockImplementation(() => LOADING);
     tableProps.mockClear();
     plugins.list = [{ name: "@acme/support", listFilters: [STATE] }];
+    branding.pending = false;
+  });
+
+  /** Every read answers with no rows. */
+  const answerEmpty = (): void => {
+    useEntries.mockImplementation(() => ({
+      data: {
+        items: [],
+        meta: { page: 1, limit: 10, total: 0, totalPages: 0 },
+      },
+      isLoading: false,
+    }));
+  };
+
+  it("keeps its table, and with it the filters, when a chosen option matches nothing", () => {
+    answerEmpty();
+    at("?pf=acme-support.state:open");
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(screen.queryByText("No tickets yet")).toBeNull();
+    expect(
+      (tableProps.mock.calls.at(-1)?.[0] as { pluginFilters?: unknown })
+        .pluginFilters
+    ).toEqual([STATE]);
+  });
+
+  it("calls a list with no filter and no rows empty", () => {
+    answerEmpty();
+    at("");
+    render(<EntryList collectionSlug="tickets" />);
+
+    expect(screen.getByText("No tickets yet")).toBeTruthy();
+    expect(tableProps).not.toHaveBeenCalled();
+  });
+
+  it("waits for the plugins' filters before reading a filtered link", () => {
+    // Before the signed-in meta arrives, no filter is declared, so the `pf`
+    // resolves to nothing; a read now would be the unfiltered list.
+    branding.pending = true;
+    plugins.list = [];
+    useEntries.mockImplementation(() => ({
+      data: undefined,
+      isLoading: false,
+    }));
+    at("?pf=acme-support.state:open");
+    const { rerender } = render(<EntryList collectionSlug="tickets" />);
+
+    expect(useEntries.mock.calls.every(([o]) => o.enabled === false)).toBe(
+      true
+    );
+    // Held, the list reads as loading, not as an empty collection.
+    expect(screen.queryByText("No tickets yet")).toBeNull();
+    expect(
+      (tableProps.mock.calls.at(-1)?.[0] as { isLoading?: boolean }).isLoading
+    ).toBe(true);
+
+    branding.pending = false;
+    plugins.list = [{ name: "@acme/support", listFilters: [STATE] }];
+    rerender(<EntryList collectionSlug="tickets" />);
+    expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
+    expect(lastRead().where).toEqual({ state: { equals: "open" } });
+  });
+
+  it("does not hold a list whose URL chooses no plugin filter", () => {
+    branding.pending = true;
+    at("");
+    render(<EntryList collectionSlug="tickets" />);
+    expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
   });
 
   it("requests the chosen option's where, read from the URL", () => {

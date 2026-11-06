@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { toCliError } from "../../cli/errors";
+import { snapshotFilter } from "../../domains/collections/query/filter-shape";
 import type { PluginListFilterDeclaration } from "../admin-contributions";
 import { contributedListFilters } from "../admin-filters";
 import { buildPluginAdminMeta } from "../admin-meta";
@@ -29,6 +30,16 @@ const OPEN: PluginListFilterDeclaration = {
     },
   ],
 };
+
+/**
+ * A `where` nested `levels` deep in `and` lists: its innermost value sits at
+ * depth `2 * levels + 2`, two more for each list it is joined in.
+ */
+function nestedWhere(levels: number): Record<string, unknown> {
+  let where: Record<string, unknown> = { state: { equals: "open" } };
+  for (let i = 0; i < levels; i++) where = { and: [where] };
+  return where;
+}
 
 /** A plugin declaring `filters`, as an author writes them. */
 function plugin(
@@ -159,6 +170,11 @@ describe("the filters plugins declare for the entry list", () => {
       "collections that are not a list of slugs",
       { ...OPEN, collections: "tickets" },
     ],
+    [
+      "a collection slug no collection can have",
+      { ...OPEN, collections: ["Tickets"] },
+    ],
+    ["a collection slug with a space", { ...OPEN, collections: [" tickets"] }],
     ["a declaration that is not an object", "acme-support.state"],
   ])("refuses %s, naming the plugin", (_case, declared) => {
     expect(
@@ -170,6 +186,26 @@ describe("the filters plugins declare for the entry list", () => {
       reason: "list-filter-invalid",
       logContext: { plugin: "@acme/support" },
     });
+  });
+
+  it("refuses a where the list read would refuse as too deep once joined to the list's own filters", () => {
+    const withWhere = (where: Record<string, unknown>) =>
+      contributedListFilters([
+        plugin("@acme/support", [
+          { ...OPEN, options: [{ ...OPEN.options[0], where }] },
+        ]),
+      ]);
+    // The read's own bound, measured where the admin sends the option: one
+    // member of an `and`. Alone, the deeper `where` is within it.
+    expect(() => snapshotFilter({ and: [nestedWhere(31)] })).toThrow();
+    expect(() => snapshotFilter(nestedWhere(31))).not.toThrow();
+    expect(refusalOf(() => withWhere(nestedWhere(31)))).toMatchObject({
+      reason: "list-filter-invalid",
+      logMessage: expect.stringContaining("64 levels"),
+    });
+    // One level shallower fits joined, and is accepted.
+    expect(() => snapshotFilter({ and: [nestedWhere(30)] })).not.toThrow();
+    expect(withWhere(nestedWhere(30))).toHaveLength(1);
   });
 
   it("refuses filters that are not a list", () => {
@@ -221,6 +257,7 @@ describe("the filters plugins declare for the entry list", () => {
     const [renamed] = buildPluginAdminMeta(
       [
         plugin("@acme/support", [OPEN], {
+          collections: [{ slug: "tickets", fields: [] }],
           renameMap: { tickets: "helpdesk-tickets" },
         }),
       ],
@@ -234,6 +271,34 @@ describe("the filters plugins declare for the entry list", () => {
       undefined
     );
     expect(disabled?.listFilters).toBeUndefined();
+  });
+
+  it("names another plugin's collection as the host renamed it through that plugin", () => {
+    const [support] = buildPluginAdminMeta(
+      [
+        plugin(
+          "@acme/support",
+          [{ ...OPEN, collections: ["forms", "posts", "tickets"] }],
+          {
+            collections: [{ slug: "tickets", fields: [] }],
+            // A rename of a collection it does not contribute moves nothing.
+            renameMap: { forms: "support-forms", tickets: "helpdesk-tickets" },
+          }
+        ),
+        plugin("@acme/forms", [], {
+          collections: [{ slug: "forms", fields: [] }],
+          renameMap: { forms: "contact-forms" },
+        }),
+      ],
+      undefined
+    );
+    // Its own collection through its own map, another plugin's through that
+    // plugin's, and the app's as written.
+    expect(support?.listFilters?.[0]?.collections).toEqual([
+      "contact-forms",
+      "posts",
+      "helpdesk-tickets",
+    ]);
   });
 
   it.each<[string, unknown]>([

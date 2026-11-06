@@ -11,7 +11,13 @@
  * @module plugins/admin-filters
  * @experimental
  */
-import { filterShapeProblems } from "../domains/collections/query/filter-shape";
+import {
+  type FilterProblem,
+  filterShapeProblems,
+  snapshotFilter,
+} from "../domains/collections/query/filter-shape";
+import { NextlyError } from "../errors/nextly-error";
+import { SLUG_PATTERN } from "../shared/slug-pattern";
 
 import type { PluginListFilterDeclaration } from "./admin-contributions";
 import { isWellFormedAdminPlaceName } from "./admin-places";
@@ -40,10 +46,14 @@ function filterProblem(declared: unknown): string | undefined {
     collections !== undefined &&
     !(
       Array.isArray(collections) &&
-      collections.every(slug => typeof slug === "string" && slug !== "")
+      // The one shape a collection slug takes, so a name no collection can
+      // have ("Tickets", " posts") is refused rather than offered nowhere.
+      collections.every(
+        slug => typeof slug === "string" && SLUG_PATTERN.test(slug)
+      )
     )
   ) {
-    return "its `collections` is not a list of collection slugs";
+    return "its `collections` is not a list of collection slugs: lower-case letters, digits, dashes and underscores, starting with a letter";
   }
   if (!Array.isArray(options) || options.length === 0) {
     return "it offers no options";
@@ -83,11 +93,34 @@ function optionProblem(
   if (typeof where !== "object" || where === null || Array.isArray(where)) {
     return `the option "${value}" has no \`where\` to narrow by`;
   }
-  const problems = filterShapeProblems(where);
+  const problems = whereProblems(where);
   if (problems.length > 0) {
-    return `the option "${value}" narrows by a \`where\` is malformed: ${problems.map(p => `${p.path}: ${p.message}`).join("; ")}`;
+    return `the option "${value}" narrows by a malformed \`where\`: ${problems.map(p => `${p.path}: ${p.message}`).join("; ")}`;
   }
   return undefined;
+}
+
+/**
+ * Every problem the list read would find with `where`, judged where the admin
+ * sends it: one member of the `and` that joins it to the list's other filters.
+ * The read copies a filter before checking its shape and refuses one nested
+ * past its bound, so the copy is taken here too, at that depth: a `where` the
+ * read would refuse only once joined is refused at start, not on the first
+ * choice of it.
+ */
+function whereProblems(where: object): FilterProblem[] {
+  let joined: { and: unknown[] };
+  try {
+    joined = snapshotFilter({ and: [where] });
+  } catch (err) {
+    if (!NextlyError.is(err) || err.code !== "VALIDATION_ERROR") throw err;
+    // A refusal that names no problem still refuses: the read would.
+    const data = err.publicData;
+    return data !== undefined && "errors" in data && data.errors.length > 0
+      ? data.errors
+      : [{ path: "where", code: err.code, message: err.publicMessage }];
+  }
+  return filterShapeProblems(joined.and[0]);
 }
 
 /** The plugin's declared filters as a list, refusing anything else. */
@@ -144,8 +177,8 @@ function checkedFilter(
 
 /**
  * @experimental Every enabled plugin's entry-list filters, refusing one that is
- * outside its plugin's namespace, declared twice, or that offers an option the
- * malformed, naming the plugin and the filter.
+ * outside its plugin's namespace, declared twice, or malformed, naming the
+ * plugin and the filter.
  *
  * A disabled plugin's filters are skipped: it is not running, so nothing it
  * declares is offered.
