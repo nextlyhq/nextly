@@ -350,7 +350,10 @@ function copyNoteReference(target: EventTarget | null): boolean {
   ) {
     return false;
   }
-  const clipboard = button.ownerDocument.defaultView?.navigator.clipboard;
+  // The editor's own clipboard, not the canvas frame's: a frame may not be
+  // allowed to write to it.
+  const clipboard: Clipboard | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard;
   void clipboard?.writeText(ref).then(
     () => {
       button.setAttribute("data-nx-list-copied", "");
