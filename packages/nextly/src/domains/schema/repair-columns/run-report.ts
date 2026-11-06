@@ -9,11 +9,15 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { describeHolder, readSchemaLockHolder } from "../pipeline/schema-lock";
+import {
+  describeHolder,
+  readSchemaLockState,
+  type SchemaLockReading,
+} from "../pipeline/schema-lock";
 import type { SupportedDialect } from "../services/field-column-descriptor";
 
 import { findColumnDifferences } from "./find-differences";
-import { NO_RUN_FACTS } from "./outcome";
+import { NO_RUN_FACTS, type TableLockFacts } from "./outcome";
 import {
   formatRecord,
   formatSummary,
@@ -24,8 +28,10 @@ import {
 import {
   reportDocument,
   SCHEMA_LOCK_HELD_WARNING,
+  SCHEMA_LOCK_UNREAD_WARNING,
   type DocumentProblem,
   type RepairColumnsDocument,
+  type SchemaLockState,
 } from "./report-json";
 import type { RepairEntity } from "./types";
 
@@ -41,6 +47,71 @@ function schemaLockWarning(holder: string): DocumentProblem {
   };
 }
 
+/** The warning a report made without knowing whether another schema change was running carries. */
+function schemaLockUnreadWarning(reason: string): DocumentProblem {
+  return {
+    code: SCHEMA_LOCK_UNREAD_WARNING,
+    message:
+      "Whether another schema change is running could not be read, so this report may change once any such change ends.",
+    cause: `${reason}.`,
+    next: "Run `nextly repair-columns` again as a database user that can read Nextly's lock tables, once no other connection holds the database.",
+    docs: null,
+  };
+}
+
+/** The lock as the document reports it, and the warning it gives, if any. */
+function schemaLockFacts(reading: SchemaLockReading): {
+  schemaLock: SchemaLockState;
+  warnings: DocumentProblem[];
+} {
+  switch (reading.state) {
+    case "free":
+      return {
+        schemaLock: { state: "free", holder: null, unreadable: null },
+        warnings: [],
+      };
+    case "held": {
+      const holder = describeHolder(reading.holder);
+      return {
+        schemaLock: { state: "held", holder, unreadable: null },
+        warnings: [schemaLockWarning(holder)],
+      };
+    }
+    case "unknown":
+      return {
+        schemaLock: {
+          state: "unknown",
+          holder: null,
+          unreadable: reading.reason,
+        },
+        warnings: [schemaLockUnreadWarning(reading.reason)],
+      };
+  }
+}
+
+/**
+ * The lock facts of a column whose table's definition could not be read because another
+ * connection held the whole database: the one read this run made, how long it took, and why the
+ * holder cannot be named.
+ */
+function heldDatabaseLock(table: string, waitedMs: number): TableLockFacts {
+  return {
+    table,
+    tries: 1,
+    waitedMs,
+    holder: {
+      sessions: [],
+      couldNotRead: {
+        details: ["which connection holds the database"],
+        why: "SQLite reports only that the database is locked, not who holds it",
+      },
+      wholeDatabase: true,
+    },
+    nextStep:
+      "run the report again once the connection holding the database ends, or end that connection",
+  };
+}
+
 /** The document of a dry run over `entities`. Reads the database and changes nothing. */
 export async function dryRunReport(args: {
   adapter: DrizzleAdapter;
@@ -49,22 +120,34 @@ export async function dryRunReport(args: {
   nextlyVersion: string;
 }): Promise<RepairColumnsDocument> {
   const { adapter, dialect } = args;
-  const holder = await readSchemaLockHolder(adapter);
+  const { schemaLock, warnings } = schemaLockFacts(
+    await readSchemaLockState(adapter)
+  );
+  const started = Date.now();
   const findings = await findColumnDifferences({
     db: adapter.getDrizzle(),
     dialect,
     entities: args.entities,
   });
-  const described = holder === null ? null : describeHolder(holder);
+  const readMs = Date.now() - started;
   return reportDocument({
     nextlyVersion: args.nextlyVersion,
     mode: "dry-run",
     dialect,
-    schemaLock: { held: described !== null, holder: described },
+    schemaLock,
     records: findings.map(finding =>
-      repairRecord(finding, NO_RUN_FACTS, "dry-run")
+      repairRecord(
+        finding,
+        finding.kind === "definition-unreadable"
+          ? {
+              ...NO_RUN_FACTS,
+              lock: heldDatabaseLock(finding.location.table, readMs),
+            }
+          : NO_RUN_FACTS,
+        "dry-run"
+      )
     ),
-    warnings: described === null ? [] : [schemaLockWarning(described)],
+    warnings,
   });
 }
 

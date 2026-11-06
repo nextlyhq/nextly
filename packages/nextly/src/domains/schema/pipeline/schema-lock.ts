@@ -1608,33 +1608,103 @@ function capitalise(text: string): string {
 }
 
 /**
- * Who holds the schema lock now, read without taking it, or null when nothing does.
+ * What a read of the schema lock learned. `unknown` is its own answer: a lock this run could not
+ * read (a role without SELECT on a lock table, a database another connection holds) is not a lock
+ * nothing holds, and reporting it as free would tell a reader no schema change is running when
+ * none could be ruled out.
+ */
+export type SchemaLockReading =
+  | { readonly state: "free" }
+  | { readonly state: "held"; readonly holder: SchemaLockHolder }
+  | { readonly state: "unknown"; readonly reason: string };
+
+/** The driver's code for a failed read, from the error or the first cause that names one. */
+function errorCode(error: unknown): string | null {
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && typeof link === "object" && link !== null;
+    depth++
+  ) {
+    const code = (link as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+    link = (link as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/** One lock's holder, or what kept it from being read. */
+async function readOneLock(
+  name: string,
+  read: () => Promise<SchemaLockHolder | null>
+): Promise<SchemaLockHolder | null | { unreadable: string }> {
+  try {
+    return await read();
+  } catch (error) {
+    const code = errorCode(error);
+    return {
+      unreadable: `${name} could not be read${code === null ? "" : ` (${code})`}`,
+    };
+  }
+}
+
+/**
+ * Who holds the schema lock now, read without taking it.
  *
  * For a run that must write nothing, such as a report: taking the lock writes a claim, so this only
- * reads each lock a schema change takes, in the order a contender meets them, and creates no table.
- * A lock table that does not exist yet is free, since the first run that claims it creates it. The
- * answer can be stale the moment it is read; a run that acts on it takes the lock instead.
+ * reads each lock a schema change takes and creates no table. A lock table that does not exist yet
+ * is free, since the first run that claims it creates it. Any lock found held makes the answer
+ * held; otherwise any lock that could not be read makes it unknown. The answer can be stale the
+ * moment it is read; a run that acts on it takes the lock instead.
  */
-export async function readSchemaLockHolder(
+export async function readSchemaLockState(
   adapter: DrizzleAdapter
-): Promise<SchemaLockHolder | null> {
+): Promise<SchemaLockReading> {
   const dialect = adapter.getCapabilities().dialect;
+  const observed = await observeMigrationLock(adapter, dialect);
+  const readings = [
+    await readOneLock("the schema lock", () =>
+      readSchemaRowHolder(adapter, dialect)
+    ),
+    await readOneLock("the earlier migrate lock", () =>
+      readEarlierLockHolder(adapter, dialect)
+    ),
+    // The field-group lock's own read already tells a free lock from one it could not read.
+    observed.kind === "unknown"
+      ? {
+          unreadable: `the field-group lock could not be read (${observed.reason})`,
+        }
+      : observed.kind === "held"
+        ? { kind: "earlier-field-group-lock" as const, owner: observed.owner }
+        : null,
+  ];
+  for (const reading of readings) {
+    if (reading !== null && !("unreadable" in reading)) {
+      return { state: "held", holder: reading };
+    }
+  }
+  const unreadable = readings
+    .filter((r): r is { unreadable: string } => r !== null && "unreadable" in r)
+    .map(r => r.unreadable);
+  return unreadable.length === 0
+    ? { state: "free" }
+    : { state: "unknown", reason: unreadable.join("; ") };
+}
+
+/** The schema lock's row while a claim on it is live; a table never created holds nothing. */
+async function readSchemaRowHolder(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<SchemaLockHolder | null> {
   let state: RowState | undefined;
   try {
     const rows = await adapter.queryStatement<RawState>(stateQuery(dialect, 0));
     state = toState(rows[0]);
   } catch (error) {
-    if (!isMissingTable(error, dialect)) throw error;
+    if (isMissingTable(error, dialect)) return null;
+    throw error;
   }
-  if (state?.live === true) return holderOf(state);
-
-  const earlier = await readEarlierLockHolder(adapter, dialect);
-  if (earlier !== null) return earlier;
-
-  const fieldGroup = await observeMigrationLock(adapter, dialect);
-  return fieldGroup.kind === "held"
-    ? { kind: "earlier-field-group-lock", owner: fieldGroup.owner }
-    : null;
+  return state?.live === true ? holderOf(state) : null;
 }
 
 /**

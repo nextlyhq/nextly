@@ -171,7 +171,11 @@ const document = z
         mode: z.enum(["dry-run", "apply"]),
         dialect: z.enum(["postgresql", "mysql", "sqlite"]),
         schemaLock: z
-          .object({ held: z.boolean(), holder: z.string().nullable() })
+          .object({
+            state: z.enum(["free", "held", "unknown"]),
+            holder: z.string().nullable(),
+            unreadable: z.string().nullable(),
+          })
           .strict(),
         records: z.array(record),
         summary: z
@@ -322,7 +326,11 @@ describe("the document's shape", () => {
       nextlyVersion: "0.0.2-alpha.99",
       mode: "dry-run",
       dialect: "postgresql",
-      schemaLock: { held: true, holder: "`nextly migrate` holds it" },
+      schemaLock: {
+        state: "held",
+        holder: "`nextly migrate` holds it",
+        unreadable: null,
+      },
       records,
       warnings: [
         {
@@ -372,7 +380,11 @@ describe("the document's shape", () => {
       nextlyVersion: "0.0.2-alpha.99",
       mode: "apply",
       dialect: "mysql",
-      schemaLock: { held: false, holder: null },
+      schemaLock: {
+        state: "unknown",
+        holder: null,
+        unreadable: "the field-group lock could not be read (42501)",
+      },
       records,
       warnings: [],
     });
@@ -420,7 +432,7 @@ describe("the document's shape", () => {
         nextlyVersion: "0.0.2-alpha.99",
         mode: "dry-run",
         dialect: "sqlite",
-        schemaLock: { held: false, holder: null },
+        schemaLock: { state: "free", holder: null, unreadable: null },
         records: [],
         warnings: [],
       })

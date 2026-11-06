@@ -269,7 +269,15 @@ export async function findColumnDifferences(args: {
       configured: namedBy(entity.configured, entity),
     })
   );
-  const live = await readLiveTables(db, dialect, planned);
+  let live: LiveTables;
+  try {
+    live = await readLiveTables(db, dialect, planned);
+  } catch (error) {
+    if (!isDatabaseHeld(error, dialect)) throw error;
+    // Another connection holds the whole database, so no table's definition can be read: every
+    // column each entity names is reported, and whether it differs is unknown.
+    return planned.flatMap(definitionUnreadableFindings);
+  }
 
   const findings: ColumnFinding[] = [];
   for (const { entity, applied, configured } of planned) {
@@ -294,6 +302,49 @@ export async function findColumnDifferences(args: {
     }
   }
   return findings;
+}
+
+/**
+ * Whether a read failed because another connection holds the whole database: SQLite's busy or
+ * locked answer, which it gives in exclusive locking mode, and which names no table. Read from the
+ * driver's code or message on the error or a cause, since Drizzle wraps the driver's error.
+ */
+function isDatabaseHeld(error: unknown, dialect: SupportedDialect): boolean {
+  if (dialect !== "sqlite") return false;
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && typeof link === "object" && link !== null;
+    depth++
+  ) {
+    const { code, message } = link as { code?: unknown; message?: unknown };
+    if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return true;
+    if (
+      typeof message === "string" &&
+      /database (?:table )?is locked/i.test(message)
+    ) {
+      return true;
+    }
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * One record for each column an entity names, as last applied, or as configured for an entity no
+ * migration has applied yet, where the table's definition could not be read.
+ */
+function definitionUnreadableFindings({
+  entity,
+  applied,
+  configured,
+}: PlannedEntity): ColumnFinding[] {
+  return (applied ?? configured ?? []).map(column => ({
+    kind: "definition-unreadable",
+    location: column.location,
+    ...ownedBy(entity.plugin),
+    expected: column.expected,
+  }));
 }
 
 /**

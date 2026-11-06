@@ -30,11 +30,17 @@ export interface DocumentProblem {
   docs: string | null;
 }
 
-/** Whether another schema change held the schema lock while the run read the database. */
+/**
+ * Whether another schema change held the schema lock while the run read the database: free, held
+ * (with who holds it), or unknown, where a lock could not be read (with why). Unknown is never
+ * reported as free.
+ */
 export interface SchemaLockState {
-  held: boolean;
-  /** Who holds it, in an operator's words, or null where nothing does. */
+  state: "free" | "held" | "unknown";
+  /** Who holds it, in an operator's words, or null where nothing is known to. */
   holder: string | null;
+  /** Why it could not be read, or null where it was. */
+  unreadable: string | null;
 }
 
 export interface RepairColumnsResult {
@@ -61,6 +67,10 @@ export interface RepairColumnsDocument {
 /** The warning a run that reported while another schema change held the lock carries. */
 export const SCHEMA_LOCK_HELD_WARNING =
   "NEXTLY_REPAIR_COLUMNS_SCHEMA_CHANGE_RUNNING";
+
+/** The warning a run that could not read whether another schema change was running carries. */
+export const SCHEMA_LOCK_UNREAD_WARNING =
+  "NEXTLY_REPAIR_COLUMNS_SCHEMA_LOCK_UNREADABLE";
 
 /** The document of a run that reported, its exit code taken from its records' outcomes. */
 export function reportDocument(args: {

@@ -5,6 +5,10 @@
  * error shape goes to standard error only without it. These cases stop before any database is
  * reached; the report of a database is the integration suite's.
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -88,6 +92,26 @@ describe("repair-columns output and exit code", () => {
     logger?.warn("A notice");
     logger?.success("Connected");
     expect(stdout).toEqual([]);
+  });
+
+  // `--verbose` turns on the configuration loader's own diagnostics, which it writes with
+  // console.log; under --json they would come before the document.
+  it("with --json and --verbose, still writes only the document to standard output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "repair-columns-json-"));
+    process.env.DATABASE_URL = `file:${join(dir, "site.db")}`;
+    process.env.DB_DIALECT = "sqlite";
+    try {
+      await repairColumnsAction(createContext)(
+        { json: true },
+        command({ cwd: dir, verbose: true })
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(stdout).toHaveLength(1);
+    expect(JSON.parse(stdout[0])).toMatchObject({
+      schema: "nextly.repair-columns/1",
+    });
   });
 
   it("without --json, prints the error shape to standard error and nothing to standard output", async () => {

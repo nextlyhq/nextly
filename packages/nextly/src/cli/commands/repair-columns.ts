@@ -78,7 +78,9 @@ async function report(
   const { config, projectRoot, deferredExtends } = await loadConfig({
     configPath: options.config,
     cwd,
-    debug: options.verbose,
+    // The loader writes its diagnostics to standard output, which under `--json` holds the
+    // document alone.
+    debug: options.verbose === true && options.json !== true,
   });
 
   const [{ readRepairEntities }, { dryRunReport }] = await Promise.all([

@@ -7,6 +7,12 @@
  * column retyped to the legacy type map's answer, as the Builder created it before its new columns
  * read the descriptor.
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createContext } from "../../../../cli/context";
@@ -19,7 +25,7 @@ import {
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { introspectLiveColumns } from "../../pipeline/diff/introspect-live";
-import { withSchemaLock } from "../../pipeline/schema-lock";
+import { getSchemaLockDdl, withSchemaLock } from "../../pipeline/schema-lock";
 import type { SupportedDialect } from "../../services/field-column-descriptor";
 import type { RepairRecord } from "../report";
 import { dryRunReport } from "../run-report";
@@ -236,7 +242,11 @@ describe.each(getConfiguredTestDialects())(
       await insertRows(1);
 
       const free = await report();
-      expect(free.result?.schemaLock).toEqual({ held: false, holder: null });
+      expect(free.result?.schemaLock).toEqual({
+        state: "free",
+        holder: null,
+        unreadable: null,
+      });
       expect(free.warnings).toEqual([]);
 
       const held = await withSchemaLock(
@@ -249,7 +259,7 @@ describe.each(getConfiguredTestDialects())(
       );
       if (!held.ran) throw new Error("the test could not take the schema lock");
       const document = held.value;
-      expect(document.result?.schemaLock.held).toBe(true);
+      expect(document.result?.schemaLock.state).toBe("held");
       expect(document.result?.schemaLock.holder).toContain("`nextly migrate`");
       expect(document.warnings).toEqual([
         expect.objectContaining({
@@ -303,3 +313,97 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+/**
+ * SQLite held in exclusive locking mode by another connection: no table's definition can be read,
+ * so every column the entity names is reported as unavailable, locked, with the one read's facts,
+ * and the run exits with differences remaining rather than as one that could not run.
+ */
+describe("repair-columns dry run on SQLite held by another connection", () => {
+  type Connected = DrizzleAdapter & {
+    connect(): Promise<void>;
+    disconnect(): Promise<void>;
+  };
+  let dir: string;
+  let reader: Connected;
+  let holder: Connected;
+
+  /**
+   * A connection to the file that waits briefly for a lock, so the test does not wait long. In a
+   * rollback journal rather than WAL: in WAL mode a connection already open keeps its share of the
+   * WAL index, which stops another from taking the database whole, while in a rollback journal the
+   * holder's first write in exclusive locking mode shuts every other connection out until it
+   * closes, the hold this case is about.
+   */
+  const open = async (file: string) => {
+    const adapter = createSqliteAdapter({
+      url: `file:${file}`,
+      busyTimeout: 100,
+      wal: false,
+    }) as unknown as Connected;
+    await adapter.connect();
+    return adapter;
+  };
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "repair-columns-held-"));
+    const file = join(dir, "site.db");
+    reader = await open(file);
+    const sql = new DynamicCollectionSchemaService(
+      undefined,
+      "sqlite"
+    ).generateMigrationSQL(TABLE, FIELDS, {});
+    for (const statement of statements(sql)) {
+      await reader.executeQuery(statement);
+    }
+    // The schema lock's table, as a site that has run a migration has it, so reading the lock
+    // meets the held database rather than a table that does not exist.
+    for (const statement of getSchemaLockDdl("sqlite")) {
+      await reader.executeQuery(statement);
+    }
+    holder = await open(file);
+    // Exclusive locking mode keeps the lock its first write takes until the connection closes.
+    await holder.executeQuery("PRAGMA locking_mode = EXCLUSIVE");
+    await holder.executeQuery("CREATE TABLE rr_hold (x integer)");
+  });
+
+  afterEach(async () => {
+    await holder?.disconnect();
+    await reader?.disconnect();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reports each column the entity names as unavailable, locked, and exits 2", async () => {
+    const document = await dryRunReport({
+      adapter: reader,
+      dialect: "sqlite",
+      entities: [entity(FIELDS)],
+      nextlyVersion: "test",
+    });
+    const records = document.result?.records ?? [];
+    expect(records.map(r => r.column).sort()).toEqual(
+      ["author", "links", "title"].sort()
+    );
+    for (const record of records) {
+      expect(record).toMatchObject({
+        outcome: "unavailable-locked",
+        differenceKnown: false,
+        live: null,
+        class: null,
+        lock: {
+          table: TABLE,
+          tries: 1,
+          holder: { sessions: [], wholeDatabase: true },
+        },
+      });
+      expect(record.expected).not.toBeNull();
+    }
+    expect(document.result?.summary.outcomes["unavailable-locked"]).toBe(3);
+    expect(document).toMatchObject({ ok: false, exitCode: 2 });
+    // The lock tables could not be read either, so whether a schema change runs is unknown.
+    expect(document.result?.schemaLock.state).toBe("unknown");
+    expect(document.warnings.map(w => w.code)).toContain(
+      "NEXTLY_REPAIR_COLUMNS_SCHEMA_LOCK_UNREADABLE"
+    );
+  });
+});
