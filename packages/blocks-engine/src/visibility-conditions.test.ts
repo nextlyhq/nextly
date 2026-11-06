@@ -735,6 +735,22 @@ describe("what a page's conditions read of its entry", () => {
     ).toBe(true);
   });
 
+  it("names the fields its conditions order by, so a reader knowing their shapes can tell a day", () => {
+    const demand = conditionDemand([
+      gated("a", [
+        [
+          { field: "publishedAt", op: "less_than", value: "2026-01-01" },
+          { field: "rating", op: "gt", value: 3 },
+          { field: "tier", op: "exists" },
+        ],
+      ]),
+    ]);
+    expect([...(demand.orderedFields ?? [])].sort()).toEqual([
+      "publishedAt",
+      "rating",
+    ]);
+  });
+
   it("asks nothing of a page with no conditions, or ones that restrict nobody", () => {
     expect(
       conditionDemand([
@@ -745,6 +761,7 @@ describe("what a page's conditions read of its entry", () => {
       any: false,
       entryFields: new Set(),
       ordersValues: false,
+      orderedFields: new Set(),
     });
   });
 

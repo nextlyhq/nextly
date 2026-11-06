@@ -17,6 +17,7 @@ import {
   bindingDemand,
   bindingKindOf,
   conditionDemand,
+  conditionFieldKind,
   DEFAULT_LIMITS,
   LIST_ENTRY_SLOT,
   deriveSeoFromDocument,
@@ -145,7 +146,11 @@ import {
 import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
-import { conditionAllows, type ConditionGate } from "./visibility";
+import {
+  conditionAllows,
+  entrySubjectOf,
+  type ConditionGate,
+} from "./visibility";
 
 // The default stays published here too, where a route's `maxQueries` is set.
 export { DEFAULT_MAX_QUERIES };
@@ -2094,22 +2099,42 @@ function listsComparingDays(
 
 /**
  * Whether any list on the page compares days, and so needs the site's zone:
- * one filtering by a day, or one whose item conditions order a value. A list
- * whose item conditions only match text or a yes-or-no needs field shapes
- * but no zone, and must not spend the page's query budget reading one.
+ * one filtering by a day, or one whose item conditions order a field its
+ * collection holds as a date. A list whose item conditions match text, a
+ * yes-or-no or a number needs field shapes but no zone, and must not spend
+ * the page's query budget reading one. A field whose shape is unknown fails
+ * its condition closed, so it compares no day either.
  */
 function listsNeedZone(
   documents: readonly BlockDocument[],
-  run: BindingRun | undefined
+  run: BindingRun | undefined,
+  shapesOf: (collection: string) => readonly BindingFieldShape[] | undefined
 ): boolean {
   return (
     listCollectionsWhere(
       documents,
       (query, list) =>
         query.filters.some(row => isListDay(row.value)) ||
-        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).ordersValues,
+        ordersADay(
+          conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
+            new Set(),
+          query.collection === undefined
+            ? undefined
+            : shapesOf(query.collection)
+        ),
       run
     ).size > 0
+  );
+}
+
+/** Whether any of `fields` is a date in `shapes`, as a condition reads it. */
+function ordersADay(
+  fields: ReadonlySet<string>,
+  shapes: readonly BindingFieldShape[] | undefined
+): boolean {
+  if (fields.size === 0 || shapes === undefined) return false;
+  return shapes.some(
+    shape => fields.has(shape.name) && conditionFieldKind(shape) === "date"
   );
 }
 
@@ -2136,9 +2161,6 @@ async function listDayInputs(args: {
       : pageBindingRun(args.bindings, args.context.locale, args.resolver);
   const collections = listsComparingDays(args.documents, run);
   if (collections.size === 0) return {};
-  const timeZone = listsNeedZone(args.documents, run)
-    ? await listZone(args)
-    : undefined;
   const cache: ReadCache = {
     scope: args.config.cacheScope ?? "",
     locale: args.context.locale,
@@ -2152,6 +2174,12 @@ async function listDayInputs(args: {
       known.set(collection, undefined);
     }
   }
+  // Asked once the shapes are known, so only a date compared needs the zone.
+  const timeZone = listsNeedZone(args.documents, run, collection =>
+    known.get(collection)
+  )
+    ? await listZone(args)
+    : undefined;
   return {
     ...(timeZone === undefined ? {} : { timeZone }),
     fieldShapes: {
@@ -2556,9 +2584,28 @@ async function readPageInputs(args: {
     effectiveLimits(config)
   );
   const page = drawn(config, args.resolver, document, definitions);
+  // Whether the page's conditions have an entry to judge. A Single's page has
+  // none, as the editor and the save say, so its entry-scoped conditions fail
+  // closed with nothing read, and its conditioned blocks are never kept for
+  // the reads: neither their fields nor what they bind is asked for. The ONE
+  // place this is decided; the reads, the skip and the decision follow it.
+  const conditionsReadEntry = args.entrySource === "collection";
+  // Whether the page reads anything is asked of it with every conditioned
+  // block kept, as its reads are taken below: a conditioned block's bindings
+  // and its conditions' entry read both spend the budget the render spends,
+  // so metadata must read the Layout before them just as the render does.
+  // Only metadata asks, and the kept page it prepares is reused for the reads.
+  const keptPage =
+    conditionsReadEntry &&
+    args.regionsOnlyWhenBound === true &&
+    holdsBackConditions(page.prepared)
+      ? keptForReading(page)
+      : undefined;
+  const pageReading = keptPage ?? page;
   const skipRegions =
     args.regionsOnlyWhenBound === true &&
-    (page.prepared === null || !bindingDemand([page.prepared.presented]).any);
+    (pageReading.prepared === null ||
+      !readsAnything(pageReading.prepared.presented));
   const { regions, regionDefinitions } = await layoutRegions({
     config,
     provider: skipRegions ? undefined : args.layoutsProvider,
@@ -2579,8 +2626,16 @@ async function readPageInputs(args: {
   // A page holding conditioned blocks is read with all of them kept: a block
   // that may show asks for what it binds, and its conditions name the entry
   // fields they check. Read once, then decided against what was read.
-  const conditioned = parts.some(part => holdsBackConditions(part.prepared));
-  const reading = conditioned ? parts.map(keptForReading) : parts;
+  const conditioned =
+    conditionsReadEntry &&
+    parts.some(part => holdsBackConditions(part.prepared));
+  // The page kept for metadata's question above is the same reading: not
+  // prepared a second time.
+  const reading = conditioned
+    ? parts.map((part, index) =>
+        index === 0 && keptPage !== undefined ? keptPage : keptForReading(part)
+      )
+    : parts;
   const readingDocs = presentedOf(reading);
   const bindings = await readBindingSources({
     documents: readingDocs,
@@ -2615,6 +2670,18 @@ async function readPageInputs(args: {
     bindings,
     presented: presentedOf(decided),
   };
+}
+
+/**
+ * Whether a presented tree reads anything at the route: a binding, or an
+ * entry field a condition checks. A list's item conditions read nothing more
+ * than the list does.
+ */
+function readsAnything(presented: BlockDocument): boolean {
+  return (
+    bindingDemand([presented]).any ||
+    conditionDemand(presented.nodes).entryFields.size > 0
+  );
 }
 
 /** The trees a set of drawn documents present, the unreadable left out. */
@@ -2661,30 +2728,6 @@ function decideConditions(
   });
   if (issues.length > 0) report(issues);
   return decided;
-}
-
-/** The page's entry as a condition reads it, when the public may read it. */
-function entrySubjectOf(bindings: PageBindings | undefined): {
-  entry?: ConditionSubject;
-} {
-  const values = bindings?.entry;
-  const ref = bindings?.entryRef;
-  const readable =
-    ref === undefined ? undefined : bindings?.fieldShapes?.fieldsOf(ref);
-  if (values === undefined || values === null || readable === undefined) {
-    return {};
-  }
-  return {
-    entry: {
-      // The public's fields are all a page is handed, so a field outside them
-      // reads as one the entry lacks; either way it fails closed.
-      fields: {
-        declared: new Set(readable.map(field => field.name)),
-        readable,
-      },
-      values,
-    },
-  };
 }
 
 /**

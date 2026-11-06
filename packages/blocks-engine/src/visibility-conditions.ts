@@ -1304,28 +1304,35 @@ export interface ConditionDemand {
   readonly entryFields: ReadonlySet<string>;
   /**
    * Whether an entry-scoped condition orders a value, which may compare days
-   * and so needs the site's time zone.
+   * and so needs the site's time zone. Derived from {@link orderedFields}.
    */
   readonly ordersValues: boolean;
+  /**
+   * The fields entry-scoped conditions order by. Only a date one compares
+   * days, so a reader that knows the fields' shapes asks for the zone only
+   * when one of these is a date. Always set by `conditionDemand`; optional
+   * so a demand built by hand without it still type-checks, and read as
+   * none when absent.
+   */
+  readonly orderedFields?: ReadonlySet<string>;
 }
 
-/** The fields and orderings one entry-scoped node's conditions read. */
+/** The fields one entry-scoped node's conditions read, and those they order by. */
 function demandOf(
   node: Readonly<Record<string, unknown>>,
-  fields: Set<string>
-): boolean {
+  fields: Set<string>,
+  ordered: Set<string>
+): void {
   // Every gate's fields: the block's own and those of the placements it was
   // expanded from, since each is judged against the same entry.
   const storedConditions = conditionGatesOf(node.visibility).flatMap(gate =>
     isPlainRecord(gate) ? (readGroups(gate.conditions)?.flat() ?? []) : []
   );
-  let orders = false;
   for (const stored of storedConditions) {
     fields.add(stored.field);
     const op = conditionOp(stored.op);
-    if (op === "greater_than" || op === "less_than") orders = true;
+    if (op === "greater_than" || op === "less_than") ordered.add(stored.field);
   }
-  return orders;
 }
 
 /**
@@ -1341,8 +1348,8 @@ export function conditionDemand(
   maxNodes: number = Number.MAX_SAFE_INTEGER
 ): ConditionDemand {
   const entryFields = new Set<string>();
+  const orderedFields = new Set<string>();
   let any = false;
-  let ordersValues = false;
   let left = maxNodes;
   const page: ConditionScope = { source: "entry", collection: undefined };
   const stack: ConditionVisit[] = [];
@@ -1359,11 +1366,16 @@ export function conditionDemand(
     if (!isPlainRecord(node)) continue;
     if (isConditionGated(node)) {
       any = true;
-      if (scope.source === "entry" && demandOf(node, entryFields)) {
-        ordersValues = true;
+      if (scope.source === "entry") {
+        demandOf(node, entryFields, orderedFields);
       }
     }
     stack.push(...childVisits(node, "", scope));
   }
-  return { any, entryFields, ordersValues };
+  return {
+    any,
+    entryFields,
+    ordersValues: orderedFields.size > 0,
+    orderedFields,
+  };
 }
