@@ -204,6 +204,46 @@ describe("a named query's declaration, as the editor and the API read it", () =>
     expect(JSON.stringify(item)).not.toContain("run");
   });
 
+  it("lists a group's own row fields, however deep, for a binding to name", () => {
+    const withSeo = defineNamedQuery({
+      name: "pages.seo",
+      label: "Pages with SEO",
+      reads: { collections: ["pages"] },
+      rows: {
+        key: "id",
+        fields: [
+          { name: "id", type: "text" },
+          {
+            name: "seo",
+            type: "group",
+            fields: [
+              { name: "title", type: "text" },
+              {
+                name: "image",
+                type: "group",
+                fields: [{ name: "alt", type: "text" }],
+              },
+            ],
+          },
+        ],
+      },
+      run,
+    });
+    const rows = namedQueryItem(withSeo).rows;
+    expect("fields" in rows ? rows.fields[1] : undefined).toEqual({
+      name: "seo",
+      type: "group",
+      fields: [
+        { name: "title", type: "text", kind: "text" },
+        {
+          name: "image",
+          type: "group",
+          fields: [{ name: "alt", type: "text", kind: "text" }],
+        },
+      ],
+    });
+  });
+
   it("gives a client its inputs as JSON Schema, naming only the inputs that need a value", () => {
     expect(namedQueryParamsSchema(upcoming)).toEqual({
       type: "object",
