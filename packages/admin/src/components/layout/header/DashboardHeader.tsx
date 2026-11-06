@@ -36,10 +36,11 @@ export function DashboardHeader({
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
   const { isPending: isWorkspacePending } = useBrandingStatus();
-  // Where the builder runs and no plugin hides it; the bell itself then shows
-  // for super-admins only. Gated on an explicit `false`, as the bell below is.
-  const bellOffered =
-    !hidden.has("notifications") && branding?.showBuilder !== false;
+  // Wherever no plugin hides it: every reader's own notices are in the bell.
+  const bellOffered = !hidden.has("notifications");
+  // The schema-change journal in it only where the builder runs (see the bell
+  // below). Gated on an explicit `false`, so a server that does not say keeps it.
+  const journalOffered = branding?.showBuilder !== false;
   // Plugin-contributed header-slot components; each self-gates on
   // permission. Read `header.slot` (current) with `headerSlot` (deprecated)
   // fallback.
@@ -81,12 +82,14 @@ export function DashboardHeader({
             workspacePending={isWorkspacePending}
             hidden={hidden}
             headerSlots={headerSlots}
+            journalOffered={journalOffered}
           />
         ) : (
           <ControlsRow
             pending={{ workspace: isWorkspacePending, permissions: false }}
             hidden={hidden}
             headerSlots={headerSlots}
+            journalOffered={journalOffered}
             bellOffered={false}
           />
         )}
@@ -107,6 +110,8 @@ export function DashboardHeader({
 interface ControlsProps {
   hidden: ReadonlySet<HeaderButtonId>;
   headerSlots: readonly { name: string; slot: string }[];
+  /** Whether the bell shows the schema-change journal: where the builder runs. */
+  journalOffered: boolean;
 }
 
 /**
@@ -164,12 +169,9 @@ function ControlsRow({
 function HeaderControls({
   hidden,
   headerSlots,
+  journalOffered,
   bellOffered,
-}: {
-  hidden: ReadonlySet<HeaderButtonId>;
-  headerSlots: readonly { name: string; slot: string }[];
-  bellOffered: boolean;
-}): JSX.Element {
+}: ControlsProps & { bellOffered: boolean }): JSX.Element {
   return (
     <>
       {!hidden.has("github") && (
@@ -221,14 +223,13 @@ function HeaderControls({
 
       <ThemeToggle />
 
-      {/* Bell renders only for super-admins (self-gated via
-            useCurrentUserPermissions), and only where the builder runs: the
-            dropdown lists schema changes, which are journaled by the builder
+      {/* The bell holds every reader's own notices. Its schema-change list is
+            a super-admin's (self-gated via useCurrentUserPermissions), and only
+            where the builder runs: schema changes are journaled by the builder
             and the dev-time code-first push. Elsewhere the schema arrives
-            through committed migrations, which write no journal, so the
-            dropdown would have nothing to list. Gated on an explicit `false`
-            (`bellOffered`), so a server that does not say keeps it. */}
-      {bellOffered && <NotificationBell />}
+            through committed migrations, which write no journal, so the list
+            would have nothing in it (`journalOffered`). */}
+      {bellOffered && <NotificationBell journalOffered={journalOffered} />}
     </>
   );
 }

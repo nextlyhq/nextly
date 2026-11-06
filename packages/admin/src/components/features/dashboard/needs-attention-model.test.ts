@@ -49,6 +49,25 @@ describe("attentionRows", () => {
     ]);
   });
 
+  it("marks core's release items with the part of Needs attention they count, and no other item", () => {
+    const rows = attentionRows({
+      items: [
+        item({ id: "core/stopped-releases" }),
+        item({ id: "core/overdue-releases" }),
+        item({ id: "seo/overdue-releases" }),
+        item({ id: "toString" }),
+        item({ id: "core/overdue-releases", failed: true }),
+      ],
+    });
+    expect(rows.map(row => row.releases)).toEqual([
+      "stopped",
+      "overdue",
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
   it("draws a failed item by its label alone, with no count", () => {
     const [row] = attentionRows({ items: [item({ count: 0, failed: true })] });
     expect(row).toMatchObject({ failed: true, title: "Overdue releases" });
