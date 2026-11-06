@@ -351,6 +351,100 @@ function useReplacementRequests({
   return { open, openReplacement, closeRequest, failed };
 }
 
+/**
+ * A section's report, bound to the document it was drawn for: the entry, in
+ * the language it was drawn in, in this editor while it is mounted. A section
+ * keeps the props it was drawn with, so a report can arrive once another
+ * document is on screen, or once this editor is gone. Then the reported
+ * document's own caches are still refreshed, since what the plugin did to it
+ * stands, and nothing else happens: no redirect from a "deleted", and no
+ * own-change expectation armed on the document now shown from a "changed".
+ */
+function useBoundSectionReport({
+  collectionSlug,
+  entryId,
+  locale,
+  documentChanged,
+}: {
+  collectionSlug: string;
+  entryId: string;
+  locale: string | undefined;
+  documentChanged: (result: DocumentChangeResult) => void;
+}): (result: DocumentChangeResult) => void {
+  const queryClient = useQueryClient();
+  const shown = { collectionSlug, entryId, locale: locale ?? null };
+  // The document on screen now, and whether this editor still is: its
+  // cleanup ends it, so a report kept past an unmount is never this one's.
+  const shownNow = useRef<typeof shown | null>(shown);
+  shownNow.current = shown;
+  useEffect(() => {
+    shownNow.current = { collectionSlug, entryId, locale: locale ?? null };
+    return () => {
+      shownNow.current = null;
+    };
+  }, [collectionSlug, entryId, locale]);
+  return result => {
+    const now = shownNow.current;
+    const stillShown =
+      now !== null &&
+      now.collectionSlug === shown.collectionSlug &&
+      now.entryId === shown.entryId &&
+      now.locale === shown.locale;
+    if (stillShown) {
+      documentChanged(result);
+      return;
+    }
+    // The reported document's caches, and nothing the screen shows now.
+    if (result === "deleted") {
+      refreshAfterEntryDelete(queryClient, shown.collectionSlug, shown.entryId);
+    } else {
+      void refreshAfterEntryChange(
+        queryClient,
+        shown.collectionSlug,
+        shown.entryId
+      );
+    }
+  };
+}
+
+/**
+ * The open replacement, drawn with the identity it was opened for and the
+ * document's live gates. An unregistered component or one that throws is
+ * closed as failed, so its run is answered rather than left waiting.
+ */
+function replacementElement(
+  open: OpenReplacement,
+  {
+    documentLock,
+    mayWrite,
+    close,
+    fail,
+  }: {
+    documentLock: DocumentLockGates;
+    mayWrite: () => boolean;
+    close: (result?: DocumentChangeResult) => void;
+    fail: () => void;
+  }
+): JSX.Element {
+  return (
+    <PluginSlot<DocumentActionReplacementProps>
+      path={open.component}
+      props={{
+        action: open.action,
+        collectionSlug: open.collectionSlug,
+        entryId: open.entryId,
+        documentLock,
+        mayWrite,
+        close,
+      }}
+      fallback={<ClosesAsFailed onMount={fail} />}
+      // Nothing drawn in its place: the editor closes it at once.
+      errorFallback={null}
+      onError={fail}
+    />
+  );
+}
+
 export function usePluginDocumentSurfaces({
   collectionSlug,
   entryId,
@@ -358,10 +452,16 @@ export function usePluginDocumentSurfaces({
   mayWrite,
   onDeleted,
   onOwnChange,
+  locale,
 }: {
   collectionSlug: string;
   /** The saved document's id, or "" before it is saved. */
   entryId: string;
+  /**
+   * The language being edited: part of which document a section was drawn
+   * for, as it is of the form's own idea of the document.
+   */
+  locale?: string | undefined;
   /** What holds the document right now, as a section is told. */
   documentLock: DocumentLockGates;
   /**
@@ -402,20 +502,12 @@ export function usePluginDocumentSurfaces({
     onOwnChange,
   });
 
-  // The document on screen now, read when a section reports late: a section
-  // keeps the props of the document it was drawn for after the editor moves.
-  const shownNow = useRef({ collectionSlug, entryId });
-  shownNow.current = { collectionSlug, entryId };
-  // A section's report, bound to the document it was drawn for: once another
-  // is on screen it does nothing, so a late "deleted" leaves nobody and a late
-  // "changed" arms no expectation on the document now shown.
-  const sectionDocumentChanged = (result: DocumentChangeResult): void => {
-    const shown = shownNow.current;
-    if (shown.collectionSlug !== collectionSlug || shown.entryId !== entryId) {
-      return;
-    }
-    documentChanged(result);
-  };
+  const sectionDocumentChanged = useBoundSectionReport({
+    collectionSlug,
+    entryId,
+    locale,
+    documentChanged,
+  });
 
   const { open, openReplacement, closeRequest, failed } =
     useReplacementRequests({ collectionSlug, entryId, documentChanged });
@@ -430,23 +522,14 @@ export function usePluginDocumentSurfaces({
     // Drawn only on the document it was opened for, with that document's
     // identity: on another, it is not drawn while it is being cancelled.
     replacement:
-      open === null || !isFor(open, collectionSlug, entryId) ? null : (
-        <PluginSlot<DocumentActionReplacementProps>
-          path={open.component}
-          props={{
-            action: open.action,
-            collectionSlug: open.collectionSlug,
-            entryId: open.entryId,
+      open === null || !isFor(open, collectionSlug, entryId)
+        ? null
+        : replacementElement(open, {
             documentLock,
             mayWrite,
             close: result => closeRequest(open, result),
-          }}
-          fallback={<ClosesAsFailed onMount={() => failed(open)} />}
-          // Nothing drawn in its place: the editor closes it at once.
-          errorFallback={null}
-          onError={() => failed(open)}
-        />
-      ),
+            fail: () => failed(open),
+          }),
     // Each with whether its component is still loading, so the panel draws
     // it as loading rather than blank until the component arrives.
     sections: surfaces.sections.map(section => ({

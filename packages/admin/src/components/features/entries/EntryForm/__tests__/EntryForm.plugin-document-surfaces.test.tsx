@@ -612,14 +612,29 @@ describe("a plugin's replacement over time", () => {
     const summary = await screen.findByRole("textbox", { name: "Summary" });
     await userEvent.setup().type(summary, "Not saved yet");
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const remove = vi.spyOn(queryClient, "removeQueries");
 
     // The first entry's section reports late: it deleted, then changed, it.
     act(() => forFirst.documentChanged("deleted"));
     act(() => forFirst.documentChanged("changed"));
 
-    // Nothing leaves the second entry, and nothing is refreshed for either.
+    // Nothing leaves the second entry.
     expect(onDelete).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
+    // The first entry's own caches are refreshed, as what the plugin did to
+    // it stands; nothing is refreshed for the second.
+    const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        ["entries", "list", "layouts"],
+        ["entries", "detail", "layouts", "l1"],
+      ])
+    );
+    expect(keys).not.toContainEqual(["entries", "detail", "layouts", "l2"]);
+    expect(remove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryKey: ["entries", "detail", "layouts", "l1"],
+      })
+    );
     // And no expectation was armed on the second entry: its next newer
     // version is someone else's and replaces the unsaved text.
     drawAgain({
@@ -630,6 +645,86 @@ describe("a plugin's replacement over time", () => {
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
         "Theirs"
+      )
+    );
+  });
+
+  it("ignores a section's late report once its editor has unmounted, and another opened", async () => {
+    // Leaving the entry page unmounts the editor; opening another document
+    // mounts a new one. The first editor's section reporting late must not
+    // reach either, beyond refreshing its own entry's caches.
+    const onDeleteFirst = vi.fn();
+    const first = render(
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={entry}
+        mode="edit"
+        onDelete={onDeleteFirst}
+      />,
+      { wrapper: Providers }
+    );
+    await screen.findByText("Used by 2 pages");
+    const forFirst = section.current!;
+    first.unmount();
+
+    const onDeleteSecond = vi.fn();
+    render(
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={{ ...(entry as object), id: "l2" } as never}
+        mode="edit"
+        onDelete={onDeleteSecond}
+      />,
+      { wrapper: Providers }
+    );
+    await waitFor(() => expect(section.current?.entryId).toBe("l2"));
+    const remove = vi.spyOn(queryClient, "removeQueries");
+
+    act(() => forFirst.documentChanged("deleted"));
+
+    expect(onDeleteFirst).not.toHaveBeenCalled();
+    expect(onDeleteSecond).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryKey: ["entries", "detail", "layouts", "l1"],
+      })
+    );
+  });
+
+  it("arms no own-change expectation from a section drawn in another language", async () => {
+    // The author switches language while a section's write is on its way.
+    const element = (locale: string, current: object) => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={current as never}
+        mode="edit"
+        locale={locale}
+      />
+    );
+    const view = render(element("en", entry as object), {
+      wrapper: Providers,
+    });
+    await screen.findByText("Used by 2 pages");
+    const inEnglish = section.current!;
+
+    view.rerender(element("es", entry as object));
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Sin guardar");
+
+    // The English section reports its change late.
+    act(() => inEnglish.documentChanged("changed"));
+    // Someone else's newer version of the Spanish copy replaces the unsaved
+    // text: no expectation was armed on it.
+    view.rerender(
+      element("es", {
+        ...(entry as object),
+        summary: "Suyo",
+        updatedAt: "2026-10-04T09:00:00Z",
+      })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Suyo"
       )
     );
   });
