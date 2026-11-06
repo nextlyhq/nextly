@@ -47,7 +47,7 @@ describe("the in-transaction store", () => {
     registry.registerInTransaction("notes", recorder("other", seen));
 
     await runInTransactionPhase(
-      registry.inTransactionRunners("orders"),
+      registry.inTransactionEntries("orders"),
       tx,
       write
     );
@@ -135,7 +135,7 @@ describe("runInTransactionPhase", () => {
     });
     const shared: Record<string, unknown> = { shared: 1 };
 
-    await runInTransactionPhase(registry.inTransactionRunners("orders"), tx, {
+    await runInTransactionPhase(registry.inTransactionEntries("orders"), tx, {
       ...write,
       context: shared,
     });
@@ -192,7 +192,7 @@ describe("runInTransactionPhase", () => {
     registry.registerInTransaction("orders", recorder("later", later));
 
     const caught = await runInTransactionPhase(
-      registry.inTransactionRunners("orders"),
+      registry.inTransactionEntries("orders"),
       tx,
       write
     ).catch((error: unknown) => error);
@@ -209,7 +209,7 @@ describe("runInTransactionPhase", () => {
     registry.registerInTransaction("orders", () => Promise.reject(broken));
 
     const caught = await runInTransactionPhase(
-      registry.inTransactionRunners("orders"),
+      registry.inTransactionEntries("orders"),
       tx,
       write
     ).catch((error: unknown) => error);
@@ -227,14 +227,14 @@ describe("runInTransactionPhase", () => {
     registry.registerInTransaction("orders", async () => {
       depth += 1;
       await runInTransactionPhase(
-        registry.inTransactionRunners("orders"),
+        registry.inTransactionEntries("orders"),
         tx,
         write
       );
     });
 
     const caught = await runInTransactionPhase(
-      registry.inTransactionRunners("orders"),
+      registry.inTransactionEntries("orders"),
       tx,
       write
     ).catch((error: unknown) => error);
