@@ -394,6 +394,62 @@ test.describe("a placement's exposed fields", () => {
     await expect(row(page, "Heading level")).toContainText("H3");
   });
 
+  test("an exposed passage is edited on the canvas, held in the panel meanwhile, on that placement only", async ({
+    page,
+  }) => {
+    const { pageId } = await seed(
+      page,
+      [placement("p1"), placement("p2")],
+      introDefinition()
+    );
+    await openBuilder(page, pageId);
+
+    const passageOnCanvas = await part(page, "p1", "content");
+    await passageOnCanvas.dblclick();
+    // Editable once the shared editor has attached to the canvas's element.
+    await expect(passageOnCanvas).toHaveAttribute("contenteditable", "true");
+    // The placement's panel holds the same passage while the canvas has it.
+    const held = page.locator('.nx-inspector p[data-held="canvas"]');
+    await expect(held).toBeVisible();
+
+    for (let line = 0; line < 12; line += 1) {
+      await page.keyboard.press("ArrowDown");
+    }
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Ours.");
+    await page.keyboard.press("Escape");
+
+    await expect(await part(page, "p1", "content")).toContainText(
+      "The component's intro. Ours."
+    );
+    await expect(await part(page, "p2", "content")).toHaveText(
+      "The component's intro."
+    );
+    await expect(held).toHaveCount(0);
+    await expect(row(page, "Intro")).toContainText("Set on this page");
+
+    // One step: a single undo takes the whole edit back, and redo restores it.
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect(await part(page, "p1", "content")).toHaveText(
+      "The component's intro."
+    );
+    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    await expect(await part(page, "p1", "content")).toContainText("Ours.");
+
+    await save(page, pageId);
+    const stored = await storedPlacements(page, pageId);
+    const overrides = stored.p1?.props.overrides as
+      | Record<string, unknown>
+      | undefined;
+    expect(textOf(overrides?.intro)).toBe("The component's intro. Ours.");
+    expect(stored.p2?.props.overrides).toBeUndefined();
+
+    await page.reload();
+    await expect(await part(page, "p1", "content")).toContainText("Ours.", {
+      timeout: 30_000,
+    });
+  });
+
   test("an exposed passage is edited in the panel with the rich-text editor, on that placement only", async ({
     page,
   }) => {
