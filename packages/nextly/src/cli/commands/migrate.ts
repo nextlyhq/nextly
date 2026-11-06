@@ -1005,7 +1005,7 @@ export async function previewMigrate(args: {
     logger
   );
   if (hasLedger) await previewChangedFiles(rows, args, logger);
-  await previewMissingFiles(args, logger);
+  await previewAppHistory(args, logger);
   if (pendingModules.length + pendingFiles.length > 0) {
     await previewEventTriggers(args, logger);
   }
@@ -1088,20 +1088,25 @@ async function previewBeyondStep(
  * anything (`assertAppliedFilesUnchanged`), so the preview names it.
  */
 /**
- * An applied app migration the folder lacks stops a real run before it
- * applies anything, exit 3 (`assertAppliedFilesPresent`), so the preview
- * names it, read-only.
+ * The app history checks a real run makes before it applies anything, in its
+ * order (`assertAppHistoryHolds`), read-only: an applied migration the folder
+ * lacks (exit 3), then an unresolved attempt; the first that refuses is named
+ * as the real run's refusal. An applied file edited since it ran is named by
+ * `previewChangedFiles`, in its own words.
  */
-async function previewMissingFiles(
+async function previewAppHistory(
   args: AppHistoryArgs,
   logger: CommandContext["logger"]
 ): Promise<void> {
-  const refusal = await historyRefusalIn(() =>
-    assertAppliedFilesPresent({ ...args, command: "nextly migrate" })
-  );
-  if (refusal !== undefined) {
+  const history = { ...args, command: "nextly migrate" };
+  try {
+    await assertAppliedFilesPresent(history);
+    await refuseUnresolvedAppAttempts(history);
+  } catch (error) {
+    const refusal = historyRefusalOf(error);
+    if (refusal === undefined) throw error;
     logger.info(
-      `  ✖ a real run would refuse before applying anything (exit code 3): ${refusal}`
+      `  ✖ a real run would refuse before applying anything (exit code ${String(migrateExitCode(error))}): ${refusal}`
     );
   }
 }
