@@ -2487,17 +2487,23 @@ async function readPageInputs(args: {
     effectiveLimits(config)
   );
   const page = drawn(config, args.resolver, document, definitions);
+  // A Single's page has no entry for its conditions (see `entrySubjectOf`),
+  // so they read nothing of it; asked once, for the reads and the skip alike.
+  const conditionsReadEntry = args.entrySource === "collection";
   // Whether the page reads anything is asked of it with every conditioned
   // block kept, as its reads are taken below: a conditioned block's bindings
   // and its conditions' entry read both spend the budget the render spends,
   // so metadata must read the Layout before them just as the render does.
-  const pageReading = holdsBackConditions(page.prepared)
-    ? keptForReading(page)
-    : page;
+  // Only metadata asks, and the kept page it prepares is reused for the reads.
+  const keptPage =
+    args.regionsOnlyWhenBound === true && holdsBackConditions(page.prepared)
+      ? keptForReading(page)
+      : undefined;
+  const pageReading = keptPage ?? page;
   const skipRegions =
     args.regionsOnlyWhenBound === true &&
     (pageReading.prepared === null ||
-      !readsAnything(pageReading.prepared.presented));
+      !readsAnything(pageReading.prepared.presented, conditionsReadEntry));
   const { regions, regionDefinitions } = await layoutRegions({
     config,
     provider: skipRegions ? undefined : args.layoutsProvider,
@@ -2519,7 +2525,13 @@ async function readPageInputs(args: {
   // that may show asks for what it binds, and its conditions name the entry
   // fields they check. Read once, then decided against what was read.
   const conditioned = parts.some(part => holdsBackConditions(part.prepared));
-  const reading = conditioned ? parts.map(keptForReading) : parts;
+  // The page kept for metadata's question above is the same reading: not
+  // prepared a second time.
+  const reading = conditioned
+    ? parts.map((part, index) =>
+        index === 0 && keptPage !== undefined ? keptPage : keptForReading(part)
+      )
+    : parts;
   const readingDocs = presentedOf(reading);
   const bindings = await readPageBindings({
     config,
@@ -2530,7 +2542,7 @@ async function readPageInputs(args: {
     reader: publicReaderFor(config, context.locale, args.window),
     budget,
     window: args.window,
-    ...(conditioned
+    ...(conditioned && conditionsReadEntry
       ? { conditions: conditionDemand(readingDocs.flatMap(doc => doc.nodes)) }
       : {}),
   });
@@ -2556,10 +2568,14 @@ async function readPageInputs(args: {
  * entry field a condition checks. A list's item conditions read nothing more
  * than the list does.
  */
-function readsAnything(presented: BlockDocument): boolean {
+function readsAnything(
+  presented: BlockDocument,
+  conditionsReadEntry: boolean
+): boolean {
   return (
     bindingDemand([presented]).any ||
-    conditionDemand(presented.nodes).entryFields.size > 0
+    (conditionsReadEntry &&
+      conditionDemand(presented.nodes).entryFields.size > 0)
   );
 }
 

@@ -99,3 +99,47 @@ describe("a Single blocks page and its draft hook", () => {
     ).toThrow(/cannot serve drafts/i);
   });
 });
+
+describe("a Single blocks page holding a conditioned block", () => {
+  it("reads the Single once, since its conditions have no entry to read", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const reader = {
+      findSingle: vi.fn(async (args: Record<string, unknown>) => {
+        calls.push(args);
+        return {
+          title: "Home",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "c",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Members only", level: "h1" },
+                visibility: {
+                  conditions: [[{ field: "title", op: "exists" }]],
+                },
+              },
+            ],
+          },
+        };
+      }),
+      find: vi.fn(async () => ({ docs: [], totalDocs: 0 })),
+      findByID: vi.fn(async () => null),
+    };
+    const route = createSinglePage({
+      slug: "homepage",
+      field: "content",
+      blocks: createBlockResolver(coreBlocks),
+      nextly: reader as never,
+      metadata: (_entry, _context, derived) => ({
+        title: derived.title ?? "Home",
+      }),
+    });
+    await route.generateMetadata();
+    // The route's own read, and no public read of the Single for a
+    // condition that can never be judged against it.
+    expect(calls).toHaveLength(1);
+  });
+});

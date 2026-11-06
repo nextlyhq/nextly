@@ -1188,6 +1188,24 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(siteRead()).toBe(true);
   });
 
+  it("prepares a conditioned page three times, never a fourth for metadata's question", async () => {
+    await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      )
+    );
+    // Once as stored, once with every conditioned block kept for the reads,
+    // once decided by the entry. Metadata's own question about the Layout
+    // isn't asked by a render, so it prepares nothing more.
+    expect(runtime.pipelineRuns).toBe(3);
+  });
+
   it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { html } = await renderedPage(
