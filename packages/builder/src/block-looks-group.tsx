@@ -12,6 +12,7 @@ import type {
   SiteTokenSet,
   TokenMode,
 } from "@nextlyhq/blocks-engine";
+import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
@@ -20,6 +21,7 @@ import {
   type BlockLookGroup,
   type BlockLookRow,
 } from "./block-look-rows";
+import { ChromeTooltip } from "./chrome-tooltip";
 import { blockLabel } from "./inserter";
 import { LookSpecimen } from "./look-tiles-view";
 
@@ -134,12 +136,13 @@ function LookRow({
       {row.own ? (
         // The own look has no count of its own: the chip says what it
         // covers, on hover and to a screen reader.
-        <span
-          className="nx-vars__chip nx-block-looks__default"
-          title={description}
-        >
-          Default
-        </span>
+        <TooltipProvider delayDuration={300}>
+          <ChromeTooltip side="bottom" align="end" content={description}>
+            <span className="nx-vars__chip nx-block-looks__default">
+              Default
+            </span>
+          </ChromeTooltip>
+        </TooltipProvider>
       ) : (
         count
       )}

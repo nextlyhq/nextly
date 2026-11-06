@@ -57,6 +57,7 @@ import {
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
+import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
 import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
 
 /** One box to draw, in the chrome's coordinates. */
@@ -65,6 +66,7 @@ interface Mark {
     | "selected"
     | "hovered"
     | "exposed"
+    | "look-reach"
     | "drop-parent"
     | "drop-refused";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
@@ -580,7 +582,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
-      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
+      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
     )
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
@@ -623,6 +625,10 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         (selected === null || placement !== "")
       ) {
         found.push({ ...outline, ...plain, kind: "exposed" });
+      }
+      // A block an edit to the look being edited reaches, dashed.
+      if (marked.hasAttribute(LOOK_REACH_ATTRIBUTE)) {
+        found.push({ ...outline, ...plain, kind: "look-reach" });
       }
       if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
         found.push({ ...outline, ...plain, kind: "drop-parent" });

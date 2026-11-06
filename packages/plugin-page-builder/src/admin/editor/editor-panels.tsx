@@ -45,6 +45,7 @@ import {
 } from "../pattern-library-client";
 
 import { DesignPanel } from "./design-panel";
+import type { LookEditingState } from "./look-editing";
 import {
   withoutSelf,
   withoutSelfPatterns,
@@ -471,7 +472,10 @@ export function editorPanelRenderer({
   canvasElement,
   layerVerbs,
   documentDirty,
+  lookEditing,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** The look edited on its own, which the Design panel's Block looks choose. */
+  lookEditing?: LookEditingState;
   /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
   documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
@@ -633,6 +637,14 @@ export function editorPanelRenderer({
             variables: () => <VariablesTab />,
             classes: () => (
               <SharedStylesStudio
+                {...(lookEditing === undefined
+                  ? {}
+                  : {
+                      looks: {
+                        onEdit: lookEditing.edit,
+                        editingId: lookEditing.id,
+                      },
+                    })}
                 classes={classes}
                 pageBlocks={pageClassBlocks}
                 styleContext={classSummaryContext}

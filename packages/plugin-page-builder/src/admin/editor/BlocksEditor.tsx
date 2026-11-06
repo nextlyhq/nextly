@@ -83,6 +83,7 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   useMediaSummaryReader,
   type ReadMediaSummary,
@@ -140,6 +141,8 @@ type EditorView = EditorMount &
     componentView: ComponentView;
     /** The block verbs shared for the surfaces drawn outside the provider. */
     layerVerbs: CardVerbs;
+    /** The look edited on its own from the Design panel, with no block. */
+    lookEditing: LookEditingState;
     /** What the canvas draws: the document, with selected hidden blocks shown. */
     reveal: Reveal;
     /** A stored media id's name, picture and alt text, for the image fields. */
@@ -495,6 +498,14 @@ function editorInspector(
       // The author's right, the style write and the reach reads, so a
       // shared style the block wears can become the Style tab's target.
       sharedStyles={sharedStyles}
+      {...(view.lookEditing.id === null
+        ? {}
+        : {
+            lookEditing: {
+              id: view.lookEditing.id,
+              onExit: view.lookEditing.exit,
+            },
+          })}
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
@@ -1069,6 +1080,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   // reads it.
   const readMedia = useMediaSummaryReader();
   const identity = useDocumentIdentity();
+  // Which look the inspector edits on its own: chosen in the Design panel,
+  // left by selecting a block, by the bar's Back, or by Esc.
+  const lookEditing = useLookEditing(mount.editor);
   const view: EditorView = {
     ...mount,
     ...style,
@@ -1078,6 +1092,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     pageTitle,
     componentView,
     layerVerbs: cardVerbs,
+    lookEditing,
     reveal,
     readMedia,
     preview: componentView.preview,
@@ -1178,6 +1193,8 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
         <BlockKeyboardActions
           editor={editor}
+          // Esc with no block selected leaves a look edited on its own.
+          onEscapeWithoutSelection={lookEditing.exit}
           onEditText={componentView.preview.onEditText}
           onSaveAsPattern={savePattern.open}
           /*
