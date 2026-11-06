@@ -262,6 +262,32 @@ describe.each(getConfiguredTestDialects())(
       expect((await events(t)).map(row => row.type)).toEqual([PAID]);
     });
 
+    it("refuses a record without the transaction's handle while the plugin's transaction is open", async () => {
+      // A record that names no transaction runs in one of its own, so made
+      // inside the plugin's it is refused rather than left to commit on its
+      // own or not; the committed record after it is the control.
+      const t = await boot(dialect);
+      const paid = await endpoint(t, [PAID]);
+
+      await expect(
+        plugin().db.transaction(async () => {
+          await plugin().webhooks.record({
+            type: PAID,
+            id: "ord_untied",
+            data: {},
+          });
+        })
+      ).rejects.toBeInstanceOf(NextlyError);
+      await plugin().webhooks.record({
+        type: PAID,
+        id: "ord_on_its_own",
+        data: {},
+      });
+      await fanOut();
+
+      expect((await deliveredIds(t)).get(paid)).toEqual(["ord_on_its_own"]);
+    });
+
     it("never reaches an endpoint scoped to a collection slugged as the plugin is", async () => {
       // The scoped endpoint receives the collection's own entry, so its
       // filter is live, and still never receives the plugin's event.
