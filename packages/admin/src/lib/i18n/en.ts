@@ -56,5 +56,9 @@ export const en = {
   "nextly.userMenu.saveFailed": "Your interface language could not be saved.",
   "nextly.places.userDetail.content": "Profile",
   "nextly.places.settings.content": "General",
+<<<<<<< HEAD
   "nextly.places.document.content": "Content",
+=======
+  "nextly.places.unavailable": "This part of the page couldn't be loaded.",
+>>>>>>> origin/feat/target-slot
 } as const;

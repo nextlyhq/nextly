@@ -17,6 +17,7 @@
 import type { DeliveredAdminEntry } from "nextly/config";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 
 import { EntryTableCell } from "./EntryTableCell";
@@ -78,6 +79,7 @@ export function declaredColumns(
             <PluginSlot<DeclaredColumnCellProps>
               path={component}
               props={{ context, row }}
+              fallback={<PlaceContributionFallback />}
             />
           ),
         },
