@@ -55,6 +55,7 @@ import {
   BUILDER_VIEW_PATH,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "./builder-view";
+import { canvasBindingsRoute } from "./canvas-bindings-route";
 import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldReach } from "./class-usage-blocks-fields";
@@ -2432,6 +2433,9 @@ export const pageBuilder = (
         // A collection list's entries on the canvas, read as the author asking
         // reads them, drafts included, for a collection they may read.
         listEntriesRoute(),
+        // The canvas's bound props: the entry being edited, the Singles its
+        // bindings read and the site settings, read as the author asking.
+        canvasBindingsRoute(),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
