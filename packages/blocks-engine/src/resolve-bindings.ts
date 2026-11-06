@@ -41,6 +41,7 @@ import {
 import type { PropSchema } from "./block";
 import {
   DEFAULT_BINDING_SOURCE,
+  MAX_SEO_SEGMENTS,
   type BlockDocument,
   type BlockNode,
 } from "./document";
@@ -755,17 +756,20 @@ function visitDocumentSeo(
   const settings = ownEntry(document, "settings");
   const seo = isPlainRecord(settings) ? ownEntry(settings, "seo") : undefined;
   if (!isPlainRecord(seo)) return;
-  const bindings: unknown[] = [];
+  const visit = (binding: unknown): void => {
+    if (!isPlainRecord(binding)) return;
+    demand.any = true;
+    visitBinding(binding, demand);
+  };
   for (const field of ["title", "description"]) {
     const segments = ownEntry(seo, field);
-    if (Array.isArray(segments)) {
-      bindings.push(...segments.filter(segment => isPlainRecord(segment)));
-    }
+    if (!Array.isArray(segments)) continue;
+    // A stored document may hold more than a save allows; only the segments
+    // the metadata reads are read for.
+    const read = Math.min(segments.length, MAX_SEO_SEGMENTS);
+    for (let index = 0; index < read; index += 1) visit(segments[index]);
   }
-  const image = ownEntry(seo, "image");
-  if (isPlainRecord(image)) bindings.push(image);
-  if (bindings.length > 0) demand.any = true;
-  for (const binding of bindings) visitBinding(binding, demand);
+  visit(ownEntry(seo, "image"));
 }
 
 /** Add every binding one node holds. */

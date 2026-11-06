@@ -168,6 +168,54 @@ describe("a document's social image", () => {
   });
 });
 
+describe("a document's social image, from stored data a save never checked", () => {
+  it("reports a source the page did not read, rather than an empty image", () => {
+    const document = documentWith({ image: { $bind: "cover" } });
+    const unread = createBindingRun({
+      sources: {},
+      entryRef: { collection: "posts" },
+      schema,
+      props: { get: () => undefined },
+    });
+    const resolved = resolveDocumentSeo(document, unread);
+    expect(resolved).not.toHaveProperty("image");
+    expect(resolved.issues.map(issue => issue.code)).toEqual([
+      "binding-source-unavailable",
+    ]);
+  });
+
+  it("refuses an object a URL field holds, as a value of the wrong type", () => {
+    const document = documentWith({ image: { $bind: "avatarUrl" } });
+    const resolved = resolveDocumentSeo(
+      document,
+      runFor({ avatarUrl: { url: "https://cdn.example.com/a.png" } })
+    );
+    expect(resolved).not.toHaveProperty("image");
+    expect(resolved.issues.map(issue => issue.code)).toEqual([
+      "binding-type-misfit",
+    ]);
+  });
+});
+
+describe("a stored value larger than a save allows", () => {
+  // Far past the save's cap, and past what a call can take as arguments.
+  const huge = Array.from({ length: 200_000 }, (_unused, index) => ({
+    $bind: index < MAX_SEO_SEGMENTS ? "title" : `field${String(index)}`,
+  }));
+  const document = documentWith({ title: huge });
+
+  it("is read for only as far as a save would accept", () => {
+    const demand = bindingDemand([document]);
+    expect(demand.entry?.fields).toEqual(["title"]);
+  });
+
+  it("joins only the segments a save would accept", () => {
+    expect(resolveDocumentSeo(document, runFor({ title: "x" })).title).toBe(
+      "x".repeat(MAX_SEO_SEGMENTS)
+    );
+  });
+});
+
 describe("what a page reads for its metadata", () => {
   it("lists the entry's, a Single's and the site's fields the metadata binds", () => {
     const demand = bindingDemand([

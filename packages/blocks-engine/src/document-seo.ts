@@ -24,7 +24,11 @@
 import type { BindingIssue } from "./binding-issues";
 import { checkBinding, type CheckedBinding } from "./binding-rules";
 import type { SeoImageCandidate } from "./derive-seo";
-import type { BlockDocument, BlockNode } from "./document";
+import {
+  MAX_SEO_SEGMENTS,
+  type BlockDocument,
+  type BlockNode,
+} from "./document";
 import { isPlainRecord } from "./plain-record";
 import {
   boundSourceValue,
@@ -100,15 +104,19 @@ function joinedText(
 ): string | undefined {
   if (!Array.isArray(value)) return undefined;
   let text = "";
-  value.forEach((segment: unknown, index) => {
+  // A stored document may hold more than a save allows: only as many
+  // segments as a save would accept are read, so its size bounds no work.
+  const read = Math.min(value.length, MAX_SEO_SEGMENTS);
+  for (let index = 0; index < read; index += 1) {
+    const segment: unknown = value[index];
     if (typeof segment === "string") {
       text += segment;
-      return;
+      continue;
     }
     const filled = filledSegment(segment, `seo:${field}:${String(index)}`, run);
-    issues.push(...filled.issues);
+    for (const issue of filled.issues) issues.push(issue);
     if (typeof filled.value === "string") text += filled.value;
-  });
+  }
   const trimmed = text.trim();
   return trimmed === "" ? undefined : trimmed;
 }
@@ -183,14 +191,13 @@ function imageOf(
   if (checked.outcome !== "resolve" && misfits(checked.issues)) {
     checked = check("url");
     if (checked.outcome === "resolve" && !isAddressField(checked.binding)) {
-      issues.push({
-        nodeId: "seo:image",
-        prop: "image",
-        code: "binding-type-misfit",
-        message:
-          "A social image binds to a media field or a URL field, so its fallback is shown.",
-        path: checked.binding.path,
-      });
+      issues.push(
+        imageIssue(
+          checked.binding.path,
+          "binding-type-misfit",
+          "A social image binds to a media field or a URL field, so its fallback is shown."
+        )
+      );
       return candidateOf(checked.binding.fallback?.value);
     }
   }
@@ -200,10 +207,46 @@ function imageOf(
     return candidateOf(checked.fallback?.value);
   }
   const read = boundSourceValue(checked.binding, run, { phase: "page" });
-  const candidate = read.read
-    ? candidateOf(read.value, checked.binding)
-    : undefined;
-  return candidate ?? candidateOf(checked.binding.fallback?.value);
+  const fallback = () => candidateOf(checked.binding.fallback?.value);
+  if (!read.read) {
+    // Reported as a block's binding to an unread source is, so a refused
+    // read is told apart from an image the entry does not have.
+    issues.push(
+      imageIssue(
+        checked.binding.path,
+        "binding-source-unavailable",
+        `This binding's ${checked.binding.source} source was not read for this page.`
+      )
+    );
+    return fallback();
+  }
+  // A URL field's value is an address. Anything else stored there, a media
+  // object included, is a value of the wrong type, not an image.
+  if (
+    checked.binding.kind === "link" &&
+    read.value !== undefined &&
+    read.value !== null &&
+    typeof read.value !== "string"
+  ) {
+    issues.push(
+      imageIssue(
+        checked.binding.path,
+        "binding-type-misfit",
+        "This binding's value is not an address, so its fallback is shown."
+      )
+    );
+    return fallback();
+  }
+  return candidateOf(read.value, checked.binding) ?? fallback();
+}
+
+/** An issue with the document's social image binding. */
+function imageIssue(
+  path: string,
+  code: BindingIssue["code"],
+  message: string
+): BindingIssue {
+  return { nodeId: "seo:image", prop: "image", code, message, path };
 }
 
 /** Whether a binding ends at a URL field, or at a field whose type is unknown. */
