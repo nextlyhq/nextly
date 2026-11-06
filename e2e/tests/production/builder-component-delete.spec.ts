@@ -329,7 +329,9 @@ test.describe("Delete component", () => {
     const listed = await component(api, `Listed ${stamp()}`);
 
     await gotoAdmin(page, "/collections/components");
-    const row = page.getByRole("row", { name: new RegExp(listed.title) });
+    // A list row is a button (it opens the entry), not a `row`, so it is
+    // found as the table row holding the title.
+    const row = page.locator("tr", { hasText: listed.title });
     await row.getByRole("button", { name: "Row actions", exact: true }).click();
     await expect(
       page.getByRole("menuitem", { name: "Delete component…" })
