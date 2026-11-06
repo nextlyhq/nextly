@@ -19,6 +19,7 @@
  *
  * @module list-entries-route
  */
+import { readListQuery } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 import { z } from "nextly/zod";
@@ -36,6 +37,22 @@ const FIELD = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 
 /** One literal a filter compares with. */
 const SCALAR = z.union([z.string(), z.number().finite(), z.boolean()]);
+
+/**
+ * A sort as a list stores it, judged by the engine's own reading of a stored
+ * sort (`readListQuery`), with no bound of its own: a stored sort has no
+ * length bound, so one here would refuse on the canvas a list the save took
+ * and the published page reads. The one-key-per-entry list form is read as
+ * the same keys joined.
+ */
+const SORT = z
+  .union([z.string(), z.array(z.string())])
+  .refine(
+    sort =>
+      readListQuery({ sort: typeof sort === "string" ? sort : sort.join(",") })
+        .problems.length === 0,
+    { message: "The sort is not one a list stores." }
+  );
 
 /**
  * The read, as the renderer sends it. Bounded as the reader bounds it, so a
@@ -59,9 +76,7 @@ const ListEntriesBody = z
           // A list's own rows, and the `in` row a related list adds.
           .max(21)
           .optional(),
-        sort: z
-          .union([z.string().max(1000), z.array(z.string()).max(50)])
-          .optional(),
+        sort: SORT.optional(),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
         page: z.number().int().min(1).optional(),

@@ -114,6 +114,38 @@ describe("a canvas list's read", () => {
     expect(can).not.toHaveBeenCalled();
   });
 
+  it("takes any sort a list may store, however long, and only those", async () => {
+    // A stored sort has no length bound, so a list sorting by many long
+    // field names reaches the reader, here refused only by the caller check.
+    const can = vi.fn(async () => false);
+    const ctx = { caller: { can } } as unknown as PluginRouteContext;
+    const request = (sort: unknown) =>
+      new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({ query: { collection: "posts", sort } }),
+      });
+    const long = Array.from(
+      { length: 30 },
+      (_, index) => `-a_field_named_at_length_${String(index)}_of_forty_chars`
+    ).join(",");
+    expect(long.length).toBeGreaterThan(1000);
+    for (const sort of [long, long.split(",")]) {
+      await expect(
+        listEntriesRoute().handler(request(sort), ctx)
+      ).rejects.toSatisfy(error => NextlyError.isCode(error, "FORBIDDEN"));
+    }
+    // A sort no list could store is refused before the caller is asked.
+    can.mockClear();
+    for (const sort of ["-a.b", ["title", "x y"]]) {
+      await expect(
+        listEntriesRoute().handler(request(sort), ctx)
+      ).rejects.toSatisfy(error =>
+        NextlyError.isCode(error, "VALIDATION_ERROR")
+      );
+    }
+    expect(can).not.toHaveBeenCalled();
+  });
+
   it("is mounted, authenticated, at the path the client asks", () => {
     const route = (pageBuilder().contributes?.routes ?? []).find(
       each => each.path === LIST_ENTRIES_ROUTE_PATH
