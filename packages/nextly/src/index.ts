@@ -874,6 +874,9 @@ export type {
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";
