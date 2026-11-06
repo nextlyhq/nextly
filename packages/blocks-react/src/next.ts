@@ -106,9 +106,6 @@ import type {
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
-
-// The default stays published here too, where a route's `maxQueries` is set.
-export { DEFAULT_MAX_QUERIES };
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -130,6 +127,9 @@ import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
 import { isUnconditional } from "./visibility";
+
+// The default stays published here too, where a route's `maxQueries` is set.
+export { DEFAULT_MAX_QUERIES };
 
 /**
  * Marker for the subpath's existence and its build wiring.
