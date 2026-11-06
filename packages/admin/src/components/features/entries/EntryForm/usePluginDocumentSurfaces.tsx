@@ -43,6 +43,7 @@ import {
 import type { DocumentLockGates } from "./document-lock-affordances";
 import type {
   DocumentActionOutcome,
+  DocumentActionOverride,
   DocumentActionOverrides,
 } from "./useDocumentActionBindings";
 
@@ -72,20 +73,36 @@ const ANOTHER_OPEN: DocumentActionOutcome = {
 };
 
 /**
- * Why every overridable action is held before the plugin list is known: it
- * may be hidden or replaced on this collection, and its built-in write must
- * not run in the meantime. Said to the author on the row.
+ * What a row held before the plugin list is known says, in the two states it
+ * can be in. One place for the words, so the rows, `run` and the docs read
+ * the same. The failed one names the row's own action, from its label.
  */
-const AWAITING_PLUGINS =
-  "Waiting for the admin to load what its plugins change here.";
+const HELD_WORDS = {
+  loading: (): string => "Loading this collection's plugin actions…",
+  failed: (label: string): string =>
+    `Couldn't load this collection's plugin actions, so ${label} is paused.`,
+  retry: "Retry",
+} as const;
 
-/** Every overridable action, held for `AWAITING_PLUGINS`. */
-function heldUntilPluginsLoad(): DocumentActionOverrides {
+/**
+ * Every overridable action, held: it may be hidden or replaced on this
+ * collection, and its built-in write must not run before that is known.
+ * Loading, it says so and clears itself; failed, it says so with Retry, which
+ * asks again: the list then reads as pending, so the rows read as loading.
+ */
+function heldUntilPluginsLoad(
+  failed: boolean,
+  retry: () => void
+): DocumentActionOverrides {
+  const held: DocumentActionOverride = failed
+    ? {
+        kind: "held",
+        reason: HELD_WORDS.failed,
+        retry: { label: HELD_WORDS.retry, onSelect: retry },
+      }
+    : { kind: "held", reason: HELD_WORDS.loading };
   return Object.fromEntries(
-    OVERRIDABLE_DOCUMENT_ACTIONS.map(action => [
-      action,
-      { kind: "held", reason: AWAITING_PLUGINS },
-    ])
+    OVERRIDABLE_DOCUMENT_ACTIONS.map(action => [action, held])
   );
 }
 
@@ -144,7 +161,7 @@ export function usePluginDocumentSurfaces({
   const { plugins } = useBranding();
   // Until the list has arrived, an absent override says nothing: the plugin
   // that overrides an action may simply not be known yet.
-  const { isPending, isUnavailable } = useBrandingStatus();
+  const { isPending, isUnavailable, retry } = useBrandingStatus();
   const queryClient = useQueryClient();
   const surfaces = useMemo(
     () => documentSurfacesFor(plugins, collectionSlug),
@@ -196,7 +213,7 @@ export function usePluginDocumentSurfaces({
 
   const actionOverrides =
     isPending || isUnavailable
-      ? heldUntilPluginsLoad()
+      ? heldUntilPluginsLoad(isUnavailable && !isPending, retry)
       : overridesFor(surfaces.actions, openReplacement);
 
   const close = (result?: DocumentChangeResult): void => {

@@ -27,6 +27,7 @@ import {
   acceptContributions,
   reasonFor,
   type ActionBinding,
+  type ActionRecovery,
   type ContributedAction,
 } from "./DocumentActionBar";
 import { effectiveEntryStatus } from "./entry-address";
@@ -60,11 +61,16 @@ type BuiltInActionId =
 export type DocumentActionOverride =
   | { kind: "hidden" }
   /**
-   * Offered but not runnable, for `reason`: while the editor cannot yet tell
-   * whether a plugin hides or replaces the action, its built-in write must not
-   * run in the meantime.
+   * Offered but not runnable: while the editor cannot yet tell whether a
+   * plugin hides or replaces the action, its built-in write must not run in
+   * the meantime. `reason` is told the action's own label, so what the row
+   * says names the row; `retry`, where given, is offered beside it.
    */
-  | { kind: "held"; reason: string }
+  | {
+      kind: "held";
+      reason: (label: string) => string;
+      retry?: ActionRecovery;
+    }
   | {
       kind: "replaced";
       label?: string;
@@ -601,7 +607,7 @@ export function useDocumentActionBindings({
     documentLocked,
     isPublishedEditState,
   });
-  const reasons = withHeldReasons(momentReasons, actionOverrides);
+  const reasons = withHeldReasons(momentReasons, actionOverrides, builtInVerbs);
 
   // Saving means three different calls depending on where the work lands, a
   // fact about this host rather than the document: a drafts-enabled published
@@ -638,11 +644,15 @@ export function useDocumentActionBindings({
     actionOverrides
   );
 
-  const actionBindings = bindingsFor(performers, reasons, {
-    // A submit-typed control submits the form natively and never calls back;
-    // `run` calls the performer, which submits the same way.
-    submitForm: hasStatus ? undefined : formId,
-  });
+  const actionBindings = withHeldRecoveries(
+    bindingsFor(performers, reasons, {
+      // A submit-typed control submits the form natively and never calls
+      // back; `run` calls the performer, which submits the same way.
+      submitForm: hasStatus ? undefined : formId,
+    }),
+    actionOverrides,
+    builtInVerbs
+  );
 
   /*
    * One merge for both halves. Splitting them would let the bar draw a built-in
@@ -743,12 +753,36 @@ function overrideOf(
  */
 function withHeldReasons(
   reasons: Partial<Record<BuiltInActionId, string | undefined>>,
-  overrides: DocumentActionOverrides
+  overrides: DocumentActionOverrides,
+  actions: readonly EditorDocumentAction[]
 ): Partial<Record<BuiltInActionId, string | undefined>> {
   const result = { ...reasons };
-  for (const id of Object.keys(overrides) as BuiltInActionId[]) {
-    const override = overrideOf(overrides, id);
-    if (override?.kind === "held") result[id] = result[id] ?? override.reason;
+  for (const action of actions) {
+    const override = overrideOf(overrides, action.id);
+    if (override?.kind !== "held") continue;
+    const id = action.id as BuiltInActionId;
+    // Named by the row's own label, so the reason cannot name another verb.
+    result[id] = result[id] ?? override.reason(action.label);
+  }
+  return result;
+}
+
+/**
+ * Each held action's binding with its way out, where the hold offers one and
+ * is what holds it now: a lock or a save in flight is not one Retry ends.
+ */
+function withHeldRecoveries(
+  bindings: Record<string, ActionBinding | undefined>,
+  overrides: DocumentActionOverrides,
+  actions: readonly EditorDocumentAction[]
+): Record<string, ActionBinding | undefined> {
+  const result = { ...bindings };
+  for (const action of actions) {
+    const override = overrideOf(overrides, action.id);
+    const binding = result[action.id];
+    if (override?.kind !== "held" || override.retry === undefined) continue;
+    if (binding?.disabledReason !== override.reason(action.label)) continue;
+    result[action.id] = { ...binding, recovery: override.retry };
   }
   return result;
 }

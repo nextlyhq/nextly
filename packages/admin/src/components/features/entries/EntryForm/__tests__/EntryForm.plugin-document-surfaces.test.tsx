@@ -21,6 +21,7 @@ import {
   cleanup,
   createTestQueryClient,
   screen,
+  waitFor,
 } from "@admin/__tests__/utils";
 import {
   registerComponent,
@@ -29,8 +30,9 @@ import {
   type DocumentPanelSectionProps,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock, deleteEntry, plugins, brandingStatus } = vi.hoisted(
-  () => ({
+const { useDocumentLock, deleteEntry, plugins, brandingStatus, retryBranding } =
+  vi.hoisted(() => ({
+    retryBranding: vi.fn(),
     brandingStatus: {
       current: {
         isPending: false,
@@ -41,8 +43,14 @@ const { useDocumentLock, deleteEntry, plugins, brandingStatus } = vi.hoisted(
     useDocumentLock: vi.fn(),
     deleteEntry: vi.fn(),
     plugins: { current: [] as unknown[] },
-  })
-);
+  }));
+
+/** The plugin list arrived: nothing pending, nothing failed. */
+const SETTLED = {
+  isPending: false,
+  isUnavailable: false,
+  isBrandingUnavailable: false,
+};
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
@@ -95,7 +103,10 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
     typeof import("@admin/context/providers/BrandingProvider")
   >()),
   useBranding: () => ({ plugins: plugins.current }),
-  useBrandingStatus: () => brandingStatus.current,
+  useBrandingStatus: () => ({
+    ...brandingStatus.current,
+    retry: retryBranding,
+  }),
 }));
 
 import { EntryForm } from "../EntryForm";
@@ -202,11 +213,7 @@ beforeEach(() => {
   window.localStorage.clear();
   queryClient = createTestQueryClient();
   plugins.current = [LAYOUTS_PLUGIN];
-  brandingStatus.current = {
-    isPending: false,
-    isUnavailable: false,
-    isBrandingUnavailable: false,
-  };
+  brandingStatus.current = SETTLED;
   replacement.current = null;
   drawnIn.locale = null;
   drawnIn.actions = false;
@@ -353,29 +360,122 @@ describe("before the admin knows what plugins change", () => {
   // Until the plugin list has arrived, no collection's document can say
   // whether a plugin hides or replaces its Delete or Unpublish, so neither may
   // run its built-in write in the meantime.
-  it.each([
-    [
-      "while the plugin list is loading",
-      { isPending: true, isUnavailable: false },
-    ],
-    [
-      "when the plugin list never arrived",
-      { isPending: false, isUnavailable: true },
-    ],
-  ])("holds Delete and Unpublish %s, saying why", async (_name, status) => {
+  const PENDING = "Loading this collection's plugin actions…";
+  /** What a held row says once the list failed, naming the row's action. */
+  const failed = (action: string) =>
+    `Couldn't load this collection's plugin actions, so ${action} is paused.`;
+
+  /** The editor, with a way to draw it again once the status has moved. */
+  function renderHeld() {
+    // A new element each time: React skips drawing the same one again.
+    const element = () => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={entry}
+        mode="edit"
+        onViewApi={() => {}}
+      />
+    );
+    const view = render(element(), { wrapper: Providers });
+    return () => view.rerender(element());
+  }
+
+  /** The menu has gone, so the next one opened is read afresh. */
+  const menuClosed = () =>
+    waitFor(() => expect(screen.queryAllByRole("menuitem")).toHaveLength(0));
+
+  const row = (items: HTMLElement[], id: string) =>
+    items.find(item => item.dataset.action === id);
+
+  it("holds Delete and Unpublish while the plugin list loads, and says so", async () => {
     plugins.current = [];
-    brandingStatus.current = { ...status, isBrandingUnavailable: false };
-    renderEditor("layouts");
+    brandingStatus.current = { ...SETTLED, isPending: true };
+    renderHeld();
     const items = await openMenu();
     for (const id of ["delete", "unpublish"]) {
-      const row = items.find(item => item.dataset.action === id);
-      expect(row, id).toHaveAttribute("aria-disabled", "true");
-      expect(row).toHaveTextContent(/plugin/i);
+      expect(row(items, id), id).toHaveAttribute("aria-disabled", "true");
+      expect(row(items, id)).toHaveTextContent(PENDING);
     }
+    // Nothing to retry while it is still on its way.
+    expect(screen.queryByRole("menuitem", { name: "Retry" })).toBeNull();
     // What no plugin may override stays usable.
-    const api = items.find(item => item.dataset.action === "view-api");
-    expect(api).not.toHaveAttribute("aria-disabled", "true");
+    expect(row(items, "view-api")).not.toHaveAttribute("aria-disabled", "true");
     expect(deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it("says the plugin list failed, and offers Retry beside the held rows", async () => {
+    plugins.current = [];
+    brandingStatus.current = { ...SETTLED, isUnavailable: true };
+    renderHeld();
+    const items = await openMenu();
+    for (const [id, label] of [
+      ["delete", "Delete"],
+      ["unpublish", "Unpublish"],
+    ] as const) {
+      expect(row(items, id), id).toHaveAttribute("aria-disabled", "true");
+      expect(row(items, id)).toHaveTextContent(failed(label));
+    }
+    // One Retry directly under each held row.
+    const retries = screen.getAllByRole("menuitem", { name: "Retry" });
+    expect(retries).toHaveLength(2);
+    for (const id of ["delete", "unpublish"]) {
+      const next = row(items, id)?.nextElementSibling;
+      expect(next, id).toHaveAttribute("data-retry-for", id);
+      expect(next).toHaveTextContent("Retry");
+    }
+    for (const retry of retries) {
+      expect(retry).not.toHaveAttribute("aria-disabled", "true");
+    }
+  });
+
+  it("asks for the plugin list again on Retry, loads while it does, and then applies the plugin's override", async () => {
+    plugins.current = [];
+    brandingStatus.current = { ...SETTLED, isUnavailable: true };
+    const drawAgain = renderHeld();
+    await openMenu();
+    await userEvent
+      .setup()
+      .click(screen.getAllByRole("menuitem", { name: "Retry" })[0]!);
+    expect(retryBranding).toHaveBeenCalledTimes(1);
+    await menuClosed();
+
+    // Asking again: the list reads as pending again, as on first load, so
+    // the rows say it is loading, not that it failed.
+    brandingStatus.current = { ...SETTLED, isPending: true };
+    drawAgain();
+    let items = await openMenu();
+    expect(row(items, "delete")).toHaveTextContent(PENDING);
+    expect(screen.queryByRole("menuitem", { name: "Retry" })).toBeNull();
+    await userEvent.setup().keyboard("{Escape}");
+    await menuClosed();
+
+    // The list arrived: the plugin's own override is what the menu offers.
+    plugins.current = [LAYOUTS_PLUGIN];
+    brandingStatus.current = SETTLED;
+    drawAgain();
+    items = await openMenu();
+    expect(row(items, "delete")).toHaveTextContent("Remove layout…");
+    expect(row(items, "delete")).not.toHaveAttribute("aria-disabled", "true");
+    expect(row(items, "unpublish")).toBeUndefined();
+  });
+
+  it("reaches Retry from the keyboard", async () => {
+    plugins.current = [];
+    brandingStatus.current = { ...SETTLED, isUnavailable: true };
+    renderHeld();
+    const user = userEvent.setup();
+    const bar = await screen.findByTestId("document-bar");
+    within(bar).getByRole("button", { name: "More actions" }).focus();
+    await user.keyboard("{Enter}");
+    await screen.findAllByRole("menuitem");
+    // Arrow keys walk the menu's usable rows; the held ones are skipped.
+    for (let step = 0; step < 6; step += 1) {
+      if (document.activeElement?.textContent === "Retry") break;
+      await user.keyboard("{ArrowDown}");
+    }
+    expect(document.activeElement).toHaveTextContent("Retry");
+    await user.keyboard("{Enter}");
+    expect(retryBranding).toHaveBeenCalledTimes(1);
   });
 });
 

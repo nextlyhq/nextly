@@ -463,7 +463,10 @@ describe("running an action a plugin overrides", () => {
       entry: published,
       onDelete,
       actionOverrides: {
-        delete: { kind: "held", reason: "Waiting for the plugins." },
+        delete: {
+          kind: "held",
+          reason: label => `Waiting for the plugins before ${label}.`,
+        },
       },
     });
 
@@ -476,7 +479,7 @@ describe("running an action a plugin overrides", () => {
     expect(outcome).toEqual({
       ok: false,
       reason: "refused",
-      message: "Waiting for the plugins.",
+      message: "Waiting for the plugins before Delete.",
     });
   });
 
@@ -486,7 +489,10 @@ describe("running an action a plugin overrides", () => {
       onDelete: () => Promise.resolve({ ok: true as const }),
       documentLocked: true,
       actionOverrides: {
-        delete: { kind: "held", reason: "Waiting for the plugins." },
+        delete: {
+          kind: "held",
+          reason: label => `Waiting for the plugins before ${label}.`,
+        },
       },
     });
 
