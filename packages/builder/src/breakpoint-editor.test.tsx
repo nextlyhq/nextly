@@ -266,6 +266,33 @@ describe("saving", () => {
     expect(screen.getByRole("status").textContent).toBe("");
   });
 
+  it("holds Save while the host says why, keeping the draft and saying it", () => {
+    const onSave = vi.fn();
+    const { rerender } = render(
+      <BreakpointEditor
+        value={stored()}
+        onSave={onSave}
+        onClose={vi.fn()}
+        blocked="Another removal is running."
+      />
+    );
+    fireEvent.change(screen.getByDisplayValue("991"), {
+      target: { value: "768" },
+    });
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Another removal is running."
+    );
+    fireEvent.click(saveButton());
+    expect(onSave).not.toHaveBeenCalled();
+    // Cleared: the same draft can be saved.
+    rerender(
+      <BreakpointEditor value={stored()} onSave={onSave} onClose={vi.fn()} />
+    );
+    expect(saveButton().disabled).toBe(false);
+    expect(screen.getByDisplayValue("768")).toBeDefined();
+  });
+
   it("treats a REJECTION as a refusal, not as a save", async () => {
     /*
      * A host that throws is not following the contract, and the author's draft

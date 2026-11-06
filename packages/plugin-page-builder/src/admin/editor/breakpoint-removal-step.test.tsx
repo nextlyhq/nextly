@@ -317,9 +317,7 @@ describe("removing a breakpoint in Settings", () => {
     });
     // The run's own record says three, not the last call's one.
     expect(
-      await screen.findByText(
-        "Mobile was removed, except from 3 pages' live versions"
-      )
+      await screen.findByText("Mobile was removed, except from 3 live versions")
     ).toBeTruthy();
   });
 
@@ -560,7 +558,7 @@ describe("removing a breakpoint in Settings", () => {
     expect(screen.queryByText("Mobile was removed")).toBeNull();
   });
 
-  it("lets a removal opened elsewhere outrank this tab's finished one, but not its own run", async () => {
+  it("lets a removal opened elsewhere outrank this tab's finished one", async () => {
     show();
     await removeMobile();
     await userEvent.click(
@@ -569,25 +567,7 @@ describe("removing a breakpoint in Settings", () => {
       })
     );
     await screen.findByText("Mobile was removed");
-    // A read not yet caught up still reports this tab's own run open.
     carryOnAnswers = [() => new Promise(() => {})];
-    siteRead = {
-      ...siteRead,
-      removals: [
-        {
-          runId: "run-1",
-          labels: ["Mobile"],
-          open: true,
-          left: 0,
-          waitingOnDrafts: false,
-        },
-      ],
-    };
-    reshow();
-    expect(screen.getByText("Mobile was removed")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Edit breakpoints" })
-    ).toHaveProperty("disabled", false);
     // Another tab opens a removal of its own.
     siteRead = {
       ...siteRead,
@@ -604,6 +584,55 @@ describe("removing a breakpoint in Settings", () => {
     reshow();
     expect(
       screen.getByText("Phone's styles are still being removed")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    ).toHaveProperty("disabled", true);
+  });
+
+  it("follows its own run again only once a newer read reports it opened again", async () => {
+    const ownOpen = (): SiteBreakpointRemovalStatus[] => [
+      {
+        runId: "run-1",
+        labels: ["Mobile"],
+        open: true,
+        left: 0,
+        waitingOnDrafts: false,
+      },
+    ];
+    confirmAnswer = saved(false);
+    let carried: (value: unknown) => void = () => {};
+    carryOnAnswers = [
+      () => new Promise(resolve => (carried = resolve)),
+      () => new Promise(() => {}),
+    ];
+    show();
+    await removeMobile();
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove Mobile and its styles",
+      })
+    );
+    await screen.findByRole("heading", { name: "Removing Mobile's styles" });
+    // The tab's read while it removes reports the run open.
+    siteRead = { ...siteRead, removals: ownOpen() };
+    reshow();
+    carried({
+      message: "Done.",
+      item: { runId: "run-1", finished: true, left: 0 },
+    });
+    await screen.findByText("Mobile was removed");
+    // That read, from before the run ended, is not followed again.
+    reshow();
+    expect(screen.getByText("Mobile was removed")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    ).toHaveProperty("disabled", false);
+    // A newer read reports it open again: a write brought values back.
+    siteRead = { ...siteRead, removals: ownOpen() };
+    reshow();
+    expect(
+      screen.getByText("Mobile's styles are still being removed")
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Edit breakpoints" })

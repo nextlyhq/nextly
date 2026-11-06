@@ -226,7 +226,38 @@ describe("the confirm step's words", () => {
         { viewport: NOW.viewport, container: [] },
         "Desktop"
       ).intro
-    ).toContain("show the styles set for wider widths at that width");
+    ).toContain("show their base styles at that width");
+  });
+
+  it("counts a container width with no bound as the widest", () => {
+    const withWide = {
+      viewport: NOW.viewport,
+      container: [
+        { id: "card", label: "Card", maxWidth: 480 },
+        { id: "wide", label: "Wide" },
+      ],
+    };
+    // Card's next wider is the unbounded one, which covers every width.
+    expect(
+      confirmWords(
+        dryRun([removed({ id: "card", label: "Card" })]),
+        withWide,
+        { viewport: NOW.viewport, container: [{ id: "wide", label: "Wide" }] },
+        "Desktop"
+      ).intro
+    ).toContain("show their Wide styles at that width");
+    // Nothing is wider than the unbounded one: the base, not Card.
+    expect(
+      confirmWords(
+        dryRun([removed({ id: "wide", label: "Wide" })]),
+        withWide,
+        {
+          viewport: NOW.viewport,
+          container: [{ id: "card", label: "Card", maxWidth: 480 }],
+        },
+        "Desktop"
+      ).intro
+    ).toContain("show their base styles at that width");
   });
 
   it("speaks of them, plural, for several breakpoints", () => {
@@ -338,8 +369,8 @@ describe("the other steps' words", () => {
     expect(
       leftWords({ labels: ["Mobile"], left: 3, waitingOnDrafts: true })
     ).toEqual({
-      title: "Mobile was removed, except from 3 pages' live versions",
-      hint: "They have drafts waiting to be published. Their live versions keep Mobile's styles until each draft is published or discarded; Mobile can't be added back until then.",
+      title: "Mobile was removed, except from 3 live versions",
+      hint: "Each has a draft waiting to be published, and keeps Mobile's styles until that draft is published or discarded; Mobile can't be added back until then.",
     });
     expect(
       leftWords({ labels: ["Mobile"], left: 1, waitingOnDrafts: false })

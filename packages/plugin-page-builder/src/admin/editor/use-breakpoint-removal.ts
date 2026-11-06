@@ -74,6 +74,8 @@ export type RemovalStep =
       readonly kind: "done";
       /** The removal it ended, where there was a run. */
       readonly runId?: string;
+      /** The tab's read of the removals when it ended; see `shownStep`. */
+      readonly endedUnder?: unknown;
       readonly labels: readonly string[];
       readonly counted?: readonly RemovedBreakpoint[];
     }
@@ -81,6 +83,8 @@ export type RemovalStep =
       readonly kind: "left";
       /** The removal it ended. */
       readonly runId?: string;
+      /** The tab's read of the removals when it ended; see `shownStep`. */
+      readonly endedUnder?: unknown;
       readonly status: Pick<
         SiteBreakpointRemovalStatus,
         "labels" | "left" | "waitingOnDrafts"
@@ -125,6 +129,7 @@ function reasonOf(error: unknown): string {
  */
 function endedOn(
   runId: string,
+  endedUnder: unknown,
   status: SiteBreakpointRemovalStatus | null | undefined,
   fallback: { readonly labels: readonly string[]; readonly left: number },
   counted: readonly RemovedBreakpoint[] | undefined
@@ -133,6 +138,7 @@ function endedOn(
     return {
       kind: "left",
       runId,
+      endedUnder,
       status: {
         labels: fallback.labels,
         left: fallback.left,
@@ -141,11 +147,12 @@ function endedOn(
     };
   }
   if (status !== null && status !== undefined && status.left > 0) {
-    return { kind: "left", runId, status };
+    return { kind: "left", runId, endedUnder, status };
   }
   return {
     kind: "done",
     runId,
+    endedUnder,
     labels: status?.labels ?? fallback.labels,
     ...(counted === undefined ? {} : { counted }),
   };
@@ -156,8 +163,10 @@ function endedOn(
  * read reports open (followed, holding editing), which also outranks this
  * tab's finished one, since editing must wait for it too; then this tab's
  * finished one; then one that finished leaving documents (said until they
- * are resolved). A read not yet caught up may still report open the run this
- * tab has just finished, which is not followed again.
+ * are resolved). The read this tab held when its run ended may still report
+ * that run open, from before it ended, and is not followed again; any newer
+ * read reporting it open is the run opened again (a write brought values
+ * back), and is followed.
  */
 function shownStep(
   own: RemovalStep,
@@ -167,7 +176,8 @@ function shownStep(
   const finished = own.kind === "done" || own.kind === "left";
   if (
     open !== undefined &&
-    (own.kind === "idle" || (finished && open.runId !== own.runId))
+    (own.kind === "idle" ||
+      (finished && (open.runId !== own.runId || removals !== own.endedUnder)))
   ) {
     return { kind: "resumed", runId: open.runId, labels: open.labels };
   }
@@ -321,6 +331,12 @@ export function useBreakpointRemoval({
     pending?.(value);
   };
   const step = shownStep(own, removals);
+  // The read as it is now, for a run that ends to record the one it ended
+  // under: kept beside the callbacks rather than in their dependencies.
+  const removalsNow = useRef(removals);
+  useEffect(() => {
+    removalsNow.current = removals;
+  });
 
   /** Settle a removal its last call said has finished. */
   const finish = useCallback<Finish>(
@@ -342,7 +358,7 @@ export function useBreakpointRemoval({
               labels: status.labels,
               counted: counted ?? [],
             }
-          : endedOn(runId, status, fallback, counted)
+          : endedOn(runId, removalsNow.current, status, fallback, counted)
       );
     },
     [reread]

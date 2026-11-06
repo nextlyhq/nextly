@@ -223,25 +223,31 @@ function notesOf(removed: RemovedBreakpoint): RemovalNote[] {
 
 /**
  * The breakpoint the pages fall back to at a removed one's width: the next
- * wider one `next` keeps on its axis, the base where none is wider on the
- * viewport, or `undefined` for a container width with none wider.
+ * wider one `next` keeps on its axis; where none is wider, the base, by the
+ * device buttons' name on the viewport and as "base" on the container axis.
+ * A container definition with no width covers every container width, so it
+ * is wider than any bounded one, and none is wider than it.
  */
 function fallbackLabel(
   removed: BreakpointDef | undefined,
   next: BreakpointSet,
   axis: "viewport" | "container",
   baseLabel: string
-): string | undefined {
-  const width = removed?.maxWidth;
+): string {
+  // The viewport's definition with no width is the base itself, not a
+  // breakpoint to fall back to; the container axis's is its widest.
+  const widthOf = (def: BreakpointDef | undefined): number | undefined =>
+    def?.maxWidth ?? (axis === "container" ? Infinity : undefined);
+  const width = widthOf(removed) ?? Infinity;
   const wider = next[axis]
+    .map(def => ({ def, width: widthOf(def) }))
     .filter(
-      def =>
-        def.maxWidth !== undefined &&
-        (width === undefined || def.maxWidth > width)
+      (entry): entry is { def: BreakpointDef; width: number } =>
+        entry.width !== undefined && entry.width > width
     )
-    .sort((a, b) => (a.maxWidth ?? 0) - (b.maxWidth ?? 0))[0];
-  if (wider !== undefined) return wider.label;
-  return axis === "viewport" ? baseLabel : undefined;
+    .sort((a, b) => a.width - b.width)[0];
+  if (wider !== undefined) return wider.def.label;
+  return axis === "viewport" ? baseLabel : "base";
 }
 
 /** Where a breakpoint is defined in `set`, with its axis. */
@@ -278,11 +284,7 @@ export function confirmWords(
       found?.axis ?? "viewport",
       baseLabel
     );
-    intro = `Everything set for ${names} is deleted from the whole site, so the pages show ${
-      fallback === undefined
-        ? "the styles set for wider widths"
-        : `their ${fallback} styles`
-    } at that width. If you add a ${names} breakpoint again later, it starts empty.`;
+    intro = `Everything set for ${names} is deleted from the whole site, so the pages show their ${fallback} styles at that width. If you add a ${names} breakpoint again later, it starts empty.`;
   } else {
     intro = `Everything set for ${names} is deleted from the whole site, so the pages show the styles of the next wider breakpoint at those widths. If you add them again later, they start empty.`;
   }
@@ -381,10 +383,12 @@ export function leftWords(
   const names = joinNames(status.labels);
   const one = status.labels.length === 1;
   const was = one ? "was" : "were";
+  // Drafts wait on pages, components, patterns and Layouts alike, so the
+  // row speaks of live versions rather than of any one place.
   if (status.waitingOnDrafts) {
     return {
-      title: `${names} ${was} removed, except from ${count(status.left, "page's live version", "pages' live versions")}`,
-      hint: `${status.left === 1 ? "It has a draft" : "They have drafts"} waiting to be published. Their live versions keep ${names}'s styles until each draft is published or discarded; ${names} can't be added back until then.`,
+      title: `${names} ${was} removed, except from ${count(status.left, "live version", "live versions")}`,
+      hint: `${status.left === 1 ? "It has a draft" : "Each has a draft"} waiting to be published, and keeps ${names}'s styles until that draft is published or discarded; ${names} can't be added back until then.`,
     };
   }
   return {

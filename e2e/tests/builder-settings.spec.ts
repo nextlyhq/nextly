@@ -902,17 +902,17 @@ test.describe("Removing a breakpoint in Settings", () => {
         .getByRole("button", { name: "Remove Small and its styles" })
         .click();
       await expect(step(dialog, "left")).toContainText(
-        "Small was removed, except from 1 page's live version"
+        "Small was removed, except from 1 live version"
       );
       await expect(step(dialog, "left")).toContainText(
-        "It has a draft waiting to be published."
+        "It has a draft waiting to be published"
       );
       // Said again when Settings opens, until the draft is resolved.
       await dialog.getByRole("button", { name: "Close" }).click();
       const again = await showSettings(page);
       await again.getByRole("tab", { name: "Site" }).click();
       await expect(step(again, "left")).toContainText(
-        "except from 1 page's live version"
+        "except from 1 live version"
       );
     } finally {
       await page.request.patch(`${ENTRIES}/${id}`, {

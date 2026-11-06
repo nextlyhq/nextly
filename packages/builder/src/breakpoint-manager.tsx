@@ -194,6 +194,8 @@ export function BreakpointManager({
         onSave={persist}
         onClose={() => setEditing(false)}
         {...(onSavingChange === undefined ? {} : { onSavingChange })}
+        // A reason that arrives while editing holds the open editor too.
+        {...(blocked === undefined ? {} : { blocked })}
       />
     );
   }

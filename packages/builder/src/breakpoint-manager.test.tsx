@@ -390,6 +390,31 @@ describe("the Site tab's breakpoints section", () => {
     expect(screen.queryByRole("button", { name: "Remove Mobile" })).toBeNull();
   });
 
+  it("holds an editor already open when the host's reason arrives", () => {
+    const { rerender } = render(
+      <BreakpointManager value={defined()} onSave={vi.fn()} status="ready" />
+    );
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
+    rerender(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        blocked="Breakpoints can be changed again once it has finished."
+      />
+    );
+    const save = screen.getByRole("button", {
+      name: /save breakpoints/i,
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(
+      screen.getByText("Breakpoints can be changed again once it has finished.")
+    ).toBeDefined();
+    // The draft is still the author's, Mobile still removed from it.
+    expect(screen.queryByRole("button", { name: "Remove Mobile" })).toBeNull();
+  });
+
   it("cannot be edited while the host says why not, and says it", () => {
     render(
       <BreakpointManager

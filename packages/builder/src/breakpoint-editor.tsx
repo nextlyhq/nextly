@@ -97,6 +97,12 @@ export interface BreakpointEditorProps {
    * confirmation, say), so the draft stays open as it was, with no refusal.
    */
   onSave: (next: BreakpointSet) => void | Promise<string | null | undefined>;
+  /**
+   * Why the set cannot be saved right now, when the host learns one while the
+   * editor is open (a removal started elsewhere, say): Save is disabled and
+   * the reason shown, and the draft stays on screen to save once it clears.
+   */
+  blocked?: string;
 }
 
 /**
@@ -229,6 +235,7 @@ export function BreakpointEditor({
   onSave,
   onClose,
   onSavingChange,
+  blocked,
 }: BreakpointEditorProps): React.JSX.Element {
   const fieldId = React.useId();
   const [draft, setDraft] = React.useState<Record<BreakpointAxis, DraftRow[]>>(
@@ -347,7 +354,7 @@ export function BreakpointEditor({
   };
 
   const save = (): void => {
-    if (issues.length > 0 || saving) return;
+    if (issues.length > 0 || saving || blocked !== undefined) return;
     setRefusal(undefined);
     const outcome = onSave(toSet(draft));
     /*
@@ -537,7 +544,9 @@ export function BreakpointEditor({
           {/* Silent while every breakpoint is usable: the line speaks only
               when something is wrong. Kept mounted, so what it then says is
               announced. */}
+          {/* The host's reason next: it holds every save, a problem or not. */}
           {refusal ??
+            blocked ??
             (issues.length === 0
               ? ""
               : `${issues.length} ${issues.length === 1 ? "problem" : "problems"} to fix before saving.`)}
@@ -553,7 +562,7 @@ export function BreakpointEditor({
           </Button>
           <Button
             type="button"
-            disabled={issues.length > 0 || saving}
+            disabled={issues.length > 0 || saving || blocked !== undefined}
             onClick={save}
           >
             {saving ? "Saving…" : "Save breakpoints"}
