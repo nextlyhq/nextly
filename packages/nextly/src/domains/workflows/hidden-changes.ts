@@ -19,6 +19,10 @@ import {
   resolvedCallerGrants,
   type CallerGrants,
 } from "../../shared/lib/field-level-registry";
+import { resolveRunAs } from "../../shared/lib/resolve-run-as";
+import type { UserContext } from "../collections/services/collection-types";
+import type { LiveFieldGroupReadPass } from "../field-groups/live-read-access";
+import { databaseRunAs } from "../jobs/jobs-runner";
 import { snapshotRecord } from "../versions/shared-publish-base";
 import { documentSystemKeys } from "../versions/snapshot-system-keys";
 
@@ -79,15 +83,31 @@ export function changedFields(
 }
 
 /**
+ * The person `userId` as a document read hands them to access rules: the context the canonical
+ * resolver builds (`resolveRunAs`), roles, email and claims included, so a rule reading any of
+ * them answers here as it does on a read. Null for a person who is gone or deactivated.
+ */
+export async function readerOf(
+  adapter: DrizzleAdapter,
+  userId: string
+): Promise<UserContext | null> {
+  const resolved = await resolveRunAs(databaseRunAs(adapter), userId);
+  return resolved.ok ? resolved.user : null;
+}
+
+/**
  * Which of `fields` the reader `user` cannot read in full in `shown`: absent from what a read of
- * it gives them, or given with something inside withheld.
+ * it gives them, or given with something inside withheld. `fieldGroupPass` is the field-group
+ * read pass a read of the document's collection makes (undefined where no field group has a read
+ * rule), so the rules of fields inside field groups apply here as they do on a read.
  */
 export async function hiddenFrom(
   document: ReviewDocument,
   shown: unknown,
   fields: readonly string[],
-  user: { id: string; name?: string | null },
-  grants: () => Promise<CallerGrants>
+  user: UserContext,
+  grants: () => Promise<CallerGrants>,
+  fieldGroupPass: LiveFieldGroupReadPass | undefined
 ): Promise<string[]> {
   if (fields.length === 0) return [];
   const whole = snapshotRecord(shown);
@@ -97,10 +117,14 @@ export async function hiddenFrom(
     kind: entityOf(document),
     slug: document.scopeSlug,
     entry: readable,
-    user: { id: user.id, ...(user.name ? { name: user.name } : {}) },
+    // The reader whole, as a read gives them to the rules: never a narrower copy.
+    user,
     grants,
     overrideAccess: false,
   });
+  // The collection's own pass does not reach inside a field group; a read then makes this one,
+  // with the same reader and grants.
+  await fieldGroupPass?.(readable, { user, grants });
   return fields.filter(name => withheld(name, whole, readable));
 }
 
@@ -125,6 +149,8 @@ interface ApproversQuestion {
   action: string;
   parts: ReadonlyArray<{ shown: unknown; changed: readonly string[] }>;
   excluded: ReadonlySet<string>;
+  /** The field-group read pass the refused reviewer was judged with. */
+  fieldGroupPass: LiveFieldGroupReadPass | undefined;
 }
 
 /** A person as the approvers question reads them. */
@@ -136,17 +162,22 @@ interface PersonRow {
 
 /** Whether `person` can read every changed field of every part in full. */
 async function readsEveryChange(
+  adapter: DrizzleAdapter,
   question: ApproversQuestion,
   person: PersonRow
 ): Promise<boolean> {
-  const grants = await resolvedCallerGrants({ id: person.id });
+  // Judged as a read judges them, by the same context the reviewer is judged by.
+  const reader = await readerOf(adapter, person.id);
+  if (reader === null) return false;
+  const grants = await resolvedCallerGrants(reader);
   for (const part of question.parts) {
     const hidden = await hiddenFrom(
       question.document,
       part.shown,
       part.changed,
-      person,
-      grants
+      reader,
+      grants,
+      question.fieldGroupPass
     );
     if (hidden.length > 0) return false;
   }
@@ -167,7 +198,9 @@ async function couldApprove(
     question.action,
     question.document.scopeSlug
   );
-  return holds === "holds" && (await readsEveryChange(question, person));
+  return (
+    holds === "holds" && (await readsEveryChange(adapter, question, person))
+  );
 }
 
 /**

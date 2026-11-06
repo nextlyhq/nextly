@@ -13,7 +13,12 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { clearServices } from "../../../di/register";
 import {
   createTestNextly,
@@ -126,8 +131,9 @@ const app = (): TestNextly => {
 };
 
 /**
- * Boots Posts (translated, with a shared `code`) on `postsWorkflow`, Briefs on `checked` with a
- * secret only bob may not read, and Memos on `handover`; Briefs and Memos keep few versions.
+ * Boots Posts (translated, with a shared `code`, and a shared `legalNote` only rita may not read)
+ * on `postsWorkflow`, Briefs on `checked` with a secret only bob may not read, and Memos on
+ * `handover`; Briefs and Memos keep few versions.
  */
 async function boot(
   dialect: TestDialect,
@@ -139,6 +145,20 @@ async function boot(
   t = await createTestNextly({
     ...(options.adapter ? { adapter: options.adapter } : { dialect }),
     localization: { locales: ["en", "es"], defaultLocale: "en" },
+    // A field group whose own field has a read rule, which only the field-group pass of a read
+    // applies: the collection's pass does not reach inside a field group.
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "aside",
+        fields: [
+          text({ name: "heading" }),
+          text({
+            name: "confidential",
+            access: { read: ({ user }) => user?.id !== "gina" },
+          }),
+        ],
+      }),
+    ],
     collections: [
       defineCollection({
         slug: "posts",
@@ -148,6 +168,11 @@ async function boot(
         fields: [
           text({ name: "title", localized: true }),
           text({ name: "code", localized: false }),
+          text({
+            name: "legalNote",
+            localized: false,
+            access: { read: ({ user }) => user?.id !== "rita" },
+          }),
         ],
       }),
       defineCollection({
@@ -161,6 +186,14 @@ async function boot(
             name: "secret",
             access: { read: ({ user }) => user?.id !== "bob" },
           }),
+          // Hidden by who the reader is beyond their id: their email, as a document read sees it.
+          text({
+            name: "dossier",
+            access: {
+              read: ({ user }) => user?.email !== "frank@example.test",
+            },
+          }),
+          fieldGroup({ name: "aside", component: "aside" }),
         ],
       }),
       defineCollection({
@@ -474,6 +507,80 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a shared field edited through another language", () => {
+      /**
+       * A post whose English and Spanish parts uma approved, then a shared field rita may not read
+       * edited through English, which returns both parts to review.
+       */
+      async function sharedNoteEdited() {
+        const n = app();
+        const uma = await person(n, "uma", [["sign-off", "posts"]]);
+        const rita = await person(n, "rita", [["sign-off", "posts"]]);
+        await person(n, "dave", [["update", "posts"]]);
+        const post = await entry(n, "posts");
+        await save("posts", post, { title: "Hola" }, { locale: "es" });
+        for (const part of ["en", "es"]) {
+          await seedState(n, partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+          await take("posts", post, part, "clear", uma);
+        }
+        await save(
+          "posts",
+          post,
+          { legalNote: "N1" },
+          {
+            locale: "en",
+            userId: "dave",
+          }
+        );
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+        return { uma, rita, post };
+      }
+
+      it("refuses another language's approval to a reviewer who cannot read the shared field, and lets one who can approve it", async () => {
+        await boot(dialect);
+        const { uma, rita, post } = await sharedNoteEdited();
+
+        // Spanish shows the note English wrote, though its own version predates it.
+        await expect(
+          take("posts", post, "es", "clear", rita)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "field-hidden", fields: ["legalNote"] },
+        });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+
+        await take("posts", post, "es", "clear", uma);
+        expect(
+          (await stateOf(app(), partOf("posts", post, "es")))?.approval
+        ).toMatchObject({ by: "uma" });
+      });
+
+      it("keeps that approval through a save that changes nothing and a translation saved in another language", async () => {
+        await boot(dialect);
+        const { uma, post } = await sharedNoteEdited();
+        await take("posts", post, "es", "clear", uma);
+        const approved = await stateOf(app(), partOf("posts", post, "es"));
+
+        await save("posts", post, { title: "Hola" }, { locale: "es" });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toEqual(
+          approved
+        );
+
+        // English's own text: Spanish still shows exactly what uma approved.
+        await save("posts", post, { title: "Only English" }, { locale: "en" });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toEqual(
+          approved
+        );
+      });
+    });
+
     describe("a step out of a publishable stage", () => {
       it("withdraws the approval on a step back that changes no content, keeping the approved version pinned", async () => {
         await boot(dialect);
@@ -641,6 +748,65 @@ describe.each(getConfiguredTestDialects())(
           publicData: { reason: "field-hidden", fields: ["secret"] },
         });
         // A reviewer who reads every field the collection has may approve the removal too.
+        await take("briefs", brief, null, "approve", erin);
+        expect(
+          (await stateOf(app(), partOf("briefs", brief, null)))?.approval
+        ).toMatchObject({ by: "erin" });
+      });
+
+      it("judges a changed field by the reviewer as a document read sees them, a rule on their email included", async () => {
+        await boot(dialect);
+        const carol = await person(app(), "carol", [["sign-off", "briefs"]]);
+        const frank = await person(app(), "frank", [["sign-off", "briefs"]]);
+        const erin = await person(app(), "erin", [["sign-off", "briefs"]]);
+        await person(app(), "dave", [["update", "briefs"]]);
+        const brief = await entry(app(), "briefs");
+        await seedState(app(), partOf("briefs", brief, null), "review", {
+          enteredBy: "alice",
+          definitionHash: workflowDefinitionHash(checked),
+        });
+        await take("briefs", brief, null, "approve", carol);
+        await save("briefs", brief, { dossier: "d2" }, { userId: "dave" });
+
+        // A read of the brief withholds the dossier from frank by his email alone.
+        await expect(
+          take("briefs", brief, null, "approve", frank)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "field-hidden", fields: ["dossier"] },
+        });
+        await take("briefs", brief, null, "approve", erin);
+        expect(
+          (await stateOf(app(), partOf("briefs", brief, null)))?.approval
+        ).toMatchObject({ by: "erin" });
+      });
+
+      it("refuses a changed field group whose own field a read rule hides from the reviewer", async () => {
+        await boot(dialect);
+        const carol = await person(app(), "carol", [["sign-off", "briefs"]]);
+        const gina = await person(app(), "gina", [["sign-off", "briefs"]]);
+        const erin = await person(app(), "erin", [["sign-off", "briefs"]]);
+        await person(app(), "dave", [["update", "briefs"]]);
+        const brief = await entry(app(), "briefs");
+        await seedState(app(), partOf("briefs", brief, null), "review", {
+          enteredBy: "alice",
+          definitionHash: workflowDefinitionHash(checked),
+        });
+        await take("briefs", brief, null, "approve", carol);
+        await save(
+          "briefs",
+          brief,
+          { aside: { heading: "Note", confidential: "c2" } },
+          { userId: "dave" }
+        );
+
+        // A read of the brief gives gina the aside without its confidential value.
+        await expect(
+          take("briefs", brief, null, "approve", gina)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "field-hidden", fields: ["aside"] },
+        });
         await take("briefs", brief, null, "approve", erin);
         expect(
           (await stateOf(app(), partOf("briefs", brief, null)))?.approval
