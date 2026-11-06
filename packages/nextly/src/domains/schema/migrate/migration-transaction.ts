@@ -8,8 +8,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 
+import { requiredColumnCheckpoint } from "./required-column-guard";
 import {
   refusingNewDanglingReferences,
   sqliteForeignKeysOn,
@@ -104,6 +106,11 @@ export async function executeTransaction<T>(
   adapter: DrizzleAdapter,
   work: (tx: MigrationTransaction) => Promise<T>
 ): Promise<T> {
+  // A precondition, on every dialect: a transaction opened inside another
+  // joins it, and a migration must not. On MySQL its DDL would commit the
+  // outer transaction implicitly; on SQLite the foreign-key switch it needs
+  // does nothing inside one.
+  assertNoOpenTransaction(adapter, "A migration");
   const dialect = adapter.getCapabilities().dialect;
   if (dialect !== "sqlite") {
     return adapter.transaction(
@@ -244,9 +251,15 @@ export async function runMigrationStatements(
   unit: MigrationUnit,
   after?: (db: unknown, statementsExecuted: number) => Promise<void>
 ): Promise<number> {
+  const dialect = adapter.getCapabilities().dialect;
+  // A column made required after an earlier statement of the unit filled its rows is counted at
+  // its statement, after the fill, through the handle the statements run on; undefined when the
+  // unit has no such column, so this costs nothing.
+  const checkpoint = requiredColumnCheckpoint(statements, dialect, unit);
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
-      for (const statement of statements) {
+      for (const [index, statement] of statements.entries()) {
+        await checkpoint?.(tx.db, index);
         await tx.execute(statement);
       }
       if (after === undefined) return;
@@ -259,6 +272,10 @@ export async function runMigrationStatements(
     execute: (statement: string) => Promise<unknown>
   ): Promise<void> => {
     for (const [index, statement] of statements.entries()) {
+      // Outside a transaction each statement has committed, so the pool reads what they left. The
+      // refusal names the statements that ran and says they stayed applied, so it reaches the
+      // caller as it is, not as a statement that failed part-way.
+      await checkpoint?.(adapter.getDrizzle(), index);
       try {
         await execute(statement);
       } catch (error) {
@@ -267,7 +284,6 @@ export async function runMigrationStatements(
     }
   };
   const onPool = (statement: string) => adapter.executeQuery(statement);
-  const dialect = adapter.getCapabilities().dialect;
   if (dialect === "sqlite") {
     const session: SqliteForeignKeySession = {
       read: statement => adapter.executeQuery(statement),

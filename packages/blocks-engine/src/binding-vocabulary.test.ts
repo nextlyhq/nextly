@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { fieldFitsProp, type BindingFieldShape } from "./binding-rules";
+import {
+  bindablePropKind,
+  fieldFitsProp,
+  type BindingFieldShape,
+} from "./binding-rules";
 import {
   bindingKindOf,
   canBindFieldToProp,
@@ -34,6 +38,25 @@ describe("which fields a picker offers for a prop", () => {
     expect(canBindFieldToProp({ type: "text" }, { type: "media" })).toBe(false);
     expect(canBindFieldToProp({ type: "url" }, { type: "url" })).toBe(true);
     expect(canBindFieldToProp({ type: "text" }, { type: "url" })).toBe(false);
+  });
+
+  it("offers an icon field wherever text fits, since its id is a string", () => {
+    expect(bindingKindOf({ type: "icon" })).toBe("text");
+    expect(canBindFieldToProp({ type: "icon" }, { type: "text" })).toBe(true);
+    expect(canBindFieldToProp({ type: "icon" }, { type: "media" })).toBe(false);
+    // An icon prop takes an icon field, a text field or a select of ids, and
+    // nothing that is not a string.
+    expect(canBindFieldToProp({ type: "icon" }, { type: "icon" })).toBe(true);
+    expect(canBindFieldToProp({ type: "select" }, { type: "icon" })).toBe(true);
+    expect(canBindFieldToProp({ type: "text" }, { type: "icon" })).toBe(true);
+    expect(canBindFieldToProp({ type: "number" }, { type: "icon" })).toBe(
+      false
+    );
+    expect(canBindFieldToProp({ type: "upload" }, { type: "icon" })).toBe(
+      false
+    );
+    // Its own value and its fallback are judged as text: an id is a string.
+    expect(bindablePropKind({ type: "icon" })).toBe("text");
   });
 
   it("offers an email prop text only", () => {

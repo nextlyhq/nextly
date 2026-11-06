@@ -142,6 +142,19 @@ type EveryLanguageLifecycleParams = {
   routeAuthorized?: boolean;
   /** API-key scope; gates the unconditional publish or unpublish check. */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   */
+  data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it, told to
+   * its hooks.
+   */
+  request?: Request;
+  /** Seeds the context every hook of this transition shares. */
+  context?: Record<string, unknown>;
 };
 
 /**
@@ -325,6 +338,21 @@ export class CollectionEntryService extends BaseService {
       withRuleLanguage(this.readLanguages(params), () =>
         this.queryService.listEntries(params)
       )
+    );
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none. See
+   * the query service; judged in the language the read it stands for would
+   * judge its rules in, as `listEntries` is.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionQueryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionQueryService["queryReadableProblems"]> {
+    return withRuleLanguage(this.readLanguages(params), () =>
+      this.queryService.queryReadableProblems(params)
     );
   }
 
@@ -1153,6 +1181,11 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
     /** API-key scope; judges each per-id transition on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Each id's own version, judged per document; see the bulk service's
+     * `bulkUpdateEntries`.
+     */
+    revs?: unknown;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, undefined),
@@ -1190,6 +1223,8 @@ export class CollectionEntryService extends BaseService {
       actor?: RequestActor;
       /** API-key scope; judges the collection gate + transitions on the key's own grant. */
       authenticatedScope?: AuthenticatedScope;
+      /** Refused: an update by query names no ids to give versions for. */
+      revs?: unknown;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {

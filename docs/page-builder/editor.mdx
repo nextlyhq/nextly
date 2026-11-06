@@ -83,14 +83,14 @@ are added from the Add panel's **Sections** tab.
 The rail shows only the panels that work in this editor. A panel that is not built yet
 has no item at all, so nothing on the rail opens an empty panel.
 
-| Item         | What it holds                                                                                                                                                                                                                                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                        |
-| **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                   |
-| **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                       |
-| **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. |
-| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                             |
-| **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                                      |
+| Item         | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                                                                                                                                                             |
+| **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                                                                                                                                                        |
+| **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                                                                                                                                                            |
+| **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. A variable that a page, a component, a shared style or a block's default style still uses can't be removed: change those uses first. |
+| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
 
@@ -180,7 +180,7 @@ pageBuilder({
 Blocks have no outer margin of their own. The space between two blocks comes from the
 block that holds them:
 
-- **Section, Box, Card, Column**, an accordion item and a collection loop put a gap above
+- **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
   every block after the first. Set the container to flex or grid and the same gap
   becomes its `gap`.
 - **Columns** and **Gallery** space their columns and images with a wider gap.
@@ -229,8 +229,9 @@ whole site is spaced:
 - **From each block's margins (classic)**: the spacing pages had before container
   gaps. Headings carry 1.5em above and 0.5em below, paragraphs 1em below, Divider
   and Quote 1.5em above and below; Section and Card have no padding; Columns,
-  Gallery and Accordion keep the `space.4` gap; a Button is padded 0.5rem × 1rem;
-  and no container puts a gap between its blocks. The variables in the table above
+  Gallery and Accordion keep the `space.4` gap; an Accordion's sections keep the
+  browser's own triangle (its Icon is **Browser default**); a Button is padded
+  0.5rem × 1rem; and no container puts a gap between its blocks. The variables in the table above
   are not used.
 
 A site that already had a page, a component or a Layout of its own when it first

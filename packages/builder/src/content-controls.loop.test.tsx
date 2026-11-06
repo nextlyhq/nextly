@@ -89,17 +89,19 @@ function register(): void {
 const POSTS: LoopCollection = {
   slug: "posts",
   label: "Blog posts",
-  sortFields: [
-    { name: "title", label: "Title", date: false },
-    { name: "publishedAt", label: "Published date", date: true },
-    { name: "createdAt", label: "Created", date: true },
+  fields: [
+    { name: "title", label: "Title", kind: "text" },
+    { name: "publishedAt", label: "Published date", kind: "date" },
+    // A relation filters a list and never sorts it, so the menu leaves it out.
+    { name: "author", label: "Author", kind: "entry", relationTo: "authors" },
+    { name: "createdAt", label: "Created", kind: "date" },
   ],
 };
 
 const COLLECTIONS: readonly LoopCollection[] = [
-  { slug: "events", label: "Events", sortFields: [] },
+  { slug: "events", label: "Events", fields: [] },
   POSTS,
-  { slug: "authors", label: "authors", sortFields: [] },
+  { slug: "authors", label: "authors", fields: [] },
 ];
 
 function editorFor(
@@ -200,7 +202,7 @@ describe("the collection a loop repeats over", () => {
       Array.from({ length: count }, (_, index) => ({
         slug: `c${index}`,
         label: `Collection ${String(index).padStart(2, "0")}`,
-        sortFields: [],
+        fields: [],
       }));
     mount({}, { listLoopCollections: vi.fn(async () => many(10)) });
     fireEvent.click(

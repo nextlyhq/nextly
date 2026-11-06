@@ -171,7 +171,7 @@ describe.each(getConfiguredTestDialects())(
       const author = await seedLiveAuthor(t);
       await t.nextly.updateSingle({
         slug: "homepage" as never,
-        data: { headline: "Draft", status: "draft" } as never,
+        data: { headline: "Draft", status: "draft", _overwrite: true } as never,
       });
       const row = await t.adapter.selectOne<{ id: string }>(
         "single_homepage",
@@ -257,7 +257,7 @@ describe.each(getConfiguredTestDialects())(
       const author = await seedLiveAuthor(t);
       await t.nextly.updateSingle({
         slug: "homepage" as never,
-        data: { headline: "Draft", status: "draft" } as never,
+        data: { headline: "Draft", status: "draft", _overwrite: true } as never,
       });
       const row = await t.adapter.selectOne<{ id: string }>(
         "single_homepage",
@@ -291,7 +291,7 @@ describe.each(getConfiguredTestDialects())(
       const author = await seedLiveAuthor(t);
       await t.nextly.updateSingle({
         slug: "homepage" as never,
-        data: { headline: "Draft", status: "draft" } as never,
+        data: { headline: "Draft", status: "draft", _overwrite: true } as never,
       });
       forgetTables(t, ["single_homepage"], () => {
         throw new Error("stored fields are unreadable");

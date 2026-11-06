@@ -98,7 +98,7 @@ rejects a moment later with a better message.
   "formatVersion": 1,
   "kind": "page",
   "nodes": [],
-  "settings": { "styles": {}, "customCss": "" },
+  "settings": { "styles": {}, "customCss": "", "seo": {} },
   "assets": { "mediaIds": [] }
 }
 ```
@@ -171,11 +171,11 @@ sources to `PageRenderer` as `bindings`. A route made with `createBlocksPage`,
 `createPublicBlocksPage` or a Single's page factory reads them for you: the
 entry, each Single and the site settings the page binds, each through the
 route's public reader at one claim on the page's query budget, and the field
-shapes each binding is checked against. A collection loop hands each item to
+shapes each binding is checked against. A collection list hands each item to
 its children. A binding to a source nobody read renders its fallback.
 
 - **Sources.** `entry` is the entry the page shows, `item` the entry a
-  collection loop is drawing, `single` the Single named by `sourceKey`, and
+  collection list is drawing, `single` the Single named by `sourceKey`, and
   `site` the public site settings (`applicationName`, `siteUrl`, `logoUrl`,
   `timezone`).
 - **Public access.** Every source is read as an anonymous visitor reads it:
@@ -226,11 +226,50 @@ one warning per report, naming the page.
 Image bindings are checked but not filled yet: a bound image keeps its own
 value.
 
+#### The document's own metadata
+
+`settings.seo` holds the title, description and social image a document states
+for its page as a whole. A collection template uses it to give each entry's
+page its own metadata:
+
+```json
+{
+  "settings": {
+    "seo": {
+      "title": [
+        { "$bind": "title" },
+        " | ",
+        { "$bind": "applicationName", "source": "site" }
+      ],
+      "description": [{ "$bind": "excerpt", "fallback": "Read the post." }],
+      "image": { "$bind": "featuredImage" }
+    }
+  }
+}
+```
+
+- **Text is a list of segments**, joined in order: a string is literal text,
+  used as written, and an object is a binding, filled the way a text prop's
+  binding is, with its checks, format and fallback. It is never a template
+  string: nothing in the literal text is read as a placeholder. A value holds
+  at most 32 segments, each literal at most 1,000 characters.
+- **The image is one binding**, to a media field (its address when the read
+  populates it, its media otherwise) or a URL field. Any other field renders the
+  binding's fallback. An address goes through the same scheme and host checks
+  as a picture on the page.
+- **Sources** are the entry, a Single and the site settings. A list item is
+  refused when the document is saved, since the metadata is read once for the
+  page.
+- **What wins.** A value the document states replaces what its blocks offer for
+  that field, so `metadata`'s `derived` argument carries it. The document's
+  image is tried before the blocks' images. A blank value states nothing, and
+  the blocks answer.
+
 ### Visibility
 
 ```json
 {
-  "conditions": [[{ "field": "status", "op": "eq", "value": "vip" }]],
+  "conditions": [[{ "field": "tier", "op": "equals", "value": "vip" }]],
   "devices": { "mobile": false }
 }
 ```
@@ -247,9 +286,19 @@ The two mechanisms are deliberately separate and must not be conflated:
 Conflating them would either leak a conditioned node into the payload or stop a
 hidden-on-mobile node being indexed.
 
-> **`conditions` is reserved, and it currently fails CLOSED.** No evaluator
-> exists — `op` is an open string and nothing decides whether a predicate holds
-> — so the renderer omits any node carrying `conditions` **for every visitor**,
+A condition names one field of the entry the page shows, or of the list item
+when the block is inside a list. Its `op` is one of `equals`, `not_equals`,
+`contains`, `not_contains`, `greater_than`, `less_than`, `exists`, `not_exists`,
+`is_true` and `is_false`. Which ones a field takes depends on its kind: an order
+only on a number or a date (compared by whole days, written `YYYY-MM-DD`), text
+search only on text, and only `exists` and `not_exists` on a field holding
+several values. The older spellings `eq`, `ne`, `neq`, `gt` and `lt` are read
+as the operators they name. A condition may check only a field the public may
+read, since whether the block shows would otherwise reveal its value. Saving
+refuses any other operator or field.
+
+> **The renderer does not evaluate `conditions` yet, so it currently fails
+> CLOSED.** It omits any node carrying `conditions` **for every visitor**,
 > rather than serving it to those who match.
 >
 > This is deliberate: conditions gate personalised and status-restricted

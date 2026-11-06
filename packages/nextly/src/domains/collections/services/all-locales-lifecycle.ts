@@ -108,4 +108,20 @@ export interface AllLocalesLifecycleParams {
   authenticatedScope?: AuthenticatedScope;
   /** Who performed the transition, recorded on the events and the trail. */
   actor?: RequestActor;
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   */
+  data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it. Its hooks
+   * are told about it as a status change of one language tells its hooks.
+   */
+  request?: Request;
+  /**
+   * Seeds the context every hook of this transition shares, as an update's
+   * `context` does.
+   */
+  context?: Record<string, unknown>;
 }

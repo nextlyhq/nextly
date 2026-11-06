@@ -17,9 +17,14 @@
  * use for a DOM.
  */
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SubmissionsView } from "./SubmissionsView";
+import {
+  SubmissionsView,
+  submissionPatch,
+  type SubmissionRow,
+} from "./SubmissionsView";
 
 /** The page size the entries API answers with when a request names none. */
 const SERVER_DEFAULT_LIMIT = 10;
@@ -90,6 +95,63 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+// The row carries the version the list read it at, and the server answers
+// that the submission changed since: the action stores nothing, and the list
+// says so rather than leaving the click looking like it did nothing.
+describe("a row's Not spam refused because the submission changed since", () => {
+  it("says the submission changed, and shows the list read again", async () => {
+    const spam = {
+      ...SUBMISSIONS[0],
+      id: "submission-spam",
+      status: "spam",
+      _rev: "2",
+    };
+    const fetched = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://localhost");
+        if (init?.method === "PATCH") {
+          return Response.json(
+            {
+              error: {
+                code: "STALE_VERSION",
+                message: "This document changed since the version you gave.",
+                data: { currentVersion: "3" },
+              },
+            },
+            { status: 409 }
+          );
+        }
+        switch (url.pathname) {
+          case "/admin/api/plugins/@nextlyhq/plugin-form-builder/builder-config":
+            return Response.json({
+              slugs: { forms: "forms", submissions: "form-submissions" },
+            });
+          case "/admin/api/me/permissions":
+            return Response.json({ isSuperAdmin: true });
+          case "/admin/api/collections/forms/entries":
+            return entriesPage(FORMS, url);
+          case "/admin/api/collections/form-submissions/entries":
+            return entriesPage([spam], url);
+          default:
+            return new Response(null, { status: 404 });
+        }
+      }
+    );
+    vi.stubGlobal("fetch", fetched);
+    const user = userEvent.setup();
+    render(<SubmissionsView collectionSlug="form-submissions" />);
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Row actions" }))[0]
+    );
+    await user.click(await screen.findByText("Not spam"));
+
+    expect(
+      await screen.findByText(/changed this submission since the list loaded/)
+    ).toBeInTheDocument();
+  });
+});
+
 describe("SubmissionsView reads past the server's default page", () => {
   it("shows a deep-linked form's own columns", async () => {
     // The control for the case below: a form on the server's first page,
@@ -131,5 +193,31 @@ describe("SubmissionsView reads past the server's default page", () => {
       screen.queryAllByText(/person-25@example\.com/).length
     ).toBeGreaterThan(0);
     expect(screen.queryByText(/person-26@example\.com/)).toBeNull();
+  });
+});
+
+describe("a change to a submission", () => {
+  const row = (rev?: string): SubmissionRow => ({
+    id: "submission-1",
+    form: "form-1",
+    data: {},
+    status: "spam",
+    ...(rev === undefined ? {} : { _rev: rev }),
+  });
+
+  it("sends the version its row had when the list read it", () => {
+    expect(submissionPatch(row("4"), { status: "new" })).toEqual({
+      status: "new",
+      _rev: "4",
+    });
+  });
+
+  it("sends the change alone for a row read without one", () => {
+    expect(submissionPatch(row(), { status: "new" })).toEqual({
+      status: "new",
+    });
+    expect(submissionPatch(undefined, { status: "new" })).toEqual({
+      status: "new",
+    });
   });
 });

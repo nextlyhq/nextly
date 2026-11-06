@@ -205,7 +205,7 @@ async function restUpdate(
         cookie: `nextly_session=${token}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, _overwrite: true }),
     }),
     { params: Promise.resolve({ params: path }) }
   );
@@ -220,7 +220,7 @@ describe.each(getConfiguredTestDialects())(
       await direct.update({
         collection: POSTS,
         id: posts.own,
-        data: { title: "Mine, edited" },
+        data: { title: "Mine, edited", _overwrite: true },
         ...as(author),
       });
       expect((await stored(t, posts.own))?.title).toBe("Mine, edited");
@@ -235,7 +235,7 @@ describe.each(getConfiguredTestDialects())(
         direct.update({
           collection: POSTS,
           id: posts.others,
-          data: { title: "Taken over" },
+          data: { title: "Taken over", _overwrite: true },
           ...as(author),
         })
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -286,7 +286,8 @@ describe.each(getConfiguredTestDialects())(
           where: {
             title: { in: ["Mine", "Mine too", "Theirs", "The editor's"] },
           },
-          data: { excerpt: "Bulk edited" },
+          // The author's rules are under test, not versions.
+          data: { excerpt: "Bulk edited", _overwrite: true },
           ...as(author),
         });
 
@@ -302,7 +303,7 @@ describe.each(getConfiguredTestDialects())(
       await direct.update({
         collection: POSTS,
         id: posts.others,
-        data: { title: "Edited by the editor" },
+        data: { title: "Edited by the editor", _overwrite: true },
         ...as(editor),
       });
       expect((await stored(t, posts.others))?.title).toBe(
@@ -337,7 +338,7 @@ describe.each(getConfiguredTestDialects())(
       await direct.update({
         collection: POSTS,
         id: posts.own,
-        data: { title: "Handed away", author: otherAuthor },
+        data: { title: "Handed away", author: otherAuthor, _overwrite: true },
         ...as(author),
       });
       expect((await stored(t, posts.own))?.title).toBe("Handed away");
@@ -349,7 +350,7 @@ describe.each(getConfiguredTestDialects())(
       await direct.update({
         collection: POSTS,
         id: posts.own,
-        data: { author: otherAuthor },
+        data: { author: otherAuthor, _overwrite: true },
         ...as(editor),
       });
       expect(await authorOf(t, posts.own)).toBe(otherAuthor);

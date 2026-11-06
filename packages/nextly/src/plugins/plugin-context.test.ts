@@ -15,6 +15,7 @@ import {
 } from "./plugin-auth-provider";
 import type { PluginGrants } from "./plugin-consent";
 import { createPluginContext } from "./plugin-context";
+import { standardWebhooks } from "./security/inbound-webhooks";
 import {
   clearPluginDependencies,
   publishPluginDependencies,
@@ -97,6 +98,8 @@ function makeCtx(
     unregister: vi.fn(),
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
+    registerInTransaction: vi.fn(),
+    unregisterInTransaction: vi.fn(),
   };
   const ctx = createPluginContext(
     getServiceFn,
@@ -106,6 +109,18 @@ function makeCtx(
   );
   return { ctx, db, logger, collections, email, built, adapter };
 }
+
+describe("ctx.security.webhooks", () => {
+  it("verifies an inbound webhook on the plugin's context", async () => {
+    const { ctx } = makeCtx();
+    const result = await ctx.security.webhooks.verify(
+      new Request("https://site.example/hook", { method: "POST", body: "{}" }),
+      { scheme: standardWebhooks, secrets: ["c2VjcmV0"] }
+    );
+    // No Standard Webhooks headers: not verified, and why.
+    expect(result).toEqual({ verified: false, reason: "missing" });
+  });
+});
 
 describe("ctx.security.secrets", () => {
   it("reaches the database through the context's own services, not the global container", async () => {
@@ -418,6 +433,8 @@ describe("ctx.db.raw.transaction", () => {
         unregister: vi.fn(),
         registerBeforeOperation: vi.fn(),
         unregisterBeforeOperation: vi.fn(),
+        registerInTransaction: vi.fn(),
+        unregisterInTransaction: vi.fn(),
       },
       {
         name: "@test/tx",

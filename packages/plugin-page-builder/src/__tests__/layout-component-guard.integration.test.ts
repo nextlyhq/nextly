@@ -136,14 +136,14 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: COMPONENTS_SLUG,
             id,
-            data: { title },
+            data: { title, _overwrite: true },
             overrideAccess: true,
           }),
         unpublish: (id: string) =>
           t.nextly.update({
             collection: COMPONENTS_SLUG,
             id,
-            data: { status: "draft" },
+            data: { status: "draft", _overwrite: true },
             overrideAccess: true,
           }),
         remove: (id: string) =>
@@ -230,7 +230,7 @@ describe.each(getConfiguredTestDialects())(
             origin: ORIGIN,
             "content-type": "application/json",
           },
-          body: JSON.stringify({ status: "draft" }),
+          body: JSON.stringify({ status: "draft", _overwrite: true }),
         }),
         { params: Promise.resolve({ params: path }) }
       );

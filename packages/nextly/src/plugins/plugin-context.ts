@@ -37,6 +37,11 @@ import type {
 } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
+import {
+  createPluginWebhooks,
+  type PluginWebhooksApi,
+} from "../domains/webhooks/plugin-record";
 import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
@@ -48,6 +53,8 @@ import type {
   HookContextPhase,
   HookHandler,
   HookOwner,
+  InTransactionRunner,
+  InTransactionWrite,
 } from "../hooks/types";
 import { env } from "../lib/env";
 import type { CollectionService } from "../services/collections/collection-service";
@@ -69,8 +76,12 @@ import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
 import type { ContributedColumn } from "./database/access";
 import {
+  bindPluginDatabase,
   createPluginDatabase,
   type PluginDatabase,
+  type PluginDatabaseDeps,
+  type PluginTransaction,
+  type PluginTransactionHandles,
 } from "./database/plugin-database";
 import type {
   HookPointContext,
@@ -104,6 +115,10 @@ import {
 } from "./plugin-versions";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
+import {
+  createPluginReceivedWebhooks,
+  type PluginReceivedWebhooks,
+} from "./security/inbound-webhooks";
 import {
   createOneTimeSecrets,
   type OneTimeSecrets,
@@ -267,7 +282,89 @@ export interface PluginHookRegistry {
     collection: string,
     handler: BeforeOperationHandler<T>
   ): void;
+
+  /**
+   * @experimental Register a handler that runs inside a write's own
+   * transaction: last, after the entry, its version and its outbox event are
+   * written, and before the commit.
+   *
+   * What the handler writes through `context.db` commits or rolls back with
+   * the entry, so a plugin can keep a row of its own exactly in step with the
+   * entry it describes. Throwing aborts the write, with the error's own status
+   * (a `NextlyError`'s; anything else answers 500), and nothing of it is kept.
+   *
+   * The transaction may be retried after a version conflict, and the handler
+   * then runs again on the new attempt: only the attempt that commits keeps its
+   * writes. So do nothing here a rollback cannot undo — no network call, no
+   * email, no write through the pooled `ctx.db` — and keep it short, since the
+   * entry's row stays locked while it runs. Work that should happen once,
+   * after the commit, belongs in an `after*` hook.
+   *
+   * Runs for create, update and delete on collections, the bulk operations
+   * included (once per entry), for publishing or withdrawing every language,
+   * and for a Single's update and publish (as an `update`, registered under
+   * `single:<slug>`); whether or not a write skips its hooks. In a batch
+   * sharing one transaction, a handler that throws aborts the whole batch,
+   * whatever `stopOnError` says.
+   *
+   * A write takes its set of handlers once, so one registered while a write is
+   * under way first runs on the next write. The shared hook `context` it is
+   * handed is a deeply frozen copy of plain data only (see
+   * `InTransactionWrite.context`).
+   *
+   * In development, a handler that makes an outbound HTTP call is warned
+   * about once: the call is not undone with a discarded attempt.
+   *
+   * @param collection - Collection slug, `single:<slug>`, or '*' for every one
+   * @param handler - Called with the write and a database bound to its
+   *   transaction
+   *
+   * @example
+   * ```typescript
+   * ctx.hooks.onInTransaction('orders', async ({ operation, id, db }) => {
+   *   if (operation === 'create') await db.insert(orderLedger, { orderId: id });
+   * });
+   * ```
+   */
+  onInTransaction<T = Record<string, unknown>>(
+    collection: string,
+    handler: InTransactionHandler<T>
+  ): void;
+
+  /**
+   * @experimental Unregister an in-transaction handler, the counterpart to
+   * {@link onInTransaction}.
+   *
+   * @param collection - Collection slug or '*'
+   * @param handler - The exact handler function to remove
+   */
+  offInTransaction<T = Record<string, unknown>>(
+    collection: string,
+    handler: InTransactionHandler<T>
+  ): void;
 }
+
+/**
+ * @experimental What an in-transaction handler is handed: the write, and the
+ * plugin's own database bound to the write's transaction.
+ */
+export interface InTransactionContext<T = Record<string, unknown>>
+  extends InTransactionWrite<T> {
+  /**
+   * The plugin's `ctx.db`, every statement of which runs inside the write's
+   * transaction and sees its uncommitted writes. It refuses once the handler
+   * has settled, and has no `transaction` of its own: it is one already.
+   */
+  db: PluginTransaction;
+}
+
+/**
+ * @experimental A handler for `ctx.hooks.onInTransaction`. What it returns is
+ * ignored; throwing aborts the write.
+ */
+export type InTransactionHandler<T = Record<string, unknown>> = (
+  context: InTransactionContext<T>
+) => void | Promise<void>;
 
 /**
  * @experimental Typed filter registry exposed to plugins.
@@ -660,6 +757,18 @@ export interface PluginContext {
   security: PluginSecurityApi;
 
   /**
+   * @experimental Recording this plugin's own webhook events, of the types it
+   * declares in `contributes.webhookEvents`, for delivery to the endpoints
+   * subscribed to them. Present on every context: a plugin that declares no
+   * types has every type refused by name.
+   *
+   * Required, like the context's other members: `createPluginContext` and
+   * `createTestNextly` provide it, and a context built by hand, such as a
+   * test double typed as `PluginContext`, adds a `webhooks` of its own.
+   */
+  webhooks: PluginWebhooksApi;
+
+  /**
    * @experimental This plugin's stored configuration.
    *
    * Present only when the plugin declares `contributes.settings`. Values are
@@ -725,6 +834,8 @@ export interface PluginSecurityApi {
   readonly opaque: OpaqueSecrets;
   /** One-purpose links and codes, spent once. */
   readonly secrets: OneTimeSecrets;
+  /** Verifying the webhooks the plugin receives, in a common scheme or its own. */
+  readonly webhooks: PluginReceivedWebhooks;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -1327,6 +1438,10 @@ export const PLUGIN_SERVICE_NAMES = [
   // never whichever one the process container holds at the time.
   "jobRegistry",
   "jobsDatabase",
+  // The registration's fast webhook drain, or `null` where webhooks are not
+  // registered, so a plugin's committed event is offered to the drain of the
+  // instance that recorded it.
+  "webhookFastDrainScheduler",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1376,7 +1491,17 @@ function buildPluginDatabase(
   adapter: () => AdapterTransactions,
   dialect: () => SupportedDialect,
   plugin: PluginDefinition | undefined
-): PluginDatabase & { raw: PluginRawDatabase } {
+): {
+  db: PluginDatabase & { raw: PluginRawDatabase };
+  /**
+   * Run `work` with this plugin's surface bound to a transaction core opened,
+   * as the in-transaction phase hands it to a handler.
+   */
+  bindTo: <T>(
+    tx: TransactionContext,
+    work: (db: PluginTransaction) => Promise<T>
+  ) => Promise<T>;
+} {
   const owner: SchemaOwner = plugin
     ? { kind: "plugin", id: plugin.name }
     : { kind: "app" };
@@ -1387,7 +1512,37 @@ function buildPluginDatabase(
   // tables and its owner rules, refusing this plugin's own tables.
   const active = () => getActiveExtensionSchema(dialect());
 
-  const surface = createPluginDatabase({
+  // The handles one transaction's connection offers the surface. One builder
+  // for the transaction `ctx.db.transaction` opens and for the write's
+  // transaction the in-transaction phase binds, so a handler's `db` is the one
+  // a plugin gets from its own transaction.
+  //
+  // Both handles come from the TRANSACTION's context, not the pool: the
+  // adapter's own `getDrizzle()` wraps the pool and would use a different
+  // connection, so the plugin's writes would commit on their own and a later
+  // throw would roll back an empty transaction while leaving them in place.
+  //
+  // The relational handle is `tx.drizzleWithRelations(relations)`: the same
+  // leased client, with the relations config that populates `query` — the
+  // bare instance's `query` namespace is empty. A getter, so the relations are
+  // resolved per access as they are outside the transaction, and a
+  // transaction that never touches `query` never builds the instance.
+  const handlesOf = (
+    tx: AdapterTransactionHandles
+  ): PluginTransactionHandles => ({
+    db: tx.getDrizzle(),
+    get relationalDb() {
+      return tx.drizzleWithRelations(relations());
+    },
+    adapterTx: asTransactionContext(tx),
+    // Registered from inside the transaction's work, so the adapter holds it
+    // for the transaction this call runs in, or joined.
+    afterCommit: effect => {
+      void holdUntilCommit(adapter(), effect);
+    },
+  });
+
+  const deps: PluginDatabaseDeps = {
     // Read when an operation runs, not now: the context can be built before
     // the database is connected.
     get dialect() {
@@ -1464,18 +1619,7 @@ function buildPluginDatabase(
     // the adapter's manual `BEGIN IMMEDIATE` path, and a plugin surface that
     // works on two dialects out of three is not portable.
     //
-    // Both handles come from the TRANSACTION's context, not the pool.
-    // `adapter.transaction` leases a client, and `tx.getDrizzle()` is bound
-    // to it; the adapter's own `getDrizzle()` wraps the pool and would use a
-    // different connection,
-    // so the plugin's writes would commit on their own and a later throw
-    // would roll back an empty transaction while leaving them in place.
-    //
-    // The relational handle is `tx.drizzleWithRelations(relations)`: the same leased
-    // client, with the relations config that populates `query` — the bare
-    // instance's `query` namespace is empty. A getter, so the relations are
-    // resolved per access as they are outside the transaction, and a
-    // transaction that never touches `query` never builds the instance.
+    // Its handles come from `handlesOf`, above.
     //
     // The work runs through `runAdapterTransaction`, so what it throws reaches
     // the plugin as thrown rather than as the adapter's classification of it.
@@ -1483,19 +1627,7 @@ function buildPluginDatabase(
     // a service called inside nests as a savepoint, defers what follows its
     // write until the commit, and refuses what a rollback could not undo.
     transaction: (fn, options) => {
-      const run = (tx: AdapterTransactionHandles) =>
-        fn({
-          db: tx.getDrizzle(),
-          get relationalDb() {
-            return tx.drizzleWithRelations(relations());
-          },
-          adapterTx: asTransactionContext(tx),
-          // Registered from inside the transaction's work, so the adapter
-          // holds it for the transaction this call runs in, or joined.
-          afterCommit: effect => {
-            void holdUntilCommit(transactions, effect);
-          },
-        });
+      const run = (tx: AdapterTransactionHandles) => fn(handlesOf(tx));
       const transactions = adapter();
       // A snapshot: REPEATABLE READ and read-only on PostgreSQL and MySQL
       // (MySQL's default level already, named so a server configured
@@ -1516,9 +1648,16 @@ function buildPluginDatabase(
             : run(tx)
       );
     },
-  });
+  };
+  const surface = createPluginDatabase(deps);
 
-  return Object.assign(surface, { raw: rawDb });
+  return {
+    db: Object.assign(surface, { raw: rawDb }),
+    bindTo: (tx, work) =>
+      bindPluginDatabase(deps, handlesOf(tx), work, {
+        method: "ctx.hooks.onInTransaction",
+      }),
+  };
 }
 
 /** One of the names a plugin-context resolver must answer. */
@@ -1622,12 +1761,13 @@ export interface PluginRawDatabase extends DatabaseInstance {
    * Run `work` in one transaction: it commits when `work` resolves and rolls
    * back when it throws. The handle `work` receives is the restricted builder,
    * without a nested `transaction`; with `rawSql` it is the live handle, whose
-   * `transaction` nests as a savepoint. Write through it: another service or
-   * `ctx.settings` called inside runs on its own connection on PostgreSQL and
-   * MySQL, outside this transaction.
+   * `transaction` nests as a savepoint. Write through it: another service
+   * called inside runs on its own connection on PostgreSQL and MySQL, outside
+   * this transaction. `ctx.settings.set` is refused inside it on every
+   * dialect: write the setting after the transaction.
    *
    * On SQLite the transaction holds the database's only connection until it
-   * ends. A service or `ctx.settings` called inside joins it as a savepoint,
+   * ends. A service called inside joins it as a savepoint,
    * and its rows roll back with it; what it does after its write (after
    * hooks, events, cache revalidation, webhook delivery) waits until this
    * transaction commits, runs before `transaction` resolves, and never runs if
@@ -1878,7 +2018,9 @@ export function createPluginContext(
                             ? JobRegistry
                             : T extends "jobsDatabase"
                               ? JobsPassDatabase
-                              : never,
+                              : T extends "webhookFastDrainScheduler"
+                                ? WebhookFastDrainScheduler | null
+                                : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -1900,6 +2042,21 @@ export function createPluginContext(
     unregisterBeforeOperation: (
       collection: string,
       handler: BeforeOperationHandler,
+      owner?: HookOwner
+    ) => void;
+    /**
+     * Optional, so a registry written before the in-transaction phase still
+     * builds a context; `ctx.hooks.onInTransaction` then refuses rather than
+     * dropping the handler.
+     */
+    registerInTransaction?: (
+      collection: string,
+      runner: InTransactionRunner,
+      owner?: HookOwner
+    ) => void;
+    unregisterInTransaction?: (
+      collection: string,
+      runner: InTransactionRunner,
       owner?: HookOwner
     ) => void;
   },
@@ -1929,6 +2086,35 @@ export function createPluginContext(
   const hookOwner: HookOwner | undefined = pluginName
     ? `plugin:${pluginName}`
     : undefined;
+
+  // One runner per handler, made on its first registration and reused, so
+  // `offInTransaction` finds by identity the very runner `onInTransaction`
+  // registered for that handler. The runner hands the handler this plugin's
+  // database bound to the write's transaction, through the binder
+  // `ctx.db.transaction` uses (resolved when a write runs it, by which time
+  // the surface below exists).
+  const inTransactionRunners = new WeakMap<
+    InTransactionHandler,
+    InTransactionRunner
+  >();
+  const inTransactionRunner = (
+    handler: InTransactionHandler
+  ): InTransactionRunner => {
+    const known = inTransactionRunners.get(handler);
+    if (known) return known;
+    const runner: InTransactionRunner = (tx, write) =>
+      bindToTransaction(tx, async bound => {
+        await handler({ ...write, db: bound });
+      });
+    inTransactionRunners.set(handler, runner);
+    return runner;
+  };
+
+  // Bound here, as both are optional on the registry this context is given.
+  const registerInTransaction =
+    hookRegistry.registerInTransaction?.bind(hookRegistry);
+  const unregisterInTransaction =
+    hookRegistry.unregisterInTransaction?.bind(hookRegistry);
 
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
@@ -1968,6 +2154,33 @@ export function createPluginContext(
     },
     offBeforeOperation: (collection, handler) => {
       hookRegistry.unregisterBeforeOperation(collection, handler, hookOwner);
+    },
+    onInTransaction: (collection, handler) => {
+      // Refused, not dropped: a handler that silently never ran would leave
+      // the plugin's rows out of step with every entry written after it.
+      if (!registerInTransaction || !unregisterInTransaction) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "hook-registry-without-in-transaction-phase",
+            plugin: pluginName,
+          },
+        });
+      }
+      const runner = inTransactionRunner(handler as InTransactionHandler);
+      registerInTransaction(collection, runner, hookOwner);
+      if (pluginName) {
+        recordPluginSubscription(pluginName, () =>
+          unregisterInTransaction(collection, runner, hookOwner)
+        );
+      }
+    },
+    offInTransaction: (collection, handler) => {
+      // A registry without the phase holds none of its handlers.
+      unregisterInTransaction?.(
+        collection,
+        inTransactionRunner(handler as InTransactionHandler),
+        hookOwner
+      );
     },
   };
 
@@ -2013,7 +2226,7 @@ export function createPluginContext(
   // The relations config is asked for on every relational access rather than
   // once here: the registry replaces it when a table is re-registered, and a
   // context outlives that.
-  const db = buildPluginDatabase(
+  const { db, bindTo: bindToTransaction } = buildPluginDatabase(
     rawDb,
     () => getServiceFn("relations"),
     // Resolved on use, like `raw`'s transaction: the context can be built
@@ -2083,6 +2296,9 @@ export function createPluginContext(
   const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
   const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
+  // Whose secrets and webhook types this context reaches: the plugin's, or
+  // core's for a context built without one.
+  const owner = plugin?.name ?? "nextly";
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -2217,6 +2433,9 @@ export function createPluginContext(
         logger,
       }),
       opaque: createOpaqueSecrets(),
+      // Pure, holding no state: the secrets come with each call, from
+      // wherever the plugin keeps them.
+      webhooks: createPluginReceivedWebhooks(),
       // Kept within this plugin's name. The adapter is read per call, as the
       // context can be built before the database connects, and through this
       // context's own resolver rather than the global container: a context
@@ -2224,7 +2443,7 @@ export function createPluginContext(
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
       secrets: createOneTimeSecrets({
-        owner: plugin?.name ?? "nextly",
+        owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
         // Every generation, the unkeyed one included: a secret minted before
         // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
@@ -2232,6 +2451,14 @@ export function createPluginContext(
           secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
       }),
     },
+    // Kept within this plugin's name, which decides the types it may record.
+    // The adapter is read per call and through this context's own resolver,
+    // as the secrets helper's is.
+    webhooks: createPluginWebhooks(
+      owner,
+      () => asSecretsAdapter(getServiceFn("adapter")),
+      () => getServiceFn("webhookFastDrainScheduler")
+    ),
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
     // exactly what this store exists to replace.

@@ -37,7 +37,10 @@ import type {
   ScopeWalk,
   ScopeWalkOutcome,
 } from "./usage-backfill";
-import type { BackfillScope } from "./usage-backfill-scope";
+import {
+  GONE_SCOPES_SWEPT_KEY,
+  type BackfillScope,
+} from "./usage-backfill-scope";
 import { isSupersededRun } from "./usage-bookkeeping";
 
 /**
@@ -78,6 +81,36 @@ export interface UsageBackfillDeps {
    * is what makes the budget a budget.
    */
   clock?: () => number;
+  /**
+   * Remove the rows and progress no scope that exists now can own, once every
+   * scope has been walked: those of a collection or Single removed from the
+   * site, or of one that no longer stores blocks where, in the language or in
+   * the form it did. No walk visits them, so nothing else would. Its writes go
+   * through `fenced`, as a walk's do. Told what the run has recorded, and
+   * how to record that it has swept, so a run that has swept reads the tables
+   * again only when a scope it recorded is gone.
+   */
+  forgetGone?: (
+    scopes: readonly BackfillScope[],
+    fenced: BackfillStateStore["fenced"],
+    run: GoneScopeRun
+  ) => Promise<void>;
+}
+
+/** What the run that just walked every scope knows, as the cleanup reads it. */
+export interface GoneScopeRun {
+  /**
+   * The keys this run has recorded: the scopes it walked, and
+   * {@link GONE_SCOPES_SWEPT_KEY} once it has swept.
+   */
+  completed: ReadonlySet<string>;
+  /**
+   * Record, in the run's progress, that it has swept the tables. Rows of
+   * content gone before or while the run walked, which no progress of this
+   * run names, are found only by reading the tables, so a run that has not
+   * swept reads them, whether or not it had anything left to walk.
+   */
+  markSwept: () => Promise<void>;
 }
 
 /**
@@ -129,6 +162,12 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
           // Every scope walked under this run: the dirty mark a failed
           // maintenance write left can go, since this run started after it.
           if (pass.complete) {
+            // Before the dirty mark clears, so a run is finished only once
+            // the rows of content that is gone are gone too.
+            await deps.forgetGone?.(scopes, write => state.fenced(write), {
+              completed: pass.completed,
+              markSwept: () => state.record(GONE_SCOPES_SWEPT_KEY),
+            });
             await state.finish();
             return;
           }

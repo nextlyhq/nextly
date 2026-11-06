@@ -20,8 +20,11 @@ import {
   deriveSeoFromDocument,
   hashId,
   isFetchableUrl,
+  isListDay,
   DOCUMENT_FORMAT_VERSION,
+  readListQuery,
   regionDocument,
+  resolveDocumentSeo,
   safeTimeZone,
   type BindingDemand,
   type BindingFieldShape,
@@ -33,6 +36,7 @@ import {
   type DefinitionsById,
   type DocumentLimits,
   type LayoutRegion,
+  type ListQuery,
   type RemotePatternInput,
   type SeoImageCandidate,
   type SiteSheetInput,
@@ -82,7 +86,12 @@ import {
   EMPTY_DEFINITIONS,
   type ComponentSource,
 } from "./component-source";
-import { createDefaultDataProvider, createStandaloneContext } from "./context";
+import {
+  createDefaultDataProvider,
+  createQueryBudget,
+  createStandaloneContext,
+  DEFAULT_MAX_QUERIES,
+} from "./context";
 import type {
   BindingIssuesHandler,
   BlockHostPolicy,
@@ -119,6 +128,9 @@ import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
 import { isUnconditional } from "./visibility";
+
+// The default stays published here too, where a route's `maxQueries` is set.
+export { DEFAULT_MAX_QUERIES };
 
 /**
  * Marker for the subpath's existence and its build wiring.
@@ -715,7 +727,12 @@ async function derivePageSeo(
    * The document as the caller already prepared it for its reads, so the
    * pipeline runs once for this invocation.
    */
-  preparation: PreparedDocument | undefined
+  preparation: PreparedDocument | undefined,
+  /**
+   * Where the document's own metadata bindings that could not be used are
+   * reported. They are no node's, so the render's report never holds them.
+   */
+  reportIssues?: BindingIssuesHandler
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
@@ -723,6 +740,13 @@ async function derivePageSeo(
   // where a present-but-undefined key erases a canonical they already knew.
   const path = emitPath(slug);
   const canonical = path === null ? {} : { canonical: path };
+
+  // One binding pass for the blocks and the document's own metadata, so a
+  // bound title segment and a bound heading read the same value.
+  const run =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(bindings, locale, resolver);
 
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
@@ -741,9 +765,7 @@ async function derivePageSeo(
       ...(definitions === undefined || definitions.size === 0
         ? {}
         : { definitions }),
-      ...(bindings === undefined
-        ? {}
-        : { bindings: pageBindingRun(bindings, locale, resolver) }),
+      ...(run === undefined ? {} : { bindings: run }),
     },
     preparation
   );
@@ -752,11 +774,23 @@ async function derivePageSeo(
   // and metadata claiming a title it does not show would be worse than silence.
   if (prepared === null) return canonical;
 
-  const { image: imageCandidates, ...text } = deriveSeoFromDocument(
+  const { image: blockImages, ...derived } = deriveSeoFromDocument(
     prepared,
     type => resolver.get(type),
     isUnconditional
   );
+  // What the document states for the page as a whole wins over what its
+  // blocks offer, field by field; its image is tried first, and a block's
+  // still answers when it yields no picture.
+  const own = resolveDocumentSeo(prepared, run);
+  if (own.issues.length > 0) reportIssues?.(own.issues);
+  const text = {
+    ...derived,
+    ...(own.title === undefined ? {} : { title: own.title }),
+    ...(own.description === undefined ? {} : { description: own.description }),
+  };
+  const imageCandidates =
+    own.image === undefined ? blockImages : [own.image, ...(blockImages ?? [])];
   const image = await firstUsableImage(
     imageCandidates,
     resolveMedia,
@@ -789,41 +823,6 @@ async function derivePageSeo(
  * chain of deleted references from being paid one round trip at a time.
  */
 const MEDIA_LOOKUP_BATCH = 5;
-
-/**
- * Reads one page render may perform when the route was given no number.
- *
- * Generous for a page and small against a database: a document would have to
- * nest loops to approach it, which is the shape the budget exists to bound. A
- * page that exceeds it renders what it could reach rather than failing, so the
- * cost of the default being low is visible content, while the cost of having no
- * default at all is an unbounded read amplification reachable by URL.
- */
-export const DEFAULT_MAX_QUERIES = 500;
-
-/**
- * A budget for ONE page render.
- *
- * Created per render rather than per route: the counter is spent, so a single
- * budget shared across requests would exhaust on the first few pages and serve
- * every later request truncated — a fault that grows with uptime and disappears
- * on restart, which is the hardest kind to attribute.
- */
-function createQueryBudget(max: number): QueryBudget {
-  // `NaN` is what `Number(process.env.MAX_QUERIES)` produces for an unset or
-  // malformed variable, and every comparison against it is false — so
-  // `remaining <= 0` never fires and the budget silently becomes unlimited.
-  // That is the failure this exists to prevent, reached by a configuration
-  // mistake rather than by a document.
-  let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
-  return {
-    take: () => {
-      if (remaining <= 0) return false;
-      remaining -= 1;
-      return true;
-    },
-  };
-}
 
 /**
  * Whether a resolution actually yielded a picture.
@@ -1964,20 +1963,89 @@ async function readSite(
   }
 }
 
-/** The collections the page's lists draw, whose items its bindings read. */
-function listCollections(documents: readonly BlockDocument[]): Set<string> {
+/**
+ * The collections the page's lists read that `wanted` keeps, each list's
+ * query read as the engine reads it. One walk for every question about the
+ * page's lists, so no two of them disagree about which lists a page holds.
+ */
+function listCollectionsWhere(
+  documents: readonly BlockDocument[],
+  wanted: (query: ListQuery) => boolean
+): Set<string> {
   const found = new Set<string>();
   const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    const collection: unknown = node.props.collection;
-    if (node.type === collectionLoop.name && typeof collection === "string") {
-      if (collection.trim() !== "") found.add(collection.trim());
+    if (node.type === collectionLoop.name) {
+      const { query } = readListQuery(node.props);
+      if (query.collection !== undefined && wanted(query)) {
+        found.add(query.collection);
+      }
     }
     for (const children of Object.values(node.slots ?? {})) {
       stack.push(...children);
     }
   }
   return found;
+}
+
+/** The collections the page's lists draw, whose items its bindings read. */
+function listCollections(documents: readonly BlockDocument[]): Set<string> {
+  return listCollectionsWhere(documents, () => true);
+}
+
+/**
+ * The collections whose lists filter by a day, which compares in the site's
+ * zone or as a calendar day by the field's shape.
+ */
+function listsComparingDays(documents: readonly BlockDocument[]): Set<string> {
+  return listCollectionsWhere(documents, query =>
+    query.filters.some(row => isListDay(row.value))
+  );
+}
+
+/**
+ * The site's zone and the field shapes of the collections whose lists filter
+ * by a day; nothing when no list does. The page's bindings' answers are used
+ * where they were already read.
+ */
+async function listDayInputs(args: {
+  config: BlocksPageConfig;
+  documents: readonly BlockDocument[];
+  bindings: PageBindings | undefined;
+  budget: QueryBudget;
+  window: number | false | undefined;
+  context: RenderContext;
+}): Promise<Pick<PageContext, "timeZone" | "fieldShapes">> {
+  const collections = listsComparingDays(args.documents);
+  if (collections.size === 0) return {};
+  const site =
+    args.bindings?.site ??
+    (args.config.timeZone === undefined
+      ? await readSite(args.config, args.budget, args.window)
+      : undefined);
+  const timeZone =
+    args.bindings?.timeZone ??
+    pageTimeZone(args.config, site ?? undefined, args.context);
+  const cache: ReadCache = {
+    scope: args.config.cacheScope ?? "",
+    locale: args.context.locale,
+    window: args.window,
+  };
+  const known = new Map<string, readonly BindingFieldShape[] | undefined>();
+  for (const collection of collections) {
+    try {
+      known.set(collection, await cachedFieldShapes({ collection }, cache));
+    } catch {
+      known.set(collection, undefined);
+    }
+  }
+  return {
+    ...(timeZone === undefined ? {} : { timeZone }),
+    fieldShapes: {
+      fieldsOf: ref =>
+        "collection" in ref ? known.get(ref.collection) : undefined,
+    },
+  };
 }
 
 /** A shape ref as a map key. */
@@ -2223,6 +2291,13 @@ interface PageInputs {
   readonly regions: readonly DrawnRegion[];
   readonly regionDefinitions: DefinitionsById;
   readonly bindings: PageBindings | undefined;
+  /**
+   * The documents as the page presents them: composed, migrated and gated,
+   * the page's and each region's. What the page's reads are asked of, so a
+   * list inside a component is seen where the stored page holds only the
+   * component's instance.
+   */
+  readonly presented: readonly BlockDocument[];
 }
 
 /**
@@ -2306,6 +2381,7 @@ async function readPageInputs(args: {
     regions: drawnRegions,
     regionDefinitions,
     bindings,
+    presented,
   };
 }
 
@@ -2489,7 +2565,8 @@ function blocksRouteConfig(
               inputs.definitions,
               inputs.bindings,
               context.locale,
-              inputs.page.prepared ?? undefined
+              inputs.page.prepared ?? undefined,
+              bindingIssueLog(context)
             );
             return metadata(entry, context, derived);
           },
@@ -2523,12 +2600,22 @@ function blocksRouteConfig(
       // has to be told which one it got.
       const pageContext: PageContext = createStandaloneContext({
         entry,
+        // So a list of the entry's related entries reads the relation as the
+        // public reads this entry. A Single's page has no collection entry,
+        // and the provider reads no Single.
+        ...(entrySource === "collection"
+          ? { entryCollection: context.collection }
+          : {}),
         // Reported by the route, not read off the row: the companion overlay
         // copies localized values onto the entry without stamping which locale
         // produced them, so inferring it here finds nothing on exactly the
         // localized pages that need it.
         locale: context.locale,
         isWorkingDraft: entry[WORKING_DRAFT_KEY] === true,
+        // A working draft is served only to an author previewing it, so a
+        // list there tells that author what it could not read as stored. A
+        // published page never does.
+        diagnostics: entry[WORKING_DRAFT_KEY] === true,
         data: dataFor(data, config, context.locale, listWindow),
         // Fresh for THIS render. `core/collection-loop` claims from it before
         // each read, and an absent budget reads as unlimited — the loop's own
@@ -2563,24 +2650,45 @@ function blocksRouteConfig(
           ? undefined
           : { ...configuredSiteStyles, breakpoints: siteBreakpoints };
 
-      const { definitions, page, regions, regionDefinitions, bindings } =
-        await readPageInputs({
-          config,
-          resolver,
-          document,
-          entry,
-          context,
-          entrySource,
-          layoutsProvider,
-          window: listWindow,
-          budget,
-        });
+      const {
+        definitions,
+        page,
+        regions,
+        regionDefinitions,
+        bindings,
+        presented,
+      } = await readPageInputs({
+        config,
+        resolver,
+        document,
+        entry,
+        context,
+        entrySource,
+        layoutsProvider,
+        window: listWindow,
+        budget,
+      });
 
       // What every document drawn on this page shares: the context (so the
       // regions spend the page's ONE budget and read in its locale), the
       // blocks, the caps, the host's posture and the page's bindings.
+      // What a list's date filter needs to compare whole days: the site's
+      // zone and the public's field shapes, read only when a list on the
+      // page filters by a day. Asked of the documents as presented, as the
+      // bindings are, so a list inside a component is seen.
+      const listDays = await listDayInputs({
+        config,
+        documents: presented,
+        bindings,
+        budget,
+        window: listWindow,
+        context,
+      });
       const shared: SharedRendererProps = {
-        context: pageContext,
+        context:
+          Object.keys(listDays).length === 0
+            ? pageContext
+            : { ...pageContext, ...listDays },
         blocks: resolver,
         styleContext,
         blockFallback,

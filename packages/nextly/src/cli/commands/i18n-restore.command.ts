@@ -5,14 +5,18 @@
 import type { Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 export function registerI18nRestoreCommand(program: Command): void {
-  program
-    .command("i18n:restore")
-    .description(
-      "Replay archived translations back onto an entity after a localization disable"
-    )
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("i18n:restore")
+      .description(
+        "Replay archived translations back onto an entity after a localization disable"
+      )
+  )
     .requiredOption(
       "--collection <slug>",
       "Collection, single, or field group slug to restore"

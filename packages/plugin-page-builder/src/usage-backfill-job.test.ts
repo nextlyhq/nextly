@@ -13,14 +13,24 @@ import { describe, expect, it } from "vitest";
 import type { PluginTransaction } from "@nextlyhq/plugin-sdk/schema";
 
 import { usageBackfillJob } from "./usage-backfill-job";
-import { backfillScopeKey, type BackfillScope } from "./usage-backfill-scope";
+import {
+  backfillScopeKey,
+  GONE_SCOPES_SWEPT_KEY,
+  type BackfillScope,
+} from "./usage-backfill-scope";
 import { usageBookkeeping } from "./usage-bookkeeping";
 
 /** What a rebuild that walked its scope to the end answers. */
 const WHOLE = { finished: true };
 
 function scope(field: string): BackfillScope {
-  return { entity: "pages", field, locale: "", variant: "published" };
+  return {
+    scope: "collection",
+    entity: "pages",
+    field,
+    locale: "",
+    variant: "published",
+  };
 }
 
 function store(initial: string[] = []) {
@@ -288,6 +298,63 @@ describe("one pass of the backfill sweep", () => {
     await expect(
       job.handler(null as never, context(10_000) as never)
     ).rejects.toThrow("the database went away");
+  });
+
+  it("tells the cleanup what the run recorded, and records its sweep in the run's progress", async () => {
+    const s = store();
+    const told: string[][] = [];
+    const job = usageBackfillJob({
+      scopes: async () => [scope("a")],
+      state: s.state,
+      rebuild: async () => WHOLE,
+      clock: () => PASS_START,
+      forgetGone: async (_scopes, _fenced, run) => {
+        told.push([...run.completed]);
+        await run.markSwept();
+      },
+    });
+
+    await job.handler(null as never, context(10_000) as never);
+    await job.handler(null as never, context(10_000) as never);
+
+    const a = backfillScopeKey(scope("a"));
+    expect(told).toEqual([[a], [a, GONE_SCOPES_SWEPT_KEY]]);
+    // Recorded as the run's progress, so a new run, which starts without it,
+    // sweeps again.
+    expect(s.done.has(GONE_SCOPES_SWEPT_KEY)).toBe(true);
+  });
+
+  it("walks a scope again once the cleanup has forgotten it, rather than reading it as walked", async () => {
+    // A scope recorded, then gone (its field removed), then back: the cleanup
+    // removed its progress, so it is outstanding again.
+    const b = backfillScopeKey(scope("b"));
+    const s = store([backfillScopeKey(scope("a")), b]);
+    let current = [scope("a")];
+    const walked: string[] = [];
+    const job = usageBackfillJob({
+      scopes: async () => current,
+      state: s.state,
+      rebuild: async sc => {
+        walked.push(sc.field);
+        return WHOLE;
+      },
+      clock: () => PASS_START,
+      // As the real cleanup does: the progress of a recorded scope no scope
+      // names is removed.
+      forgetGone: async (scopes, _fenced, run) => {
+        const named = new Set(scopes.map(backfillScopeKey));
+        for (const key of run.completed) {
+          if (!named.has(key)) s.done.delete(key);
+        }
+      },
+    });
+
+    await job.handler(null as never, context(10_000) as never);
+    expect(s.done.has(b)).toBe(false);
+    current = [scope("a"), scope("b")];
+    await job.handler(null as never, context(10_000) as never);
+
+    expect(walked).toEqual(["b"]);
   });
 
   it("is declared a sweep, which is what keeps one queued", async () => {

@@ -1,40 +1,40 @@
 /**
- * What the loop collections route BINDS its sorted read to.
+ * What the loop collections route BINDS its reads to.
  *
  * `loop-collections-route.test.ts` exercises the decisions over injected
  * reads, so every one of its assertions passes whatever the declaration hands
- * the Direct API, and the Direct API is the trusted server handle, which
- * defaults every call to `overrideAccess: true`. Under that default core skips
- * the field rules a sort is judged by, and every field would be offered to
- * every author. So this file reads the arguments.
+ * them. Two bindings decide what an author is offered, and this file reads
+ * both: which collections are listed is asked of the CALLER, and which fields
+ * of each is asked of the PUBLIC (`bindingFieldShapes`), since a list's
+ * filters and sort may name only fields a visitor can see. A field read with
+ * the caller's access, or the trusted server handle's, would offer a field
+ * the save then refuses.
  *
  * @module loop-collections-route.binding.test
  */
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/** The Direct API handle the route reaches, with its list read recorded. */
-const nextly = vi.hoisted(() => ({ find: vi.fn() }));
+/** The public's shapes, as the route reads them, with each read recorded. */
+const runtime = vi.hoisted(() => ({ bindingFieldShapes: vi.fn() }));
 
 vi.mock("nextly/runtime", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  requireNextly: () => nextly,
+  bindingFieldShapes: runtime.bindingFieldShapes,
 }));
 
 import { LOOP_COLLECTIONS_ROUTE_PATH } from "./loop-collections-contract";
 import { loopCollectionsRoute } from "./loop-collections-route";
 
-/** A route context: who is asking, and a registry holding one collection. */
-function contextAs(identity: {
-  user: Record<string, unknown>;
-}): PluginRouteContext {
+/** A route context: who is asking, and a registry holding two collections. */
+function contextAs(can: (action: string, slug: string) => Promise<boolean>) {
   return {
     self: { collections: {} },
     user: { id: "account-only" },
     caller: {
       authMethod: "session",
-      can: async () => true,
-      identity: async () => identity,
+      can: vi.fn(can),
+      identity: async () => ({ user: { id: "u1" } }),
     },
     services: {
       collections: {
@@ -43,50 +43,68 @@ function contextAs(identity: {
             {
               slug: "posts",
               label: "Post",
-              fields: [{ name: "title", type: "text" }],
+              fields: [
+                { name: "title", type: "text", label: "Title" },
+                { name: "internalNote", type: "text" },
+              ],
             },
+            { slug: "orders", label: "Order", fields: [] },
           ],
-          pagination: { hasMore: false, total: 1 },
+          pagination: { hasMore: false, total: 2 },
         }),
       },
     },
-  } as unknown as PluginRouteContext;
+  };
 }
 
-describe("the loop collections route asks core AS THE CALLER", () => {
+describe("the loop collections route", () => {
   beforeEach(() => {
-    nextly.find.mockReset();
-    nextly.find.mockResolvedValue({
-      items: [],
-      meta: {
-        total: 0,
-        page: 1,
-        limit: 1,
-        totalPages: 0,
-        hasNext: false,
-        hasPrev: false,
-      },
-    });
+    runtime.bindingFieldShapes.mockReset();
+    // The public may read the title and not the note.
+    runtime.bindingFieldShapes.mockResolvedValue([
+      { name: "title", type: "text" },
+    ]);
   });
 
-  it("sorts one row by every candidate, overrideAccess: false, refusing unknown keys", async () => {
-    const identity = { user: { id: "u1", roles: ["editor"] } };
+  it("lists the collections the caller may read, with the fields the public may read", async () => {
+    const ctx = contextAs(async (_action, slug) => slug === "posts");
     const response = await loopCollectionsRoute().handler(
       new Request(`http://nextly.test/plugins/x${LOOP_COLLECTIONS_ROUTE_PATH}`),
-      contextAs(identity)
+      ctx as unknown as PluginRouteContext
     );
 
-    expect(nextly.find).toHaveBeenCalledTimes(1);
-    const args = nextly.find.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(args).toMatchObject({
-      collection: "posts",
-      overrideAccess: false,
-      select: { id: true },
-      sort: ["title", "createdAt", "updatedAt"],
-      limit: 1,
-      unknownSort: "refuse",
-    });
-    expect(args.user).toBe(identity.user);
     expect(response.status).toBe(200);
+    expect(ctx.caller.can.mock.calls).toEqual([
+      ["read", "posts"],
+      ["read", "orders"],
+    ]);
+    // Asked of the public for the listed collection only, by its slug, in
+    // every language when none is asked.
+    expect(runtime.bindingFieldShapes.mock.calls).toEqual([
+      [{ collection: "posts" }, {}],
+    ]);
+    const body = (await response.json()) as {
+      items: { slug: string; fields: { name: string }[] }[];
+    };
+    expect(body.items.map(item => item.slug)).toEqual(["posts"]);
+    expect(body.items[0]?.fields.map(field => field.name)).toEqual([
+      "title",
+      "createdAt",
+      "updatedAt",
+    ]);
+  });
+
+  it("asks the public in the language the editor asks in, as a save in it judges", async () => {
+    const ctx = contextAs(async (_action, slug) => slug === "posts");
+    const response = await loopCollectionsRoute().handler(
+      new Request(
+        `http://nextly.test/plugins/x${LOOP_COLLECTIONS_ROUTE_PATH}?locale=fr`
+      ),
+      ctx as unknown as PluginRouteContext
+    );
+    expect(response.status).toBe(200);
+    expect(runtime.bindingFieldShapes.mock.calls).toEqual([
+      [{ collection: "posts" }, { locale: "fr" }],
+    ]);
   });
 });

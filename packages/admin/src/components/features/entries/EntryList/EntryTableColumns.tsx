@@ -104,6 +104,8 @@ const SORTABLE_FIELD_TYPES: readonly string[] = [
   "select",
   "email",
   "checkbox",
+  // An id sorts as text, which groups icons by set and then by name.
+  "icon",
 ];
 
 /**

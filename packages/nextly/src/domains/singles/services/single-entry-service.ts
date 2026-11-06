@@ -172,7 +172,10 @@ export class SingleEntryService extends BaseService {
       // snapshot in its logical shape, and the live document of the language
       // it belongs to. The read service is the one that answers both, and
       // this path is built here where it already exists.
-      this.queryService
+      this.queryService,
+      // A publish is an update of the Single, so it runs the Single's
+      // in-transaction handlers, registered here as its other hooks are.
+      hookRegistry
     );
   }
 

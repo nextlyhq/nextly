@@ -28,6 +28,9 @@ import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
+/** A collection list drawing its empty state while that state holds nothing. */
+const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
+
 /**
  * The attribute on the root element of the editor's blank page, which a page
  * the site serves never carries.
@@ -167,8 +170,10 @@ ${ROOT} [contenteditable="true"] * {
   -webkit-user-select: text;
 }
 
-/* A block that draws nothing still has height enough to be selected. */
-${ROOT} [data-nx-selected]:empty { min-height: 2px; }
+/* A block that draws nothing still has height enough to be selected: at no
+   specificity, so a min height the block sets (a Section at Full screen)
+   wins over it while it is selected, as it does on the page. */
+:where(${ROOT} [data-nx-selected]:empty) { min-height: 2px; }
 
 /* A text block emptied of its words keeps a line, so it can still be clicked:
    see EMPTY_TEXT_SELECTOR. */
@@ -176,10 +181,12 @@ ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 
 /* An empty container always has an area to aim at, since without one it has
    no height and cannot be clicked. Drawn in the page's own text colour, faint,
-   so it reads on a light page and a dark section alike. */
+   so it reads on a light page and a dark section alike. Its height is held
+   apart, at no specificity, so a min height the block sets (a Section at Full
+   screen) wins over it, as it does on the page. */
+:where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
-  min-height: 2.75rem;
   border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
   border-radius: 0.25rem;
   background: color-mix(in srgb, currentColor 6%, transparent);
@@ -204,13 +211,160 @@ ${ROOT} [data-nx-drag-source] { opacity: 0.4; }
 ${ROOT} [contenteditable] { -webkit-touch-callout: default; }
 ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
 
+/* A collection list's note to its author: why its sort fell back (amber) or
+   its read failed (red). Drawn in the page, where the list draws it, in the
+   admin's scheme and face, which the frame hands these notes as values. A
+   visitor's page never carries one. */
+[data-nx-list-diagnostic] {
+  /* The whole row of a list laid out as a grid or a wrapping row, so it
+     reads as a note about the list rather than one of its entries. */
+  grid-column: 1 / -1;
+  flex-basis: 100%;
+  /* Its words, and the one action a fallen-back sort offers, on one row. */
+  display: flex;
+  align-items: flex-start;
+  color-scheme: var(--nx-builder-scheme, light);
+  border: 1px solid;
+  border-radius: var(--radius-sm, 0.25rem);
+  color: var(--nx-builder-text, CanvasText);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  /* The admin's size whatever the zoom, so the author can read it on a
+     page drawn small; its spacing is in its own text's units, so it keeps
+     its shape at every zoom. */
+  font-size: calc(0.8125rem / var(--nx-canvas-zoom, 1));
+  line-height: 1.5;
+  gap: 0.9em;
+  margin-block-end: 0.6em;
+  padding: 0.6em 0.9em;
+}
+
+[data-nx-list-diagnostic="sort-fallback"] {
+  border-color: color-mix(in srgb, var(--nx-builder-warning, Mark) 55%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--nx-builder-warning, Mark) 12%,
+    var(--nx-builder-surface-raised, Canvas)
+  );
+}
+
+/* The note's one action: an outlined button in the note's own ink, at the
+   row's end. Pressing it is the editor's (see the canvas's click). */
+[data-nx-list-diagnostic] > [data-nx-list-action] {
+  flex: none;
+  margin-inline-start: auto;
+  padding: 0.15em 0.6em;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.92em;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+[data-nx-list-diagnostic] > [data-nx-list-action]:focus-visible {
+  outline: 2px solid var(--nx-builder-select, Highlight);
+  outline-offset: 2px;
+}
+
+[data-nx-list-diagnostic="query-failed"] {
+  border-color: color-mix(in srgb, var(--nx-builder-danger, CanvasText) 55%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--nx-builder-danger, CanvasText) 8%,
+    var(--nx-builder-surface-raised, Canvas)
+  );
+}
+
+/* A list drawing its empty state is tagged, in the editing colour, with why:
+   the author chose to see it, nothing matched, or its read failed. The tag
+   is the first thing in the list's own flow, so it covers nothing: lifted
+   above the list's top edge it lay over whatever the page draws there, and
+   a page with no gap above the list lost that line. It spans a grid's row
+   from its start, sits first in a flex row, and is as wide as its words.
+   On the canvas only. */
+${ROOT} [data-nx-list-shows]::before {
+  display: block;
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: start;
+  flex: none;
+  inline-size: max-content;
+  max-inline-size: 100%;
+  margin-block-end: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.1875rem;
+  background: var(--nx-builder-select, Highlight);
+  color: var(--nx-builder-select-text, HighlightText);
+  font-family: system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+/* A list whose empty state holds nothing yet: a roomy area, at the admin's
+   size whatever the zoom, so the "+" drawn over its centre, the line below
+   it and the spacing badges on its edges never meet. The tag sits at the
+   inside of its top edge, clear of the centred words. Written on the empty
+   container's own selector, so it outweighs that rule's smaller box. */
+${EMPTY_LIST} {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(7.5rem / var(--nx-canvas-zoom, 1));
+}
+
+${EMPTY_LIST}::before {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  margin: 0;
+  border-radius: 0 0 0.1875rem 0;
+}
+
+/* What the area is for, under the "+" and its words, faint in the page's
+   own ink so it reads on any section. */
+${EMPTY_LIST}::after {
+  content: "Visitors see this when no entry matches. Left empty, the list shows nothing.";
+  max-inline-size: 100%;
+  margin-block-start: 2.5rem;
+  padding-inline: 0.75rem;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+  font-family: system-ui, sans-serif;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-align: center;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+${ROOT} [data-nx-list-empty-because="chosen"]::before {
+  content: "When empty";
+}
+
+${ROOT} [data-nx-list-empty-because="none"]::before {
+  content: "No entries match · showing When empty";
+}
+
+${ROOT} [data-nx-list-empty-because="failed"]::before {
+  content: "Showing When empty";
+}
+
 /* A region of the page's Layout, drawn locked around the page. Its content
    keeps the site's own colours, quietened, so it reads as what surrounds the
-   page; its links and forms are inert. The region is one focus stop: its
-   badge says where it comes from at rest, and a click or Enter opens the tag
-   with the way to edit it. The badge and tag are the admin's words, so they
-   read the admin's tokens, which the frame hands those elements alone as
-   values. */
+   page; its links and forms are inert. Its mark never covers that content: a
+   lock outside the region, at the edge it shares with the page (below a
+   header, above a footer), which widens into a badge on hover or focus and
+   opens the tag beside it on a click or Enter. Where outside has no room on
+   screen the mark is placed inside instead, by its data-placement. The mark
+   holds the admin's words, so it reads the admin's tokens, which the frame
+   hands it alone as values. */
 .nx-canvas-region {
   position: relative;
   cursor: default;
@@ -230,57 +384,91 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
 }
 
 .nx-canvas-region:hover,
-.nx-canvas-region[data-open] {
+.nx-canvas-region:focus-within,
+.nx-canvas-region[data-state="open"] {
   box-shadow: inset 0 0 0 1px var(--nx-builder-border);
 }
 
-.nx-canvas-region:focus-visible {
-  outline: 2px solid var(--nx-builder-accent);
-  outline-offset: -2px;
+/* Placed in the page's own pixels, so its edge is the region's: the left
+   offset is measured to keep it on screen. Only its body takes the pointer. */
+.nx-canvas-region__mark {
+  position: absolute;
+  z-index: 3;
+  left: 0.5rem;
+  display: flex;
+  pointer-events: none;
+}
+
+.nx-canvas-region[data-nx-region="header"] > .nx-canvas-region__mark[data-placement="outside"] {
+  top: 100%;
+}
+
+.nx-canvas-region[data-nx-region="footer"] > .nx-canvas-region__mark[data-placement="outside"] {
+  bottom: 100%;
+}
+
+.nx-canvas-region > .nx-canvas-region__mark[data-placement="inside"] {
+  top: 0;
 }
 
 /* The admin's face and scheme rather than the site's, and the admin's size
    however far the frame is painted down: the scale the canvas publishes is
    undone here. */
-.nx-canvas-region__badge,
-.nx-canvas-region__tag {
+.nx-canvas-region__mark-body {
   zoom: calc(1 / var(--nx-canvas-zoom, 1));
   color-scheme: var(--nx-builder-scheme, light);
   font-family: var(--font-sans, system-ui), sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.375rem 0;
+  pointer-events: auto;
 }
 
-.nx-canvas-region__badge {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
+/* At rest a lock alone; on hover or focus it widens into the badge. */
+.nx-canvas-region__lock {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.125rem 0.5rem;
+  min-width: 1.375rem;
+  height: 1.375rem;
+  padding: 0 0.3125rem;
   border: 1px solid var(--nx-builder-border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: var(--nx-builder-surface-raised);
   color: var(--nx-builder-text-muted);
+  font: inherit;
   font-size: var(--text-xs, 0.75rem);
-  line-height: 1.4;
-  pointer-events: none;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-/* The badge opens into the tag, in the same place. */
-.nx-canvas-region[data-open] .nx-canvas-region__badge {
+.nx-canvas-region__lock:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: 2px;
+}
+
+.nx-canvas-region__lock[aria-expanded="true"] {
+  border-color: var(--nx-builder-text-muted);
+  color: var(--nx-builder-text);
+}
+
+.nx-canvas-region__badge {
   display: none;
+  padding-right: 0.125rem;
+}
+
+.nx-canvas-region[data-state="hover"] .nx-canvas-region__badge {
+  display: inline;
 }
 
 .nx-canvas-region__tag {
-  position: absolute;
-  z-index: 3;
-  top: 0.5rem;
-  right: 0.5rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.375rem 0.5rem;
-  max-width: calc(100% - 1rem);
+  max-width: 32rem;
   padding: 0.375rem 0.625rem;
   border: 1px solid var(--nx-builder-border);
   border-radius: 0.375rem;

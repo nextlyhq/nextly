@@ -68,7 +68,7 @@ Most users do not need this.
 
 - **Single writer.** SQLite serializes writes; concurrent transactions queue. Fine for one user, painful for production traffic.
 - **No SSL or TLS.** Not applicable to a local file.
-- **Limited types.** No native arrays, no JSONB; JSON is stored as TEXT. ILIKE is emulated as `LOWER(...) LIKE LOWER(...)`.
+- **Limited types.** No native arrays, no JSONB; JSON is stored as TEXT. ILIKE and case-insensitive `contains` fold both sides with `nextly_fold_case()`, a Unicode case fold the adapter registers on every connection it opens (SQLite's own `LOWER()` folds ASCII letters only), then compare with `LIKE`.
 - **Savepoints.** Supported.
 - **`RETURNING` clause.** Supported (SQLite 3.35+).
 
