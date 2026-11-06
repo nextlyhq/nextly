@@ -2155,3 +2155,124 @@ describe("a double-click on a component's text", () => {
     });
   });
 });
+
+describe("a double-click on a component's exposed passage", () => {
+  /** A passage of one paragraph. */
+  const passage = (text: string) => ({
+    root: {
+      type: "root",
+      children: [
+        { type: "paragraph", children: [{ type: "text", text, format: 0 }] },
+      ],
+    },
+  });
+  const CARD_DEF = {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [
+      {
+        id: "c",
+        type: "acme/card",
+        version: 1,
+        props: { body: passage("From the component") },
+      },
+    ],
+    exposed: [
+      {
+        id: "intro",
+        label: "Intro",
+        nodeId: "c",
+        propPath: "body",
+        type: "richText",
+      },
+    ],
+  } as unknown as BlockDocument;
+
+  /** A card placed once, selected, as a click on it leaves the canvas. */
+  function placedCard(read: ReturnType<typeof vi.fn>) {
+    registerBlocks(
+      [
+        {
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: () => null,
+          name: "acme/card",
+          props: { body: { type: "richText", inline: true } },
+        },
+      ] as never,
+      { source: "use-inline-editing-test" }
+    );
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "p1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "card" },
+        },
+      ],
+    } as BlockDocument;
+    const composed = resolveComponentInstances(
+      page,
+      new Map([["card", CARD_DEF]]),
+      { exposures: true }
+    ).document;
+    const card = composed.nodes[0];
+    document.body.innerHTML = `
+      <div data-nx-node="${card?.id ?? ""}" data-nx-instance="p1">
+        <div data-nx-prop="body"><p>From the component</p></div>
+      </div>`;
+    const editor = {
+      document: page,
+      selectedId: "p1",
+      apply: vi.fn(() => page),
+      select: vi.fn(),
+      composed: () => composed,
+    } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
+    const session = {
+      focus: vi.fn(),
+      read: read as () => unknown,
+      detach: vi.fn(),
+      hold: vi.fn(),
+    };
+    const load = vi.fn(() =>
+      Promise.resolve({ attach: vi.fn(() => attachment(session)) })
+    );
+    const onPartOf = vi.fn();
+    const hook = renderHook(() =>
+      useInlineEditing(editor, load, undefined, onPartOf)
+    );
+    return { ...hook, editor, onPartOf, session };
+  }
+
+  it("edits it in place and stores it on the placement, as one op", async () => {
+    const read = vi
+      .fn()
+      .mockReturnValueOnce(passage("From the component"))
+      .mockReturnValue(passage("Ours"));
+    const { result, editor, onPartOf, session } = placedCard(read);
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("body"));
+    });
+    expect(onPartOf).not.toHaveBeenCalled();
+    expect(result.current.editingRich?.exposure?.exposureId).toBe("intro");
+    expect(session.focus).toHaveBeenCalled();
+
+    act(() => {
+      result.current.commit();
+    });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "p1",
+      patch: {
+        props: { componentId: "card", overrides: { intro: passage("Ours") } },
+      },
+    });
+  });
+});

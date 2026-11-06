@@ -32,10 +32,13 @@
 import {
   COLLECTION_LIST_TYPE,
   findNode,
+  LIST_ENTRY_SLOT,
   LIST_MAX_FILTERS,
+  LIST_MAX_SORT_KEYS,
   listKindSortable,
   listQueryIssues,
   locateNode,
+  outerListOf,
   readListQuery,
   type BindingFieldShape,
   type BlockDocument,
@@ -222,17 +225,6 @@ function offeredShapes(found: LoopCollection): BindingFieldShape[] {
   ];
 }
 
-/** The list block around `id`, nearest first, if there is one. */
-function outerList(document: BlockDocument, id: string): BlockNode | undefined {
-  let at = locateNode(document.nodes, id)?.parent;
-  // Bounded by the document's depth: each step moves one parent out.
-  while (at !== undefined) {
-    if (at.type === COLLECTION_LIST_TYPE) return at;
-    at = locateNode(document.nodes, at.id)?.parent;
-  }
-  return undefined;
-}
-
 /** The problems the engine finds with one list, as a save would. */
 type Issues = ReturnType<typeof listQueryIssues>;
 
@@ -296,15 +288,35 @@ interface Related {
   readonly entryHeading: string;
   /** "Related to each category", over the outer item's relations. */
   readonly itemHeading: string;
+  /**
+   * Whether the nearest list around this one holds it in its empty state,
+   * which is drawn only when that list has no entries, so with none to
+   * relate to.
+   */
+  readonly inEmptyState?: boolean;
+}
+
+/** Whether the nearest list around `id` holds it anywhere but per entry. */
+function inListEmptyState(nodes: BlockNode[], id: string): boolean {
+  let at = locateNode(nodes, id);
+  // Bounded by the document's depth: each step moves one parent out.
+  while (at?.parent !== undefined) {
+    const parent = at.parent;
+    if (parent.type === COLLECTION_LIST_TYPE) {
+      return at.slot !== LIST_ENTRY_SLOT;
+    }
+    at = locateNode(nodes, parent.id);
+  }
+  return false;
 }
 
 /** The related sources a list may show where it sits. */
 function relatedSources(
   collections: readonly LoopCollection[],
-  entryCollection: string | undefined,
+  entryCollection: string | null | undefined,
   outer: ListQuery | undefined
 ): Related {
-  const ownerOf = (slug: string | undefined) =>
+  const ownerOf = (slug: string | null | undefined) =>
     collections.find(each => each.slug === slug);
   const one = (owner: LoopCollection | undefined) =>
     (owner?.singular ?? owner?.label ?? "entry").toLowerCase();
@@ -434,16 +446,33 @@ function sourceGroups(related: Related): { group: string; heading: string }[] {
 }
 
 /** The Source menu's note where no related source can be offered. */
-const NO_RELATED = (
-  <div className="nx-list-query__menu-note">
-    <p className="nx-vars__group-name nx-font-pick__heading">Related entries</p>
-    <p className="nx-list-query__menu-text">
-      Not available here. On a collection&apos;s entry, or inside another list,
-      a list can show the entry&apos;s related entries, such as its categories
-      or tags.
-    </p>
-  </div>
-);
+function NoRelated({
+  inEmptyState,
+}: {
+  inEmptyState: boolean;
+}): React.JSX.Element {
+  return (
+    <div className="nx-list-query__menu-note">
+      <p className="nx-vars__group-name nx-font-pick__heading">
+        Related entries
+      </p>
+      <p className="nx-list-query__menu-text">
+        {inEmptyState ? (
+          <>
+            Not available in When empty: it only shows when the list has no
+            entries, so there&apos;s no entry to relate to.
+          </>
+        ) : (
+          <>
+            Not available here. On a collection&apos;s entry, or inside another
+            list, a list can show the entry&apos;s related entries, such as its
+            categories or tags.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
 
 /** What a related source shows, said under Source. */
 function SourceHint({
@@ -561,7 +590,12 @@ function SourceField({
           noMatch: "No source matches.",
           searchFrom: 1,
         }}
-        around={{ above: all.length > 0 ? undefined : NO_RELATED }}
+        around={{
+          above:
+            all.length > 0 ? undefined : (
+              <NoRelated inEmptyState={related.inEmptyState === true} />
+            ),
+        }}
         onPick={choice => onPick(choice.pick)}
       />
       {refused ? (
@@ -1522,6 +1556,7 @@ function FiltersGroup({
     fields,
     rows.map(row => row.draft)
   );
+  const filterLimit = listLimit(rows.length, LIST_MAX_FILTERS, id);
   const change = (row: ShownRow, draft: DraftFilter) => {
     const field = fields.find(each => each.name === draft.field);
     const completed = completedFilter(draft, field);
@@ -1609,9 +1644,8 @@ function FiltersGroup({
         size="sm"
         variant="ghost"
         className="nx-list-query__add"
-        disabled={
-          disabled || fields.length === 0 || rows.length >= LIST_MAX_FILTERS
-        }
+        disabled={disabled || fields.length === 0 || filterLimit.full}
+        aria-describedby={filterLimit.describedBy}
         onClick={() => {
           nextKey.current += 1;
           const key = `new:${String(nextKey.current)}`;
@@ -1623,7 +1657,41 @@ function FiltersGroup({
         <Plus aria-hidden="true" size={14} />
         Add filter
       </Button>
+      <LimitNote limit={filterLimit}>
+        Up to {LIST_MAX_FILTERS} filters.
+      </LimitNote>
     </section>
+  );
+}
+
+/** Whether a list holds the most of something it takes, and the note saying so. */
+interface ListLimit {
+  full: boolean;
+  /** The note's id while the limit is reached, for the Add button to name. */
+  describedBy: string | undefined;
+  id: string;
+}
+
+/** The limit of `count` against `most`, its note under `${id}-limit`. */
+function listLimit(count: number, most: number, id: string): ListLimit {
+  const full = count >= most;
+  const noteId = `${id}-limit`;
+  return { full, describedBy: full ? noteId : undefined, id: noteId };
+}
+
+/** Why an Add button is off: shown only once the list holds the most it takes. */
+function LimitNote({
+  limit,
+  children,
+}: {
+  limit: ListLimit;
+  children: React.ReactNode;
+}): React.JSX.Element | null {
+  if (!limit.full) return null;
+  return (
+    <p id={limit.id} className="nx-inspector__note nx-list-query__hint">
+      {children}
+    </p>
   );
 }
 
@@ -1933,10 +2001,13 @@ function useFocusOnAsk(
 function AddSortButton({
   fields,
   disabled,
+  describedBy,
   onPick,
 }: {
   fields: readonly LoopListField[];
   disabled: boolean;
+  /** The note saying why the button is off, when it is. */
+  describedBy: string | undefined;
   onPick: (field: LoopListField) => void;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
@@ -1956,6 +2027,7 @@ function AddSortButton({
           // Where an ask to fix the sort lands when there is no row.
           data-list-add-sort=""
           disabled={disabled || fields.length === 0}
+          aria-describedby={describedBy}
         >
           <Plus aria-hidden="true" size={14} />
           Add sort
@@ -2012,6 +2084,7 @@ function SortGroup({
   onSort: (keys: readonly ListSortKey[]) => void;
 }): React.JSX.Element {
   const keys = query.sort;
+  const sortLimit = listLimit(keys.length, LIST_MAX_SORT_KEYS, id);
   const group = React.useRef<HTMLElement>(null);
   useFocusOnAsk(group, fieldAsked, `${id}-0-field`);
   const sortable = fields.filter(field => listKindSortable(field.kind));
@@ -2124,7 +2197,9 @@ function SortGroup({
         fields={sortable.filter(
           field => !keys.some(key => key.field === field.name)
         )}
-        disabled={disabled}
+        // No key past the most a list sorts by, which the save refuses.
+        disabled={disabled || sortLimit.full}
+        describedBy={sortLimit.describedBy}
         onPick={field =>
           onSort([
             ...keys,
@@ -2132,6 +2207,7 @@ function SortGroup({
           ])
         }
       />
+      <LimitNote limit={sortLimit}>Up to {LIST_MAX_SORT_KEYS} sorts.</LimitNote>
       {shown.length === 0 ? null : (
         <p className="nx-inspector__note nx-list-query__hint">
           Entries with the same values keep a fixed order. Entries with no value
@@ -2482,7 +2558,9 @@ function useListQueryReading(
       }).filter(issue => issue.nodeId === nodeId && issue.severity === "error"),
     [document, nodeId, fieldSource, entryCollection]
   );
-  const outerNode = outerList(document, nodeId);
+  // The list whose entry is this one's item, as the save judges it: never
+  // one whose empty state this list sits in.
+  const outerNode = outerListOf(document.nodes, nodeId);
   const outer =
     outerNode === undefined ? undefined : readListQuery(outerNode.props).query;
   return {
@@ -2492,7 +2570,10 @@ function useListQueryReading(
     collections,
     fieldSource,
     issues,
-    related: relatedSources(collections, entryCollection, outer),
+    related: {
+      ...relatedSources(collections, entryCollection, outer),
+      inEmptyState: inListEmptyState(document.nodes, nodeId),
+    },
     fields:
       collections.find(each => each.slug === query.collection)?.fields ?? [],
   };

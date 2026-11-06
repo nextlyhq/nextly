@@ -18,6 +18,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
   image, gallery, button, embed, form), and one that reads from your content
   ([Collection list](#reading-content-into-a-page)).
+- **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
+  section's title as text or as a heading from level 2 to 6, and its **Icon** and
+  **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
+  before or after the title. Some screen readers announce a section title as the button's
+  text rather than as a heading; the section still opens and closes as normal.
 - **Your own blocks**, defined in code, which the page renderer takes beside the
   built-in ones.
 - **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
@@ -31,7 +36,7 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 ## Availability
 
 | | |
-|---|---|
+| ---------- | ----------------------------------------------------------------------------------------------- |
 | Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
 | Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
 | Permission | Editing a page requires update access to the collection holding it |
@@ -63,12 +68,18 @@ boot refuses to start:
 npx nextly plugins install @nextlyhq/plugin-page-builder
 ```
 
-The plugin keeps the bookkeeping behind its usage counts (how far the background job
-has indexed existing pages, and whether an index write has failed) in two tables of
-its own, `page_builder__usage_runs` and `page_builder__usage_progress`. No admin
-screen or API reaches them. Installing creates them; a site upgrading from a version
-without them runs `npx nextly migrate` before it starts on the new version, since a
-production boot refuses a plugin whose tables are behind it.
+The plugin keeps its usage counts in tables of its own: which documents place each
+component and apply each shared style (`page_builder__component_usage` and
+`page_builder__class_usage`), and the bookkeeping behind them, how far the background
+job has indexed existing content and whether an index write has failed
+(`page_builder__usage_runs` and `page_builder__usage_progress`). No admin screen or
+API reaches them. The counts cover collection entries and Singles, and a component a
+placement chooses through one of its fields counts as used where it is placed.
+Installing creates the tables; a site upgrading from a version without them runs
+`npx nextly migrate` before it starts on the new version, since a production boot
+refuses a plugin whose tables are behind it. After the upgrade the background job
+indexes every page and Single again, and until it has finished, counts read as "at
+least" rather than as exact.
 
 Last, run `npx nextly generate:types`. It writes the file that registers the builder's
 screen with the admin, and that file also loads the editor's styles, so there is nothing
@@ -135,9 +146,9 @@ export default ContentPage;
 ```
 
 <Callout type="warn">
-Without a breakpoint set the renderer emits class names with no CSS behind them, and
-pages come out structurally correct and visually bare. Declare at least a `base`
-breakpoint.
+  Without a breakpoint set the renderer emits class names with no CSS behind
+  them, and pages come out structurally correct and visually bare. Declare at
+  least a `base` breakpoint.
 </Callout>
 
 ### Public sites read differently
@@ -145,7 +156,7 @@ breakpoint.
 `createBlocksPage` reads **access-enforced** content, so it needs no database during
 `next build`. A wholly public site calls `createPublicBlocksPage` instead: it reads
 trusted, pre-renders, and returns a `generateStaticParams` to export alongside the other
-two. Which one you call *is* the security posture — there is no option to flip.
+two. Which one you call _is_ the security posture — there is no option to flip.
 
 ## Draw the canvas in your site's layout
 
@@ -455,9 +466,10 @@ Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
 The settings and the shapes read the process's running instance, as `requireNextly` does.
 
 <Callout type="warn">
-Field bindings inside a loop are stored but not resolved yet. Each repeated item shows
-the text its blocks were given in the editor, not the entry's own fields. See
-[Block document format](/docs/api-reference/block-document-format).
+  Field bindings inside a loop are stored but not resolved yet. Each repeated
+  item shows the text its blocks were given in the editor, not the entry's own
+  fields. See [Block document
+  format](/docs/api-reference/block-document-format).
 </Callout>
 
 ## Related

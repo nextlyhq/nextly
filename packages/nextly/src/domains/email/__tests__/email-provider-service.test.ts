@@ -145,7 +145,7 @@ describe("EmailProviderService", () => {
       expect(callArgs.to).toBe("noreply@example.com");
     });
 
-    it("returns success:false and does NOT call the adapter when the provider is inactive", async () => {
+    it("tests a provider that is off, since a test is how a new one is turned on", async () => {
       const provider = await service.createProvider({
         name: "Inactive",
         type: "resend",
@@ -155,12 +155,14 @@ describe("EmailProviderService", () => {
         isDefault: false,
         isActive: false,
       });
+      mockAdapterSend.mockResolvedValue({ success: true, messageId: "mid3" });
 
       const result = await service.testProvider(provider.id);
 
-      expect(result.success).toBe(false);
-      expect(result.error).toMatch(/inactive/i);
-      expect(mockAdapterSend).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      expect(mockAdapterSend).toHaveBeenCalledTimes(1);
+      // Testing does not turn it on; the person does, after the test.
+      expect((await service.getProvider(provider.id)).isActive).toBe(false);
     });
   });
 

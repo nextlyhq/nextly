@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getCoreSchema } from "../../../schemas";
 import type { Logger } from "../../../services/shared";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
+import { NextlyError } from "../../../errors/nextly-error";
 import { defineEmailProvider } from "../provider-definition";
 import { getEmailProviderRegistry } from "../services/email-provider-registry";
 import { EmailProviderService } from "../services/email-provider-service";
@@ -130,17 +131,35 @@ describe("testProvider disclosure", () => {
     expect(result.error).not.toContain(SECRET);
   });
 
-  it("keeps the detail for the operator, in the log", async () => {
+  it("keeps the detail for the operator, in the log, without the credential", async () => {
     await service.testProvider(providerId, undefined, "connection");
 
     // Withholding the detail from the CALLER must not withhold it from the
     // operator: the message tells them to read the server log, so something
-    // has to have written one.
+    // has to have written one. What it writes is contained as a thrown
+    // failure's cause is, so the log is not where the credential goes instead.
     const logged = vi
       .mocked(logger.warn)
       .mock.calls.map(call => JSON.stringify(call))
       .join("\n");
-    expect(logged).toContain(SECRET);
+    expect(logged).toContain("Invalid key [secret]");
+    expect(logged).not.toContain(SECRET);
+  });
+
+  it("logs a check's detail without the credential", async () => {
+    const result = await service.checkConfiguration({
+      type: "chatty-probe",
+      configuration: { apiKey: SECRET },
+    });
+
+    expect(result).toMatchObject({ checked: true, success: false });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    const logged = vi
+      .mocked(logger.warn)
+      .mock.calls.map(call => JSON.stringify(call))
+      .join("\n");
+    expect(logged).toContain("Invalid key [secret]");
+    expect(logged).not.toContain(SECRET);
   });
 
   it("refuses an unrecognised mode instead of sending a real message", async () => {
@@ -154,6 +173,103 @@ describe("testProvider disclosure", () => {
         "connecton" as unknown as "connection"
       )
     ).rejects.toThrow(/Unknown email provider test mode/);
+  });
+
+  it("says where the test went, as the mailbox the server used", async () => {
+    // The admin shows the address from its cached /me, while the server
+    // resolves the recipient from the user record at send time. The result
+    // carries the mailbox the message actually went to, so a caller tells the
+    // operator to check the inbox that received it, not the one a stale
+    // cache still names.
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    });
+
+    const result = await service.testProvider(
+      providerId,
+      "Jane <jane@example.com>"
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.to).toBe("jane@example.com");
+  });
+});
+
+describe("a provider's deliberate error, with the raw failure as its cause", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+
+  const wrapping = defineEmailProvider<{ apiKey: string }>({
+    type: "wrapping-probe",
+    label: "Wrapping Probe",
+    capabilities: { connectionTest: true },
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    testConnection: config =>
+      Promise.reject(
+        new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "The key was refused.",
+          cause: new Error(`Invalid key ${config.apiKey}`),
+        })
+      ),
+    domainStatus: config =>
+      Promise.resolve({
+        domain: "example.com",
+        status: "pending" as const,
+        records: [{ type: "TXT", name: "auth", value: `k=${config.apiKey}` }],
+      }),
+  });
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(wrapping);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("keeps its sentence, and logs its cause without the credential", async () => {
+    const result = await service.checkConfiguration({
+      type: "wrapping-probe",
+      configuration: { apiKey: SECRET },
+    });
+
+    expect(result).toMatchObject({
+      checked: true,
+      success: false,
+      error: "The key was refused.",
+    });
+    const logged = vi
+      .mocked(logger.error)
+      .mock.calls.map(call => JSON.stringify(call))
+      .join("\n");
+    expect(logged).toContain("Invalid key");
+    expect(logged).not.toContain(SECRET);
+  });
+
+  it("returns a domain status without the credential", async () => {
+    const status = await wrapping.domainStatusFrom?.(
+      { apiKey: SECRET },
+      "example.com"
+    );
+    expect(status?.records[0].value).toBe("k=[secret]");
+    expect(JSON.stringify(status)).not.toContain(SECRET);
   });
 });
 
@@ -925,5 +1041,105 @@ describe("a parser that changes what a credential looks like", () => {
     });
 
     expect(result.messageId).toBeUndefined();
+  });
+});
+
+describe("a numeric credential returned as an MX priority", () => {
+  const numeric = defineEmailProvider<{ apiKey: string; pin: number }>({
+    type: "numeric-secret",
+    label: "Numeric Secret",
+    capabilities: {},
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      { name: "pin", label: "PIN", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string; pin: number },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    domainStatus: config =>
+      Promise.resolve({
+        domain: "example.com",
+        status: "pending" as const,
+        records: [
+          { type: "MX", name: "@", value: "mx.example.com", priority: 10 },
+          {
+            type: "MX",
+            name: "@",
+            value: "mx2.example.com",
+            priority: config.pin,
+          },
+        ],
+      }),
+  });
+
+  it("drops the priority that carries the credential and keeps the others", async () => {
+    const status = await numeric.domainStatusFrom?.(
+      { apiKey: SECRET, pin: 98765 },
+      "example.com"
+    );
+    expect(status?.records[0].priority).toBe(10);
+    expect(status?.records[1]).not.toHaveProperty("priority");
+    expect(JSON.stringify(status)).not.toContain("98765");
+  });
+});
+
+describe("a saved provider read with its domain status", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  /** Reads DNS records for the sending domain, naming the key it was given. */
+  const reporting = defineEmailProvider<{ apiKey: string }>({
+    type: "status-reporting",
+    label: "Status Reporting",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    domainStatus: config =>
+      Promise.resolve({
+        domain: "example.com",
+        status: "pending" as const,
+        records: [{ type: "TXT", name: "auth", value: `k=${config.apiKey}` }],
+      }),
+  });
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(reporting);
+    const created = await service.createProvider({
+      name: "Reporting",
+      type: "status-reporting",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("returns the provider with its domain status, and the credential stays out of both", async () => {
+    const record = await service.getProviderWithDomainStatus(providerId);
+
+    expect(record.id).toBe(providerId);
+    expect(record.domainStatus?.domain).toBe("example.com");
+    expect(record.domainStatus?.records[0]?.value).toBe("k=[secret]");
+    expect(JSON.stringify(record)).not.toContain(SECRET);
   });
 });

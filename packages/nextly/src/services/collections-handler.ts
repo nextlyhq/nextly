@@ -392,6 +392,18 @@ export class CollectionsHandler {
   }
 
   /**
+   * Every reason a list read would refuse this caller's query, or none, on the
+   * instance that serves collection reads. See the query service.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionEntryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionEntryService["queryReadableProblems"]> {
+    return this.entryService.queryReadableProblems(params);
+  }
+
+  /**
    * Which of these entries a write of the action by this caller would find
    * inside its rule's filter, judged now and without writing, on the instance
    * that serves collection writes. See the mutation service.

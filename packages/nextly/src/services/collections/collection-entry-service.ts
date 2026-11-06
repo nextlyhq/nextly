@@ -341,6 +341,21 @@ export class CollectionEntryService extends BaseService {
     );
   }
 
+  /**
+   * Every reason a list read would refuse this caller's query, or none. See
+   * the query service; judged in the language the read it stands for would
+   * judge its rules in, as `listEntries` is.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionQueryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionQueryService["queryReadableProblems"]> {
+    return withRuleLanguage(this.readLanguages(params), () =>
+      this.queryService.queryReadableProblems(params)
+    );
+  }
+
   async countEntries(params: {
     collectionName: string;
     user?: UserContext;

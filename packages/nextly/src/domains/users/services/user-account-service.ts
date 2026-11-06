@@ -33,6 +33,8 @@ import {
   updateUserEndingSessions,
   type PasswordWriteTx,
 } from "./password-write";
+import { parseInterfaceLanguage } from "../interface-language";
+
 import { UserQueryService } from "./user-query-service";
 
 /**
@@ -71,7 +73,9 @@ export class UserAccountService extends BaseService {
   }
 
   /**
-   * Update the current user's profile (name and image only).
+   * Update the current user's own profile: name, image and interface
+   * language. The interface language is checked before anything is read or
+   * written, and only this path sets it.
    *
    * @throws NextlyError(NOT_FOUND) when the user does not exist
    *   (propagated from queryService.getUserById).
@@ -84,8 +88,10 @@ export class UserAccountService extends BaseService {
     changes: {
       name?: string;
       image?: string;
+      interfaceLanguage?: string | null;
     }
   ): Promise<GetUserResponse> {
+    const interfaceLanguage = parseInterfaceLanguage(changes);
     // Validate that user exists first. getUserById throws NOT_FOUND when
     // missing; we let that propagate unchanged.
     await this.queryService.getUserById(userId);
@@ -103,6 +109,10 @@ export class UserAccountService extends BaseService {
 
     if (changes.image !== undefined) {
       updateData.image = changes.image;
+    }
+
+    if (interfaceLanguage !== undefined) {
+      updateData.interfaceLanguage = interfaceLanguage;
     }
 
     try {
