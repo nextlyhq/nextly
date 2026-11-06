@@ -30,6 +30,27 @@ export interface ContributedListFilter extends PluginListFilterDeclaration {
   plugin: string;
 }
 
+/** The keys a filter declaration takes, and those an option takes. */
+const FILTER_KEYS: ReadonlySet<string> = new Set([
+  "name",
+  "label",
+  "collections",
+  "options",
+]);
+const OPTION_KEYS: ReadonlySet<string> = new Set(["value", "label", "where"]);
+
+/**
+ * A key `declared` has that it does not take, or `undefined`. Refused rather
+ * than ignored: a misspelled optional key (`collection` for `collections`)
+ * would otherwise read as one left out, and offer the filter on every list.
+ */
+function strayKey(
+  declared: object,
+  known: ReadonlySet<string>
+): string | undefined {
+  return Object.keys(declared).find(key => !known.has(key));
+}
+
 /** What makes a declared filter unusable, in a sentence, or `undefined`. */
 function filterProblem(declared: unknown): string | undefined {
   if (
@@ -38,6 +59,10 @@ function filterProblem(declared: unknown): string | undefined {
     Array.isArray(declared)
   ) {
     return "it is not an object";
+  }
+  const stray = strayKey(declared, FILTER_KEYS);
+  if (stray !== undefined) {
+    return `it has the key \`${stray}\`, which a filter does not take`;
   }
   const { label, collections, options } = declared as Record<string, unknown>;
   if (typeof label !== "string" || label.trim() === "")
@@ -93,6 +118,10 @@ function optionProblem(
     !isWellFormedAdminPlaceName(value)
   ) {
     return `the option value ${typeof value === "string" ? `"${value}"` : `given as ${typeof value}`} is not lower-case letters, digits and single dashes`;
+  }
+  const stray = strayKey(option, OPTION_KEYS);
+  if (stray !== undefined) {
+    return `the option "${value}" has the key \`${stray}\`, which an option does not take`;
   }
   if (values.has(value)) return `two options have the value "${value}"`;
   values.add(value);

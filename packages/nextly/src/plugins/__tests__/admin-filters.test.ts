@@ -180,6 +180,22 @@ describe("the filters plugins declare for the entry list", () => {
       { ...OPEN, collections: [`t${"x".repeat(50)}`] },
     ],
     ["an empty collection slug", { ...OPEN, collections: [""] }],
+    [
+      "a misspelled key, which would read as one left out",
+      {
+        name: OPEN.name,
+        label: OPEN.label,
+        collection: ["tickets"],
+        options: OPEN.options,
+      },
+    ],
+    [
+      "an option with a key an option does not take",
+      {
+        ...OPEN,
+        options: [{ ...OPEN.options[0], wehre: { state: { equals: "x" } } }],
+      },
+    ],
     ["a declaration that is not an object", "acme-support.state"],
   ])("refuses %s, naming the plugin", (_case, declared) => {
     expect(
