@@ -38,7 +38,7 @@ async function seed(): Promise<{ id: string; handle: TestNextly }> {
   for (const title of ["v2", "v3"]) {
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title }
+      { title, _overwrite: true }
     );
   }
   return { id, handle: current };

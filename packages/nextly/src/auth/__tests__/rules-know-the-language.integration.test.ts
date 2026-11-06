@@ -310,7 +310,7 @@ async function seedWithFrench(
     collection,
     id,
     locale: "fr",
-    data: { body: "bonjour" },
+    data: { body: "bonjour", _overwrite: true },
   } as never);
   return id;
 }
@@ -424,7 +424,7 @@ describe.each(getConfiguredTestDialects())(
               locale,
               ...caller,
             },
-            { body: `in ${locale}` }
+            { body: `in ${locale}`, _overwrite: true }
           );
 
         const refused = await write("fr");
@@ -470,7 +470,7 @@ describe.each(getConfiguredTestDialects())(
         const write = (locale: string) =>
           singlesOf(t).update(
             SETTINGS,
-            { tagline: `in ${locale}` },
+            { tagline: `in ${locale}`, _overwrite: true },
             { overrideAccess: false, locale, ...caller }
           );
         expect((await write("fr")).success).toBe(false);
@@ -536,7 +536,10 @@ describe.each(getConfiguredTestDialects())(
 
         const updated = await serviceOf(t).updateMany(
           ENGLISH,
-          created.ids.map(id => ({ id, data: { body: "changed" } })),
+          created.ids.map(id => ({
+            id,
+            data: { body: "changed", _overwrite: true },
+          })),
           context
         );
         expect(updated.failed).toBe(0);
@@ -551,7 +554,7 @@ describe.each(getConfiguredTestDialects())(
             tx,
             ENGLISH,
             id,
-            { body: "changed" },
+            { body: "changed", _overwrite: true },
             context
           )
         );
@@ -570,7 +573,7 @@ describe.each(getConfiguredTestDialects())(
               tx,
               NOT_ENGLISH,
               id,
-              { body: "changed" },
+              { body: "changed", _overwrite: true },
               { ...context, locale: "fr" }
             )
           )
@@ -626,7 +629,7 @@ describe.each(getConfiguredTestDialects())(
           (
             await singlesOf(t).update(
               SETTINGS,
-              { tagline: "hello" },
+              { tagline: "hello", _overwrite: true },
               { overrideAccess: true, locale: "en" }
             )
           ).success
@@ -648,7 +651,7 @@ describe.each(getConfiguredTestDialects())(
           (
             await singlesOf(t).update(
               SETTINGS,
-              { tagline: "hello" },
+              { tagline: "hello", _overwrite: true },
               { overrideAccess: true, locale: "en" }
             )
           ).success

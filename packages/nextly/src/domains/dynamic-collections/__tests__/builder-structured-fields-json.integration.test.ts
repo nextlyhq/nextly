@@ -196,7 +196,7 @@ describe.each(getConfiguredTestDialects())(
       };
       await handle.nextly.updateSingle({
         slug: "site",
-        data: written,
+        data: { ...written, _overwrite: true },
       } as never);
       const read = (await handle.nextly.findSingle({
         slug: "site",

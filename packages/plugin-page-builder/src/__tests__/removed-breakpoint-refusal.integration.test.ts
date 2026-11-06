@@ -84,7 +84,7 @@ describe.each(getConfiguredTestDialects())(
     ): Promise<void> {
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport, container: [] } },
+        data: { breakpoints: { viewport, container: [] }, _overwrite: true },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -103,7 +103,7 @@ describe.each(getConfiguredTestDialects())(
       return t.nextly.update({
         collection: "pages",
         id,
-        data: { content: pageOf(nodes) },
+        data: { content: pageOf(nodes), _overwrite: true },
         overrideAccess: true,
       });
     }

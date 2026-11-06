@@ -113,18 +113,33 @@ export interface PluginSchedule {
 }
 
 /**
- * @experimental The earlier, reserved scheduled-task declaration. **Not
- * executed**: declare a {@link PluginSchedule} instead.
+ * @experimental The earlier scheduled-task declaration.
+ *
+ * @deprecated Declare a {@link PluginSchedule} instead. One in this shape is
+ * mapped to it, with a deprecation notice: `name` is the slug, a cron string
+ * is the cron, an interval in milliseconds of whole minutes dividing an hour
+ * or whole hours dividing a day is the cron that fires on it, and `handler`
+ * runs as a job of its own, given the plugin's context. One that cannot be
+ * mapped (another interval, a cron that does not parse, no handler) is not
+ * run, and a notice says why; it never stops the installation starting.
  */
 export interface ScheduledTask {
   /** Unique, namespaced task name, e.g. `'seo.regenerate-sitemap'`. */
   name: string;
-  /** Cron expression or interval in milliseconds (reserved; not yet honored). */
+  /** Cron expression or interval in milliseconds. */
   schedule: string | number;
-  /** Task handler (reserved — the runtime does not invoke it yet). */
+  /** Task handler, run once per window with the plugin's context. */
   handler?: (ctx: PluginContext) => Promise<void> | void;
   description?: string;
 }
+
+/**
+ * @experimental A plugin's admin strings, `contributes.translations`: interface
+ * language, then key, then the text.
+ */
+export type PluginTranslations = Readonly<
+  Record<string, Readonly<Record<string, string>>>
+>;
 
 /**
  * @experimental A webhook event type a plugin declares: `contributes.webhookEvents`.
@@ -839,7 +854,8 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * window of a cron expression ({@link PluginSchedule}). A schedule that
    * cannot run (an invalid cron or time zone, a job the plugin does not
    * declare) stops the installation from starting, naming the plugin. An
-   * entry in the earlier {@link ScheduledTask} shape is not run.
+   * entry in the earlier {@link ScheduledTask} shape is mapped to this one
+   * with a deprecation notice, or, when it cannot be, not run, with a notice.
    */
   schedules?: Array<PluginSchedule | ScheduledTask>;
   /** @experimental Custom email providers, registered into the provider registry. */
@@ -850,6 +866,17 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   fieldTypes?: PluginFieldType[];
   /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
+  /**
+   * @experimental The admin's strings this plugin's components show, by
+   * interface language and then by key: `{ en: { "acme-shop.cart.title": "Cart" } }`.
+   *
+   * Each key begins with the plugin's admin slug and a dot. Startup refuses
+   * a key outside that namespace, a malformed key or language, a value that is
+   * not text, and a key another plugin already declares. The admin's own keys
+   * begin with `nextly.`, which no plugin's may, so a plugin slugged `nextly`
+   * can declare none. English is the fallback for a key a language lacks.
+   */
+  translations?: PluginTranslations;
   /**
    * @experimental Webhook event types this plugin declares, which an
    * endpoint may subscribe to beside core's. Distinct from `events`, which are

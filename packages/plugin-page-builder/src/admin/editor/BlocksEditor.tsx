@@ -66,6 +66,7 @@ import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
+import { canvasListReadsIn } from "../list-entries-client";
 import { listLoopCollections } from "../loop-collections-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -145,6 +146,11 @@ type EditorView = EditorMount &
     readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
+    /**
+     * The collection the document is an entry of, so a list on it can show
+     * the entry's related entries; absent on a Single.
+     */
+    entryCollection: string | undefined;
   };
 
 /**
@@ -366,9 +372,10 @@ function borrowedServices(): ContentServices {
 }
 
 /**
- * The borrowed services with this editor's open-passage registry and its
- * language, one object per registry and language so the panel sees the same
- * one on every render. A relation search and a link's search read titles in
+ * The borrowed services with this editor's open-passage registry, its
+ * language and the collection its document is an entry of, one object per
+ * registry, language and collection so the panel sees the same one on every
+ * render. A relation search and a link's search read titles in
  * the language being edited.
  */
 const servicesByPassages = new WeakMap<
@@ -379,14 +386,16 @@ const servicesByPassages = new WeakMap<
 function servicesFor(
   passages: OpenPassages,
   locale: string | undefined,
-  readMedia: ReadMediaSummary
+  readMedia: ReadMediaSummary,
+  entryCollection: string | undefined
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
     byLocale = new Map();
     servicesByPassages.set(passages, byLocale);
   }
-  const key = locale ?? "";
+  // Both in the key, as JSON so no language and collection can collide.
+  const key = JSON.stringify([locale ?? "", entryCollection ?? ""]);
   let services = byLocale.get(key);
   if (services === undefined) {
     services = {
@@ -398,6 +407,10 @@ function servicesFor(
       // The same language for a link's search, so a page is found and named
       // as the author reads it.
       findLinkTargets: findLinkTargetsIn(locale),
+      // The selected list's "N entries match, so M show", taken from the
+      // canvas's own read of the list in this language.
+      countListEntries: canvasListReadsIn(locale).count,
+      ...(entryCollection === undefined ? {} : { entryCollection }),
     };
     byLocale.set(key, services);
   }
@@ -470,7 +483,12 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(view.passages, view.locale, view.readMedia)}
+      contentServices={servicesFor(
+        view.passages,
+        view.locale,
+        view.readMedia,
+        view.entryCollection
+      )}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -738,6 +756,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               selectedId={editor.selectedId}
               selectedIds={editor.selection.ids}
               onSelect={editor.select}
+              // A list note's "Choose a field": the list selected and the
+              // author taken to its first sort row.
+              onListSortField={editor.askSortField}
               // The style context and the host policy, derived above so both
               // are one object with one identity rather than rebuilt per
               // render.
@@ -846,6 +867,7 @@ function editorSettings(
     pageLayout,
     canvasRender,
     saveBreakpoints,
+    refreshSiteStyle,
     siteStylePending,
     siteStyleError,
   } = view;
@@ -880,6 +902,7 @@ function editorSettings(
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
           status: siteStyleStatus(siteStylePending, siteStyleError),
+          refresh: refreshSiteStyle,
         }}
       />
     </RemountOnStyleReplay>
@@ -1045,6 +1068,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // A stored image's name and picture in the inspector, read as the canvas
   // reads it.
   const readMedia = useMediaSummaryReader();
+  const identity = useDocumentIdentity();
   const view: EditorView = {
     ...mount,
     ...style,
@@ -1057,6 +1081,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     reveal,
     readMedia,
     preview: componentView.preview,
+    entryCollection:
+      identity?.kind === "collection" ? identity.slug : undefined,
   };
   useOpenAtSection({
     sectionId: openAt,

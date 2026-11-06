@@ -265,7 +265,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "pages",
           id,
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         });
 
@@ -321,7 +321,7 @@ describe.each(getConfiguredTestDialects())(
           collection: "articles",
           id,
           locale: "de",
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         } as never);
 
@@ -365,7 +365,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (content: unknown) =>
         t.nextly.updateSingle({
           slug: "home",
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         } as never);
       await save(pageOf([card]));
@@ -409,7 +409,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (content: unknown, locale?: string) =>
         t.nextly.updateSingle({
           slug: "home",
-          data: { content },
+          data: { content, _overwrite: true },
           ...(locale === undefined ? {} : { locale }),
           overrideAccess: true,
         } as never);
@@ -450,7 +450,12 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await entries.updateEntries(
         { collectionName: "pages", overrideAccess: true },
-        [{ id: String(saved.item.id), data: { content: pageOf([card]) } }],
+        [
+          {
+            id: String(saved.item.id),
+            data: { content: pageOf([card]), _overwrite: true },
+          },
+        ],
         { skipHooks: true }
       );
 
