@@ -49,7 +49,12 @@ import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
-import type { WebhookEvent, WebhookEventType, WebhookResource } from "./types";
+import type {
+  RecordedEventType,
+  WebhookEvent,
+  WebhookEventType,
+  WebhookResource,
+} from "./types";
 
 /**
  * Whether the changed resource opted out of webhook recording. Resolves the
@@ -69,7 +74,8 @@ function resourceRecordingEnabled(resource: WebhookResource): boolean {
 
 /** Arguments for recording one mutation as a durable outbox event. */
 export interface RecordMutationEventArgs {
-  type: WebhookEventType;
+  /** Core's type, or a plugin's once checked as its own. */
+  type: RecordedEventType;
   resource: WebhookResource;
   /**
    * The just-written document in READ SHAPE — JSON container fields already

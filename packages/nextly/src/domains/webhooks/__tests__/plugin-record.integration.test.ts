@@ -30,6 +30,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { WebhookEndpointRegistry } from "../endpoint-registry";
 import { fanOutDueEvents } from "../fan-out";
+import type { WebhookDeliveryQueryService } from "../services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../services/webhook-endpoint-service";
 import type { FilterSpec, WebhookEventSubscription } from "../types";
 
@@ -290,6 +291,62 @@ describe.each(getConfiguredTestDialects())(
       await plugin().webhooks.record({ type: PAID, id: "ord_2", data: {} });
 
       expect((await events(t)).map(row => row.type)).toEqual([PAID]);
+    });
+  }
+);
+
+// Longer than the 20 characters `resource_kind` holds on PostgreSQL and
+// MySQL, so the slug can only round-trip through the scope column, which is
+// where it is kept.
+const LONG_PLUGIN = "@acme/storefront-subscriptions";
+const LONG_SLUG = "acme-storefront-subscriptions";
+const RENEWAL = `${LONG_SLUG}.renewal.due`;
+
+describe.each(getConfiguredTestDialects())(
+  "a plugin's recorded webhook event in the delivery log (%s)",
+  dialect => {
+    it("is read back as the plugin's, with a slug over 20 characters, and never as a collection", async () => {
+      let context: PluginContext | undefined;
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          definePlugin({
+            name: LONG_PLUGIN,
+            version: "1.0.0",
+            nextly: ">=0.0.0",
+            contributes: { webhookEvents: [{ type: RENEWAL }] },
+            init(ctx: PluginContext) {
+              context = ctx;
+            },
+          }),
+        ],
+      });
+      const t = current;
+      if (!context) throw new Error("the plugin did not initialise");
+      const subscribed = await endpoint(t, [RENEWAL]);
+
+      await context.webhooks.record({
+        type: RENEWAL,
+        id: "sub_1",
+        data: { plan: "yearly" },
+      });
+      await fanOut(t);
+
+      const { items } = await t
+        .getService<WebhookDeliveryQueryService>("webhookDeliveryQueryService")
+        .listDeliveries(subscribed, { page: 1, limit: 10 });
+      expect(items.map(item => [item.eventType, item.resource])).toEqual([
+        [
+          RENEWAL,
+          {
+            kind: "plugin",
+            plugin: LONG_SLUG,
+            collection: null,
+            id: "sub_1",
+            locale: null,
+          },
+        ],
+      ]);
     });
   }
 );

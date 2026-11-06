@@ -162,7 +162,10 @@ export type WebhookDeliveryStatus = (typeof WEBHOOK_DELIVERY_STATUSES)[number];
 /** The resource an event was about, surfaced from the joined event row. */
 export interface WebhookDeliveryResource {
   kind: string;
+  /** The collection an entry belongs to, or a slugged resource's slug; null for a plugin's event. */
   collection: string | null;
+  /** The admin slug of the plugin that recorded the event, for kind `plugin`. */
+  plugin?: string | null;
   id: string | null;
   /** Which translation changed, for a localized resource; null otherwise. */
   locale: string | null;

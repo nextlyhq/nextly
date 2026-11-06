@@ -37,6 +37,10 @@ import type {
 } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import {
+  createPluginWebhooks,
+  type PluginWebhooksApi,
+} from "../domains/webhooks/plugin-record";
 import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
@@ -658,6 +662,14 @@ export interface PluginContext {
    * `passwordHasher`: a plugin's people never share a format with staff.
    */
   security: PluginSecurityApi;
+
+  /**
+   * @experimental Recording this plugin's own webhook events, of the types it
+   * declares in `contributes.webhookEvents`, for delivery to the endpoints
+   * subscribed to them. Present on every context: a plugin that declares no
+   * types has every type refused by name.
+   */
+  webhooks: PluginWebhooksApi;
 
   /**
    * @experimental This plugin's stored configuration.
@@ -2233,6 +2245,12 @@ export function createPluginContext(
           secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
       }),
     },
+    // Kept within this plugin's name, which decides the types it may record.
+    // The adapter is read per call and through this context's own resolver,
+    // as the secrets helper's is.
+    webhooks: createPluginWebhooks(plugin?.name ?? "nextly", () =>
+      asSecretsAdapter(getServiceFn("adapter"))
+    ),
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
     // exactly what this store exists to replace.
