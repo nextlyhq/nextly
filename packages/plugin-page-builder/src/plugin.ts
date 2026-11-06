@@ -1,9 +1,12 @@
 import {
   allBlocks,
+  allNamedQueries,
   breakpointContexts,
   DEFAULT_LIMITS,
+  namedQueryDeclaration,
   type DocumentLimits,
   type NamedClass,
+  type NamedQueryDefinition,
   type RemotePattern,
   type RetiredExposures,
 } from "@nextlyhq/blocks-engine";
@@ -161,6 +164,7 @@ import {
 } from "./library-route";
 import { listEntriesRoute } from "./list-entries-route";
 import { loopCollectionsRoute } from "./loop-collections-route";
+import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pageActionsRoute } from "./page-actions-route";
@@ -454,6 +458,14 @@ export interface PageBuilderOptions {
    * Left unset, both use the engine defaults and agree by construction.
    */
   limits?: DocumentLimits;
+  /**
+   * The site's named queries: a collection list's custom sources, made with
+   * `defineNamedQuery` from `@nextlyhq/plugin-sdk/blocks`. Registered on each
+   * boot beside the ones plugins declare, all or nothing.
+   *
+   * @experimental
+   */
+  namedQueries?: readonly NamedQueryDefinition[];
   /**
    * Where component definitions live: what publishing a page checks when it
    * warns that some are not live, and what the EDITOR reads to draw them.
@@ -1620,6 +1632,9 @@ export const pageBuilder = (
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // The site's named queries and the ones plugins declare, into a
+      // registry emptied for this boot.
+      registerNamedQueriesAtBoot(ctx, opts.namedQueries);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
       refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
@@ -2357,6 +2372,9 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
+        // The site's named queries, without their run functions: what the
+        // editor offers as a list's custom sources.
+        namedQueriesRoute(() => allNamedQueries().map(namedQueryDeclaration)),
         // A collection list's entries on the canvas, read as a visitor reads
         // them, for a collection the author may read.
         listEntriesRoute(),

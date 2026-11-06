@@ -551,9 +551,18 @@ function placementUpdate(
   };
 }
 
+/** The parts of a list's query a custom source replaces, as one source. */
+const SOURCE_PARTS = ["collection", "relation", "filters", "sort"] as const;
+
 /**
  * The update op that changes one collection list's query: each part given
  * is set, each `null` removed, and the rest of its props kept as stored.
+ *
+ * A list has one source. Choosing a custom source (`namedQuery`) removes the
+ * collection, related entries, filters and sort in the same write, as the
+ * editor's Source menu does, so one action is one undo step; a change that
+ * sets both is refused. Choosing a collection or related entries removes a
+ * custom source.
  */
 function listQueryUpdate(
   document: BlockDocument,
@@ -566,7 +575,19 @@ function listQueryUpdate(
       `There is no collection list "${listId}" on this page.`,
     ]);
   }
+  const sets = (part: keyof ListQueryChange) =>
+    change[part] !== undefined && change[part] !== null;
   const props: Record<string, unknown> = { ...node.props };
+  if (sets("namedQuery")) {
+    if (SOURCE_PARTS.some(sets)) {
+      throw refusedAction([
+        "This list's source is a custom source, so it can't also name a collection, related entries, filters or sort.",
+      ]);
+    }
+    for (const part of SOURCE_PARTS) delete props[part];
+  } else if (sets("collection") || sets("relation")) {
+    delete props.namedQuery;
+  }
   for (const [part, value] of Object.entries(change)) {
     if (value === undefined) continue;
     if (value === null) delete props[part];

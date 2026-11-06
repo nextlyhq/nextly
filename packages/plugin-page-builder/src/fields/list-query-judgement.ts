@@ -22,12 +22,14 @@ import {
   isPlainRecord,
   LIST_FIELD_CODES,
   listQueryIssues,
+  registeredNamedQueries,
   walkNodes,
   type BindingFieldShape,
   type BlockDocument,
   type BlockNode,
   type ListFields,
   type ListFieldSource,
+  type NamedQuerySource,
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -131,7 +133,8 @@ export function listSettingOf(write: PluginFieldWrite): ListSetting {
 /** The collections a judgement over `nodes` asks about, and nothing read. */
 function collectionsAsked(
   nodes: readonly unknown[],
-  entryCollection: string | null | undefined
+  entryCollection: string | null | undefined,
+  namedQueries: NamedQuerySource
 ): Set<string> {
   const asked = new Set<string>();
   listQueryIssues(nodes, {
@@ -142,6 +145,8 @@ function collectionsAsked(
       },
     },
     ...(entryCollection === undefined ? {} : { entryCollection }),
+    // A custom source asks about what its query reads and lists.
+    namedQueries,
   });
   return asked;
 }
@@ -151,10 +156,15 @@ async function sourceFor(
   forests: readonly (readonly unknown[])[],
   setting: ListSetting,
   read: ListFieldsReader,
-  known: Map<string, ListFields | undefined>
+  known: Map<string, ListFields | undefined>,
+  namedQueries: NamedQuerySource
 ): Promise<ListFieldSource> {
   for (const nodes of forests) {
-    for (const collection of collectionsAsked(nodes, setting.entryCollection)) {
+    for (const collection of collectionsAsked(
+      nodes,
+      setting.entryCollection,
+      namedQueries
+    )) {
       if (!known.has(collection)) {
         known.set(collection, await read(collection, setting.locale));
       }
@@ -183,6 +193,11 @@ export interface ListJudging {
   /** The forms the forest is stored as, read only once a problem is found. */
   readonly storedForms?: () => Promise<StoredForms>;
   readonly maxNodes?: number;
+  /**
+   * The site's named queries, for a list whose source is one; the process
+   * registry the page builder fills at boot when absent.
+   */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /**
@@ -199,8 +214,10 @@ async function listErrorsIn(
 ): Promise<ListIssue[]> {
   const known = new Map<string, ListFields | undefined>();
   const fieldsOf = site.fieldsOf;
+  const namedQueries = site.namedQueries ?? registeredNamedQueries();
   const judge = async (stored: readonly BlockDocument[]) =>
     listQueryIssues(nodes, {
+      namedQueries,
       ...(fieldsOf === undefined
         ? {}
         : {
@@ -214,7 +231,8 @@ async function listErrorsIn(
               ],
               setting,
               fieldsOf,
-              known
+              known,
+              namedQueries
             ),
           }),
       ...(setting.entryCollection === undefined

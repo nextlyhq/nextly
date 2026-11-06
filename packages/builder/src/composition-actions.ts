@@ -127,6 +127,15 @@ export interface ListQueryChange {
   readonly limit?: number | null;
   /** How many matching entries to skip, from 0. */
   readonly offset?: number | null;
+  /**
+   * A custom source: a named query the site registers, and one literal per
+   * input set. Choosing one removes the collection, related entries, filters
+   * and sort in the same write; inputs are replaced whole, not merged.
+   */
+  readonly namedQuery?: {
+    readonly name: string;
+    readonly params?: Readonly<Record<string, string | number | boolean>>;
+  } | null;
 }
 
 /** Which part of a block an exposure targets: a prop, or its visibility. */
@@ -237,6 +246,17 @@ const pageActionOptions = [
         .nullable()
         .optional(),
       sort: z.string().max(2048).nullable().optional(),
+      // The shape only: whether the query exists and its inputs fit it is
+      // the blocks field's to judge, in the editor's words.
+      namedQuery: z
+        .strictObject({
+          name: z.string().max(64),
+          params: z
+            .record(id, z.union([z.string().max(200), z.number(), z.boolean()]))
+            .optional(),
+        })
+        .nullable()
+        .optional(),
       limit: z.number().nullable().optional(),
       offset: z.number().nullable().optional(),
     }),
