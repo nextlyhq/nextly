@@ -117,12 +117,14 @@ interface Issue {
   message: string;
 }
 
-/** One collection entry that places a component, as the usage index records it. */
+/** One document that places a component, as the usage index records it. */
 export interface HostRef {
-  /** The collection's slug. */
+  /** The collection's slug, or the Single's when {@link single} is set. */
   readonly slug: string;
-  /** The entry's id. */
+  /** The entry's id; empty for a Single, which has one document. */
   readonly id: string;
+  /** Whether this is a Single's document rather than a collection entry. */
+  readonly single?: boolean;
   /** The blocks field the placement is in. */
   readonly field: string;
   /** Whether the reference was recorded in one language of a localized field. */
@@ -1116,12 +1118,6 @@ async function judgeHosts(args: {
     );
     return;
   }
-  // Said whenever hosts are looked for, because it is true of every lookup: the
-  // index records the components a document names, not one a placement's
-  // override chooses inside the component it places.
-  tally.incomplete(
-    "a document that reaches it only through a placement's override is not in the usage index"
-  );
   const listed = await everyHost(self, setup);
   if (listed === null) {
     tally.incomplete(
@@ -1265,7 +1261,7 @@ function addDamage(
 
 /** One document, whichever of its fields placed the component. */
 function documentKey(host: HostRef): string {
-  return `${host.slug}\u0000${host.id}`;
+  return `${host.single === true ? "single" : "collection"}\u0000${host.slug}\u0000${host.id}`;
 }
 
 /** What one host is broken by: a composition fault, or a loop it now closes. */
@@ -1376,8 +1372,9 @@ function admitHosts(
 ): string[] {
   const components: string[] = [];
   for (const host of hosts) {
-    const key = `${host.slug}\u0000${host.id}\u0000${host.field}`;
-    const isComponent = host.slug === setup.store.collection;
+    const key = `${documentKey(host)}\u0000${host.field}`;
+    const isComponent =
+      host.single !== true && host.slug === setup.store.collection;
     if (listing.found.has(key) || (isComponent && host.id === self)) continue;
     if (listing.found.size >= MOST_HOSTS_JUDGED) {
       listing.whole = false;
@@ -1612,12 +1609,11 @@ async function hostDocument(
   draft: boolean,
   write: PluginFieldWrite
 ): Promise<BlockDocument | undefined | null> {
-  const target: PluginStoredValueTarget = {
-    collection: host.slug,
-    id: host.id,
-    field: host.field,
-    form: draft ? "draft" : "published",
-  };
+  const form = draft ? "draft" : "published";
+  const target: PluginStoredValueTarget =
+    host.single === true
+      ? { single: host.slug, field: host.field, form }
+      : { collection: host.slug, id: host.id, field: host.field, form };
   try {
     const read = await write.readStored(target);
     if (read.kind === "absent") return undefined;
@@ -1627,9 +1623,11 @@ async function hostDocument(
   }
 }
 
-/** A host as an operator finds it in the log: its entry id in its collection. */
+/** A host as an operator finds it in the log: its entry id in its collection, or the Single. */
 function describeHost(host: HostRef): string {
-  return `"${host.id}" in "${host.slug}"`;
+  return host.single === true
+    ? `the Single "${host.slug}"`
+    : `"${host.id}" in "${host.slug}"`;
 }
 
 /**
