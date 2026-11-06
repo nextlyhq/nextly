@@ -22,6 +22,7 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import { TEMPLATE_COLLECTION_FIELD } from "../collections/templates";
+import { JUDGEMENT_CONTEXT } from "../judged-writes";
 
 /** The template drawing a collection, as a refusal names it. */
 export interface TemplateHolder {
@@ -191,6 +192,8 @@ interface GuardContext {
   readonly data?: unknown;
   readonly originalData?: unknown;
   readonly executor?: unknown;
+  /** The write's own hook context, which marks a judging write. */
+  readonly context?: unknown;
   readonly user?: unknown;
   readonly req?: unknown;
 }
@@ -242,6 +245,7 @@ export async function guardWrite(
     ) {
       return;
     }
+    if (skipsReads(context)) return;
     // A template keeps the collection it draws. The one exception is a
     // template whose collection no longer exists under its name, renamed or
     // deleted: it may be pointed at another, judged as a new template's
@@ -282,6 +286,8 @@ async function judgeCollection(
   // which has already run.
   if (typeof collection !== "string" || collection === "") return;
 
+  if (skipsReads(context)) return;
+
   const problem = await templateCollectionProblem(
     collection,
     setup.readCollection,
@@ -289,14 +295,30 @@ async function judgeCollection(
   );
   if (problem !== null) throw templateCollectionRefusal(problem);
 
-  // Inside a caller's transaction the read would take a second connection,
-  // which on a small pool can wait for the one that transaction holds. The
-  // index still refuses a second template there; the refusal is only unnamed.
-  if (context.executor !== undefined) return;
   const holder = await setup.holderOf(collection);
   if (holder === null || holder.id === self) return;
   throw await secondTemplateRefusal(collection, holder, id =>
     mayReadAsWriter(context, setup.templatesCollection, id)
+  );
+}
+
+/**
+ * Whether a write is judged without reading, or refused for being in a
+ * caller's transaction.
+ *
+ * Inside a caller's transaction every read the guard makes would take a
+ * second connection, which on a small pool waits for the one that
+ * transaction holds, while the transaction waits for this hook. A template
+ * action's dry run asked the same questions before it opened its
+ * transaction, so its judging write goes on to the index. Any other write in
+ * a caller's transaction that names a collection is refused rather than let
+ * through unjudged.
+ */
+function skipsReads(context: GuardContext): boolean {
+  if (context.executor === undefined) return false;
+  if (recordOf(context.context)?.[JUDGEMENT_CONTEXT] === true) return true;
+  throw templateCollectionRefusal(
+    "A template's collection cannot be checked inside a bulk operation. Create or change the template on its own."
   );
 }
 

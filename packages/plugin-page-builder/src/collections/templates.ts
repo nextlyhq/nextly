@@ -33,7 +33,9 @@ export function templatesCollection(): CollectionConfig {
     slug: TEMPLATES_SLUG,
     labels: { singular: "Template", plural: "Templates" },
     fields: [
-      text({ name: "title", required: true }),
+      // Bounded on every write path, so a long title is refused alike on every
+      // dialect rather than fitting one database's column and not another's.
+      text({ name: "title", required: true, maxLength: 255 }),
       text({
         name: TEMPLATE_COLLECTION_FIELD,
         label: "Collection",

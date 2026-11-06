@@ -137,10 +137,16 @@ async function createTemplate(
   const publishes = action.publish === true;
   // Preconditions first, before anything about the collection is read: a
   // caller who may not create templates learns nothing from this route.
-  const by = await actingCaller(ctx, [
-    ["create", templates],
-    ...(publishes ? ([["publish", templates]] as const) : []),
-  ]);
+  // Asked of any entry: a create rule that limits which templates the caller
+  // may make is the write's to apply, made as the caller with the data.
+  const by = await actingCaller(
+    ctx,
+    [
+      ["create", templates],
+      ...(publishes ? ([["publish", templates]] as const) : []),
+    ],
+    { anyEntry: true }
+  );
 
   const title = action.title ?? (await defaultTitle(ctx, action.collection));
   const asked: TemplateSummary = {

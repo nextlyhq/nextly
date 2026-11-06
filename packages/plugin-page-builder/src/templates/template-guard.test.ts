@@ -114,14 +114,27 @@ describe("a new template", () => {
     expect(error.publicMessage).not.toContain("Secret");
   });
 
-  it("leaves the second template to the index inside a caller's transaction", async () => {
+  it("reads nothing inside a caller's transaction: a dry run's judging write goes to the index, any other is refused", async () => {
     const holderOf = vi.fn(async () => ({ id: "t1", title: "Post page" }));
-    await guardWrite(setup({ holderOf }), {
+    const readCollection = vi.fn(async () => POSTS);
+    await guardWrite(setup({ holderOf, readCollection }), {
       operation: "create",
       data: { title: "Post", collection: "posts" },
       executor: {},
+      context: { "pageBuilder.transferJudgement": true },
     });
     expect(holderOf).not.toHaveBeenCalled();
+    expect(readCollection).not.toHaveBeenCalled();
+
+    const error = await refusalOf(() =>
+      guardWrite(setup({ holderOf, readCollection }), {
+        operation: "create",
+        data: { title: "Post", collection: "posts" },
+        executor: {},
+      })
+    );
+    expect(NextlyError.isValidation(error)).toBe(true);
+    expect(readCollection).not.toHaveBeenCalled();
   });
 });
 
