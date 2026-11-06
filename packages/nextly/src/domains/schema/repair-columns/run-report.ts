@@ -174,9 +174,11 @@ export function formatReport(document: RepairColumnsDocument): ReportLine[] {
           : "Each column Nextly builds from field definitions, compared with its field as last migrated, and converted where it is safe.",
     },
   ];
+  // Each warning as the document gives it: what happened, why, and what to do next.
   for (const warning of document.warnings) {
     const cause = warning.cause === null ? "" : ` ${warning.cause}`;
-    lines.push({ level: "warn", text: `${warning.message}${cause}` });
+    const next = warning.next === null ? "" : ` Next: ${warning.next}`;
+    lines.push({ level: "warn", text: `${warning.message}${cause}${next}` });
   }
   for (const record of result.records) {
     lines.push({ level: "warn", text: formatRecord(record) });

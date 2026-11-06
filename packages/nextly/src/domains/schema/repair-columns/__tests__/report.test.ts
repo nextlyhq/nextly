@@ -23,6 +23,8 @@ import {
   countOutcomes,
   type RepairRecord,
 } from "../report";
+import { reportDocument } from "../report-json";
+import { formatReport } from "../run-report";
 import type { ColumnFinding, ColumnLocation, DiffersFinding } from "../types";
 
 const location: ColumnLocation = {
@@ -618,5 +620,37 @@ describe("the summary", () => {
     expect(counts.converted).toBe(0);
     expect(Object.keys(counts)).toHaveLength(11);
     expect(formatSummary(counts)).toBe("1 not migrated, 2 would convert.");
+  });
+});
+
+describe("the text report of a run", () => {
+  it("gives each warning its message, cause and next step, as the document does", () => {
+    const document = reportDocument({
+      nextlyVersion: "test",
+      mode: "dry-run",
+      dialect: "postgresql",
+      schemaLock: {
+        state: "unknown",
+        holder: null,
+        unreadable: "the field-group lock could not be read (42501)",
+      },
+      records: [record(textToJson)],
+      warnings: [
+        {
+          code: "NEXTLY_REPAIR_COLUMNS_SCHEMA_LOCK_UNREADABLE",
+          message:
+            "Whether another schema change is running could not be read.",
+          cause: "the field-group lock could not be read (42501).",
+          next: "Run it again as a database user that can read Nextly's lock tables.",
+          docs: null,
+        },
+      ],
+    });
+    const warnings = formatReport(document).filter(
+      line => line.level === "warn" && line.text.startsWith("Whether")
+    );
+    expect(warnings.map(line => line.text)).toEqual([
+      "Whether another schema change is running could not be read. the field-group lock could not be read (42501). Next: Run it again as a database user that can read Nextly's lock tables.",
+    ]);
   });
 });
