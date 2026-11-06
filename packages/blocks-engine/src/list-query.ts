@@ -105,6 +105,11 @@ export interface ListQuery {
   readonly sort: readonly ListSortKey[];
   readonly limit?: number;
   readonly offset?: number;
+  /**
+   * Present, and true, when the list is split into pages, each served at
+   * its own address (`/news/page/2`); absent when it shows one page.
+   */
+  readonly paginate?: true;
 }
 
 /** The props a stored list query is read from. */
@@ -114,7 +119,8 @@ export type ListQueryProp =
   | "filters"
   | "sort"
   | "limit"
-  | "offset";
+  | "offset"
+  | "paginate";
 
 /** Why part of a stored list query could not be read. */
 export interface ListQueryProblem {
@@ -129,7 +135,8 @@ export type ListShapeCode =
   | "list-offset-invalid"
   | "list-filter-invalid"
   | "list-sort-invalid"
-  | "list-relation-invalid";
+  | "list-relation-invalid"
+  | "list-paginate-invalid";
 
 /** The codes a list is refused with when judged against the schema. */
 export type ListFieldCode =
@@ -141,9 +148,19 @@ export type ListFieldCode =
   | "list-relation-unsuitable"
   | "list-too-deep";
 
+/**
+ * The codes a split into pages is refused with, by where the list sits: a
+ * page has one list that pages, and it must be one that can.
+ */
+export type ListPageCode =
+  | "list-paginate-twice"
+  | "list-paginate-nested"
+  | "list-paginate-related"
+  | "list-paginate-shared";
+
 /** Every code a list query is judged with, each described for authors. */
 export const LIST_ISSUE_CODES: {
-  readonly [Code in ListShapeCode | ListFieldCode]: string;
+  readonly [Code in ListShapeCode | ListFieldCode | ListPageCode]: string;
 } = {
   "list-limit-invalid":
     "A list's number of items is not a whole number from 1 to 100.",
@@ -168,6 +185,14 @@ export const LIST_ISSUE_CODES: {
     "A list's related source is not a to-many relation to its collection.",
   "list-too-deep":
     "A list shows related entries of a list that already shows related entries.",
+  "list-paginate-invalid":
+    "A list's split into pages is not stored as on or off.",
+  "list-paginate-twice": "More than one list on a page is split into pages.",
+  "list-paginate-nested": "A list split into pages sits inside another list.",
+  "list-paginate-related":
+    "A list split into pages shows related entries, which have no count of pages.",
+  "list-paginate-shared":
+    "A list split into pages sits in a component or a Layout region, which shows on many pages.",
 };
 
 /** A field name as a list may write it: no paths, operators or quoting. */
@@ -510,12 +535,14 @@ export function readListQuery(props: unknown): {
     message: stored =>
       `The number of entries to skip is ${stored}. Skip a whole number of entries, 0 or more.`,
   });
+  const paginate = readPaginate(record.paginate);
   const filters = readFilters(record.filters);
   const sorted = readSort(record.sort);
   const relation = readRelation(record.relation, collection);
   const problems = [
     limit.problem,
     offset.problem,
+    paginate.problem,
     ...filters.problems,
     "problem" in sorted ? sorted.problem : undefined,
     isProblem(relation) ? relation : undefined,
@@ -528,9 +555,105 @@ export function readListQuery(props: unknown): {
       sort: "keys" in sorted ? sorted.keys : [],
       ...(limit.value === undefined ? {} : { limit: limit.value }),
       ...(offset.value === undefined ? {} : { offset: offset.value }),
+      ...(paginate.value === true ? { paginate: true as const } : {}),
     },
     problems,
   };
+}
+
+/**
+ * The stored split into pages: on when `true`, off when absent or `false`,
+ * which a switch turned off stores.
+ */
+function readPaginate(value: unknown): {
+  value?: true;
+  problem?: ListQueryProblem;
+} {
+  if (value === undefined || value === false) return {};
+  if (value === true) return { value: true };
+  return {
+    problem: {
+      prop: "paginate",
+      code: "list-paginate-invalid",
+      message: `Split into pages is ${describeValue(value)}. Turn it on or off.`,
+    },
+  };
+}
+
+/**
+ * How many pages a list split into pages has: the entries after the skipped
+ * ones, `limit` to a page, and never fewer than one, which shows the list's
+ * empty state when nothing is left. The one count the route, the renderer's
+ * links and the editor share, so none of them names a page the others do not.
+ */
+export function listPageCount(
+  matching: number,
+  offset: number,
+  limit: number
+): number {
+  const left = Math.max(0, matching - offset);
+  return Math.max(1, Math.ceil(left / Math.max(1, limit)));
+}
+
+/** The list on a page that is split into pages, as its node holds it. */
+export interface PaginatedList {
+  readonly id: string;
+  /** The author's name for the list, when it has one. */
+  readonly name?: string;
+  readonly props: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The list a page's address pages, or undefined when none is split into
+ * pages: the first, in document order, of the lists split into pages that
+ * are not inside another list and read a collection rather than related
+ * entries. Every other list split into pages is one validation refuses, and
+ * one that reaches the renderer anyway shows its first page alone.
+ *
+ * Bounded by `maxNodes`, and reading only plain records, because a stored
+ * document is whatever the database returned.
+ */
+export function paginatedList(
+  nodes: readonly unknown[],
+  maxNodes: number = Number.MAX_SAFE_INTEGER
+): PaginatedList | undefined {
+  const stack: unknown[] = [...nodes].reverse();
+  let left = maxNodes;
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    if (left <= 0) return undefined;
+    left -= 1;
+    if (!isPlainRecord(node)) continue;
+    if (node.type === COLLECTION_LIST_TYPE) {
+      const { query } = readListQuery(node.props);
+      if (
+        query.paginate === true &&
+        query.relation === undefined &&
+        typeof node.id === "string"
+      ) {
+        return {
+          id: node.id,
+          ...(typeof node.name === "string" && node.name.trim() !== ""
+            ? { name: node.name.trim() }
+            : {}),
+          props: isPlainRecord(node.props) ? node.props : {},
+        };
+      }
+      // A list inside a list repeats once per outer entry, with no address
+      // of its own, so nothing inside one pages.
+      continue;
+    }
+    const slots = node.slots;
+    if (!isPlainRecord(slots)) continue;
+    for (const name of Object.keys(slots).reverse()) {
+      const children = slots[name];
+      if (Array.isArray(children)) {
+        for (let index = children.length - 1; index >= 0; index -= 1) {
+          stack.push(children[index]);
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 /** The fields of one collection, as a list's filters and sort are judged. */
@@ -572,13 +695,19 @@ export interface ListQueryJudgement {
   readonly stored?: readonly BlockDocument[];
   /** How many nodes to visit at most, as the rest of validation is bounded. */
   readonly maxNodes?: number;
+  /**
+   * What the document is (`page`, `component`, `region`, …). A component
+   * or a Layout region shows on many pages, so no list in one may be split
+   * into pages; absent, where its lists sit is not judged.
+   */
+  readonly documentKind?: string;
 }
 
 /** One finding about a list, before its severity is decided. */
 interface Finding {
   readonly path: string;
   readonly nodeId: string;
-  readonly code: ListShapeCode | ListFieldCode;
+  readonly code: ListShapeCode | ListFieldCode | ListPageCode;
   readonly message: string;
 }
 
@@ -1018,12 +1147,73 @@ function relationFindings(
       ];
 }
 
+/** Where each kind of shared document shows, for the words of a refusal. */
+const SHOWN_ON_MANY: Readonly<Record<string, string>> = {
+  component:
+    "This list is in a component, which can be placed on many pages, so it can't be split into pages.",
+  region:
+    "This list is in a Layout region, which shows on every page using the Layout, so it can't be split into pages.",
+};
+
+/**
+ * Why a list split into pages may not be: it sits where nothing has an
+ * address of its own, it has no count of pages, or another list on the page
+ * already pages. `paging` is the one list the page's address pages.
+ */
+function pageFindings(
+  query: ListQuery,
+  outer: EnclosingList | undefined,
+  judgement: ListQueryJudgement,
+  paging: PaginatedList | undefined,
+  at: (prop: ListQueryProp) => string,
+  nodeId: string
+): Finding[] {
+  if (query.paginate !== true) return [];
+  const refused = (code: ListPageCode, message: string): Finding[] => [
+    { path: at("paginate"), nodeId, code, message },
+  ];
+  const shared =
+    judgement.documentKind === undefined
+      ? undefined
+      : SHOWN_ON_MANY[judgement.documentKind];
+  if (shared !== undefined) {
+    return refused(
+      "list-paginate-shared",
+      `${shared} Turn off Split into pages.`
+    );
+  }
+  if (outer !== undefined) {
+    return refused(
+      "list-paginate-nested",
+      "This list is split into pages, but it sits inside another list, which repeats it for each entry with no address of its own. Turn off Split into pages, or move this list out of that list."
+    );
+  }
+  if (query.relation !== undefined) {
+    return refused(
+      "list-paginate-related",
+      "This list shows related entries, which can't be split into pages. Show a collection instead, or turn off Split into pages."
+    );
+  }
+  if (paging !== undefined && paging.id !== nodeId) {
+    const other =
+      paging.name === undefined
+        ? "another list on this page"
+        : `"${paging.name}"`;
+    return refused(
+      "list-paginate-twice",
+      `Only one list on a page can be split into pages, and ${other} already is. Turn off Split into pages on one of them.`
+    );
+  }
+  return [];
+}
+
 /** Everything found about one list node. */
 function findingsFor(
   node: Readonly<Record<string, unknown>>,
   path: string,
   outer: EnclosingList | undefined,
-  judgement: ListQueryJudgement
+  judgement: ListQueryJudgement,
+  paging: PaginatedList | undefined
 ): { findings: Finding[]; list: EnclosingList } {
   const { query, problems } = readListQuery(node.props);
   const at = (prop: ListQueryProp) => pointer(`${path}/props`, prop);
@@ -1035,6 +1225,7 @@ function findingsFor(
     message: problem.message,
   }));
   findings.push(...relationFindings(query, outer, judgement, at, nodeId));
+  findings.push(...pageFindings(query, outer, judgement, paging, at, nodeId));
   const fields =
     query.collection === undefined || judgement.fields === undefined
       ? undefined
@@ -1064,6 +1255,9 @@ function walkFindings(
 ): Finding[] {
   const findings: Finding[] = [];
   const budget = { left: judgement.maxNodes ?? Number.MAX_SAFE_INTEGER };
+  // The one list the page's address pages, as the route and renderer find
+  // it, so every other list split into pages is judged against that one.
+  const paging = paginatedList(nodes, budget.left);
   const stack: Visit[] = [];
   const pushChildren = (
     list: readonly unknown[],
@@ -1086,7 +1280,7 @@ function walkFindings(
     if (!isPlainRecord(node)) continue;
     let outer = visit.outer;
     if (node.type === COLLECTION_LIST_TYPE) {
-      const judged = findingsFor(node, path, outer, judgement);
+      const judged = findingsFor(node, path, outer, judgement, paging);
       findings.push(...judged.findings);
       outer = judged.list;
     }
@@ -1125,7 +1319,7 @@ export function listQueryIssues(
   readonly path: string;
   /** The list block the issue is about, so an editor shows it on that block. */
   readonly nodeId: string;
-  readonly code: ListShapeCode | ListFieldCode;
+  readonly code: ListShapeCode | ListFieldCode | ListPageCode;
   readonly message: string;
   readonly severity: "error" | "warning";
 }[] {

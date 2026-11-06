@@ -27,6 +27,7 @@
  */
 import {
   listFieldKind,
+  listPageCount,
   readListQuery,
   safeTimeZone,
   isListDay,
@@ -652,9 +653,13 @@ function blockingProblem(
   problems: ReturnType<typeof readListQuery>["problems"]
 ): string | undefined {
   // A limit is held to its bounds and a malformed sort lists in id order,
-  // as a stored list always did; anything else would read the wrong entries.
+  // as a stored list always did, and a malformed split into pages shows one
+  // page; anything else would read the wrong entries.
   const blocking = problems.filter(
-    problem => problem.prop !== "limit" && problem.prop !== "sort"
+    problem =>
+      problem.prop !== "limit" &&
+      problem.prop !== "sort" &&
+      problem.prop !== "paginate"
   );
   return blocking.length === 0
     ? undefined
@@ -780,21 +785,43 @@ export async function listEntryCount(
 }
 
 /**
- * Read a list's entries as its stored props ask. Never throws: a read that
- * fails comes back as `failed` with what failed, and the list draws its
- * empty state.
+ * How many pages a list split into pages has when its query matches
+ * `matching` entries, by its stored offset and limit as its read takes them.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function listPagesOf(props: unknown, matching: number): number {
+  const offset = readListQuery(props).query.offset ?? 0;
+  const limit = safeLimit((props as { limit?: unknown } | null)?.limit);
+  return listPageCount(matching, offset, limit);
+}
+
+/**
+ * Read a list's entries as its stored props ask: page `page` of them, from
+ * 1, where the list is split into pages. Never throws: a read that fails
+ * comes back as `failed` with what failed, and the list draws its empty
+ * state.
  */
 export async function readList(
   props: unknown,
   collection: string,
   ctx: PageContext,
-  reads: ListReads
+  reads: ListReads,
+  page = 1
 ): Promise<ListOutcome> {
   const read = listReadBase(props, collection, ctx);
   if ("blocking" in read) {
     return { items: [], failed: true, diagnostic: failure(read.blocking) };
   }
-  const { query, base, offset, limit, sort, sortProblem } = read;
+  const { query, base: first, limit, sort, sortProblem } = read;
+  // A later page starts `limit` entries further on for each page before it,
+  // the stored offset applied once, before paging. The window moves in the
+  // read itself rather than through the reader's page number, so a provider
+  // that knows nothing of pages still reads the right entries. Related
+  // entries are never paged: they have no count of pages.
+  const paged = page > 1 && query.relation === undefined;
+  const offset = paged ? read.offset + (page - 1) * limit : read.offset;
+  const base = paged ? { ...first, offset } : first;
   try {
     // A related source's ids first, as a visitor reads them; with none to
     // read, the list draws its empty state and an author is told why.

@@ -658,6 +658,11 @@ export function validateDocument(
           : {}),
         ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
         maxNodes: survey.limits.maxNodes,
+        // So a list in a component or a Layout region, which shows on many
+        // pages, is refused a split into pages of its own.
+        ...(typeof envelope.kind === "string"
+          ? { documentKind: envelope.kind }
+          : {}),
       }).map(({ nodeId: _nodeId, ...issue }) => issue)
     );
   }

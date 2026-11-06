@@ -22,6 +22,7 @@ import {
   isFetchableUrl,
   isListDay,
   DOCUMENT_FORMAT_VERSION,
+  paginatedList,
   readListQuery,
   regionDocument,
   safeTimeZone,
@@ -58,7 +59,8 @@ import {
   nextlySingleTags,
   nextlySiteSettingsTags,
   readPublicSiteSettings,
-  slugToStaticParam,
+  LIST_PAGE_SEGMENT,
+  slugToPath,
 } from "nextly/runtime";
 import type {
   ContentEntry,
@@ -77,6 +79,7 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { collectionLoop } from "./blocks/collection-loop";
+import { listEntryCount, listPagesOf } from "./blocks/list-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -100,6 +103,7 @@ import type {
   BlocksFieldShapes,
   BlocksPublicReader,
   BlocksSiteSettings,
+  ListPageContext,
   PageBindings,
   PageContext,
   QueryBudget,
@@ -477,23 +481,46 @@ export type { BlocksLayoutsProvider } from "./next-layouts";
  * to itself another is the disagreement this exists to prevent.
  */
 function emitPath(slug: string): string | null {
-  // The route's OWN answer, not a second opinion. `slugToStaticParam` is what
-  // `generateStaticParams` pre-renders from, so deriving the path any other way
-  // is how a canonical or a link comes to name somewhere the route does not
-  // serve. It collapses repeated and edge slashes — Next answers `/a//b` with a
-  // 308 to `/a/b`, and the lookup then asks for a slug the entry does not have —
-  // refuses reserved paths, and refuses the segments URL resolution removes.
+  // The route's OWN answer, not a second opinion: the path its static params
+  // pre-render, which the route's redirects name too. It collapses repeated
+  // and edge slashes — Next answers `/a//b` with a 308 to `/a/b`, and the
+  // lookup then asks for a slug the entry does not have — refuses reserved
+  // paths, and refuses the segments URL resolution removes.
   //
   // An empty slug is the HOMEPAGE, which the route resolves at `/` and
   // pre-renders as `{ slug: [] }`. Treating it as missing would strip the
   // destination from every button pointing at the site root.
-  const param = slugToStaticParam(slug);
-  if (param === null) return null;
-  if (param.slug.length === 0) return "/";
-  // Encoded per segment: Next hands this route DECODED segments while the
-  // request used their encoded form, so `faq?all` emitted raw is read as a path
-  // plus a query.
-  return `/${param.slug.map(encodeURIComponent).join("/")}`;
+  return slugToPath(slug);
+}
+
+/**
+ * The slug of page `page` of the list on the entry at `slug`: the entry's
+ * own for page 1, `<slug>/page/<n>` for a later one, as the route serves it.
+ */
+function listPageSlug(slug: string, page: number | undefined): string {
+  if (page === undefined || page <= 1) return slug;
+  return [slug, LIST_PAGE_SEGMENT, String(page)]
+    .filter(part => part !== "")
+    .join("/");
+}
+
+/**
+ * Which page of its paginated list a render draws, and the address of each
+ * page, or nothing when the page's own document splits no list into pages.
+ * The page's own nodes only: a component or a Layout region shows on many
+ * pages, so a list in one never pages an address.
+ */
+function listPageFor(
+  document: BlockDocument,
+  context: RenderContext
+): ListPageContext | undefined {
+  // The route's own addresses, its mount included: present where it serves
+  // a list's later pages, so the links name exactly the pages it answers.
+  const listPagePath = context.listPagePath;
+  if (listPagePath === undefined) return undefined;
+  const list = paginatedList(document.nodes);
+  if (list === undefined) return undefined;
+  return { nodeId: list.id, page: context.page ?? 1, href: listPagePath };
 }
 
 /**
@@ -2535,7 +2562,9 @@ function blocksRouteConfig(
               document,
               resolver,
               mediaResolver(config, readerFor(config), budget),
-              context.slug,
+              // A later page of the page's list is its own address, so its
+              // canonical names it rather than the list's first page.
+              listPageSlug(context.slug, context.page),
               limits,
               styleContext,
               config.hostPolicy?.remotePatterns,
@@ -2548,6 +2577,36 @@ function blocksRouteConfig(
           },
         }
       : {}),
+    // The route serves the pages of the one list a page splits into pages,
+    // counted as the list itself reads: the same provider, language and
+    // terms for comparing days, so the route never serves a page the list's
+    // own links do not name, nor refuses one they do.
+    listPages: async (entry, context) => {
+      const document = readDocument(entry, field, context);
+      const list = paginatedList(document.nodes);
+      if (list === undefined) return null;
+      const budget = createQueryBudget(
+        config.maxQueries ?? DEFAULT_MAX_QUERIES
+      );
+      const days = await listDayInputs({
+        config,
+        documents: [document],
+        bindings: undefined,
+        budget,
+        window: listWindow,
+        context,
+      });
+      const counted = await listEntryCount(
+        list.props,
+        { locale: context.locale, ...days },
+        dataFor(data, config, context.locale, listWindow)
+      ).catch(() => undefined);
+      // A list whose read cannot say how many entries it matches shows its
+      // first page alone, as a list that fails to read shows its empty state.
+      return counted === undefined
+        ? 1
+        : listPagesOf(list.props, counted.matching);
+    },
     render: async (entry, context) => {
       const document = readDocument(entry, field, context);
       const resolved = styles ? await styles(entry, context) : undefined;
@@ -2602,6 +2661,10 @@ function blocksRouteConfig(
         resolveEntryPath,
         // The published page draws the Lucide set, vendored with this package.
         resolveIcon: resolveLucideIcon,
+        // The page of its list this address draws, and where the others are.
+        // A Single's route serves no later pages and gives no addresses for
+        // them, so its list shows one page.
+        listPage: listPageFor(document, context),
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(

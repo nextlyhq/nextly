@@ -84,7 +84,9 @@ function canvasQueryBudget(): CanvasQueryBudget {
  */
 export function useCanvasPageContext(
   listsShowingEmpty?: ReadonlySet<string>,
-  locale?: string
+  locale?: string,
+  /** The list the page splits into pages, which draws its first page's links. */
+  pagedList?: string
 ): PageContext {
   const readMedia = useMediaResolver();
   const budget = useMemo(canvasQueryBudget, []);
@@ -119,11 +121,23 @@ export function useCanvasPageContext(
       }),
     [readMedia, entryCollection, entryId, lists, budget]
   );
-  return useMemo(
-    () =>
+  return useMemo(() => {
+    const showing =
       listsShowingEmpty === undefined || listsShowingEmpty.size === 0
         ? base
-        : { ...base, listsShowingEmpty },
-    [base, listsShowingEmpty]
-  );
+        : { ...base, listsShowingEmpty };
+    // The links lead nowhere on the canvas: a click there selects the list,
+    // and the pages after the first are the published route's to draw.
+    return pagedList === undefined
+      ? showing
+      : {
+          ...showing,
+          listPage: { nodeId: pagedList, page: 1, href: canvasPageHref },
+        };
+  }, [base, listsShowingEmpty, pagedList]);
+}
+
+/** Where a page link points on the canvas: an anchor naming the page. */
+function canvasPageHref(page: number): string {
+  return `#page-${String(page)}`;
 }

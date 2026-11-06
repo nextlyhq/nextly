@@ -34,14 +34,20 @@ import type { UserContext } from "../../domains/collections/services/collection-
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
 
-import { triggerNotFound } from "./not-found";
+import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
 import { isReservedPath } from "./reserved-paths";
 import {
   resolveContent,
   type ContentEntry,
   type NextlyContentReader,
 } from "./resolve-content";
-import { slugToStaticParam } from "./slug-param";
+import {
+  LIST_PAGE_SEGMENT,
+  listPageNumber,
+  listPageOf,
+  slugToPath,
+  slugToStaticParam,
+} from "./slug-param";
 
 // Re-exported, not defined here. It moved to a LEAF module so that importing
 // the one pure function this file exports does not drag this file's graph — the
@@ -89,7 +95,29 @@ export interface ResolvedContext {
  * `nextly` and uses it directly, where the posture is visibly theirs to choose
  * rather than inherited from a field that looks like a convenience.
  */
-export type RenderContext = ResolvedContext;
+export interface RenderContext extends ResolvedContext {
+  /**
+   * Which page of the entry's paginated list the request asked for, from 2;
+   * absent on the entry's own address, which is the list's first page.
+   *
+   * Set only by a route given {@link ContentRouteConfig.listPages}, and only
+   * for a page that exists: a number past the list's last page, or written
+   * any way but the one, is answered as not found before `render` runs.
+   *
+   * @experimental Settles with list pagination.
+   */
+  page?: number;
+  /**
+   * The address of page `page` of the entry's paginated list, as this route
+   * serves it (its {@link ContentRouteConfig.mountPath} included): the
+   * entry's own address for page 1. Present on a route given
+   * {@link ContentRouteConfig.listPages}, so a list's links name exactly the
+   * addresses the route answers.
+   *
+   * @experimental Settles with list pagination.
+   */
+  listPagePath?: (page: number) => string;
+}
 
 /**
  * Config for {@link createContentRoute}. `TNode` is the render output (your
@@ -271,6 +299,41 @@ export interface ContentRouteConfig<TNode> {
    * (default `1000`). The rest render on demand via `dynamicParams`.
    */
   staticParamsLimit?: number;
+  /**
+   * How many pages the entry's paginated list has, or null when the entry
+   * paginates none. Given, the route also serves `<address>/page/<n>`:
+   *
+   * - page `n` from 2 renders the entry with `context.page` set to `n`;
+   * - `/page/1` redirects permanently to the entry's own address, so the
+   *   first page has one;
+   * - a number past the last page, or written any other way (`0`, `02`,
+   *   `1.5`), answers not found, as does any `/page/<n>` of an entry that
+   *   paginates nothing.
+   *
+   * An entry stored at such an address itself (`news/page/2`) is served as
+   * itself, ahead of the list's page. On the public route, each page from 2
+   * up to the count at build is pre-rendered too, within
+   * {@link staticParamsLimit}; pages that come to exist later render on their
+   * first request.
+   *
+   * Counted when a later page is requested, so it should read as the render
+   * reads: the same visitor, language and cache.
+   *
+   * @experimental Settles with list pagination.
+   */
+  listPages?: (
+    entry: ContentEntry,
+    context: ResolvedContext
+  ) => Promise<number | null>;
+  /**
+   * The path this route's catch-all is mounted under, for the addresses it
+   * redirects and links to: `/blocks` for `app/blocks/[[...slug]]`. Absent,
+   * the route serves the site root. Written with a leading slash and none
+   * at the end.
+   *
+   * @experimental Settles with list pagination.
+   */
+  mountPath?: string;
 }
 
 /**
@@ -364,6 +427,31 @@ function buildRoute<TNode>(
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
 
   const collections = [...new Set(config.collections)];
+  const mountPath = checkedMountPath(config.mountPath);
+
+  /** The address this route serves `slug` at, under its mount. */
+  function addressOf(slug: string): string {
+    const path = slugToPath(slug) ?? "/";
+    if (mountPath === "") return path;
+    return path === "/" ? mountPath : `${mountPath}${path}`;
+  }
+
+  /** `context` with the addresses of its entry's list pages, when listed. */
+  function withListPaths(context: RenderContext): RenderContext {
+    if (config.listPages === undefined) return context;
+    const base = context.slug;
+    return {
+      ...context,
+      listPagePath: page =>
+        addressOf(
+          page <= 1
+            ? base
+            : [base, LIST_PAGE_SEGMENT, String(page)]
+                .filter(part => part !== "")
+                .join("/")
+        ),
+    };
+  }
 
   // The set this route's bypass may reach, defaulting to the collections it
   // serves — which is what the guide has always claimed this config means.
@@ -582,6 +670,66 @@ function buildRoute<TNode>(
     return null;
   }
 
+  /**
+   * What a request path serves: an entry, with the page of its list when the
+   * path names a later one; a redirect, when the path is the list's first
+   * page under a second spelling; or nothing.
+   *
+   * The path is first looked up as it is, so an entry stored at an address
+   * that looks like a page (`news/page/2`) is served as itself. Only when
+   * none matches is it read as a page of the entry at its front.
+   */
+  async function resolvePath(
+    slug: string
+  ): Promise<
+    | { entry: ContentEntry; context: RenderContext }
+    | { redirect: string }
+    | null
+  > {
+    const exact = await resolve(slug);
+    if (exact)
+      return { entry: exact.entry, context: withListPaths(exact.context) };
+    const listPages = config.listPages;
+    const later = listPages === undefined ? null : listPageOf(slug);
+    if (listPages === undefined || later === null) return null;
+    // Checked before anything is read, so a malformed number costs no query.
+    const page = listPageNumber(later.segment);
+    if (page === null) return null;
+    const base = await resolve(later.base);
+    if (!base) return null;
+    const pages = await listPages(base.entry, base.context);
+    if (pages === null) return null;
+    if (page === 1) return { redirect: addressOf(later.base) };
+    if (page > pages) return null;
+    return {
+      entry: base.entry,
+      context: { ...withListPaths(base.context), page },
+    };
+  }
+
+  /**
+   * The later pages of the paginated lists among `params`, page 2 onward,
+   * at most `room` of them, as the lists count at build.
+   */
+  async function listPageParams(
+    params: readonly { slug: string[] }[],
+    room: number
+  ): Promise<Array<{ slug: string[] }>> {
+    const listPages = config.listPages;
+    if (listPages === undefined || room <= 0) return [];
+    const extra: Array<{ slug: string[] }> = [];
+    for (const param of params) {
+      const resolved = await resolve(param.slug.join("/"));
+      if (!resolved) continue;
+      const pages = await listPages(resolved.entry, resolved.context);
+      for (let page = 2; pages !== null && page <= pages; page += 1) {
+        if (extra.length >= room) return extra;
+        extra.push({ slug: [...param.slug, "page", String(page)] });
+      }
+    }
+    return extra;
+  }
+
   async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
     // A non-positive limit disables pre-rendering entirely — every path then
     // renders on demand via `dynamicParams`. Return before querying so a `0`
@@ -656,7 +804,16 @@ function buildRoute<TNode>(
         page += 1;
       }
     }
-    return params;
+    // The lists' later pages share the limit with the entries, after them,
+    // so a very long list never makes the build enumerate without bound;
+    // the rest render on their first request.
+    const pages = await runWithAccessMemo(() =>
+      listPageParams(
+        params,
+        staticParamsLimit * collections.length - params.length
+      )
+    );
+    return [...params, ...pages];
   }
 
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
@@ -668,8 +825,9 @@ function buildRoute<TNode>(
     // person a preview was shared by, the field rules of the draft read as
     // them, and any read the callback makes look that person up once.
     return runWithAccessMemo(async () => {
-      const resolved = await resolve(slug);
-      if (!resolved) return {};
+      const resolved = await resolvePath(slug);
+      // A redirect's metadata is never read: the page answers with it.
+      if (!resolved || "redirect" in resolved) return {};
       return buildMetadata(resolved.entry, resolved.context);
     });
   }
@@ -681,8 +839,9 @@ function buildRoute<TNode>(
     // One memo of access lookups for the resolution and the render; see
     // `generateMetadata`.
     return runWithAccessMemo(async () => {
-      const resolved = await resolve(slug);
+      const resolved = await resolvePath(slug);
       if (!resolved) triggerNotFound();
+      if ("redirect" in resolved) triggerPermanentRedirect(resolved.redirect);
       return config.render(resolved.entry, resolved.context);
     });
   }
@@ -799,6 +958,22 @@ export function createPublicContentRoute<TNode>(
     },
     "public"
   );
+}
+
+/**
+ * A route's mount path as given, or a refusal naming what is wrong with it:
+ * a path that does not start with a slash, ends with one, or holds a query,
+ * a fragment or an empty segment would put every redirect and link it
+ * builds somewhere the route does not answer.
+ */
+function checkedMountPath(mountPath: string | undefined): string {
+  if (mountPath === undefined || mountPath === "") return "";
+  if (!/^(\/[^/?#\s]+)+$/.test(mountPath)) {
+    throw NextlyError.invalidInput({
+      message: `The route's mountPath "${mountPath}" is not a path such as "/blocks": start it with a slash, end it without one.`,
+    });
+  }
+  return mountPath;
 }
 
 /** Join the optional-catch-all segments into a slug path (no leading slash). */
