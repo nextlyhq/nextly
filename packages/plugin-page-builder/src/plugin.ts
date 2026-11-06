@@ -1077,7 +1077,7 @@ function rewriteInstallFor(
       layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
       // A document whose field groups hold no blocks field is no host: its
       // field groups' values are stored apart, where no copy can be.
-      fieldGroup: declaredFieldGroups(ctx),
+      fieldGroups: siteFieldGroups(ctx, nextly),
     },
     hints: async componentId => {
       const found = await composition.hostsOf?.placing([componentId]);
@@ -1219,10 +1219,54 @@ function configuredSingles(ctx: {
   return bySlug;
 }
 
+/** How many field groups one page of the registry lists. */
+const FIELD_GROUPS_PER_PAGE = 200;
+
+/** How many pages of the registry one walk reads before it stops. */
+const FIELD_GROUP_PAGES = 50;
+
+/**
+ * The site's field groups, by slug, read once per walk: the registry's
+ * definitions (made in the admin, or declared in code and synced into it at
+ * start), each winning over the code's for its slug, since the registry is
+ * what core builds a group's table and reads its schema from; and, for a slug
+ * the registry does not hold, the code's. A registry that cannot be read, or
+ * holds more than the walk lists, leaves the slugs it did not answer to the
+ * code alone, and a slug neither knows answers `undefined`: its reference
+ * stays one that may hold blocks.
+ */
+function siteFieldGroups(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  nextly: () => Promise<RewriteDirectApi>
+): () => Promise<(slug: string) => { readonly fields?: unknown } | undefined> {
+  const inCode = declaredFieldGroups(ctx);
+  return async () => {
+    const registry = new Map<string, { readonly fields?: unknown }>();
+    try {
+      const api = await nextly();
+      for (let page = 0; page < FIELD_GROUP_PAGES; page += 1) {
+        const listed = await api.fieldGroups.find({
+          limit: FIELD_GROUPS_PER_PAGE,
+          offset: page * FIELD_GROUPS_PER_PAGE,
+        });
+        for (const group of listed.items) {
+          registry.set(group.slug, { fields: group.fields });
+        }
+        if (!listed.meta.hasNext) break;
+      }
+    } catch (error) {
+      ctx.logger.warn(
+        "[page-builder] the field-group registry could not be read, so only field groups declared in code are read through their definitions",
+        { error }
+      );
+    }
+    return slug => registry.get(slug) ?? inCode(slug);
+  };
+}
+
 /**
  * The field groups the site declares in code, by slug, as its config states
- * them. A group made in the admin is in no list a plugin can read, so it is
- * not here, and a reference to it stays one that may hold blocks.
+ * them.
  */
 function declaredFieldGroups(ctx: {
   config?: { fieldGroups?: unknown };

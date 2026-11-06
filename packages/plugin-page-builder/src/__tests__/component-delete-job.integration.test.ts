@@ -60,6 +60,8 @@ const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
 const HARNESS = "@t/delete-harness";
 const NOTES = "notes";
+/** The slug of a field group made in the admin, after start. */
+const ADMIN_GROUP = "promo";
 /** A collection whose blocks values sit in a repeater: no fixed path reaches them. */
 const BOARDS = "boards";
 
@@ -181,7 +183,11 @@ function oneDeletableComponent(): PluginDefinition {
  * name, a translated tagline and an SEO field group of plain fields), and a
  * Single embedding a field group whose definition holds a blocks field.
  */
-function siteShapes(site: { settings?: boolean; blocksInGroup?: boolean }) {
+function siteShapes(site: {
+  settings?: boolean;
+  blocksInGroup?: boolean;
+  adminGroup?: "plain" | "blocks";
+}) {
   const groups = [
     ...(site.settings === true
       ? [
@@ -232,6 +238,17 @@ function siteShapes(site: { settings?: boolean; blocksInGroup?: boolean }) {
           }),
         ]
       : []),
+    ...(site.adminGroup === undefined
+      ? []
+      : [
+          defineSingle({
+            slug: "promoband",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "promo", component: ADMIN_GROUP }),
+            ],
+          }),
+        ]),
   ];
   return {
     ...(groups.length === 0 ? {} : { fieldGroups: groups }),
@@ -306,6 +323,11 @@ describe.each(getConfiguredTestDialects())(
         settings?: boolean;
         /** A Single embedding a field group whose definition holds blocks. */
         blocksInGroup?: boolean;
+        /**
+         * A Single embedding a field group made in the admin after start:
+         * one of plain fields, or one holding a blocks field.
+         */
+        adminGroup?: "plain" | "blocks";
       } = {}
     ) {
       const plugin = pageBuilder();
@@ -449,6 +471,37 @@ describe.each(getConfiguredTestDialects())(
 
     const dryRun = (cookie: string, id: string) =>
       call(cookie, id, "POST", { dryRun: true });
+
+    /** Every slice of a dry run, to the last, or until one is refused. */
+    async function dryRunToTheEnd(cookie: string, id: string): Promise<Answer> {
+      let answered = await dryRun(cookie, id);
+      for (let n = 0; n < 10 && answered.item.status === "counting"; n += 1) {
+        answered = await call(cookie, id, "POST", {
+          dryRun: true,
+          after: answered.item.plan?.next,
+        });
+      }
+      return answered;
+    }
+
+    /** A field group made as the admin makes one: through its own route. */
+    async function adminGroup(cookie: string, fields: unknown[]) {
+      const handlers = createDynamicHandlers();
+      const response = await handlers.POST(
+        new Request(`${ORIGIN}/api/field-groups`, {
+          method: "POST",
+          headers: {
+            cookie: `${cookie}; nextly_csrf=${CSRF}`,
+            "x-csrf-token": CSRF,
+            origin: ORIGIN,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ slug: ADMIN_GROUP, label: "Promo", fields }),
+        }),
+        { params: Promise.resolve({ params: ["field-groups"] }) }
+      );
+      expect(response.status, await response.clone().text()).toBe(201);
+    }
 
     /** Step the delete until it stops running, at most a few calls. */
     async function deleteToTheEnd(cookie: string, id: string): Promise<Answer> {
@@ -1090,6 +1143,46 @@ describe.each(getConfiguredTestDialects())(
 
       // Doubt counts as use: a blocks value stored apart from the row, which
       // no read of the row reaches, is a host that can't be judged.
+      expect(answered.item.status, JSON.stringify(answered.body)).toBe(
+        "refused"
+      );
+      expect(answered.item.left).toEqual([
+        expect.objectContaining({ reason: "unreadable" }),
+      ]);
+    });
+    it("is stopped by no document whose field group, made in the admin, holds no blocks", async () => {
+      const { t, cookie } = await boot({}, { adminGroup: "plain" });
+      await adminGroup(cookie, [{ name: "headline", type: "text" }]);
+      await t.nextly.updateSingle({
+        slug: "promoband",
+        data: { title: "Promo", promo: { headline: "Sale" } },
+        overrideAccess: true,
+      });
+      const spare = await card(t, "Spare");
+
+      const answered = await dryRunToTheEnd(cookie, spare);
+
+      expect(answered.item.status, JSON.stringify(answered.body)).toBe("none");
+      expect(answered.item.left).toBeUndefined();
+    });
+
+    it("still refuses for a document whose field group, made in the admin, holds a blocks field", async () => {
+      const { t, cookie } = await boot({}, { adminGroup: "blocks" });
+      // The same group as above, judged by its real definition: this one
+      // holds a blocks field, whose values no read of the row reaches.
+      await adminGroup(cookie, [
+        { name: "headline", type: "text" },
+        { name: "body", type: BLOCKS_TYPE },
+      ]);
+      await t.nextly.updateSingle({
+        slug: "promoband",
+        data: { title: "Promo" },
+        overrideAccess: true,
+      });
+      const spare = await card(t, "Spare");
+
+      const answered = await dryRunToTheEnd(cookie, spare);
+
       expect(answered.item.status, JSON.stringify(answered.body)).toBe(
         "refused"
       );
