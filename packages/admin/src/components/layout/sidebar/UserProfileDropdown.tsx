@@ -47,6 +47,11 @@ function InterfaceLanguageChoice(): JSX.Element {
   const languages = useInterfaceLanguages();
   const stored = useStoredInterfaceLanguage(true);
   const setInterfaceLanguage = useSetInterfaceLanguage();
+  // A stored language the admin has no catalog for (its plugin removed, say)
+  // is still shown, chosen and marked, so the person sees what is stored
+  // while the admin falls back, and that it returns with its catalog.
+  const unavailable =
+    stored != null && !languages.includes(stored) ? stored : null;
   return (
     <>
       <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
@@ -64,6 +69,17 @@ function InterfaceLanguageChoice(): JSX.Element {
         >
           {t("nextly.userMenu.followBrowser")}
         </DropdownMenuRadioItem>
+        {unavailable !== null && (
+          <DropdownMenuRadioItem
+            value={unavailable}
+            lang={unavailable}
+            className="cursor-pointer text-sm text-muted-foreground"
+          >
+            {t("nextly.userMenu.unavailable", {
+              language: languageName(unavailable),
+            })}
+          </DropdownMenuRadioItem>
+        )}
         {languages.map(language => (
           <DropdownMenuRadioItem
             key={language}

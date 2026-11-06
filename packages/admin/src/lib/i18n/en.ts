@@ -52,4 +52,6 @@ export const en = {
   "nextly.search.clear": "Clear search",
   "nextly.userMenu.interfaceLanguage": "Interface language",
   "nextly.userMenu.followBrowser": "Follow the browser",
+  "nextly.userMenu.unavailable": "{language} (not available)",
+  "nextly.userMenu.saveFailed": "Your interface language could not be saved.",
 } as const;
