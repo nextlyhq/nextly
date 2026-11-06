@@ -22,6 +22,7 @@
  */
 import { cssFetches, type CssFetch } from "./css-urls";
 import {
+  siteCodeLinkRelations,
   siteCodeScriptKind,
   type SiteCodeAttrs,
   type SiteCodeEntry,
@@ -41,6 +42,17 @@ export function parseCsp(header: string): CspPolicy {
     if (!directives.has(directive)) directives.set(directive, sources);
   }
   return directives;
+}
+
+/**
+ * Every policy a header carries: a header may hold several, separated by
+ * commas, and a browser enforces each.
+ */
+function parsePolicies(header: string): CspPolicy[] {
+  return header
+    .split(",")
+    .filter(policy => policy.trim() !== "")
+    .map(parseCsp);
 }
 
 /** A policy as a header again, directives in the order they were read. */
@@ -124,6 +136,28 @@ function inlineMode(
 }
 
 /**
+ * A hash source as CSP compares it: the algorithm in any case, the digest in
+ * base64 whether written as base64 or base64url, padding aside.
+ */
+function hashKey(source: string): string | undefined {
+  const match = /^'?(sha256|sha384|sha512)-([A-Za-z0-9+/=_-]+)'?$/i.exec(
+    source
+  );
+  if (match === null) return undefined;
+  const [, algorithm = "", digest = ""] = match;
+  return `${algorithm.toLowerCase()}-${digest
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .replace(/=+$/, "")}`;
+}
+
+/** Whether a list names `hash` (`sha256-…`), compared as CSP compares it. */
+function namesHash(sources: readonly string[], hash: string): boolean {
+  const key = hashKey(hash);
+  return key !== undefined && sources.some(source => hashKey(source) === key);
+}
+
+/**
  * Whether a list lets inline code with `hash` run. A nonce or hash in the list
  * cancels `'unsafe-inline'`; a nonce lets an element run only where the site
  * passes its nonce to the code. A style attribute takes no nonce, and is
@@ -138,9 +172,9 @@ function allowsInline(
   const mode = inlineMode(sources, kind === "script");
   if (mode === "unsafe-inline") return true;
   if (kind === "style-attr") {
-    return holds(sources, "'unsafe-hashes'") && sources.includes(`'${hash}'`);
+    return holds(sources, "'unsafe-hashes'") && namesHash(sources, hash);
   }
-  if (sources.includes(`'${hash}'`)) return true;
+  if (namesHash(sources, hash)) return true;
   return mode === "nonce" && siteNonce;
 }
 
@@ -199,13 +233,29 @@ function hostSourceMatches(source: string, url: URL): boolean {
 }
 
 /**
+ * Whether `'self'` allows a URL: the site's own origin, or its secure
+ * upgrade (an `http:` site loading the same host over `https:`, each on its
+ * default port, or the same port), as CSP Level 3 matches it.
+ */
+function selfMatches(url: URL, siteOrigin: string): boolean {
+  if (url.origin === siteOrigin) return true;
+  const site = new URL(siteOrigin);
+  return (
+    site.protocol === "http:" &&
+    url.protocol === "https:" &&
+    url.hostname === site.hostname &&
+    (url.port === site.port || (site.port === "" && url.port === ""))
+  );
+}
+
+/**
  * Whether one source allows a URL, the site's own origin standing for
  * 'self'. A keyword matches no URL, so `'none'` beside other sources is
  * ignored, as browsers ignore it, and alone matches nothing.
  */
 function sourceMatches(source: string, url: URL, siteOrigin: string): boolean {
   const lower = source.toLowerCase();
-  if (lower === "'self'") return url.origin === siteOrigin;
+  if (lower === "'self'") return selfMatches(url, siteOrigin);
   if (lower === "*") {
     return url.protocol === "https:" || url.protocol === "http:";
   }
@@ -231,9 +281,7 @@ function integrityMatches(
   integrity: string | undefined
 ): boolean {
   const hashes = integrityHashes(integrity);
-  return (
-    hashes.length > 0 && hashes.every(hash => sources.includes(`'${hash}'`))
-  );
+  return hashes.length > 0 && hashes.every(hash => namesHash(sources, hash));
 }
 
 /** One resource site code loads: what it is fetched as, and from where. */
@@ -242,6 +290,12 @@ export interface SiteCodeLoad {
   /** The URL as written: `https:`, or a path on the site. */
   readonly url: string;
   readonly integrity?: string;
+  /**
+   * Loaded by an element the loader builds and passes the site's nonce to (a
+   * script's `src`, a stylesheet link); never a fetch a stylesheet makes,
+   * which carries no nonce.
+   */
+  readonly nonceable?: true;
 }
 
 /** What a load is judged with besides the policy. */
@@ -264,8 +318,9 @@ function allowsLoad(
   url: URL,
   context: LoadContext
 ): boolean {
-  const nonceable = load.kind === "script" || load.kind === "style";
-  if (nonceable && context.siteNonce && sources.some(isNonce)) return true;
+  if (load.nonceable === true && context.siteNonce && sources.some(isNonce)) {
+    return true;
+  }
   if (load.kind === "script") {
     if (integrityMatches(sources, load.integrity)) return true;
     if (holds(sources, "'strict-dynamic'")) return false;
@@ -324,13 +379,16 @@ function withIntegrity(load: SiteCodeLoad, attrs: SiteCodeAttrs): SiteCodeLoad {
 function linkLoad(attrs: SiteCodeAttrs): SiteCodeLoad | undefined {
   const href = attrs.href;
   if (href === undefined) return undefined;
-  const kind =
-    attrs.rel === "preload"
-      ? PRELOAD_KINDS.get(attrs.as ?? "")
-      : LINK_KINDS.get(attrs.rel ?? "");
-  return kind === undefined
-    ? undefined
-    : withIntegrity({ kind, url: href }, attrs);
+  const relations = siteCodeLinkRelations(attrs.rel);
+  const kind = relations.includes("preload")
+    ? PRELOAD_KINDS.get((attrs.as ?? "").trim().toLowerCase())
+    : relations
+        .map(relation => LINK_KINDS.get(relation))
+        .find(found => found !== undefined);
+  if (kind === undefined) return undefined;
+  // A stylesheet link is built by the loader, which passes it the nonce.
+  const load = withIntegrity({ kind, url: href }, attrs);
+  return relations.includes("stylesheet") ? { ...load, nonceable: true } : load;
 }
 
 /** What one entry loads and runs inline. */
@@ -346,7 +404,12 @@ function scriptParts(attrs: SiteCodeAttrs, text?: string): Parts {
   if (siteCodeScriptKind(attrs.type) === "data") return NOTHING;
   if (attrs.src !== undefined) {
     return {
-      loads: [withIntegrity({ kind: "script", url: attrs.src }, attrs)],
+      loads: [
+        {
+          ...withIntegrity({ kind: "script", url: attrs.src }, attrs),
+          nonceable: true,
+        },
+      ],
       inline: [],
     };
   }
@@ -362,11 +425,20 @@ function fallbackParts(child: {
   readonly attrs: SiteCodeAttrs;
 }): Parts {
   const { src, style } = child.attrs;
+  const own: SiteCodeLoad[] =
+    src === undefined
+      ? []
+      : [{ kind: child.tag === "iframe" ? "frame" : "img", url: src }];
+  // The style attribute applies, and fetches what it names, as a sheet does.
+  const styled: SiteCodeLoad[] =
+    style === undefined
+      ? []
+      : cssFetches(style, "declarationList").map(fetch => ({
+          kind: FETCH_KINDS[fetch.via],
+          url: fetch.url,
+        }));
   return {
-    loads:
-      src === undefined
-        ? []
-        : [{ kind: child.tag === "iframe" ? "frame" : "img", url: src }],
+    loads: [...own, ...styled],
     inline: style === undefined ? [] : [{ kind: "style-attr", text: style }],
   };
 }
@@ -569,27 +641,32 @@ export async function checkSiteCodeAgainstCsp(
         "No Content Security Policy is known for this site; nothing was checked.",
     };
   }
-  const policy = parseCsp(input.policy);
-  const level = input.reportOnly === true ? "warning" : "error";
+  const level: CspFinding["level"] =
+    input.reportOnly === true ? "warning" : "error";
   const context = {
     siteOrigin: input.siteOrigin,
     siteNonce: input.siteNonce === true,
   };
-  const findings: CspFinding[] = [];
-  for (const slot of ["head", "body"] as const) {
-    for (const [index, entry] of slots[slot].entries()) {
-      for (const found of await entryFindings(entry, policy, context)) {
-        findings.push({ slot, index, level, ...found });
+  // Every policy the header carries is enforced, so each is checked; a block
+  // two policies make alike is said once.
+  const findings = new Map<string, CspFinding>();
+  for (const policy of parsePolicies(input.policy)) {
+    for (const slot of ["head", "body"] as const) {
+      for (const [index, entry] of slots[slot].entries()) {
+        for (const found of await entryFindings(entry, policy, context)) {
+          const finding: CspFinding = { slot, index, level, ...found };
+          findings.set(JSON.stringify(finding), finding);
+        }
       }
     }
   }
-  return { checked: true, findings };
+  return { checked: true, findings: [...findings.values()] };
 }
 
 /** Each kind's own directive, which an addition goes to over a fallback. */
 const OWN_DIRECTIVE: Readonly<Record<Kind, string>> = {
-  script: "script-src",
-  style: "style-src",
+  script: "script-src-elem",
+  style: "style-src-elem",
   "style-attr": "style-src-attr",
   img: "img-src",
   font: "font-src",
@@ -599,14 +676,17 @@ const OWN_DIRECTIVE: Readonly<Record<Kind, string>> = {
 
 /**
  * Whether the directive judging `kind` is a fallback that governs other uses
- * too: `default-src` for every kind, `child-src` for frames, `style-src` for
- * style attributes.
+ * too: `default-src` for every kind; `script-src`, which workers fall back to
+ * as well; `style-src`, which governs style attributes and elements alike;
+ * and `child-src` for frames, which governs workers too.
  */
 function isFallback(kind: Kind, directive: string): boolean {
   return (
     directive === "default-src" ||
-    (kind === "frame" && directive === "child-src") ||
-    (kind === "style-attr" && directive === "style-src")
+    (kind === "script" && directive === "script-src") ||
+    ((kind === "style" || kind === "style-attr") &&
+      directive === "style-src") ||
+    (kind === "frame" && directive === "child-src")
   );
 }
 
@@ -677,17 +757,35 @@ function loadNeeds(
  * code is blocked, which never happens under a list relying on
  * `'unsafe-inline'`, so it is never cancelled. A kind no directive restricts
  * is left alone. Pass `siteNonce` when the site hands its nonce to site code.
+ *
+ * Additions for scripts and styles go to `script-src-elem` and
+ * `style-src-elem`, made from what they fell back to, so workers and style
+ * attributes gain nothing. Browsers from before those directives (Chrome 75,
+ * Firefox 108 and Safari 15.4) read only the fallback and so don't see them.
  */
 export function mergeSiteCodeIntoCsp(
   header: string,
   facts: SiteCodeFacts,
   options: { readonly siteNonce?: boolean } = {}
 ): string {
-  const policy = new Map(parseCsp(header));
   const context = {
     siteOrigin: facts.siteOrigin,
     siteNonce: options.siteNonce === true,
   };
+  // Each policy the header carries is enforced on its own, so each is given
+  // what it blocks.
+  return parsePolicies(header)
+    .map(parsed => serialiseCsp(mergedPolicy(parsed, facts, context)))
+    .join(", ");
+}
+
+/** One policy with what site code needs that it blocks added. */
+function mergedPolicy(
+  parsed: CspPolicy,
+  facts: SiteCodeFacts,
+  context: LoadContext
+): CspPolicy {
+  const policy = new Map(parsed);
   for (const kind of ["script", "style", "style-attr"] as const) {
     const needs = inlineNeeds(
       policy,
@@ -700,5 +798,5 @@ export function mergeSiteCodeIntoCsp(
   for (const load of facts.loads) {
     addTo(policy, load.kind, loadNeeds(policy, load, context));
   }
-  return serialiseCsp(policy);
+  return policy;
 }

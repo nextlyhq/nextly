@@ -106,12 +106,18 @@ function nodeFetches(
     : [];
 }
 
-/** Every fetch a stylesheet makes, in the order written. */
-export function cssFetches(text: string): CssFetch[] {
+/**
+ * Every fetch a stylesheet makes, in the order written: a whole sheet, or
+ * the declarations of a `style` attribute.
+ */
+export function cssFetches(
+  text: string,
+  context: "stylesheet" | "declarationList" = "stylesheet"
+): CssFetch[] {
   const fetches: CssFetch[] = [];
   let ast: CssNode;
   try {
-    ast = parse(text);
+    ast = parse(text, { context });
   } catch {
     // Not CSS the parser can read at all: every `url(` in it is still read.
     return rawFetches(text, "image");

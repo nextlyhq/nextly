@@ -383,6 +383,66 @@ describe("what site code loads", () => {
     ).toEqual([]);
   });
 
+  it("judges what a pixel's style attribute fetches", async () => {
+    expect(
+      await blockedBy(
+        "img-src 'self'",
+        [],
+        [
+          pixel("img", "/p.gif", {
+            style: "background:url(https://t.example/p.png)",
+          }),
+        ]
+      )
+    ).toEqual(["img-src"]);
+  });
+
+  it("never lets the site's nonce stand for a stylesheet's import", async () => {
+    expect(
+      await blockedBy(
+        "style-src 'nonce-x'",
+        [style('@import "https://fonts.example/a.css";')],
+        [],
+        { siteNonce: true }
+      )
+    ).toEqual(["style-src"]);
+  });
+
+  it("checks every policy a header carries", async () => {
+    expect(
+      await blockedBy("script-src https://cdn.example, script-src 'none'", [
+        loaded("https://cdn.example/a.js"),
+      ])
+    ).toEqual(["script-src"]);
+  });
+
+  it("lets 'self' allow the site's secure upgrade", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      { policy: "script-src 'self'", siteOrigin: "http://acme.example" },
+      { head: [loaded("https://acme.example/a.js")], body: [] }
+    );
+    expect(check).toEqual({ checked: true, findings: [] });
+  });
+
+  it("matches a hash in any algorithm case and in base64url", async () => {
+    const digest = (await cspHash("a()")).slice("sha256-".length);
+    const variant = `SHA256-${digest.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+    expect(await blockedBy(`script-src '${variant}'`, [inline("a()")])).toEqual(
+      []
+    );
+  });
+
+  it("reads a link's relation in any case", async () => {
+    expect(
+      await blockedBy("style-src 'self'", [
+        {
+          tag: "link",
+          attrs: { rel: "STYLESHEET", href: "https://cdn.example/a.css" },
+        },
+      ])
+    ).toEqual(["style-src"]);
+  });
+
   it("warns rather than errs under a Report-Only policy", async () => {
     const check = await checkSiteCodeAgainstCsp(
       { policy: "script-src 'self'", reportOnly: true, siteOrigin: ORIGIN },
@@ -424,10 +484,10 @@ describe("adding what site code needs to a policy", () => {
   }
   const GTM = "https://www.googletagmanager.com";
 
-  it("adds the hash and origin to a policy that relies on hashes", async () => {
+  it("adds the hash and origin to script-src-elem, never to script-src, which workers fall back to", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("script-src 'self' 'sha256-AAAA'", facts)).toBe(
-      `script-src 'self' 'sha256-AAAA' ${hash} ${GTM}`
+      `script-src 'self' 'sha256-AAAA'; script-src-elem 'self' 'sha256-AAAA' ${hash} ${GTM}`
     );
   });
 
@@ -435,7 +495,9 @@ describe("adding what site code needs to a policy", () => {
     const { facts } = await gtagFacts();
     expect(
       mergeSiteCodeIntoCsp("script-src 'self' 'unsafe-inline'", facts)
-    ).toBe(`script-src 'self' 'unsafe-inline' ${GTM}`);
+    ).toBe(
+      `script-src 'self' 'unsafe-inline'; script-src-elem 'self' 'unsafe-inline' ${GTM}`
+    );
   });
 
   it("leaves a nonce-based, 'strict-dynamic' policy as it is where the site passes its nonce", async () => {
@@ -446,7 +508,9 @@ describe("adding what site code needs to a policy", () => {
     );
     // Without the nonce, the inline setup needs its hash; no host is
     // honoured under 'strict-dynamic', so none is added for the script.
-    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(`${policy} ${hash}`);
+    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
+      `${policy}; script-src-elem 'nonce-abc' 'strict-dynamic' ${hash}`
+    );
   });
 
   it("adds nothing for a load a path-scoped source already allows", async () => {
@@ -461,7 +525,7 @@ describe("adding what site code needs to a policy", () => {
   it("adds 'self' for a load from the site itself", async () => {
     const facts = await siteCodeFacts([loaded("/analytics.js")], ORIGIN);
     const merged = mergeSiteCodeIntoCsp("default-src 'none'", facts);
-    expect(merged).toBe("default-src 'none'; script-src 'self'");
+    expect(merged).toBe("default-src 'none'; script-src-elem 'self'");
     expect(await blockedBy(merged, [loaded("/analytics.js")])).toEqual([]);
   });
 
@@ -472,7 +536,9 @@ describe("adding what site code needs to a policy", () => {
     );
     expect(
       mergeSiteCodeIntoCsp("script-src 'strict-dynamic' 'nonce-x'", facts)
-    ).toBe("script-src 'strict-dynamic' 'nonce-x' 'sha384-abc'");
+    ).toBe(
+      "script-src 'strict-dynamic' 'nonce-x'; script-src-elem 'strict-dynamic' 'nonce-x' 'sha384-abc'"
+    );
   });
 
   it("lets a pixel's style attribute through by its hash alone", async () => {
@@ -500,11 +566,34 @@ describe("adding what site code needs to a policy", () => {
   it("adds to a directive of the kind's own, never widening default-src", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("default-src 'self'; img-src *", facts)).toBe(
-      `default-src 'self'; img-src *; script-src 'self' ${hash} ${GTM}`
+      `default-src 'self'; img-src *; script-src-elem 'self' ${hash} ${GTM}`
     );
     expect(mergeSiteCodeIntoCsp("default-src 'none'", facts)).toBe(
-      `default-src 'none'; script-src ${hash} ${GTM}`
+      `default-src 'none'; script-src-elem ${hash} ${GTM}`
     );
+  });
+
+  it("gives each policy a header carries what it blocks", async () => {
+    const facts = await siteCodeFacts(
+      [loaded("https://cdn.example/a.js")],
+      ORIGIN
+    );
+    expect(
+      mergeSiteCodeIntoCsp(
+        "script-src https://cdn.example, script-src 'none'",
+        facts
+      )
+    ).toBe(
+      "script-src https://cdn.example, script-src 'none'; script-src-elem https://cdn.example"
+    );
+  });
+
+  it("adds nothing for a hash the policy names in another spelling", async () => {
+    const facts = await siteCodeFacts([inline("a()")], ORIGIN);
+    const digest = (await cspHash("a()")).slice("sha256-".length);
+    const variant = `SHA256-${digest.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+    const policy = `script-src '${variant}'`;
+    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
   });
 
   it("adds a frame's origin to frame-src, not the child-src it fell back to", async () => {

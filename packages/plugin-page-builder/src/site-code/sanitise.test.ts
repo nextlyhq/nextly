@@ -227,6 +227,42 @@ describe("what is refused", () => {
     ).toContain("isn't allowed");
   });
 
+  it("holds what a pixel's style attribute fetches to the attribute rule", () => {
+    expect(
+      refusalsOf(
+        '<noscript><img src="/p.gif" style="background:url(//t.example/p)"></noscript>',
+        "body"
+      ).join(" ")
+    ).toContain(
+      'its style attribute loads "//t.example/p", which points at another site without saying https:'
+    );
+  });
+
+  it("lets a preload load only what the check judges", () => {
+    expect(
+      refusalsOf(
+        '<link rel="preload" as="fetch" href="https://api.example/d" crossorigin>'
+      ).join(" ")
+    ).toContain(`a preload of "fetch" isn't allowed`);
+    expect(
+      refusalsOf(
+        '<link rel="PRELOAD" as="Script" href="https://cdn.example/a.js">'
+      )
+    ).toEqual([]);
+  });
+
+  it("reads a link's relation in any case, and an old favicon's shortcut", () => {
+    expect(
+      refusalsOf('<link rel="STYLESHEET" href="https://cdn.example/a.css">')
+    ).toEqual([]);
+    expect(
+      refusalsOf('<link rel="shortcut icon" href="/favicon.ico">')
+    ).toEqual([]);
+    expect(
+      refusalsOf('<link rel="shortcut" href="/favicon.ico">').join(" ")
+    ).toContain(`a link with rel "shortcut" isn't allowed`);
+  });
+
   it("refuses text outside an element", () => {
     expect(refusalsOf("hello <script>a()</script>")).toEqual([
       "Text outside an element isn't allowed.",
