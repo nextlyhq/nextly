@@ -8891,6 +8891,178 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The hooks an update runs before anything is validated, in order:
+   * `beforeOperation` (which may replace the data), then the code-registered
+   * and the stored (admin-configured) `beforeUpdate` hooks, each handed the
+   * data the one before it left. Returns the data they leave; a hook that
+   * throws refuses the update. One implementation for an update and for a
+   * move of every language's status, so the two run the same hooks in the
+   * same order.
+   */
+  private async beforeUpdateHooks(args: {
+    collectionName: string;
+    entryId: string;
+    body: Record<string, unknown>;
+    /** The entry as stored, which `beforeUpdate` compares against. */
+    existingEntry: Record<string, unknown>;
+    user?: UserContext;
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    sharedContext: Record<string, unknown>;
+    requestFacts: ReturnType<typeof resolveRequestFacts>;
+  }): Promise<Record<string, unknown>> {
+    // Can modify the operation's arguments (id, data) or throw to abort.
+    const beforeOpArgs =
+      await this.hookService.hookRegistry.executeBeforeOperation({
+        collection: args.collectionName,
+        operation: "update",
+        args: { id: args.entryId, data: args.body },
+        user: args.user
+          ? { id: args.user.id, email: args.user.email }
+          : undefined,
+        context: args.sharedContext,
+        req: args.requestFacts,
+      });
+    const currentData =
+      (beforeOpArgs as BeforeOperationArgs)?.data ?? args.body;
+    const fromCode = await this.hookService.hookRegistry.execute(
+      "beforeUpdate",
+      this.hookService.buildHookContext({
+        collection: args.collectionName,
+        operation: "update" as const,
+        data: currentData,
+        originalData: args.existingEntry,
+        user: args.user,
+        context: args.sharedContext,
+        req: args.requestFacts,
+      })
+    );
+    const afterCodeHooks = (fromCode ?? currentData) as Record<string, unknown>;
+    // The stored hooks run after the code-registered ones, on what they left.
+    const fromStored = await this.hookService.storedHookExecutor.execute(
+      "beforeUpdate",
+      args.storedHooks,
+      this.hookService.buildPrebuiltHookContext({
+        collection: args.collectionName,
+        operation: "update",
+        data: afterCodeHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: args.user,
+        sharedContext: args.sharedContext,
+        req: args.requestFacts,
+      })
+    );
+    return (fromStored.data ?? afterCodeHooks) as Record<string, unknown>;
+  }
+
+  /**
+   * The hooks a status change of one language (`updateEntry` with a body of
+   * `status` alone) runs before it writes, run once for a move of every
+   * language: `beforeOperation`, the code and stored `beforeUpdate`, the
+   * fields' `beforeValidate`, the code and stored `beforeChange`, then the
+   * fields' `beforeChange`, in that order, each handed `{ status }` against
+   * the entry as stored. A hook that throws refuses the move before its
+   * transaction opens, so nothing changes in any language, and the refusal
+   * leaves the service as the same hook's refusal of one language does.
+   *
+   * Run outside the transaction, as `updateEntry` runs them: the transaction
+   * retries its closure on a version conflict, and a hook's effects outside
+   * this process could not be withdrawn by that retry's rollback.
+   *
+   * The move writes each language's status and nothing else, so what a hook
+   * makes of `data` is not written. A hook that takes `status` away or names
+   * another one is answered as a conflict rather than ignored: the write
+   * would otherwise report a move the hook had decided against.
+   */
+  private async lifecycleBeforeHooks(
+    direction: LifecycleDirection,
+    args: {
+      params: AllLocalesLifecycleParams;
+      /** The entry as stored, which a status change's hooks compare against. */
+      existingEntry: Record<string, unknown>;
+      collection: unknown;
+    }
+  ): Promise<
+    | { answer: CollectionServiceResult }
+    | {
+        ready: {
+          sharedContext: Record<string, unknown>;
+          requestFacts: ReturnType<typeof resolveRequestFacts>;
+          storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+        };
+      }
+  > {
+    const { params, existingEntry } = args;
+    const storedHooks = this.hookService.getStoredHooks(
+      args.collection as Record<string, unknown>
+    );
+    // One context for every hook of the move, before and after it, as an
+    // update shares one between its phases.
+    const sharedContext: Record<string, unknown> = { ...params.context };
+    const requestFacts = resolveRequestFacts(params.request);
+    const body: Record<string, unknown> = { status: direction.nextStatus };
+
+    const data = await this.beforeUpdateHooks({
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      body,
+      existingEntry,
+      user: params.user,
+      storedHooks,
+      sharedContext,
+      requestFacts,
+    });
+    await runFieldHooks({
+      kind: "collection",
+      slug: params.collectionName,
+      phase: "beforeValidate",
+      data,
+      operation: "update",
+      user: params.user,
+    });
+    await this.hookService.runBeforeChange({
+      collection: params.collectionName,
+      operation: "update",
+      data,
+      originalData: existingEntry,
+      storedHooks,
+      queryDatabase: this.queryDatabaseFn,
+      user: params.user,
+      sharedContext,
+      req: requestFacts,
+    });
+    await runFieldHooks({
+      kind: "collection",
+      slug: params.collectionName,
+      phase: "beforeChange",
+      data,
+      operation: "update",
+      user: params.user,
+    });
+    // An own `status: undefined` names no status, as an update reads it.
+    stripUndefinedStatus(data);
+    if (data.status !== direction.nextStatus) {
+      return {
+        answer: errorToServiceResult(
+          NextlyError.conflict({
+            reason: "state",
+            message:
+              `Moving every language to '${direction.nextStatus}' was ` +
+              `refused: after the collection's hooks ran, the write no ` +
+              `longer carries that status. Nothing was changed.`,
+            logContext: {
+              cause: "every-language-lifecycle-status-changed-by-hook",
+              collection: params.collectionName,
+            },
+          }),
+          { defaultMessage: "Failed to change every language's status" },
+          this.dialect
+        ),
+      };
+    }
+    return { ready: { sharedContext, requestFacts, storedHooks } };
+  }
+
+  /**
    * Move every language of an entry to `direction`'s status at once: the
    * main `status` and — when the collection has per-locale status — every
    * companion row's `_status`, in a single transaction.
@@ -8981,6 +9153,19 @@ export class CollectionMutationService extends BaseService {
         versionCheck,
         languagesTable
       );
+
+      // The hooks a status change of one language runs, run once for the
+      // move of every language: after the caller is known to be allowed to
+      // make it, and before anything is written, so a plugin's guard refuses
+      // this as it refuses that. A refusal thrown here is answered by the
+      // catch below with the hook's own status and message.
+      const hooks = await this.lifecycleBeforeHooks(direction, {
+        params,
+        existingEntry: existingEntry as Record<string, unknown>,
+        collection: publishCollection,
+      });
+      if ("answer" in hooks) return hooks.answer;
+      const { sharedContext, requestFacts, storedHooks } = hooks.ready;
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
@@ -10082,52 +10267,76 @@ export class CollectionMutationService extends BaseService {
           });
         }
 
-        // The update hooks a publish of each promoted language alone runs, with
-        // its durable document: the collection's code-registered and stored
-        // `afterUpdate` hooks, then the fields' `afterChange`. A publish that
-        // puts a pending change live writes content, not only a status, so an
-        // integration that skips the earlier working-draft save sees it here.
-        if (promotedForHooks.length > 0) {
-          const storedHooks = this.hookService.getStoredHooks(
-            publishCollection as Record<string, unknown>
-          );
-          const requestFacts = resolveRequestFacts(undefined);
-          for (const promoted of promotedForHooks) {
-            const sharedContext: Record<string, unknown> = {};
-            await this.hookService.hookRegistry.execute(
-              "afterUpdate",
-              this.hookService.buildHookContext({
-                collection: params.collectionName,
-                operation: "update" as const,
-                data: promoted.data,
-                originalData: promoted.originalData ?? undefined,
-                user: params.user,
-                context: sharedContext,
-                req: requestFacts,
-              })
-            );
-            await this.hookService.storedHookExecutor.execute(
-              "afterUpdate",
-              storedHooks,
-              this.hookService.buildPrebuiltHookContext({
-                collection: params.collectionName,
-                operation: "update",
-                data: promoted.data,
-                queryDatabase: this.queryDatabaseFn,
-                user: params.user,
-                sharedContext,
-                req: requestFacts,
-              })
-            );
-            await runFieldHooks({
-              kind: "collection",
-              slug: params.collectionName,
-              phase: "afterChange",
-              data: promoted.data,
-              operation: "update",
+        // The update hooks this move runs once it is durable: the
+        // collection's code-registered and stored `afterUpdate` hooks, then
+        // the fields' `afterChange`, sharing the context its before hooks
+        // ran with. A publish that put pending changes live runs them for
+        // each such language, with its durable document, as a publish of
+        // that language alone runs them: it wrote content, not only a
+        // status, so an integration that skips the earlier working-draft
+        // save sees it here. Any other move runs them once, with the entry
+        // as the move left it, as a status change of one language does.
+        // Never both: the languages a promotion reported are the write.
+        //
+        // A move that put nothing live changed the statuses and no field, so
+        // the fields' `afterChange` runs only for `status`, as a write runs
+        // that phase only for the fields it touched (`updateEntryWrite`): the
+        // row it is handed carries every shared field, and a handler that
+        // mails or re-indexes on a change would act on an unchanged value.
+        // The whole row is still handed over, so a handler that does run can
+        // read its siblings.
+        const afterRuns: {
+          data: Record<string, unknown>;
+          originalData: Record<string, unknown> | null;
+          touched?: ReadonlySet<string>;
+        }[] =
+          promotedForHooks.length > 0
+            ? promotedForHooks
+            : [
+                {
+                  data: publishedParentRow ?? {
+                    ...(existingEntry as Record<string, unknown>),
+                    status: direction.nextStatus,
+                  },
+                  originalData: existingEntry as Record<string, unknown>,
+                  touched: new Set(["status"]),
+                },
+              ];
+        for (const run of afterRuns) {
+          await this.hookService.hookRegistry.execute(
+            "afterUpdate",
+            this.hookService.buildHookContext({
+              collection: params.collectionName,
+              operation: "update" as const,
+              data: run.data,
+              originalData: run.originalData ?? undefined,
               user: params.user,
-            });
-          }
+              context: sharedContext,
+              req: requestFacts,
+            })
+          );
+          await this.hookService.storedHookExecutor.execute(
+            "afterUpdate",
+            storedHooks,
+            this.hookService.buildPrebuiltHookContext({
+              collection: params.collectionName,
+              operation: "update",
+              data: run.data,
+              queryDatabase: this.queryDatabaseFn,
+              user: params.user,
+              sharedContext,
+              req: requestFacts,
+            })
+          );
+          await runFieldHooks({
+            kind: "collection",
+            slug: params.collectionName,
+            phase: "afterChange",
+            data: run.data,
+            operation: "update",
+            user: params.user,
+            only: run.touched,
+          });
         }
 
         // emit the post-commit "updated" reaction event so cache
@@ -13324,64 +13533,18 @@ export class CollectionMutationService extends BaseService {
       // same thing about the caller and none of them re-reads a header.
       const requestFacts = resolveRequestFacts(params.request);
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments (id, data) or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "update",
-          args: { id: params.entryId, data: body },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          req: requestFacts,
-        });
-
-      // Use modified data if returned by beforeOperation
-      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
-
-      // Execute beforeUpdate hooks (code-registered)
-      // Hooks run before validation and can modify the incoming data
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "update" as const,
-        data: currentData,
-        originalData: existingEntry,
+      // `beforeOperation`, then the code and stored `beforeUpdate` hooks: the
+      // hooks before validation, which can modify the incoming data.
+      let finalData = await this.beforeUpdateHooks({
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        body,
+        existingEntry,
         user: params.user,
-        context: sharedContext,
-        req: requestFacts,
+        storedHooks,
+        sharedContext,
+        requestFacts,
       });
-
-      const modifiedData = await this.hookService.hookRegistry.execute(
-        "beforeUpdate",
-        beforeContext
-      );
-      const dataAfterCodeHooks = (modifiedData ?? currentData) as Record<
-        string,
-        unknown
-      >;
-
-      // Execute stored beforeUpdate hooks (UI-configured)
-      // Runs after code hooks, can further modify data
-      const storedBeforeResult =
-        await this.hookService.storedHookExecutor.execute(
-          "beforeUpdate",
-          storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "update",
-            data: dataAfterCodeHooks,
-            queryDatabase: this.queryDatabaseFn,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-          })
-        );
-      let finalData = (storedBeforeResult.data ?? dataAfterCodeHooks) as Record<
-        string,
-        unknown
-      >;
 
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
