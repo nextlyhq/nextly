@@ -1234,8 +1234,9 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.deleteEntryInTransaction(tx, {
       collectionName,
       entryId,
-      actor,
       ...forwardedFromContext(context),
+      // The actor passed beside the context wins over one the context names.
+      ...(actor === undefined ? {} : { actor }),
     });
 
     this.settleTxWrite<unknown>(tx, result, {

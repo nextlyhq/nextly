@@ -338,8 +338,15 @@ async function postWithFourEvents(t: TestNextly, id?: string): Promise<string> {
     data: { ...(id === undefined ? {} : { id }), title: "one" },
   });
   const postId = (created.item as { id: string }).id;
+  // Each save names the version the one before it left.
+  let rev = String((created.item as { _rev: string })._rev);
   for (const title of ["two", "three", "four"]) {
-    await t.nextly.update({ collection: "posts", id: postId, data: { title } });
+    const updated = await t.nextly.update({
+      collection: "posts",
+      id: postId,
+      data: { title, _rev: rev },
+    });
+    rev = String((updated.item as { _rev: string })._rev);
   }
   return postId;
 }

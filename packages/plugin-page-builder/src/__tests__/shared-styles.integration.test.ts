@@ -130,7 +130,10 @@ describe.each(getConfiguredTestDialects())(
       // fixture, not the behaviour under test.
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { classes: [{ ...card, locked: true }, hero, spare] },
+        data: {
+          classes: [{ ...card, locked: true }, hero, spare],
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       return { t, tick: backfillTick(plugin) };
@@ -244,7 +247,10 @@ describe.each(getConfiguredTestDialects())(
         [hero, spare],
       ];
       for (const classes of writes) {
-        const answer = await call("PATCH", SINGLE, designer, { classes });
+        const answer = await call("PATCH", SINGLE, designer, {
+          classes,
+          _overwrite: true,
+        });
         expect(answer.status).toBe(409);
         expect(JSON.stringify(answer.body)).toContain(
           "Card is locked, so it can't be changed, renamed or removed. Unlock it first."
@@ -273,6 +279,7 @@ describe.each(getConfiguredTestDialects())(
       const red = { ...card, styles: { base: { base: { color: "#ff0000" } } } };
       const change = await call("PATCH", SINGLE, keeper, {
         classes: [red, hero, spare],
+        _overwrite: true,
       });
       expect(change.status).toBe(200);
       const lock = await call("POST", route("lock"), keeper, {
@@ -301,6 +308,7 @@ describe.each(getConfiguredTestDialects())(
           { ...hero, locked: true },
           { ...spare, locked: true },
         ],
+        _overwrite: true,
       });
       expect(flip.status).toBe(400);
       expect(JSON.stringify(flip.body)).toContain(
@@ -319,6 +327,7 @@ describe.each(getConfiguredTestDialects())(
       // Undoing a style just made writes the section back without it.
       const undone = await call("PATCH", SINGLE, designer, {
         classes: [lockedCard, hero],
+        _overwrite: true,
       });
       expect(undone.status).toBe(200);
       expect((await stored(t)).map(entry => entry.id)).toEqual([
@@ -327,6 +336,7 @@ describe.each(getConfiguredTestDialects())(
       ]);
       const dropped = await call("PATCH", SINGLE, designer, {
         classes: [hero],
+        _overwrite: true,
       });
       expect(dropped.status).toBe(409);
       expect((await stored(t)).map(entry => entry.id)).toEqual([
@@ -580,7 +590,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { classes: [lockedCard, hero] },
+        data: { classes: [lockedCard, hero], _overwrite: true },
         overrideAccess: true,
       });
       const kept = await t.nextly.update({
@@ -589,6 +599,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           title: "Old, renamed",
           content: pageOf([text("a", { classes: ["c-spare"] })]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });

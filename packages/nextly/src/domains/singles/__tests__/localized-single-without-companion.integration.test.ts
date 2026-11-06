@@ -80,7 +80,7 @@ describe("localized single without a companion table (integration)", () => {
     current = await boot(false);
     await current.nextly.updateSingle({
       slug: "swin_settings",
-      data: { headline: "Original" },
+      data: { headline: "Original", _overwrite: true },
     } as Parameters<typeof current.nextly.updateSingle>[0]);
 
     // Re-open localized, then remove the companion to recreate the window.
@@ -92,7 +92,10 @@ describe("localized single without a companion table (integration)", () => {
 
     await current.nextly.updateSingle({
       slug: "swin_settings",
-      data: { headline: "Edited while the companion was missing" },
+      data: {
+        headline: "Edited while the companion was missing",
+        _overwrite: true,
+      },
       locale: "en",
     } as Parameters<typeof current.nextly.updateSingle>[0]);
 
@@ -106,7 +109,7 @@ describe("localized single without a companion table (integration)", () => {
     current = await boot(false);
     await current.nextly.updateSingle({
       slug: "swin_settings",
-      data: { headline: "Original" },
+      data: { headline: "Original", _overwrite: true },
     } as Parameters<typeof current.nextly.updateSingle>[0]);
     await current.destroy();
     current = await boot(true);
@@ -170,7 +173,10 @@ describe("localized single without a companion table (integration)", () => {
     await expect(
       current.nextly.updateSingle({
         slug: "swin_settings",
-        data: { headline: "Edited while the companion was missing" },
+        data: {
+          headline: "Edited while the companion was missing",
+          _overwrite: true,
+        },
         locale: "en",
       } as Parameters<typeof current.nextly.updateSingle>[0])
     ).rejects.toThrow(/Translations are not ready/);
@@ -211,7 +217,10 @@ describe.each(getConfiguredTestDialects())(
         .getService<SingleEntryService>("singleEntryService")
         .update(
           "swin_settings",
-          { headline: "Edited while the companion was missing" },
+          {
+            headline: "Edited while the companion was missing",
+            _overwrite: true,
+          },
           { locale: "en", overrideAccess: true }
         );
 

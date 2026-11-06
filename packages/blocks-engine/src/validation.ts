@@ -32,6 +32,11 @@ import {
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import {
+  LIST_ISSUE_CODES,
+  listQueryIssues,
+  type ListFieldSource,
+} from "./list-query";
+import {
   DEFAULT_LIMITS,
   LIMIT_WARNING_RATIO,
   MAX_ENVELOPE_ENTRIES,
@@ -240,6 +245,15 @@ export interface ValidationContext {
   bindingSchema?: BindingSchemaSource;
   /** Which source an `entry` binding reads, for {@link bindingSchema}. */
   bindingEntry?: BindingSchemaRef;
+  /**
+   * The fields each collection declares and the public may read, for judging
+   * what a collection list filters and sorts by (`list-query`).
+   *
+   * Absent means a list is judged by its shape and nesting only, on the same
+   * terms as {@link bindingSchema}. A list related to the page's entry looks
+   * its relation up in the collection {@link bindingEntry} names.
+   */
+  listFields?: ListFieldSource;
 }
 
 /** The validator's own codes, before the binding codes are added. */
@@ -329,6 +343,8 @@ const DOCUMENT_ISSUE_CODES = {
     "More than one named class in the site library carries the same name.",
   "duplicate-class-id":
     "More than one named class in the site library carries the same id, which is what documents reference.",
+  "duplicate-own-look":
+    "More than one class in the site library is the same block type's own look; only the first is read.",
   "invalid-style-value":
     "A style value does not match the shape its property declares.",
   "token-not-allowed":
@@ -367,7 +383,10 @@ const DOCUMENT_ISSUE_CODES = {
 } as const;
 
 /** A stable validation issue code. */
-export type IssueCode = keyof typeof DOCUMENT_ISSUE_CODES | BindingIssueCode;
+export type IssueCode =
+  | keyof typeof DOCUMENT_ISSUE_CODES
+  | BindingIssueCode
+  | keyof typeof LIST_ISSUE_CODES;
 
 /**
  * The stable issue-code vocabulary, each with a one-line description. Tests
@@ -381,6 +400,9 @@ export type IssueCode = keyof typeof DOCUMENT_ISSUE_CODES | BindingIssueCode;
 export const ISSUE_CODES: { readonly [Code in IssueCode]: string } = {
   ...DOCUMENT_ISSUE_CODES,
   ...BINDING_ISSUE_CODES,
+  // A collection list's query codes, from the module that reads the query, so
+  // the editor, the API and the renderer name a list's problem alike.
+  ...LIST_ISSUE_CODES,
 };
 
 /**
@@ -618,6 +640,27 @@ export function validateDocument(
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
+
+  // Each collection list's query: its bounds, filter rows, sort and related
+  // source, and the fields it names when the caller can answer for them.
+  // Under the survey's node cap, and skipped past the limits as the per-value
+  // work above is. A problem a stored form already held stays a warning, so a
+  // list a schema change broke does not make its page unsavable.
+  if (!overLimits) {
+    const entry = ctx.bindingEntry;
+    issues.push(
+      // As validation issues: the path names the list, so the block's id the
+      // judgement also carries is left to the editor that asks for it.
+      ...listQueryIssues(envelope.nodes, {
+        ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
+        ...(entry !== undefined && "collection" in entry
+          ? { entryCollection: entry.collection }
+          : {}),
+        ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+        maxNodes: survey.limits.maxNodes,
+      }).map(({ nodeId: _nodeId, ...issue }) => issue)
+    );
+  }
 
   return { issues, survey };
 }

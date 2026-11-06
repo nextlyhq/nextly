@@ -76,7 +76,7 @@ async function cappedDocument(dialect: TestDialect) {
     for (let i = 0; i < times; i += 1) {
       await handler.updateEntry(
         { collectionName: "notes", entryId, overrideAccess: true },
-        { title: `save ${i}` }
+        { title: `save ${i}`, _overwrite: true }
       );
     }
   };
@@ -551,7 +551,11 @@ describe.each(getConfiguredTestDialects())(
       );
       await current
         .getService("singleEntryService")
-        .update(slug, { heading: "v1" }, { overrideAccess: true });
+        .update(
+          slug,
+          { heading: "v1", _overwrite: true },
+          { overrideAccess: true }
+        );
       const [version] = (
         await current.adapter.select<{ scopeSlug: string; entryId: string }>(
           "nextly_versions"

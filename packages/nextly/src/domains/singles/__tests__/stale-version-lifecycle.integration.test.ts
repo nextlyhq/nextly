@@ -136,8 +136,14 @@ async function lifecycleOf(t: TestNextly, slug: string) {
 
 /** The banner as a draft in English and Spanish, with the version of a read of every language. */
 async function translatedBanner(t: TestNextly): Promise<string> {
-  await save(t, BANNER, "en", { headline: "hello" });
-  await save(t, BANNER, "es", { headline: "hola" });
+  await save(t, BANNER, "en", {
+    headline: "hello",
+    _rev: await readRev(t, BANNER, "en"),
+  });
+  await save(t, BANNER, "es", {
+    headline: "hola",
+    _rev: await readRev(t, BANNER, "es"),
+  });
   return readRev(t, BANNER, "*");
 }
 
@@ -168,19 +174,43 @@ async function englishBehindSpanish(t: TestNextly): Promise<void> {
         siteName: "EN",
         articleCount: 10,
         status: "published",
+        _rev: await readRev(t, SITE, "en"),
       })
     ).success
   ).toBe(true);
   expect(
-    (await save(t, SITE, "es", { siteName: "ES", status: "published" })).success
+    (
+      await save(t, SITE, "es", {
+        siteName: "ES",
+        status: "published",
+        _rev: await readRev(t, SITE, "es"),
+      })
+    ).success
   ).toBe(true);
-  expect((await save(t, SITE, "en", { siteName: "EN edited" })).success).toBe(
-    true
-  );
-  expect((await save(t, SITE, "es", { articleCount: 13 })).success).toBe(true);
-  expect((await save(t, SITE, "es", { status: "published" })).success).toBe(
-    true
-  );
+  expect(
+    (
+      await save(t, SITE, "en", {
+        siteName: "EN edited",
+        _rev: await readRev(t, SITE, "en"),
+      })
+    ).success
+  ).toBe(true);
+  expect(
+    (
+      await save(t, SITE, "es", {
+        articleCount: 13,
+        _rev: await readRev(t, SITE, "es"),
+      })
+    ).success
+  ).toBe(true);
+  expect(
+    (
+      await save(t, SITE, "es", {
+        status: "published",
+        _rev: await readRev(t, SITE, "es"),
+      })
+    ).success
+  ).toBe(true);
 }
 
 /** The English pending change's name, as a read of the change shows it. */
@@ -212,7 +242,13 @@ describe.each(getConfiguredTestDialects())(
       it("refuses a publish of every language after one of them changed", async () => {
         const t = await boot(dialect);
         const read = await translatedBanner(t);
-        await save(t, BANNER, "es", { headline: "hola otra vez" }, ANA);
+        await save(
+          t,
+          BANNER,
+          "es",
+          { headline: "hola otra vez", _overwrite: true },
+          ANA
+        );
         const before = await lifecycleOf(t, BANNER);
 
         const refused = await publishAll(t, { _rev: read });
@@ -262,14 +298,23 @@ describe.each(getConfiguredTestDialects())(
       it("publishes with no version, until a version is required", async () => {
         const t = await boot(dialect);
         await translatedBanner(t);
-        await save(t, BANNER, "es", { headline: "hola otra vez" });
+        await save(t, BANNER, "es", {
+          headline: "hola otra vez",
+          _overwrite: true,
+        });
         expect((await publishAll(t, {})).success).toBe(true);
       });
 
       it("publishes over a change with the overwrite choice, and records it", async () => {
         const t = await boot(dialect);
         const read = await translatedBanner(t);
-        await save(t, BANNER, "es", { headline: "hola otra vez" }, ANA);
+        await save(
+          t,
+          BANNER,
+          "es",
+          { headline: "hola otra vez", _rev: await readRev(t, BANNER, "es") },
+          ANA
+        );
         const published = await publishAll(t, {
           _rev: read,
           _overwrite: true,
@@ -289,7 +334,13 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         await englishBehindSpanish(t);
         const read = await readRev(t, SITE, "en");
-        await save(t, SITE, "en", { siteName: "Ana's draft" }, ANA);
+        await save(
+          t,
+          SITE,
+          "en",
+          { siteName: "Ana's draft", _overwrite: true },
+          ANA
+        );
         const asAnaLeftIt = await pendingName(t);
 
         const refused = (await singlesOf(t).takeLiveSharedValues({
@@ -317,7 +368,13 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         await englishBehindSpanish(t);
         const read = await readRev(t, SITE, "en");
-        await save(t, SITE, "en", { siteName: "Ana's draft" }, ANA);
+        await save(
+          t,
+          SITE,
+          "en",
+          { siteName: "Ana's draft", _overwrite: true },
+          ANA
+        );
         const asAnaLeftIt = await pendingName(t);
 
         expect(
@@ -349,7 +406,13 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         await englishBehindSpanish(t);
         const read = await readRev(t, SITE, "en");
-        await save(t, SITE, "en", { siteName: "Ana's draft" }, ANA);
+        await save(
+          t,
+          SITE,
+          "en",
+          { siteName: "Ana's draft", _overwrite: true },
+          ANA
+        );
         // A removal that fails: a discard that removed before judging would
         // answer with this failure rather than with the refusal.
         const removal = vi
@@ -375,7 +438,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         await englishBehindSpanish(t);
         const read = await readRev(t, SITE, "en");
-        await save(t, SITE, "en", { siteName: "Ana's draft" }, ANA);
+        await save(t, SITE, "en", { siteName: "Ana's draft", _rev: read }, ANA);
         const removed = await singlesOf(t).discardWorkingDraftCounted({
           slug: SITE,
           locale: "en",

@@ -99,7 +99,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: PAGES,
         id: liveId,
-        data: { title: "Pending edit" },
+        data: { title: "Pending edit", _overwrite: true },
         draft: true,
       } as never);
       draftId = idOf(

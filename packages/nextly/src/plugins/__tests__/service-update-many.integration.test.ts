@@ -77,8 +77,8 @@ describe("ctx.services.collections.updateMany", () => {
     const result = await services.collections.updateMany(
       "widgets",
       [
-        { id: a, data: { kind: "published" } },
-        { id: b, data: { title: "renamed" } },
+        { id: a, data: { kind: "published", _overwrite: true } },
+        { id: b, data: { title: "renamed", _overwrite: true } },
       ],
       { as: "system" }
     );
@@ -109,8 +109,8 @@ describe("ctx.services.collections.updateMany", () => {
     const result = await services.collections.updateMany(
       "widgets",
       [
-        { id: "missing-id", data: { kind: "published" } },
-        { id: a, data: { kind: "published" } },
+        { id: "missing-id", data: { kind: "published", _overwrite: true } },
+        { id: a, data: { kind: "published", _overwrite: true } },
       ],
       { as: "system" }
     );
@@ -174,7 +174,10 @@ describe("ctx.services.collections.updateMany", () => {
 
     const result = await services.collections.updateMany(
       "widgets",
-      created.ids.map((id: string) => ({ id, data: { kind: "published" } })),
+      created.ids.map((id: string) => ({
+        id,
+        data: { kind: "published", _overwrite: true },
+      })),
       { as: "system" }
     );
     expect(result.failed, JSON.stringify(result.errors)).toBe(0);

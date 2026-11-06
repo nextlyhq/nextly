@@ -341,6 +341,16 @@ export interface PageContext {
    * where a document is rendered with no surrounding record.
    */
   entry: Record<string, unknown> | null;
+  /**
+   * The collection {@link entry} is an entry of, so a list of the entry's
+   * related entries can read the relation as the public reads the entry,
+   * through {@link data}, rather than take it from `entry`, which a route may
+   * have read with more access than a visitor has. Absent for a Single's page
+   * and in standalone use; such a list then shows its empty state.
+   *
+   * @experimental
+   */
+  entryCollection?: string;
   /** The locale being rendered, when the host is localized. */
   locale?: string;
   /**
@@ -420,6 +430,52 @@ export interface PageContext {
    * hanging.
    */
   queries?: QueryBudget;
+  /**
+   * Whether an author is looking: the editor's canvas, or a preview of a
+   * working draft. A block may then draw what it could not do as stored,
+   * such as a list whose read failed or whose sort fell back to id order,
+   * with a note only that author sees. Absent on a published page, which
+   * shows visitors only what they may see.
+   *
+   * @experimental
+   */
+  diagnostics?: boolean;
+  /**
+   * The site's IANA time zone, in which a list's date filter compares whole
+   * days for a field holding an instant. UTC when absent.
+   *
+   * @experimental
+   */
+  timeZone?: string;
+  /**
+   * The fields of the collections the page's lists read, as the public sees
+   * them, so a list's date filter can tell a field holding a calendar day
+   * (compared as that day) from one holding an instant (compared in
+   * {@link timeZone}). Absent, every date compares as an instant.
+   *
+   * @experimental
+   */
+  fieldShapes?: BlocksFieldShapes;
+  /**
+   * The collection lists, by node id, an author has asked to see in their
+   * empty state: the editor's "Canvas shows: When empty". Such a list draws
+   * its empty slot in place of its entries. Honoured only where
+   * {@link diagnostics} says an author is looking, so no page a visitor is
+   * served can be made to hide its entries.
+   *
+   * @experimental
+   */
+  listsShowingEmpty?: ReadonlySet<string>;
+  /**
+   * The editor's canvas, which can act on a list note's action: a list whose
+   * sort fell back offers "Choose a field" there, which the canvas answers by
+   * taking the author to the list's sort. Honoured only where
+   * {@link diagnostics} says an author is looking; absent in a preview, which
+   * has nothing to act with, so its notes are words alone.
+   *
+   * @experimental
+   */
+  listNoteActions?: boolean;
 }
 
 /**
@@ -541,6 +597,49 @@ export interface PageBindings {
  * @experimental
  */
 export type BindingIssuesHandler = (issues: readonly BindingIssue[]) => void;
+
+/**
+ * Reads one page render may perform when the route was given no number.
+ *
+ * Generous for a page and small against a database: a document would have to
+ * nest loops to approach it, which is the shape the budget exists to bound. A
+ * page that exceeds it renders what it could reach rather than failing, so the
+ * cost of the default being low is visible content, while the cost of having no
+ * default at all is an unbounded read amplification reachable by URL.
+ *
+ * @experimental
+ */
+export const DEFAULT_MAX_QUERIES = 500;
+
+/**
+ * A budget for ONE page render: `max` reads, then none.
+ *
+ * Here rather than beside the route, so every surface that draws a page
+ * bounds its reads the same way: the published route and the editor's
+ * canvas alike.
+ *
+ * Created per render rather than per route: the counter is spent, so a single
+ * budget shared across requests would exhaust on the first few pages and serve
+ * every later request truncated — a fault that grows with uptime and disappears
+ * on restart, which is the hardest kind to attribute.
+ */
+export function createQueryBudget(
+  max: number = DEFAULT_MAX_QUERIES
+): QueryBudget {
+  // `NaN` is what `Number(process.env.MAX_QUERIES)` produces for an unset or
+  // malformed variable, and every comparison against it is false — so
+  // `remaining <= 0` never fires and the budget silently becomes unlimited.
+  // That is the failure this exists to prevent, reached by a configuration
+  // mistake rather than by a document.
+  let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
+  return {
+    take: () => {
+      if (remaining <= 0) return false;
+      remaining -= 1;
+      return true;
+    },
+  };
+}
 
 /** A context with nothing wired up: the standalone default. */
 export function createStandaloneContext(

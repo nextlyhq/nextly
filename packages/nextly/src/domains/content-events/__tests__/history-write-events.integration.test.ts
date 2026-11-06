@@ -140,18 +140,20 @@ describe.each(getConfiguredTestDialects())(
         title: "live",
         status: "published",
       });
-      await t.update("articles", id, { title: "held edit" });
+      await t.update("articles", id, { title: "held edit", _overwrite: true });
 
       await t.handler.discardWorkingDraft({
         collectionName: "articles",
         entryId: id,
         user: ANA,
+        version: { _overwrite: true },
       });
       // Nothing left to discard.
       await t.handler.discardWorkingDraft({
         collectionName: "articles",
         entryId: id,
         user: ANA,
+        version: { _overwrite: true },
       });
 
       const discarded = (await t.eventsOf(id)).filter(
@@ -167,9 +169,9 @@ describe.each(getConfiguredTestDialects())(
     it("records a retention pass once, with how many versions it removed, by the system", async () => {
       const t = await boot(dialect);
       const id = await t.create("kept", { title: "1" });
-      await t.update("kept", id, { title: "2" });
-      await t.update("kept", id, { title: "3" });
-      await t.update("kept", id, { title: "4" });
+      await t.update("kept", id, { title: "2", _overwrite: true });
+      await t.update("kept", id, { title: "3", _overwrite: true });
+      await t.update("kept", id, { title: "4", _overwrite: true });
 
       const removals = (await t.eventsOf(id)).filter(
         e => e.kind === "versions-removed"
@@ -188,8 +190,8 @@ describe.each(getConfiguredTestDialects())(
         title: "live",
         status: "published",
       });
-      await t.update("drafted", id, { title: "held 1" });
-      await t.update("drafted", id, { title: "held 2" });
+      await t.update("drafted", id, { title: "held 1", _overwrite: true });
+      await t.update("drafted", id, { title: "held 2", _overwrite: true });
       const versionsOf = async () =>
         (
           await current!.adapter.select<{
@@ -215,10 +217,14 @@ describe.each(getConfiguredTestDialects())(
       // per item and carries on; a pass that pruned versions without its event
       // must not.
       const result = await service
-        .updateMany("drafted", [{ id, data: { title: "held 3" } }], {
-          overrideAccess: true,
-          user: ANA,
-        })
+        .updateMany(
+          "drafted",
+          [{ id, data: { title: "held 3", _overwrite: true } }],
+          {
+            overrideAccess: true,
+            user: ANA,
+          }
+        )
         .catch(() => ({ failed: -1 }));
 
       expect(result.failed).not.toBe(0);

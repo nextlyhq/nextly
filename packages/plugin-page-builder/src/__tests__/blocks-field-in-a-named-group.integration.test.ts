@@ -226,7 +226,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "features" as never,
             id,
-            data: at(pageOf(nodes)) as never,
+            data: { ...at(pageOf(nodes)), _overwrite: true } as never,
             overrideAccess: true,
           });
 
@@ -262,7 +262,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (nodes: BlockNode[]) =>
         t.nextly.updateSingle({
           slug: "frontpage" as never,
-          data: { hero: { body: pageOf(nodes) } } as never,
+          data: { hero: { body: pageOf(nodes) }, _overwrite: true } as never,
           overrideAccess: true,
         } as never);
       await save([card]);
@@ -290,7 +290,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "features" as never,
           id,
-          data: { hero: { body: pageOf(nodes) } } as never,
+          data: { hero: { body: pageOf(nodes) }, _overwrite: true } as never,
           overrideAccess: true,
         });
       RULE.on = true;
