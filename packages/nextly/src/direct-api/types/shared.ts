@@ -15,6 +15,7 @@ import type { Principal } from "../../plugins/principals/types";
 import type { TrustBound } from "../../services/collections/trust-grant";
 
 import type { FormsConfig } from "./forms";
+import type { LocaleOption } from "./locales";
 
 // (`{ items, meta }`) so the in-process Direct API speaks the same envelope
 // as the wire API. The legacy `PaginatedResponse` (Payload's `{ docs,
@@ -601,16 +602,18 @@ export interface DirectAPIConfig {
   /**
    * Locale for localized content.
    *
-   * When set, returns content in the specified locale.
+   * When set, returns content in the specified locale. One of the site's languages where
+   * generated types list them (`"all"` for every language at once); any code otherwise, checked
+   * at run time.
    */
-  locale?: string;
+  locale?: LocaleOption;
 
   /**
    * Fallback locale when requested locale data is missing.
    *
    * Set to `false` to disable fallback behavior.
    */
-  fallbackLocale?: string | false;
+  fallbackLocale?: LocaleOption | false;
 
   /**
    * Relationship population depth.

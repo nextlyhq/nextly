@@ -12,6 +12,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import { TypeGenerator } from "../../domains/schema/services/type-generator";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import type { PermissionConfigSource } from "../../plugins/permissions/collect-permissions";
@@ -29,8 +30,13 @@ export interface WriteGeneratedTypesOptions {
   cwd: string;
   /** The configured `typescript.outputFile`, or an explicit `--output`. */
   outputFile: string;
-  /** The merged config, whose permissions and events the types narrow to. */
-  config: PermissionConfigSource;
+  /**
+   * The merged config, whose permissions and events the types narrow to, and whose declared
+   * languages, where it locks them, the types list.
+   */
+  config: PermissionConfigSource & {
+    localization?: Pick<SanitizedLocalizationConfig, "locales">;
+  };
   plugins: PluginDefinition[];
   collections: DynamicCollectionRecord[];
   singles: DynamicSingleRecord[];
@@ -54,6 +60,20 @@ export interface GeneratedFile {
 }
 
 /**
+ * The languages a types file lists, for every writer of one (`generate:types`, `build`,
+ * `db:sync --types`): those a configuration that declares them locks, as the reads match them.
+ * Where it declares none, Settings manages them and the types take any code. Old codes still
+ * accepted after a conversion come from the upgrade that converts them; none are recorded before
+ * it.
+ */
+export function generatedLanguages(config: {
+  localization?: Pick<SanitizedLocalizationConfig, "locales">;
+}): { locales?: string[] } {
+  const locales = config.localization?.locales.map(locale => locale.code);
+  return locales === undefined ? {} : { locales };
+}
+
+/**
  * Generates the types file without writing it: the path and content
  * `writeTypesFile` writes, for a run that only reports them.
  */
@@ -72,6 +92,7 @@ export function generateTypesFile(
     generateInputTypes: true,
     generateConfig: true,
     generateModuleAugmentation: options.moduleAugmentation,
+    ...generatedLanguages(options.config),
   }).generateTypesFile(
     options.collections,
     options.singles,
