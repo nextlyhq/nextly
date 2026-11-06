@@ -408,7 +408,7 @@ describe("what an author is told about a custom source", () => {
     expect(
       NAMED_QUERY_TEXT.readsHiddenCanvas("Most read", "Page views", ["views"])
     ).toBe(
-      "Most read reads views from Page views, which visitors can't read, so visitors see the rows without them. This is what a visitor would see."
+      "Most read reads views from Page views, which visitors can't read, so on the published page visitors see the rows without them."
     );
     // A collection whose fields are not known is named alone.
     expect(NAMED_QUERY_TEXT.readsHidden("Page views", [])).toContain(

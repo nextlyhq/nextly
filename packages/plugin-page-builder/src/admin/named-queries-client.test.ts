@@ -176,7 +176,7 @@ describe("the canvas's runs of a named query", () => {
     expect(outcome.diagnostic).toEqual({
       kind: "query-caution",
       message:
-        "Upcoming events reads views from Page views, which visitors can't read, so visitors see the rows without them. This is what a visitor would see.",
+        "Upcoming events reads views from Page views, which visitors can't read, so on the published page visitors see the rows without them.",
     });
   });
 

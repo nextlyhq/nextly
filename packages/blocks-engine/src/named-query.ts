@@ -558,10 +558,12 @@ export const NAMED_QUERY_TEXT: {
     fields.length === 0
       ? `It reads ${collection}, which visitors can't read, so a published list of it may show nothing.`
       : `It reads ${wordList(fields)} from ${collection}, which visitors can't read, so visitors see the rows without them.`,
+  // The canvas reads as the person editing, so it says what the published
+  // page does differently rather than claiming to be a visitor's view.
   readsHiddenCanvas: (query, collection, fields) =>
     fields.length === 0
-      ? `${query} reads ${collection}, which visitors can't read, so on the published page it gets nothing from it. This is what a visitor would see.`
-      : `${query} reads ${wordList(fields)} from ${collection}, which visitors can't read, so visitors see the rows without them. This is what a visitor would see.`,
+      ? `${query} reads ${collection}, which visitors can't read, so on the published page it gets nothing from it.`
+      : `${query} reads ${wordList(fields)} from ${collection}, which visitors can't read, so on the published page visitors see the rows without them.`,
   rowsHidden: (query, collection) =>
     `${query} lists entries of ${collection}, which visitors can't read, so this list can never show anything. Choose another source.`,
   runFailed: detail =>
