@@ -21,6 +21,7 @@ import type {
   PlaceCount,
   RemovedBreakpoint,
 } from "../../breakpoint-removal/dry-run";
+import type { BreakpointRemoval } from "./use-breakpoint-removal";
 import type {
   SiteBreakpointRemovalStatus,
   SiteBreakpointsDryRun,
@@ -45,7 +46,11 @@ let dryRunAnswer: () => Promise<unknown>;
 let confirmAnswer: () => Promise<unknown>;
 let carryOnAnswers: Array<() => Promise<unknown>> = [];
 /** What the read of a removal's status answers. */
-let statusRead: () => Promise<SiteSettingsRead | undefined>;
+let statusRead: () => Promise<{
+  removal: SiteBreakpointRemovalStatus | null;
+}>;
+/** The paths the status was read at. */
+const statusAsked: string[] = [];
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: () => ({
@@ -55,7 +60,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     fetching: false,
     refetch,
   }),
-  readPluginRoute: async () => statusRead(),
+  readPluginRoute: async ({ path }: { path: string }) => {
+    statusAsked.push(path);
+    return statusRead();
+  },
   writePluginRoute: async (write: {
     path: string;
     body: Record<string, unknown>;
@@ -73,6 +81,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 const { SettingsDialog } = await import("./settings-dialog");
+const { RemovalStepPanel } = await import("./breakpoint-removal-step");
 
 const none = (): PlaceCount => ({
   documents: 0,
@@ -114,6 +123,9 @@ function dryRun(removed: RemovedBreakpoint): () => Promise<unknown> {
 
 const STORED = mobile({ pages: { documents: 14, styles: 30 } });
 
+/** Renders the dialog again with the current read, as a refetch would. */
+let reshow: () => void = () => {};
+
 /** A saved answer, with where its removal stands. */
 function saved(finished: boolean, left = 0): () => Promise<unknown> {
   return async () => ({
@@ -125,11 +137,11 @@ function saved(finished: boolean, left = 0): () => Promise<unknown> {
   });
 }
 
-/** The status read, reporting `removals`. */
+/** The status read of one run: what it still holds, or nothing. */
 function reads(
   removals: SiteBreakpointRemovalStatus[]
-): () => Promise<SiteSettingsRead> {
-  return async () => ({ ...siteRead, removals });
+): () => Promise<{ removal: SiteBreakpointRemovalStatus | null }> {
+  return async () => ({ removal: removals[0] ?? null });
 }
 
 const writer = vi.fn(async () => undefined);
@@ -137,7 +149,8 @@ const refresh = vi.fn();
 const onOpenChange = vi.fn();
 
 function show(): void {
-  render(
+  // Built afresh each time, so a re-render asks the dialog again.
+  const element = () => (
     <SettingsDialog
       open
       onOpenChange={onOpenChange}
@@ -148,6 +161,8 @@ function show(): void {
       breakpoints={{ value: SET, onSave: writer, status: "ready", refresh }}
     />
   );
+  const { rerender } = render(element());
+  reshow = () => rerender(element());
 }
 
 /** Open the Site tab and remove Mobile in the editor, then Save. */
@@ -189,6 +204,7 @@ beforeEach(() => {
   confirmAnswer = saved(true);
   carryOnAnswers = [];
   statusRead = reads([]);
+  statusAsked.length = 0;
   refetch.mockClear();
   writer.mockClear();
   refresh.mockClear();
@@ -496,5 +512,124 @@ describe("removing a breakpoint in Settings", () => {
     );
     await waitFor(() => expect(writer).toHaveBeenCalledWith(SET));
     expect(writes).toEqual([]);
+  });
+
+  it("reads the finished run's own status, past any cap on the tab's list", async () => {
+    confirmAnswer = saved(true, 2);
+    statusRead = reads([
+      {
+        runId: "run-1",
+        labels: ["Mobile"],
+        open: false,
+        left: 2,
+        waitingOnDrafts: false,
+      },
+    ]);
+    show();
+    await removeMobile();
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove Mobile and its styles",
+      })
+    );
+    expect(
+      await screen.findByText(
+        "Mobile was removed, except from 2 entries it couldn't change"
+      )
+    ).toBeTruthy();
+    expect(statusAsked).toEqual(["/site/breakpoints/removal?runId=run-1"]);
+  });
+
+  it("takes the last call's count when the run's status can't be read, never done", async () => {
+    confirmAnswer = saved(true, 1);
+    statusRead = async () => {
+      throw new Error("offline");
+    };
+    show();
+    await removeMobile();
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove Mobile and its styles",
+      })
+    );
+    expect(
+      await screen.findByText(
+        "Mobile was removed, except from 1 entry it couldn't change"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("Mobile was removed")).toBeNull();
+  });
+
+  it("lets a removal opened elsewhere outrank this tab's finished one, but not its own run", async () => {
+    show();
+    await removeMobile();
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove Mobile and its styles",
+      })
+    );
+    await screen.findByText("Mobile was removed");
+    // A read not yet caught up still reports this tab's own run open.
+    carryOnAnswers = [() => new Promise(() => {})];
+    siteRead = {
+      ...siteRead,
+      removals: [
+        {
+          runId: "run-1",
+          labels: ["Mobile"],
+          open: true,
+          left: 0,
+          waitingOnDrafts: false,
+        },
+      ],
+    };
+    reshow();
+    expect(screen.getByText("Mobile was removed")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    ).toHaveProperty("disabled", false);
+    // Another tab opens a removal of its own.
+    siteRead = {
+      ...siteRead,
+      removals: [
+        {
+          runId: "run-7",
+          labels: ["Phone"],
+          open: true,
+          left: 0,
+          waitingOnDrafts: false,
+        },
+      ],
+    };
+    reshow();
+    expect(
+      screen.getByText("Phone's styles are still being removed")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    ).toHaveProperty("disabled", true);
+  });
+
+  it("checks an unbounded container width as a row of its own", () => {
+    const current = {
+      viewport: SET.viewport,
+      container: [{ id: "card", label: "Card" }],
+    };
+    render(
+      <RemovalStepPanel
+        removal={
+          {
+            step: { kind: "checking", next: SET, labels: ["Card"] },
+            back: vi.fn(),
+          } as unknown as BreakpointRemoval
+        }
+        current={current}
+        baseLabel="Desktop"
+        onClose={vi.fn()}
+      />
+    );
+    const card = screen.getByText("Card").closest("li");
+    expect(card?.textContent).toContain("every width");
+    expect(card?.className).toContain("line-through");
   });
 });

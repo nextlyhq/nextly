@@ -198,6 +198,7 @@ import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
   siteBreakpointRemovalRoute,
+  siteBreakpointRemovalStatusRoute,
   siteBreakpointsRoute,
   siteSettingsRoute,
   type BreakpointsRouteContext,
@@ -2240,6 +2241,8 @@ export const pageBuilder = (
         // one that does not finish in its save is carried on by the second.
         siteBreakpointsRoute(breakpointRemoval),
         siteBreakpointRemovalRoute(breakpointRemoval),
+        // Where one removal stands, read by its id.
+        siteBreakpointRemovalStatusRoute(breakpointRemoval),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.

@@ -72,11 +72,15 @@ export type RemovalStep =
     }
   | {
       readonly kind: "done";
+      /** The removal it ended, where there was a run. */
+      readonly runId?: string;
       readonly labels: readonly string[];
       readonly counted?: readonly RemovedBreakpoint[];
     }
   | {
       readonly kind: "left";
+      /** The removal it ended. */
+      readonly runId?: string;
       readonly status: Pick<
         SiteBreakpointRemovalStatus,
         "labels" | "left" | "waitingOnDrafts"
@@ -120,6 +124,7 @@ function reasonOf(error: unknown): string {
  * what it left decides, since doubt is never reported as done.
  */
 function endedOn(
+  runId: string,
   status: SiteBreakpointRemovalStatus | null | undefined,
   fallback: { readonly labels: readonly string[]; readonly left: number },
   counted: readonly RemovedBreakpoint[] | undefined
@@ -127,6 +132,7 @@ function endedOn(
   if (status === undefined && fallback.left > 0) {
     return {
       kind: "left",
+      runId,
       status: {
         labels: fallback.labels,
         left: fallback.left,
@@ -135,31 +141,41 @@ function endedOn(
     };
   }
   if (status !== null && status !== undefined && status.left > 0) {
-    return { kind: "left", status };
+    return { kind: "left", runId, status };
   }
   return {
     kind: "done",
+    runId,
     labels: status?.labels ?? fallback.labels,
     ...(counted === undefined ? {} : { counted }),
   };
 }
 
 /**
- * The step on screen: this tab's own while it has one, otherwise a removal
- * the read reports open (followed, holding editing), then one that finished
- * leaving documents (said until they are resolved).
+ * The step on screen: this tab's own while it is under way; a removal the
+ * read reports open (followed, holding editing), which also outranks this
+ * tab's finished one, since editing must wait for it too; then this tab's
+ * finished one; then one that finished leaving documents (said until they
+ * are resolved). A read not yet caught up may still report open the run this
+ * tab has just finished, which is not followed again.
  */
 function shownStep(
   own: RemovalStep,
   removals: readonly SiteBreakpointRemovalStatus[] | undefined
 ): RemovalStep {
-  if (own.kind !== "idle") return own;
   const open = removals?.find(removal => removal.open);
-  if (open !== undefined) {
+  const finished = own.kind === "done" || own.kind === "left";
+  if (
+    open !== undefined &&
+    (own.kind === "idle" || (finished && open.runId !== own.runId))
+  ) {
     return { kind: "resumed", runId: open.runId, labels: open.labels };
   }
+  if (own.kind !== "idle") return own;
   const leftOver = removals?.find(removal => !removal.open && removal.left > 0);
-  return leftOver === undefined ? own : { kind: "left", status: leftOver };
+  return leftOver === undefined
+    ? own
+    : { kind: "left", runId: leftOver.runId, status: leftOver };
 }
 
 /** What a dry run's answer leads to. */
@@ -326,7 +342,7 @@ export function useBreakpointRemoval({
               labels: status.labels,
               counted: counted ?? [],
             }
-          : endedOn(status, fallback, counted)
+          : endedOn(runId, status, fallback, counted)
       );
     },
     [reread]

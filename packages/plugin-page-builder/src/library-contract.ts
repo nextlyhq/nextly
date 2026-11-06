@@ -641,6 +641,32 @@ export interface SiteBreakpointsDryRun extends RemovalDryRun {
  */
 export const SITE_BREAKPOINT_REMOVAL_ROUTE_PATH = "/site/breakpoints/removal";
 
+/** The query parameter naming the run a removal's status is read for. */
+export const SITE_BREAKPOINT_REMOVAL_RUN_PARAM = "runId";
+
+/**
+ * Where removal `runId` stands is read: `GET` on the removal route.
+ *
+ * @experimental
+ */
+export function siteBreakpointRemovalStatusPath(runId: string): string {
+  const params = new URLSearchParams({
+    [SITE_BREAKPOINT_REMOVAL_RUN_PARAM]: runId,
+  });
+  return `${SITE_BREAKPOINT_REMOVAL_ROUTE_PATH}?${params.toString()}`;
+}
+
+/**
+ * What reading one removal answers: its status while it holds what it
+ * removed, or `null` once it holds nothing (done, leaving no document), or
+ * where there is no such run.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalRead {
+  readonly removal: SiteBreakpointRemovalStatus | null;
+}
+
 /**
  * What continuing a removal sends: the run the save answered with.
  *

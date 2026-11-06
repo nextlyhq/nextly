@@ -80,9 +80,12 @@ function CheckedRows({
   const kept = new Set(
     [...next.viewport, ...next.container].map(def => def.id)
   );
-  const rows = [...current.viewport, ...current.container].filter(
-    def => def.maxWidth !== undefined
-  );
+  // Every authored row: the viewport's base has no width and is not one,
+  // while the container axis may hold one unbounded definition of its own.
+  const rows = [
+    ...current.viewport.filter(def => def.maxWidth !== undefined),
+    ...current.container,
+  ];
   return (
     <ul className="divide-y divide-border rounded-md border border-border">
       {rows.map(def => {
@@ -98,7 +101,9 @@ function CheckedRows({
           >
             <span className="font-medium">{def.label}</span>
             <span className="text-muted-foreground">
-              up to {def.maxWidth} pixels
+              {def.maxWidth === undefined
+                ? "every width"
+                : `up to ${def.maxWidth} pixels`}
             </span>
             {dropped ? <span className="sr-only">(removed)</span> : null}
           </li>

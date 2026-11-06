@@ -12,6 +12,7 @@ import { LAYOUTS_SLUG } from "./collections/layouts";
 import {
   MANAGE_SITE_PERMISSION,
   readSiteSettings,
+  siteBreakpointRemovalStatusRoute,
   type BreakpointRemoval,
   writeSiteBreakpoints,
   type SiteSettingsDirectApi,
@@ -365,6 +366,11 @@ describe("what the Site tab reads", () => {
       held(run("0190a000-0000-7000-8000-000000000005", [], false), [
         "pending-draft",
       ]),
+      // A save still preparing it: it may yet be abandoned.
+      held(
+        run("0190a000-0000-7000-8000-000000000006", ["mobile"], true, true),
+        []
+      ),
     ]);
     const read = await readSiteSettings(
       route({ caller: holding("manage-page-builder-site").caller }),
@@ -425,6 +431,68 @@ describe("what the Site tab reads", () => {
   });
 });
 
+describe("reading one removal", () => {
+  const RUNS = [
+    held(run("0190a000-0000-7000-8000-000000000004", ["phone"], false), [
+      "unreadable",
+    ]),
+    held(run("0190a000-0000-7000-8000-000000000003", ["tablet"], false), [
+      "unreadable",
+    ]),
+    held(run("0190a000-0000-7000-8000-000000000002", ["tablet"], false), [
+      "unreadable",
+    ]),
+    // The oldest, past the list's cap of three.
+    held(run("0190a000-0000-7000-8000-000000000001", ["mobile"], false), [
+      "pending-draft",
+      "pending-draft",
+    ]),
+    held(
+      run("0190a000-0000-7000-8000-000000000009", ["mobile"], true, true),
+      []
+    ),
+  ];
+
+  async function ask(query: string) {
+    const { removal } = removals(RUNS);
+    const statusRoute = siteBreakpointRemovalStatusRoute(
+      removal as Parameters<typeof siteBreakpointRemovalStatusRoute>[0]
+    );
+    return statusRoute.handler(
+      new Request(`http://site.test/site/breakpoints/removal${query}`),
+      route() as never
+    );
+  }
+
+  it("answers a run the Site tab's list leaves out past its cap", async () => {
+    const answer = await ask("?runId=0190a000-0000-7000-8000-000000000001");
+    expect(await answer.json()).toEqual({
+      removal: {
+        runId: "0190a000-0000-7000-8000-000000000001",
+        labels: ["Mobile"],
+        open: false,
+        left: 2,
+        waitingOnDrafts: true,
+      },
+    });
+  });
+
+  it("answers null for a run holding nothing, an unknown one, or one still preparing", async () => {
+    for (const id of [
+      "0190a000-0000-7000-8000-00000000000f",
+      "0190a000-0000-7000-8000-000000000009",
+    ]) {
+      expect(await (await ask(`?runId=${id}`)).json()).toEqual({
+        removal: null,
+      });
+    }
+  });
+
+  it("refuses a read naming no run", async () => {
+    await expect(ask("")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+});
+
 /** The set every run here removed from, as the stylesheet was emitted then. */
 const EMITTED = {
   viewport: [
@@ -436,7 +504,12 @@ const EMITTED = {
 };
 
 /** A removal run, as the run store hands it out. */
-function run(id: string, removedIds: string[], open: boolean): BreakpointRun {
+function run(
+  id: string,
+  removedIds: string[],
+  open: boolean,
+  preparing = false
+): BreakpointRun {
   return {
     id,
     phase: open ? "converting" : "done",
@@ -447,7 +520,7 @@ function run(id: string, removedIds: string[], open: boolean): BreakpointRun {
     beforeEmitted: EMITTED,
     startedBy: "user:user-1",
     open,
-    preparing: false,
+    preparing,
   };
 }
 

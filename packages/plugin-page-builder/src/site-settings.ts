@@ -56,9 +56,11 @@ import { runStarterOf } from "./host-rewrite/service";
 import { inCauses } from "./judged-writes";
 import {
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
+  SITE_BREAKPOINT_REMOVAL_RUN_PARAM,
   SITE_BREAKPOINTS_ROUTE_PATH,
   SITE_SETTINGS_ROUTE_PATH,
   type SiteBreakpointRemoval,
+  type SiteBreakpointRemovalRead,
   type SiteBreakpointRemovalRequest,
   type SiteBreakpointRemovalStatus,
   type SiteBreakpointsDryRun,
@@ -1034,18 +1036,78 @@ async function removalStatuses(
     );
     return undefined;
   }
-  return (
-    holding
-      // A run whose every id the site defines again holds nothing of them.
-      .filter(held => held.run.removedIds.length > 0)
-      .sort(
-        (a, b) =>
-          Number(b.run.open) - Number(a.run.open) ||
-          (a.run.id < b.run.id ? 1 : a.run.id > b.run.id ? -1 : 0)
-      )
-      .slice(0, REMOVALS_SHOWN)
-      .map(held => removalStatusOf(held, removal.defaults))
+  return holding
+    .filter(reportable)
+    .sort(
+      (a, b) =>
+        Number(b.run.open) - Number(a.run.open) ||
+        (a.run.id < b.run.id ? 1 : a.run.id > b.run.id ? -1 : 0)
+    )
+    .slice(0, REMOVALS_SHOWN)
+    .map(held => removalStatusOf(held, removal.defaults));
+}
+
+/**
+ * Whether the Site tab is told about a removal: not one whose save has not
+ * stored its set yet (`preparing`), which may still be abandoned, and not one
+ * whose every id the site defines again, which holds nothing of them.
+ */
+function reportable(held: HoldingRun): boolean {
+  return !held.run.preparing && held.run.removedIds.length > 0;
+}
+
+/**
+ * Where one removal stands, read by its id: its status while it holds what
+ * it removed, or `null` once it holds nothing. Read from the same runs as the
+ * Site tab's list, so the two never disagree, but never cut by its cap.
+ */
+async function removalStatusById(
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade },
+  runId: string
+): Promise<SiteBreakpointRemovalStatus | null> {
+  const held = (await removal.cascade.service().holding()).find(
+    candidate => candidate.run.id === runId && reportable(candidate)
   );
+  return held === undefined ? null : removalStatusOf(held, removal.defaults);
+}
+
+/**
+ * The route Settings reads one removal's status through, to tell a removal
+ * that finished leaving documents from one that holds nothing, under the
+ * permission its save asked for.
+ */
+export function siteBreakpointRemovalStatusRoute(
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade }
+): {
+  method: "GET";
+  path: string;
+  requiredPermission: string;
+  handler: (req: Request, ctx: BreakpointsRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "GET",
+    path: SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
+    requiredPermission: MANAGE_SITE_PERMISSION,
+    handler: async req => {
+      const parsed = RemovalBody.shape.runId.safeParse(
+        new URL(req.url).searchParams.get(SITE_BREAKPOINT_REMOVAL_RUN_PARAM)
+      );
+      if (!parsed.success) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: SITE_BREAKPOINT_REMOVAL_RUN_PARAM,
+              code: "INVALID_VALUE",
+              message: "The request does not name a breakpoint removal.",
+            },
+          ],
+        });
+      }
+      return Response.json({
+        removal: await removalStatusById(removal, parsed.data),
+      } satisfies SiteBreakpointRemovalRead);
+    },
+  };
 }
 
 /** One removal as the Site tab shows it, named from the set it removed from. */

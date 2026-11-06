@@ -18,14 +18,14 @@ import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
   SITE_BREAKPOINTS_ROUTE_PATH,
-  SITE_SETTINGS_ROUTE_PATH,
+  siteBreakpointRemovalStatusPath,
   type SiteBreakpointRemoval,
+  type SiteBreakpointRemovalRead,
   type SiteBreakpointRemovalRequest,
   type SiteBreakpointRemovalStatus,
   type SiteBreakpointsDryRun,
   type SiteBreakpointsRequest,
   type SiteBreakpointsSaved,
-  type SiteSettingsRead,
 } from "../library-contract";
 
 /** A mutation route's answer: its message and the item it carries. */
@@ -93,18 +93,19 @@ export async function carryOnBreakpointRemoval(
 }
 
 /**
- * Where removal `runId` stands, read from the Site tab's own read: `null`
- * once it holds nothing (done, leaving no document), and `undefined` where
- * the read reports no removals at all, so nothing is known.
+ * Where removal `runId` stands, read by its id: `null` once it holds nothing
+ * (done, leaving no document). A read that answers nothing is refused, so
+ * nothing known is never taken for done.
  */
 export async function readBreakpointRemoval(
   runId: string
-): Promise<SiteBreakpointRemovalStatus | null | undefined> {
-  const read = await readPluginRoute<SiteSettingsRead>({
+): Promise<SiteBreakpointRemovalStatus | null> {
+  const read = await readPluginRoute<SiteBreakpointRemovalRead>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: SITE_SETTINGS_ROUTE_PATH,
+    path: siteBreakpointRemovalStatusPath(runId),
   });
-  const removals = read?.removals;
-  if (removals === undefined) return undefined;
-  return removals.find(removal => removal.runId === runId) ?? null;
+  if (read === undefined) {
+    throw new Error("The site did not say where the removal stands.");
+  }
+  return read.removal;
 }
