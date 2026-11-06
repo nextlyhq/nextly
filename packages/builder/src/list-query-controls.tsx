@@ -30,12 +30,11 @@
  * @module list-query-controls
  */
 import {
-  COLLECTION_LIST_TYPE,
   findNode,
   LIST_MAX_FILTERS,
   listKindSortable,
   listQueryIssues,
-  locateNode,
+  outerListOf,
   readListQuery,
   type BindingFieldShape,
   type BlockDocument,
@@ -222,17 +221,6 @@ function offeredShapes(found: LoopCollection): BindingFieldShape[] {
   ];
 }
 
-/** The list block around `id`, nearest first, if there is one. */
-function outerList(document: BlockDocument, id: string): BlockNode | undefined {
-  let at = locateNode(document.nodes, id)?.parent;
-  // Bounded by the document's depth: each step moves one parent out.
-  while (at !== undefined) {
-    if (at.type === COLLECTION_LIST_TYPE) return at;
-    at = locateNode(document.nodes, at.id)?.parent;
-  }
-  return undefined;
-}
-
 /** The problems the engine finds with one list, as a save would. */
 type Issues = ReturnType<typeof listQueryIssues>;
 
@@ -301,10 +289,10 @@ interface Related {
 /** The related sources a list may show where it sits. */
 function relatedSources(
   collections: readonly LoopCollection[],
-  entryCollection: string | undefined,
+  entryCollection: string | null | undefined,
   outer: ListQuery | undefined
 ): Related {
-  const ownerOf = (slug: string | undefined) =>
+  const ownerOf = (slug: string | null | undefined) =>
     collections.find(each => each.slug === slug);
   const one = (owner: LoopCollection | undefined) =>
     (owner?.singular ?? owner?.label ?? "entry").toLowerCase();
@@ -2482,7 +2470,9 @@ function useListQueryReading(
       }).filter(issue => issue.nodeId === nodeId && issue.severity === "error"),
     [document, nodeId, fieldSource, entryCollection]
   );
-  const outerNode = outerList(document, nodeId);
+  // The list whose entry is this one's item, as the save judges it: never
+  // one whose empty state this list sits in.
+  const outerNode = outerListOf(document.nodes, nodeId);
   const outer =
     outerNode === undefined ? undefined : readListQuery(outerNode.props).query;
   return {

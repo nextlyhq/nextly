@@ -132,19 +132,21 @@ const CATEGORIES: LoopCollection = {
 
 const COLLECTIONS = [POSTS, CATEGORIES];
 
-function editorFor(props: Record<string, unknown>) {
+/** The selected list, as `place` puts it in the page; on its own by default. */
+function editorFor(
+  props: Record<string, unknown>,
+  place: (selected: BlockNode) => BlockNode[] = selected => [selected]
+) {
   const document = {
     formatVersion: 1,
     kind: "page",
-    nodes: [
-      {
-        id: "list",
-        type: COLLECTION_LIST_TYPE,
-        version: 1,
-        props,
-        slots: { children: [], empty: [] },
-      } as BlockNode,
-    ],
+    nodes: place({
+      id: "list",
+      type: COLLECTION_LIST_TYPE,
+      version: 1,
+      props,
+      slots: { children: [], empty: [] },
+    } as BlockNode),
   } as BlockDocument;
   return {
     document,
@@ -169,10 +171,11 @@ function editorFor(props: Record<string, unknown>) {
 
 function mount(
   props: Record<string, unknown>,
-  services: Partial<ContentServices> = {}
+  services: Partial<ContentServices> = {},
+  place?: (selected: BlockNode) => BlockNode[]
 ) {
   register();
-  const editor = editorFor(props);
+  const editor = editorFor(props, place);
   render(
     <InspectorPanel
       editor={editor}
@@ -221,6 +224,47 @@ describe("a list's source", () => {
     );
     expect(screen.getByText(/Not available here\./)).toBeDefined();
     expect(listed("Sources")).toEqual(["No collection", "Categories", "Posts"]);
+  });
+
+  it("offers each outer entry's relations only to a list drawn per entry", async () => {
+    // A list of posts, holding the selected list in the slot it draws per
+    // entry, or in its empty state, which is drawn with no post at all.
+    const inPosts =
+      (slot: "children" | "empty") =>
+      (selected: BlockNode): BlockNode[] => [
+        {
+          id: "posts",
+          type: COLLECTION_LIST_TYPE,
+          version: 1,
+          props: { collection: "posts" },
+          slots: { children: [], empty: [], [slot]: [selected] },
+        } as BlockNode,
+      ];
+    mount({ collection: "categories" }, {}, inPosts("children"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(listed("Sources")).toContain("Each post's categories");
+    cleanup();
+    clearBlocks();
+    mount({ collection: "categories" }, {}, inPosts("empty"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(listed("Sources")).not.toContain("Each post's categories");
+  });
+
+  it("says, as the save does, that a Single's page has no entry to relate to", async () => {
+    mount(
+      {
+        collection: "categories",
+        relation: { of: "entry", field: "categories" },
+      },
+      { entryCollection: null }
+    );
+    expect(
+      await screen.findByText(/this page is not an entry of a collection/)
+    ).toBeDefined();
   });
 
   it("stores a relation and its collection in one write", async () => {
