@@ -8,11 +8,15 @@
  * first tab, under the page's own label, and each contributed tab follows in
  * the order delivered, its component behind its own boundary.
  *
+ * The page's content stays mounted while another tab is shown, only hidden:
+ * it holds the page's form, so leaving it for a plugin's tab must keep what
+ * was typed, and the page's own Save button must still find its form.
+ *
  * @module components/shared/target-slot/PlaceTabs
  */
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import type { AdminPlaceId } from "nextly/config";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 
@@ -40,9 +44,10 @@ export function PlaceTabs<P extends AdminPlaceId>({
   const tabs = usePlaceContributions(place, "tab", entry).filter(
     item => !("builtIn" in item) && item.kind === "tab"
   );
+  const [shown, setShown] = useState(CONTENT_TAB);
   if (tabs.length === 0) return children;
   return (
-    <Tabs defaultValue={CONTENT_TAB}>
+    <Tabs value={shown} onValueChange={setShown}>
       <TabsList>
         <TabsTrigger value={CONTENT_TAB}>{contentLabel}</TabsTrigger>
         {tabs.map(tab =>
@@ -53,7 +58,13 @@ export function PlaceTabs<P extends AdminPlaceId>({
           )
         )}
       </TabsList>
-      <TabsContent value={CONTENT_TAB}>{children}</TabsContent>
+      <TabsContent
+        value={CONTENT_TAB}
+        forceMount
+        hidden={shown !== CONTENT_TAB}
+      >
+        {children}
+      </TabsContent>
       {tabs.map(tab =>
         "builtIn" in tab || tab.kind !== "tab" ? null : (
           <TabsContent key={tab.id} value={tab.id}>

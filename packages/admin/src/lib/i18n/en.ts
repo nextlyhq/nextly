@@ -54,4 +54,6 @@ export const en = {
   "nextly.userMenu.followBrowser": "Follow the browser",
   "nextly.userMenu.unavailable": "{language} (not available)",
   "nextly.userMenu.saveFailed": "Your interface language could not be saved.",
+  "nextly.places.userDetail.content": "Profile",
+  "nextly.places.settings.content": "General",
 } as const;

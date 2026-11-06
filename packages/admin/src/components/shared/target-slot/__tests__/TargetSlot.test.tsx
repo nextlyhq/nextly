@@ -229,4 +229,43 @@ describe("PlaceTabs", () => {
     await user.click(screen.getByRole("tab", { name: "Billing" }));
     expect(await screen.findByText("plugin tab body")).toBeTruthy();
   });
+
+  it("leaving the content for a tab keeps what was typed in it", async () => {
+    meta.contributions = {
+      "user.detail": {
+        tab: [
+          {
+            plugin: "@acme/a",
+            id: "acme-a.billing",
+            kind: "tab",
+            label: "Billing",
+            component: TAB,
+          },
+        ],
+      },
+    };
+    const user = userEvent.setup();
+
+    render(
+      <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">
+        <form id="page-form">
+          <input aria-label="Name" />
+        </form>
+      </PlaceTabs>
+    );
+
+    await user.type(screen.getByLabelText("Name"), "Ada");
+    await user.click(screen.getByRole("tab", { name: "Billing" }));
+    expect(await screen.findByText("plugin tab body")).toBeTruthy();
+    // Still there for a Save button outside the strip, only hidden.
+    const form = document.getElementById("page-form");
+    expect(form?.closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(
+      true
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Profile" }));
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Ada"
+    );
+  });
 });
