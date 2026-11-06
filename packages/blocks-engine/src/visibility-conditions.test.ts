@@ -665,6 +665,14 @@ describe("setting a block's conditions", () => {
     });
   });
 
+  it("replaces a visibility nothing can read, keeping none of it", () => {
+    const unreadable = "hidden" as unknown as Parameters<
+      typeof withConditions
+    >[0];
+    expect(withConditions(unreadable, undefined)).toBeUndefined();
+    expect(withConditions(unreadable, vip)).toEqual({ conditions: vip });
+  });
+
   it("copies what it stores, so a later edit to the input changes nothing", () => {
     const groups = [[{ field: "tier", op: "equals", value: "vip" }]];
     const stored = withConditions(undefined, groups);

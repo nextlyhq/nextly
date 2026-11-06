@@ -160,3 +160,26 @@ describe("the fields a condition can check", () => {
     expect(conditionChoices("boolean", "is_false")).toHaveLength(1);
   });
 });
+
+describe("a number too large to hold", () => {
+  it("is not a finished condition, so it is never written", () => {
+    expect(
+      completedCondition(
+        { field: "rating", op: "greater_than", value: Infinity },
+        rating
+      )
+    ).toEqual({
+      missing:
+        "Enter a smaller number for Reading time, or remove this condition.",
+    });
+    // CONTROL: a finite one is.
+    expect(
+      completedCondition(
+        { field: "rating", op: "greater_than", value: 5 },
+        rating
+      )
+    ).toEqual({
+      condition: { field: "rating", op: "greater_than", value: 5 },
+    });
+  });
+});

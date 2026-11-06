@@ -1249,7 +1249,11 @@ export function withConditions(
   visibility: NodeVisibility | undefined,
   conditions: readonly (readonly Condition[])[] | undefined
 ): NodeVisibility | undefined {
-  const { conditions: _old, ...rest } = visibility ?? {};
+  // A visibility nothing can read, a string or a list, is replaced whole:
+  // none of it can be kept.
+  const { conditions: _old, ...rest } = isPlainRecord(visibility)
+    ? visibility
+    : {};
   // Asked of the gate itself, so what is stored is what restricts.
   const restricts =
     conditions !== undefined &&

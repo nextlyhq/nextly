@@ -146,8 +146,17 @@ describe("Show when", () => {
 
   it("shows conditions it can't read as such, and removes them when asked", async () => {
     // A group holding something other than a condition, and a flat list.
-    for (const unreadable of [[[null]], [{ field: "title", op: "exists" }]]) {
-      await shown(withConditions(unreadable));
+    const hidden = {
+      ...withConditions(),
+      nodes: [{ ...withConditions().nodes[0]!, visibility: "hidden" }],
+    } as unknown as BlockDocument;
+    for (const unreadable of [
+      withConditions([[null]]),
+      withConditions([{ field: "title", op: "exists" }]),
+      // A visibility that is not a record at all.
+      hidden,
+    ]) {
+      await shown(unreadable);
       expect(screen.queryByText("Always shown.")).toBeNull();
       expect(screen.getByRole("alert").textContent).toContain(
         "Visitors never see this block."

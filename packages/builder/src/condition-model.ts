@@ -286,6 +286,13 @@ export function completedCondition(
       missing: `Choose a value for ${field.label}, or remove this condition.`,
     };
   }
+  // A number too large to hold, read as Infinity, is one the save refuses,
+  // so it is never written.
+  if (typeof draft.value === "number" && !Number.isFinite(draft.value)) {
+    return {
+      missing: `Enter a smaller number for ${field.label}, or remove this condition.`,
+    };
+  }
   return {
     condition: { field: draft.field, op: draft.op, value: draft.value },
   };

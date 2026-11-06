@@ -17,6 +17,7 @@
  * @module inspector-panel.test
  */
 import {
+  act,
   cleanup,
   createEvent,
   fireEvent,
@@ -38,6 +39,7 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
+import type { ContentServices } from "./content-controls";
 import { editedStyleState, InspectorPanel } from "./inspector-panel";
 import { applyOp } from "./ops";
 import type { EditorState } from "./editor-state";
@@ -2302,3 +2304,46 @@ describe("a block inside an area locked to its content", () => {
 function document_(): Document {
   return globalThis.document;
 }
+
+describe("Show when, as the selection moves", () => {
+  it("keeps a condition not yet finished with the block it was added to", async () => {
+    register();
+    const two = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/heading", version: 1, props: {} },
+        { id: "b", type: "acme/heading", version: 1, props: {} },
+      ],
+    } as unknown as BlockDocument;
+    const services: ContentServices = {
+      listLoopCollections: async () => [
+        {
+          slug: "posts",
+          label: "Posts",
+          fields: [{ name: "title", label: "Title", kind: "text" }],
+        },
+      ],
+      entryCollection: "posts",
+    };
+    const on = (id: string): EditorState => ({
+      ...editorFor(two),
+      selectedId: id,
+      selection: { ids: [id], primary: id },
+    });
+    const { rerender } = render(
+      <InspectorPanel editor={on("a")} contentServices={services} />
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      screen.getByRole("button", { name: "Add condition" }).click();
+    });
+    // CONTROL: the new row is open on block a.
+    expect(screen.queryByText("Always shown.")).toBeNull();
+
+    rerender(<InspectorPanel editor={on("b")} contentServices={services} />);
+    expect(screen.getByText("Always shown.")).toBeTruthy();
+  });
+});

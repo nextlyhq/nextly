@@ -16,6 +16,7 @@
 import {
   CONDITION_MAX,
   conditionIssues,
+  isPlainRecord,
   conditionOp,
   findNode,
   outerListOf,
@@ -150,7 +151,12 @@ function isConditionRecord(value: unknown): value is Condition {
 function storedGroups(
   node: BlockNode
 ): readonly (readonly Condition[])[] | undefined {
-  const groups: unknown = node.visibility?.conditions;
+  const envelope: unknown = node.visibility;
+  if (envelope === undefined || envelope === null) return [];
+  // A visibility that is not a record, a string or a list, is one the engine
+  // reads as a restriction it can't check.
+  if (!isPlainRecord(envelope)) return undefined;
+  const groups: unknown = envelope.conditions;
   if (groups === undefined || groups === null) return [];
   if (!Array.isArray(groups)) return undefined;
   const read: Condition[][] = [];
