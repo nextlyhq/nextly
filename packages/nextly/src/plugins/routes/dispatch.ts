@@ -13,10 +13,7 @@ import {
   type RouteActor,
 } from "../../auth/caller-scope";
 import { withoutRefreshCookie } from "../../auth/cookies/refresh-token-cookie";
-import {
-  MAX_CSRF_BODY_BYTES,
-  readCsrfBody,
-} from "../../auth/csrf/read-csrf-body";
+import { readCsrfBody } from "../../auth/csrf/read-csrf-body";
 import { carriesBearerToken } from "../../auth/csrf/validate";
 import {
   authorizeCaller,
@@ -29,6 +26,7 @@ import { beginSessionConsultation } from "../../auth/plugin-auth-api";
 import { actorFromAuthContext } from "../../auth/request-actor";
 import { getSession } from "../../auth/session/get-session";
 import { container } from "../../di/container";
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
@@ -53,7 +51,10 @@ import {
 import type { Principal, PluginRoutePrincipal } from "../principals/types";
 import type { PluginSelf } from "../self";
 
-import { actionRouteRefusal } from "./action-route-check";
+import {
+  actionRouteRefusal,
+  MAX_ACTION_BODY_BYTES,
+} from "./action-route-check";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import { noteRetiredManageAsked } from "./retired-manage-asked";
@@ -312,14 +313,20 @@ function authenticatedCaller(
   };
 }
 
+/** The answers of a list read that mean "none of it is yours to read". */
+const ACCESS_REFUSALS = new Set([403, 404]);
+
 /**
  * The rows of `collection` with these ids that `account` may read, as it
- * reads them: one list read of the collection, as the caller, with drafts.
- * A collection the caller may not read answers no rows, as rows it may not
- * read do, so a refusal built from this says nothing of what exists; a
- * failure of the read itself is not an answer, and is rethrown.
+ * reads them: one list read of the collection, as the caller, with drafts,
+ * told about the request as the handler's own reads are, so a read hook that
+ * scopes by it (a tenant from a header) scopes this read too. A collection
+ * the caller may not read answers no rows, as rows it may not read do, so a
+ * refusal built from this says nothing of what exists. Any other failure is
+ * answered as itself, with its own code and status.
  */
 async function readRowsAs(
+  req: Request,
   account: AuthenticatedRequest,
   collection: string,
   ids: readonly string[]
@@ -328,6 +335,7 @@ async function readRowsAs(
   const read = await container
     .get<CollectionsHandler>("collectionsHandler")
     .listEntries({
+      request: req,
       collectionName: collection,
       where: { id: { in: [...ids] } },
       limit: ids.length,
@@ -338,12 +346,11 @@ async function readRowsAs(
       authenticatedScope: caller.authenticatedScope,
     });
   if (!read.success) {
-    if ((read.statusCode ?? 500) >= 500) {
-      throw NextlyError.internal({
-        logContext: { reason: "action-rows-unread", collection },
-      });
-    }
-    return new Map();
+    if (ACCESS_REFUSALS.has(read.statusCode ?? 500)) return new Map();
+    throw errorFromServiceEnvelope(read, {
+      reason: "action-rows-unread",
+      collection,
+    });
   }
   const docs =
     (read.data as { docs?: Array<Record<string, unknown>> } | undefined)
@@ -364,7 +371,23 @@ async function refusedBeforeHandler(
 ): Promise<Response | null> {
   const csrf = await applyRouteCsrf(req, matched, auth.credential);
   if (csrf) return markPluginResponse(csrf, matched.route);
-  const refusedAction = await boundActionRefusal(req, matched, auth);
+  let refusedAction: NextlyError | undefined;
+  try {
+    // In the scopes the handler runs in, so the rows are read for this
+    // request and as this caller, exactly as the handler would read them.
+    refusedAction = await runWithRequestScope(req, () =>
+      runWithCallerScope(auth.authenticatedScope, () =>
+        boundActionRefusal(req, matched, auth)
+      )
+    );
+  } catch (err) {
+    // A check that could not decide answers as the handler's failures do,
+    // and the handler does not run.
+    return markPluginResponse(
+      withNoStore(toErrorResponse(req, err), matched.route),
+      matched.route
+    );
+  }
   if (refusedAction === undefined) return null;
   return markPluginResponse(
     withNoStore(
@@ -403,7 +426,7 @@ async function boundActionRefusal(
   }
   let body: unknown;
   try {
-    body = await readBoundedJsonBody(req.clone(), MAX_CSRF_BODY_BYTES);
+    body = await readBoundedJsonBody(req.clone(), MAX_ACTION_BODY_BYTES);
   } catch {
     body = undefined;
   }
@@ -416,7 +439,7 @@ async function boundActionRefusal(
       );
       return isErrorResponse(decided) ? toNextlyAuthError(decided) : undefined;
     },
-    readRows: (collection, ids) => readRowsAs(account, collection, ids),
+    readRows: (collection, ids) => readRowsAs(req, account, collection, ids),
   });
 }
 

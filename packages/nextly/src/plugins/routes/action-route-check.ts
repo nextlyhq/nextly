@@ -32,6 +32,13 @@ import { resolveRoutePermission } from "./route-permission";
 /** @experimental The most rows one request to an action's route may name. */
 export const MAX_ACTION_ROWS = 100;
 
+/**
+ * @experimental The largest body the check reads of a request to an action's
+ * route: 1 MiB, room for the most rows a request may name beside a plugin's
+ * own payload. A larger body is answered 400, before the handler runs.
+ */
+export const MAX_ACTION_BODY_BYTES = 1024 * 1024;
+
 /** @experimental An action a route is bound to, as the check reads it. */
 export interface BoundAction {
   id: string;

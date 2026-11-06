@@ -4813,7 +4813,6 @@ async function initializePlugins(
   routeRegistry.clear();
   if (collectedRoutes.length > 0) {
     const byPlugin = new Map(teardown.map(t => [t.plugin.name, t]));
-    const registeredPlugins = teardown.map(t => t.plugin);
     for (const collected of collectedRoutes) {
       const entry = byPlugin.get(collected.pluginName);
       if (entry) {
@@ -4824,7 +4823,9 @@ async function initializePlugins(
           collected.pluginName,
           collected.route,
           entry.context,
-          boundActionsOf(entry.plugin, collected.route, registeredPlugins)
+          // Through every configured plugin, disabled ones included: their
+          // collections are still served, under their renamed slugs.
+          boundActionsOf(entry.plugin, collected.route, plugins)
         );
       }
     }

@@ -30,6 +30,7 @@ import { orderContributions, type OrderedEntry } from "./contribution-order";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
+import { routePathIsLiteral } from "./routes/route-pattern";
 import type { PluginRoute } from "./routes/route-types";
 import { rowPredicateProblems } from "./row-predicate";
 
@@ -134,6 +135,11 @@ function runProblem(
     (run.mount !== undefined && run.mount !== "plugin" && run.mount !== "root")
   ) {
     return "its `action.run` is not a route's `method`, `path` and optional `mount`";
+  }
+  // A path with `:name` parts has nothing to fill them from: the request
+  // names its rows in its body, not in its address.
+  if (!routePathIsLiteral(run.path)) {
+    return `its \`action.run\` names ${run.method} ${run.path}, a route whose path takes parameters an action cannot fill`;
   }
   const route = runRoute(plugin, run as AdminContributionRun);
   if (route === undefined) {

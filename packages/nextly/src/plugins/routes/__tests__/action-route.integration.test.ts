@@ -15,6 +15,8 @@ import {
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
+import { registerHook, unregisterHook } from "../../../hooks";
+import type { HookHandler } from "../../../hooks/types";
 import { setHandlerConfig } from "../../../route-handler/auth-handler";
 import { sanitizeConfig } from "../../../shared/types/config";
 import type { AdminContribution } from "../../admin-contributions";
@@ -146,6 +148,9 @@ async function boot(dialect: TestDialect): Promise<void> {
     ["mine open", "open", AGENT],
     ["mine closed", "closed", AGENT],
     ["boss open", "open", BOSS],
+    // Readable to its owner, and withheld from any read made for a request by
+    // the request-scoped hook one test registers.
+    ["mine withheld", "withheld", AGENT],
   ]) {
     const created = await current.nextly.create({
       collection: TICKETS as never,
@@ -319,6 +324,31 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
       expect(await post("/assign", body)).toMatchObject({ status: 400 });
       expect(ran).toEqual([]);
+    });
+
+    it("reads the rows for the request, so a request-scoped read hook still narrows them", async () => {
+      await boot(dialect);
+      // A rule that narrows reads made for a request, and stands down for
+      // background work, as request-scoped rules do.
+      const scope: HookHandler = ctx =>
+        ctx.req?.http
+          ? {
+              ...(ctx.data as Record<string, unknown>),
+              status: { not_equals: "withheld" },
+            }
+          : ctx.data;
+      registerHook("beforeRead", TICKETS, scope);
+      try {
+        expect(
+          await post("/escalate", {
+            action: "acme-support.escalate",
+            rows: one("mine withheld"),
+          })
+        ).toMatchObject({ status: 404, code: "NOT_FOUND" });
+        expect(ran).toEqual([]);
+      } finally {
+        unregisterHook("beforeRead", TICKETS, scope);
+      }
     });
 
     it("leaves a route no action runs as it was", async () => {
