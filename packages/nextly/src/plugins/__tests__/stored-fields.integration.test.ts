@@ -85,6 +85,18 @@ function restoreStoredBody(hook: {
   return { ...hook.data, body: stored };
 }
 
+/**
+ * A site's `beforeChange` hook that turns a publish titled "flip" into a
+ * draft: the lifecycle state the write sent is not the one it would persist.
+ */
+function flipPublishToDraft(hook: {
+  data?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const data = hook.data;
+  if (data?.title !== "flip" || data.status !== "published") return data;
+  return { ...data, status: "draft" };
+}
+
 /** What the read hooks below put in place of the stored values. */
 const HIDDEN = { hiddenBy: "afterRead" };
 
@@ -342,6 +354,9 @@ describe.each(getConfiguredTestDialects())(
               body: { ...(data.body as Record<string, unknown>), sealed: true },
             };
           });
+          ctx.hooks.on("beforeChange", "flipped", hook =>
+            flipPublishToDraft(hook as { data?: Record<string, unknown> })
+          );
           ctx.hooks.on("beforeChange", "restored", hook =>
             restoreStoredBody(
               hook as {
@@ -474,6 +489,17 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as unknown as CollectionConfig,
           {
+            // A lifecycle with working drafts, whose `beforeChange` hook turns
+            // a publish into a draft.
+            slug: "flipped",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
             // A body a `beforeChange` hook puts back as stored.
             slug: "restored",
             fields: [
@@ -528,6 +554,18 @@ describe.each(getConfiguredTestDialects())(
                 ],
               }) as never
           ),
+          // A Single with working drafts whose own `beforeChange` hook turns a
+          // publish into a draft.
+          {
+            slug: "flipsite",
+            status: true,
+            versions: { drafts: true },
+            hooks: { beforeChange: [flipPublishToDraft] },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as never,
           // A Single whose own `beforeChange` hook puts its stored body back.
           {
             slug: "restoresite",
@@ -583,6 +621,7 @@ describe.each(getConfiguredTestDialects())(
         "locked",
         "hookgated",
         "restored",
+        "flipped",
         "staged",
         "stagedwords",
       ];
@@ -2510,6 +2549,123 @@ describe.each(getConfiguredTestDialects())(
           kind: "value",
           value: { v: 0 },
         });
+      });
+
+      it("refuses a publish a collection's beforeChange hook turns into a draft, and writes nothing", async () => {
+        const id = await created("flipped", {
+          title: "t",
+          body: { v: 0 },
+          status: "published",
+        });
+        const entry = { collection: "flipped", id };
+        const hash = await systemHash(entry, "body");
+        const live = () =>
+          readStoredFields(SYSTEM, {
+            ...entry,
+            fields: ["body"],
+            form: "published",
+          });
+        const asSent = {
+          title: "flip",
+          body: { v: "conditional" },
+          status: "published",
+        };
+
+        for (const identity of [editor, checked(editor)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: asSent,
+              expect: {
+                field: "body",
+                form: "published",
+                hash,
+                noPendingDraft: true,
+              },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        // Nothing changed, and no working draft was made.
+        expect(await live()).toMatchObject({
+          values: { body: { kind: "value", value: { v: 0 } } },
+          live: { publicState: "published", workingDraft: false },
+        });
+
+        // CONTROL: an ordinary update lets the hook turn the publish into a
+        // draft, and writes what it sends otherwise.
+        await t.nextly.update({
+          collection: "flipped",
+          id,
+          data: asSent,
+          overrideAccess: true,
+        } as never);
+        const after = await live();
+        expect(
+          after.kind === "found" ? after.live?.publicState : "absent"
+        ).not.toBe("published");
+      });
+
+      it("refuses a publish a Single's beforeChange hook turns into a draft, and writes nothing", async () => {
+        const site = { single: "flipsite" };
+        await t.nextly.updateSingle({
+          slug: "flipsite",
+          data: {
+            title: "t",
+            body: { v: 0 },
+            status: "published",
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        } as never);
+        const hash = await systemHash(site, "body");
+        const live = () =>
+          readStoredFields(SYSTEM, {
+            ...site,
+            fields: ["body"],
+            form: "published",
+          });
+        expect(await live()).toMatchObject({
+          live: { publicState: "published", workingDraft: false },
+        });
+        const asSent = {
+          title: "flip",
+          body: { v: "conditional" },
+          status: "published",
+        };
+
+        for (const identity of [owner, checked(owner)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...site,
+              data: asSent,
+              expect: {
+                field: "body",
+                form: "published",
+                hash,
+                noPendingDraft: true,
+              },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        // Nothing changed, and no working draft was made.
+        expect(await live()).toMatchObject({
+          values: { body: { kind: "value", value: { v: 0 } } },
+          live: { publicState: "published", workingDraft: false },
+        });
+
+        // CONTROL: an ordinary update lets the hook turn the publish into a
+        // draft.
+        await t.nextly.updateSingle({
+          slug: "flipsite",
+          data: { ...asSent, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const after = await live();
+        expect(
+          after.kind === "found" ? after.live?.publicState : "absent"
+        ).not.toBe("published");
       });
     });
   }

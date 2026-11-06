@@ -2646,8 +2646,7 @@ export class SingleMutationService extends BaseService {
       await storedFieldRead.refuseUnlessWhole(
         options.context,
         { kind: "single", slug },
-        currentData,
-        fieldConfigs
+        currentData
       );
 
       // 6.35. Authorize a change to the single's published state, judged on the

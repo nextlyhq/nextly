@@ -13500,8 +13500,7 @@ export class CollectionMutationService extends BaseService {
           slug: params.collectionName,
           id: params.entryId,
         },
-        finalData,
-        fields
+        finalData
       );
 
       // A password the update leaves out of a container keeps its stored hash.

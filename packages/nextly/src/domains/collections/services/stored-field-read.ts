@@ -47,6 +47,10 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
+import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "../../../lib/system-columns";
 import type {
   PluginStoredValue,
   PluginStoredValueTarget,
@@ -1270,23 +1274,23 @@ export async function fieldAccessPass(
  * or rule of the site decides it. Only then is the write judged whole, which
  * {@link holdStoredExpectation} requires under the row lock.
  *
- * `fields` are the entity's declared fields; a key the write sent that names
- * none (a system key such as its version) is not one of its fields.
+ * Every key the write sent is judged, the lifecycle `status` among them, but
+ * the {@link WRITE_TRANSPORT_KEYS}, which say how to write and are never
+ * stored. So a hook that turns a publish into a draft, or takes the status
+ * out, refuses it; and since a write is held as a working draft only when it
+ * names no status (`resolveDraftHold`), one that keeps the status it sent is
+ * never held as a draft in place of the state it named.
  */
 export async function refuseUnlessWhole(
   context: Record<string, unknown> | undefined,
   document: ExpectedDocument,
-  data: Record<string, unknown>,
-  fields: unknown
+  data: Record<string, unknown>
 ): Promise<void> {
   const whole = wholeWriteFor(context, document);
   if (whole === undefined) return;
-  const declared = new Set(
-    addressableFields(fields).map(field => (field as { name?: unknown }).name)
-  );
   const changed: string[] = [];
   for (const [name, hash] of whole.sent) {
-    if (!declared.has(name)) continue;
+    if (WRITE_TRANSPORT_KEYS.has(name)) continue;
     if ((await storedValueHash(payloadValueOf(data, name))) !== hash) {
       changed.push(name);
     }
@@ -1306,6 +1310,17 @@ export async function refuseUnlessWhole(
   }
   whole.judged = true;
 }
+
+/**
+ * The keys a write sends that say how to write, not what: the version it was
+ * read at (`_rev`) and the overwrite of a save made since (`_overwrite`). The
+ * write path reads them at its boundary and stores neither, so a whole write
+ * is judged on every other key it sends.
+ */
+const WRITE_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
+  DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
+]);
 
 /** The whole-write record of the write called with `context`, for this document. */
 function wholeWriteFor(
