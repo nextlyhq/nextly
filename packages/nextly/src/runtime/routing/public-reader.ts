@@ -216,7 +216,11 @@ const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 100;
 
-function refuse(reason: string, message: string, detail: object = {}): never {
+export function refuse(
+  reason: string,
+  message: string,
+  detail: object = {}
+): never {
   throw NextlyError.invalidInput({
     message,
     logContext: { reason: `public-read-${reason}`, ...detail },
@@ -285,7 +289,9 @@ function assertShape(
  * commas, as core splits one, so `""`, `" "` and `","` come to no keys and
  * the read keeps its id order instead of reaching core with no order at all.
  */
-function sortKeys(sort: string | readonly string[] | undefined): string[] {
+export function sortKeys(
+  sort: string | readonly string[] | undefined
+): string[] {
   // Every element split on commas, as core splits each one, so the keys
   // judged here are the keys core would order by.
   const parts = (typeof sort === "string" ? [sort] : [...(sort ?? [])]).flatMap(

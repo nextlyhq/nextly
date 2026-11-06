@@ -33,6 +33,7 @@ import {
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
 import {
+  useCurrentUserId,
   useDocumentIdentity,
   useMediaResolver,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -115,8 +116,9 @@ export function useCanvasPageContext(
   const entryCollection = listEntryCollectionOf(identity) ?? undefined;
   const entryId =
     identity?.kind === "collection" ? identity.documentId : undefined;
-  // The language's one set of list reads, which the inspector's count shares.
-  const lists = canvasListReadsIn(locale);
+  // The person's and language's one set of list reads, which the inspector's
+  // count shares: the rows are read as the person signed in.
+  const lists = canvasListReadsIn(locale, useCurrentUserId());
   const base = useMemo(
     () =>
       createStandaloneContext({

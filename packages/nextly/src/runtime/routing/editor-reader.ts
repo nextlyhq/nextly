@@ -19,7 +19,10 @@
  * - `status: "all"`, so a draft the person may read is listed with the rest;
  * - a filter or sort on a field the PUBLIC may not read is refused, as on the
  *   published page, so a list the published page would refuse never looks
- *   right on the canvas. The rows themselves are not stripped of such fields:
+ *   right on the canvas. "May not read" is the visitor's own answer: a field
+ *   declared hidden, and a field whose read rule denies the anonymous
+ *   visitor, judged by core's visitor field reader rather than by this
+ *   person's access. The rows themselves are not stripped of such fields:
  *   the person may read them, and what the public could not is the canvas's
  *   to mark, not this reader's to hide.
  *
@@ -41,6 +44,8 @@ import {
   assertCountKeys,
   assertNotHidden,
   hiddenOf,
+  refuse,
+  sortKeys,
   toPublicFind,
   type PublicCountQuery,
   type PublicReader,
@@ -49,6 +54,7 @@ import {
   type PublicReadQuery,
   type PublicReadResult,
 } from "./public-reader";
+import { readAsVisitor } from "./read-as-visitor";
 
 /**
  * Who an editor reader reads as: the signed-in person, and an API key's own
@@ -86,6 +92,50 @@ export function toEditorFind(
 }
 
 /**
+ * Refuse a filter or sort naming a field the anonymous visitor may not read,
+ * as the published page's read refuses it. The visitor's answer for each
+ * field, from core's visitor field reader (`visitorFields`), judged as no one
+ * in the read's language, so this person's own access cannot widen it. Where
+ * the visitor may read nothing of the collection, the published page shows
+ * nothing of the list at all, and its fields are not judged here: the canvas
+ * marks such a list, and this reader still answers the person.
+ */
+async function assertPublicMayName(
+  query: Pick<PublicReadQuery, "collection" | "filters" | "sort" | "locale">,
+  binding: PublicReaderBinding
+): Promise<void> {
+  const named = [
+    ...new Set([
+      ...(query.filters ?? []).map(row => row.field),
+      ...sortKeys(query.sort).map(key => key.replace(/^-/, "")),
+    ]),
+  ].filter(name => name !== "id");
+  if (named.length === 0) return;
+  const { inReadLanguage, visitorFields } = await import("./visitor-fields");
+  const refused = await readAsVisitor(() =>
+    inReadLanguage(binding.locale ?? query.locale, async () => {
+      const visible = await visitorFields({
+        kind: "collection",
+        slug: query.collection,
+      });
+      if (visible === undefined) return [];
+      const denied: string[] = [];
+      for (const name of named) {
+        if (!(await visible.readable([name]))) denied.push(name);
+      }
+      return denied.sort();
+    })
+  );
+  if (refused.length > 0) {
+    refuse(
+      "field-not-public",
+      `A list cannot filter or sort by ${refused.map(name => `"${name}"`).join(", ")}: visitors may not read it, so the published page refuses the list.`,
+      { fields: refused }
+    );
+  }
+}
+
+/**
  * A reader over a Direct API's `find`, reading as `person`. A person with no
  * user is no one: their reads are refused by core as an anonymous read of a
  * draft would be, never widened.
@@ -112,6 +162,7 @@ export function createEditorReader(
         query,
         await hiddenOf(binding, { kind: "collection", slug: query.collection })
       );
+      await assertPublicMayName(query, binding);
       return result;
     },
     async count(query: PublicCountQuery): Promise<number> {
@@ -124,6 +175,7 @@ export function createEditorReader(
         query,
         await hiddenOf(binding, { kind: "collection", slug: query.collection })
       );
+      await assertPublicMayName(query, binding);
       return result.meta.total;
     },
   });

@@ -388,15 +388,17 @@ function servicesFor(
   passages: OpenPassages,
   locale: string | undefined,
   readMedia: ReadMediaSummary,
-  entryCollection: string | null | undefined
+  entryCollection: string | null | undefined,
+  userId: string | null
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
     byLocale = new Map();
     servicesByPassages.set(passages, byLocale);
   }
-  // Both in the key, as JSON so no language and collection can collide.
-  const key = JSON.stringify([locale ?? "", entryCollection ?? null]);
+  // All three in the key, as JSON so no language, collection and person can
+  // collide: the list count below reads as the person signed in.
+  const key = JSON.stringify([locale ?? "", entryCollection ?? null, userId]);
   let services = byLocale.get(key);
   if (services === undefined) {
     services = {
@@ -412,7 +414,7 @@ function servicesFor(
       listLoopCollections: () => listLoopCollections(locale),
       // The selected list's "N entries match, so M show", taken from the
       // canvas's own read of the list in this language.
-      countListEntries: canvasListReadsIn(locale).count,
+      countListEntries: canvasListReadsIn(locale, userId).count,
       ...(entryCollection === undefined ? {} : { entryCollection }),
     };
     byLocale.set(key, services);
@@ -490,7 +492,8 @@ function editorInspector(
         view.passages,
         view.locale,
         view.readMedia,
-        view.entryCollection
+        view.entryCollection,
+        view.userId
       )}
       // A placement's exposed passage the canvas is editing in place: its
       // field in the placement panel is held meanwhile, as one editor serves

@@ -93,6 +93,39 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("refuses a filter or sort the published page refuses, though the editor may read the field", async () => {
+      const editor = createEditorReader(t.nextly, { user: { id: "editor" } });
+      // The control: the editor reads the field, and may filter by a field
+      // the public reads too.
+      await expect(
+        editor.find({
+          collection: SLUG,
+          filters: [{ field: "title", op: "equals", value: "Live" }],
+        })
+      ).resolves.toMatchObject({ meta: { total: 1 } });
+      for (const read of [
+        () =>
+          editor.find({
+            collection: SLUG,
+            filters: [
+              { field: "internalNote", op: "equals", value: "note for Live" },
+            ],
+          }),
+        () => editor.find({ collection: SLUG, sort: "-internalNote" }),
+        () =>
+          editor.count({
+            collection: SLUG,
+            filters: [{ field: "internalNote", op: "exists", value: true }],
+          }),
+      ]) {
+        const refusal = await read().then(
+          () => "",
+          (error: unknown) => JSON.stringify(error)
+        );
+        expect(refusal).toContain("internalNote");
+      }
+    });
+
     it("refuses a person who may not read the collection, as the admin does", async () => {
       const outsider = createEditorReader(t.nextly, {
         user: { id: "outsider" },
