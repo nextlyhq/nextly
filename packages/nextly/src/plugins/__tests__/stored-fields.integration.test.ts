@@ -52,6 +52,7 @@ import {
   updateIfUnchanged,
   type PluginConditionalUpdate,
   type PluginStoredDocument,
+  type PluginConditionalWriteIdentity,
   type PluginStoredFieldsRequest,
   type PluginStoredIdentity,
 } from "../stored-fields";
@@ -305,6 +306,8 @@ describe.each(getConfiguredTestDialects())(
     let reader: PluginRouteIdentity;
     let stranger: PluginRouteIdentity;
     let owner: PluginRouteIdentity;
+    /** May update content, and read none of it. */
+    let updater: PluginRouteIdentity;
 
     beforeAll(async () => {
       const plugin = definePlugin({
@@ -510,6 +513,9 @@ describe.each(getConfiguredTestDialects())(
       const readerId = await person("reader");
       await grantTo(t, readerId, "read", content);
       const strangerId = await person("stranger");
+      const updaterId = await person("updater");
+      await grantTo(t, updaterId, "update", content);
+      updater = { user: { id: updaterId } };
       editor = { user: { id: editorId } };
       reader = { user: { id: readerId } };
       stranger = { user: { id: strangerId } };
@@ -2014,6 +2020,190 @@ describe.each(getConfiguredTestDialects())(
             )
           )
         ).toBe(true);
+      });
+    });
+
+    describe("a caller whose expectation the system read", () => {
+      const SYSTEM = { overrideAccess: true } as const;
+      /** The write as `caller`, its expectation read and judged as the system. */
+      const checked = (caller: PluginRouteIdentity) => ({
+        caller,
+        checkedBy: SYSTEM,
+      });
+      /** The hash of a field as the system reads it. */
+      async function systemHash(
+        document: PluginStoredDocument,
+        field: string
+      ): Promise<string> {
+        const read = await readStoredFields(SYSTEM, {
+          ...document,
+          fields: [field],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the entry");
+        return storedValueHash(read.values[field] ?? { kind: "absent" });
+      }
+      /** A field as the system reads it. */
+      async function systemValue(
+        document: PluginStoredDocument,
+        field: string
+      ): Promise<PluginStoredValue | undefined> {
+        const read = await readStoredFields(SYSTEM, {
+          ...document,
+          fields: [field],
+          form: "published",
+        });
+        return read.kind === "found" ? read.values[field] : undefined;
+      }
+
+      it("lands the write of a caller who may update an entry but not read it, which made as them alone is refused", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+
+        // CONTROL: made as the caller alone, the expectation is theirs to
+        // read, and they may not, so nothing is compared or written.
+        const alone = await rejectionOf(
+          updateIfUnchanged(updater, {
+            ...page,
+            data: { body: { v: "alone" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isForbidden(alone)).toBe(true);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        await updateIfUnchanged(checked(updater), {
+          ...page,
+          data: { body: { v: "updater" } },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: "updater" },
+        });
+      });
+
+      it("lands the write of a field a read rule closes to the caller, which made as them alone is refused unread", async () => {
+        const id = await created("guarded", { body: { v: 0 } });
+        const entry = { collection: "guarded", id };
+        const hash = await systemHash(entry, "body");
+
+        // CONTROL: the caller is never told whether a hash matches a field
+        // they may not read, right or wrong.
+        for (const guess of [hash, "not-the-hash"]) {
+          const alone = await rejectionOf(
+            updateIfUnchanged(editor, {
+              ...entry,
+              data: { body: { v: "alone" } },
+              expect: { field: "body", form: "published", hash: guess },
+            })
+          );
+          expect(NextlyError.isCode(alone, "INVALID_INPUT")).toBe(true);
+        }
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        await updateIfUnchanged(checked(editor), {
+          ...entry,
+          data: { body: { v: "editor" } },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: "editor" },
+        });
+      });
+
+      it("refuses a caller who may not update, though the system read the expectation, and changes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+
+        for (const caller of [reader, stranger]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(checked(caller), {
+              ...page,
+              data: { body: { v: "refused" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("still refuses a stale one with a conflict, and changes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+        await t.nextly.update({
+          collection: "pages",
+          id,
+          data: { body: { v: "author" } },
+          overrideAccess: true,
+        } as never);
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(checked(editor), {
+            ...page,
+            data: { body: { v: "stale" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: "author" },
+        });
+      });
+
+      it("refuses any other shape carrying `checkedBy`, and the stored read refuses this one, writing nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+        const junk: unknown[] = [
+          { caller: editor, checkedBy: { overrideAccess: false } },
+          {
+            caller: editor,
+            checkedBy: { overrideAccess: true, user: owner.user },
+          },
+          { caller: { ...editor, overrideAccess: true }, checkedBy: SYSTEM },
+          { caller: {}, checkedBy: SYSTEM },
+          { ...checked(editor), user: editor.user },
+          { ...checked(editor), overrideAccess: true },
+          { checkedBy: SYSTEM },
+        ];
+        for (const identity of junk) {
+          const write = await rejectionOf(
+            updateIfUnchanged(identity as PluginConditionalWriteIdentity, {
+              ...page,
+              data: { body: { v: "junk" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+        }
+        const read = await rejectionOf(
+          readStoredFields(checked(editor) as unknown as PluginStoredIdentity, {
+            ...page,
+            fields: ["body"],
+            form: "published",
+          })
+        );
+        expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
       });
     });
   }

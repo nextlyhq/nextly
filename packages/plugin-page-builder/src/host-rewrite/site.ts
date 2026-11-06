@@ -5,7 +5,8 @@
  * Read as the SYSTEM, because a host the person running the rewrite cannot see
  * still renders the component. Written as that PERSON, through the identity
  * their request resolved, so a host they may not update (or, for a live row,
- * publish) is refused by the same rules their own save would meet. A run no
+ * publish) is refused by the same rules their own save would meet; what the
+ * write expects to find is judged as the system's, which read it. A run no
  * person started writes as the system instead (see `WriteIdentity`).
  *
  * @module host-rewrite/site
@@ -14,9 +15,11 @@ import {
   NextlyError,
   readStoredFields,
   updateIfUnchanged,
+  type PluginConditionalWriteIdentity,
   type PluginStoredDocument,
   type PluginStoredFields,
   type PluginStoredIdentity,
+  type PluginStoredLifecycle,
   type PluginStoredValue,
 } from "@nextlyhq/plugin-sdk";
 
@@ -557,40 +560,89 @@ export async function documentHasWorkingDraft(
 }
 
 /**
+ * How many times a host's forms are read from the start when its working
+ * draft is published or discarded between the live read and the draft read.
+ */
+const FORM_READS = 3;
+
+/**
  * A host's stored forms, from the stored read of `fields`: the live row's,
  * its public state, and the pending working draft's where one is. One field
  * is a fixed path's; several are a whole-row scan's, given back as one row
- * of those fields.
+ * of those fields. Read again from the start while the draft moves between
+ * the two reads; a host whose draft never holds still is not one to judge,
+ * and is reported as unreadable rather than guessed at.
  */
 async function storedForms(
   host: HostAddress,
   fields: readonly string[]
 ): Promise<Omit<HostRead, "rev">> {
+  for (let attempt = 0; attempt < FORM_READS; attempt += 1) {
+    const forms = await storedFormsOnce(host, fields);
+    if (forms !== undefined) return forms;
+  }
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage:
+      "This document's working draft kept changing while it was read.",
+  });
+}
+
+/**
+ * One reading of a host's stored forms, or `undefined` where the working
+ * draft the live read found was gone, or the live row moved, by the draft
+ * read.
+ *
+ * The draft read falls back to the live row once no working draft is pending,
+ * so a draft discarded or published after the live read answers the live
+ * value in the draft's place. Taken as the draft, that value would be saved
+ * as one, recreating a draft its author just discarded. Only a draft read
+ * that itself reports the draft still pending, over the same live state, is
+ * the draft; anything else is read again.
+ */
+async function storedFormsOnce(
+  host: HostAddress,
+  fields: readonly string[]
+): Promise<Omit<HostRead, "rev"> | undefined> {
   const live = await readStored(host, fields, "published");
   if (live.kind === "absent") {
     return { published: { kind: "absent" }, draft: null, liveState: null };
   }
-  // The system's read always carries it; a read that does not is not one to
-  // judge a host by.
-  if (live.live === undefined) {
+  const lifecycle = lifecycleOf(live);
+  if (!lifecycle.workingDraft) {
+    return {
+      published: hostValue(live, host, fields),
+      draft: null,
+      liveState: lifecycle.publicState,
+    };
+  }
+  const draft = await readStored(host, fields, "draft");
+  if (draft.kind === "absent") return undefined;
+  const now = lifecycleOf(draft);
+  if (!now.workingDraft || now.publicState !== lifecycle.publicState) {
+    return undefined;
+  }
+  return {
+    published: hostValue(live, host, fields),
+    draft: hostValue(draft, host, fields),
+    liveState: lifecycle.publicState,
+  };
+}
+
+/**
+ * The lifecycle a found stored read gives. The system's read always carries
+ * it; a read that does not is not one to judge a host by.
+ */
+function lifecycleOf(
+  read: Extract<PluginStoredFields, { kind: "found" }>
+): PluginStoredLifecycle {
+  if (read.live === undefined) {
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       publicMessage: "The stored read gave no lifecycle for this document.",
     });
   }
-  const draft = live.live.workingDraft
-    ? await readStored(host, fields, "draft")
-    : undefined;
-  return {
-    published: hostValue(live, host, fields),
-    draft:
-      draft === undefined
-        ? null
-        : draft.kind === "absent"
-          ? { kind: "absent" }
-          : hostValue(draft, host, fields),
-    liveState: live.live.publicState,
-  };
+  return read.live;
 }
 
 /** One stored read of a host's fields, in one form and its language. */
@@ -764,7 +816,10 @@ function storedDocumentOf(host: HostAddress): PluginStoredDocument {
     : { collection: host.slug, id: host.id ?? "" };
 }
 
-/** Writes a host as the person running the rewrite, checked against what was read. */
+/**
+ * Writes a host as the person running the rewrite, checked against what was
+ * read as the system (see `writeIdentityOf`).
+ */
 export function siteHostWriter(
   site: Pick<RewriteSite, "identity">
 ): HostWriter {
@@ -787,7 +842,7 @@ export function siteHostWriter(
       },
       write.rev
     );
-    const identity = await site.identity();
+    const identity = writeIdentityOf(await site.identity());
     try {
       // Made only if the field still hashes, under the write's own row lock,
       // to what was read; a publish also only if no working draft is pending,
@@ -810,6 +865,25 @@ export function siteHostWriter(
       return writeFailure(error);
     }
   };
+}
+
+/**
+ * Who a host's conditional write is made as. The system's own run writes as
+ * the system. A person's is the person's update, judged by every rule their
+ * own save meets (the entry's or Single's update access, the field's update
+ * rules, and publishing where the write publishes), with its expectation
+ * judged as the system's: the host was read as the system, and the hash came
+ * from that read, never from the person. So a person who may update a host
+ * but not read it, or whose field read rule closes the blocks field to them,
+ * still has their authorized rewrite made, and nobody is told whether a value
+ * of their own matches one they may not read.
+ */
+function writeIdentityOf(
+  identity: WriteIdentity
+): PluginConditionalWriteIdentity {
+  return identity.overrideAccess === true
+    ? identity
+    : { caller: identity, checkedBy: THE_SYSTEM };
 }
 
 /**
