@@ -231,6 +231,34 @@ describe("the list", () => {
     expect(onEditLook).toHaveBeenCalledWith(primary.id);
   });
 
+  it("reads a worn look's count with the styles' and says it in the row's name", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    const { access, usageReads } = accessOf({
+      styles: { [outline.id]: reach({ pages: 3 }) },
+    });
+    await panel({
+      library: [CARD, outline],
+      access,
+      looks: { onEdit: () => {}, editingId: null },
+    });
+    // One read for the tab: the styles and the worn look together.
+    expect(usageReads).toHaveLength(1);
+    expect(usageReads[0]).toEqual([CARD.id, outline.id]);
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(
+      within(looks)
+        .getByRole("button", { name: /^Outline, \.nx-l-button-outline, / })
+        .getAttribute("aria-label")
+    ).toMatch(/3 pages/);
+  });
+
   it("finds a look by a value it sets, as it finds a shared style", async () => {
     const outline: NamedClass = {
       id: "look:core/button:outline",

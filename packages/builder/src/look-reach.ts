@@ -12,13 +12,14 @@
  */
 
 import {
+  MAX_CLASSES_PER_NODE,
   walkNodes,
   type BlockDocument,
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
 
 import type { BlockLookRow } from "./block-look-rows";
-import { looksOfType, wornLook } from "./look-tiles";
+import { looksOfType } from "./look-tiles";
 
 /** Marks a block an edit to the look being edited reaches. */
 export const LOOK_REACH_ATTRIBUTE = "data-nx-look-reach";
@@ -33,11 +34,28 @@ export function lookReach(
   const reached = new Set<string>();
   walkNodes(document.nodes, node => {
     if (node.type !== look.blockType) return;
-    if (look.own || wornLook(node.classes, looks) === look.id) {
+    if (look.own || appliesLook(node.classes, looks, look.id)) {
       reached.add(node.id);
     }
   });
   return reached;
+}
+
+/**
+ * Whether a block's classes apply the look: listed among the classes the
+ * engine reads for a node, and one of the type's looks it renders. A block
+ * listing two looks of its type has both applied, the later over the earlier,
+ * so an edit to either reaches it.
+ */
+function appliesLook(
+  classes: readonly string[] | undefined,
+  looks: readonly NamedClass[],
+  lookId: string
+): boolean {
+  return (
+    looks.some(each => each.id === lookId) &&
+    (classes ?? []).slice(0, MAX_CLASSES_PER_NODE).includes(lookId)
+  );
 }
 
 /**

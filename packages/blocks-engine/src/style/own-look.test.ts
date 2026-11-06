@@ -80,6 +80,13 @@ describe("the site's edits to its block types' own looks", () => {
     });
   });
 
+  it("read an id once: a second own look sharing it, of another type, is not read", () => {
+    const image = { ...primary, blockType: "core/image", orderIndex: 3 };
+    expect(blockDefaultsOf([primary, image])).toEqual({
+      "core/button": colour("purple"),
+    });
+  });
+
   it("skip an own look the engine could not use, and a library that is no list", () => {
     expect(blockDefaultsOf([{ ...primary, styles: [] }])).toEqual({});
     expect(blockDefaultsOf({ classes: [primary] })).toEqual({});

@@ -149,12 +149,16 @@ export function ownLooksRead(library: unknown): NamedClass[] {
   if (!Array.isArray(library)) return [];
   const read = namedClassesRead(library as readonly NamedClass[]);
   const types = new Set<string>();
+  // An id read once, as a class's is: a second own look sharing it is never
+  // read, so one id always names one own look to whoever edits it.
+  const ids = new Set<string>();
   const own: NamedClass[] = [];
   for (const cls of orderedNamedClasses(read)) {
     if (!isUsableNamedClass(cls) || !isDefaultLook(cls)) continue;
     const type = cls.blockType as string;
-    if (types.has(type)) continue;
+    if (types.has(type) || ids.has(cls.id)) continue;
     types.add(type);
+    ids.add(cls.id);
     own.push(cls);
   }
   return own;

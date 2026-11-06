@@ -65,6 +65,38 @@ describe("the blocks an edit to a look reaches", () => {
   });
 });
 
+describe("a block listing two looks of its type", () => {
+  it("is reached by an edit to either, since both are applied", () => {
+    const text: NamedClass = {
+      ...outline,
+      id: "look:core/button:text",
+      slug: "button-text",
+      orderIndex: 2,
+    };
+    const stacked = {
+      ...page,
+      nodes: [
+        {
+          id: "both",
+          type: "core/button",
+          version: 1,
+          props: {},
+          classes: [outline.id, text.id],
+        },
+      ],
+    } as unknown as BlockDocument;
+    const reach = (id: string) => [
+      ...lookReach(stacked, [outline, text], {
+        id,
+        blockType: "core/button",
+        own: false,
+      }),
+    ];
+    expect(reach(outline.id)).toEqual(["both"]);
+    expect(reach(text.id)).toEqual(["both"]);
+  });
+});
+
 describe("marking them on the canvas", () => {
   it("marks exactly the blocks named, and clears the marks after", () => {
     const root = document.createElement("div");

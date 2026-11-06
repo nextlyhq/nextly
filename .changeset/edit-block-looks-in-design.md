@@ -37,8 +37,9 @@ row draws a small block of its type with the look applied, on the type's base
 as the site has edited it.
 
 Choosing a row edits that look in the inspector, with no block selected. A bar
-says who the edit reaches ("every Button without another look", or "every
-Button that wears it") and offers the way back to block editing. The Style
+says who the edit reaches ("every Button", since every other look of the type
+is laid on its own look, or "every Button that wears it") and offers the way
+back to block editing. The Style
 controls below write the look through the shared-style save, one undo step per
 change, and the blocks the edit reaches are marked on the canvas. Selecting a
 block, the bar's Back, or Esc returns to editing blocks.

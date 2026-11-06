@@ -261,21 +261,21 @@ function idsOf(key: string): string[] {
 function useRows(
   library: readonly NamedClass[] | undefined,
   suppliedClassIds: readonly string[] | undefined
-): SharedStyleRow[] {
+): { rows: SharedStyleRow[]; lookIds: string[] } {
   // Keyed by the ids rather than the array, which a host may build afresh on
   // every render: the search text compiles every style, once per library,
   // not once per render.
   const suppliedKey = idsKey(suppliedClassIds ?? []);
-  return React.useMemo(
-    () =>
-      library === undefined
-        ? []
-        : sharedStyleRows(
-            sharedStylesOnly(library),
-            new Set(idsOf(suppliedKey))
-          ),
-    [library, suppliedKey]
-  );
+  return React.useMemo(() => {
+    if (library === undefined) return { rows: [], lookIds: [] };
+    const supplied = new Set(idsOf(suppliedKey));
+    return {
+      rows: sharedStyleRows(sharedStylesOnly(library), supplied),
+      // The worn looks, whose counts are read with the styles' in one read,
+      // so the tab's counting and failure notes speak for both.
+      lookIds: wornLookIds(blockLookGroups(library, supplied)),
+    };
+  }, [library, suppliedKey]);
 }
 
 /**
@@ -334,21 +334,21 @@ function PanelLooks({
   library,
   suppliedClassIds,
   query,
-  access,
   paint,
   editing,
   styleContext,
+  reaches,
 }: {
   library: readonly NamedClass[];
   suppliedClassIds: readonly string[] | undefined;
   query: string;
   styleContext: StyleCompileContext | undefined;
-  access: SharedStylesAccess | undefined;
   paint: TilePaint;
   editing: PanelLookEditing | undefined;
+  /** Each worn look's reach, from the tab's one usage read. */
+  reaches: ReadonlyMap<string, SharedStyleReach>;
 }): React.JSX.Element | null {
   const groups = useLookGroups(library, suppliedClassIds, query, styleContext);
-  const usage = useUsage(access, wornLookIds(groups));
   return (
     <BlockLooksGroup
       groups={groups}
@@ -357,10 +357,8 @@ function PanelLooks({
       mode={paint.mode}
       editingId={editing?.editingId}
       onEdit={editing?.onEdit}
-      countOf={row => {
-        const reach = usage.styles.get(row.id);
-        return reach === undefined ? null : <ReachChip reach={reach} />;
-      }}
+      reachOf={row => reaches.get(row.id)}
+      chip={reach => <ReachChip reach={reach} />}
     />
   );
 }
@@ -400,7 +398,7 @@ export function SharedStylesPanel({
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
   const [openId, setOpenId] = React.useState<string | null>(null);
-  const rows = useRows(library, suppliedClassIds);
+  const { rows, lookIds } = useRows(library, suppliedClassIds);
   const texts = React.useMemo(
     () =>
       new Map(
@@ -411,7 +409,7 @@ export function SharedStylesPanel({
   const found = searchSharedStyles(rows, query, row => texts.get(row.id) ?? "");
   // Every style's usage is read, so each filter can be counted: the rows the
   // search puts first, then the rest, fifty to a read.
-  const usage = useUsage(access, usageOrder(rows, found, pages));
+  const usage = useUsage(access, usageOrder(rows, found, pages, lookIds));
   const { counter } = usage;
   const exact = countsExact(usage, pageBlocks, rows);
 
@@ -475,10 +473,10 @@ export function SharedStylesPanel({
           library={library}
           suppliedClassIds={suppliedClassIds}
           query={query}
-          access={access}
           paint={paint}
           editing={looks}
           styleContext={styleContext}
+          reaches={usage.styles}
         />
         <section
           className="nx-vars__group"
@@ -625,11 +623,17 @@ function pageBlocksOf(
 function usageOrder(
   rows: readonly SharedStyleRow[],
   found: readonly SharedStyleRow[],
-  pages: number
+  pages: number,
+  lookIds: readonly string[] = []
 ): string[] {
   const first = found.slice(0, pages * PAGE_SIZE).map(row => row.id);
   const listed = new Set(first);
-  return [...first, ...rows.map(row => row.id).filter(id => !listed.has(id))];
+  // The worn looks after the styles: few, and listed above the styles.
+  return [
+    ...first,
+    ...rows.map(row => row.id).filter(id => !listed.has(id)),
+    ...lookIds,
+  ];
 }
 
 /**

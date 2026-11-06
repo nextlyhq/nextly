@@ -24,6 +24,10 @@ import {
 import { ChromeTooltip } from "./chrome-tooltip";
 import { blockLabel } from "./inserter";
 import { LookSpecimen } from "./look-tiles-view";
+import {
+  sharedStyleReachSentence,
+  type SharedStyleReach,
+} from "./shared-style-library";
 
 export interface BlockLooksGroupProps {
   readonly groups: readonly BlockLookGroup[];
@@ -34,8 +38,10 @@ export interface BlockLooksGroupProps {
   readonly editingId: string | null | undefined;
   /** Edit a look in the inspector. Absent: the rows are shown, not chosen. */
   readonly onEdit?: (lookId: string) => void;
-  /** A worn look's count, drawn as the shared styles' counts are. */
-  readonly countOf: (row: BlockLookRow) => React.ReactNode;
+  /** A worn look's reach, as the tab's usage read has it, or `undefined`. */
+  readonly reachOf: (row: BlockLookRow) => SharedStyleReach | undefined;
+  /** A reach drawn as the shared styles' counts are. */
+  readonly chip: (reach: SharedStyleReach) => React.ReactNode;
 }
 
 /** How many looks a block type has, as its heading counts them. */
@@ -50,7 +56,8 @@ export function BlockLooksGroup({
   mode,
   editingId,
   onEdit,
-  countOf,
+  reachOf,
+  chip,
 }: BlockLooksGroupProps): React.JSX.Element | null {
   const headingId = React.useId();
   if (groups.length === 0) return null;
@@ -94,7 +101,8 @@ export function BlockLooksGroup({
                         mode={mode}
                       />
                     }
-                    count={row.own ? null : countOf(row)}
+                    reach={row.own ? undefined : reachOf(row)}
+                    chip={chip}
                   />
                 </li>
               ))}
@@ -112,16 +120,29 @@ function LookRow({
   chosen,
   onEdit,
   specimen,
-  count,
+  reach,
+  chip,
 }: {
   readonly row: BlockLookRow;
   readonly title: string;
   readonly chosen: boolean;
   readonly onEdit: ((lookId: string) => void) | undefined;
   readonly specimen: React.ReactNode;
-  readonly count: React.ReactNode;
+  readonly reach: SharedStyleReach | undefined;
+  readonly chip: (reach: SharedStyleReach) => React.ReactNode;
 }): React.JSX.Element {
   const description = row.own ? ownLookDescription(title) : undefined;
+  // The row's name says what the eye reads, the chips included, since the
+  // count chip is hidden from assistive technology as a shared style's is.
+  const label = [
+    row.name,
+    row.own ? "own look" : row.className,
+    ...(reach === undefined
+      ? []
+      : [sharedStyleReachSentence(undefined, reach)]),
+  ]
+    .filter(part => part !== "")
+    .join(", ");
   const content = (
     <>
       <span className="nx-block-looks__specimen">{specimen}</span>
@@ -143,8 +164,8 @@ function LookRow({
             </span>
           </ChromeTooltip>
         </TooltipProvider>
-      ) : (
-        count
+      ) : reach === undefined ? null : (
+        chip(reach)
       )}
     </>
   );
@@ -156,6 +177,7 @@ function LookRow({
       type="button"
       className="nx-vars__row nx-block-looks__row"
       aria-pressed={chosen}
+      aria-label={label}
       aria-description={description}
       data-block-look={row.id}
       onClick={() => onEdit(row.id)}
