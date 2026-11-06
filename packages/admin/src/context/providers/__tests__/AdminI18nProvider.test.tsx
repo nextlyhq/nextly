@@ -42,9 +42,21 @@ vi.mock("@admin/hooks/useApi", () => ({
   }),
 }));
 
+/** What the shared session query answers: signed in unless a test says not. */
+const session = vi.hoisted(() => ({
+  data: { isSetup: true, isAuthenticated: true } as
+    | undefined
+    | { isSetup: boolean; isAuthenticated: boolean },
+}));
+
+vi.mock("@admin/hooks/queries/useAuthSession", () => ({
+  useAuthSession: () => session,
+}));
+
 afterEach(() => {
   me.interfaceLanguage = null;
   me.asked = [];
+  session.data = { isSetup: true, isAuthenticated: true };
   vi.restoreAllMocks();
 });
 
@@ -199,6 +211,30 @@ describe("AdminI18nProvider, each person's own interface language", () => {
     expect(screen.getByText("Cart")).toBeTruthy();
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(me.asked).toEqual([]);
+  });
+
+  it("asks nothing of /me on a private screen until the session is known to be signed in", async () => {
+    // A signed-out visitor opening a private address: the route is private
+    // while the guard decides where to send them, and the session is not.
+    branding.plugins = SHOP_IN_TWO_LANGUAGES;
+    browserLanguage("en-US");
+    me.interfaceLanguage = "fr";
+
+    for (const answer of [
+      undefined,
+      { isSetup: true, isAuthenticated: false },
+    ]) {
+      session.data = answer;
+      const rendered = render(
+        <AdminI18nProvider signedIn>
+          <CartTitle />
+        </AdminI18nProvider>
+      );
+      expect(screen.getByText("Cart")).toBeTruthy();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(me.asked, JSON.stringify(answer)).toEqual([]);
+      rendered.unmount();
+    }
   });
 
   it("editing French content leaves the interface language alone", async () => {

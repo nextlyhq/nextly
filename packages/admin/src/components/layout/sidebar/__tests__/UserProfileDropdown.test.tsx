@@ -23,6 +23,11 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 
+// Signed in, as the menu only ever is.
+vi.mock("@admin/hooks/queries/useAuthSession", () => ({
+  useAuthSession: () => ({ data: { isSetup: true, isAuthenticated: true } }),
+}));
+
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
