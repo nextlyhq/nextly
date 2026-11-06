@@ -267,6 +267,30 @@ describe("the block types whose own default styles name a variable", () => {
     expect([...using.keys()]).toEqual(["color.brand"]);
   });
 
+  it("finds a reference in a part's default styles and in the child gap, which the compiler writes too", () => {
+    const using = blockDefaultsUsing(
+      [
+        {
+          name: "acme/figure",
+          parts: {
+            caption: { baseStyles: at({ color: { $token: "color.ink" } }) },
+            broken: null,
+          },
+        },
+        { name: "acme/stack", childGap: { $token: "space.md" } },
+        // The controls: a literal gap, and a part with no default styles.
+        { name: "acme/row", childGap: "1rem", parts: { cell: {} } },
+      ],
+      new Set(["color.ink", "space.md"])
+    );
+    expect(using.get("color.ink")).toEqual([
+      { type: "acme/figure", label: "Figure" },
+    ]);
+    expect(using.get("space.md")).toEqual([
+      { type: "acme/stack", label: "Stack" },
+    ]);
+  });
+
   it("skips a reference too long to name a variable, as every other walk does", () => {
     const long = "t".repeat(MAX_TOKEN_NAME_LENGTH + 1);
     expect(

@@ -1,7 +1,9 @@
 /**
- * The site-style Single's guard over its variables: a write that drops a
+ * The site-style Single's guards over its variables: a write that drops a
  * variable the site added is judged by the remove route's in-use check, and
- * every other write to the tokens section passes without asking it.
+ * every other write to the tokens section passes without asking it; a write
+ * whose shared styles add a reference to a variable the site will not define
+ * is refused, as a page adding one is.
  */
 import { NextlyError } from "nextly/errors";
 import { describe, expect, it, vi } from "vitest";
@@ -235,5 +237,128 @@ describe("which stored variables a write drops", () => {
       [true, true]
     );
     expect(supplied.has("color.brand")).toBe(false);
+  });
+});
+
+describe("a write whose shared styles name variables", () => {
+  /** A stored shared style whose own styles name `token`. */
+  const naming = (id: string, token: string) => ({
+    id,
+    slug: id.replace(/^c-/, ""),
+    orderIndex: 0,
+    styles: { base: { base: { color: { $token: token } } } },
+  });
+  const check = async () => undefined;
+
+  it("refuses a reference it adds to a variable the site does not define", async () => {
+    const refused = await written(
+      {
+        user: author,
+        data: {
+          classes: [naming("c-card", "t-accent"), naming("c-x", "t-gone")],
+        },
+        originalData: {
+          ...stored(accent),
+          classes: [naming("c-card", "t-accent")],
+        },
+      },
+      check
+    );
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "classes",
+            code: "unknown-token",
+            message:
+              'Shared styles: "t-gone" is not a variable on this site. Remove it from the shared style, or choose a variable the site has.',
+          },
+        ],
+      },
+    });
+  });
+
+  it("passes references to variables every tier defines, the code's and the engine's included", async () => {
+    expect(
+      await written(
+        {
+          user: author,
+          data: {
+            classes: [
+              naming("c-card", "t-accent"),
+              naming("c-code", "color.code"),
+              naming("c-engine", "color.primary"),
+            ],
+          },
+          originalData: { ...stored(accent), classes: [] },
+        },
+        check
+      )
+    ).toBeUndefined();
+  });
+
+  it("passes a reference to a variable the same write adds, and refuses one it removes", async () => {
+    expect(
+      await written(
+        {
+          user: author,
+          data: {
+            ...stored(accent, brand),
+            classes: [naming("c-card", "color.brand")],
+          },
+          originalData: { ...stored(accent), classes: [] },
+        },
+        check
+      )
+    ).toBeUndefined();
+    // The control: the tokens this write leaves are what it is judged by.
+    expect(
+      await written(
+        {
+          user: author,
+          data: { ...stored(), classes: [naming("c-card", "t-accent")] },
+          originalData: { ...stored(accent), classes: [] },
+        },
+        check
+      )
+    ).toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("keeps a reference the stored shared styles already held, though the site no longer defines it", async () => {
+    expect(
+      await written(
+        {
+          user: author,
+          data: {
+            classes: [{ ...naming("c-card", "t-gone"), label: "Renamed" }],
+          },
+          originalData: {
+            ...stored(accent),
+            classes: [naming("c-card", "t-gone")],
+          },
+        },
+        check
+      )
+    ).toBeUndefined();
+  });
+
+  it("does not judge server code acting as nobody, nor the remove route's own write", async () => {
+    const adding = {
+      data: { classes: [naming("c-x", "t-gone")] },
+      originalData: { ...stored(accent), classes: [] },
+    };
+    expect(await written(adding, check)).toBeUndefined();
+    expect(
+      await written(
+        {
+          ...adding,
+          user: author,
+          context: { ...VARIABLE_REMOVE_WRITE_CONTEXT },
+        },
+        check
+      )
+    ).toBeUndefined();
   });
 });

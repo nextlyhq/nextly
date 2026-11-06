@@ -30,7 +30,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { readStoredJson } from "./stored-json";
-import { styleEnvelopeTokens } from "./style-token-refs";
+import { collectStyleTokens, styleEnvelopeTokens } from "./style-token-refs";
 import type { UsageIndex, UsageSubject } from "./usage-index";
 
 /** One row: this document, through this field, uses this variable. */
@@ -85,14 +85,19 @@ function namesAVariable(identity: string): boolean {
   return identity.length <= MAX_TOKEN_NAME_LENGTH;
 }
 
-/** The variables one style envelope names that can name a variable at all. */
-function variablesIn(styles: unknown): Set<string> {
-  const found = new Set<string>();
-  styleEnvelopeTokens(styles, found);
+/** The identities in `found` that can name a variable at all. */
+function onlyVariables(found: Set<string>): Set<string> {
   for (const identity of found) {
     if (!namesAVariable(identity)) found.delete(identity);
   }
   return found;
+}
+
+/** The variables one style envelope names that can name a variable at all. */
+function variablesIn(styles: unknown): Set<string> {
+  const found = new Set<string>();
+  styleEnvelopeTokens(styles, found);
+  return onlyVariables(found);
 }
 
 /**
@@ -149,7 +154,7 @@ export function sharedStylesUsing(
   for (const entry of classes) {
     if (!isPlainRecord(entry) || typeof entry.id !== "string") continue;
     const style = { id: entry.id, name: classNameOf(entry) };
-    for (const identity of variablesIn(entry.styles)) {
+    for (const identity of sharedStyleVariables(entry)) {
       if (!identities.has(identity)) continue;
       using.set(identity, [...(using.get(identity) ?? []), style]);
     }
@@ -157,19 +162,45 @@ export function sharedStylesUsing(
   return using;
 }
 
-/** A registered block type, as far as its own default styles go. */
+/**
+ * A registered block type, as far as the styles the compiler writes from its
+ * definition go: its own default styles, each part's default styles, and the
+ * space it puts between its children. Each read as stored, since a plugin's
+ * definition reaches the compiler unvalidated by some paths.
+ */
 export interface BlockTypeDefaults {
   readonly name: string;
   readonly baseStyles?: unknown;
+  readonly parts?: unknown;
+  readonly childGap?: unknown;
   readonly editor?: { readonly label?: string };
 }
 
 /**
+ * The variables a block type's definition names in any style the compiler
+ * writes from it (`compilePageCss`'s block tier): the base envelope, each
+ * part's base envelope, and the child gap, which is one style value rather
+ * than an envelope. A block's looks are not read here: the site receives
+ * them as shared styles, and they are counted there.
+ */
+function blockDefaultVariables(block: BlockTypeDefaults): Set<string> {
+  const found = new Set<string>();
+  styleEnvelopeTokens(block.baseStyles, found);
+  if (isPlainRecord(block.parts)) {
+    for (const part of Object.values(block.parts)) {
+      if (isPlainRecord(part)) styleEnvelopeTokens(part.baseStyles, found);
+    }
+  }
+  collectStyleTokens(block.childGap, found);
+  return onlyVariables(found);
+}
+
+/**
  * The registered block types whose own default styles name each variable
- * asked about, by identity, in type order: a type's `baseStyles` is laid
- * under every instance of it on every page that places one, so removing the
- * variable changes all of them whether or not any page does yet. Each type is
- * named by the label the editor shows it by.
+ * asked about, by identity, in type order: what the compiler writes from a
+ * type's definition is laid under every instance of it on every page that
+ * places one, so removing the variable changes all of them whether or not
+ * any page does yet. Each type is named by the label the editor shows it by.
  */
 export function blockDefaultsUsing(
   blocks: readonly BlockTypeDefaults[],
@@ -184,12 +215,47 @@ export function blockDefaultsUsing(
       type: block.name,
       label: blockLabelFrom(block.name, block),
     };
-    for (const identity of variablesIn(block.baseStyles)) {
+    for (const identity of blockDefaultVariables(block)) {
       if (!identities.has(identity)) continue;
       using.set(identity, [...(using.get(identity) ?? []), named]);
     }
   }
   return using;
+}
+
+/** The variables one stored shared style's own styles name. */
+export function sharedStyleVariables(
+  entry: Readonly<Record<string, unknown>>
+): Set<string> {
+  return variablesIn(entry.styles);
+}
+
+/** The code a write adding a reference to a variable the site lacks is refused with. */
+export const UNKNOWN_TOKEN_CODE = "unknown-token";
+
+/** How many undefined variables one refusal names; the rest are counted. */
+const NAMED_AT_MOST = 5;
+
+/**
+ * The words a write adding references to variables the site does not define
+ * is refused with, `label` naming what was written and `from` where the
+ * author removes them: one wording for a page and for a shared style.
+ */
+export function undefinedVariablesMessage(
+  label: string,
+  added: readonly string[],
+  from: string
+): string {
+  const named = added
+    .slice(0, NAMED_AT_MOST)
+    .map(id => `"${id}"`)
+    .join(", ");
+  const more =
+    added.length > NAMED_AT_MOST
+      ? ` and ${added.length - NAMED_AT_MOST} more`
+      : "";
+  const one = added.length === 1;
+  return `${label}: ${named}${more} ${one ? "is not a variable" : "are not variables"} on this site. Remove ${one ? "it" : "them"} from ${from}, or choose a variable the site has.`;
 }
 
 /** The name a shared style is shown by: its label, else its slug, else its id. */
