@@ -117,6 +117,8 @@ function fakeService(over: Partial<BreakpointRemovalService> = {}) {
     carryOn: async () => {},
     retire: async () => {},
     publish: async () => {},
+    keepFragment: async () => {},
+    purgeFragments: async () => {},
     ...over,
   };
   return { service, abandon };
@@ -303,7 +305,8 @@ describe("a removal of a breakpoint a code-supplied shared style holds", () => {
       breakpoints: set(DESKTOP, TABLET),
       classes: [BAND],
     });
-    const { service } = fakeService();
+    const keepFragment = vi.fn(async () => {});
+    const { service } = fakeService({ keepFragment });
     const removal = removalOver(single, service, {
       defaults: { classes: [coded, plain] },
     });
@@ -320,6 +323,20 @@ describe("a removal of a breakpoint a code-supplied shared style holds", () => {
       { ...BAND, styles: { base: { base: { color: "#111111" } } } },
       { ...coded, styles: { base: { base: { color: "#333333" } } } },
     ]);
+    // What the write took out was kept first, the code's style named as the
+    // override the strip stored, which putting it back takes out again.
+    expect(keepFragment).toHaveBeenCalledWith({
+      runId: "run-1",
+      host: null,
+      form: "site",
+      fragment: {
+        classes: {
+          [BAND.id]: expect.anything(),
+          "c-coded": { base: { tablet: { color: "#444" } } },
+        },
+        overridden: ["c-coded"],
+      },
+    });
   });
 });
 
