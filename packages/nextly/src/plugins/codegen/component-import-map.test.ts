@@ -1203,8 +1203,10 @@ describe("parity with the contributions a reader is sent", () => {
     if (Array.isArray(sent)) return sent.flatMap(sentPaths);
     if (sent === null || typeof sent !== "object") return [];
     const record = sent as Record<string, unknown>;
-    const own = [record.component, (record.action as { open?: unknown })?.open]
-      .filter((path): path is string => typeof path === "string");
+    const own = [
+      record.component,
+      (record.action as { open?: unknown })?.open,
+    ].filter((path): path is string => typeof path === "string");
     return [
       ...own,
       ...Object.entries(record)

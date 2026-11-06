@@ -22,6 +22,11 @@ interface FixtureContributionProps {
   onClose?: () => void;
 }
 
+/** An id as the fixture shows it: a string or number as it is, else a mark. */
+function shownId(id: unknown): string {
+  return typeof id === "string" || typeof id === "number" ? String(id) : "?";
+}
+
 export function FixtureContribution({
   context,
   entry,
@@ -33,7 +38,7 @@ export function FixtureContribution({
       <div className="space-y-3 text-sm">
         <p>
           Fixture: {rows.length} {rows.length === 1 ? "row" : "rows"} (
-          {rows.map(row => String(row.id)).join(", ")})
+          {rows.map(row => shownId(row.id)).join(", ")})
         </p>
         <button
           type="button"
@@ -51,7 +56,7 @@ export function FixtureContribution({
       className="rounded-md border border-dashed border-border bg-card p-4 text-sm text-muted-foreground"
     >
       Fixture contribution
-      {entry?.id !== undefined ? ` for ${String(entry.id)}` : ""}
+      {entry?.id !== undefined ? ` for ${shownId(entry.id)}` : ""}
       {context !== undefined ? ` · ${Object.keys(context).join(", ")}` : ""}
     </div>
   );
