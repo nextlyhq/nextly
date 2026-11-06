@@ -114,10 +114,14 @@ interface Scope {
   kind: string;
 }
 
-/** Refuse a `replaces` that names no built-in part, or a part two take. */
+/**
+ * Refuse a `replaces` that names no built-in part, a part the place keeps
+ * whatever is contributed, or a part two take.
+ */
 function replacementNodes(
   items: readonly OrderableContribution[],
   builtIns: readonly string[],
+  notReplaceable: readonly string[],
   scope: Scope
 ): Map<string, OrderableContribution> {
   const replacers = new Map<string, OrderableContribution>();
@@ -134,6 +138,19 @@ function replacementNodes(
           place: scope.place,
           kind: scope.kind,
           builtIns: [...builtIns],
+        }
+      );
+    }
+    if (notReplaceable.includes(item.replaces)) {
+      throw resolutionError(
+        "contribution-replace-not-allowed",
+        `Plugin "${item.plugin}" contributes "${item.id}" to replace "${item.replaces}" at the admin place "${scope.place}", which a contribution may be placed beside but not replace.`,
+        {
+          plugin: item.plugin,
+          contribution: item.id,
+          replaces: item.replaces,
+          place: scope.place,
+          kind: scope.kind,
         }
       );
     }
@@ -311,18 +328,19 @@ function placed(
 /**
  * @experimental One place's contributions of one kind in order, the place's
  * built-in parts of that kind among them, refusing a reference to nothing, a
- * built-in part replaced twice or not at all there, and a cycle, naming every
- * contribution in it.
+ * built-in part replaced twice, not at all there or one of `notReplaceable`,
+ * and a cycle, naming every contribution in it.
  */
 export function orderContributions(
   items: readonly OrderableContribution[],
   builtIns: readonly string[],
-  scope: Scope
+  scope: Scope,
+  notReplaceable: readonly string[] = []
 ): OrderedEntry[] {
   const graph = graphNodes(
     items,
     builtIns,
-    replacementNodes(items, builtIns, scope)
+    replacementNodes(items, builtIns, notReplaceable, scope)
   );
   const { edges, anchored } = graphEdges(items, builtIns, graph, scope);
   const { ordered, done } = placed(graph.nodes, edges, anchored);

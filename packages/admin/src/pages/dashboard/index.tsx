@@ -18,6 +18,8 @@ import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ErrorBoundary } from "@admin/components/shared/error-boundary";
+import { TargetSlot } from "@admin/components/shared/target-slot";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 
 /**
  * DashboardErrorFallback Component
@@ -58,6 +60,32 @@ const DashboardErrorFallback = (
   </PageContainer>
 );
 
+/**
+ * The page's own two parts, the dashboard place's built-ins `welcome` and
+ * `widgets`, with plugins' blocks around them in the order the server sent,
+ * each behind its own boundary, after the grid unless placed before it. The
+ * grid itself is passed through as it is, and no plugin may replace it.
+ *
+ * Its own component, inside the page's error boundary, so reading who is
+ * looking can fail into the dashboard's crash screen like the rest.
+ */
+function DashboardPlace(): React.ReactNode {
+  const { user } = useDashboardUser();
+  // What a plugin's block here is told: who is looking. Held while the viewer
+  // is not known yet, so no block is handed an id that is not theirs.
+  const placeContext = user ? { userId: user.id } : null;
+  return (
+    <TargetSlot
+      place="dashboard"
+      context={placeContext}
+      builtIns={{
+        welcome: <WelcomeHeader />,
+        widgets: <WidgetGrid />,
+      }}
+    />
+  );
+}
+
 const DashboardPage: React.FC = () => {
   return (
     <ErrorBoundary fallback={DashboardErrorFallback}>
@@ -70,8 +98,6 @@ const DashboardPage: React.FC = () => {
             below: the page container's is every admin page's, so the header
             starts where other pages' headings do. */}
           <div className="max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-1000">
-            <WelcomeHeader />
-
             {/* Every card, through ONE grid.
  
               The seed prompt, the collection counts, the singles and the team
@@ -90,7 +116,7 @@ const DashboardPage: React.FC = () => {
               the resource sections competes with getting an editor to their
               content without answering a question they actually have. The
               component still ships and is cheap to restore, as a widget now. */}
-            <WidgetGrid />
+            <DashboardPlace />
           </div>
         </PageContainer>
       </DashboardChromeProvider>

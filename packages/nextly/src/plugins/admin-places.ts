@@ -58,7 +58,9 @@ const EDIT_PAGE_BLOCKS = Object.freeze(["document-bar", "editor"] as const);
  * place says which kinds it `accepts`, and names its `builtIns`, by kind: the
  * parts the page draws itself that a contribution may be ordered beside or
  * replace. A built-in is named here only once the page draws it under that
- * name, so a replacement always has something to replace.
+ * name, so a replacement always has something to replace. A place may also
+ * name, by kind, built-ins that are `notReplaceable`: a contribution may be
+ * ordered beside them, never take their place.
  * Frozen, so no code can add a core place at run time that the type of
  * {@link AdminPlaceId} does not know.
  */
@@ -66,7 +68,16 @@ export const CORE_ADMIN_PLACES = Object.freeze({
   dashboard: Object.freeze({
     page: "dashboard",
     accepts: Object.freeze(["block"] as const),
-    builtIns: Object.freeze({}),
+    // The welcome header, then the grid of cards. A block placed by nothing
+    // goes after the grid; one `before: "widgets"` goes between the two.
+    builtIns: Object.freeze({
+      block: Object.freeze(["welcome", "widgets"] as const),
+    }),
+    // The grid is each person's own arrangement of their cards, so a plugin
+    // draws beside it, never in its place.
+    notReplaceable: Object.freeze({
+      block: Object.freeze(["widgets"] as const),
+    }),
   }),
   "collection.list": Object.freeze({
     page: "a collection's entry list",
@@ -139,6 +150,24 @@ export function coreAdminPlaceBuiltIns(
   const builtIns: Partial<Record<AdminContributionKind, readonly string[]>> =
     CORE_ADMIN_PLACES[place as CoreAdminPlaceId].builtIns;
   return builtIns[kind] ?? [];
+}
+
+/**
+ * @experimental The built-in parts of one kind at a core place that a
+ * contribution may be ordered beside but may not replace, or none.
+ */
+export function coreAdminPlaceNotReplaceable(
+  place: string,
+  kind: AdminContributionKind
+): readonly string[] {
+  if (!Object.prototype.hasOwnProperty.call(CORE_ADMIN_PLACES, place)) {
+    return [];
+  }
+  const entry = CORE_ADMIN_PLACES[place as CoreAdminPlaceId];
+  if (!("notReplaceable" in entry)) return [];
+  const kept: Partial<Record<AdminContributionKind, readonly string[]>> =
+    entry.notReplaceable;
+  return kept[kind] ?? [];
 }
 
 /** @experimental The id of one of core's admin places. */

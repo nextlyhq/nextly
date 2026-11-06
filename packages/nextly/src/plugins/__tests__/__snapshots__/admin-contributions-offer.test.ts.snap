@@ -37,6 +37,12 @@ exports[`contributionsForReader > snapshots what each reader receives 1`] = `
     "dashboard": {
       "block": [
         {
+          "builtIn": "welcome",
+        },
+        {
+          "builtIn": "widgets",
+        },
+        {
           "component": "x#Audit",
           "id": "acme-support.audit",
           "kind": "block",
@@ -80,6 +86,12 @@ exports[`contributionsForReader > snapshots what each reader receives 1`] = `
     },
     "dashboard": {
       "block": [
+        {
+          "builtIn": "welcome",
+        },
+        {
+          "builtIn": "widgets",
+        },
         {
           "component": "x#Totals",
           "id": "acme-support.totals",

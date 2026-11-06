@@ -108,7 +108,12 @@ describe("contributionsForReader", () => {
     expect(Object.keys(meta).sort()).toEqual(["collection.edit", "dashboard"]);
     expect(
       meta.dashboard?.block?.map(e => ("id" in e ? e.id : e.builtIn))
-    ).toEqual(["acme-support.audit", "acme-support.totals"]);
+    ).toEqual([
+      "welcome",
+      "widgets",
+      "acme-support.audit",
+      "acme-support.totals",
+    ]);
     expect(meta["collection.edit"]?.sidebarSection).toEqual([
       expect.objectContaining({
         id: "acme-support.status",
