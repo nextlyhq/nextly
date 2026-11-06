@@ -22,7 +22,11 @@ export function toCollectionForColumns(
         label?: string;
         schemaDefinition?: { fields: Array<{ name?: string; type?: string }> };
         fields?: Array<{ name?: string; type?: string }>;
-        admin?: { defaultColumns?: string[]; useAsTitle?: string };
+        admin?: {
+          defaultColumns?: string[];
+          useAsTitle?: string;
+          disableDelete?: boolean;
+        };
         /**
          * Built-in Draft / Published lifecycle flag (collection-level).
          * Read from the dynamic-collections row or the code-first config.
@@ -80,6 +84,11 @@ export function toCollectionForColumns(
     // Forwarded so the bulk actions, and the row selection and row Delete that
     // follow them, are withheld from a collection removed from code.
     ...(collection.removedFromCode === true ? { removedFromCode: true } : {}),
+    // Forwarded so the row Delete and the bulk Delete are withheld from a
+    // collection whose entries are deleted through an action of their own.
+    ...(collection.admin?.disableDelete === true
+      ? { disableDelete: true }
+      : {}),
     admin: {
       useAsTitle: collection.admin?.useAsTitle,
       defaultColumns: [

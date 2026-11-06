@@ -21,3 +21,10 @@ export const BUILDER_VIEW_COMPONENT =
  */
 export const REMOVE_LAYOUT_ACTION_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot";
+
+/**
+ * The tools above the Components list: Import from file, and the dialog its
+ * row action "Delete component…" opens. Declared here for the same reason.
+ */
+export const COMPONENT_LIST_TOOLS_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#ComponentListTools";

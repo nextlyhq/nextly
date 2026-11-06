@@ -141,6 +141,21 @@ describe("the editor's Delete", () => {
 
     expect(await menuActions()).toContain("delete");
   });
+
+  it("is not offered on a collection deleted through an action of its own", async () => {
+    // The permission alone would offer it, as above: the collection's own
+    // setting is what withholds it.
+    holding("read-categories", "update-categories", "delete-categories");
+    const ownDelete = {
+      ...(categories as object),
+      admin: { disableDelete: true },
+    } as never;
+    render(<EntryForm collection={ownDelete} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+
+    expect(await menuActions()).not.toContain("delete");
+  });
 });
 
 describe("an action the page contributes", () => {

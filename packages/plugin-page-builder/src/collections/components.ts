@@ -33,8 +33,8 @@ import {
   type CollectionConfig,
 } from "nextly/config";
 
+import { COMPONENT_LIST_TOOLS_COMPONENT } from "../builder-view";
 import { blocks } from "../fields/blocksHelper";
-import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 
 import { layoutAreaOptions } from "./areas";
 
@@ -100,9 +100,15 @@ export function componentsCollection(): CollectionConfig {
     admin: {
       useAsTitle: "title",
       hidden: true,
+      // A component is deleted only through Delete component, which turns
+      // its copies into plain blocks first: the store refuses any other
+      // delete, so the admin offers none of its own. The plugin offers
+      // Delete component in the document bar and on each list row instead.
+      disableDelete: true,
       // "Import from file" above the list, where a file exported from
-      // another site is brought in after its preview.
-      components: { BeforeListTable: TRANSFER_IMPORT_COMPONENT },
+      // another site is brought in after its preview, and the dialog the
+      // row action "Delete component…" opens.
+      components: { BeforeListTable: COMPONENT_LIST_TOOLS_COMPONENT },
     },
   });
 }

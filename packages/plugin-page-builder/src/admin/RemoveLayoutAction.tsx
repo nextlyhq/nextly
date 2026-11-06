@@ -63,6 +63,7 @@ import type {
 import { DEFAULT_LAYOUT_REFUSAL, PAGES_USE_IT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { DeleteComponentAction } from "./DeleteComponentAction";
 import { MovePagesDialog } from "./RemoveLayoutMove";
 
 /** Which Layout the action removes, and how it stands. */
@@ -135,10 +136,13 @@ function heldReason(
 }
 
 /**
- * The entry-form toolbar slot: Remove Layout on a saved Layout's own form,
- * nothing on any other. The Layouts collection is matched by the slug the site
- * resolved, renamed or not. What the slot is handed (`context`, a controller
- * field) is not needed; the form says which document it is.
+ * The plugin's entry-form toolbar slot: Remove Layout on a saved Layout's own
+ * form, Delete component on a saved component's, nothing on any other. A
+ * plugin has one such slot, so this one draws both; its name is the
+ * specifier the plugin registers, kept as published. Each collection is
+ * matched by the slug the site resolved, renamed or not. What the slot is
+ * handed (`context`, a controller field) is not needed; the form says which
+ * document it is.
  */
 export function RemoveLayoutToolbarSlot(_props: {
   readonly context?: "collection" | "single";
@@ -153,6 +157,24 @@ export function RemoveLayoutToolbarSlot(_props: {
     enabled: collection,
   });
   const layouts = resolved.data?.layoutsCollection;
+  const components = resolved.data?.componentsCollection;
+  if (
+    collection &&
+    components !== undefined &&
+    identity.slug === components &&
+    identity.documentId !== undefined &&
+    identity.documentId !== "" &&
+    identity.documentId !== "create"
+  ) {
+    // Delete component is its own action, with its own checks and fence on
+    // the server, so the form's holds on its own writes do not hold it.
+    return (
+      <DeleteComponentAction
+        componentId={identity.documentId}
+        onDeleted={() => navigateTo(`/admin/collections/${components}`)}
+      />
+    );
+  }
   if (
     !collection ||
     layouts === undefined ||

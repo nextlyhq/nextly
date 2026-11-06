@@ -1,0 +1,150 @@
+// @vitest-environment jsdom
+
+/**
+ * Where Delete component is offered: in a saved component's document bar,
+ * through the plugin's one toolbar slot, and on each row of the Components
+ * list, whose tools draw the dialog for the row chosen. Neither is offered on
+ * another collection's form, nor on a component not saved yet.
+ */
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ComponentDeleteResult } from "../component-delete/contract";
+
+/** A row action, as the list registry receives it. */
+interface RowAction {
+  readonly id: string;
+  readonly destructive?: boolean;
+  readonly isVisible?: (row: Record<string, unknown>) => boolean;
+  readonly onSelect: (row: Record<string, unknown>) => void;
+}
+
+const rowActions: { target: string; action: RowAction }[] = [];
+const navigated: string[] = [];
+let identity: { kind: string; slug: string; documentId?: string } | null = null;
+const resolved = {
+  pagesCollection: "pages",
+  layoutsCollection: "layouts",
+  componentsCollection: "site-components",
+};
+
+const NOTHING_USES_IT: ComponentDeleteResult = {
+  componentId: "c1",
+  status: "none",
+  mayDelete: true,
+  run: null,
+  plan: {
+    convert: { named: [], unreadable: 0, more: 0 },
+    drafts: { named: [], unreadable: 0, more: 0 },
+    mayBeRefused: 0,
+  },
+};
+
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  writePluginRoute: () =>
+    Promise.resolve({ message: "", item: NOTHING_USES_IT }),
+  isApiError: () => false,
+  apiErrorMessage: (_error: Error, fallback: string) => fallback,
+  validationIssues: () => [],
+  usePluginRouteMutation: () => ({}),
+  registerRowAction: (target: string, action: RowAction) => {
+    rowActions.push({ target, action });
+  },
+  navigateTo: (to: string) => {
+    navigated.push(to);
+  },
+  useDocumentIdentity: () => identity,
+  useDocumentStatus: () => null,
+  useDocumentActions: () => ({ actions: [] }),
+  usePluginRoute: ({ enabled }: { enabled?: boolean }) => ({
+    data: enabled === false ? undefined : resolved,
+    error: null,
+    pending: false,
+    refetch: () => {},
+  }),
+}));
+
+// The import bar beside it has tests of its own.
+vi.mock("./transfer-import", () => ({ TransferImport: () => null }));
+
+const { ComponentListTools, registerDeleteComponentAction } = await import(
+  "./DeleteComponentAction"
+);
+const { RemoveLayoutToolbarSlot } = await import("./RemoveLayoutAction");
+
+beforeEach(() => {
+  navigated.length = 0;
+  identity = null;
+});
+
+describe("in the document bar", () => {
+  it("offers Delete component on a saved component's form, by the slug the site resolved", async () => {
+    identity = {
+      kind: "collection",
+      slug: "site-components",
+      documentId: "c1",
+    };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete component…" }));
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove Layout…" })).toBeNull();
+  });
+
+  it("is not offered on a component not saved yet", () => {
+    identity = {
+      kind: "collection",
+      slug: "site-components",
+      documentId: "create",
+    };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    expect(
+      screen.queryByRole("button", { name: "Delete component…" })
+    ).toBeNull();
+  });
+
+  it("is not offered on another collection's form", () => {
+    identity = { kind: "collection", slug: "pages", documentId: "p1" };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    expect(
+      screen.queryByRole("button", { name: "Delete component…" })
+    ).toBeNull();
+  });
+
+  it("leaves for the list once the component is deleted", async () => {
+    identity = {
+      kind: "collection",
+      slug: "site-components",
+      documentId: "c1",
+    };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete component…" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete component" })
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Back to Components" })
+    );
+    expect(navigated).toEqual(["/admin/collections/site-components"]);
+  });
+});
+
+describe("on the Components list", () => {
+  it("registers one destructive row action, however often it is asked", () => {
+    registerDeleteComponentAction();
+    registerDeleteComponentAction();
+    expect(rowActions.map(entry => entry.target)).toEqual(["components"]);
+    expect(rowActions[0]?.action.destructive).toBe(true);
+    expect(rowActions[0]?.action.isVisible?.({ id: "c1" })).toBe(true);
+    expect(rowActions[0]?.action.isVisible?.({})).toBe(false);
+  });
+
+  it("opens the dialog for the row chosen, naming it", async () => {
+    registerDeleteComponentAction();
+    render(<ComponentListTools />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    act(() => {
+      rowActions[0]?.action.onSelect({ id: "c1", title: "Hero banner" });
+    });
+    expect(await screen.findByText("Hero banner")).toBeTruthy();
+  });
+});

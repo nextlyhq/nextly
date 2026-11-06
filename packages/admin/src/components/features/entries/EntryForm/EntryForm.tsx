@@ -855,7 +855,12 @@ export function EntryForm({
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
   // field, not through the route guard the full editor sits behind.
-  const canDelete = useCan(`delete-${collectionSlug}`);
+  // A collection deleted through an action of its own (a plugin draws it in
+  // the document bar) is offered no Delete here: the server refuses that
+  // delete, and the plugin's action is the way to it.
+  const canDelete =
+    useCan(`delete-${collectionSlug}`) &&
+    collection.admin?.disableDelete !== true;
   // The modals send no language, so the server writes the default one: a
   // create is answered so already, and an update by its own cell.
   const canCreate = useCan(`create-${collectionSlug}`);

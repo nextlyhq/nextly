@@ -178,6 +178,12 @@ export interface CollectionAdminConfig {
   disableCreate?: boolean;
 
   /**
+   * Hide the admin's own Delete, for collections deleted through an action of
+   * their own.
+   */
+  disableDelete?: boolean;
+
+  /**
    * Preview URL configuration for content preview workflows.
    *
    * For UI-created collections, use `urlTemplate` with placeholders.

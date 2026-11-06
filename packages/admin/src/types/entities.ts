@@ -195,6 +195,12 @@ export interface ApiCollection extends RemovedFromCodeMark {
      * submissions do): no "New" is offered for it anywhere in the admin.
      */
     disableCreate?: boolean;
+    /**
+     * Whether this collection's documents are deleted through an action of
+     * their own, which a plugin draws: the admin offers no Delete of its own
+     * for them (not in the editor, on a list row or in the selection bar).
+     */
+    disableDelete?: boolean;
     /** Custom component configuration for plugin views */
     components?: {
       /** Custom view components */

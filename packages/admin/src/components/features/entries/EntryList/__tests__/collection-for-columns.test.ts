@@ -40,6 +40,18 @@ describe("toCollectionForColumns", () => {
     );
     expect(table.localized).toBe(false);
   });
+
+  it("carries a collection's own delete action, so the list offers no Delete", () => {
+    const own = toCollectionForColumns(
+      { ...LOCALIZED, admin: { disableDelete: true } },
+      "posts",
+      true
+    );
+    expect(own.disableDelete).toBe(true);
+    expect(
+      toCollectionForColumns(LOCALIZED, "posts", true).disableDelete
+    ).toBeUndefined();
+  });
 });
 
 /**
