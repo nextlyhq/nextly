@@ -127,6 +127,8 @@ export function useCanvasPageContext(
   locale?: string,
   /** The document being edited, whose kind decides whether it is an entry. */
   document?: unknown,
+  /** The list the page splits into pages, which draws its first page's links. */
+  pagedList?: string,
   /** The lists whose new source waits for an input, with each one's tag. */
   listsStillShowing?: ReadonlyMap<string, string>
 ): PageContext {
@@ -180,14 +182,30 @@ export function useCanvasPageContext(
       listsStillShowing === undefined || listsStillShowing.size === 0
         ? undefined
         : listsStillShowing;
-    // The editor's one object again whenever nothing is chosen or waiting.
-    if (empty === undefined && still === undefined) return base;
+    // The editor's one object again whenever nothing is chosen, waiting or
+    // paged.
+    if (empty === undefined && still === undefined && pagedList === undefined) {
+      return base;
+    }
     return {
       ...base,
       ...(empty === undefined ? {} : { listsShowingEmpty: empty }),
       ...(still === undefined ? {} : { listsStillShowing: still }),
+      // The links lead nowhere on the canvas: a click there selects the
+      // list, and the pages after the first are the published route's to
+      // draw.
+      ...(pagedList === undefined
+        ? {}
+        : {
+            listPage: { nodeId: pagedList, page: 1, href: canvasPageHref },
+          }),
     };
-  }, [base, listsShowingEmpty, listsStillShowing]);
+  }, [base, listsShowingEmpty, listsStillShowing, pagedList]);
+}
+
+/** Where a page link points on the canvas: an anchor naming the page. */
+function canvasPageHref(page: number): string {
+  return `#page-${String(page)}`;
 }
 
 /** How long the canvas waits before asking again for queries it could not read. */

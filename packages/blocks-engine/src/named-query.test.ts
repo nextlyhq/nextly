@@ -161,6 +161,40 @@ describe("a named query's declaration", () => {
       'named "street name"',
     ],
     [
+      "two row fields of one name",
+      {
+        rows: {
+          key: "id",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "title", type: "text" },
+            { name: "title", type: "number" },
+          ],
+        },
+      },
+      'two fields named "title"',
+    ],
+    [
+      "two fields of one name in a group",
+      {
+        rows: {
+          key: "id",
+          fields: [
+            { name: "id", type: "text" },
+            {
+              name: "venue",
+              type: "group",
+              fields: [
+                { name: "city", type: "text" },
+                { name: "city", type: "text" },
+              ],
+            },
+          ],
+        },
+      },
+      'two fields named "city"',
+    ],
+    [
       "a row key that is not a declared field",
       { rows: { key: "slug", fields: [{ name: "id", type: "text" }] } },
       'key "slug"',

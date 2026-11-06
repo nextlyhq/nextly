@@ -124,6 +124,29 @@ describe("the Design panel's block looks", () => {
     ]);
   });
 
+  it("marks an own look whose id a shared style or another type's worn look carries", () => {
+    const ownOf = (library: NamedClass[]) =>
+      blockLookGroups(library, new Set()).flatMap(group =>
+        group.rows
+          .filter(row => row.own)
+          .map(row => [row.blockType, row.id, row.sharedId])
+      );
+    // The control: an id no other entry carries is not marked.
+    expect(ownOf([primary, outline, square])).toEqual([
+      ["core/button", primary.id, false],
+      ["core/image", square.id, false],
+    ]);
+    const style = { ...card, id: primary.id };
+    expect(ownOf([primary, outline, style])).toEqual([
+      ["core/button", primary.id, true],
+    ]);
+    const worn = { ...outline, id: square.id };
+    expect(ownOf([primary, worn, square])).toEqual([
+      ["core/button", primary.id, false],
+      ["core/image", square.id, true],
+    ]);
+  });
+
   it("reads a library with no looks as no groups", () => {
     expect(blockLookGroups([card], new Set())).toEqual([]);
   });

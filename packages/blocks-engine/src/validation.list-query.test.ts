@@ -18,10 +18,12 @@ import {
   LIST_MAX_SORT_LENGTH,
   listFieldKind,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   listRelationTarget,
   listSortText,
   outerListOf,
+  paginatedList,
   readListQuery,
   type ListFields,
   type ListFieldSource,
@@ -896,6 +898,212 @@ describe("listQueryIssues", () => {
     expect(issues.map(issue => [issue.nodeId, issue.code])).toEqual([
       ["wrong", "list-limit-invalid"],
     ]);
+  });
+});
+
+describe("a list split into pages", () => {
+  /** The pagination codes found, each with the list it is about. */
+  function pageCodes(
+    nodes: unknown[],
+    documentKind?: string
+  ): { nodeId: string; code: string; message: string }[] {
+    return listQueryIssues(nodes, {
+      ...(documentKind === undefined ? {} : { documentKind }),
+    })
+      .filter(issue => issue.code.startsWith("list-paginate"))
+      .map(({ nodeId, code, message }) => ({ nodeId, code, message }));
+  }
+
+  it("reads the switch as stored: on, off, or a problem", () => {
+    expect(readListQuery({ paginate: true }).query.paginate).toBe(true);
+    for (const off of [false, undefined]) {
+      const read = readListQuery({ paginate: off });
+      expect(read.query).not.toHaveProperty("paginate");
+      expect(read.problems).toEqual([]);
+    }
+    const bad = readListQuery({ paginate: "yes" });
+    expect(bad.query).not.toHaveProperty("paginate");
+    expect(bad.problems.map(problem => problem.code)).toEqual([
+      "list-paginate-invalid",
+    ]);
+  });
+
+  it("accepts one list split into pages on a page, at save", () => {
+    const issues = validate(
+      page(list("news", { collection: "posts", paginate: true })),
+      withSchema
+    );
+    expect(listIssues(issues)).toEqual([]);
+  });
+
+  it("refuses a second list split into pages, naming the first by its name", () => {
+    const first = {
+      ...list("a", { collection: "posts", paginate: true }),
+      name: "Latest posts",
+    };
+    const found = pageCodes([
+      first,
+      list("b", { collection: "posts", paginate: true }),
+      // Not split into pages: never judged against the first.
+      list("c", { collection: "posts" }),
+    ]);
+    expect(found).toEqual([
+      {
+        nodeId: "b",
+        code: "list-paginate-twice",
+        message: expect.stringContaining('"Latest posts" already is') as string,
+      },
+    ]);
+  });
+
+  it("names an unnamed first list as another on the page", () => {
+    const [found] = pageCodes([
+      list("a", { collection: "posts", paginate: true }),
+      list("b", { collection: "posts", paginate: true }),
+    ]);
+    expect(found?.message).toContain("another list on this page already is");
+  });
+
+  it("refuses a list split into pages inside another list, and lets the outer page", () => {
+    const found = pageCodes([
+      list("outer", { collection: "posts", paginate: true }, [
+        list("inner", { collection: "posts", paginate: true }),
+      ]),
+    ]);
+    expect(found.map(({ nodeId, code }) => ({ nodeId, code }))).toEqual([
+      { nodeId: "inner", code: "list-paginate-nested" },
+    ]);
+  });
+
+  it("refuses related entries split into pages, which have no count", () => {
+    const found = pageCodes([
+      list("tags", {
+        collection: "categories",
+        relation: { of: "entry", field: "categories" },
+        paginate: true,
+      }),
+    ]);
+    expect(found.map(({ code }) => code)).toEqual(["list-paginate-related"]);
+  });
+
+  it.each([
+    ["component", "in a component"],
+    ["region", "in a Layout region"],
+  ])("refuses a list split into pages in a %s", (kind, words) => {
+    const [found] = pageCodes(
+      [list("shared", { collection: "posts", paginate: true })],
+      kind
+    );
+    expect(found?.code).toBe("list-paginate-shared");
+    expect(found?.message).toContain(words);
+  });
+
+  it.each(["page", "pattern", "template"])(
+    "lets a %s hold a list split into pages",
+    kind => {
+      expect(
+        pageCodes([list("one", { collection: "posts", paginate: true })], kind)
+      ).toEqual([]);
+    }
+  );
+
+  it("judges a component's list by the document's kind at save", () => {
+    const issues = validate(
+      {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [list("shared", { collection: "posts", paginate: true })],
+        exposed: [],
+      } as unknown as BlockDocument,
+      shapeOnly
+    );
+    expect(listIssues(issues).map(issue => issue.code)).toEqual([
+      "list-paginate-shared",
+    ]);
+  });
+});
+
+describe("the list a page's address pages", () => {
+  it("is the first split into pages, in document order, outside any list", () => {
+    const nodes = [
+      {
+        id: "box",
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            list("loop", { collection: "posts" }, [
+              list("nested", { collection: "posts", paginate: true }),
+            ]),
+            {
+              ...list("first", { collection: "posts", paginate: true }),
+              name: " News ",
+            },
+          ],
+        },
+      },
+      list("second", { collection: "posts", paginate: true }),
+    ];
+    expect(paginatedList(nodes)).toEqual({
+      id: "first",
+      name: "News",
+      props: { collection: "posts", paginate: true },
+    });
+  });
+
+  it("refuses one in another list's empty state, which is drawn only when that list is empty", () => {
+    const nodes = [
+      {
+        ...list("outer", { collection: "posts" }),
+        slots: {
+          children: [],
+          empty: [list("fallback", { collection: "posts", paginate: true })],
+        },
+      },
+    ];
+    expect(paginatedList(nodes)).toBeUndefined();
+    expect(
+      listQueryIssues(nodes)
+        .filter(issue => issue.code.startsWith("list-paginate"))
+        .map(({ nodeId, code }) => ({ nodeId, code }))
+    ).toEqual([{ nodeId: "fallback", code: "list-paginate-nested" }]);
+  });
+
+  it("skips related entries, and finds none where nothing is split", () => {
+    expect(
+      paginatedList([
+        list("rel", {
+          collection: "posts",
+          relation: { of: "entry", field: "posts" },
+          paginate: true,
+        }),
+        list("plain", { collection: "posts" }),
+      ])
+    ).toBeUndefined();
+  });
+
+  it("stops at its node bound", () => {
+    const nodes = [
+      list("a", { collection: "posts" }),
+      list("b", { collection: "posts", paginate: true }),
+    ];
+    expect(paginatedList(nodes, 1)).toBeUndefined();
+    expect(paginatedList(nodes, 2)?.id).toBe("b");
+  });
+});
+
+describe("how many pages a list has", () => {
+  it("applies the offset once, before paging", () => {
+    // 25 entries, 10 skipped, 10 to a page: pages 1 and 2 only.
+    expect(listPageCount(25, 10, 10)).toBe(2);
+    expect(listPageCount(30, 0, 10)).toBe(3);
+    expect(listPageCount(31, 0, 10)).toBe(4);
+  });
+
+  it("is never fewer than one, which shows the empty state", () => {
+    expect(listPageCount(0, 0, 10)).toBe(1);
+    expect(listPageCount(5, 10, 10)).toBe(1);
   });
 });
 

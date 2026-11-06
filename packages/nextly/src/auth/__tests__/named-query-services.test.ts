@@ -97,6 +97,31 @@ describe("plugin services inside a named query's frame", () => {
     expect(built).toBe(1);
   });
 
+  it("run no getter inside the frame, read as a property or through its descriptor", () => {
+    let evaluated = 0;
+    registerPluginService(PLUGIN, "withGetter", () => ({
+      get count() {
+        evaluated += 1;
+        return 7;
+      },
+    }));
+    // Resolved outside the frame, as a query's module might capture it.
+    const service = services().withGetter as unknown as { count: number };
+    const frame = openNamedQueryFrame("notes.all");
+    expect(outcome(() => frame.run(() => service.count))).toBe(
+      "named-query-trusted-read"
+    );
+    expect(
+      outcome(() =>
+        frame.run(() => Object.getOwnPropertyDescriptor(service, "count"))
+      )
+    ).toBe("named-query-trusted-read");
+    expect(evaluated).toBe(0);
+    // Outside the frame the getter runs as it always did.
+    expect(service.count).toBe(7);
+    expect(evaluated).toBe(1);
+  });
+
   it("answer through the frame's own door", () => {
     const frame = openNamedQueryFrame("notes.all");
     expect(frame.run(() => frame.read(() => services().store?.read()))).toEqual(

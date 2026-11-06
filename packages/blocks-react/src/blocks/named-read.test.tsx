@@ -12,7 +12,6 @@
 import {
   defineNamedQuery,
   param,
-  type BindingIssue,
   type BlockDocument,
   type BlockNode,
   type NamedQueryDefinition,
@@ -25,6 +24,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   createQueryBudget,
+  type BindingIssuesHandler,
   type BlocksFilterOp,
   type BlocksQuery,
   type ListBaseReader,
@@ -184,7 +184,7 @@ function context(overrides: Partial<PageContext>): PageContext {
 async function drawn(
   document: BlockDocument,
   ctx: PageContext,
-  onBindingIssues?: (issues: readonly BindingIssue[]) => void
+  onBindingIssues?: BindingIssuesHandler
 ): Promise<HTMLElement> {
   const stream = await renderToReadableStream(
     <PageRenderer
@@ -623,6 +623,43 @@ describe("a list whose source is a named query", () => {
     expect(new Set(keys).size).toBe(2);
   });
 
+  it("reads what run returns while its frame is open, getters included", async () => {
+    let inFrame = false;
+    const evaluated: boolean[] = [];
+    const frame: NamedQueryHost["frame"] = () => ({
+      run: async operation => {
+        inFrame = true;
+        try {
+          return await operation();
+        } finally {
+          inFrame = false;
+        }
+      },
+      read: operation => operation(),
+    });
+    const row = {
+      id: "e1",
+      get title() {
+        evaluated.push(inFrame);
+        return "From a getter";
+      },
+    };
+    const result = {
+      get rows() {
+        evaluated.push(inFrame);
+        return [row];
+      },
+    };
+    const { element } = await draw(
+      eventsQuery(() => Promise.resolve(result as never)),
+      { host: { frame } }
+    );
+    expect(headings(element)).toEqual(["From a getter"]);
+    // Every getter ran inside the frame, and none ran after it closed.
+    expect(evaluated.length).toBeGreaterThan(0);
+    expect(evaluated.every(Boolean)).toBe(true);
+  });
+
   it("reads only through the frame's door, with the query as plain data", async () => {
     let inFrame = false;
     const seen: string[] = [];
@@ -677,7 +714,7 @@ describe("a list whose source is a named query", () => {
       rows: (await reader.find({ collection: "events" })).items,
     }));
     const issues = async (query: NamedQueryDefinition) => {
-      const found: BindingIssue[] = [];
+      const found: Parameters<BindingIssuesHandler>[0][number][] = [];
       await drawn(
         page(list(named(), [itemHeading("t", "internalNote")])),
         context({ namedQueries: host(query, base({ events: EVENTS })) }),

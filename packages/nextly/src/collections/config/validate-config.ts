@@ -151,7 +151,8 @@ export type ValidationErrorCode =
   | "DB_OPTIONS_INVALID_TYPE"
   | "DB_OPTION_UNKNOWN"
   | "DB_ID_TYPE_INVALID"
-  | "DB_ALLOW_ID_ON_CREATE_INVALID";
+  | "DB_ALLOW_ID_ON_CREATE_INVALID"
+  | "DB_SLUG_PATHS_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -702,6 +703,15 @@ function validateDbOptions(db: unknown, errors: ValidationError[]): void {
       path: "db.allowIdOnCreate",
       code: "DB_ALLOW_ID_ON_CREATE_INVALID",
       message: "db.allowIdOnCreate must be true or false.",
+    });
+  }
+  // Read leniently by the write path, which stores paths only for `true`,
+  // so a misspelt value would quietly keep one-segment slugs.
+  if (db.slugPaths !== undefined && typeof db.slugPaths !== "boolean") {
+    errors.push({
+      path: "db.slugPaths",
+      code: "DB_SLUG_PATHS_INVALID",
+      message: "db.slugPaths must be true or false.",
     });
   }
 }
