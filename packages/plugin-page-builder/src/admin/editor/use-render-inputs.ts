@@ -20,6 +20,7 @@ import {
   type StyleCompileContext,
   type RemotePattern,
   type BreakpointSet,
+  type DefinitionsById,
   type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -269,12 +270,6 @@ export type SiteStyleInputs = {
 type CanvasRender = {
   canvasRender: PageRenderInputs;
   classSummaryContext: StyleCompileContext;
-  /**
-   * The bound props on the page a visitor will not see filled, by node id:
-   * the published page's own binding check, asked with the field shapes a
-   * visitor may read, which the canvas's sources carry.
-   */
-  visitorUnreadable: ReadonlyMap<string, readonly VisitorUnreadableBinding[]>;
 };
 
 /** Nothing marked: no sources read yet, or none of their shapes known. */
@@ -394,51 +389,12 @@ function useCanvasRender({
       componentLibrary.definitions,
     ]
   );
-  // The tree the canvas draws, prepared by the renderer's own pipeline:
-  // composed with the components' definitions under the same caps, so a
-  // binding or a list inside a component is read for, as on the published
-  // page, and a block the page does not draw asks for nothing.
-  const presented = useMemo(
-    () =>
-      prepareDocumentForRead(editor.document, {
-        resolver: registeredBlocks(),
-        styleContext: pageInputs.styleContext,
-        definitions: pageInputs.definitions,
-        ...(pageInputs.limits === undefined
-          ? {}
-          : { limits: pageInputs.limits }),
-      }),
-    [editor.document, pageInputs]
-  );
-  // What the page's bindings read, read as the person editing.
-  const bindings = useCanvasBindings(presented, locale);
-  // Judged on the author's own document, whose blocks the canvas can point
-  // at; a binding inside a component's definition is the definition's to say.
-  const visitorUnreadable = useMemo(
-    () =>
-      bindings.fieldShapes === undefined
-        ? NONE_UNREADABLE
-        : visitorUnreadableBindings(editor.document, {
-            schema: bindings.fieldShapes,
-            ...(bindings.entryRef === undefined
-              ? {}
-              : { entryRef: bindings.entryRef }),
-            props: { get: getBlock },
-          }),
-    [editor.document, bindings]
-  );
+  // The page as the canvas draws it, before the sources its bindings read
+  // are known: `useBoundCanvasRender` adds them, once the Layout's regions
+  // drawn around the page are known too.
   const canvasRender = useMemo(
-    () => ({
-      ...pageInputs,
-      context: canvasContext,
-      // The binding pass, with the sources the page's bindings read, read as
-      // the person editing: the entry, its Singles and the site settings. A
-      // list item's bindings fill from the entry the canvas drew it with, as
-      // on the published page; until the sources arrive, a bound prop keeps
-      // its own value (or its fallback), as it always drew.
-      bindings,
-    }),
-    [pageInputs, canvasContext, bindings]
+    () => ({ ...pageInputs, context: canvasContext }),
+    [pageInputs, canvasContext]
   );
 
   /*
@@ -465,7 +421,7 @@ function useCanvasRender({
     [canvasRender.styleContext, stylePolicy]
   );
 
-  return { canvasRender, classSummaryContext, visitorUnreadable };
+  return { canvasRender, classSummaryContext };
 }
 
 /** What `useCanvasViewport` returns. */
@@ -941,6 +897,99 @@ export function useCanvasInputs(
     ...site,
     sharedStyle,
   };
+}
+
+/** No region: what a page with no Layout draws around it. */
+const NO_DEFINITIONS: DefinitionsById = new Map();
+
+/** A drawn tree, prepared by the renderer's own pipeline for the canvas. */
+function drawnTree(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  render: PageRenderInputs
+): BlockDocument | null {
+  return prepareDocumentForRead(document, {
+    resolver: registeredBlocks(),
+    styleContext: render.styleContext,
+    definitions,
+    ...(render.limits === undefined ? {} : { limits: render.limits }),
+  });
+}
+
+/**
+ * The canvas's render inputs with the sources its bindings read, read as the
+ * person editing: the entry, its Singles and the site settings, and the
+ * public field shapes that judge them.
+ *
+ * Asked of every tree the canvas draws, prepared by the renderer's own
+ * pipeline: the page's, composed with its components' definitions, and each
+ * region of its Layout with the definitions it reaches, as the published
+ * route reads for the page and its regions together. A list item's bindings
+ * fill from the entry the canvas drew it with, as on the published page;
+ * until the sources arrive, a bound prop keeps its own value (or its
+ * fallback), as it always drew.
+ */
+export function useBoundCanvasRender(
+  canvasRender: PageRenderInputs,
+  drawn: {
+    readonly document: BlockDocument;
+    readonly regions: readonly {
+      readonly document: BlockDocument;
+      readonly definitions?: DefinitionsById;
+    }[];
+  },
+  locale: string | undefined,
+  /** Whether the document is a component's own, which has no entry. */
+  component: boolean
+): {
+  readonly canvasRender: PageRenderInputs;
+  /**
+   * The bound props on the page a visitor will not see filled, by node id:
+   * the published page's own binding check, asked with the field shapes a
+   * visitor may read, which the canvas's sources carry.
+   */
+  readonly visitorUnreadable: ReadonlyMap<
+    string,
+    readonly VisitorUnreadableBinding[]
+  >;
+} {
+  const { document, regions } = drawn;
+  const trees = useMemo(
+    () =>
+      [
+        drawnTree(document, canvasRender.definitions, canvasRender),
+        ...regions.map(region =>
+          drawnTree(
+            region.document,
+            region.definitions ?? NO_DEFINITIONS,
+            canvasRender
+          )
+        ),
+      ].filter((tree): tree is BlockDocument => tree !== null),
+    [document, regions, canvasRender]
+  );
+  const bindings = useCanvasBindings(trees, locale, component);
+  const bound = useMemo(
+    () => ({ ...canvasRender, bindings }),
+    [canvasRender, bindings]
+  );
+  // Judged on the author's own document, whose blocks the canvas can point
+  // at; a binding inside a component's definition or a Layout region is
+  // theirs to say, in their own editors.
+  const visitorUnreadable = useMemo(
+    () =>
+      bindings.fieldShapes === undefined
+        ? NONE_UNREADABLE
+        : visitorUnreadableBindings(document, {
+            schema: bindings.fieldShapes,
+            ...(bindings.entryRef === undefined
+              ? {}
+              : { entryRef: bindings.entryRef }),
+            props: { get: getBlock },
+          }),
+    [document, bindings]
+  );
+  return { canvasRender: bound, visitorUnreadable };
 }
 
 /**

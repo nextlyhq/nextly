@@ -17,7 +17,11 @@
  *
  * @module canvas-bindings-client
  */
-import { bindingDemand, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  bindingDemand,
+  type BindingDemand,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import {
   bindingsFromWire,
   listCollections,
@@ -58,26 +62,50 @@ let keptFor: string | undefined;
  * What the canvas asks for the page it draws, or nothing when it holds no
  * binding or has no entry to read for.
  *
- * `presented` is the tree the canvas draws, prepared by the renderer's own
- * pipeline (`prepareDocumentForRead`): a component's bound nodes and its
- * lists are in it, where the stored page holds only the component's instance.
+ * `drawn` is every tree the canvas draws, the page's and each Layout
+ * region's, prepared by the renderer's own pipeline
+ * (`prepareDocumentForRead`): a component's bound nodes and its lists are in
+ * them, where a stored document holds only the component's instance. The
+ * published route reads for the page and its regions together, and so does
+ * this.
+ *
+ * A component's own document has no entry of its own: a placed component
+ * reads the entry of each page placing it, so its preview asks for none
+ * rather than reading the component's storage row as one.
  */
 export function canvasBindingsRequest(
-  presented: BlockDocument | null,
+  drawn: readonly BlockDocument[],
   identity: DocumentIdentity | null,
-  locale: string | undefined
+  locale: string | undefined,
+  component = false
 ): CanvasBindingsRequest | undefined {
-  if (identity === null || presented === null) return undefined;
-  const demand = bindingDemand([presented]);
-  if (!demand.any) return undefined;
+  if (identity === null || drawn.length === 0) return undefined;
+  const found = bindingDemand(drawn);
+  const demand: BindingDemand = component
+    ? {
+        any: found.any,
+        singles: found.singles,
+        site: found.site,
+        formatsDates: found.formatsDates,
+      }
+    : found;
+  const lists = [...listCollections(drawn)].sort();
+  const wire = demandToWire(demand);
+  const asks =
+    wire.entry !== undefined ||
+    Object.keys(wire.singles).length > 0 ||
+    wire.site ||
+    wire.formatsDates ||
+    lists.length > 0;
+  if (!found.any || !asks) return undefined;
   return {
     source: {
       kind: identity.kind,
       slug: identity.slug,
       ...(identity.documentId === undefined ? {} : { id: identity.documentId }),
     },
-    demand: demandToWire(demand),
-    lists: [...listCollections([presented])].sort(),
+    demand: wire,
+    lists,
     ...(locale === undefined ? {} : { locale }),
   };
 }
@@ -129,8 +157,8 @@ export function canvasBindingsFor(
 
 /**
  * The binding sources the canvas draws a page with, as the person editing
- * reads them. `presented` is the tree the canvas draws (see
- * {@link canvasBindingsRequest}).
+ * reads them. `drawn` is every tree the canvas draws, and `component` says
+ * the document is a component's own (see {@link canvasBindingsRequest}).
  *
  * Until the first answer arrives, for a page with no binding, and while the
  * signed-in person is not yet known, no source is read: bound props keep
@@ -140,14 +168,15 @@ export function canvasBindingsFor(
  * answer goes and the fallbacks are drawn.
  */
 export function useCanvasBindings(
-  presented: BlockDocument | null,
-  locale: string | undefined
+  drawn: readonly BlockDocument[],
+  locale: string | undefined,
+  component = false
 ): PageBindings {
   const identity = useDocumentIdentity();
   const userId = useCurrentUserId();
   const request = useMemo(
-    () => canvasBindingsRequest(presented, identity, locale),
-    [presented, identity, locale]
+    () => canvasBindingsRequest(drawn, identity, locale, component),
+    [drawn, identity, locale, component]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);

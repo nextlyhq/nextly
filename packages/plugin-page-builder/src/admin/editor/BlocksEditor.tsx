@@ -127,6 +127,7 @@ import {
 } from "./use-host-commit";
 import { useOpenAtSection } from "./use-open-at-section";
 import {
+  useBoundCanvasRender,
   useCanvasInputs,
   useSiteStyleInputs,
   type CanvasInputs,
@@ -138,6 +139,13 @@ type EditorView = EditorMount &
   SiteStyleInputs &
   CanvasInputs &
   EditorPanels & {
+    /**
+     * The bound props on the page a visitor will not see filled, by node id,
+     * for the canvas's badges and the inspector's note.
+     */
+    visitorUnreadable: ReturnType<
+      typeof useBoundCanvasRender
+    >["visitorUnreadable"];
     documentDirty: boolean;
     pageTitle: string | undefined;
     /** "Edit component", and the banner over a component's own view. */
@@ -1055,6 +1063,14 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
+  // The canvas's render inputs with the sources its bindings read, asked of
+  // the page and of the Layout regions drawn around it together.
+  const { canvasRender, visitorUnreadable } = useBoundCanvasRender(
+    canvas.canvasRender,
+    { document: mount.editor.document, regions: panels.canvasRegions },
+    mount.locale,
+    mount.initialDocument.kind === "component"
+  );
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
     control,
@@ -1112,6 +1128,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...style,
     ...canvas,
     ...panels,
+    canvasRender,
+    visitorUnreadable,
     documentDirty,
     pageTitle,
     componentView,

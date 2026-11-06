@@ -163,6 +163,9 @@ function directCanvasBindingsReads(
         {
           find: async args => await nextly.find(args),
           findSingle: async args => await nextly.findSingle(args),
+          // The page's own entry and each entry a binding follows to, by id,
+          // so a pending working draft is what the canvas shows.
+          findByID: async args => await nextly.findByID(args),
         },
         { user, ...(actor === undefined ? {} : { actor }) },
         locale === undefined ? {} : { locale }

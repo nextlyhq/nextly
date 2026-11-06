@@ -1821,6 +1821,15 @@ async function readById(
 ): Promise<PublicRecord> {
   if (!reads.budget.take()) return undefined;
   try {
+    // An editor's reader reads by id, which alone returns the working draft
+    // of an entry with one pending; a published page's reads as a list does.
+    if (reads.reader.findById !== undefined) {
+      return await reads.reader.findById({
+        collection,
+        id,
+        select: fields,
+      });
+    }
     const { items } = await reads.reader.find({
       collection,
       filters: [{ field: "id", op: "equals", value: id }],

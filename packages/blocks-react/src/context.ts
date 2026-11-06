@@ -117,6 +117,20 @@ export interface BlocksPublicReader {
     locale?: string;
     select?: readonly string[];
   }): Promise<Record<string, unknown> | null>;
+  /**
+   * One entry by its id, or `null` when there is none the reader may see.
+   * Given by an editor's reader, whose by-id read returns an entry's pending
+   * working draft where a list read returns its live row; the page's own entry
+   * and each entry a binding follows a relation to are read through it when
+   * it is there. A published page's reader has none, and reads them as a
+   * list does.
+   */
+  findById?(query: {
+    collection: string;
+    id: string | number;
+    locale?: string;
+    select?: readonly string[];
+  }): Promise<Record<string, unknown> | null>;
 }
 
 /**
