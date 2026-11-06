@@ -18,6 +18,11 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import type { FieldSurface, PluginTranslations } from "./contributions";
+import {
+  publishedDocumentSurfaces,
+  type PublishedDocumentActionOverride,
+  type PublishedPanelSection,
+} from "./document-surfaces";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -142,6 +147,17 @@ export interface PluginAdminMeta {
    * routes it under or on a field type — present only for enabled plugins.
    */
   documentViews?: PublishedDocumentView[];
+  /**
+   * @experimental Overrides of a collection's built-in document actions, each
+   * on the slug it applies to (rename map applied) — present only for enabled
+   * plugins.
+   */
+  documentActions?: PublishedDocumentActionOverride[];
+  /**
+   * @experimental Sections added to a collection's document panel, each on
+   * the slug it applies to — present only for enabled plugins.
+   */
+  panelSections?: PublishedPanelSection[];
   /**
    * Custom field types — `type` → admin editor component path (so the admin
    * renders fields of these types) plus the picker presentation (label, hint,
@@ -455,6 +471,15 @@ export function buildPluginAdminMeta(
         ({ plugin: _owner, ...view }) => view
       );
       if (documentViews.length > 0) meta.documentViews = documentViews;
+      // Read after the boot check, so each names an action this version
+      // knows and something to draw.
+      const surfaces = publishedDocumentSurfaces(plugin);
+      if (surfaces.documentActions.length > 0) {
+        meta.documentActions = surfaces.documentActions;
+      }
+      if (surfaces.panelSections.length > 0) {
+        meta.panelSections = surfaces.panelSections;
+      }
     }
 
     // Routes move to `whenEnabled` when the plugin is disabled, because
