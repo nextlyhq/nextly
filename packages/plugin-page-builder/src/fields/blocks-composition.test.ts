@@ -25,6 +25,7 @@ import {
   type HostFinder,
   type HostRef,
   type LockedExposures,
+  type PlacementUnjudged,
   type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
@@ -205,6 +206,7 @@ function judge(
     onHostsBroken?: (broken: BrokenHosts) => void;
     onLockedExposures?: (found: LockedExposures) => void;
     onHostsStillBroken?: (found: StillBrokenHosts) => void;
+    onPlacementUnjudged?: (found: PlacementUnjudged) => void;
     composesDocuments?: boolean;
     localized?: boolean;
     listFields?: ListFieldsReader;
@@ -1140,6 +1142,78 @@ describe("a page's placed lists, judged as the page composes them", () => {
       expect(codes(issues)).toEqual(["list-sort-invalid"]);
       expect(issues[0]!.message).toContain('"cards"');
     }
+  });
+
+  it("keeps a placed list's problem, and says so, where the stored page cannot be read", async () => {
+    // A localized field whose language store is not ready: the stored page
+    // may already compose to the problem, so nothing tells it from a new one.
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+      pages: { p1: { published: "not-ready" } },
+    });
+    const onPlacementUnjudged = vi.fn();
+    expect(
+      await judge(
+        placed({ order: "secret" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+          localized: true,
+          onPlacementUnjudged,
+        }
+      )
+    ).toEqual([]);
+    expect(onPlacementUnjudged).toHaveBeenCalledWith(
+      expect.objectContaining({ field: FIELD, slug: "pages", breaks: 1 })
+    );
+  });
+
+  it("keeps a placed list's problem, and says so, where the stored page composes only in part", async () => {
+    // The stored page held the placement in a frame component's slot, and
+    // the frame can no longer be read: composed in part, the stored page
+    // cannot say whether it already held the list's problem.
+    const framed = page([
+      {
+        ...placing("f1", "frame"),
+        slots: {
+          body: [
+            {
+              ...placing("i1", "cards"),
+              props: { componentId: "cards", overrides: { order: "secret" } },
+            },
+          ],
+        },
+      },
+    ]);
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        cards: { published: sorted },
+        frame: { published: "unreadable" },
+      },
+      pages: { p1: { published: framed } },
+    });
+    const onPlacementUnjudged = vi.fn();
+    expect(
+      await judge(
+        placed({ order: "secret" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+          onPlacementUnjudged,
+        }
+      )
+    ).toEqual([]);
+    expect(onPlacementUnjudged).toHaveBeenCalledWith(
+      expect.objectContaining({ field: FIELD, slug: "pages", breaks: 1 })
+    );
+    // CONTROL: a page never stored has no problem to keep, and is refused.
+    expect(
+      codes(
+        await judge(placed({ order: "secret" }), write(readStored, "pages"), {
+          listFields,
+        })
+      )
+    ).toEqual(["list-field-protected"]);
   });
 
   it("keeps a sort the stored page already composed to, however it reads", async () => {

@@ -107,6 +107,45 @@ describe("a write's collection lists, judged by the server", () => {
   });
 });
 
+describe("a problem the stored page may already hold", () => {
+  // A list sorted by a field visitors can't see, on a posts page.
+  const hidden = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "l1",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "categories", sort: "featured" },
+        slots: { children: [] },
+      },
+    ],
+  };
+  const fieldsOf = async (collection: string) => FIELDS[collection];
+
+  it("is kept, not refused, where the stored page cannot be read", async () => {
+    const onUnjudged = vi.fn();
+    expect(
+      await newListQueryIssues(hidden, args({}), "Content", {
+        fieldsOf,
+        storedForms: async () => ({ forms: [], readable: false }),
+        onUnjudged,
+      })
+    ).toEqual([]);
+    expect(onUnjudged).toHaveBeenCalledWith(1);
+    // CONTROL: nothing stored (a create), the problem is the write's own.
+    expect(
+      (
+        await newListQueryIssues(hidden, args({}), "Content", {
+          fieldsOf,
+          storedForms: async () => ({ forms: [], readable: true }),
+        })
+      ).map(issue => issue.code)
+    ).toEqual(["list-field-protected"]);
+  });
+});
+
 describe("the schema a judgement reads", () => {
   it("reads the fields of no more lists than the judgement visits", async () => {
     // Five lists, each of its own collection, and a judgement bounded at two.

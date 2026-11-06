@@ -188,16 +188,26 @@ export interface ListJudging {
    * their shape alone.
    */
   readonly fieldsOf?: ListFieldsReader;
-  /** The forms the forest is stored as, read only once a problem is found. */
+  /**
+   * The forms the forest is stored as, read only once a problem is found.
+   * Unreadable, they may already hold every problem found, so none is
+   * refused: a write is never blamed for a problem nothing shows it made.
+   */
   readonly storedForms?: () => Promise<StoredForms>;
   readonly maxNodes?: number;
+  /**
+   * Told how many problems were kept unjudged because the stored forms could
+   * not be read, for a caller whose server log says so.
+   */
+  readonly onUnjudged?: (kept: number) => void;
 }
 
 /**
  * The errors about the lists in `nodes` that `counts` keeps, judged in
  * `setting`. A problem a stored form already held on the same block is kept
  * rather than refused, so the stored forms are read only once a problem is
- * found.
+ * found; where they cannot be read, every problem is kept, as the other
+ * checks against the stored page keep theirs.
  */
 async function listErrorsIn(
   nodes: readonly unknown[],
@@ -232,14 +242,15 @@ async function listErrorsIn(
       ...(stored.length === 0 ? {} : { stored }),
       ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
     }).filter(issue => isErrorIssue(issue) && counts(issue));
-  let found = await judge([]);
-  if (found.length > 0 && site.storedForms !== undefined) {
-    const snapshot = await site.storedForms();
-    if (snapshot.readable && snapshot.forms.length > 0) {
-      found = await judge(snapshot.forms);
-    }
+  const found = await judge([]);
+  if (found.length === 0 || site.storedForms === undefined) return found;
+  const snapshot = await site.storedForms();
+  if (!snapshot.readable) {
+    site.onUnjudged?.(found.length);
+    return [];
   }
-  return found;
+  // Nothing stored (a create) holds no problem, so every one is the write's.
+  return snapshot.forms.length > 0 ? judge(snapshot.forms) : found;
 }
 
 /**
