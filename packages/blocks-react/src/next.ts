@@ -24,6 +24,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   paginatedList,
   readListQuery,
+  type PaginatedList,
   regionDocument,
   safeTimeZone,
   type BindingDemand,
@@ -505,21 +506,43 @@ function listPageSlug(slug: string, page: number | undefined): string {
 }
 
 /**
+ * The list a page's address pages, found in the page's own document as the
+ * renderer presents it: repaired, and held to the route's caps on nodes and
+ * depth. A list the renderer would drop (malformed, past a cap) therefore
+ * pages nothing, so the route never serves a later page whose HTML has no
+ * list. The page's own nodes only, its components left out: a component or a
+ * Layout region shows on many pages, so a list in one never pages an
+ * address. The one finding the route's count and the render share.
+ */
+function pagedListOf(
+  config: BlocksPageConfig,
+  resolver: BlockResolver,
+  document: BlockDocument
+): PaginatedList | undefined {
+  const prepared = prepareDocument(document, {
+    resolver,
+    ...(config.limits === undefined ? {} : { limits: config.limits }),
+    ...(config.styleContext === undefined
+      ? {}
+      : { styleContext: config.styleContext }),
+  });
+  return prepared === null
+    ? undefined
+    : paginatedList(prepared.presented.nodes);
+}
+
+/**
  * Which page of its paginated list a render draws, and the address of each
- * page, or nothing when the page's own document splits no list into pages.
- * The page's own nodes only: a component or a Layout region shows on many
- * pages, so a list in one never pages an address.
+ * page, or nothing when the page splits no list into pages.
  */
 function listPageFor(
-  document: BlockDocument,
+  list: PaginatedList | undefined,
   context: RenderContext
 ): ListPageContext | undefined {
   // The route's own addresses, its mount included: present where it serves
   // a list's later pages, so the links name exactly the pages it answers.
   const listPagePath = context.listPagePath;
-  if (listPagePath === undefined) return undefined;
-  const list = paginatedList(document.nodes);
-  if (list === undefined) return undefined;
+  if (listPagePath === undefined || list === undefined) return undefined;
   return { nodeId: list.id, page: context.page ?? 1, href: listPagePath };
 }
 
@@ -2583,8 +2606,11 @@ function blocksRouteConfig(
     // own links do not name, nor refuses one they do.
     listPages: async (entry, context) => {
       const document = readDocument(entry, field, context);
-      const list = paginatedList(document.nodes);
+      const list = pagedListOf(config, resolver, document);
       if (list === undefined) return null;
+      // Counted under the page's read allowance, as the list reads: a page
+      // whose allowance cannot reach the list (`maxQueries: 0`, or spent on
+      // the day terms first) has no later pages, since its list draws none.
       const budget = createQueryBudget(
         config.maxQueries ?? DEFAULT_MAX_QUERIES
       );
@@ -2596,10 +2622,12 @@ function blocksRouteConfig(
         window: listWindow,
         context,
       });
+      if (!budget.take()) return 1;
       const counted = await listEntryCount(
         list.props,
         { locale: context.locale, ...days },
-        dataFor(data, config, context.locale, listWindow)
+        dataFor(data, config, context.locale, listWindow),
+        () => budget.take()
       ).catch(() => undefined);
       // A list whose read cannot say how many entries it matches shows its
       // first page alone, as a list that fails to read shows its empty state.
@@ -2664,7 +2692,7 @@ function blocksRouteConfig(
         // The page of its list this address draws, and where the others are.
         // A Single's route serves no later pages and gives no addresses for
         // them, so its list shows one page.
-        listPage: listPageFor(document, context),
+        listPage: listPageFor(pagedListOf(config, resolver, document), context),
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(

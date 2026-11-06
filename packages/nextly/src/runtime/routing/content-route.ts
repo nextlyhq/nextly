@@ -697,7 +697,7 @@ function buildRoute<TNode>(
     if (page === null) return null;
     const base = await resolve(later.base);
     if (!base) return null;
-    const pages = await listPages(base.entry, base.context);
+    const pages = pageCount(await listPages(base.entry, base.context));
     if (pages === null) return null;
     if (page === 1) return { redirect: addressOf(later.base) };
     if (page > pages) return null;
@@ -721,10 +721,14 @@ function buildRoute<TNode>(
     for (const param of params) {
       const resolved = await resolve(param.slug.join("/"));
       if (!resolved) continue;
-      const pages = await listPages(resolved.entry, resolved.context);
+      const pages = pageCount(
+        await listPages(resolved.entry, resolved.context)
+      );
       for (let page = 2; pages !== null && page <= pages; page += 1) {
         if (extra.length >= room) return extra;
-        extra.push({ slug: [...param.slug, "page", String(page)] });
+        extra.push({
+          slug: [...param.slug, LIST_PAGE_SEGMENT, String(page)],
+        });
       }
     }
     return extra;
@@ -740,6 +744,8 @@ function buildRoute<TNode>(
     for (const collection of collections) {
       let page = 1;
       let collected = 0;
+      // This collection's own paths, whose lists' later pages it pays for.
+      const own: Array<{ slug: string[] }> = [];
       for (;;) {
         let result;
         try {
@@ -797,23 +803,24 @@ function buildRoute<TNode>(
           const param = slugToStaticParam(item[slugField]);
           if (!param) continue;
           params.push(param);
+          own.push(param);
           collected += 1;
           if (collected >= staticParamsLimit) break;
         }
         if (collected >= staticParamsLimit || !result.meta.hasNext) break;
         page += 1;
       }
+      // The lists' later pages come out of the same collection's limit, after
+      // its entries, so a very long list never makes the build enumerate
+      // without bound, nor borrows another collection's share; the rest
+      // render on their first request.
+      params.push(
+        ...(await runWithAccessMemo(() =>
+          listPageParams(own, staticParamsLimit - own.length)
+        ))
+      );
     }
-    // The lists' later pages share the limit with the entries, after them,
-    // so a very long list never makes the build enumerate without bound;
-    // the rest render on their first request.
-    const pages = await runWithAccessMemo(() =>
-      listPageParams(
-        params,
-        staticParamsLimit * collections.length - params.length
-      )
-    );
-    return [...params, ...pages];
+    return params;
   }
 
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
@@ -961,6 +968,18 @@ export function createPublicContentRoute<TNode>(
 }
 
 /**
+ * A list's page count as the route may trust it: a whole number from 1, or
+ * null for anything else (none, zero, a fraction, `NaN`, `Infinity`). A
+ * `listPages` is the site's own code, and an answer past these would serve
+ * every number as a page or redirect page one of a list with no pages.
+ */
+function pageCount(pages: number | null): number | null {
+  return typeof pages === "number" && Number.isSafeInteger(pages) && pages >= 1
+    ? pages
+    : null;
+}
+
+/**
  * A route's mount path as given, or a refusal naming what is wrong with it:
  * a path that does not start with a slash, ends with one, or holds a query,
  * a fragment or an empty segment would put every redirect and link it
@@ -968,7 +987,13 @@ export function createPublicContentRoute<TNode>(
  */
 function checkedMountPath(mountPath: string | undefined): string {
   if (mountPath === undefined || mountPath === "") return "";
-  if (!/^(\/[^/?#\s]+)+$/.test(mountPath)) {
+  // Each segment as a browser sends it: no query, fragment, space,
+  // backslash or percent-encoding, and no `.` or `..`, which URL parsing
+  // resolves away, moving every link and redirect out of the mount.
+  if (
+    !/^(\/[^/?#\s\\%]+)+$/.test(mountPath) ||
+    mountPath.split("/").some(segment => segment === "." || segment === "..")
+  ) {
     throw NextlyError.invalidInput({
       message: `The route's mountPath "${mountPath}" is not a path such as "/blocks": start it with a slash, end it without one.`,
     });

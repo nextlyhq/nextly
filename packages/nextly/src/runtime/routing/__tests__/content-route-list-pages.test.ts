@@ -236,10 +236,36 @@ describe("the addresses a list's pages are served at", () => {
     expect(context.listPagePath).toBeUndefined();
   });
 
-  it.each(["blocks", "/blocks/", "/blocks?x", "//blocks", "/a b"])(
-    "refuses the mount path %j when the route is built",
-    mountPath => {
-      expect(() => mounted(mountPath)).toThrow(/mountPath/);
+  it.each([
+    "blocks",
+    "/blocks/",
+    "/blocks?x",
+    "//blocks",
+    "/a b",
+    "/docs/../blocks",
+    "/docs/./blocks",
+    "/docs/%2e%2e/blocks",
+    "/docs\\blocks",
+  ])("refuses the mount path %j when the route is built", mountPath => {
+    expect(() => mounted(mountPath)).toThrow(/mountPath/);
+  });
+});
+
+describe("a page count the route cannot trust", () => {
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -2, 2.5])(
+    "serves no later page, and redirects no page one, for a count of %s",
+    async count => {
+      const { nextly } = reader(ROWS);
+      const { ContentPage } = createContentRoute<Drawn>({
+        collections: ["pages"],
+        nextly,
+        render: entry => ({ id: entry.id, page: undefined }),
+        listPages: async () => count,
+      });
+      const serve = (path: string) =>
+        ContentPage({ params: { slug: path.split("/") } });
+      await expect(serve("news/page/2")).rejects.toThrow("not found");
+      await expect(serve("news/page/1")).rejects.toThrow("not found");
     }
   );
 });
@@ -264,6 +290,31 @@ describe("pre-rendering a paginated list's later pages", () => {
       { slug: ["news", "page", "9"] },
       { slug: ["page", "2"] },
       { slug: ["page", "3"] },
+      { slug: ["news", "page", "2"] },
+      { slug: ["news", "page", "3"] },
+    ]);
+  });
+
+  it("keeps each collection's later pages within that collection's limit", async () => {
+    // Two collections, a limit of 3 each: `news` has 3 pages but its
+    // collection's own entry leaves room for 2 of them only, though the
+    // other collection is empty and leaves its whole share unused.
+    const { nextly } = reader([{ id: "news", slug: "news" }]);
+    const params = await createPublicContentRoute<Drawn>({
+      collections: ["pages", "empty"],
+      nextly: {
+        ...nextly,
+        find: args =>
+          args.collection === "empty"
+            ? reader([]).nextly.find(args)
+            : nextly.find(args),
+      },
+      render: entry => ({ id: entry.id, page: undefined }),
+      listPages: async () => 10,
+      staticParamsLimit: 3,
+    }).generateStaticParams();
+    expect(params).toEqual([
+      { slug: ["news"] },
       { slug: ["news", "page", "2"] },
       { slug: ["news", "page", "3"] },
     ]);

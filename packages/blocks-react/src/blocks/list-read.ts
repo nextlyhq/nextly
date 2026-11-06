@@ -755,7 +755,12 @@ export interface ListEntryCount {
 export async function listEntryCount(
   props: unknown,
   terms: Pick<PageContext, "locale" | "timeZone" | "fieldShapes">,
-  data: BlocksDataProvider
+  data: BlocksDataProvider,
+  /**
+   * Claim each read after the first, as the list's own reads are claimed
+   * from a page's allowance. Absent, the editor's count reads freely.
+   */
+  claim: () => boolean = () => true
 ): Promise<ListEntryCount | undefined> {
   const named = readListQuery(props).query;
   if (named.collection === undefined || named.relation !== undefined) {
@@ -771,8 +776,7 @@ export async function listEntryCount(
         total = answer.total;
         return answer.items;
       },
-      // The editor's own read, outside any page's allowance.
-      claim: () => true,
+      claim,
     },
     read.base,
     read.sort
