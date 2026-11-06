@@ -2,7 +2,7 @@
  * What every usage index has in common, and what each one supplies for itself.
  *
  * Two indexes derive rows from the same documents by the same rules and differ
- * only in WHAT they record a reference to: `nx_pb_class_usage` records the
+ * only in WHAT they record a reference to: the class index records the
  * named classes a document applies, and the component index records the
  * component definitions it embeds. Everything between — which subjects a
  * written document has, how stored rows are read back, which are inserted and

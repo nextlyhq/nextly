@@ -99,7 +99,8 @@ So verification is: **check the timestamp is recent, then** split the header on 
 split each token on its comma, and accept if any token matches.
 
 The freshness check is not optional. Signing the timestamp proves it was not altered; it does
-not make the delivery expire. Nextly's own `verifySignature` rejects anything outside a
+not make the delivery expire. Nextly's own verifier (what a plugin calls as
+`ctx.security.webhooks.verify` with `standardWebhooks`) rejects anything outside a
 **300-second (5 minute)** tolerance _before_ it compares signatures, and a receiver that skips
 that step will accept a captured request forever.
 

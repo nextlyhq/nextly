@@ -3,6 +3,10 @@
  * may not read, before anything is read, and otherwise the public reader's
  * answer; a body no list could build is refused at the boundary.
  */
+import {
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
+} from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -107,6 +111,60 @@ describe("a canvas list's read", () => {
     ]) {
       await expect(
         listEntriesRoute().handler(request(body), ctx)
+      ).rejects.toSatisfy(error =>
+        NextlyError.isCode(error, "VALIDATION_ERROR")
+      );
+    }
+    expect(can).not.toHaveBeenCalled();
+  });
+
+  it("takes any sort a list may store, and nothing past its bounds", async () => {
+    const can = vi.fn(async () => false);
+    const ctx = { caller: { can } } as unknown as PluginRouteContext;
+    const request = (sort: unknown) =>
+      new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({ query: { collection: "posts", sort } }),
+      });
+    // The longest sort a list stores, every key naming a 63-character
+    // column, reaches the reader, here refused only by the caller check.
+    const keys = Array.from(
+      { length: LIST_MAX_SORT_KEYS },
+      (_, index) => `-${"f".repeat(61)}${String(index).padStart(2, "0")}`
+    );
+    expect(keys.join(",").length).toBeGreaterThan(1000);
+    for (const sort of [keys.join(","), keys]) {
+      await expect(
+        listEntriesRoute().handler(request(sort), ctx)
+      ).rejects.toSatisfy(error => NextlyError.isCode(error, "FORBIDDEN"));
+    }
+    expect(can).toHaveBeenCalledTimes(2);
+    // A sort no list could store is refused before the caller is asked:
+    // one malformed, and ones past the bounds a stored sort is held to,
+    // which are checked before the sort is read at all.
+    can.mockClear();
+    const join = vi.spyOn(Array.prototype, "join");
+    const pastBounds = [
+      [...keys, "title"],
+      " ".repeat(LIST_MAX_SORT_LENGTH + 1),
+      Array.from({ length: 100_000 }, () => ""),
+      [`a${" ".repeat(LIST_MAX_SORT_LENGTH)}`],
+    ];
+    for (const sort of pastBounds) {
+      await expect(
+        listEntriesRoute().handler(request(sort), ctx)
+      ).rejects.toSatisfy(error =>
+        NextlyError.isCode(error, "VALIDATION_ERROR")
+      );
+    }
+    // Nothing past the bounds was joined to be read.
+    expect(join.mock.calls.filter(([separator]) => separator === ",")).toEqual(
+      []
+    );
+    join.mockRestore();
+    for (const sort of ["-a.b", ["title", "x y"]]) {
+      await expect(
+        listEntriesRoute().handler(request(sort), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
