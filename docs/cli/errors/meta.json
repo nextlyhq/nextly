@@ -105,6 +105,8 @@
     "plugin-column-not-migrated",
     "plugin-dependency-not-installed",
     "plugin-disabled",
+    "plugin-document-surface-collision",
+    "plugin-document-surface-invalid",
     "plugin-document-view-collision",
     "plugin-document-view-field-type-unowned",
     "plugin-document-view-invalid",

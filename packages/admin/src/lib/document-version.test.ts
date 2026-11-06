@@ -7,8 +7,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  OVERWRITE_EVERY_LANGUAGE,
   STALE_VERSION_CODE,
   changerName,
+  everyLanguageBody,
   revsFor,
   versionForLanguage,
   staleVersionOf,
@@ -172,5 +174,18 @@ describe("revsFor", () => {
   it("gives none where any document has none, which the server would refuse", () => {
     expect(revsFor(["a", "b"], { a: "3" })).toBeUndefined();
     expect(revsFor([], {})).toBeUndefined();
+  });
+});
+
+// A publish of every language sends the version a read of every language
+// gave, or, from a caller refused that read, says it is made over whatever
+// each language holds: an update that says neither is refused.
+describe("everyLanguageBody", () => {
+  it("sends the version read, the overwrite choice, or nothing", () => {
+    expect(everyLanguageBody("7.en:2,es:3")).toEqual({ _rev: "7.en:2,es:3" });
+    expect(everyLanguageBody(OVERWRITE_EVERY_LANGUAGE)).toEqual({
+      _overwrite: true,
+    });
+    expect(everyLanguageBody(undefined)).toEqual({});
   });
 });

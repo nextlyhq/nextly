@@ -69,6 +69,7 @@ import {
 import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
+import { runAsReleaseRun } from "../versions/stale-version";
 
 import type { ReleaseMutations, ReleaseWrite } from "./apply-due-releases";
 import {
@@ -129,17 +130,21 @@ export function createReleaseMutations(deps: {
       );
     };
 
-    await runWithWriteReceipt(
-      {
-        target: {
-          // The write below goes to a Single or else to a collection entry.
-          scopeKind: ref.scopeKind === "single" ? "single" : "collection",
-          scopeSlug: ref.scopeSlug,
-          entryId: ref.entryId,
-        },
-        record,
-      },
-      async () => {
+    const target = {
+      // The write below goes to a Single or else to a collection entry.
+      scopeKind:
+        ref.scopeKind === "single"
+          ? ("single" as const)
+          : ("collection" as const),
+      scopeSlug: ref.scopeSlug,
+      entryId: ref.entryId,
+    };
+    await runWithWriteReceipt({ target, record }, () =>
+      // A run makes live what its release was given, whatever was saved since,
+      // so its own write to this document is not judged by version. Only that
+      // write: one a hook makes meanwhile, to this document or another, is
+      // judged.
+      runAsReleaseRun(target, async () => {
         if (ref.scopeKind === "single") {
           await content.updateSingle({
             slug: ref.scopeSlug as never,
@@ -155,7 +160,7 @@ export function createReleaseMutations(deps: {
           data: { status },
           locale,
         });
-      }
+      })
     );
   };
 

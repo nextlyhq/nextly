@@ -269,12 +269,16 @@ export function sharedStyleSearchText(
   );
 }
 
-/** The rows a search finds, by name, class name, property or value. */
-export function searchSharedStyles(
-  rows: readonly SharedStyleRow[],
+/**
+ * The rows a search finds, by name, class name, property or value, in their
+ * order. Any row a shared style's row extends, so a look's row comes back as
+ * the row it was.
+ */
+export function searchSharedStyles<Row extends SharedStyleRow>(
+  rows: readonly Row[],
   query: string,
-  textOf: (row: SharedStyleRow) => string
-): SharedStyleRow[] {
+  textOf: (row: Row) => string
+): Row[] {
   const needle = searchable(query.trim());
   if (needle === "") return [...rows];
   return rows.filter(row => textOf(row).includes(needle));

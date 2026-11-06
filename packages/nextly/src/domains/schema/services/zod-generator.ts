@@ -354,6 +354,9 @@ export class ZodGenerator {
     // Base schema with all fields
     lines.push(`export const ${schemaName}Schema = z.object({`);
     lines.push(`  id: z.string(),`);
+    // The version a read gives, which an update sends back; as the
+    // TypeScript interface states it.
+    lines.push(`  _rev: z.string().optional(),`);
 
     // Add field schemas
     for (const field of collection.fields) {
@@ -391,7 +394,8 @@ export class ZodGenerator {
       lines.push(` */`);
     }
 
-    const omitFields = ["id"];
+    // A create is never judged by version, so it carries none.
+    const omitFields = ["id", "_rev"];
     if (collection.timestamps) {
       omitFields.push("createdAt", "updatedAt");
     }
@@ -416,11 +420,13 @@ export class ZodGenerator {
       lines.push(` */`);
     }
 
+    // An update also says it replaces whatever is stored, when it sends no
+    // version: one of the two it must say.
     lines.push(
-      `export const ${schemaName}UpdateInputSchema = ${schemaName}Schema.partial().required({`
+      `export const ${schemaName}UpdateInputSchema = ${schemaName}Schema.partial()`
     );
-    lines.push(`  id: true,`);
-    lines.push(`});`);
+    lines.push(`  .required({ id: true })`);
+    lines.push(`  .extend({ _overwrite: z.boolean().optional() });`);
 
     return lines.join("\n");
   }

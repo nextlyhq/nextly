@@ -260,7 +260,11 @@ describe.each(getConfiguredTestDialects())(
     async function single(t: TestNextly, nodes: Node[]): Promise<void> {
       await t.nextly.updateSingle({
         slug: SINGLE,
-        data: { title: "Home", content: document("page", nodes) },
+        data: {
+          title: "Home",
+          content: document("page", nodes),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await t.events.settle();
@@ -276,6 +280,7 @@ describe.each(getConfiguredTestDialects())(
           content: document("component", [
             box("d1", [box("d2", [text("d3")])]),
           ]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });

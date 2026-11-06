@@ -346,7 +346,12 @@ describe.each(getConfiguredTestDialects())(
             "content-type": "application/json",
             authorization: `Bearer ${key}`,
           },
-          body: JSON.stringify(body),
+          // Every write here is made whatever is stored: none sends a version.
+          body: JSON.stringify(
+            "_rev" in body || "_overwrite" in body
+              ? body
+              : { ...body, _overwrite: true }
+          ),
         }),
         { params: Promise.resolve({ params: path }) }
       );

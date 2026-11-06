@@ -489,6 +489,15 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as unknown as CollectionConfig,
           {
+            // A field group beside the body: an update stores its values in
+            // the group's own table, not in this row.
+            slug: "carded",
+            fields: [
+              { name: "body", type: "doc" },
+              { name: "heroBlock", type: "component", component: "teaser" },
+            ],
+          } as unknown as CollectionConfig,
+          {
             // A lifecycle with working drafts, whose `beforeChange` hook turns
             // a publish into a draft.
             slug: "flipped",
@@ -587,6 +596,12 @@ describe.each(getConfiguredTestDialects())(
                 ],
               }) as never
           ),
+        ],
+        fieldGroups: [
+          {
+            slug: "teaser",
+            fields: [{ name: "body", type: "text" }],
+          } as never,
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
@@ -1969,7 +1984,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "drafted",
           id,
-          data: { body: { v: "draft" } },
+          data: { body: { v: "draft" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         expect(await readStoredFields(SYSTEM, asked)).toMatchObject({
@@ -2027,7 +2042,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id,
-          data: { body: { v: "author" } },
+          data: { body: { v: "author" }, _overwrite: true },
           overrideAccess: true,
         } as never);
 
@@ -2252,7 +2267,7 @@ describe.each(getConfiguredTestDialects())(
             t.nextly.update({
               collection: "pages",
               id,
-              data: { body: { v: "refused" } },
+              data: { body: { v: "refused" }, _overwrite: true },
               user: caller.user,
               overrideAccess: false,
             } as never)
@@ -2285,7 +2300,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id,
-          data: { body: { v: "author" } },
+          data: { body: { v: "author" }, _overwrite: true },
           overrideAccess: true,
         } as never);
 
@@ -2362,7 +2377,11 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "hookgated",
           id,
-          data: { title: "ordinary", body: { v: "ordinary" } },
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
           user: editor.user,
           overrideAccess: false,
         } as never);
@@ -2407,7 +2426,11 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "locked",
           id,
-          data: { title: "ordinary", body: { v: "ordinary" } },
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
           user: editor.user,
           overrideAccess: false,
         } as never);
@@ -2473,7 +2496,11 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "restored",
           id,
-          data: { title: "ordinary", body: { v: "ordinary" } },
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
           user: editor.user,
           overrideAccess: false,
         } as never);
@@ -2600,7 +2627,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "flipped",
           id,
-          data: asSent,
+          data: { ...asSent, _overwrite: true },
           overrideAccess: true,
         } as never);
         const after = await live();
@@ -2669,6 +2696,154 @@ describe.each(getConfiguredTestDialects())(
         expect(
           after.kind === "found" ? after.live?.publicState : "absent"
         ).not.toBe("published");
+      });
+
+      it("refuses a write sending a key an update never stores, for an entry and a Single, and writes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const pageHash = await systemHash(page, "body");
+        await t.nextly.updateSingle({
+          slug: "site",
+          data: { body: { v: 0 }, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const site = { single: "site" };
+        const siteHash = await systemHash(site, "body");
+        const at = new Date(0).toISOString();
+
+        // A system column no client writes, on an entry and on a Single, as
+        // a caller, with the expectation the system's, and as the system.
+        const writes = [
+          { document: page, hash: pageHash, key: "updatedAt", caller: editor },
+          { document: site, hash: siteHash, key: "createdAt", caller: owner },
+        ];
+        for (const { document, hash, key, caller } of writes) {
+          for (const identity of [caller, checked(caller), SYSTEM] as const) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(identity, {
+                ...document,
+                data: { body: { v: "partial" }, [key]: at },
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+          }
+          expect(await systemValue(document, "body")).toEqual({
+            kind: "value",
+            value: { v: 0 },
+          });
+        }
+
+        // CONTROL: the same write without the key lands.
+        await updateIfUnchanged(checked(editor), {
+          ...page,
+          data: { body: { v: "whole" } },
+          expect: { field: "body", form: "published", hash: pageHash },
+        });
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: "whole" },
+        });
+      });
+
+      it("takes a field group an update stores in its own table, by the name it is declared under alone", async () => {
+        const id = await created("carded", { body: { v: 0 } });
+        const entry = { collection: "carded", id };
+        const hash = await systemHash(entry, "body");
+
+        // Another spelling of the field group's name is taken out of no
+        // payload and stored nowhere, so it is refused like any such key.
+        const respelt = await rejectionOf(
+          updateIfUnchanged(checked(owner), {
+            ...entry,
+            data: { body: { v: "respelt" }, hero_block: { body: "hi" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(respelt, "INVALID_INPUT")).toBe(true);
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        await updateIfUnchanged(checked(owner), {
+          ...entry,
+          data: { body: { v: "with hero" }, heroBlock: { body: "hi" } },
+          expect: { field: "body", form: "published", hash },
+        });
+
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: "with hero" },
+        });
+        const row = (await t.nextly.findByID({
+          collection: "carded",
+          id,
+          overrideAccess: true,
+          depth: 1,
+        } as never)) as unknown as { heroBlock?: { body?: unknown } };
+        expect(row.heroBlock?.body).toBe("hi");
+      });
+
+      it("refuses a caller who may read but not update with the same answer whatever the data names", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+        const codes: string[] = [];
+        for (const identity of [reader, checked(reader)]) {
+          for (const data of [
+            { body: { v: "x" }, updatedAt: new Date(0).toISOString() },
+            { body: { v: "x" } },
+          ]) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(identity, {
+                ...page,
+                data,
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isForbidden(refusal)).toBe(true);
+            codes.push((refusal as NextlyError).code);
+          }
+        }
+        expect(new Set(codes).size).toBe(1);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses a caller who may not read with the same answer whatever the data names, for an entry there or not", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const hash = await storedValueHash({ kind: "value", value: { v: 0 } });
+        const at = new Date(0).toISOString();
+        const documents = [
+          { collection: "pages", id },
+          { collection: "pages", id: "no-such-entry" },
+          { collection: "no-such-collection", id },
+        ];
+        const codes: string[] = [];
+        for (const document of documents) {
+          for (const data of [
+            { body: { v: "x" }, updatedAt: at },
+            { body: { v: "x" } },
+          ]) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(stranger, {
+                ...document,
+                data,
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isForbidden(refusal)).toBe(true);
+            codes.push((refusal as NextlyError).code);
+          }
+        }
+        expect(new Set(codes).size).toBe(1);
+        expect(await systemValue({ collection: "pages", id }, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
       });
     });
   }

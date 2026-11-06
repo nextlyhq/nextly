@@ -55,6 +55,10 @@ import { singleDocumentEditable } from "../domains/singles/services/single-docum
 import { fieldsCarryingReadRules } from "../domains/versions/component-read-access";
 import { NextlyError } from "../errors";
 import { resolveStatusFilter } from "../lib/status-filter";
+import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "../lib/system-columns";
 
 import type { PluginStoredValue } from "./contributions";
 import type { PluginRouteIdentity } from "./routes/route-types";
@@ -431,6 +435,12 @@ function publicStateOf(liveState: string | null | undefined): string | null {
  * would persist, after every hook, does not hold each field it writes exactly
  * as sent, or the field-access pass took one out: an ordinary update lets a
  * rule drop such a field, or a hook change it, silently and writes the rest.
+ * Data naming a key no update stores (a system column no client writes, a
+ * column a schema hook contributed, a field stored nowhere; not a field group
+ * or a many-to-many, which it stores in their own tables) is refused with
+ * `INVALID_INPUT` before anything is written, once the update's own access
+ * has been judged, so a caller who may not update the document is refused
+ * alike whatever the data names.
  * Made as the system, it is an
  * `overrideAccess: true` update, judged by no access rule. The expectation is
  * judged inside the update's own transaction, once it holds the entry's row
@@ -490,6 +500,9 @@ export async function updateIfUnchanged(
     document,
     expect: expected,
     checked: false,
+    // Judged by the write path once its access is, against the entity's own
+    // table: a key no update stores refuses the write there.
+    sentKeys: Object.keys(named.data),
     ...(person === undefined ? {} : { whole: await wholeWriteOf(named.data) }),
   };
   expectStoredValue(context, pin);
@@ -506,11 +519,18 @@ export async function updateIfUnchanged(
             ? {}
             : { actor: person.authenticatedScope }),
         };
+  // Guarded by its own expectation, judged under the row lock, rather than by
+  // a version: so it says it sets these values whatever else is stored,
+  // unless the plugin's data names a version or that choice itself.
+  const data =
+    DOCUMENT_VERSION_KEY in named.data || DOCUMENT_OVERWRITE_KEY in named.data
+      ? named.data
+      : { ...named.data, [DOCUMENT_OVERWRITE_KEY]: true };
   const nextly = requireNextly();
   if (document.kind === "single") {
     await nextly.updateSingle({
       slug: document.slug,
-      data: named.data,
+      data,
       depth: 0,
       ...inLocale,
       ...as,
@@ -519,7 +539,7 @@ export async function updateIfUnchanged(
     await nextly.update({
       collection: document.slug,
       id: document.id,
-      data: named.data,
+      data,
       depth: 0,
       ...inLocale,
       ...as,

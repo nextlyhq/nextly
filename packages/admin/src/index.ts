@@ -312,6 +312,9 @@ export {
   registerKnownPlugin,
   type ComponentPath,
   type CustomEditViewProps,
+  type DocumentActionReplacementProps,
+  type DocumentChangeResult,
+  type DocumentPanelSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";

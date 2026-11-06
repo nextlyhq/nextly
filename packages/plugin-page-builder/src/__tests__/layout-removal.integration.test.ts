@@ -1445,7 +1445,8 @@ describe.each(getConfiguredTestDialects())(
             origin: ORIGIN,
             "content-type": "application/json",
           },
-          body: "{}",
+          // Every language, whatever each stores now.
+          body: JSON.stringify({ _overwrite: true }),
         }),
         { params: Promise.resolve({ params: path }) }
       );
