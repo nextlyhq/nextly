@@ -478,6 +478,13 @@ export class CollectionMetadataService extends BaseService {
             [],
             artifacts.metadata.fields
           ),
+          keys: {
+            before: [],
+            after: this.collectionService.relationshipForeignKeys(
+              artifacts.tableName,
+              artifacts.metadata.fields
+            ),
+          },
         });
         return { rowWritten: this.isDevelopment() };
       } catch (error: unknown) {

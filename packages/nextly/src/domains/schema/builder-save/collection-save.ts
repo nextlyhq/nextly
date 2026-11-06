@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -73,11 +74,13 @@ import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type {
+  ForeignKeySpec,
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { generateStatements } from "../pipeline/sql-templates/index";
 import { toSnakeCase } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
@@ -133,6 +136,19 @@ export interface CollectionSave {
    * file, since the generator writes no junction table.
    */
   junctions?: { up: readonly string[]; down: readonly string[] };
+  /**
+   * The collection's relationship foreign keys before the save and after it
+   * (`DynamicCollectionService.relationshipForeignKeys`), which the column
+   * mapping does not describe: a table the save creates is declared with
+   * them, and an existing one has each removed or changed key dropped and
+   * each new or changed one added, as the Builder's own DDL does. SQLite
+   * cannot alter a key, so there, as in the Builder, only a new table gets
+   * them.
+   */
+  keys?: {
+    before: readonly ForeignKeySpec[];
+    after: readonly ForeignKeySpec[];
+  };
   /** The fields the person renamed, by name: written as renames, keeping their values. */
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
   /** Override the clock for tests. */
@@ -453,9 +469,10 @@ async function writeFiles(
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
-    ...(save.junctions === undefined
+    appended: addedStatements(deps, save, plan.table),
+    ...(save.keys === undefined
       ? {}
-      : { appended: placedJunctions(save, save.junctions) }),
+      : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
   });
   onWritten(change);
   return { adopt, change: [...convert, ...change] };
@@ -617,6 +634,7 @@ async function generateFor(
     now: Date;
     tablesAsTheyStand?: TableSpec[];
     appended?: { up: AddedStatements; down: AddedStatements };
+    newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -648,12 +666,89 @@ async function generateFor(
     ...(args.appended === undefined
       ? {}
       : { appendedStatements: args.appended }),
+    ...(args.newTableKeys === undefined
+      ? {}
+      : { foreignKeysOfNewTables: args.newTableKeys }),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,
   });
   if (result === null) return [];
   return (await sqlFiles(deps.migrationsDir)).filter(f => !before.has(f));
+}
+
+/**
+ * What the save's change file carries beyond what the generator writes: its
+ * junction statements (`placedJunctions`) and, for a table that exists, its
+ * relationship keys' changes (`keyChanges`), each side's drops first and
+ * adds last.
+ */
+function addedStatements(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): { up: AddedStatements; down: AddedStatements } {
+  const junctions =
+    save.junctions === undefined
+      ? emptyAdded()
+      : placedJunctions(save, save.junctions);
+  const keys =
+    save.keys === undefined || save.entity === null || save.previous === null
+      ? emptyAdded()
+      : keyChanges(deps.adapter.getCapabilities().dialect, table, save.keys);
+  return {
+    up: {
+      first: [...keys.up.first, ...junctions.up.first],
+      last: [...junctions.up.last, ...keys.up.last],
+    },
+    down: {
+      first: [...keys.down.first, ...junctions.down.first],
+      last: [...junctions.down.last, ...keys.down.last],
+    },
+  };
+}
+
+const emptyAdded = (): { up: AddedStatements; down: AddedStatements } => ({
+  up: { first: [], last: [] },
+  down: { first: [], last: [] },
+});
+
+/**
+ * The statements changing an existing table's relationship keys from
+ * `before` to `after`, rendered by the generator's own templates: a key that
+ * went or changed is dropped before the generated statements (before its
+ * column can go), and one that came or changed is added after them (once its
+ * column exists). The down undoes each the other way round. None on SQLite,
+ * which cannot alter a key in place; the Builder's DDL adds none there either.
+ */
+function keyChanges(
+  dialect: SupportedDialect,
+  table: string,
+  keys: NonNullable<CollectionSave["keys"]>
+): { up: AddedStatements; down: AddedStatements } {
+  if (dialect === "sqlite") return emptyAdded();
+  const same = (a: ForeignKeySpec, b: ForeignKeySpec) =>
+    JSON.stringify(a) === JSON.stringify(b);
+  const kept = keys.before.filter(k => keys.after.some(a => same(k, a)));
+  const between = (
+    from: readonly ForeignKeySpec[],
+    to: readonly ForeignKeySpec[]
+  ) =>
+    generateStatements(
+      diffSnapshots(
+        { tables: [{ name: table, columns: [], foreignKeys: [...from] }] },
+        { tables: [{ name: table, columns: [], foreignKeys: [...to] }] }
+      ),
+      dialect,
+      []
+    );
+  return {
+    up: { first: between(keys.before, kept), last: between(kept, keys.after) },
+    down: {
+      first: between(keys.after, kept),
+      last: between(kept, keys.before),
+    },
+  };
 }
 
 /**

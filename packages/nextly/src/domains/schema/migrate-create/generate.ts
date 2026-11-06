@@ -76,6 +76,7 @@ import {
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
   ColumnSpec,
+  ForeignKeySpec,
   IndexSpec,
   NextlySchemaSnapshot,
   Operation,
@@ -281,6 +282,14 @@ export interface GenerateArgs {
     up: AddedStatements;
     down: AddedStatements;
   };
+  /**
+   * Foreign keys a table this file creates is declared with, by table: a
+   * Schema Builder collection's relationship keys, which the column mapping
+   * does not describe. Rendered into the table's CREATE, as the Builder
+   * creates it, and left out of the snapshot, where a collection's foreign
+   * keys stay untracked. A table that already exists is left alone.
+   */
+  foreignKeysOfNewTables?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -400,6 +409,30 @@ function settingsInScope(
   };
 }
 
+/**
+ * `desired` with each table `previous` lacks declared with its keys from
+ * `keys`: the diff then creates it with them. Only the desired side changes,
+ * so the snapshot written beside the file, built separately, keeps them
+ * untracked.
+ */
+function withKeysOfNewTables(
+  desired: NextlySchemaSnapshot,
+  previous: NextlySchemaSnapshot,
+  keys: ReadonlyMap<string, readonly ForeignKeySpec[]> | undefined
+): NextlySchemaSnapshot {
+  if (keys === undefined || keys.size === 0) return desired;
+  const existing = new Set(previous.tables.map(t => t.name));
+  return {
+    ...desired,
+    tables: desired.tables.map(table => {
+      const declared = keys.get(table.name);
+      return existing.has(table.name) || declared === undefined
+        ? table
+        : { ...table, foreignKeys: [...declared] };
+    }),
+  };
+}
+
 /** Statements a caller adds to one side of a file, before and after the generated ones. */
 export interface AddedStatements {
   first: readonly string[];
@@ -492,7 +525,11 @@ export async function generateMigration(
   // Scoped, every table outside the scope stays as the latest snapshot has it.
   const stream = streamInScope(args.scope, unscoped, previous?.data ?? null);
   const previousSnapshot = stream.previous;
-  const desiredSnapshot = stream.desired;
+  const desiredSnapshot = withKeysOfNewTables(
+    stream.desired,
+    previousSnapshot,
+    args.foreignKeysOfNewTables
+  );
 
   // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
   //     components (i18n Option B: companions are migration-owned, emitted as
