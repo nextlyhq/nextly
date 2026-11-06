@@ -102,3 +102,75 @@ describe("a page drawn with list data and no bindings", () => {
     expect(html).not.toContain("#c0ffee");
   });
 });
+
+describe("a list with no collection inside another list", () => {
+  it("never judges its item conditions by the outer list's item", async () => {
+    const nested: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 1 },
+          slots: {
+            children: [
+              {
+                id: "outerTitle",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Outer drawn", level: "h2" },
+              },
+              {
+                id: "inner",
+                type: "core/collection-loop",
+                version: 1,
+                // No collection chosen yet: its template is drawn once.
+                props: {},
+                slots: {
+                  children: [
+                    {
+                      id: "innerPill",
+                      type: "core/heading",
+                      version: 1,
+                      props: { text: "Inner featured", level: "h3" },
+                      visibility: {
+                        conditions: [[{ field: "featured", op: "is_true" }]],
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const html = await renderToHtml(
+      <PageRenderer
+        document={nested}
+        blocks={resolver}
+        siteStyles={false}
+        context={createStandaloneContext({
+          data: {
+            find: () =>
+              Promise.resolve({
+                items: [{ id: "1", title: "One", featured: true }],
+              }),
+          },
+          fieldShapes: {
+            fieldsOf: ref =>
+              "collection" in ref && ref.collection === "posts"
+                ? POSTS
+                : undefined,
+          },
+        })}
+      />
+    );
+    // CONTROL: the outer list drew its featured post.
+    expect(html).toContain("Outer drawn");
+    // The inner list has no item of its own, so its condition fails closed.
+    expect(html).not.toContain("Inner featured");
+  });
+});
