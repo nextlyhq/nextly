@@ -179,9 +179,10 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       <PortalProvider container={portalRoot}>
         <BrandingProvider>
           {/* The interface language every screen's strings are read in: the
-              browser's, where the admin has a catalog for it, else English.
-              Inside branding, which carries the plugins' catalogs. */}
-          <AdminI18nProvider>
+              signed-in person's own choice, else the browser's, where the
+              admin has a catalog for it, else English. Inside branding, which
+              carries the plugins' catalogs. */}
+          <AdminI18nProvider signedIn={routeType !== "public"}>
             {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
             <PluginPageRegistrar />
             {/* Registers the widget preview page on the server's development answer alone. */}
