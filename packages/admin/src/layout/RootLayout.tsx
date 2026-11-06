@@ -15,6 +15,7 @@ import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
+import { AdminI18nProvider } from "../context/providers/AdminI18nProvider";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
 import { DocumentTitleProvider } from "../context/providers/DocumentTitleProvider";
 import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSync";
@@ -27,7 +28,6 @@ import { RestartProvider } from "../context/RestartContext";
 import { RoutedPathnameContext } from "../context/RoutedPathnameContext";
 import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
-import { I18nProvider } from "../lib/i18n/I18nProvider";
 import { cn } from "../lib/utils";
 
 import "../styles/globals.css";
@@ -176,39 +176,40 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       className={cn("nextly-admin", isDark && "dark")}
       suppressHydrationWarning
     >
-      {/* The interface language every screen's strings are read in: the
-          browser's, where the admin has a catalog for it, else English. */}
-      <I18nProvider>
-        <PortalProvider container={portalRoot}>
-          <BrandingProvider>
+      <PortalProvider container={portalRoot}>
+        <BrandingProvider>
+          {/* The interface language every screen's strings are read in: the
+              browser's, where the admin has a catalog for it, else English.
+              Inside branding, which carries the plugins' catalogs. */}
+          <AdminI18nProvider>
             {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
             <PluginPageRegistrar />
             {/* Registers the widget preview page on the server's development answer alone. */}
             <WidgetPreviewsRegistrar />
             {/* The settings sync applies the admin timezone to date rendering,
-                and mounting it starts the ["generalSettings"] query — an
-                endpoint gated by settings permissions, so on the signed-out
-                screens (login, register, forgot password, setup) the query
-                can only fail and retry once while the form waits on nothing
-                it needs. It renders nothing and sits beside the subtree
-                rather than around it, for the load-bearing reasons recorded
-                on GeneralSettingsSync itself. */}
+              and mounting it starts the ["generalSettings"] query — an
+              endpoint gated by settings permissions, so on the signed-out
+              screens (login, register, forgot password, setup) the query
+              can only fail and retry once while the form waits on nothing
+              it needs. It renders nothing and sits beside the subtree
+              rather than around it, for the load-bearing reasons recorded
+              on GeneralSettingsSync itself. */}
             {routeType !== "public" && <GeneralSettingsSync />}
             {/* Names the browser tab after the routed screen and the site. Inside
-              branding, which supplies the site's name, and around the screen,
-              whose detail pages add the name of the item they show. Rendered
-              only once a route is resolved, so the host's own title stands
-              until the admin knows which screen it is on. */}
+            branding, which supplies the site's name, and around the screen,
+            whose detail pages add the name of the item they show. Rendered
+            only once a route is resolved, so the host's own title stands
+            until the admin knows which screen it is on. */}
             <DocumentTitleProvider route={route} pathname={pathname}>
               {/* The address the router drew this screen for, which a screen
-                writing the address compares with the bar's. */}
+              writing the address compares with the bar's. */}
               <RoutedPathnameContext.Provider value={pathname}>
                 {content}
               </RoutedPathnameContext.Provider>
             </DocumentTitleProvider>
-          </BrandingProvider>
-        </PortalProvider>
-      </I18nProvider>
+          </AdminI18nProvider>
+        </BrandingProvider>
+      </PortalProvider>
     </div>
   );
 }

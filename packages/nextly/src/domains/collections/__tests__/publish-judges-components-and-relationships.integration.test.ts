@@ -73,6 +73,7 @@ interface Entries {
     collectionName: string;
     entryId: string;
     overrideAccess?: boolean;
+    data?: Doc;
   }): Promise<Result>;
   updateEntries(
     params: { collectionName: string; overrideAccess?: boolean },
@@ -485,7 +486,7 @@ function publish(
       overrideAccess: true,
       ...(locale === undefined ? {} : { locale }),
     },
-    { ...data, status: "published" }
+    { ...data, status: "published", _overwrite: true }
   );
 }
 
@@ -697,7 +698,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: ids.republished,
               overrideAccess: true,
             },
-            { status: "draft" }
+            { status: "draft", _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -715,7 +716,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: ids.promoted,
               overrideAccess: true,
             },
-            { hero: null }
+            { hero: null, _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -798,7 +799,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: ids.promotedNested,
               overrideAccess: true,
             },
-            { hero: { heading: "Live", code: "retired" } }
+            { hero: { heading: "Live", code: "retired" }, _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -823,7 +824,7 @@ describe.each(getConfiguredTestDialects())(
               overrideAccess: true,
               locale: "de",
             },
-            { title: "Handbuch" }
+            { title: "Handbuch", _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -849,7 +850,7 @@ describe.each(getConfiguredTestDialects())(
                 overrideAccess: true,
                 locale,
               },
-              data
+              { ...data, _overwrite: true }
             )
           ).success
         ).toBe(true);
@@ -872,7 +873,7 @@ describe.each(getConfiguredTestDialects())(
               overrideAccess: true,
               locale: "de",
             },
-            { memo: { code: "retired" } }
+            { memo: { code: "retired" }, _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -909,7 +910,7 @@ describe.each(getConfiguredTestDialects())(
                 entryId: ids[name],
                 overrideAccess: true,
               },
-              { note: { body: "changed" } }
+              { note: { body: "changed" }, _overwrite: true }
             )
           ).success
         ).toBe(true);
@@ -940,7 +941,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: ids.evolving,
               overrideAccess: true,
             },
-            { title: "evolved" }
+            { title: "evolved", _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -958,7 +959,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: ids.growing,
               overrideAccess: true,
             },
-            { title: "grown" }
+            { title: "grown", _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -975,7 +976,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: ids.growingAll,
               overrideAccess: true,
             },
-            { title: "grown" }
+            { title: "grown", _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -1000,7 +1001,7 @@ describe.each(getConfiguredTestDialects())(
                 overrideAccess: true,
                 locale,
               },
-              data
+              { ...data, _overwrite: true }
             )
           ).success
         ).toBe(true);
@@ -1147,7 +1148,7 @@ describe.each(getConfiguredTestDialects())(
         { collectionName: "pages", overrideAccess: true },
         [ids.batchA, ids.batchB].map(id => ({
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         }))
       );
       expect(batch).toMatchObject({ successful: 0, failed: 2 });
@@ -1168,6 +1169,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "guides",
         entryId: ids.everyLanguage,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       expect(result.success).toBe(false);
@@ -1213,7 +1215,7 @@ describe.each(getConfiguredTestDialects())(
           { collectionName: "checked", overrideAccess: true },
           [ids.nestedBatchA, ids.nestedBatchB].map(id => ({
             id,
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           }))
         );
         expect(batch).toMatchObject({ successful: 0, failed: 2 });
@@ -1296,7 +1298,7 @@ describe.each(getConfiguredTestDialects())(
             { collectionName: collection, overrideAccess: true },
             names.map(name => ({
               id: ids[name],
-              data: { status: "published" },
+              data: { status: "published", _overwrite: true },
             }))
           );
           return [
@@ -1471,7 +1473,7 @@ describe.each(getConfiguredTestDialects())(
           { collectionName: "stories", overrideAccess: true },
           [ids.raceA, ids.raceB].map(id => ({
             id,
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           }))
         );
         expect(interleaved).toBe(true);
@@ -1597,6 +1599,7 @@ describe.each(getConfiguredTestDialects())(
           collectionName: "growing",
           entryId: ids.growingAll,
           overrideAccess: true,
+          data: { _overwrite: true },
         });
         expect(removed).toBe(true);
       } finally {
@@ -1836,6 +1839,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "asides",
         entryId: ids.aside,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       expect(result.success).toBe(false);

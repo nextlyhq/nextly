@@ -83,7 +83,10 @@ async function save(
   locale: string,
   data: Record<string, unknown>
 ): Promise<void> {
-  const saved = await entries.updateEntry(at(entryId, locale), data);
+  const saved = await entries.updateEntry(at(entryId, locale), {
+    ...data,
+    _overwrite: true,
+  });
   expect(saved.success, JSON.stringify(saved)).toBe(true);
 }
 
@@ -147,6 +150,7 @@ describe.each(getConfiguredTestDialects())(
       const published = await entries.publishAllLocales({
         ...every,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.success, JSON.stringify(published)).toBe(true);
       expect(
@@ -192,7 +196,10 @@ describe.each(getConfiguredTestDialects())(
         hiddenCount: 1,
       });
 
-      const refused = await entries.publishAllLocales(every);
+      const refused = await entries.publishAllLocales({
+        ...every,
+        data: { _overwrite: true },
+      });
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(409);
       expect((refused as { publicData?: unknown }).publicData).toMatchObject({
@@ -289,7 +296,10 @@ describe.each(getConfiguredTestDialects())(
         { reason: "pending-change-forbidden", fields: ["lockState"] },
       ]);
 
-      const refused = await entries.publishAllLocales(every);
+      const refused = await entries.publishAllLocales({
+        ...every,
+        data: { _overwrite: true },
+      });
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(400);
       expect((refused as { publicData?: unknown }).publicData).toMatchObject({

@@ -17,7 +17,8 @@ import {
   removalOf,
   removedIdsIn,
   stripBreakpointsStep,
-  stripClasses,
+  splitClass,
+  splitDocument,
   stripDocument,
 } from "./strip";
 import type { Removal } from "./strip";
@@ -59,6 +60,85 @@ const FORM = {
   },
   form: "published" as const,
 };
+
+describe("splitDocument", () => {
+  it("says what it took out of each block, a slot's included, and of the page's settings", () => {
+    const hidden = { devices: { mobile: false } };
+    const document = page(
+      [
+        heading("a", {
+          styles: {
+            base: { base: { color: "#111" }, mobile: { color: "#222" } },
+            hover: { mobile: { color: "#333" } },
+          },
+        }),
+        {
+          ...heading("box"),
+          type: "core/box",
+          slots: {
+            children: [heading("inner", { visibility: hidden })],
+          },
+        },
+        heading("untouched", { styles: { base: { base: { color: "#9" } } } }),
+      ],
+      {
+        settings: {
+          styles: { base: { mobile: { gap: "2rem" } } },
+        },
+      }
+    );
+    const split = splitDocument(document, removingMobile);
+    expect(split.fragment).toEqual({
+      nodes: {
+        a: {
+          styles: {
+            base: { mobile: { color: "#222" } },
+            hover: { mobile: { color: "#333" } },
+          },
+        },
+        inner: {
+          visibility: {
+            before: hidden,
+            after: (split.document.nodes[1]?.slots?.children ?? [])[0]
+              ?.visibility,
+          },
+        },
+      },
+      settingsStyles: { base: { mobile: { gap: "2rem" } } },
+    });
+    // The document it answers is the one the strip writes.
+    expect(split.document).toEqual(stripDocument(document, removingMobile));
+    expect(split.document).not.toEqual(document);
+  });
+
+  it("keeps a block whose id is __proto__ as one of its own", () => {
+    const split = splitDocument(
+      page([
+        heading("__proto__", {
+          styles: { base: { mobile: { color: "#222" } } },
+        }),
+      ]),
+      removingMobile
+    );
+    // Through JSON, as the fragment is stored.
+    const stored = JSON.parse(JSON.stringify(split.fragment)) as {
+      nodes: Record<string, unknown>;
+    };
+    expect(Object.hasOwn(stored.nodes, "__proto__")).toBe(true);
+    expect(stored.nodes["__proto__"]).toEqual({
+      styles: { base: { mobile: { color: "#222" } } },
+    });
+  });
+
+  it("answers the same document, and no fragment, when nothing is held there", () => {
+    const document = page([
+      heading("a", { styles: { base: { tablet: { color: "#1" } } } }),
+    ]);
+    const split = splitDocument(document, removingMobile);
+    expect(split.document).toBe(document);
+    expect(split.fragment).toBeUndefined();
+  });
+});
 
 describe("stripDocument", () => {
   it("drops every state's values under the removed breakpoint and keeps the rest", () => {
@@ -177,57 +257,31 @@ describe("stripDocument", () => {
   });
 });
 
-describe("stripClasses", () => {
-  it("strips each shared style's values under the removed breakpoint, locked ones too", () => {
-    const kept = {
+describe("splitClass", () => {
+  it("takes a shared style's values under the removed breakpoint out, locked ones too, and says what they were", () => {
+    const entry = {
+      id: "c-1",
+      slug: "one",
+      orderIndex: 0,
+      locked: true,
+      styles: { base: { base: { color: "#0" }, mobile: { color: "#9" } } },
+    };
+    expect(splitClass(entry, removingMobile.ids)).toEqual({
+      entry: { ...entry, styles: { base: { base: { color: "#0" } } } },
+      removed: { base: { mobile: { color: "#9" } } },
+    });
+  });
+
+  it("answers the same entry, and nothing removed, when it holds no value there", () => {
+    const entry = {
       id: "c-2",
       slug: "two",
       orderIndex: 1,
-      styles: { base: { base: { color: "#1" } } },
+      styles: { base: { tablet: { color: "#1" } } },
     };
-    const classes = [
-      {
-        id: "c-1",
-        slug: "one",
-        orderIndex: 0,
-        locked: true,
-        styles: { base: { base: { color: "#0" }, mobile: { color: "#9" } } },
-      },
-      kept,
-    ];
-    const stripped = stripClasses(classes, removingMobile.ids);
-    expect(stripped).toEqual([
-      { ...classes[0], styles: { base: { base: { color: "#0" } } } },
-      kept,
-    ]);
-    expect(stripped[1]).toBe(kept);
-  });
-
-  it("answers the same list when no shared style holds a value there", () => {
-    const classes = [
-      {
-        id: "c-1",
-        slug: "one",
-        orderIndex: 0,
-        styles: { base: { tablet: { color: "#0" } } },
-      },
-    ];
-    expect(stripClasses(classes, removingMobile.ids)).toBe(classes);
-  });
-
-  it("keeps a shared style's styles, empty, when all it held was under the removed breakpoint", () => {
-    const [entry] = stripClasses(
-      [
-        {
-          id: "c-1",
-          slug: "one",
-          orderIndex: 0,
-          styles: { base: { mobile: { color: "#0" } } },
-        },
-      ],
-      removingMobile.ids
-    );
-    expect(entry).toMatchObject({ styles: {} });
+    const split = splitClass(entry, removingMobile.ids);
+    expect(split.entry).toBe(entry);
+    expect(split.removed).toBeUndefined();
   });
 });
 

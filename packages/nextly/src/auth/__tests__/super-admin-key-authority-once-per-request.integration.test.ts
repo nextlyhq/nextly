@@ -248,6 +248,7 @@ describe.each(getConfiguredTestDialects())(
     const publish = (key: string, id: string) =>
       rest("PATCH", ["collections", "notes", "entries", id], key, {
         status: "published",
+        _overwrite: true,
       });
 
     const writeTwice = (key: string) =>

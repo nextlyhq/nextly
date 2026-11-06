@@ -199,7 +199,7 @@ const recorder = definePlugin({
       overwrite.classes = false;
       await overwrite.site?.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { classes: [] },
+        data: { classes: [], _overwrite: true },
         overrideAccess: true,
       });
     });
@@ -353,7 +353,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: SOURCE_BREAKPOINTS },
+        data: { breakpoints: SOURCE_BREAKPOINTS, _overwrite: true },
       });
       const { cookie } = await holding(t, WRITES_EVERYTHING);
 
@@ -440,6 +440,7 @@ describe.each(getConfiguredTestDialects())(
             classes: [
               { id: "c-card", slug: "card", orderIndex: 0, styles: {} },
             ],
+            _overwrite: true,
           },
         });
         await t.nextly.media.delete({ id: site.mediaId });
@@ -754,6 +755,7 @@ describe.each(getConfiguredTestDialects())(
               ],
               container: [],
             },
+            _overwrite: true,
           },
         });
         const author = await holding(t, slugs);
@@ -902,6 +904,7 @@ describe.each(getConfiguredTestDialects())(
               ],
               container: [],
             },
+            _overwrite: true,
           },
         });
         const answer = await post(cookie, ["transfer", "import"], {
@@ -953,6 +956,7 @@ describe.each(getConfiguredTestDialects())(
             nodes: [heading("h")],
             exposed: [exposure("kept")],
           },
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1076,7 +1080,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: SOURCE_BREAKPOINTS },
+        data: { breakpoints: SOURCE_BREAKPOINTS, _overwrite: true },
       });
       const { cookie } = await holding(
         t,
@@ -1210,6 +1214,7 @@ describe.each(getConfiguredTestDialects())(
               },
             ],
           },
+          _overwrite: true,
         },
       });
       const { cookie } = await holding(t, WRITES_EVERYTHING);

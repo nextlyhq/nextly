@@ -389,6 +389,14 @@ export {
   // Reads a plugin's own PUBLIC config from admin metadata; see
   // `usePluginClientConfig`.
   usePluginClientConfig,
+} from "./components/field-ui";
+
+// The translator a plugin's component reads its own strings with, from the
+// catalogs it declared in `contributes.translations`. Re-exported by
+// `@nextlyhq/plugin-sdk/admin`.
+export { usePluginTranslate } from "./lib/i18n/I18nProvider";
+
+export {
   FieldPicker,
   describeFieldTypes,
   ConditionRow,

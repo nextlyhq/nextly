@@ -99,6 +99,7 @@ describe("publishAllLocales (M7)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(true);
 
@@ -122,6 +123,7 @@ describe("publishAllLocales (M7)", () => {
       collectionName: "pages",
       entryId: "does-not-exist",
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(false);
   });
@@ -150,6 +152,7 @@ describe("publishAllLocales (M7)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const rows = await adapter.executeQuery(

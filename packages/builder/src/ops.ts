@@ -82,5 +82,6 @@ export {
   type DefinitionAction,
   type DefinitionActionSources,
   type ExposureTargetInput,
+  type ListQueryChange,
   type PageAction,
 } from "./composition-actions";

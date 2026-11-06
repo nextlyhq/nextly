@@ -2371,11 +2371,18 @@ async function handleAdminMetaWorkspaceRequest(
  * The catch-all Email routes whose grant is not their verb's action, each the
  * system policy's entry for what it does, as the standalone routes ask it:
  * choosing a provider type is a read or a create, making a provider the
- * default updates it, and a test send through a provider or a template
- * preview creates nothing stored and asks create.
+ * default updates it, a test send through a provider or a template preview
+ * creates nothing stored and asks create, and checking a saved provider takes
+ * the edit grant, because it is an edit's first step and tries the provider's
+ * stored secrets.
  */
 const EMAIL_METHOD_GRANTS: Readonly<Record<string, RouteGrant>> = {
   listProviderTypes: SYSTEM_READ_POLICY.emailProviders.readTypes,
+  // A saved provider's check travels over POST, but it is an edit's first
+  // step and tries the provider's stored secrets, so it takes the grant an
+  // edit takes: read from the verb, a person who may only add providers
+  // could point another provider's stored sign-in at a server of their own.
+  checkSavedProvider: SYSTEM_WRITE_POLICY.emailProviders.update,
   setDefault: SYSTEM_WRITE_POLICY.emailProviders.makeDefault,
   testProvider: SYSTEM_WRITE_POLICY.emailProviders.sendTest,
   previewTemplate: SYSTEM_WRITE_POLICY.emailTemplates.preview,

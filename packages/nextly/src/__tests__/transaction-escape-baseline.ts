@@ -166,13 +166,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: PIPELINE,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select role_inherits",
     witness:
       "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
@@ -299,13 +292,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent \u00b7 select tables",
     witness: null,
     reason: TIMING,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: PIPELINE,
   },
   {
     dialect: "postgresql",

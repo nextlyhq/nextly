@@ -238,6 +238,54 @@ running its own pass can call `runJobsPass` directly and pass `leaseMs`, which i
 raising where an event loop pause or a slow database can plausibly exceed 30 seconds,
 because the renewal timer cannot fire during a stall either.
 
+## Plugin schedules
+
+A plugin can run one of its own jobs on a cron schedule. Declare the schedule beside the job:
+
+```ts
+import { defineJob, definePlugin } from "@nextlyhq/plugin-sdk";
+
+export const reportsPlugin = definePlugin({
+  name: "@acme/reports",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    jobs: [
+      defineJob({
+        slug: "acme-reports:daily-digest",
+        handler: async input => {
+          // input.window is the ISO time this run's window opened.
+        },
+      }),
+    ],
+    schedules: [
+      {
+        slug: "daily-digest",
+        cron: "0 7 * * MON-FRI",
+        tz: "Europe/Berlin",
+        job: "acme-reports:daily-digest",
+        input: { audience: "editors" },
+      },
+    ],
+  },
+});
+```
+
+`cron` takes five fields (minute, hour, day of month, month, day of week) with lists, ranges, steps, month and day names, or an alias: `@yearly`, `@monthly`, `@weekly`, `@daily`, `@hourly`. Times are read in `tz`, an IANA time zone, UTC when you leave it out. A local time that a daylight-saving change skips doesn't run that day, and one it repeats runs once.
+
+Each call to the jobs route enqueues a schedule's job for the latest window that has opened, once:
+
+- Two calls at once, or a second call after the job has finished, add nothing for that window.
+- A schedule's first job is for the first window that opens after the installation first sees it. A yearly schedule you deploy in November first runs in January.
+- Windows that opened while nothing called the route are not run later. Only the latest is.
+- A schedule can't run more often than you call the route. A minute schedule needs the route called every minute.
+- A schedule's windows belong to its definition: its cron, read as parsed, and its time zone. Changing either starts again from the next window. A definition you change back to within 30 days resumes, and runs its latest window once if one opened in between.
+- During a rolling deploy whose versions declare different crons, each definition runs its own windows, so a job may run under both while both are live.
+
+A schedule that can't run (an invalid `cron` or `tz`, a `job` the plugin doesn't declare, or a slug it uses twice) stops the installation from starting, naming the plugin. Each window's record is kept for 30 days, and a schedule's latest window is always kept.
+
+This surface is experimental. The earlier `{ name, schedule, handler }` shape is deprecated, and runs as the current shape with a warning at start-up: `name` is the slug, `schedule` is the cron, or an interval in milliseconds of whole minutes dividing an hour or whole hours dividing a day (`900000` runs every 15 minutes, `7200000` every 2 hours), and `handler` runs as a job of its own, given the plugin's context. One that cannot be mapped, such as a 7-minute interval, a cron that doesn't parse, or one with no handler, is not run, and the warning says why. Neither stops the app starting.
+
 ## Retention
 
 Finished jobs are pruned on a schedule, so the table holds recent history rather than

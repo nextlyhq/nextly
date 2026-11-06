@@ -42,6 +42,12 @@ import {
 import { Lock, Moon, Search } from "lucide-react";
 import * as React from "react";
 
+import {
+  blockLookGroups,
+  type BlockLookGroup,
+  type LookKey,
+} from "./block-look-rows";
+import { BlockLooksGroup } from "./block-looks-group";
 import { useSurvivingReport } from "./builder-notices";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { BACKGROUND_JOBS_DOCS_HREF } from "./docs-links";
@@ -176,6 +182,21 @@ export interface SharedStylesPanelProps {
   currentRenameAttempt?: (classId: string) => number;
   /** The name each style is being renamed to while its write is open. */
   pendingNames?: Readonly<Record<string, string>>;
+  /**
+   * Choosing a look to edit in the inspector, with no block selected. Absent:
+   * the Block looks group is listed, not chosen.
+   *
+   * @experimental
+   */
+  looks?: PanelLookEditing;
+}
+
+/** How the Block looks group's rows choose the look the inspector edits. */
+export interface PanelLookEditing {
+  /** Edit a look in the inspector. */
+  readonly onEdit: (look: LookKey) => void;
+  /** The look the inspector is editing, whose row shows as chosen. */
+  readonly editing: LookKey | null;
 }
 
 /** How many rows mount before the author asks for more; also one usage read. */
@@ -244,20 +265,120 @@ function idsOf(key: string): string[] {
 function useRows(
   library: readonly NamedClass[] | undefined,
   suppliedClassIds: readonly string[] | undefined
-): SharedStyleRow[] {
+): { rows: SharedStyleRow[]; lookIds: string[] } {
   // Keyed by the ids rather than the array, which a host may build afresh on
   // every render: the search text compiles every style, once per library,
   // not once per render.
   const suppliedKey = idsKey(suppliedClassIds ?? []);
-  return React.useMemo(
+  return React.useMemo(() => {
+    if (library === undefined) return { rows: [], lookIds: [] };
+    const supplied = new Set(idsOf(suppliedKey));
+    return {
+      rows: sharedStyleRows(sharedStylesOnly(library), supplied),
+      // The worn looks, whose counts are read with the styles' in one read,
+      // so the tab's counting and failure notes speak for both.
+      lookIds: wornLookIds(blockLookGroups(library, supplied)),
+    };
+  }, [library, suppliedKey]);
+}
+
+/**
+ * The site's looks by block type, narrowed by the search to the looks whose
+ * name holds it; a type with none left is not listed.
+ */
+function useLookGroups(
+  library: readonly NamedClass[] | undefined,
+  suppliedClassIds: readonly string[] | undefined,
+  query: string,
+  styleContext: StyleCompileContext | undefined
+): BlockLookGroup[] {
+  const suppliedKey = idsKey(suppliedClassIds ?? []);
+  const groups = React.useMemo(
     () =>
       library === undefined
         ? []
-        : sharedStyleRows(
-            sharedStylesOnly(library),
-            new Set(idsOf(suppliedKey))
-          ),
+        : blockLookGroups(library, new Set(idsOf(suppliedKey))),
     [library, suppliedKey]
+  );
+  // Each look's search text, as each shared style's is: its name and every
+  // property and value it declares, so a search the box promises finds both.
+  const texts = React.useMemo(
+    () =>
+      new Map(
+        groups.flatMap(group =>
+          group.rows.map(row => [
+            row.id,
+            sharedStyleSearchText(row, styleContext),
+          ])
+        )
+      ),
+    [groups, styleContext]
+  );
+  if (query.trim() === "") return groups;
+  return groups
+    .map(group => {
+      const found = new Set(
+        searchSharedStyles(
+          group.rows,
+          query,
+          row => texts.get(row.id) ?? ""
+        ).map(row => row.id)
+      );
+      return { ...group, rows: group.rows.filter(row => found.has(row.id)) };
+    })
+    .filter(group => group.rows.length > 0);
+}
+
+/**
+ * The Block looks group above the shared styles: the site's looks by block
+ * type, found by the same search, with the worn looks' counts read as the
+ * shared styles' are. An own look has no count of its own.
+ */
+function PanelLooks({
+  library,
+  suppliedClassIds,
+  query,
+  paint,
+  editing,
+  styleContext,
+  reaches,
+}: {
+  library: readonly NamedClass[];
+  suppliedClassIds: readonly string[] | undefined;
+  query: string;
+  styleContext: StyleCompileContext | undefined;
+  paint: TilePaint;
+  editing: PanelLookEditing | undefined;
+  /** Each worn look's reach, from the tab's one usage read. */
+  reaches: ReadonlyMap<string, SharedStyleReach>;
+}): React.JSX.Element | null {
+  const groups = useLookGroups(library, suppliedClassIds, query, styleContext);
+  return (
+    <BlockLooksGroup
+      groups={groups}
+      library={library}
+      tokens={paint.tokens}
+      mode={paint.mode}
+      editing={editing?.editing}
+      onEdit={editing?.onEdit}
+      reachOf={row => reaches.get(row.id)}
+      chip={reach => <ReachChip reach={reach} />}
+    />
+  );
+}
+
+/** Whether a style may be renamed here: the tab is writable and a rename has a host. */
+function mayRename(
+  readOnly: boolean,
+  onRename: SharedStylesPanelProps["onRename"]
+): boolean {
+  return !readOnly && onRename !== undefined;
+}
+
+/** The worn looks among the groups, whose counts are read. */
+function wornLookIds(groups: readonly BlockLookGroup[]): string[] {
+  return groups.flatMap(group =>
+    group.rows.filter(row => !row.own).map(row => row.id)
   );
 }
 
@@ -273,6 +394,7 @@ export function SharedStylesPanel({
   onRename,
   currentRenameAttempt,
   pendingNames = NO_NAMES,
+  looks,
 }: SharedStylesPanelProps): React.JSX.Element {
   const paint = usePaint(tokens);
   const [query, setQuery] = React.useState("");
@@ -280,7 +402,7 @@ export function SharedStylesPanel({
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
   const [openId, setOpenId] = React.useState<string | null>(null);
-  const rows = useRows(library, suppliedClassIds);
+  const { rows, lookIds } = useRows(library, suppliedClassIds);
   const texts = React.useMemo(
     () =>
       new Map(
@@ -291,7 +413,7 @@ export function SharedStylesPanel({
   const found = searchSharedStyles(rows, query, row => texts.get(row.id) ?? "");
   // Every style's usage is read, so each filter can be counted: the rows the
   // search puts first, then the rest, fifty to a read.
-  const usage = useUsage(access, usageOrder(rows, found, pages));
+  const usage = useUsage(access, usageOrder(rows, found, pages, lookIds));
   const { counter } = usage;
   const exact = countsExact(usage, pageBlocks, rows);
 
@@ -316,7 +438,7 @@ export function SharedStylesPanel({
 
   const blocksOf = (id: string): BlocksOnThisPage =>
     pageBlocksOf(pageBlocks, id);
-  const writable = !readOnly && onRename !== undefined;
+  const writable = mayRename(readOnly, onRename);
   // Any rename still being stored. A rename writes the whole list of styles,
   // and so do Lock, Remove and Remove unused, so each waits for every
   // pending rename, not only its own row's: whichever landed second would put
@@ -350,6 +472,15 @@ export function SharedStylesPanel({
           readOnly={readOnly}
           usageFailed={usage.failed}
           issue={issueBesideList(issue, openId)}
+        />
+        <PanelLooks
+          library={library}
+          suppliedClassIds={suppliedClassIds}
+          query={query}
+          paint={paint}
+          editing={looks}
+          styleContext={styleContext}
+          reaches={usage.styles}
         />
         <section
           className="nx-vars__group"
@@ -496,11 +627,17 @@ function pageBlocksOf(
 function usageOrder(
   rows: readonly SharedStyleRow[],
   found: readonly SharedStyleRow[],
-  pages: number
+  pages: number,
+  lookIds: readonly string[] = []
 ): string[] {
   const first = found.slice(0, pages * PAGE_SIZE).map(row => row.id);
   const listed = new Set(first);
-  return [...first, ...rows.map(row => row.id).filter(id => !listed.has(id))];
+  // The worn looks after the styles: few, and listed above the styles.
+  return [
+    ...first,
+    ...rows.map(row => row.id).filter(id => !listed.has(id)),
+    ...lookIds,
+  ];
 }
 
 /**

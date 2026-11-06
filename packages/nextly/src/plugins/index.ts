@@ -102,8 +102,10 @@ export type {
   PluginFieldCodegen,
   PluginFieldCodegenImport,
   FieldSurface,
+  PluginSchedule,
   ScheduledTask,
   PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
 } from "./contributions";
 
@@ -118,6 +120,8 @@ export type {
   PluginDocumentView,
   PluginFieldTypeDocumentView,
   PluginAdminPlaceDeclaration,
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";

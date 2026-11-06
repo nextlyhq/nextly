@@ -141,16 +141,20 @@ describe("FORM_FIELD_TYPE_CATALOG", () => {
 });
 
 describe("BLOCK_FIELD_TYPE_CATALOG", () => {
-  it("is the canonical catalog minus password and component", () => {
+  it("is the canonical catalog minus password, component and icon", () => {
     const types = BLOCK_FIELD_TYPE_CATALOG.map(entry => entry.type);
     expect(new Set(types).size).toBe(types.length);
     // fieldGroup is excluded beside component: it is the same field kind's
     // migrated spelling, and a block prop can no more be a field group than
-    // it can be a component.
+    // it can be a component. icon is excluded until the Icon block brings
+    // the icon block prop and its builder.
     expect([...types].sort()).toEqual(
       ALL_FIELD_TYPES.filter(
         type =>
-          type !== "password" && type !== "component" && type !== "fieldGroup"
+          type !== "password" &&
+          type !== "component" &&
+          type !== "fieldGroup" &&
+          type !== "icon"
       ).sort()
     );
   });
@@ -175,6 +179,7 @@ describe("BLOCK_FIELD_TYPE_CATALOG", () => {
     expect(isBlockFieldType("password")).toBe(false);
     expect(isBlockFieldType("component")).toBe(false);
     expect(isBlockFieldType("fieldGroup")).toBe(false);
+    expect(isBlockFieldType("icon")).toBe(false);
     expect(isBlockFieldType("url")).toBe(false);
     expect(isBlockFieldType("nope")).toBe(false);
   });
@@ -289,6 +294,8 @@ describe("binding kinds", () => {
   it("pairs compatible source fields with props", () => {
     expect(canBindFieldToProp({ type: "text" }, { type: "text" })).toBe(true);
     expect(canBindFieldToProp({ type: "email" }, { type: "text" })).toBe(true);
+    // An icon id binds as text, the way an email address does.
+    expect(canBindFieldToProp({ type: "icon" }, { type: "text" })).toBe(true);
     expect(canBindFieldToProp({ type: "number" }, { type: "text" })).toBe(true);
     expect(canBindFieldToProp({ type: "select" }, { type: "radio" })).toBe(
       true
