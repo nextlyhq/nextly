@@ -25,6 +25,15 @@ export function registerMigrateResolveCommand(program: Command): void {
       "Record a rolled_back event so <filename> re-runs on next migrate"
     )
     .option(
+      "--removed <filename>",
+      "Record that an applied migration's file was removed from the folder on purpose; it stays applied"
+    )
+    .option(
+      "--file-missing",
+      "With --rolled-back, say the file is gone from the migrations folder, so it is not read",
+      false
+    )
+    .option(
       "--failed-cleanup <filename>",
       "Flip the stuck failed or unfinished attempts of <filename> to rolled_back (edit the .sql before retrying)"
     )

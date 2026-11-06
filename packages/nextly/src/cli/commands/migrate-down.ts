@@ -108,7 +108,7 @@ import {
 import { compareMigrationBaseNames } from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
-import { assertAppHistoryHolds } from "./migrate";
+import { assertAppHistoryHolds, migrateExitCode } from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -911,6 +911,14 @@ interface GuardedPlan {
 export async function migrateDownCore(
   deps: MigrateDownCoreDeps
 ): Promise<MigrateDownResult> {
+  // Before the plan, which reads each target's down section: a build lacking
+  // an applied file stops on the history (exit 3), not on the read of the
+  // file it lacks. Read-only here; asked again under the lock. A dry run
+  // reports the refusal after its plan instead.
+  if (!deps.options.dryRun) {
+    const refused = await refusalOfHistory(deps, false);
+    if (refused !== undefined) throw refused;
+  }
   const guarded = await planAndGuard(deps);
   const planned = guarded.planned;
   const lockOptions = {
@@ -1391,7 +1399,8 @@ export async function migrateDownAction(
   try {
     await runMigrateDown(resolvedOptions, context);
   } catch (error) {
-    exitWithError(context.logger, error);
+    // Exit 2 for an edited applied file, 3 for one the folder lacks.
+    exitWithError(context.logger, error, migrateExitCode(error));
   }
 }
 

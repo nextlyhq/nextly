@@ -53,6 +53,10 @@ interface ResolveCommandOptions {
   applied?: string;
   rolledBack?: string;
   failedCleanup?: string;
+  /** `--removed <file>`: record an applied migration's file removed on purpose. */
+  removed?: string;
+  /** `--file-missing`: with `--rolled-back`, the file is gone from the folder. */
+  fileMissing?: boolean;
   skipVerify?: boolean;
   /** Clear a stale migrate lock before taking it (operator escape hatch). */
   forceUnlock?: boolean;
@@ -91,6 +95,11 @@ function recordingRepo(
       record(`ledger row ${id} of ${filename} as rolled_back`),
     recordChecksum: id =>
       record(`the file's current checksum on ledger row ${id} of ${filename}`),
+    recordRemoval: () =>
+      record(`the removal of ${filename} from the migrations folder`).then(
+        () => "dry-run"
+      ),
+    listFileRemovals: () => repo.listFileRemovals(),
   };
 }
 
@@ -113,12 +122,22 @@ function pickMode(opts: ResolveCommandOptions): {
     opts.failedCleanup !== undefined
       ? (["failed-cleanup", opts.failedCleanup] as const)
       : null,
+    opts.removed !== undefined ? (["removed", opts.removed] as const) : null,
   ].filter((x): x is readonly [ResolveMode, string] => x !== null);
 
   if (chosen.length !== 1) {
     throw resolveModeRequired(chosen.length);
   }
-  return { mode: chosen[0][0], filename: chosen[0][1] };
+  const [mode, filename] = chosen[0];
+  // `--file-missing` says what `--rolled-back` may assume, and nothing else.
+  if (opts.fileMissing === true && mode !== "rolled-back") {
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      publicMessage:
+        "--file-missing goes with --rolled-back: it says the file being recorded rolled back is gone from the migrations folder.",
+    });
+  }
+  return { mode, filename };
 }
 
 /**
@@ -222,6 +241,7 @@ export async function runMigrateResolve(
       mode,
       filename,
       skipVerify: options.skipVerify,
+      fileMissing: options.fileMissing === true,
       dialect,
       repo,
       fileExists: async name =>
@@ -349,6 +369,11 @@ export async function runMigrateResolve(
         break;
       case "failed-cleanup":
         logger.success(cleanedUpMessage(filename, result.updatedIds.length));
+        break;
+      case "removed":
+        logger.success(
+          `Recorded that ${filename} was removed from the migrations folder on purpose. It stays applied, and later runs of \`nextly migrate\` go on.`
+        );
         break;
       case "noop":
         logger.info(result.reason);

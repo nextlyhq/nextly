@@ -689,7 +689,7 @@ describe("a pending plugin module that deletes data", () => {
 });
 
 describe("an unresolved app attempt", () => {
-  it("is refused inside the lock, before the core reconcile writes anything", async () => {
+  it("is refused before the lock, and so before the core reconcile writes anything", async () => {
     const order: string[] = [];
     const refusal = new Error("unresolved attempt");
     const d = deps({
@@ -712,17 +712,15 @@ describe("an unresolved app attempt", () => {
       lockCommand: "boot migrations (db.runMigrationsOnBoot)",
     });
     await expect(migrateCore(d as never)).rejects.toBe(refusal);
-    // The command it names is the one holding the lock, the boot step's here.
-    expect(order).toEqual([
-      "lock",
-      "refusal:boot migrations (db.runMigrationsOnBoot)",
-    ]);
+    // Asked read-only before the lock is waited on, and again under it once
+    // held; the command it names is the boot step's here.
+    expect(order).toEqual(["refusal:boot migrations (db.runMigrationsOnBoot)"]);
     expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
   });
 });
 
 describe("an applied file edited since it ran", () => {
-  it("is refused inside the lock, after the attempt check and before the core reconcile", async () => {
+  it("is refused after the attempt check and before the core reconcile", async () => {
     const order: string[] = [];
     const refusal = new CliError("MIGRATION_TAMPERED", {
       what: "edited",

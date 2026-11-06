@@ -50,7 +50,7 @@ import {
 } from "../../../domains/schema/pipeline/__tests__/helpers/schema-lock-world";
 import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
-import { migrateCore, refuseUnresolvedAppAttempts } from "../migrate";
+import { assertAppHistoryHolds, migrateCore } from "../migrate";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 
 const CHILD = join(__dirname, "helpers", "migration-run-child.ts");
@@ -131,14 +131,15 @@ describe.each(LOCK_DIALECTS)(
             transaction: !marksNoTransaction(content),
           });
         },
-        refuseUnresolvedAttempts: () =>
-          refuseUnresolvedAppAttempts({
+        checkAppHistory: ({ recordChecksums }) =>
+          assertAppHistoryHolds({
             adapter: adapter as never,
             db: adapter.getDrizzle(),
             dialect,
             migrationsDir,
             logger,
             command: "nextly migrate:down",
+            recordChecksums,
           }),
         withLock: withMigrateLock,
       });
@@ -519,12 +520,20 @@ describe.each(LOCK_DIALECTS)(
         rmSync(join(migrationsDir, FILE));
         const settled = await databaseState();
 
-        // The lock lapses; both commands refuse, naming the file, with nothing
-        // of it to judge, and change nothing.
-        expect(await refusedWith(migrate())).toEqual([]);
-        expect(await databaseState()).toEqual(settled);
-        expect(await refusedWith(migrateDown())).toEqual([]);
-        expect(await databaseState()).toEqual(settled);
+        // The lock lapses; both commands refuse as for a migration the folder
+        // lacks (exit 3), naming the file a newer build tried, and change
+        // nothing.
+        for (const command of [migrate(), migrateDown()]) {
+          const refusal = await command.then(
+            () => undefined,
+            (thrown: unknown) => thrown
+          );
+          expect(refusal).toMatchObject({
+            code: "MIGRATION_MISSING",
+            logContext: { unresolved: [FILE] },
+          });
+          expect(await databaseState()).toEqual(settled);
+        }
 
         // The operator reverses what ran and clears the attempt, which needs
         // no file: the run goes on, with nothing of the file left to apply.

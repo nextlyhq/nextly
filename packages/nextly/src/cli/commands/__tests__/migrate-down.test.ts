@@ -358,6 +358,23 @@ describe("migrateDownCore", () => {
       expect(executed).toEqual([]);
     });
 
+    it("is asked before the plan reads any down section, so an older build stops on its history", async () => {
+      const order: string[] = [];
+      const { deps } = baseDeps({
+        checkAppHistory: async () => {
+          order.push("history");
+          throw refusal;
+        },
+        readDownSql: async () => {
+          order.push("read");
+          return down('ALTER TABLE "t" DROP COLUMN "c";');
+        },
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+      });
+      await expect(migrateDownCore(deps as never)).rejects.toBe(refusal);
+      expect(order).toEqual(["history"]);
+    });
+
     it("records no checksum in a dry run, and may in a real one", async () => {
       const asked: boolean[] = [];
       const check = async (args: { recordChecksums: boolean }) => {
@@ -375,7 +392,8 @@ describe("migrateDownCore", () => {
           options: { step: 1, allowDataLoss: false, yes: false, dryRun: true },
         }).deps as never
       );
-      expect(asked).toEqual([true, false]);
+      // A real run asks read-only before its plan and again under the lock.
+      expect(asked).toEqual([false, true, false]);
     });
 
     it("is not asked for a plugin's stream", async () => {

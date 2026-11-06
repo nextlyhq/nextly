@@ -1021,9 +1021,9 @@ export function resolveModeRequired(given: number): CliError {
     what: "`nextly migrate:resolve` needs exactly one thing to record.",
     why:
       given === 0
-        ? "It was given none of `--applied`, `--rolled-back` and `--failed-cleanup`."
-        : `It was given ${given} of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.`,
-    next: "Provide exactly one of --applied, --rolled-back, or --failed-cleanup.",
+        ? "It was given none of `--applied`, `--rolled-back`, `--failed-cleanup` and `--removed`."
+        : `It was given ${given} of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.`,
+    next: "Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.",
   });
 }
 

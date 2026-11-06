@@ -338,7 +338,7 @@ export async function runMigrate(
   // Every failure below ends here: the command's exit, or with
   // `throwOnFailure` a throw its caller ends the command with.
   // Annotated so the checker reads a call to it as ending the path.
-  const fail: (error: unknown, status?: 1 | 2) => never = (
+  const fail: (error: unknown, status?: 1 | 2 | 3) => never = (
     error,
     status = 1
   ) => {
@@ -1866,16 +1866,25 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
-  // An older build stops here, before the lock and anything else, with exit
-  // 3 while the ledger records an app migration its folder lacks; asked again
-  // under the lock, below, where no other run changes the ledger.
+  // The app's history, before the lock and anything else, in
+  // `assertAppHistoryHolds`'s order: an older build stops with exit 3 while
+  // the ledger records an app migration its folder lacks, an unresolved
+  // attempt is named before any consent is asked, and an edited applied
+  // file stops with exit 2. Read-only here, recording no checksum; asked
+  // again under the lock, below, where no other run changes the ledger.
   const assertFilesPresent =
     deps.assertAppliedFilesPresentFn ?? assertAppliedFilesPresent;
+  const refuseAttempts =
+    deps.refuseUnresolvedAttemptsFn ?? refuseUnresolvedAppAttempts;
+  const assertFilesUnchanged =
+    deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged;
   const historyArgs = {
     ...deps,
     command: deps.lockCommand ?? "nextly migrate",
   };
   await assertFilesPresent(historyArgs);
+  await refuseAttempts(historyArgs);
+  await assertFilesUnchanged({ ...historyArgs, recordChecksums: false });
   // Before the lock as well: taking it creates the lock's own table on a
   // database that has none, and a refused run leaves the schema as it was. A
   // file another run records meanwhile is only refused once more.
@@ -1917,9 +1926,7 @@ export async function migrateCore(
       // before this one writes, and before Phase 1's first write: the
       // history checks of `assertAppHistoryHolds`, in its order.
       await assertFilesPresent(historyArgs);
-      await (deps.refuseUnresolvedAttemptsFn ?? refuseUnresolvedAppAttempts)(
-        historyArgs
-      );
+      await refuseAttempts(historyArgs);
       // A file that deletes data runs only with consent covering each
       // deletion, judged from the database this run holds the lock on. The
       // files run only as they were judged here (`assertRunsAsJudged`).

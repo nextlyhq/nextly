@@ -88,7 +88,7 @@ export function printCliError(
 export function exitWithError(
   logger: Pick<Logger, "getOptions">,
   error: unknown,
-  status: 1 | 2 = 1
+  status: 1 | 2 | 3 = 1
 ): never {
   printCliError(logger, error);
   return process.exit(status);

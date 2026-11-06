@@ -79,7 +79,11 @@ import { createContext, type CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import { openMigrationCommand } from "../utils/command-prerequisites";
 
-import { maybeForceUnlock } from "./migrate";
+import {
+  assertAppHistoryHolds,
+  maybeForceUnlock,
+  migrateExitCode,
+} from "./migrate";
 import { DEFAULT_BASELINE_NAME } from "./migrate-baseline.command";
 import { dryRunRefusalOf } from "./migrate-create";
 
@@ -636,7 +640,12 @@ export async function baselineCore(
 
   // A dry run plans as a run does and writes nothing, so it takes no lock: it changes nothing a
   // concurrent run could see half of.
+  // The app history checks every command that records migrations makes
+  // before its first write (`assertAppHistoryHolds`); a dry run refuses as a
+  // run would, recording no checksum.
+  const history = { ...deps, command: "nextly migrate:baseline" };
   if (deps.dryRun === true) {
+    await assertAppHistoryHolds({ ...history, recordChecksums: false });
     const planned = await planAdoption(deps);
     if (planned.kind !== "adopt") return planned;
     return {
@@ -657,6 +666,9 @@ export async function baselineCore(
     adapter as unknown as DrizzleAdapter,
     dialect,
     async () => {
+      // Under the lock, before the plan and the first write, from the ledger
+      // no other run changes now.
+      await assertAppHistoryHolds(history);
       const planned = await planAdoption(deps);
       if (planned.kind !== "adopt") return planned;
       const { baseName, sqlContent, sqlPath } = planned;
@@ -963,6 +975,7 @@ export async function migrateBaselineAction(
       context
     );
   } catch (error) {
-    exitWithError(context.logger, error);
+    // Exit 2 for an edited applied file, 3 for one the folder lacks.
+    exitWithError(context.logger, error, migrateExitCode(error));
   }
 }
