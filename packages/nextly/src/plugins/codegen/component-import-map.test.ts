@@ -1198,21 +1198,20 @@ describe("parity with the contributions a reader is sent", () => {
     },
   } as unknown as PluginDefinition;
 
-  /** Every component path in what a reader is sent. */
+  /**
+   * Every string in what a reader is sent that is shaped as a component path,
+   * `<module>#<export>`, whatever key holds it. Found by its shape rather
+   * than by the keys the collector reads, so a contribution kind that later
+   * names its component under a new key shows up here, and fails the check
+   * below until the collector learns it.
+   */
+  const COMPONENT_PATH = /^[^\s#]+#[A-Za-z_$][\w$]*$/;
   function sentPaths(sent: unknown): string[] {
+    if (typeof sent === "string")
+      return COMPONENT_PATH.test(sent) ? [sent] : [];
     if (Array.isArray(sent)) return sent.flatMap(sentPaths);
     if (sent === null || typeof sent !== "object") return [];
-    const record = sent as Record<string, unknown>;
-    const own = [
-      record.component,
-      (record.action as { open?: unknown })?.open,
-    ].filter((path): path is string => typeof path === "string");
-    return [
-      ...own,
-      ...Object.entries(record)
-        .filter(([key]) => key !== "action")
-        .flatMap(([, value]) => sentPaths(value)),
-    ];
+    return Object.values(sent).flatMap(sentPaths);
   }
 
   it("collects the component of every contribution a reader is sent", async () => {
