@@ -163,7 +163,13 @@ function StepBody({
           {checkingWords(step.labels)}
         </p>
         <Actions>
-          <Button type="button" variant="outline" onClick={removal.back}>
+          <Button
+            type="button"
+            variant="outline"
+            // Not once the save it found nothing stored for is out.
+            disabled={step.sending === true}
+            onClick={removal.back}
+          >
             Cancel
           </Button>
           <Button type="button" disabled>

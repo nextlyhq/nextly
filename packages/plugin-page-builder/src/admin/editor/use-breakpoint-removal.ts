@@ -35,6 +35,7 @@ import {
   carryOnBreakpointRemoval,
   confirmBreakpointRemoval,
   readBreakpointRemoval,
+  readSiteRemovals,
 } from "../breakpoint-removal-client";
 
 import {
@@ -50,6 +51,11 @@ export type RemovalStep =
       readonly kind: "checking";
       readonly next: BreakpointSet;
       readonly labels: readonly string[];
+      /**
+       * Whether the save it found nothing stored for is out: then it can no
+       * longer be cancelled, since the removal may already be made.
+       */
+      readonly sending?: boolean;
     }
   | {
       readonly kind: "confirm";
@@ -122,41 +128,53 @@ function reasonOf(error: unknown): string {
 }
 
 /**
- * The step a finished removal ended on, from the tab's read of it: `null`
- * when it holds nothing (done), its status when it left documents, and
- * `undefined` when the read could not say. Then the last call's own count of
- * what it left decides, since doubt is never reported as done.
+ * The step a finished removal ended on, from the run's own status: `null`
+ * when it holds nothing (done), its status when it left documents. Never
+ * from a call's own count of what it left, which counts that call alone.
  */
 function endedOn(
   runId: string,
   endedUnder: unknown,
-  status: SiteBreakpointRemovalStatus | null | undefined,
-  fallback: { readonly labels: readonly string[]; readonly left: number },
+  status: SiteBreakpointRemovalStatus | null,
+  labels: readonly string[],
   counted: readonly RemovedBreakpoint[] | undefined
 ): RemovalStep {
-  if (status === undefined && fallback.left > 0) {
-    return {
-      kind: "left",
-      runId,
-      endedUnder,
-      status: {
-        labels: fallback.labels,
-        left: fallback.left,
-        waitingOnDrafts: false,
-      },
-    };
-  }
-  if (status !== null && status !== undefined && status.left > 0) {
+  if (status !== null && status.left > 0) {
     return { kind: "left", runId, endedUnder, status };
   }
   return {
     kind: "done",
     runId,
     endedUnder,
-    labels: status?.labels ?? fallback.labels,
+    labels: status?.labels ?? labels,
     ...(counted === undefined ? {} : { counted }),
   };
 }
+
+/** How many times a finished run's status is read before following it on. */
+const STATUS_ATTEMPTS = 3;
+
+/**
+ * Removal `runId`'s status, read again after a short wait when a read fails;
+ * `undefined` when none answered, which is never taken for done.
+ */
+async function statusOf(
+  runId: string
+): Promise<SiteBreakpointRemovalStatus | null | undefined> {
+  for (let attempt = 1; attempt <= STATUS_ATTEMPTS; attempt += 1) {
+    try {
+      return await readBreakpointRemoval(runId);
+    } catch {
+      if (attempt < STATUS_ATTEMPTS) {
+        await new Promise(resolve => setTimeout(resolve, FOLLOW_MS * attempt));
+      }
+    }
+  }
+  return undefined;
+}
+
+/** How often an open Settings looks for a removal another tab started. */
+export const WATCH_MS = 10_000;
 
 /**
  * The step on screen: this tab's own while it is under way; a removal the
@@ -244,9 +262,9 @@ export interface BreakpointRemoval {
 type Finish = (
   asked: number,
   runId: string,
-  fallback: { labels: readonly string[]; left: number },
+  labels: readonly string[],
   counted: readonly RemovedBreakpoint[] | undefined
-) => Promise<void>;
+) => Promise<"settled" | "again">;
 
 /**
  * Carry the removal on screen on through its route until it says it has
@@ -289,13 +307,14 @@ function useFollowRemoval(
         if (stopped) return;
         if (answered.finished) {
           const known = followed.current;
-          await finish(
+          const outcome = await finish(
             asked,
             following,
-            { labels: known.labels, left: answered.left },
+            known.labels,
             known.counted
           );
-          return;
+          // Opened again, or its status could not be read: followed on.
+          if (outcome === "settled" || stopped) return;
         }
       } catch {
         wait = FOLLOW_AFTER_TROUBLE_MS;
@@ -340,30 +359,48 @@ export function useBreakpointRemoval({
 
   /** Settle a removal its last call said has finished. */
   const finish = useCallback<Finish>(
-    async (asked, runId, fallback, counted) => {
-      let status: SiteBreakpointRemovalStatus | null | undefined;
-      try {
-        status = await readBreakpointRemoval(runId);
-      } catch {
-        status = undefined;
-      }
+    async (asked, runId, labels, counted) => {
+      const status = await statusOf(runId);
       reread();
-      if (turn.current !== asked) return;
-      // Still open: a write sent a document back to be stripped since.
-      setOwn(
-        status?.open === true
-          ? {
-              kind: "removing",
-              runId,
-              labels: status.labels,
-              counted: counted ?? [],
-            }
-          : endedOn(runId, removalsNow.current, status, fallback, counted)
-      );
+      if (turn.current !== asked) return "settled";
+      // Still open (a write sent a document back to be stripped since), or
+      // nothing known: the removal is followed on, never called done.
+      if (status === undefined || status?.open === true) {
+        setOwn({
+          kind: "removing",
+          runId,
+          labels: status?.labels ?? labels,
+          counted: counted ?? [],
+        });
+        return "again";
+      }
+      setOwn(endedOn(runId, removalsNow.current, status, labels, counted));
+      return "settled";
     },
     [reread]
   );
   useFollowRemoval(step, turn, finish);
+  // Another tab may start a removal while Settings is open here, and the
+  // tab's own read is asked only when it opens or acts. So the removals are
+  // looked at alone now and then, and the read asked again only when they
+  // differ from the ones on screen: a refresh each time would hold Edit
+  // breakpoints while it lasts.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      readSiteRemovals().then(
+        removalsThere => {
+          if (
+            JSON.stringify(removalsThere ?? null) !==
+            JSON.stringify(removalsNow.current ?? null)
+          ) {
+            reread();
+          }
+        },
+        () => undefined
+      );
+    }, WATCH_MS);
+    return () => clearInterval(timer);
+  }, [reread]);
 
   /** Where a stored removal goes next: done, settled, or followed. */
   const afterSave = (
@@ -376,12 +413,7 @@ export function useBreakpointRemoval({
     if (removal === undefined) {
       setOwn({ kind: "done", labels, counted: dryRun.removed });
     } else if (removal.finished) {
-      void finish(
-        asked,
-        removal.runId,
-        { labels, left: removal.left },
-        dryRun.removed
-      );
+      void finish(asked, removal.runId, labels, dryRun.removed);
     } else {
       setOwn({
         kind: "removing",
@@ -425,6 +457,10 @@ export function useBreakpointRemoval({
         answerEditor(reasonOf(error))
       );
     } else if (then === "remove") {
+      // Out now: from here it may already be made, so it cannot be cancelled.
+      setOwn(current =>
+        current.kind === "checking" ? { ...current, sending: true } : current
+      );
       send(asked, next, dryRun);
     } else {
       setOwn({ kind: "confirm", next, dryRun, sending: false });
@@ -466,6 +502,7 @@ export function useBreakpointRemoval({
     step,
     save: saveThrough,
     back: () => {
+      if (own.kind === "checking" && own.sending === true) return;
       turn.current += 1;
       setOwn({ kind: "idle" });
       answerEditor(null);
