@@ -9,6 +9,7 @@
  *
  * @module editor-words
  */
+import type { TokenKind } from "@nextlyhq/blocks-engine";
 
 export const EDITOR_WORDS = {
   add: "Add",
@@ -30,3 +31,20 @@ export const EDITOR_WORDS = {
 
 /** One place the editor names, by its key in {@link EDITOR_WORDS}. */
 export type EditorWord = keyof typeof EDITOR_WORDS;
+
+/**
+ * What a place using a variable would lose with it, by the variable's kind:
+ * "they would lose this colour". The author's words for each kind, not the
+ * engine's, so a dimension is a size and anything without a plainer word is
+ * a value.
+ */
+export const VARIABLE_LOSS_WORDS: Readonly<Record<TokenKind, string>> = {
+  color: "colour",
+  dimension: "size",
+  fontFamily: "font",
+  fontWeight: "font weight",
+  number: "value",
+  shadow: "shadow",
+  duration: "value",
+  custom: "value",
+};

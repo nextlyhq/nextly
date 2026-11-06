@@ -91,11 +91,20 @@ export function builderAddress(
   if (identity.documentId === undefined) {
     return { unavailable: "Save this page to open the Page Builder." };
   }
-  const id = encodeURIComponent(identity.documentId);
   return {
-    href: `/admin/collections/${slug}/${id}/${BUILDER_VIEW_PATH}${query}`,
+    href: `${documentBuilderPath(identity.slug, identity.documentId)}${query}`,
     ...elsewhere,
   };
+}
+
+/**
+ * The Page Builder view of a document in a collection, naming no field: the
+ * admin opens the document's one blocks field, or asks which where it has
+ * several. The path every address of a collection document's view starts
+ * from.
+ */
+export function documentBuilderPath(collection: string, id: string): string {
+  return `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}/${BUILDER_VIEW_PATH}`;
 }
 
 /**

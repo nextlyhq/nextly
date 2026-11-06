@@ -59,9 +59,9 @@ function usageFromResponse(
   };
 }
 
-/** The list envelope the where-used route answers with. */
-interface SharedStyleUsesList {
-  readonly items: readonly SharedStyleUseItem[];
+/** The list envelope a where-used route answers with. */
+export interface UsesList<I> {
+  readonly items: readonly I[];
   readonly meta: {
     readonly total: number;
     readonly hasNext: boolean;
@@ -70,20 +70,25 @@ interface SharedStyleUsesList {
   };
 }
 
-/** One where-used page as the tab reads it. */
-function usesFromResponse(
-  body: SharedStyleUsesList | undefined
-): SharedStyleUsesPage {
+/**
+ * One where-used page as a tab reads it, each item read by `item`: the
+ * shared styles' and the variables' where-used routes answer the same list
+ * envelope, so its meta is read here once for both.
+ */
+export function usesPageFrom<I, O>(
+  body: UsesList<I> | undefined,
+  item: (item: I) => O
+): {
+  readonly items: readonly O[];
+  readonly total: number;
+  readonly hidden: number;
+  readonly hasNext: boolean;
+  readonly complete: boolean;
+} {
   if (body === undefined)
     throw new Error("The where-used read answered nothing.");
   return {
-    items: body.items.map(item => ({
-      id: item.id,
-      title: item.title,
-      // Kept: an id is unique only within its collection.
-      collection: item.collection,
-      kind: item.kind,
-    })),
+    items: body.items.map(item),
     total: body.meta.total,
     hidden: body.meta.hiddenCount ?? 0,
     hasNext: body.meta.hasNext,
@@ -91,6 +96,48 @@ function usesFromResponse(
     // still being counted, so the list may be short.
     complete: body.meta.notConsulted === undefined,
   };
+}
+
+/** One where-used page as the tab reads it. */
+function usesFromResponse(
+  body: UsesList<SharedStyleUseItem> | undefined
+): SharedStyleUsesPage {
+  return usesPageFrom(body, item => ({
+    id: item.id,
+    title: item.title,
+    // Kept: an id is unique only within its collection.
+    collection: item.collection,
+    kind: item.kind,
+  }));
+}
+
+/**
+ * Count the site's pages now, through the count route. One count fills every
+ * usage index, so the Shared styles and Variables tabs both count through
+ * this; counting writes no site style, so nothing is read again here, and
+ * the tab reads its counts again itself.
+ */
+export async function countSiteUsage(): Promise<SharedStylesCount> {
+  try {
+    // The mutation envelope, `{ message, item }`; the health is its item.
+    const answer = await writePluginRoute<{
+      readonly item?: SharedStylesCountResponse;
+    }>({
+      plugin: PAGE_BUILDER_PLUGIN_NAME,
+      path: SHARED_STYLE_COUNT_ROUTE_PATH,
+      body: {},
+    });
+    const item = answer?.item;
+    if (item === undefined) {
+      throw new Error("The count answered without how far it got.");
+    }
+    return { kind: "counted", whole: item.whole, counting: item.counting };
+  } catch (refused) {
+    return {
+      kind: "refused",
+      reason: refusalWords(refused, "The pages could not be counted."),
+    };
+  }
 }
 
 /**
@@ -116,7 +163,7 @@ export function useSharedStylesClient(): SharedStylesAccess {
   const uses = useCallback(
     async (id: string, page: number, signal: AbortSignal) =>
       usesFromResponse(
-        await readPluginRoute<SharedStyleUsesList>({
+        await readPluginRoute<UsesList<SharedStyleUseItem>>({
           plugin: PAGE_BUILDER_PLUGIN_NAME,
           path: sharedStyleWhereUsedPath(id, page),
           signal,
@@ -187,31 +234,6 @@ export function useSharedStylesClient(): SharedStylesAccess {
     [send]
   );
 
-  // Counting writes no site style, so nothing is read again here: the tab
-  // reads the counts again itself.
-  const count = useCallback(async (): Promise<SharedStylesCount> => {
-    try {
-      // The mutation envelope, `{ message, item }`; the health is its item.
-      const answer = await writePluginRoute<{
-        readonly item?: SharedStylesCountResponse;
-      }>({
-        plugin: PAGE_BUILDER_PLUGIN_NAME,
-        path: SHARED_STYLE_COUNT_ROUTE_PATH,
-        body: {},
-      });
-      const item = answer?.item;
-      if (item === undefined) {
-        throw new Error("The count answered without how far it got.");
-      }
-      return { kind: "counted", whole: item.whole, counting: item.counting };
-    } catch (refused) {
-      return {
-        kind: "refused",
-        reason: refusalWords(refused, "The pages could not be counted."),
-      };
-    }
-  }, []);
-
   // The words alone, as `remove` has always answered.
   const remove = useCallback(
     async (ids: readonly string[]) => (await removeWithReason(ids))?.reason,
@@ -219,7 +241,14 @@ export function useSharedStylesClient(): SharedStylesAccess {
   );
 
   return useMemo(
-    () => ({ usage, uses, lock, remove, removeWithReason, count }),
-    [usage, uses, lock, remove, removeWithReason, count]
+    () => ({
+      usage,
+      uses,
+      lock,
+      remove,
+      removeWithReason,
+      count: countSiteUsage,
+    }),
+    [usage, uses, lock, remove, removeWithReason]
   );
 }

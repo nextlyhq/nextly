@@ -628,6 +628,13 @@ export function editorPanelRenderer({
               )}
               supplied={configSiteStyle?.tokens}
               pending={siteStylePending}
+              // The class surface's library, the one the Shared styles tab
+              // lists, so a style using a variable says what it sets.
+              {...(classes.library === undefined
+                ? {}
+                : { classes: classes.library })}
+              // A shared style using a variable opens in its own tab.
+              onShowSharedStyles={() => view.choose("classes")}
               // Offered once the stored style is read, so the choice shows
               // the model the canvas is compiled under and nothing earlier.
               {...(siteStylePending || siteStyleError !== null
