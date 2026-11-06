@@ -142,12 +142,35 @@ describe("parseUiSchema", () => {
     }
   });
 
-  it("refuses a relationship's options object on a field of another type", () => {
+  it("keeps any field's registry options as stored, whole", () => {
+    // A plugin or API save sends a long text or a formatted number with the
+    // registry's options object; the definition holds it as sent.
     const r = parseUiSchema({
       collections: [
         {
           slug: "x",
-          fields: [{ name: "a", type: "text", options: { target: "people" } }],
+          fields: [
+            { name: "bio", type: "text", options: { variant: "long" } },
+            { name: "price", type: "number", options: { format: "float" } },
+          ],
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.collections[0]?.fields.map(f => f.options)).toEqual([
+        { variant: "long" },
+        { format: "float" },
+      ]);
+    }
+  });
+
+  it("still requires a select's choices as a list", () => {
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "x",
+          fields: [{ name: "a", type: "select", options: { variant: "long" } }],
         },
       ],
     });

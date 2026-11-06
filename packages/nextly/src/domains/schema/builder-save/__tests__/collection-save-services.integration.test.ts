@@ -223,6 +223,41 @@ describe.each(getConfiguredTestDialects())(
       ).resolves.toBeDefined();
     });
 
+    it("writes a plugin's long text and formatted number through the writer", async () => {
+      process.env.NODE_ENV = "development";
+      const service = t.getService<CollectionService>("collectionService");
+      const fields = [
+        { name: "bio", type: "text", options: { variant: "long" } },
+        { name: "price", type: "number", options: { format: "float" } },
+      ];
+
+      await service.createCollection(
+        { name: "profiles", label: "Profile", fields } as Parameters<
+          CollectionService["createCollection"]
+        >[0],
+        {}
+      );
+
+      const definition = JSON.parse(
+        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
+      ) as { collections: { slug: string; fields: unknown[] }[] };
+      expect(
+        definition.collections.find(c => c.slug === "profiles")?.fields
+      ).toEqual(fields);
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        adapter.getCapabilities().dialect,
+        ["dc_profiles"]
+      );
+      const columns = new Map(
+        live.tables[0]?.columns.map(c => [c.name, c.type.toLowerCase()])
+      );
+      // A long text is unbounded and a float is not an integer, on every dialect.
+      expect(columns.get("bio")).toMatch(/text/);
+      expect(columns.get("price")).not.toMatch(/int/);
+    });
+
     it("outside development writes them and runs nothing", async () => {
       process.env.NODE_ENV = "production";
       const service = t.getService<CollectionService>("collectionService");
