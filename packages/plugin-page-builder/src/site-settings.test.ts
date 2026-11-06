@@ -196,6 +196,59 @@ describe("the breakpoints route", () => {
   });
 });
 
+describe("a confirmed removal's write of the shared styles", () => {
+  it("is not made when what it takes out cannot be kept, and the removal is dropped", async () => {
+    const stored = {
+      breakpoints: CHANGED,
+      classes: [
+        {
+          id: "c-1",
+          slug: "one",
+          orderIndex: 0,
+          styles: { base: { base: { color: "#0" }, mobile: { color: "#9" } } },
+        },
+      ],
+      version: "v1",
+    };
+    const service = {
+      holding: vi.fn(async () => []),
+      retire: vi.fn(async () => {}),
+      begin: vi.fn(async () => ({ id: "run-1" })),
+      abandon: vi.fn(async () => {}),
+      publish: vi.fn(async () => {}),
+      keepFragment: vi.fn(async () => {
+        throw new Error("the fragments table refused the row");
+      }),
+    };
+    const removal = {
+      stored: async () => stored,
+      count: async () => ({ removed: [], unreadable: 0, complete: true }),
+      cascade: { service: () => service, walkMs: 1000, countMs: 1000 },
+    } as unknown as BreakpointRemoval;
+    const updateSingle = vi.fn(async () => ({}));
+    await expect(
+      writeSiteBreakpoints(
+        post({ breakpoints: SET, confirmRemoval: true, version: "v1" }),
+        route({ caller: holding("manage-page-builder-site").caller }) as never,
+        { updateSingle } as never,
+        removal
+      )
+    ).rejects.toThrow("refused the row");
+    // What it would take out was offered to be kept, before any write.
+    expect(service.keepFragment).toHaveBeenCalledWith({
+      runId: "run-1",
+      host: null,
+      form: "site",
+      fragment: {
+        classes: { "c-1": { base: { mobile: { color: "#9" } } } },
+        overridden: [],
+      },
+    });
+    expect(updateSingle).not.toHaveBeenCalled();
+    expect(service.abandon).toHaveBeenCalledWith("run-1");
+  });
+});
+
 /** A caller holding exactly the grants named, recording what it was asked. */
 function holding(...grants: string[]) {
   const asked: string[] = [];

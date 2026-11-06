@@ -17,11 +17,18 @@
  * request walking the same run is safe: every write carries the hash of the
  * value it was computed from, and every move of the run is a compare-and-set.
  *
+ * Each pass also deletes what removals took out of the site once it is past
+ * the window they can be undone in (`fragments`).
+ *
  * @module breakpoint-removal/job
  */
 import { defineJob, type JobDefinition } from "@nextlyhq/plugin-sdk";
 
+import { FRAGMENTS_KEPT_DAYS } from "./fragments";
 import type { BreakpointRemovalService } from "./service";
+
+/** A day, in milliseconds. */
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The job type this plugin registers, namespaced by the plugin. */
 export const BREAKPOINT_REMOVAL_JOB = "page-builder:breakpoint-removal";
@@ -32,7 +39,7 @@ export const BREAKPOINT_REMOVAL_JOB = "page-builder:breakpoint-removal";
  * walking a half-built configuration.
  */
 export function breakpointRemovalJob(
-  service: () => Pick<BreakpointRemovalService, "carryOn">
+  service: () => Pick<BreakpointRemovalService, "carryOn" | "purgeFragments">
 ): JobDefinition {
   return defineJob({
     slug: BREAKPOINT_REMOVAL_JOB,
@@ -41,6 +48,10 @@ export function breakpointRemovalJob(
       // The runner's own deadline: the walk checks the live clock against it
       // between documents.
       await service().carryOn({ deadline: context.deadline });
+      // After the walk, which the deadline is for: the purge is one delete.
+      await service().purgeFragments(
+        new Date(Date.now() - FRAGMENTS_KEPT_DAYS * DAY_MS)
+      );
     },
   });
 }

@@ -38,6 +38,7 @@ import {
 } from "../host-rewrite/site";
 import type { SiteStyleData } from "../site-style";
 
+import { fragmentCapture, fragmentStore, type FragmentRow } from "./fragments";
 import {
   removalRunStore,
   WRITTEN_BACK,
@@ -125,6 +126,13 @@ export interface BreakpointRemovalService {
    * walked from now on. Until then nobody walks it.
    */
   publish(runId: string): Promise<void>;
+  /**
+   * Keep what a removal took out of the shared styles, before the write that
+   * takes it out. Throws when it cannot be kept, so that write is not made.
+   */
+  keepFragment(row: FragmentRow): Promise<void>;
+  /** Delete what removals took out before `before`: past their undo window. */
+  purgeFragments(before: Date): Promise<void>;
 }
 
 /** What the installed plugin hands the service. */
@@ -268,17 +276,19 @@ export function breakpointRemovalService(
     // none left it is closed, and values a breakpoint added since put back
     // are the site's own.
     if (!run.open && !(await store.reopen(runId))) return NOTHING_LEFT;
+    // What each strip takes out is kept before its write (`fragments`).
+    const capture = fragmentCapture(fragmentStore(installed.db), runId);
     return rewriteHosts(
       {
         fence: store,
         progress: progressStore(installed.db, installed.dialect),
         source: siteWalkSource(installed.site),
         read: siteHostReader(installed.site),
-        write: systemHostWriter(installed.site),
+        write: capture.writer(systemHostWriter(installed.site)),
       },
       {
         runId,
-        step: stripBreakpointsStep(removal),
+        step: stripBreakpointsStep(removal, capture.remember),
         ...(budget.maxDocuments === undefined
           ? {}
           : { maxDocuments: budget.maxDocuments }),
@@ -337,5 +347,7 @@ export function breakpointRemovalService(
     },
     retire: ids => runs().retire(ids),
     publish: runId => runs().publish(runId),
+    keepFragment: row => fragmentStore(install().db).keep(row),
+    purgeFragments: before => fragmentStore(install().db).purge(before),
   };
 }

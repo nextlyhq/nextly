@@ -34,12 +34,13 @@ import {
   type RemovalPlace,
   type RemovedBreakpoint,
 } from "./breakpoint-removal/dry-run";
+import type { ClassesFragment } from "./breakpoint-removal/fragments";
 import type { BreakpointRun, HoldingRun } from "./breakpoint-removal/run-store";
 import {
   PENDING_DRAFT,
   type BreakpointRemovalService,
 } from "./breakpoint-removal/service";
-import { stripClass, stripClasses } from "./breakpoint-removal/strip";
+import { splitClass, type RemovedStyles } from "./breakpoint-removal/strip";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
@@ -408,8 +409,9 @@ function refuseReadding(
 }
 
 /**
- * The stored class tier a removal writes, or `undefined` when no shared style
- * holds anything under `ids`, so a removal that strips none writes none.
+ * The stored class tier a removal writes, with what it took out of the shared
+ * styles; `undefined` when no shared style holds anything under `ids`, so a
+ * removal that strips none writes none.
  *
  * The library the site compiles is the code's classes with the stored tier
  * over them, by id. So every stored entry is stripped, and each code-supplied
@@ -417,30 +419,49 @@ function refuseReadding(
  * is stored as its stripped override: the code's class, without them, which
  * is the stored tier's rule for what differs from the code (`classOverrideOf`).
  * Otherwise the code's values would stay in the library, and a breakpoint
- * added again under the same id would find them.
+ * added again under the same id would find them. The fragment names those
+ * overrides, which putting the values back takes out again.
  */
 function strippedClassTier(
   stored: unknown,
   supplied: readonly NamedClass[] | undefined,
   ids: ReadonlySet<string>
-): readonly unknown[] | undefined {
+): { tier: readonly unknown[]; fragment: ClassesFragment } | undefined {
   const read = readStoredJson(stored);
   const list: readonly unknown[] = Array.isArray(read) ? read : [];
-  const stripped = stripClasses(list, ids);
-  const overridden = new Set(
-    list.map(entry =>
-      typeof entry === "object" && entry !== null
-        ? (entry as { id?: unknown }).id
-        : undefined
-    )
-  );
+  const classes: Record<string, RemovedStyles> = {};
+  let changed = false;
+  const stripped = list.map(entry => {
+    const split = splitClass(entry, ids);
+    if (split.removed === undefined) return entry;
+    changed = true;
+    const id = classIdOf(entry);
+    if (id !== undefined) classes[id] = split.removed;
+    return split.entry;
+  });
+  const overridden = new Set(list.map(classIdOf));
   const fromCode = (supplied ?? [])
     .filter(entry => !overridden.has(entry.id))
-    .map(entry => ({ entry, without: stripClass(entry, ids) }))
-    .filter(({ entry, without }) => without !== entry)
-    .map(({ without }) => without);
-  if (stripped === list && fromCode.length === 0) return undefined;
-  return [...stripped, ...fromCode];
+    .map(entry => ({ id: entry.id, split: splitClass(entry, ids) }))
+    .filter(({ split }) => split.removed !== undefined);
+  if (!changed && fromCode.length === 0) return undefined;
+  for (const { id, split } of fromCode) {
+    if (split.removed !== undefined) classes[id] = split.removed;
+  }
+  return {
+    tier: [
+      ...(changed ? stripped : list),
+      ...fromCode.map(({ split }) => split.entry),
+    ],
+    fragment: { classes, overridden: fromCode.map(({ id }) => id) },
+  };
+}
+
+/** A stored shared style's id, or `undefined` for an entry that names none. */
+function classIdOf(entry: unknown): string | undefined {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const id = (entry as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
 }
 
 /** The audit kind each removed breakpoint is recorded under. */
@@ -585,6 +606,11 @@ async function writeRemovalSet(args: {
   removal: BreakpointRemoval;
   stored: VersionedSiteStyle;
   removedIds: ReadonlySet<string>;
+  /**
+   * Keep what the write takes out of the shared styles, before it does:
+   * refused when it cannot be kept, and the write is not made.
+   */
+  keep: (fragment: ClassesFragment) => Promise<void>;
 }): Promise<void> {
   let read = args.stored;
   for (let attempt = 1; ; attempt += 1) {
@@ -593,13 +619,16 @@ async function writeRemovalSet(args: {
       args.removal.defaults?.classes,
       args.removedIds
     );
+    // Kept for every attempt, from the version that attempt strips: a row
+    // for an attempt refused as stale only fills values that are there.
+    if (classes !== undefined) await args.keep(classes.fragment);
     try {
       await writeSiteStyle(
         args.nextly,
         args.ctx,
         {
           breakpoints: args.breakpoints,
-          ...(classes === undefined ? {} : { classes }),
+          ...(classes === undefined ? {} : { classes: classes.tier }),
         },
         versionToWrite(read)
       );
@@ -661,6 +690,13 @@ async function beginRemoval(args: {
       removal,
       stored,
       removedIds: new Set(removed.keys()),
+      keep: fragment =>
+        service.keepFragment({
+          runId: run.id,
+          host: null,
+          form: "site",
+          fragment,
+        }),
     });
   } catch (error) {
     // A write can commit and still throw (a hook after it failed): then the
