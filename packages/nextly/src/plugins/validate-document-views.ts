@@ -87,7 +87,10 @@ function labelOf(view: { label?: string }): { label?: string } {
  * keys: `constructor` is a legal slug, and an inherited lookup answers it with
  * a function the admin would receive as no slug at all.
  */
-function renamedSlug(plugin: PluginDefinition, declared: string): string {
+export function renamedSlug(
+  plugin: PluginDefinition,
+  declared: string
+): string {
   const renames = plugin.renameMap ?? {};
   return Object.hasOwn(renames, declared) ? renames[declared] : declared;
 }

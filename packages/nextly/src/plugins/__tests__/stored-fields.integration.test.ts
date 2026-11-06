@@ -52,6 +52,7 @@ import {
   updateIfUnchanged,
   type PluginConditionalUpdate,
   type PluginStoredDocument,
+  type PluginConditionalWriteIdentity,
   type PluginStoredFieldsRequest,
   type PluginStoredIdentity,
 } from "../stored-fields";
@@ -68,6 +69,33 @@ const DOC_TYPE = {
   storage: "json",
   component: "@test/doc/admin#Doc",
 } as const;
+
+/**
+ * A site's `beforeChange` hook that puts the stored body back over the one a
+ * write sends, once a body is stored: the last hook before a save persists.
+ */
+function restoreStoredBody(hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const stored = hook.originalData?.body;
+  if (hook.data === undefined || !("body" in hook.data) || stored == null) {
+    return hook.data;
+  }
+  return { ...hook.data, body: stored };
+}
+
+/**
+ * A site's `beforeChange` hook that turns a publish titled "flip" into a
+ * draft: the lifecycle state the write sent is not the one it would persist.
+ */
+function flipPublishToDraft(hook: {
+  data?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const data = hook.data;
+  if (data?.title !== "flip" || data.status !== "published") return data;
+  return { ...data, status: "draft" };
+}
 
 /** What the read hooks below put in place of the stored values. */
 const HIDDEN = { hiddenBy: "afterRead" };
@@ -305,6 +333,8 @@ describe.each(getConfiguredTestDialects())(
     let reader: PluginRouteIdentity;
     let stranger: PluginRouteIdentity;
     let owner: PluginRouteIdentity;
+    /** May update content, and read none of it. */
+    let updater: PluginRouteIdentity;
 
     beforeAll(async () => {
       const plugin = definePlugin({
@@ -313,6 +343,28 @@ describe.each(getConfiguredTestDialects())(
         nextly: ">=0.0.0",
         contributes: { fieldTypes: [DOC_TYPE] },
         init(ctx) {
+          // A site's update hook that seals the body it is sent, which the
+          // body's own update rule then refuses: what the rule judges is the
+          // data as the hook left it.
+          ctx.hooks.on("beforeUpdate", "hookgated", hook => {
+            const data = hook.data as Record<string, unknown> | undefined;
+            if (data === undefined || !("body" in data)) return data;
+            return {
+              ...data,
+              body: { ...(data.body as Record<string, unknown>), sealed: true },
+            };
+          });
+          ctx.hooks.on("beforeChange", "flipped", hook =>
+            flipPublishToDraft(hook as { data?: Record<string, unknown> })
+          );
+          ctx.hooks.on("beforeChange", "restored", hook =>
+            restoreStoredBody(
+              hook as {
+                data?: Record<string, unknown>;
+                originalData?: Record<string, unknown>;
+              }
+            )
+          );
           // A site's collection-level read hook that removes a field from
           // every ordinary read.
           for (const slug of ["hooked", "worded"]) {
@@ -428,6 +480,60 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as unknown as CollectionConfig,
           {
+            // A field every writer is refused by its own update rule, which an
+            // ordinary update drops silently, writing the rest of the row.
+            slug: "locked",
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc", access: { update: () => false } },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            // A field group beside the body: an update stores its values in
+            // the group's own table, not in this row.
+            slug: "carded",
+            fields: [
+              { name: "body", type: "doc" },
+              { name: "heroBlock", type: "component", component: "teaser" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            // A lifecycle with working drafts, whose `beforeChange` hook turns
+            // a publish into a draft.
+            slug: "flipped",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            // A body a `beforeChange` hook puts back as stored.
+            slug: "restored",
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            // A body whose update rule refuses a sealed value, which only the
+            // collection's own update hook seals.
+            slug: "hookgated",
+            fields: [
+              { name: "title", type: "text" },
+              {
+                name: "body",
+                type: "doc",
+                access: {
+                  update: ({ data }: { data?: Record<string, unknown> }) =>
+                    (data?.body as { sealed?: unknown } | undefined)?.sealed !==
+                    true,
+                },
+              },
+            ],
+          } as unknown as CollectionConfig,
+          {
             slug: "grouped",
             fields: [
               {
@@ -457,6 +563,27 @@ describe.each(getConfiguredTestDialects())(
                 ],
               }) as never
           ),
+          // A Single with working drafts whose own `beforeChange` hook turns a
+          // publish into a draft.
+          {
+            slug: "flipsite",
+            status: true,
+            versions: { drafts: true },
+            hooks: { beforeChange: [flipPublishToDraft] },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as never,
+          // A Single whose own `beforeChange` hook puts its stored body back.
+          {
+            slug: "restoresite",
+            hooks: { beforeChange: [restoreStoredBody] },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as never,
           // Created by another writer while a conditional write is under way,
           // with the field it expects left unset.
           ...["adoptrace", "adoptcontrol", "firstpair"].map(
@@ -469,6 +596,12 @@ describe.each(getConfiguredTestDialects())(
                 ],
               }) as never
           ),
+        ],
+        fieldGroups: [
+          {
+            slug: "teaser",
+            fields: [{ name: "body", type: "text" }],
+          } as never,
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
@@ -500,6 +633,10 @@ describe.each(getConfiguredTestDialects())(
         "germanless",
         "grouped",
         "guarded",
+        "locked",
+        "hookgated",
+        "restored",
+        "flipped",
         "staged",
         "stagedwords",
       ];
@@ -510,6 +647,9 @@ describe.each(getConfiguredTestDialects())(
       const readerId = await person("reader");
       await grantTo(t, readerId, "read", content);
       const strangerId = await person("stranger");
+      const updaterId = await person("updater");
+      await grantTo(t, updaterId, "update", content);
+      updater = { user: { id: updaterId } };
       editor = { user: { id: editorId } };
       reader = { user: { id: readerId } };
       stranger = { user: { id: strangerId } };
@@ -1844,7 +1984,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "drafted",
           id,
-          data: { body: { v: "draft" } },
+          data: { body: { v: "draft" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         expect(await readStoredFields(SYSTEM, asked)).toMatchObject({
@@ -1902,7 +2042,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id,
-          data: { body: { v: "author" } },
+          data: { body: { v: "author" }, _overwrite: true },
           overrideAccess: true,
         } as never);
 
@@ -2014,6 +2154,696 @@ describe.each(getConfiguredTestDialects())(
             )
           )
         ).toBe(true);
+      });
+    });
+
+    describe("a caller whose expectation the system read", () => {
+      const SYSTEM = { overrideAccess: true } as const;
+      /** The write as `caller`, its expectation read and judged as the system. */
+      const checked = (caller: PluginRouteIdentity) => ({
+        caller,
+        checkedBy: SYSTEM,
+      });
+      /** The hash of a field as the system reads it. */
+      async function systemHash(
+        document: PluginStoredDocument,
+        field: string
+      ): Promise<string> {
+        const read = await readStoredFields(SYSTEM, {
+          ...document,
+          fields: [field],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the entry");
+        return storedValueHash(read.values[field] ?? { kind: "absent" });
+      }
+      /** A field as the system reads it. */
+      async function systemValue(
+        document: PluginStoredDocument,
+        field: string
+      ): Promise<PluginStoredValue | undefined> {
+        const read = await readStoredFields(SYSTEM, {
+          ...document,
+          fields: [field],
+          form: "published",
+        });
+        return read.kind === "found" ? read.values[field] : undefined;
+      }
+
+      it("lands the write of a caller who may update an entry but not read it, which made as them alone is refused", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+
+        // CONTROL: made as the caller alone, the expectation is theirs to
+        // read, and they may not, so nothing is compared or written.
+        const alone = await rejectionOf(
+          updateIfUnchanged(updater, {
+            ...page,
+            data: { body: { v: "alone" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isForbidden(alone)).toBe(true);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        await updateIfUnchanged(checked(updater), {
+          ...page,
+          data: { body: { v: "updater" } },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: "updater" },
+        });
+      });
+
+      it("lands the write of a field a read rule closes to the caller, which made as them alone is refused unread", async () => {
+        const id = await created("guarded", { body: { v: 0 } });
+        const entry = { collection: "guarded", id };
+        const hash = await systemHash(entry, "body");
+
+        // CONTROL: the caller is never told whether a hash matches a field
+        // they may not read, right or wrong.
+        for (const guess of [hash, "not-the-hash"]) {
+          const alone = await rejectionOf(
+            updateIfUnchanged(editor, {
+              ...entry,
+              data: { body: { v: "alone" } },
+              expect: { field: "body", form: "published", hash: guess },
+            })
+          );
+          expect(NextlyError.isCode(alone, "INVALID_INPUT")).toBe(true);
+        }
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        await updateIfUnchanged(checked(editor), {
+          ...entry,
+          data: { body: { v: "editor" } },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: "editor" },
+        });
+      });
+
+      it("refuses a caller who may not update, though the system read the expectation, and changes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+
+        // Refused as the caller's own update is: forbidden to one who may
+        // read the entry, and not found to one who may not, so a refused
+        // caller cannot tell whether it exists. Never a conflict or a write.
+        for (const caller of [reader, stranger]) {
+          const ordinary = await rejectionOf(
+            t.nextly.update({
+              collection: "pages",
+              id,
+              data: { body: { v: "refused" }, _overwrite: true },
+              user: caller.user,
+              overrideAccess: false,
+            } as never)
+          );
+          if (!(ordinary instanceof NextlyError)) {
+            throw new Error("expected the ordinary update to be refused");
+          }
+          const refusal = await rejectionOf(
+            updateIfUnchanged(checked(caller), {
+              ...page,
+              data: { body: { v: "refused" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(
+            NextlyError.isForbidden(refusal) || NextlyError.isNotFound(refusal)
+          ).toBe(true);
+          expect(NextlyError.isCode(refusal, ordinary.code)).toBe(true);
+        }
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("still refuses a stale one with a conflict, and changes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+        await t.nextly.update({
+          collection: "pages",
+          id,
+          data: { body: { v: "author" }, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(checked(editor), {
+            ...page,
+            data: { body: { v: "stale" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: "author" },
+        });
+      });
+
+      it("refuses any other shape carrying `checkedBy`, and the stored read refuses this one, writing nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+        const junk: unknown[] = [
+          { caller: editor, checkedBy: { overrideAccess: false } },
+          {
+            caller: editor,
+            checkedBy: { overrideAccess: true, user: owner.user },
+          },
+          { caller: { ...editor, overrideAccess: true }, checkedBy: SYSTEM },
+          { caller: {}, checkedBy: SYSTEM },
+          { ...checked(editor), user: editor.user },
+          { ...checked(editor), overrideAccess: true },
+          { checkedBy: SYSTEM },
+        ];
+        for (const identity of junk) {
+          const write = await rejectionOf(
+            updateIfUnchanged(identity as PluginConditionalWriteIdentity, {
+              ...page,
+              data: { body: { v: "junk" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+        }
+        const read = await rejectionOf(
+          readStoredFields(checked(editor) as unknown as PluginStoredIdentity, {
+            ...page,
+            fields: ["body"],
+            form: "published",
+          })
+        );
+        expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses a write whose own update hook leaves it a field the field update rule refuses, and writes nothing", async () => {
+        const id = await created("hookgated", { title: "t", body: { v: 0 } });
+        const entry = { collection: "hookgated", id };
+        const hash = await systemHash(entry, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findByID({
+              collection: "hookgated",
+              id,
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: the data as sent passes the rule, and the hook's sealed
+        // body does not, so the ordinary update drops the body silently and
+        // writes the title.
+        await t.nextly.update({
+          collection: "hookgated",
+          id,
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
+          user: editor.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        for (const identity of [editor, checked(editor)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses a write a field update rule would leave its field out of, whoever read it, and writes nothing", async () => {
+        const id = await created("locked", { title: "t", body: { v: 0 } });
+        const entry = { collection: "locked", id };
+        const hash = await systemHash(entry, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findByID({
+              collection: "locked",
+              id,
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: the ordinary update drops the field silently, and writes
+        // the rest of the row without it.
+        await t.nextly.update({
+          collection: "locked",
+          id,
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
+          user: editor.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        // As the caller alone, or with the expectation the system's.
+        for (const identity of [editor, checked(editor)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        // CONTROL: a field the write only expects is not written, so no rule
+        // takes it out; what it writes lands, judged whole.
+        await updateIfUnchanged(checked(editor), {
+          ...entry,
+          data: { title: "expected only" },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await titleOf()).toBe("expected only");
+
+        // CONTROL: the system, which no field rule judges, writes the field.
+        await updateIfUnchanged(SYSTEM, {
+          ...entry,
+          data: { body: { v: "system" } },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: "system" },
+        });
+      });
+
+      it("refuses a write a collection's beforeChange hook puts the stored value back into, and writes nothing", async () => {
+        const id = await created("restored", { title: "t", body: { v: 0 } });
+        const entry = { collection: "restored", id };
+        const hash = await systemHash(entry, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findByID({
+              collection: "restored",
+              id,
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: an ordinary update lets the hook put the body back, and
+        // writes the title.
+        await t.nextly.update({
+          collection: "restored",
+          id,
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
+          user: editor.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        for (const identity of [editor, checked(editor)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses a write a Single's beforeChange hook puts the stored value back into, and writes nothing", async () => {
+        const site = { single: "restoresite" };
+        await t.nextly.updateSingle({
+          slug: "restoresite",
+          data: { title: "t", body: { v: 0 }, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const hash = await systemHash(site, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findSingle({
+              slug: "restoresite",
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: an ordinary update lets the hook put the body back, and
+        // writes the title.
+        await t.nextly.updateSingle({
+          slug: "restoresite",
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
+          user: owner.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(site, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        for (const identity of [owner, checked(owner)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...site,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(site, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses a publish a collection's beforeChange hook turns into a draft, and writes nothing", async () => {
+        const id = await created("flipped", {
+          title: "t",
+          body: { v: 0 },
+          status: "published",
+        });
+        const entry = { collection: "flipped", id };
+        const hash = await systemHash(entry, "body");
+        const live = () =>
+          readStoredFields(SYSTEM, {
+            ...entry,
+            fields: ["body"],
+            form: "published",
+          });
+        const asSent = {
+          title: "flip",
+          body: { v: "conditional" },
+          status: "published",
+        };
+
+        // As one who may also unpublish, so only the whole-write judgment can
+        // refuse it: a writer without that permission would be refused by the
+        // lifecycle gate whatever this judged.
+        for (const identity of [owner, checked(owner)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: asSent,
+              expect: {
+                field: "body",
+                form: "published",
+                hash,
+                noPendingDraft: true,
+              },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        // Nothing changed, and no working draft was made.
+        expect(await live()).toMatchObject({
+          values: { body: { kind: "value", value: { v: 0 } } },
+          live: { publicState: "published", workingDraft: false },
+        });
+
+        // CONTROL: an ordinary update lets the hook turn the publish into a
+        // draft, and writes what it sends otherwise.
+        await t.nextly.update({
+          collection: "flipped",
+          id,
+          data: { ...asSent, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const after = await live();
+        expect(
+          after.kind === "found" ? after.live?.publicState : "absent"
+        ).not.toBe("published");
+      });
+
+      it("refuses a publish a Single's beforeChange hook turns into a draft, and writes nothing", async () => {
+        const site = { single: "flipsite" };
+        await t.nextly.updateSingle({
+          slug: "flipsite",
+          data: {
+            title: "t",
+            body: { v: 0 },
+            status: "published",
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        } as never);
+        const hash = await systemHash(site, "body");
+        const live = () =>
+          readStoredFields(SYSTEM, {
+            ...site,
+            fields: ["body"],
+            form: "published",
+          });
+        expect(await live()).toMatchObject({
+          live: { publicState: "published", workingDraft: false },
+        });
+        const asSent = {
+          title: "flip",
+          body: { v: "conditional" },
+          status: "published",
+        };
+
+        for (const identity of [owner, checked(owner)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...site,
+              data: asSent,
+              expect: {
+                field: "body",
+                form: "published",
+                hash,
+                noPendingDraft: true,
+              },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        // Nothing changed, and no working draft was made.
+        expect(await live()).toMatchObject({
+          values: { body: { kind: "value", value: { v: 0 } } },
+          live: { publicState: "published", workingDraft: false },
+        });
+
+        // CONTROL: an ordinary update lets the hook turn the publish into a
+        // draft.
+        await t.nextly.updateSingle({
+          slug: "flipsite",
+          data: { ...asSent, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const after = await live();
+        expect(
+          after.kind === "found" ? after.live?.publicState : "absent"
+        ).not.toBe("published");
+      });
+
+      it("refuses a write sending a key an update never stores, for an entry and a Single, and writes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const pageHash = await systemHash(page, "body");
+        await t.nextly.updateSingle({
+          slug: "site",
+          data: { body: { v: 0 }, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const site = { single: "site" };
+        const siteHash = await systemHash(site, "body");
+        const at = new Date(0).toISOString();
+
+        // A system column no client writes, on an entry and on a Single, as
+        // a caller, with the expectation the system's, and as the system.
+        const writes = [
+          { document: page, hash: pageHash, key: "updatedAt", caller: editor },
+          { document: site, hash: siteHash, key: "createdAt", caller: owner },
+        ];
+        for (const { document, hash, key, caller } of writes) {
+          for (const identity of [caller, checked(caller), SYSTEM] as const) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(identity, {
+                ...document,
+                data: { body: { v: "partial" }, [key]: at },
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+          }
+          expect(await systemValue(document, "body")).toEqual({
+            kind: "value",
+            value: { v: 0 },
+          });
+        }
+
+        // CONTROL: the same write without the key lands.
+        await updateIfUnchanged(checked(editor), {
+          ...page,
+          data: { body: { v: "whole" } },
+          expect: { field: "body", form: "published", hash: pageHash },
+        });
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: "whole" },
+        });
+      });
+
+      it("takes a field group an update stores in its own table, by the name it is declared under alone", async () => {
+        const id = await created("carded", { body: { v: 0 } });
+        const entry = { collection: "carded", id };
+        const hash = await systemHash(entry, "body");
+
+        // Another spelling of the field group's name is taken out of no
+        // payload and stored nowhere, so it is refused like any such key.
+        const respelt = await rejectionOf(
+          updateIfUnchanged(checked(owner), {
+            ...entry,
+            data: { body: { v: "respelt" }, hero_block: { body: "hi" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(respelt, "INVALID_INPUT")).toBe(true);
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        await updateIfUnchanged(checked(owner), {
+          ...entry,
+          data: { body: { v: "with hero" }, heroBlock: { body: "hi" } },
+          expect: { field: "body", form: "published", hash },
+        });
+
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: "with hero" },
+        });
+        const row = (await t.nextly.findByID({
+          collection: "carded",
+          id,
+          overrideAccess: true,
+          depth: 1,
+        } as never)) as unknown as { heroBlock?: { body?: unknown } };
+        expect(row.heroBlock?.body).toBe("hi");
+      });
+
+      it("refuses a caller who may read but not update with the same answer whatever the data names", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+        const codes: string[] = [];
+        for (const identity of [reader, checked(reader)]) {
+          for (const data of [
+            { body: { v: "x" }, updatedAt: new Date(0).toISOString() },
+            { body: { v: "x" } },
+          ]) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(identity, {
+                ...page,
+                data,
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isForbidden(refusal)).toBe(true);
+            codes.push((refusal as NextlyError).code);
+          }
+        }
+        expect(new Set(codes).size).toBe(1);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses a caller who may not read with the same answer whatever the data names, for an entry there or not", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const hash = await storedValueHash({ kind: "value", value: { v: 0 } });
+        const at = new Date(0).toISOString();
+        const documents = [
+          { collection: "pages", id },
+          { collection: "pages", id: "no-such-entry" },
+          { collection: "no-such-collection", id },
+        ];
+        const codes: string[] = [];
+        for (const document of documents) {
+          for (const data of [
+            { body: { v: "x" }, updatedAt: at },
+            { body: { v: "x" } },
+          ]) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(stranger, {
+                ...document,
+                data,
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isForbidden(refusal)).toBe(true);
+            codes.push((refusal as NextlyError).code);
+          }
+        }
+        expect(new Set(codes).size).toBe(1);
+        expect(await systemValue({ collection: "pages", id }, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
       });
     });
   }

@@ -46,6 +46,9 @@ export {
   type PluginTransaction,
   type PluginFilterRegistry,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginSettingsApi,
 } from "./plugin-context";
 export type {
@@ -127,8 +130,12 @@ export type {
   PluginAdminContributions,
   PluginAdminPage,
   PluginCollectionView,
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PluginDocumentActionOverrides,
   PluginDocumentView,
   PluginFieldTypeDocumentView,
+  PluginPanelSection,
   PluginAdminPlaceDeclaration,
   AdminBlockContribution,
   AdminBulkActionContribution,

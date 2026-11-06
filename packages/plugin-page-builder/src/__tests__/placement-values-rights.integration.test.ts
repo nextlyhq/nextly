@@ -245,6 +245,7 @@ describe.each(getConfiguredTestDialects())(
     const writePage = (overrides: Row) =>
       patch(["collections", PAGES_SLUG, "entries", pageId], author, {
         content: placing(componentId, overrides),
+        _overwrite: true,
       });
 
     async function storedOverrides(): Promise<unknown> {
@@ -327,7 +328,7 @@ describe.each(getConfiguredTestDialects())(
       const answer = await patch(
         ["collections", COMPONENTS_SLUG, "entries", componentId],
         author,
-        { content: redesigned() }
+        { content: redesigned(), _overwrite: true }
       );
 
       expect(answer.status, answer.text).toBe(403);
@@ -345,7 +346,7 @@ describe.each(getConfiguredTestDialects())(
       const answer = await patch(
         ["collections", COMPONENTS_SLUG, "entries", componentId],
         owner,
-        { content: redesigned() }
+        { content: redesigned(), _overwrite: true }
       );
 
       expect(answer.status, answer.text).toBe(200);

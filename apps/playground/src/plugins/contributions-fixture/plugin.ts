@@ -10,10 +10,12 @@
  * until someone chooses it, and one contribution of each kind to an admin
  * place: a dashboard block, a column, a row action and a bulk action on
  * Posts' list, and a tab and a side panel section on a Post's edit page. The
- * admin receives those as data in its metadata, each naming one component by
- * path, and draws none of them yet. One block asks for a permission, so what
- * a reader without it is sent can be seen. Every label names it a fixture,
- * so nothing reads as product.
+ * row action ("Fixture: inspect", on draft posts) appears in the Posts list's
+ * row menu; it opens a component this folder does not provide, so it shows
+ * the slot's fallback. The rest arrive as data in the admin's metadata, each
+ * naming that component by path, and are not drawn yet. One block asks for a
+ * permission, so what a reader without it is sent can be seen. Every label
+ * names it a fixture, so nothing reads as product.
  */
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 

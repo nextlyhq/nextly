@@ -214,7 +214,6 @@ describe("contributionsForReader", () => {
             method: "POST",
             path: "/ping",
             handler: () => new Response(),
-            public: true,
           },
         ],
         admin: {
@@ -250,7 +249,7 @@ describe("contributionsForReader", () => {
     expect(await sent(["update-helpdesk-tickets"])).toContain(
       "acme-support.escalate"
     );
-    // A public route asks nothing of anyone.
+    // A route with no permission of its own asks only the action's.
     expect(await sent([])).toContain("acme-support.ping");
   });
 

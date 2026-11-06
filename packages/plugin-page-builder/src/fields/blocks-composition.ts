@@ -251,6 +251,11 @@ export interface SiteDefinitions {
   readonly classIds: ReadonlySet<string>;
   /** The breakpoints the stylesheet is emitted under, the base included. */
   readonly breakpointIds: ReadonlySet<string>;
+  /**
+   * The identities of the variables the page may name: the engine's, the
+   * code's and the stored ones, merged as the stylesheet resolves them.
+   */
+  readonly tokenIds: ReadonlySet<string>;
 }
 
 /** Which document a write is to: a collection or a single, its slug, an id. */
@@ -704,6 +709,7 @@ async function judgeOwnComposition(args: {
     stored: args.stored,
     write: args.write,
     report,
+    unjudged: { field: args.field ?? "", ...args.writtenTo },
   });
   // Every placement's definition, the ones a condition gates included: the
   // composition never expanded those, and both checks below read them.
@@ -761,11 +767,15 @@ async function judgeComposedLists(args: {
   stored: () => Promise<StoredRead>;
   write: PluginFieldWrite;
   report: Report;
+  /** Which document is written, for the server log of problems kept. */
+  unjudged: Omit<PlacementUnjudged, "breaks">;
 }): Promise<void> {
   const fieldsOf = args.setup.listFields;
   // The stored forms composed as this page is, so a list or a condition they
   // already composed to keeps its problem as a warning. Composed once, for
-  // both judgements, and only once one of them finds a problem.
+  // both judgements, and only once one of them finds a problem. Composed only
+  // in part, they may lack a problem the stored page holds, so they count as
+  // unreadable: the problem is kept rather than blamed on this write.
   let storedForms: Promise<StoredForms> | undefined;
   const composeStored = async (): Promise<StoredForms> => {
     const stored = await args.stored();
@@ -774,14 +784,23 @@ async function judgeComposedLists(args: {
       ...args.reading,
       hosts: stored.forms,
     });
-    return { forms: composed.forms as BlockDocument[], readable: true };
+    return {
+      forms: composed.forms as BlockDocument[],
+      readable: composed.complete,
+    };
   };
   const site = {
     ...(fieldsOf === undefined ? {} : { fieldsOf }),
     maxNodes: args.setup.limits.maxNodes,
     storedForms: () => (storedForms ??= composeStored()),
+    // A placement's value or variant made each such problem, so it is logged
+    // as the placement breaks a write keeps are.
+    onUnjudged: (breaks: number) =>
+      args.setup.onPlacementUnjudged?.({ ...args.unjudged, breaks }),
   };
-  const setting = listSettingOf(args.write);
+  // A component's own save leaves the entry unknown: its lists and
+  // conditions read the entries of the pages placing it.
+  const setting = listSettingOf(args.write, args.document);
   const found = [
     ...(await composedListQueryIssues(
       args.composed,
