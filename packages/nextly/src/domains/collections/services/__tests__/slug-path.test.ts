@@ -49,7 +49,7 @@ describe("a slug path", () => {
     expect(problem("docs/你好")).toContain('"你好" has no letters or numbers');
   });
 
-  it.each(["admin/pages", "Admin/x", "api/v1", "_next/static"])(
+  it.each(["admin/pages", "Admin/x", "api/v1", "_next/static", "admin", "API"])(
     "refuses the reserved path %j",
     value => {
       expect(problem(value)).toContain("is reserved for the site itself");
@@ -62,5 +62,7 @@ describe("a slug path", () => {
     expect(fits).toHaveLength(254);
     expect(normalizeSlugPath(fits)).toEqual({ slug: fits });
     expect(problem(`${fits}/bb`)).toContain("Keep it to 255");
+    // One segment is held to the same column.
+    expect(problem("a".repeat(256))).toContain("Keep it to 255");
   });
 });

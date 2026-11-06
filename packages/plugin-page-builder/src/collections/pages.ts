@@ -199,7 +199,10 @@ export function pagesCollection(
         ? {}
         : {
             preview: {
-              url: previewUrlFromTemplate(previewPath),
+              // The slug is a path (`db.slugPaths`), so its `/` stays.
+              url: previewUrlFromTemplate(previewPath, {
+                pathFields: ["slug"],
+              }),
               // Spread rather than set to `undefined`, so a collection that
               // declares none has no `breakpoints` key at all — which is what
               // `resolvePreviewViewports` reads as "offer nothing" without

@@ -18098,14 +18098,12 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
-        // A beforeChange hook can also set `slug`, so re-sanitize before
-        // storage.
-        await this.reSanitizeSlug(
-          finalData,
-          isSlugTaken,
-          params.collectionName
-        );
       }
+      // A beforeChange hook can also set `slug`, so re-sanitize before
+      // storage. Outside the hooks' gate: a write that skips hooks still
+      // stores only a slug its collection can hold, since an early pass
+      // leaves an unstorable slug path as given for this one to refuse.
+      await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(

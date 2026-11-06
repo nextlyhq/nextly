@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasPreviewConfigured,
+  previewUrlFromTemplate,
   resolvePreviewUrl,
 } from "../preview-url-resolver";
 
@@ -210,32 +211,21 @@ describe("resolvePreviewUrl", () => {
     });
   });
 
-  it("keeps the slashes of a value that is a path of real segments", () => {
+  it("keeps the slashes of a path field's value, and only a path field's", () => {
     // A page stored at a nested address links to that address; each segment
     // is still encoded, so a space or a `?` cannot change the URL's shape.
-    const at = (slug: string) =>
-      resolvePreviewUrl({
-        preview: { urlTemplate: "/{slug}" },
-        entry: { slug },
-        siteUrl: SITE,
-      });
-    expect(at("docs/getting started/install")).toEqual({
-      status: "resolved",
-      url: "https://example.com/docs/getting%20started/install",
+    const asPath = previewUrlFromTemplate("/{slug}/{ref}", {
+      pathFields: ["slug"],
     });
-    expect(at("faq/all?x")).toEqual({
-      status: "resolved",
-      url: "https://example.com/faq/all%3Fx",
-    });
-    // An empty or dot segment is no path: encoded whole, as before.
-    expect(at("a//b")).toEqual({
-      status: "resolved",
-      url: "https://example.com/a%2F%2Fb",
-    });
-    expect(at("./b")).toEqual({
-      status: "resolved",
-      url: "https://example.com/.%2Fb",
-    });
+    expect(asPath({ slug: "docs/getting started/install", ref: "a/b" })).toBe(
+      "/docs/getting%20started/install/a%2Fb"
+    );
+    expect(asPath({ slug: "faq/all?x", ref: "r" })).toBe("/faq/all%3Fx/r");
+    // An empty or dot segment is no path: encoded whole.
+    expect(asPath({ slug: "a//b", ref: "r" })).toBe("/a%2F%2Fb/r");
+    expect(asPath({ slug: "./b", ref: "r" })).toBe("/.%2Fb/r");
+    // Without the option, every value is encoded whole, as before.
+    expect(previewUrlFromTemplate("/p/{ref}")({ ref: "a/b" })).toBe("/p/a%2Fb");
   });
 
   // The separating property. Every case below produces "no usable URL", and a

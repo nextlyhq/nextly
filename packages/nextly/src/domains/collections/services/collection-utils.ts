@@ -323,20 +323,42 @@ const SLUG_PATH_MAX = 255;
  * `db.slugPaths` stores it, or why it cannot be one.
  *
  * Without a `/` the value is normalised exactly as {@link generateSlug}
- * does, so a one-segment slug is stored as it always was, an empty result
- * included (the caller then derives one from the title, as before). With a
- * `/`, each segment is normalised as a one-segment slug is, and the path is
- * refused, never rewritten, where rewriting would put the entry at an
- * address nobody asked for: an empty segment, a `.` or `..` segment (which a
- * browser resolves away), a segment with nothing left once normalised, a
- * reserved path, or more than 255 characters. One leading and one trailing
- * `/` are dropped first, since `/docs/install` is how an address is written.
+ * does, an empty result included (the caller then derives one from the
+ * title, as before). With a `/`, each segment is normalised as a one-segment
+ * slug is, and the path is refused, never rewritten, where rewriting would
+ * put the entry at an address nobody asked for: an empty segment, or a `.` or
+ * `..` segment (which a browser resolves away), or a segment with nothing
+ * left once normalised. One leading and one trailing `/` are dropped first,
+ * since `/docs/install` is how an address is written. Either way, an address
+ * the content route can never serve (a reserved path such as `admin`) or a
+ * column cannot hold (more than 255 characters) is refused too.
  */
 export function normalizeSlugPath(
   value: string
 ): { readonly slug: string } | { readonly problem: string } {
   const raw = value.toString().trim();
-  if (!raw.includes("/")) return { slug: generateSlug(raw) };
+  const read = raw.includes("/")
+    ? slugSegments(raw)
+    : { slug: generateSlug(raw) };
+  if ("problem" in read || read.slug === "") return read;
+  const { slug } = read;
+  if (isReservedPath(`/${slug}`)) {
+    return {
+      problem: `The address "/${slug}" is reserved for the site itself (its admin, API or framework files). Choose another.`,
+    };
+  }
+  if (slug.length > SLUG_PATH_MAX) {
+    return {
+      problem: `The address is ${String(slug.length)} characters long. Keep it to ${String(SLUG_PATH_MAX)}.`,
+    };
+  }
+  return { slug };
+}
+
+/** A path of several segments, each normalised, or why it is no path. */
+function slugSegments(
+  raw: string
+): { readonly slug: string } | { readonly problem: string } {
   const trimmed = raw.replace(/^\//, "").replace(/\/$/, "");
   const segments: string[] = [];
   for (const part of trimmed.split("/")) {
@@ -359,18 +381,7 @@ export function normalizeSlugPath(
     }
     segments.push(normalised);
   }
-  const slug = segments.join("/");
-  if (isReservedPath(`/${slug}`)) {
-    return {
-      problem: `The address "/${slug}" is reserved for the site itself (its admin, API or framework files). Choose another.`,
-    };
-  }
-  if (slug.length > SLUG_PATH_MAX) {
-    return {
-      problem: `The address is ${String(slug.length)} characters long. Keep it to ${String(SLUG_PATH_MAX)}.`,
-    };
-  }
-  return { slug };
+  return { slug: segments.join("/") };
 }
 
 /**

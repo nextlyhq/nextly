@@ -52,10 +52,11 @@ export interface CollectionDbOptions {
    * it is stripped as before.
    *
    * Each segment is normalised as a one-segment slug is, and a slug with an
-   * empty segment (`docs//install`), a `.` or `..` segment, a segment that
-   * normalises to nothing, a reserved path (`admin/...`, `api/...`) or more
-   * than 255 characters is refused rather than rewritten. A one-segment slug
-   * is treated exactly as without the option, so turning it on changes no
+   * empty segment (`docs//install`), a `.` or `..` segment or a segment that
+   * normalises to nothing is refused rather than rewritten, and so is any
+   * slug, one segment or several, that names a reserved path (`admin`,
+   * `api/...`) or runs past 255 characters. A one-segment slug is otherwise
+   * normalised exactly as without the option, and turning it on rewrites no
    * stored address. The value stays one column, so no migration follows.
    *
    * @experimental Settles with multi-segment page addresses.
