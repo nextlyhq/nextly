@@ -7,6 +7,8 @@
  * reference to a variable the site does not define.
  */
 
+import { randomUUID } from "node:crypto";
+
 // Set before the harness boots: the routes verify the session with it.
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -25,7 +27,6 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { TOKEN_USAGE_INDEX_SLUG } from "../collections/token-usage-index";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -33,6 +34,10 @@ import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
+/** Where the variable usage index's rows live. */
+const TOKEN_ROWS = "page_builder__token_usage";
+/** Where the usage backfill records its run. */
+const RUNS = "page_builder__usage_runs";
 
 /** A colour variable the site added, by id. */
 const variable = (id: string, label: string) => ({
@@ -360,20 +365,12 @@ describe.each(getConfiguredTestDialects())(
       });
       await tick();
       // The row two interleaved saves can lose, lost here directly.
-      const rows = await t.nextly.find({
-        collection: TOKEN_USAGE_INDEX_SLUG,
-        where: { tokenId: { equals: "t-spare" } },
-        limit: 100,
-        overrideAccess: true,
-      });
-      expect(rows.items.length).toBeGreaterThan(0);
-      for (const row of rows.items) {
-        await t.nextly.delete({
-          collection: TOKEN_USAGE_INDEX_SLUG,
-          id: String((row as { id: unknown }).id),
-          overrideAccess: true,
-        });
-      }
+      const spareRows = {
+        and: [{ column: "tokenId", op: "=" as const, value: "t-spare" }],
+      };
+      const rows = await t.adapter.select(TOKEN_ROWS, { where: spareRows });
+      expect(rows.length).toBeGreaterThan(0);
+      await t.adapter.delete(TOKEN_ROWS, spareRows);
       const designer = await holding(t, ...DESIGN, "read-pages");
       // CONTROL: the index is whole and counts the variable on nothing, so
       // the refusal below comes from the stored page and not from the index.
@@ -391,6 +388,40 @@ describe.each(getConfiguredTestDialects())(
         "Still used on Home. Remove it from that page first."
       );
       expect(await storedIds(t)).toContain("t-spare");
+    });
+
+    it("fills the variable index for pages the backfill walks again", async () => {
+      const { t, tick } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+        overrideAccess: true,
+      });
+      await tick();
+      // A page stored before the variable index counted: its rows absent,
+      // and the run marked dirty with a new token, as a failed maintenance
+      // write leaves it, so the next pass walks every scope again.
+      await t.adapter.delete(TOKEN_ROWS, {
+        and: [{ column: "tokenId", op: "=" as const, value: "t-accent" }],
+      });
+      await t.adapter.update(
+        RUNS,
+        { token: randomUUID(), dirty: true },
+        { and: [{ column: "name", op: "=" as const, value: "usage" }] }
+      );
+      const reader = await holding(t, "read-site-style");
+      const usage = `${route("usage")}?id=t-accent`;
+      // CONTROL: the row is gone, so a count of 1 below is the backfill's.
+      expect((await call("GET", usage, reader)).body).toMatchObject({
+        whole: false,
+        variables: { "t-accent": { documents: 0 } },
+      });
+
+      await tick();
+      expect((await call("GET", usage, reader)).body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
     });
 
     it("refuses a page that adds a variable the site does not define, and keeps one it already held", async () => {

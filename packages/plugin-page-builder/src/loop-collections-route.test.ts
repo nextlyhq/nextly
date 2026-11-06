@@ -296,6 +296,12 @@ describe("the fields a list may name", () => {
     });
   });
 
+  it("asks which fields the public may read in the language asked, as a save does", async () => {
+    const reads = readsOf([POSTS]);
+    await readLoopCollections(reads, "fr");
+    expect(reads.publicFields).toHaveBeenCalledWith("posts", "fr");
+  });
+
   it("offers no field of a collection the public may read none of", async () => {
     const answer = await readLoopCollections(
       readsOf([POSTS], { unreadable: ["posts"] })

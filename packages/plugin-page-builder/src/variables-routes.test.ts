@@ -301,7 +301,7 @@ describe("where a variable is used", () => {
     const response = await readVariableUses(
       new Request(`http://local/variables/where-used?${query}`),
       source,
-      named,
+      { named, single: async () => null },
       async () => styles,
       "renamed_site-style"
     );

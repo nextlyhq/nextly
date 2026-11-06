@@ -75,6 +75,7 @@ import {
   listingOf,
   mayCountSharedStyleUsage,
   namedDocumentsReader,
+  namedSingleReader,
   NOTHING_FOUND,
   readableUses,
   respondWithUsesPage,
@@ -82,6 +83,7 @@ import {
   usageOf,
   usageRefusals,
   type ReadNamedDocuments,
+  type ReadNamedSingle,
   type SharedStyleUsageSource,
   type UsageReason,
 } from "./shared-styles-routes";
@@ -302,7 +304,7 @@ const WhereUsedQuery = z.object({
 export async function readVariableUses(
   req: Request,
   usage: SharedStyleUsageSource,
-  readNamed: ReadNamedDocuments,
+  readers: { named: ReadNamedDocuments; single: ReadNamedSingle },
   sharedStyles: SharedStylesNow,
   siteStyleSlug: string
 ): Promise<Response> {
@@ -328,7 +330,7 @@ export async function readVariableUses(
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const found = await listingOf(usage, id, await usage.health());
-  const { readable, hidden } = await readableUses(found, usage, readNamed);
+  const { readable, hidden } = await readableUses(found, usage, readers);
   return respondWithUsesPage<VariableUseItem>([...styles, ...readable], page, {
     hidden,
     complete: found.complete,
@@ -590,7 +592,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
         return readVariableUses(
           req,
           setup.usage(ctx),
-          namedDocumentsReader(ctx),
+          { named: namedDocumentsReader(ctx), single: namedSingleReader(ctx) },
           sharedStylesOf(ctx),
           ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG
         );

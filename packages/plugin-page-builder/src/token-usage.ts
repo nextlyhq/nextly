@@ -26,10 +26,20 @@ import {
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 
-import type { TokenUsageRow } from "./collections/token-usage-index";
 import { readStoredJson } from "./stored-json";
 import { styleEnvelopeTokens } from "./style-token-refs";
-import type { UsageIndex } from "./usage-index";
+import type { UsageIndex, UsageSubject } from "./usage-index";
+
+/** One row: this document, through this field, uses this variable. */
+export type TokenUsageRow = UsageSubject & {
+  /**
+   * The variable's identity as the document stores it in `$token` (the
+   * token's `id`, else its name), or the marker {@link UNDETERMINED_TOKEN_ID}
+   * on the row recording that the document could not be read whole: disjoint
+   * by length, since the derivation records no identity that long.
+   */
+  tokenId: string;
+};
 
 /**
  * The identity a marker row carries, chosen so no real reference can wear it.

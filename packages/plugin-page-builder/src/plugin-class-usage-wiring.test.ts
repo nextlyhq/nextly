@@ -13,16 +13,42 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { CLASS_USAGE_INDEX_SLUG } from "./collections/class-usage-index";
-import { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
-import { TOKEN_USAGE_INDEX_SLUG } from "./collections/token-usage-index";
-
 import { UNDETERMINED_CLASS_ID } from "./class-usage-reconcile";
 import { pageBuilder } from "./plugin";
 import { UNDETERMINED_TOKEN_ID } from "./token-usage";
 
+/**
+ * The plugin's own database, as far as a save's maintenance reaches it: no
+ * stored rows, and every insert recorded with the table it went to.
+ */
+function fakeDatabase() {
+  const inserted: { table: string; values: Record<string, unknown> }[] = [];
+  const rows = {
+    where: () => rows,
+    orderBy: () => rows,
+    limit: () => rows,
+    offset: () => rows,
+    all: async () => [],
+    first: async () => null,
+  };
+  const db = {
+    // Column stubs: conditions are built, never run.
+    table: () => new Proxy({}, { get: () => ({}) }),
+    select: () => rows,
+    insert: async (
+      table: { name: string },
+      values: Record<string, unknown>
+    ) => {
+      inserted.push({ table: table.name, values });
+    },
+    delete: () => ({ where: async () => 0 }),
+  };
+  return { db, inserted };
+}
+
 /** The parts of a plugin context `init` reaches for, and nothing more. */
 function initContext(renameMap: Record<string, string> = {}) {
+  const database = fakeDatabase();
   const registered: string[] = [];
   const handlers: ((c: Record<string, unknown>) => unknown)[] = [];
   const byKey = new Map<string, ((c: Record<string, unknown>) => unknown)[]>();
@@ -61,6 +87,8 @@ function initContext(renameMap: Record<string, string> = {}) {
     },
     config: {},
     logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+    db: database.db,
+    dialect: "sqlite",
   };
   /**
    * The class-usage handler for one phase, selected by what it was registered
@@ -84,7 +112,13 @@ function initContext(renameMap: Record<string, string> = {}) {
     return found[0];
   };
 
-  return { ctx, registered, handlers, maintenanceFor };
+  return {
+    ctx,
+    registered,
+    handlers,
+    maintenanceFor,
+    inserted: database.inserted,
+  };
 }
 
 describe("installing the page-builder plugin", () => {
@@ -102,12 +136,13 @@ describe("installing the page-builder plugin", () => {
     // The pair matters: a table with no maintenance silently records nothing,
     // and maintenance with no table fails every write it is called for. A host
     // installing the plugin is asking for both.
-    const slugs = (pageBuilder().contributes?.collections ?? []).map(
-      collection => (collection as { slug?: string }).slug
+    const tables = (pageBuilder().contributes?.schema?.tables ?? []).map(
+      table => table.name
     );
 
-    expect(slugs).toContain("nx_pb_class_usage");
-    expect(slugs).toContain("nx_pb_token_usage");
+    expect(tables).toEqual(
+      expect.arrayContaining(["class_usage", "component_usage", "token_usage"])
+    );
   });
 });
 
@@ -144,50 +179,6 @@ describe("the warning for a blocks field inside a repeater", () => {
   });
 });
 
-describe("an integrator who renamed the index collection", () => {
-  it("recognises the RENAMED collection as its own, not the declared slug", async () => {
-    // `.rename()` makes the schema create only the renamed collection. A hook
-    // holding the literal would write every row to a table that does not
-    // exist — and would not recognise its own writes, so the first maintained
-    // save would recurse: every row it inserts is a create on that collection,
-    // which fires this same handler.
-    //
-    // Observed through the recursion guard rather than by reading the fixture
-    // back: the guard is the one place the resolved slug is visible from
-    // outside, and a test that asserted `ctx.self` would only be asserting its
-    // own input.
-    const { ctx, maintenanceFor } = initContext({
-      nx_pb_class_usage: "custom_usage",
-    });
-    (pageBuilder().init as (c: unknown) => void)(ctx);
-
-    const getCollection = ctx.services.collections.getCollection;
-
-    // A write to the RENAMED index must be skipped as its own.
-    await maintenanceFor(
-      "afterCreate",
-      "*"
-    )({
-      collection: "custom_usage",
-      data: { id: "r1" },
-      req: { nextly: {} },
-    });
-    expect(getCollection).not.toHaveBeenCalled();
-
-    // A write to the DECLARED slug is now an ordinary collection, and is not
-    // skipped — which is what proves the guard moved rather than widened.
-    await maintenanceFor(
-      "afterCreate",
-      "*"
-    )({
-      collection: "nx_pb_class_usage",
-      data: { id: "r1" },
-      req: { nextly: {} },
-    });
-    expect(getCollection).toHaveBeenCalled();
-  });
-});
-
 describe("what one save derives, and writes to each index", () => {
   /** A document with two nodes, each applying one class. */
   const twoNodes = {
@@ -207,10 +198,7 @@ describe("what one save derives, and writes to each index", () => {
     // `maintenanceFor` rather than a positional handler: the phase and
     // collection are what identify a handler, and selecting by position made
     // adding any registration silently point this at a different one.
-    const { ctx, maintenanceFor } = initContext();
-    const created: string[] = [];
-    const componentRows: { kind?: string; componentId?: string }[] = [];
-    const tokenRows: (string | undefined)[] = [];
+    const { ctx, maintenanceFor, inserted } = initContext();
     ctx.services.collections.getCollection = (async () => ({
       fields: [{ type: "blocks", name: "content" }],
     })) as never;
@@ -237,34 +225,25 @@ describe("what one save derives, and writes to each index", () => {
                   meta: { hasNext: false },
                 }
               : { items: [], meta: { hasNext: false } },
-          // Scoped to the CLASS index. One save now maintains both indexes
-          // from one read, so an unscoped collector also catches the component
-          // index's row — whose `classId` is `undefined`, which reads as this
-          // wiring having produced a second, malformed class row. This test is
-          // about the limits the CLASS derivation runs under; the component
-          // index has its own.
-          create: async (a: {
-            collection: string;
-            data: { classId?: string };
-          }) => {
-            if (a.collection === CLASS_USAGE_INDEX_SLUG) {
-              created.push(a.data.classId as string);
-            }
-            if (a.collection === TOKEN_USAGE_INDEX_SLUG) {
-              tokenRows.push((a.data as { tokenId?: string }).tokenId);
-            }
-            if (a.collection === COMPONENT_USAGE_INDEX_SLUG) {
-              componentRows.push({
-                kind: (a.data as { kind?: string }).kind,
-                componentId: (a.data as { componentId?: string }).componentId,
-              });
-            }
-            return {};
-          },
-          delete: async () => ({}),
         },
       },
     });
+    // Scoped to each index's own table. One save maintains both indexes from
+    // one read, so an unscoped collector also catches the component index's
+    // row, whose `classId` is `undefined`, which would read as this wiring
+    // having produced a second, malformed class row.
+    const created = inserted
+      .filter(entry => entry.table === "class_usage")
+      .map(entry => entry.values.classId);
+    const componentRows = inserted
+      .filter(entry => entry.table === "component_usage")
+      .map(entry => ({
+        kind: entry.values.kind,
+        componentId: entry.values.componentId,
+      }));
+    const tokenRows = inserted
+      .filter(entry => entry.table === "token_usage")
+      .map(entry => entry.values.tokenId);
     return { created, componentRows, tokenRows };
   }
 
@@ -290,6 +269,44 @@ describe("what one save derives, and writes to each index", () => {
     const { created } = await savedUnder({});
 
     expect(created).toEqual(["one", "two"]);
+  });
+
+  describe("the variable index, maintained from the same read", () => {
+    const withVariable = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          styles: { base: { base: { color: { $token: "color.brand" } } } },
+        },
+        { id: "b", type: "core/text", version: 1, props: {} },
+      ],
+    };
+
+    it("writes a row for a variable the saved page uses", async () => {
+      const { tokenRows } = await savedUnder({}, withVariable);
+
+      expect(tokenRows).toEqual(["color.brand"]);
+    });
+
+    it("writes NO variable row for a page that uses none", async () => {
+      const { tokenRows } = await savedUnder({});
+
+      expect(tokenRows).toEqual([]);
+    });
+
+    it("marks a page it could not read whole, under the host's limits", async () => {
+      const { tokenRows } = await savedUnder(
+        { limits: { maxDepth: 1, maxNodes: 1, maxBytes: 100_000 } },
+        withVariable
+      );
+
+      expect(tokenRows).toEqual([UNDETERMINED_TOKEN_ID]);
+    });
   });
 
   describe("the component index, maintained from the same read", () => {
@@ -336,44 +353,6 @@ describe("what one save derives, and writes to each index", () => {
       );
 
       expect(componentRows).toEqual([{ kind: "unreadable", componentId: "" }]);
-    });
-  });
-
-  describe("the variable index, maintained from the same read", () => {
-    const withVariable = {
-      formatVersion: 1,
-      kind: "page",
-      nodes: [
-        {
-          id: "a",
-          type: "core/text",
-          version: 1,
-          props: {},
-          styles: { base: { base: { color: { $token: "color.brand" } } } },
-        },
-        { id: "b", type: "core/text", version: 1, props: {} },
-      ],
-    };
-
-    it("writes a row for a variable the saved page uses", async () => {
-      const { tokenRows } = await savedUnder({}, withVariable);
-
-      expect(tokenRows).toEqual(["color.brand"]);
-    });
-
-    it("writes NO variable row for a page that uses none", async () => {
-      const { tokenRows } = await savedUnder({});
-
-      expect(tokenRows).toEqual([]);
-    });
-
-    it("marks a page it could not read whole, under the host's limits", async () => {
-      const { tokenRows } = await savedUnder(
-        { limits: { maxDepth: 1, maxNodes: 1, maxBytes: 100_000 } },
-        withVariable
-      );
-
-      expect(tokenRows).toEqual([UNDETERMINED_TOKEN_ID]);
     });
   });
 });

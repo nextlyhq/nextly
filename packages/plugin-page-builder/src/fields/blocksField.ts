@@ -15,6 +15,7 @@
  */
 
 import {
+  CONDITION_ISSUE_CODES,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   LIST_ISSUE_CODES,
@@ -55,7 +56,7 @@ import {
   layersLockIssues,
   withLockIssues,
 } from "./layers-lock-judgement";
-import { newListQueryIssues } from "./list-query-judgement";
+import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
 import { newTokenReferenceIssues } from "./token-reference-judgement";
 
@@ -89,6 +90,9 @@ const STORED_MAY_HOLD: ReadonlySet<string> = new Set<string>([
   // A collection list's query problems: a list stored before its bounds and
   // rows were judged keeps saving with a warning until it is edited.
   ...Object.keys(LIST_ISSUE_CODES),
+  // A block's visibility condition problems, alike: a condition stored before
+  // operators were judged keeps saving with a warning until it is edited.
+  ...Object.keys(CONDITION_ISSUE_CODES),
 ]);
 
 /** The field type id. Was a built-in token; now this plugin's to own. */
@@ -296,11 +300,17 @@ export function blocksFieldType(
         if (emptied || listFields === undefined || args.write === undefined) {
           return [];
         }
-        return newListQueryIssues(value, args, label, {
+        const site = {
           fieldsOf: listFields,
           storedForms,
           maxNodes: composition?.()?.limits.maxNodes,
-        });
+        };
+        // And the fields its blocks' visibility conditions check, judged the
+        // same way, since a condition the page could not check hides its block.
+        return [
+          ...(await newListQueryIssues(value, args, label, site)),
+          ...(await newConditionIssues(value, args, label, site)),
+        ];
       };
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {
         const listed = await lists();

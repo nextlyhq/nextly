@@ -78,6 +78,20 @@ function canvasQueryBudget(): CanvasQueryBudget {
 }
 
 /**
+ * The collection a document is an entry of, as its lists judge a related
+ * source: the collection's slug for an entry; `null` for a Single, whose
+ * page has no entry a related list could read, so the inspector refuses
+ * such a list as the save does; nothing while no document is known.
+ */
+export function listEntryCollectionOf(
+  identity: { readonly kind: string; readonly slug: string } | null
+): string | null | undefined {
+  if (identity === null) return undefined;
+  if (identity.kind === "single") return null;
+  return identity.kind === "collection" ? identity.slug : undefined;
+}
+
+/**
  * The canvas's page context: its images resolve through the admin's media
  * read, which caches each item by id and shares a read in flight, and its
  * lists read in `locale`, the language being edited.
@@ -97,8 +111,7 @@ export function useCanvasPageContext(
   // of its related entries reads the relation as a visitor reads the entry:
   // again, through the canvas's reader, never from the form's values.
   const identity = useDocumentIdentity();
-  const entryCollection =
-    identity?.kind === "collection" ? identity.slug : undefined;
+  const entryCollection = listEntryCollectionOf(identity) ?? undefined;
   const entryId =
     identity?.kind === "collection" ? identity.documentId : undefined;
   // The language's one set of list reads, which the inspector's count shares.
