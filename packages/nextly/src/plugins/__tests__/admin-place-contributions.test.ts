@@ -421,6 +421,8 @@ describe("contributedAdminContributions", () => {
                   ...(accepts ? { accepts } : {}),
                 } as never,
               ],
+              // A plugin's own place, which a real plugin types by augmenting
+              // `AdminPlaces`; this test declares it as plain JavaScript would.
               contributions: [
                 {
                   id: "acme-billing.lines",
@@ -429,7 +431,7 @@ describe("contributedAdminContributions", () => {
                   label: "Lines",
                   component: "x#Y",
                 },
-              ],
+              ] as unknown[] as AdminContribution[],
             },
           },
         }
