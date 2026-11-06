@@ -429,11 +429,11 @@ test.describe("a placement's exposed fields", () => {
     await expect(row(page, "Intro")).toContainText("Set on this page");
 
     // One step: a single undo takes the whole edit back, and redo restores it.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(await part(page, "p1", "content")).toHaveText(
       "The component's intro."
     );
-    await page.keyboard.press("ControlOrMeta+Shift+z");
+    await page.getByRole("button", { name: "Redo", exact: true }).click();
     await expect(await part(page, "p1", "content")).toContainText("Ours.");
 
     await save(page, pageId);
