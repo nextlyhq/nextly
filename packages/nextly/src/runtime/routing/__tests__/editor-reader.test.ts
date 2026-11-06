@@ -147,4 +147,43 @@ describe("the canvas's reader", () => {
       status: "all",
     });
   });
+
+  it("reads a Single as the person, its working draft where they may edit it", async () => {
+    const findSingle = vi.fn(async () => ({
+      id: "s1",
+      headline: "Spring sale (draft)",
+      banner: "b",
+    }));
+    const reader = {
+      find: vi.fn(),
+      findSingle,
+    } as unknown as PublicReaderSource;
+    const single = await createEditorReader(reader, person, {
+      declarations,
+    }).findSingle({ slug: "home", select: ["headline"] });
+    // Only the fields asked for, with its id.
+    expect(single).toEqual({ id: "s1", headline: "Spring sale (draft)" });
+    expect(findSingle.mock.calls[0]?.[0]).toMatchObject({
+      slug: "home",
+      overrideAccess: false,
+      user: person.user,
+      status: "all",
+      draft: true,
+      createIfMissing: false,
+    });
+  });
+
+  it("answers nothing for a Single it may not read, as the public reader does", async () => {
+    const reader = {
+      find: vi.fn(),
+      findSingle: vi.fn(async () => {
+        throw NextlyError.forbidden();
+      }),
+    } as unknown as PublicReaderSource;
+    await expect(
+      createEditorReader(reader, person, { declarations }).findSingle({
+        slug: "home",
+      })
+    ).resolves.toBeNull();
+  });
 });

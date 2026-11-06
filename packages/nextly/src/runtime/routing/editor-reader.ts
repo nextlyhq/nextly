@@ -39,15 +39,20 @@ import { runAsPrincipal } from "../../auth/principal-scope";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { UserContext } from "../../direct-api/types/shared";
 
+import { isMissOrDenied } from "./miss-or-denied";
 import {
   assertCountKeys,
   assertNotHidden,
   hiddenOf,
   refuse,
+  selectedFrom,
   sortKeys,
   toPublicFind,
+  toPublicFindSingle,
   type PublicCountQuery,
-  type PublicReader,
+  type PublicSingleQuery,
+  type PublicSingleResult,
+  type PublicSourceReader,
   type PublicReaderBinding,
   type PublicReaderSource,
   type PublicReadQuery,
@@ -158,6 +163,29 @@ async function assertListFieldsPublic(
 }
 
 /**
+ * The read a public Single query becomes when the person editing makes it:
+ * the public read's arguments, read as the person, with the working draft in
+ * place of the live document where one is pending and they may edit it (a
+ * person who may only read it gets the published values, as core decides).
+ *
+ * @experimental
+ */
+export function toEditorFindSingle(
+  query: PublicSingleQuery,
+  person: EditorReaderPerson,
+  binding: PublicReaderBinding = {}
+): ReturnType<typeof toPublicFindSingle> {
+  return {
+    ...toPublicFindSingle(query, binding),
+    status: "all",
+    draft: true,
+    overrideAccess: false,
+    user: person.user,
+    actor: person.actor,
+  };
+}
+
+/**
  * A reader over a Direct API's `find`, reading as `person`. A person with no
  * user is no one: their reads are refused by core as an anonymous read of a
  * draft would be, never widened.
@@ -168,7 +196,7 @@ export function createEditorReader(
   nextly: PublicReaderSource,
   person: EditorReaderPerson,
   binding: PublicReaderBinding = {}
-): PublicReader {
+): PublicSourceReader {
   const read = (args: FindArgs) =>
     // `null` is a frame of its own, so it clears a person an enclosing
     // operation was made as rather than inheriting it; the person named in
@@ -190,6 +218,31 @@ export function createEditorReader(
         toEditorFind({ ...query, limit: 1, select: ["id"] }, person, binding)
       );
       return result.meta.total;
+    },
+    async findSingle(query: PublicSingleQuery): Promise<PublicSingleResult> {
+      const args = toEditorFindSingle(query, person, binding);
+      const findSingle = nextly.findSingle;
+      if (findSingle === undefined) {
+        // As the public reader answers a reader made without a Single's read.
+        return refuse(
+          "single-unsupported",
+          "This reader was made over a reader with no findSingle, so it cannot read a Single."
+        );
+      }
+      // Missing, never published and refused all read as nothing, as the
+      // public reader's Single does, so the answer does not tell them apart.
+      const document = await (async () => {
+        try {
+          return await runDetachedFromRequest(() =>
+            runAsPrincipal(null, () => findSingle.call(nextly, args))
+          );
+        } catch (error) {
+          if (isMissOrDenied(error)) return null;
+          throw error;
+        }
+      })();
+      if (document === null) return null;
+      return selectedFrom(document, query.select);
     },
   });
 }

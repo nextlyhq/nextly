@@ -152,6 +152,7 @@ export type {
 export {
   createEditorReader,
   toEditorFind,
+  toEditorFindSingle,
 } from "./runtime/routing/editor-reader";
 export type { EditorReaderPerson } from "./runtime/routing/editor-reader";
 
