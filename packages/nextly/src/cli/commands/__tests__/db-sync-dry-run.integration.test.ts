@@ -194,6 +194,12 @@ function normalised(text: string, project: string, url: string): string[] {
         .split(database)
         .join("<database>")
         .replace(/\b\d+(\.\d+)?\s?(ms|s)\b/g, "<time>")
+        // The system permissions are the core's own and grow as it does; the collection count is
+        // this test's, and stays pinned.
+        .replace(
+          /\d+ system \+ (\d+) collection permission\(s\) created \(\d+ total\)/,
+          "<n> system + $1 collection permission(s) created (<n> total)"
+        )
         // A box's padding follows the width of the timing it frames.
         .replace(/ {2,}\|$/, " |")
         .trimEnd()
@@ -258,6 +264,22 @@ function plannedWrites(stdout: string): string[] {
     .sort();
 }
 
+/**
+ * The columns of this test's own tables (its `dsd_…` collections, stored as `dc_dsd_…`, and the `dsd_…` table it creates itself), each sorted. The core's tables
+ * are left out: they grow whenever the core adds one, which says nothing about what db:sync does
+ * with the collections the test declares.
+ */
+function ownTableShapes(
+  shapes: Iterable<[string, Iterable<string>]>
+): [string, string[]][] {
+  return [...shapes]
+    .filter(([table]) => /(^|_)dsd_/.test(table))
+    .map(([table, columns]): [string, string[]] => [
+      table,
+      [...columns].sort(),
+    ]);
+}
+
 describe.each(LOCK_DIALECTS)("a real db:sync on %s", dialect => {
   let world: LockWorld;
   let adapter: DrizzleAdapter;
@@ -283,8 +305,8 @@ describe.each(LOCK_DIALECTS)("a real db:sync on %s", dialect => {
       expect(normalised(first.stdout, project, world.url)).toMatchSnapshot(
         "first sync output"
       );
-      const shapeAfterFirst = [...(await columnsByTable(adapter, dialect))].map(
-        ([table, columns]) => [table, [...columns].sort()]
+      const shapeAfterFirst = ownTableShapes(
+        await columnsByTable(adapter, dialect)
       );
       expect(shapeAfterFirst.sort()).toMatchSnapshot("tables after first sync");
 
@@ -294,9 +316,9 @@ describe.each(LOCK_DIALECTS)("a real db:sync on %s", dialect => {
       expect(normalised(second.stdout, project, world.url)).toMatchSnapshot(
         "second sync output"
       );
-      const shapeAfterSecond = [
-        ...(await columnsByTable(adapter, dialect)),
-      ].map(([table, columns]) => [table, [...columns].sort()]);
+      const shapeAfterSecond = ownTableShapes(
+        await columnsByTable(adapter, dialect)
+      );
       expect(shapeAfterSecond.sort()).toMatchSnapshot(
         "tables after second sync"
       );
