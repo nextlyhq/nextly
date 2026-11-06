@@ -17,12 +17,11 @@
  *   they may not read is refused, and rows and fields their rules deny are
  *   left out;
  * - `status: "all"`, so a draft the person may read is listed with the rest;
- * - a filter or sort on a field the PUBLIC may not read is refused, as on the
- *   published page, so a list the published page would refuse never looks
- *   right on the canvas. "May not read" is the visitor's own answer: a field
- *   declared hidden, and a field whose read rule denies the anonymous
- *   visitor, judged by core's visitor field reader rather than by this
- *   person's access. The rows themselves are not stripped of such fields:
+ * - a filter or sort on a field the PUBLIC may not read is refused before
+ *   anything is read, as on the published page, so a list the published page
+ *   would refuse never looks right on the canvas. "May not read" is the
+ *   visitor's own answer (a field declared hidden, or one whose read rule
+ *   denies the anonymous visitor), never this person's access. The rows themselves are not stripped of such fields:
  *   the person may read them, and what the public could not is the canvas's
  *   to mark, not this reader's to hide.
  *
@@ -91,26 +90,49 @@ export function toEditorFind(
   };
 }
 
-/**
- * Refuse a filter or sort naming a field the anonymous visitor may not read,
- * as the published page's read refuses it. The visitor's answer for each
- * field, from core's visitor field reader (`visitorFields`), judged as no one
- * in the read's language, so this person's own access cannot widen it. Where
- * the visitor may read nothing of the collection, the published page shows
- * nothing of the list at all, and its fields are not judged here: the canvas
- * marks such a list, and this reader still answers the person.
- */
-async function assertPublicMayName(
-  query: Pick<PublicReadQuery, "collection" | "filters" | "sort" | "locale">,
-  binding: PublicReaderBinding
-): Promise<void> {
-  const named = [
+/** The fields a list's filter and sort name, the id aside: every row has it. */
+function namedFields(
+  query: Pick<PublicReadQuery, "filters" | "sort">
+): string[] {
+  return [
     ...new Set([
       ...(query.filters ?? []).map(row => row.field),
       ...sortKeys(query.sort).map(key => key.replace(/^-/, "")),
     ]),
   ].filter(name => name !== "id");
+}
+
+/**
+ * Refuse a filter or sort naming a field the anonymous visitor may not read,
+ * as the published page's read refuses it, BEFORE anything is read: a query
+ * the page refuses runs no read and no read hook on the canvas either.
+ *
+ * Who answers "may the visitor read it" follows the public reader:
+ * - given `binding.declarations`, a reader over something other than this
+ *   process's Nextly, the declarations answer, as they answer the public
+ *   reader: a field they declare hidden is refused;
+ * - otherwise this process's instance answers, through core's visitor field
+ *   reader (`visitorFields`), judged as no one in the read's language: a
+ *   field declared hidden and a field whose read rule denies the visitor are
+ *   both refused. Where the visitor may read nothing of the collection, the
+ *   published page shows nothing of the list at all, and its fields are not
+ *   judged: the canvas marks such a list, and this reader still answers the
+ *   person.
+ */
+async function assertListFieldsPublic(
+  query: Pick<PublicReadQuery, "collection" | "filters" | "sort" | "locale">,
+  binding: PublicReaderBinding
+): Promise<void> {
+  const named = namedFields(query);
+  // Nothing named, nothing to judge: no instance or declaration is asked.
   if (named.length === 0) return;
+  if (binding.declarations !== undefined) {
+    assertNotHidden(
+      query,
+      await hiddenOf(binding, { kind: "collection", slug: query.collection })
+    );
+    return;
+  }
   const { inReadLanguage, visitorFields } = await import("./visitor-fields");
   const refused = await readAsVisitor(() =>
     inReadLanguage(binding.locale ?? query.locale, async () => {
@@ -154,28 +176,19 @@ export function createEditorReader(
     runDetachedFromRequest(() => runAsPrincipal(null, () => nextly.find(args)));
   return Object.freeze({
     async find(query: PublicReadQuery): Promise<PublicReadResult> {
-      const result = await read(toEditorFind(query, person, binding));
-      // Judged once the read has booted the instance, as the public reader
-      // judges it, and before any of its rows is returned: the published
-      // page's refusal of a filter or sort on a field the public may not read.
-      assertNotHidden(
-        query,
-        await hiddenOf(binding, { kind: "collection", slug: query.collection })
-      );
-      await assertPublicMayName(query, binding);
-      return result;
+      // The published page's refusals first, so a query it refuses reads
+      // nothing here either.
+      await assertListFieldsPublic(query, binding);
+      return read(toEditorFind(query, person, binding));
     },
     async count(query: PublicCountQuery): Promise<number> {
-      // Only what narrows a count, as the public reader's count takes.
+      // Only what narrows a count, as the public reader's count takes, and
+      // the published page's refusals, before anything is read.
       assertCountKeys(query);
+      await assertListFieldsPublic(query, binding);
       const result = await read(
         toEditorFind({ ...query, limit: 1, select: ["id"] }, person, binding)
       );
-      assertNotHidden(
-        query,
-        await hiddenOf(binding, { kind: "collection", slug: query.collection })
-      );
-      await assertPublicMayName(query, binding);
       return result.meta.total;
     },
   });

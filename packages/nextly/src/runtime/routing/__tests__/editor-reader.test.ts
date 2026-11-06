@@ -78,8 +78,8 @@ describe("the canvas's reader", () => {
     });
   });
 
-  it("refuses a filter or sort the published page refuses, returning nothing", async () => {
-    const { reader } = source();
+  it("refuses a filter or sort the published page refuses, reading nothing", async () => {
+    const { find, reader } = source();
     const editor = createEditorReader(reader, person, { declarations });
     for (const read of [
       () =>
@@ -96,6 +96,23 @@ describe("the canvas's reader", () => {
     ]) {
       await expect(read()).rejects.toSatisfy(isRefusal);
     }
+    // Refused before the read: no row is read and no read hook runs for a
+    // query the published page would refuse.
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("judges the fields by the reader's own declarations, never another instance's", async () => {
+    // No Nextly is registered in this process: a check that reached for the
+    // process's instance would fail rather than read.
+    const { find, reader } = source();
+    await expect(
+      createEditorReader(reader, person, { declarations }).find({
+        collection: "posts",
+        filters: [{ field: "title", op: "contains", value: "Draft" }],
+        sort: "-title",
+      })
+    ).resolves.toMatchObject({ meta: { total: 7 } });
+    expect(find).toHaveBeenCalledTimes(1);
   });
 
   it("takes only the public reader's keys and limits", async () => {
