@@ -181,7 +181,7 @@ describe("the confirm step's words", () => {
       },
     ]);
     expect(words.notes).toEqual([]);
-    expect(words.undo).toBe("This can't be undone.");
+    expect(words.undo).toBe("You can undo this from Settings for 30 days.");
     expect(words.confirm).toBe("Remove Mobile and its styles");
   });
 
