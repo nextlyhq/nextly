@@ -40,6 +40,11 @@ import {
   type PageActionRequest,
   type PageActionResult,
 } from "../composition-actions-contract";
+import {
+  asOverwrite,
+  documentVersionOf,
+  withVersionFrom,
+} from "../document-version";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
 import type { SavePatternDryRunResponse } from "../library-contract";
@@ -347,16 +352,20 @@ describe.each(getConfiguredTestDialects())(
       const dry = await act(cookie, { ...request, dryRun: true });
       const fingerprint = (dry.body.item as PageActionResult).fingerprint;
 
+      // Someone else edits the page after the preview, from their own read.
       await t.nextly.update({
         collection: "pages",
         id: page,
-        data: {
-          content: {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [heading("lead", "Edited")],
+        data: withVersionFrom(
+          {
+            content: {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [heading("lead", "Edited")],
+            },
           },
-        },
+          documentVersionOf(await stored(t, "pages", page))
+        ),
         overrideAccess: true,
       });
       const applied = await act(cookie, { ...request, expect: fingerprint });
@@ -382,16 +391,22 @@ describe.each(getConfiguredTestDialects())(
           const row = await read(args);
           if (args.collection === "pages" && !saved) {
             saved = true;
+            // From the version the action's read gave, so this save is
+            // accepted and the action's write, carrying that same version,
+            // is the one that arrives too late.
             await t.nextly.update({
               collection: "pages",
               id: page,
-              data: {
-                content: {
-                  formatVersion: 1,
-                  kind: "page",
-                  nodes: [heading("lead", "Saved meanwhile")],
+              data: withVersionFrom(
+                {
+                  content: {
+                    formatVersion: 1,
+                    kind: "page",
+                    nodes: [heading("lead", "Saved meanwhile")],
+                  },
                 },
-              },
+                documentVersionOf(row)
+              ),
               overrideAccess: true,
             });
           }
@@ -486,10 +501,11 @@ describe.each(getConfiguredTestDialects())(
     it("turns the Layout back on when one is chosen without the switch", async () => {
       const t = await boot();
       const { page } = await site(t);
+      // A fixture: the switch set whatever the page holds.
       await t.nextly.update({
         collection: "pages",
         id: page,
-        data: { noHeaderFooter: true },
+        data: asOverwrite({ noHeaderFooter: true }),
         overrideAccess: true,
       });
       const { cookie } = await holding(t, AUTHOR);
