@@ -13,7 +13,7 @@
  *
  * @module components/features/entries/EntryForm/usePluginDocumentSurfaces
  */
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   OVERRIDABLE_DOCUMENT_ACTIONS,
   type OverridableDocumentAction,
@@ -40,6 +40,7 @@ import {
   type CollectionDocumentSurfaces,
   type PluginPanelSectionEntry,
 } from "@admin/lib/plugins/document-surfaces";
+import { entryKeys } from "@admin/services/entryApi";
 
 import type { DocumentLockGates } from "./document-lock-affordances";
 import type {
@@ -154,6 +155,36 @@ function ClosesAsFailed({ onMount }: { onMount: () => void }): null {
   return null;
 }
 
+/**
+ * Calls `release` a task after the next SUCCESSFUL read of the entry whose
+ * detail key is `detail`, under any of its scoped keys: the form takes that
+ * read in as it renders, before the task runs. A failed read releases nothing.
+ * Answers how to stop waiting, which releases at once.
+ */
+function releaseOnNextRead(
+  queryClient: QueryClient,
+  detail: readonly unknown[],
+  release: () => void
+): () => void {
+  const isOfEntry = (key: readonly unknown[]): boolean =>
+    detail.every(
+      (part, index) => JSON.stringify(key[index]) === JSON.stringify(part)
+    );
+  let done = false;
+  const finish = (): void => {
+    if (done) return;
+    done = true;
+    unsubscribe();
+    release();
+  };
+  const unsubscribe = queryClient.getQueryCache().subscribe(event => {
+    if (event.type !== "updated" || event.action.type !== "success") return;
+    if (!isOfEntry(event.query.queryKey)) return;
+    setTimeout(finish, 0);
+  });
+  return finish;
+}
+
 export interface PluginDocumentSurfaces {
   /** The overrides the editor's actions run through. */
   actionOverrides: DocumentActionOverrides;
@@ -163,6 +194,60 @@ export interface PluginDocumentSurfaces {
   sections: readonly PluginPanelSectionEntry[];
   /** What each section is handed; absent before the document is saved. */
   sectionProps: DocumentPanelSectionProps | undefined;
+}
+
+/**
+ * What the editor does once a plugin says what it did to the document: the
+ * caches refresh exactly as after the built-in delete or update, through the
+ * same functions those hooks call, and a deleted document is left. "changed"
+ * reads it again, so the editor shows what the plugin wrote.
+ */
+function useDocumentChanged({
+  collectionSlug,
+  entryId,
+  onDeleted,
+  onOwnChange,
+}: {
+  collectionSlug: string;
+  entryId: string;
+  onDeleted: (() => void) | undefined;
+  onOwnChange: (() => () => void) | undefined;
+}): (result: DocumentChangeResult) => void {
+  const queryClient = useQueryClient();
+  // Ends a plugin's change still expected: stops waiting and releases it.
+  const expectedChange = useRef<(() => void) | null>(null);
+  // Leaving the editor ends it with the form it was expected for.
+  useEffect(
+    () => () => {
+      expectedChange.current?.();
+      expectedChange.current = null;
+    },
+    []
+  );
+  return result => {
+    if (result === "deleted") {
+      refreshAfterEntryDelete(queryClient, collectionSlug, entryId);
+      onDeleted?.();
+      return;
+    }
+    // The copy that arrives is the author's own change, so the form keeps
+    // what they have not saved over it, as it does over its own save's echo,
+    // rather than resetting to it as to someone else's. Expected until a read
+    // of the entry SUCCEEDS and the form has taken it in, a task later: a
+    // failed refetch leaves it expected, so the copy a later read brings is
+    // still taken in as the author's; the first successful read ends it, so
+    // it cannot carry over onto a version someone else writes after.
+    const release = onOwnChange?.();
+    if (release !== undefined) {
+      expectedChange.current?.();
+      expectedChange.current = releaseOnNextRead(
+        queryClient,
+        entryKeys.detail(collectionSlug, entryId),
+        release
+      );
+    }
+    void refreshAfterEntryChange(queryClient, collectionSlug, entryId);
+  };
 }
 
 export function usePluginDocumentSurfaces({
@@ -197,7 +282,6 @@ export function usePluginDocumentSurfaces({
   // Until the list has arrived, an absent override says nothing: the plugin
   // that overrides an action may simply not be known yet.
   const { isPending, isUnavailable, retry } = useBrandingStatus();
-  const queryClient = useQueryClient();
   const surfaces = useMemo(
     () => documentSurfacesFor(plugins, collectionSlug),
     [plugins, collectionSlug]
@@ -206,30 +290,12 @@ export function usePluginDocumentSurfaces({
   // The replacement asked for, read when it closes: a close from a render
   // before the open state reached it must still answer the one on screen.
   const openNow = useRef<OpenReplacement | null>(null);
-
-  /*
-   * What the editor does once a plugin says what it did to the document: the
-   * caches refresh exactly as after the built-in delete or update, through the
-   * same functions those hooks call, and a deleted document is left. "changed"
-   * reads it again, so the editor shows what the plugin wrote.
-   */
-  const documentChanged = (result: DocumentChangeResult): void => {
-    if (result === "deleted") {
-      refreshAfterEntryDelete(queryClient, collectionSlug, entryId);
-      onDeleted?.();
-      return;
-    }
-    // The copy that arrives is the author's own change, so the form keeps
-    // what they have not saved over it, as it does over its own save's echo,
-    // rather than resetting to it as to someone else's. Expected until the
-    // read has landed and the form has taken it in, a task later.
-    const release = onOwnChange?.();
-    void refreshAfterEntryChange(queryClient, collectionSlug, entryId).finally(
-      () => {
-        setTimeout(() => release?.(), 0);
-      }
-    );
-  };
+  const documentChanged = useDocumentChanged({
+    collectionSlug,
+    entryId,
+    onDeleted,
+    onOwnChange,
+  });
 
   const openReplacement = (
     action: OverridableDocumentAction,

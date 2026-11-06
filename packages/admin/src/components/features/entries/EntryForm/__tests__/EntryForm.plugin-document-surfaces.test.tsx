@@ -110,6 +110,7 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
 }));
 
 import { toast } from "@admin/components/ui";
+import { entryKeys } from "@admin/services/entryApi";
 
 import { EntryForm } from "../EntryForm";
 import { useDocumentLocale } from "../EntryFormContext";
@@ -503,6 +504,65 @@ describe("a plugin's replacement over time", () => {
       summary: "Theirs",
       updatedAt: "2026-10-04T09:00:00Z",
     });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Theirs"
+      )
+    );
+  });
+
+  it("keeps expecting the plugin's change while its read back fails, so the copy a later read brings keeps the unsaved edits", async () => {
+    // The refetch after the plugin's change fails: nothing in this test
+    // answers it, and no read of the entry succeeds. Time passes, then a later
+    // read brings the plugin's newer copy. Released when the refetch settled,
+    // that copy would be taken for someone else's and reset the form.
+    const drawAgain = renderLive();
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Not saved yet");
+    await screen.findByText("Used by 2 pages");
+
+    act(() => section.current!.documentChanged("changed"));
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+    drawAgain({
+      ...(entry as object),
+      summary: "From the plugin",
+      updatedAt: "2026-10-03T09:00:00Z",
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Not saved yet"
+      )
+    );
+  });
+
+  it("stops expecting the plugin's change once a read of the entry succeeds", async () => {
+    // A successful read ends the expectation even when it brings no newer
+    // copy, so it cannot carry onto a version someone else writes later.
+    const drawAgain = renderLive();
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Not saved yet");
+    await screen.findByText("Used by 2 pages");
+
+    act(() => section.current!.documentChanged("changed"));
+    // The entry is read successfully, under one of its scoped detail keys.
+    act(() => {
+      queryClient.setQueryData(
+        [...entryKeys.detail("layouts", "l1"), { locale: null }],
+        entry
+      );
+    });
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+    drawAgain({
+      ...(entry as object),
+      summary: "Theirs",
+      updatedAt: "2026-10-04T09:00:00Z",
+    });
+
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
         "Theirs"
