@@ -40,13 +40,14 @@ const NO_IN_TRANSACTION_HANDLERS: InTransactionHandlerSet = Object.freeze([]);
 /**
  * The in-transaction handlers one write to `target` runs, asked of the
  * registry once: a write keeps the set for the assembly decision and the run.
- * A presence check first, so a write with none costs one question.
+ * A presence check first, so a write with none costs one question. A service
+ * given no registry runs none.
  */
 export function inTransactionHandlersFor(
-  registry: HookRegistry,
+  registry: HookRegistry | undefined,
   target: string
 ): InTransactionHandlerSet {
-  return registry.hasInTransaction(target)
+  return registry?.hasInTransaction(target)
     ? registry.inTransactionEntries(target)
     : NO_IN_TRANSACTION_HANDLERS;
 }

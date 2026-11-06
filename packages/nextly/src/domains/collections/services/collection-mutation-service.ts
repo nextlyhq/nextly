@@ -9103,13 +9103,17 @@ export class CollectionMutationService extends BaseService {
       // be stale (a concurrent writer may commit between it and the lock), so a
       // transition detected only under the lock still needs the committed row
       // for its event payload rather than falling back to the stale pre-read.
-      const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
-
+      // An in-transaction handler is handed the entry as this publish leaves
+      // it, so it needs that row too.
       // The in-transaction handlers, asked once for this write: a retried
       // attempt runs the same set.
       const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
       );
+      const needsFreshParent =
+        !!versionsConfig?.enabled ||
+        hasMainStatus ||
+        inTransactionHandlers.length > 0;
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await this.adapter.transaction(async tx => {
@@ -9366,6 +9370,25 @@ export class CollectionMutationService extends BaseService {
                 })
               : [];
         }
+
+        // What an in-transaction handler is handed as the entry before this
+        // publish: the default language's whole read-shape document (its
+        // components, relations and translated values), read before anything
+        // is written, and only when the write took a handler.
+        const phaseBefore =
+          inTransactionHandlers.length > 0
+            ? (
+                await this.languageDocumentsOnTx(tx, {
+                  row: preImageRow,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  manyToManyFields,
+                  locales: [null],
+                })
+              ).get(null)
+            : undefined;
 
         // Where a promotion can rewrite a slug, the ones the entry was
         // reachable at until now: the main row's as locked, and each
@@ -10054,14 +10077,30 @@ export class CollectionMutationService extends BaseService {
 
         // Last in the transaction, as on an update: publishing or withdrawing
         // every language is an update of the entry, and is retried as one.
-        // The documents are the ones the outbox event above carries. No hook
-        // context is shared on this path, so the handler's is empty.
+        // The handler is handed the default language's whole read-shape
+        // document as the publish left it, against the one read before
+        // anything was written; both read only when it took a handler. No
+        // hook context is shared on this path, so the handler's is empty.
+        const phaseAfter =
+          inTransactionHandlers.length > 0
+            ? (
+                await this.languageDocumentsOnTx(tx, {
+                  row: publishedParentRow ?? preImageRow,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  manyToManyFields,
+                  locales: [null],
+                })
+              ).get(null)
+            : undefined;
         await this.runInTransactionPhase(tx, inTransactionHandlers, {
           collection: params.collectionName,
           operation: "update",
           id: params.entryId,
-          data: publishedDocument,
-          originalData: previousDocument,
+          data: phaseAfter,
+          originalData: phaseBefore ?? null,
           user: params.user,
           context: {},
         });

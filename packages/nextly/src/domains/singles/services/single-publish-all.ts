@@ -40,6 +40,7 @@ import {
   inTransactionHandlersFor,
   runInTransactionPhaseFor,
 } from "../../../hooks/in-transaction-call";
+import type { InTransactionHandlerSet } from "../../../hooks/in-transaction-phase";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -254,6 +255,11 @@ interface PublishPlan {
   companionReady: boolean;
   fieldConfigs: FieldConfig[];
   recordingEnabled: boolean;
+  /**
+   * The in-transaction handlers this publish runs, asked once before the
+   * transaction, so every attempt runs the same set and reads what it needs.
+   */
+  inTransactionHandlers: InTransactionHandlerSet;
   /**
    * Whether the Single may have working drafts, as its schema read reports.
    * A stored draft is promoted only while it does: one left from before the
@@ -822,6 +828,10 @@ export class SinglePublishAllService extends BaseService {
         companionReady,
         fieldConfigs: singleMeta.fields ?? [],
         recordingEnabled: isOutboxRecordingActive("single", slug),
+        inTransactionHandlers: inTransactionHandlersFor(
+          this.hookRegistry,
+          getSingleHookCollection(slug)
+        ),
         actor: actorForWrite(options.actor ?? null, options.user),
         // Resolved before the transaction: it reads the component registry.
         draftsEligible: (
@@ -1749,7 +1759,8 @@ export class SinglePublishAllService extends BaseService {
    *   Every other language's companion row is left as it is, so the values
    *   read after the publish are the same.
    *
-   * Both empty when no event is recorded.
+   * Both empty when no event is recorded and no in-transaction handler
+   * runs: either is handed the before-state.
    */
   private async stateBeforePromotion(
     tx: TransactionContext,
@@ -1761,7 +1772,10 @@ export class SinglePublishAllService extends BaseService {
     values: Map<string, Record<string, unknown>>;
   }> {
     const components = new Map<string, Record<string, unknown>>();
-    if (!plan.recordingEnabled || pending.length === 0) {
+    if (
+      (!plan.recordingEnabled && plan.inTransactionHandlers.length === 0) ||
+      pending.length === 0
+    ) {
       return { components, values: new Map() };
     }
     const promoted = [
@@ -2445,22 +2459,20 @@ export class SinglePublishAllService extends BaseService {
 
   /**
    * The in-transaction phase for this publish, as operation `update` under
-   * the Single's hook namespace. The handlers are asked for once, and the
-   * documents read only when that set is not empty, so a publish nobody
-   * handles reads nothing more, and the set that decided the read is the one
-   * that runs. No hook context is shared on this path, so the handler's is
-   * empty.
+   * the Single's hook namespace, with the handlers the plan took before the
+   * transaction. The documents are read only when that set is not empty, so
+   * a publish nobody handles reads nothing more, and the set that decided
+   * what was read (the before-state included) is the one that runs. No hook
+   * context is shared on this path, so the handler's is empty.
    */
   private async runInTransactionPhase(
     tx: TransactionContext,
     args: Parameters<SinglePublishAllService["publishDocuments"]>[1],
     user: PublishAllSingleLocalesOptions["user"]
   ): Promise<void> {
-    const registry = this.hookRegistry;
-    if (!registry) return;
-    const collection = getSingleHookCollection(args.plan.slug);
-    const handlers = inTransactionHandlersFor(registry, collection);
+    const handlers = args.plan.inTransactionHandlers;
     if (handlers.length === 0) return;
+    const collection = getSingleHookCollection(args.plan.slug);
     const { data, previous } = await this.publishDocuments(tx, args);
     await runInTransactionPhaseFor(handlers, tx, {
       collection,
