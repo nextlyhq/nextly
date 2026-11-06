@@ -47,15 +47,6 @@ import {
   getApiKeyAbilities,
 } from "./api/api-keys";
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
-import {
-  contributionsForReader,
-  listFiltersForReader,
-  type ContributionAudience,
-} from "./plugins/admin-contributions-offer";
-import {
-  contributionAudienceFor,
-  NOBODY,
-} from "./plugins/contribution-audience";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
   getDashboardStats,
@@ -183,7 +174,16 @@ import {
 } from "./middleware/rest-limit-gate";
 import { createRestLimits, restLimitCounts } from "./middleware/rest-limits";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
+import {
+  contributionsForReader,
+  listFiltersForReader,
+  type ContributionAudience,
+} from "./plugins/admin-contributions-offer";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
+import {
+  contributionAudienceFor,
+  NOBODY,
+} from "./plugins/contribution-audience";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,

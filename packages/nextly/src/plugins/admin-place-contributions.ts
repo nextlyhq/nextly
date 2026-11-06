@@ -102,22 +102,41 @@ function actionProblem(
       ? undefined
       : "its `action.open` names no component";
   }
-  const run = action.run;
+  return runProblem(action.run, plugin);
+}
+
+/** The keys a `run` takes. */
+const RUN_KEYS = new Set(["method", "path", "mount"]);
+
+/**
+ * What makes a `run` unusable, or `undefined`: it must name exactly one of
+ * the plugin's own routes, by method, path and mount, since a namespaced and
+ * a root-mounted route may share a method and a path.
+ */
+function runProblem(
+  run: unknown,
+  plugin: PluginDefinition
+): string | undefined {
   if (
     !isRecord(run) ||
-    Object.keys(run).some(key => key !== "method" && key !== "path") ||
+    Object.keys(run).some(key => !RUN_KEYS.has(key)) ||
     typeof run.method !== "string" ||
     !ROUTE_METHODS.has(run.method) ||
-    typeof run.path !== "string"
+    typeof run.path !== "string" ||
+    (run.mount !== undefined && run.mount !== "plugin" && run.mount !== "root")
   ) {
-    return "its `action.run` is not a route's `method` and `path`";
+    return "its `action.run` is not a route's `method`, `path` and optional `mount`";
   }
+  const mount = run.mount ?? "plugin";
   const declared = (plugin.contributes?.routes ?? []).some(
-    route => route.method === run.method && route.path === run.path
+    route =>
+      route.method === run.method &&
+      route.path === run.path &&
+      (route.mount ?? "plugin") === mount
   );
   return declared
     ? undefined
-    : `its \`action.run\` names ${run.method} ${run.path}, which is not one of this plugin's routes`;
+    : `its \`action.run\` names ${run.method} ${run.path} (${mount} mount), which is not one of this plugin's routes`;
 }
 
 /** What makes a kind's own fields unusable, or `undefined`. */
@@ -166,8 +185,11 @@ function placementProblem(
     }
   }
   if (requiredPermission !== undefined) {
-    if (!isText(requiredPermission)) {
-      return "its `requiredPermission` is not a permission";
+    if (
+      !isText(requiredPermission) &&
+      typeof requiredPermission !== "function"
+    ) {
+      return "its `requiredPermission` is neither a permission nor a function of the plugin's names";
     }
     if (place === "login") {
       return "it asks for a permission on the login page, where nobody has signed in";
@@ -379,7 +401,7 @@ export function contributedAdminContributions(
       const contribution = {
         ...checkedContribution(plugin, declared, places),
         plugin: plugin.name,
-      } as ContributedAdminContribution;
+      };
       const owner = owners.get(contribution.id);
       if (owner !== undefined) {
         throw resolutionError(

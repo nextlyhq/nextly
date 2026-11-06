@@ -2,8 +2,9 @@ import type { WhereFilter } from "../domains/collections/query/query-operators";
 
 import type { AdminContributionKind, AdminPlaceId } from "./admin-places";
 import type { PermissionSlug } from "./contributions";
+import type { PluginRoutePermissionResolver } from "./routes/route-permission";
+import type { PluginRouteMount, RouteMethod } from "./routes/route-types";
 import type { RowPredicate } from "./row-predicate";
-import type { RouteMethod } from "./routes/route-types";
 
 /**
  * @public A value that survives being sent to the browser as JSON.
@@ -301,8 +302,13 @@ interface AdminContributionBase {
    * Who sees it. A reader without this permission is not sent it at all, so
    * its label and action never reach them. Not allowed on the login page,
    * where nobody has signed in.
+   *
+   * A fixed slug for a name that cannot move, or, for one of the plugin's own
+   * collections or singles, a function of its names after the host's renames,
+   * as a route's `requiredPermission` is:
+   * `({ collection }) => collection("tickets", "update")`.
    */
-  requiredPermission?: PermissionSlug;
+  requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
   /**
    * On a page about one entry, or an action on rows, the entries it shows for.
    * Judged on each entry as the reader's read returned it: a field the reader
@@ -324,7 +330,15 @@ interface AdminContributionBase {
  */
 export type AdminContributionAction =
   | { open: ComponentPath }
-  | { run: { method: RouteMethod; path: string } };
+  | {
+      run: {
+        method: RouteMethod;
+        /** The route's `path`, as the plugin declares it. */
+        path: string;
+        /** The route's `mount`; the plugin's own, `"plugin"`, when absent. */
+        mount?: PluginRouteMount;
+      };
+    };
 
 /** @experimental A block the plugin draws, at any place that takes blocks. */
 export interface AdminBlockContribution extends AdminContributionBase {

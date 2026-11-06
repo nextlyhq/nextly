@@ -80,7 +80,15 @@ const SUPPORT: PluginDefinition = {
 };
 
 /** A reader holding `held`, who may filter on every field but `codename`. */
-function reader(held: string[] = [], collections = ["tickets", "posts"]) {
+/**
+ * A reader holding `held`, who may read `collections` (by the slugs the
+ * registry lists, a renamed one's served slug among them) and filter on every
+ * field but `codename`.
+ */
+function reader(
+  held: string[] = [],
+  collections = ["helpdesk-tickets", "posts"]
+) {
   const mayFilter = vi.fn(
     async (_collection: string, where: Record<string, unknown>) =>
       !JSON.stringify(where).includes("codename")
@@ -137,7 +145,7 @@ describe("contributionsForReader", () => {
     const meta = await contributionsForReader([SUPPORT], audience, "workspace");
     // The tab's rule names `codename`, which this reader may not filter on.
     expect(JSON.stringify(meta)).not.toContain("acme-support.secret");
-    expect(mayFilter).toHaveBeenCalledWith("tickets", {
+    expect(mayFilter).toHaveBeenCalledWith("helpdesk-tickets", {
       and: [{ codename: { exists: true } }],
     });
 
@@ -152,6 +160,72 @@ describe("contributionsForReader", () => {
         collections: ["posts"],
       }),
     ]);
+  });
+
+  it("sends a contribution named for collections only where the reader may read them", async () => {
+    // The reader may not read the tickets collection, so the section named
+    // for it is not sent at all.
+    const { audience } = reader(["read-audit"], ["posts"]);
+    const meta = await contributionsForReader([SUPPORT], audience, "workspace");
+    expect(JSON.stringify(meta)).not.toContain("acme-support.sla");
+  });
+
+  it("asks a permission named through the plugin's renamed collection", async () => {
+    const ops: PluginDefinition = {
+      ...SUPPORT,
+      contributes: {
+        admin: {
+          contributions: [
+            {
+              id: "acme-support.ops",
+              kind: "block",
+              place: "dashboard",
+              component: "x#Ops",
+              requiredPermission: ({ collection }) =>
+                collection("tickets", "update"),
+            },
+          ],
+        },
+      },
+    };
+    const sentTo = async (held: string[]) =>
+      JSON.stringify(
+        await contributionsForReader([ops], reader(held).audience, "workspace")
+      ).includes("acme-support.ops");
+    expect(await sentTo(["update-helpdesk-tickets"])).toBe(true);
+    // The declared spelling names no grant once the collection is renamed.
+    expect(await sentTo(["update-tickets"])).toBe(false);
+  });
+
+  it("sends no reader a contribution whose permission cannot be computed", async () => {
+    const broken: PluginDefinition = {
+      ...SUPPORT,
+      contributes: {
+        admin: {
+          contributions: [
+            {
+              id: "acme-support.broken",
+              kind: "block",
+              place: "dashboard",
+              component: "x#Broken",
+              requiredPermission: () => {
+                throw new Error("no names");
+              },
+            },
+          ],
+        },
+      },
+    };
+    const everything: ContributionAudience = {
+      ...reader().audience,
+      holds: () => true,
+    };
+    const meta = await contributionsForReader(
+      [broken],
+      everything,
+      "workspace"
+    );
+    expect(JSON.stringify(meta)).not.toContain("acme-support.broken");
   });
 
   it("sends the public metadata the login page's contributions alone", async () => {
@@ -197,7 +271,7 @@ describe("listFiltersForReader", () => {
     expect(await listFiltersForReader([STATE], audience)).toEqual([
       {
         ...STATE,
-        collections: ["tickets", "posts"],
+        collections: ["helpdesk-tickets", "posts"],
         options: [STATE.options[0]],
       },
     ]);

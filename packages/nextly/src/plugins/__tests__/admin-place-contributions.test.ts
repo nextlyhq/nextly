@@ -447,6 +447,82 @@ describe("contributedAdminContributions", () => {
     ).toMatchObject({ reason: "admin-place-malformed" });
   });
 
+  it("names a route by its mount too, the plugin's own when it says none", () => {
+    const routed = (
+      mount?: "plugin" | "root",
+      run: Record<string, unknown> = {}
+    ) =>
+      contributedAdminContributions([
+        plugin(
+          "@acme/support",
+          [
+            {
+              id: "acme-support.a",
+              kind: "rowAction",
+              place: "collection.list",
+              label: "A",
+              action: { run: { method: "POST", path: "/escalate", ...run } },
+            },
+          ],
+          {
+            contributes: {
+              admin: {
+                contributions: [
+                  {
+                    id: "acme-support.a",
+                    kind: "rowAction",
+                    place: "collection.list",
+                    label: "A",
+                    action: {
+                      run: { method: "POST", path: "/escalate", ...run },
+                    },
+                  },
+                ] as AdminContribution[],
+              },
+              routes: [
+                {
+                  method: "POST",
+                  path: "/escalate",
+                  handler: () => new Response(),
+                  ...(mount ? { mount } : {}),
+                },
+              ],
+            },
+          }
+        ),
+      ]);
+    // A root-mounted route is not the plugin's own one of the same path.
+    expect(refusalOf(() => routed("root"))).toMatchObject({
+      reason: "admin-contribution-invalid",
+    });
+    expect(routed("root", { mount: "root" }).contributions).toHaveLength(1);
+    expect(routed(undefined, { mount: "plugin" }).contributions).toHaveLength(
+      1
+    );
+    expect(
+      refusalOf(() => routed(undefined, { mount: "elsewhere" }))
+    ).toMatchObject({
+      reason: "admin-contribution-invalid",
+    });
+  });
+
+  it("takes a permission computed from the plugin's names", () => {
+    expect(
+      contributedAdminContributions([
+        plugin("@acme/support", [
+          {
+            ...SECTION,
+            requiredPermission: ({
+              collection,
+            }: {
+              collection: (s: string, a: string) => string;
+            }) => collection("tickets", "update"),
+          },
+        ]),
+      ]).contributions
+    ).toHaveLength(1);
+  });
+
   it("refuses contributions that cannot be ordered", () => {
     expect(
       refusalOf(() =>

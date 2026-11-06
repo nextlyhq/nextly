@@ -28,6 +28,8 @@ import {
 const TICKETS = "acd_tickets";
 const BOSS = "user-acd-boss";
 const AGENT = "user-acd-agent";
+/** Signed in, and may not read the tickets collection at all. */
+const OUTSIDER = "user-acd-outsider";
 
 const SUPPORT: PluginDefinition = {
   name: "@acme/support",
@@ -120,6 +122,7 @@ async function boot(dialect: TestDialect): Promise<void> {
   for (const id of [BOSS, AGENT])
     await userWhoMay(current, id, "read", [TICKETS]);
   await grantTo(current, BOSS, "update", [TICKETS]);
+  await userWhoMay(current, OUTSIDER, "read", ["media"]);
 }
 
 async function cookieFor(userId: string): Promise<string> {
@@ -221,6 +224,18 @@ describe.each(getConfiguredTestDialects())(
           options: [expect.objectContaining({ value: "open" })],
         }),
       ]);
+    });
+
+    it("offers nothing on a collection the reader may not read", async () => {
+      await boot(dialect);
+      const { status, body } = await meta(WORKSPACE, OUTSIDER);
+      expect(status).toBe(200);
+      const workspace = workspaceOf(body);
+      expect(ids(workspace.contributions)).toEqual(["acme-support.totals"]);
+      const plugin = (workspace.plugins as Array<Record<string, unknown>>).find(
+        p => p.name === "@acme/support"
+      );
+      expect(plugin?.listFilters).toBeUndefined();
     });
 
     it("refuses the workspace metadata without a session", async () => {

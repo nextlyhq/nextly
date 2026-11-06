@@ -8,6 +8,7 @@
  * @experimental
  */
 import type { ReadAccessCaller } from "../auth/code-access";
+import { readableEntities } from "../auth/entity-read-access";
 import { container } from "../di/container";
 import { holdsWidgetPermission } from "../domains/widgets/gate";
 import { permissionVerdicts } from "../domains/widgets/visibility";
@@ -16,10 +17,10 @@ import type { CollectionsHandler } from "../services/collections-handler";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import {
+  contributionPermissions,
   readerFilterVerdict,
   type ContributionAudience,
 } from "./admin-contributions-offer";
-import { contributedAdminContributions } from "./admin-place-contributions";
 import type { PluginDefinition } from "./plugin-context";
 
 /**
@@ -30,8 +31,8 @@ import type { PluginDefinition } from "./plugin-context";
  */
 export const NOBODY: ContributionAudience = Object.freeze({
   holds: () => false,
-  mayFilter: async () => false,
-  collections: Object.freeze([]) as readonly string[],
+  mayFilter: () => Promise.resolve(false),
+  collections: Object.freeze([]),
 });
 
 /**
@@ -55,46 +56,55 @@ async function listedCollections(): Promise<string[]> {
 }
 
 /**
+ * The handler that serves collection reads. Looked up when the verdict is
+ * asked, inside its promise, so a container without it is a failure the
+ * verdict reads as no, not a payload that cannot be built.
+ */
+function collectionsHandler(): CollectionsHandler {
+  return container.get<CollectionsHandler>("collectionsHandler");
+}
+
+/**
  * @experimental The signed-in reader of this request, for the offer.
  *
  * Its permissions are resolved once, for every gate a contribution names, by
  * the same verdicts the widget gate decides from, and a gate that could not
- * be decided denies. What it may filter on is asked of the list read's own
- * chain with the caller the read would be judged as, once per collection and
- * `where` for the whole payload.
+ * be decided denies. The collections it is offered anything on are the ones
+ * it may read, by the decision every entity read takes, since a list it may
+ * not read refuses before it judges a field. What it may filter on is then
+ * asked of the list read's own chain with the caller the read would be judged
+ * as, once per collection and `where` for the whole payload.
  */
 export async function contributionAudienceFor(
   plugins: readonly PluginDefinition[],
   caller: ReadCaller,
   accessCaller: ReadAccessCaller
 ): Promise<ContributionAudience> {
-  const gates = contributedAdminContributions(plugins).contributions.flatMap(
-    c => (c.requiredPermission === undefined ? [] : [c.requiredPermission])
-  );
+  const gates = contributionPermissions(plugins);
   const verdicts = await permissionVerdicts(gates, accessCaller);
+  const listed = await listedCollections();
+  const readable = await readableEntities(listed, accessCaller);
+  const judged = readerFilterVerdict(
+    async (collection, where) =>
+      collectionsHandler().queryReadableProblems({
+        collectionName: collection,
+        where,
+        overrideAccess: false,
+        user: caller.user,
+        authenticatedScope: caller.authenticatedScope,
+      }),
+    (collection, error) =>
+      getNextlyLogger().warn({
+        kind: "admin-contribution-offer-undecided",
+        collection,
+        err: error instanceof Error ? error.stack : String(error),
+      })
+  );
   return {
     holds: gate => holdsWidgetPermission(gate, verdicts),
-    mayFilter: readerFilterVerdict(
-      // Looked up when asked, inside the promise, so a container without the
-      // handler is a failure the verdict reads as no, not a payload that
-      // cannot be built.
-      async (collection, where) =>
-        container
-          .get<CollectionsHandler>("collectionsHandler")
-          .queryReadableProblems({
-            collectionName: collection,
-            where,
-            overrideAccess: false,
-            user: caller.user,
-            authenticatedScope: caller.authenticatedScope,
-          }),
-      (collection, error) =>
-        getNextlyLogger().warn({
-          kind: "admin-contribution-offer-undecided",
-          collection,
-          err: error instanceof Error ? error.stack : String(error),
-        })
-    ),
-    collections: await listedCollections(),
+    // A collection the reader may not read is refused before any field is.
+    mayFilter: async (collection, where) =>
+      readable.has(collection) && (await judged(collection, where)),
+    collections: listed.filter(slug => readable.has(slug)),
   };
 }

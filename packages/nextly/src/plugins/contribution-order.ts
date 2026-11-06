@@ -153,23 +153,21 @@ function replacementNodes(
   return replacers;
 }
 
-/**
- * @experimental One place's contributions of one kind in order, the place's
- * built-in parts of that kind among them, refusing a reference to nothing, a
- * built-in part replaced twice or not at all there, and a cycle, naming every
- * contribution in it.
- */
-export function orderContributions(
+/** The graph's nodes, and the node each id or built-in name is placed by. */
+interface Nodes {
+  nodes: Map<string, Node>;
+  /** A replacer stands where its built-in part was, so either name reaches it. */
+  nodeOf: Map<string, string>;
+}
+
+/** One node per built-in part, a replacer taking its part's, and one per other contribution. */
+function graphNodes(
   items: readonly OrderableContribution[],
   builtIns: readonly string[],
-  scope: Scope
-): OrderedEntry[] {
-  const replacers = replacementNodes(items, builtIns, scope);
+  replacers: ReadonlyMap<string, OrderableContribution>
+): Nodes {
   const nodes = new Map<string, Node>();
-  // The node each id or built-in name is placed by: a replacer stands where
-  // its built-in part was, so a reference to either reaches the same node.
   const nodeOf = new Map<string, string>();
-
   builtIns.forEach((name, i) => {
     const key = `builtin:${name}`;
     const replacer = replacers.get(name);
@@ -194,16 +192,26 @@ export function orderContributions(
     });
     nodeOf.set(item.id, item.id);
   }
+  return { nodes, nodeOf };
+}
 
-  // Edges run from what comes first to what follows it. The ones a
-  // contribution asked for are kept apart from the built-in parts' own chain,
-  // so what a contribution is anchored to is followed by it first.
-  const edges = new Map<string, Set<string>>(
-    [...nodes.keys()].map(key => [key, new Set<string>()])
-  );
-  const anchored = new Map<string, Set<string>>(
-    [...nodes.keys()].map(key => [key, new Set<string>()])
-  );
+/**
+ * The graph's edges, from what comes first to what follows it, and apart from
+ * them the ones a contribution asked for, so what a contribution is anchored
+ * to is followed by it first. Refuses a reference to nothing there.
+ */
+function graphEdges(
+  items: readonly OrderableContribution[],
+  builtIns: readonly string[],
+  { nodes, nodeOf }: Nodes,
+  scope: Scope
+): { edges: Map<string, Set<string>>; anchored: Map<string, Set<string>> } {
+  const empty = () =>
+    new Map<string, Set<string>>(
+      [...nodes.keys()].map(key => [key, new Set<string>()])
+    );
+  const edges = empty();
+  const anchored = empty();
   const link = (from: string, to: string, asked: boolean): void => {
     edges.get(from)!.add(to);
     if (asked) anchored.get(from)!.add(to);
@@ -236,10 +244,20 @@ export function orderContributions(
       else link(other, self, true);
     }
   }
+  return { edges, anchored };
+}
 
-  // Kahn's algorithm. What a node frees is placed straight after it, what it
-  // was anchored to first, so `after` means next to; otherwise the
-  // lowest-ranked free node goes next.
+/**
+ * Kahn's algorithm. What a node frees is placed straight after it, what it
+ * was anchored to first, so `after` means next to; otherwise the
+ * lowest-ranked free node goes next. Answers the order and the nodes placed;
+ * a node left unplaced is on or behind a cycle.
+ */
+function placed(
+  nodes: ReadonlyMap<string, Node>,
+  edges: ReadonlyMap<string, ReadonlySet<string>>,
+  anchored: ReadonlyMap<string, ReadonlySet<string>>
+): { ordered: OrderedEntry[]; done: Set<string> } {
   const incoming = new Map<string, number>(
     [...nodes.keys()].map(key => [key, 0])
   );
@@ -272,11 +290,34 @@ export function orderContributions(
     if (free.length === 0) break;
     place(free[0]);
   }
-  if (done.size === nodes.size) return ordered;
+  return { ordered, done };
+}
 
-  const remaining = new Set([...nodes.keys()].filter(key => !done.has(key)));
+/**
+ * @experimental One place's contributions of one kind in order, the place's
+ * built-in parts of that kind among them, refusing a reference to nothing, a
+ * built-in part replaced twice or not at all there, and a cycle, naming every
+ * contribution in it.
+ */
+export function orderContributions(
+  items: readonly OrderableContribution[],
+  builtIns: readonly string[],
+  scope: Scope
+): OrderedEntry[] {
+  const graph = graphNodes(
+    items,
+    builtIns,
+    replacementNodes(items, builtIns, scope)
+  );
+  const { edges, anchored } = graphEdges(items, builtIns, graph, scope);
+  const { ordered, done } = placed(graph.nodes, edges, anchored);
+  if (done.size === graph.nodes.size) return ordered;
+
+  const remaining = new Set(
+    [...graph.nodes.keys()].filter(key => !done.has(key))
+  );
   const members = [...cycleMembers(remaining, edges)]
-    .flatMap(key => nodes.get(key)!.names)
+    .flatMap(key => graph.nodes.get(key)!.names)
     .sort();
   throw resolutionError(
     "contribution-order-cycle",
