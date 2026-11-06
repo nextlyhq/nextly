@@ -127,6 +127,14 @@ describe("the bell for a person who is not a super-admin", () => {
     await waitFor(() => expect(markRead).toHaveBeenCalledWith({ all: true }));
   });
 
+  it("never asks for the schema-change journal, which is a super-admin's", async () => {
+    render(<NotificationBell />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByTestId("notification-bell"));
+    await screen.findByRole("heading", { name: "For you" });
+
+    expect(journalList).not.toHaveBeenCalled();
+  });
+
   it("says so when there are no notices", async () => {
     list.mockResolvedValue({
       items: [],
@@ -171,9 +179,11 @@ describe("the bell for a super-admin", () => {
     expect(
       screen.queryByRole("heading", { name: "Recent schema changes" })
     ).not.toBeInTheDocument();
-    // Its count is the notices alone: the journal is not this workspace's.
+    // Its count is the notices alone, and the journal is never asked for: it
+    // is not this workspace's.
     expect(screen.getByTestId("notification-bell-badge")).toHaveTextContent(
       "1"
     );
+    expect(journalList).not.toHaveBeenCalled();
   });
 });

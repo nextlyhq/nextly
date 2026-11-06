@@ -45,10 +45,15 @@ export function NotificationBell({
     useCurrentUserPermissions();
   const [open, setOpen] = useState(false);
 
-  // The journal query is fetched here even when the popover is closed
-  // because the badge needs the row list to compute `unread`. Fetched
-  // lazily-once via React Query's stale-time; cheap.
-  const { data } = useJournal({ limit: JOURNAL_PAGE_SIZE });
+  // The journal is a super-admin's, and only where the workspace has one: it is
+  // never read for anyone else, whose read would be refused. Where it is shown
+  // it is read with the popover closed too, since the badge counts its unread
+  // rows; once, via React Query's stale time.
+  const showJournal = !permissionsLoading && isSuperAdmin && journalOffered;
+  const { data } = useJournal(
+    { limit: JOURNAL_PAGE_SIZE },
+    { enabled: showJournal }
+  );
   const rows = data?.rows ?? [];
   const { unread: journalUnread, markAllSeen } = useUnreadCount(rows);
   // Every admin user has notices of their own; the schema-change journal stays
@@ -57,8 +62,6 @@ export function NotificationBell({
 
   if (permissionsLoading) return null;
 
-  // The journal is a super-admin's, and only where the workspace has one.
-  const showJournal = isSuperAdmin && journalOffered;
   const unread = noticeUnread + (showJournal ? journalUnread : 0);
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
