@@ -44,6 +44,7 @@ import {
   showsUnpublished,
   STORED_FORMS,
   storesJson,
+  unstoredWriteKeys,
   wholeWriteOf,
   type StoredFieldsRead,
   type FieldScope,
@@ -431,6 +432,9 @@ function publicStateOf(liveState: string | null | undefined): string | null {
  * would persist, after every hook, does not hold each field it writes exactly
  * as sent, or the field-access pass took one out: an ordinary update lets a
  * rule drop such a field, or a hook change it, silently and writes the rest.
+ * Data naming a key no update stores (a system column no client writes, a
+ * column a schema hook contributed, a field with no column) is refused with
+ * `INVALID_INPUT` before anything is read or written, whoever makes it.
  * Made as the system, it is an
  * `overrideAccess: true` update, judged by no access rule. The expectation is
  * judged inside the update's own transaction, once it holds the entry's row
@@ -467,6 +471,22 @@ export async function updateIfUnchanged(
   // judged in the very language its expectation was read in.
   const inLocale =
     language.locale === undefined ? {} : { locale: language.locale };
+  // Refused where it arrives: a key the update would never store (a system
+  // column no write sets, one a schema hook contributed, a field with no
+  // column) would leave the write made in part, reported as made whole.
+  const unstored = await unstoredWriteKeys(
+    {
+      ...targetOf(document),
+      fields: [expected.field],
+      form: expected.form,
+    },
+    named.data
+  );
+  if (unstored.length > 0) {
+    throw NextlyError.invalidInput({
+      message: `A conditional write cannot write ${unstored.map(key => `"${key}"`).join(", ")}: an update never stores ${unstored.length === 1 ? "it" : "them"}, so the write would be made in part.`,
+    });
+  }
   // The read half first: a precondition, so before anything is written. Made
   // as whoever read the expectation, which is the caller unless the system
   // read it for them.
