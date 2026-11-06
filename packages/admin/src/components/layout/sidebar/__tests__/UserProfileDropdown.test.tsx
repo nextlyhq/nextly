@@ -27,18 +27,22 @@ vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 const me = vi.hoisted(() => ({
   interfaceLanguage: null as string | null,
   written: [] as Array<[string, unknown]>,
+  reads: 0,
 }));
 
 vi.mock("@admin/hooks/useApi", () => ({
   useApi: () => ({
     api: {
       protected: {
-        get: async () => ({
-          id: "u1",
-          name: "Ada",
-          email: "ada@example.com",
-          interfaceLanguage: me.interfaceLanguage,
-        }),
+        get: async () => {
+          me.reads += 1;
+          return {
+            id: "u1",
+            name: "Ada",
+            email: "ada@example.com",
+            interfaceLanguage: me.interfaceLanguage,
+          };
+        },
         patch: async (path: string, body: { interfaceLanguage: unknown }) => {
           me.written.push([path, body]);
           me.interfaceLanguage = body.interfaceLanguage as string | null;
@@ -52,6 +56,7 @@ vi.mock("@admin/hooks/useApi", () => ({
 afterEach(() => {
   me.interfaceLanguage = null;
   me.written = [];
+  me.reads = 0;
   vi.restoreAllMocks();
 });
 
@@ -94,13 +99,18 @@ describe("the user menu's interface language", () => {
     renderMenu();
     await openMenu(user);
 
-    await user.click(
-      await screen.findByRole("menuitemradio", { name: "Français" })
-    );
+    const french = await screen.findByRole("menuitemradio", {
+      name: "Français",
+    });
+    const readsBefore = me.reads;
+    await user.click(french);
 
     await vi.waitFor(() =>
       expect(me.written).toEqual([["/me", { interfaceLanguage: "fr" }]])
     );
+    // The save re-reads the person, so every reader of them is refreshed,
+    // not only this menu.
+    await vi.waitFor(() => expect(me.reads).toBeGreaterThan(readsBefore));
     await openMenu(user);
     await vi.waitFor(() =>
       expect(

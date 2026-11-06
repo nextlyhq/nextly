@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { createTestQueryClient, render, screen } from "@admin/__tests__/utils";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
+import { currentUserKey } from "@admin/hooks/useDashboardUser";
 import { usePluginTranslate, useT } from "@admin/lib/i18n/I18nProvider";
 
 const branding = vi.hoisted(() => ({
@@ -118,19 +119,33 @@ describe("AdminI18nProvider", () => {
   });
 });
 
+/**
+ * Render signed in, and wait until `/me` has ANSWERED, not merely been asked:
+ * before the answer the browser's language is in effect, which is also what
+ * several of the right answers look like.
+ */
+async function renderSettled(ui: React.ReactElement) {
+  const queryClient = createTestQueryClient();
+  const rendered = render(ui, { queryClient });
+  await vi.waitFor(() =>
+    expect(queryClient.getQueryData(currentUserKey)).toBeDefined()
+  );
+  return rendered;
+}
+
 describe("AdminI18nProvider, each person's own interface language", () => {
   it("the stored language wins over the browser's", async () => {
     branding.plugins = SHOP_IN_TWO_LANGUAGES;
     browserLanguage("en-US");
     me.interfaceLanguage = "fr";
 
-    render(
+    await renderSettled(
       <AdminI18nProvider signedIn>
         <CartTitle />
       </AdminI18nProvider>
     );
 
-    expect(await screen.findByText("Panier")).toBeTruthy();
+    expect(screen.getByText("Panier")).toBeTruthy();
     expect(me.asked).toEqual(["/me"]);
   });
 
@@ -139,13 +154,12 @@ describe("AdminI18nProvider, each person's own interface language", () => {
     browserLanguage("fr-FR");
     me.interfaceLanguage = null;
 
-    render(
+    await renderSettled(
       <AdminI18nProvider signedIn>
         <CartTitle />
       </AdminI18nProvider>
     );
 
-    await vi.waitFor(() => expect(me.asked).toEqual(["/me"]));
     expect(screen.getByText("Panier")).toBeTruthy();
   });
 
@@ -154,22 +168,20 @@ describe("AdminI18nProvider, each person's own interface language", () => {
     me.interfaceLanguage = "de";
 
     browserLanguage("fr-FR");
-    const first = render(
+    const first = await renderSettled(
       <AdminI18nProvider signedIn>
         <CartTitle />
       </AdminI18nProvider>
     );
-    await vi.waitFor(() => expect(me.asked).toEqual(["/me"]));
     expect(screen.getByText("Panier")).toBeTruthy();
     first.unmount();
 
     browserLanguage("es-ES");
-    render(
+    await renderSettled(
       <AdminI18nProvider signedIn>
         <CartTitle />
       </AdminI18nProvider>
     );
-    await vi.waitFor(() => expect(me.asked).toEqual(["/me", "/me"]));
     expect(screen.getByText("Cart")).toBeTruthy();
   });
 
@@ -196,7 +208,7 @@ describe("AdminI18nProvider, each person's own interface language", () => {
     browserLanguage("en-US");
     me.interfaceLanguage = null;
 
-    render(
+    await renderSettled(
       <AdminI18nProvider signedIn>
         <EntryLocaleProvider
           value={{
@@ -211,7 +223,6 @@ describe("AdminI18nProvider, each person's own interface language", () => {
       </AdminI18nProvider>
     );
 
-    await vi.waitFor(() => expect(me.asked).toEqual(["/me"]));
     expect(screen.getByText("Cart")).toBeTruthy();
   });
 });
