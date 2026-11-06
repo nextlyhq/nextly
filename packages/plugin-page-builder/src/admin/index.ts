@@ -25,10 +25,7 @@
  * @module @nextlyhq/plugin-page-builder/admin
  */
 
-import {
-  registerComponents,
-  registerKnownPlugin,
-} from "@nextlyhq/plugin-sdk/admin";
+import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
 import {
   BUILDER_VIEW_COMPONENT,
@@ -95,12 +92,6 @@ registerComponents(COMPONENTS);
 // "Export" on the Components, Patterns and Layouts lists.
 registerExportActions();
 
-// Lazy fallback: the host can trigger registration on demand by package prefix.
-registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
-  registerComponents(COMPONENTS);
-  registerExportActions();
-  return Promise.resolve();
-});
 
 export {
   BlocksField,

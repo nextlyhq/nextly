@@ -84,9 +84,6 @@ vi.mock("@admin/hooks/useCanRequest", () => ({
   useDefaultLanguageAsksTranslationStatus: () => false,
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => false }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: false,

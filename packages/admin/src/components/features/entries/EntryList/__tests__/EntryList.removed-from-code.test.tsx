@@ -43,9 +43,6 @@ vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ enabled: false }),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 vi.mock("@admin/hooks/useSearchParams", () => ({
   useSearchParams: () => ({}),
 }));

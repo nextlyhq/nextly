@@ -23,6 +23,7 @@
 
 import { dirname, join, posix, relative, sep } from "node:path";
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import {
   isConfigRelative,
   SITE_CONFIG,
@@ -150,10 +151,17 @@ export function collectAdminComponentEntries(
   const fieldTypes = (plugin.contributes?.fieldTypes ?? []).map(fieldType =>
     entry(fieldType.component, owner, "field type")
   );
+  // A collection's own screens, by the same rule as its field editors: a
+  // disabled plugin keeps its collections, so the views they name still draw
+  // and still need their modules.
+  const ownViews = collectCollectionOwnViewPaths(
+    plugin.contributes?.collections
+  ).map(path => entry(path, owner, "collection view"));
 
-  if (plugin.enabled === false) return fieldTypes;
+  if (plugin.enabled === false) return [...fieldTypes, ...ownViews];
   return [
     ...fieldTypes,
+    ...ownViews,
     ...collectAdminEntries(plugin.contributes?.admin, owner),
     ...collectDeclaredWidgetEntries(plugin.contributes?.dashboard, owner),
   ];
@@ -272,6 +280,32 @@ function importedFromConfig(module: string, configImport?: string): string {
   if (configImport === undefined) return module;
   const joined = posix.join(posix.dirname(configImport), module);
   return joined.startsWith("../") ? joined : `./${joined}`;
+}
+
+/**
+ * The components a collection names for its own screens under
+ * `admin.components`: its edit and list views, and what is drawn before and
+ * after its list table and its edit form.
+ *
+ * The admin resolves each by this string through the component registry, and
+ * the map is the only importer of the module behind it once nothing loads a
+ * module by name at run time. Read defensively, since generation runs before
+ * startup validates a collection: a slot naming no component is skipped.
+ */
+function collectCollectionOwnViewPaths(
+  collections: readonly CollectionConfig[] | undefined
+): string[] {
+  return (collections ?? []).flatMap(collection => {
+    const components = collection.admin?.components;
+    return [
+      components?.views?.Edit?.Component,
+      components?.views?.List?.Component,
+      components?.BeforeListTable,
+      components?.AfterListTable,
+      components?.BeforeEdit,
+      components?.AfterEdit,
+    ].filter((path): path is string => typeof path === "string" && path !== "");
+  });
 }
 
 /**

@@ -436,3 +436,38 @@ describe("the config a development rewrite checks against", () => {
     );
   });
 });
+
+describe("a site collection's own views", () => {
+  beforeEach(() => vi.stubEnv("NODE_ENV", "development"));
+
+  // `generate:types` lists the views the site's own collections name, and the
+  // development check does not collect them yet: it reads them as obsolete and
+  // its rewrite would remove them. Held as an expected failure, and a plain
+  // `it` once the check collects them too.
+  it.fails(
+    "leaves alone a map listing a site collection's custom edit view",
+    async () => {
+      const withViews = {
+        ...config,
+        collections: [
+          {
+            slug: "orders",
+            fields: [],
+            admin: {
+              components: {
+                views: { Edit: { Component: "./views/orders#OrderEditor" } },
+              },
+            },
+          },
+        ],
+      } as unknown as Parameters<typeof checkAdminComponents>[0]["config"];
+
+      await checkAdminComponents({
+        config: withViews,
+        registeredComponentPaths: [...BOTH, "./views/orders#OrderEditor"],
+      });
+
+      expect(writeComponentMapFiles).not.toHaveBeenCalled();
+    }
+  );
+});

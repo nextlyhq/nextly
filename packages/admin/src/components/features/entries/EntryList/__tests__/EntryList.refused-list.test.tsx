@@ -39,9 +39,6 @@ vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ enabled: false }),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 vi.mock("@admin/hooks/useSearchParams", () => ({
   // The hook answers a plain record, as `parseSearchParams` builds it: an
   // address with no query string.

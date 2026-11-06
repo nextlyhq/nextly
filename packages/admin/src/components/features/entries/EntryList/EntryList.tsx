@@ -41,7 +41,6 @@ import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useCan } from "@admin/hooks/useCan";
 import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
@@ -50,7 +49,6 @@ import { navigateTo } from "@admin/lib/navigation";
 import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
 import { getSearchParam } from "@admin/lib/search-params";
 import type { Entry } from "@admin/types/collection";
-import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
 import {
@@ -261,13 +259,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   const { data: collection, isLoading: collectionLoading } =
     useCollection(collectionSlug);
 
-  // Auto-register plugin components when collection is loaded
-  // This ensures components like BeforeListTable are registered before rendering
-  const collectionsForRegistration = useMemo<ApiCollection[]>(
-    () => (collection ? [collection as unknown as ApiCollection] : []),
-    [collection]
-  );
-  usePluginAutoRegistration(collectionsForRegistration);
 
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.

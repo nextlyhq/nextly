@@ -1,5 +1,5 @@
 import { renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   clearDocumentViews,
@@ -13,15 +13,9 @@ import type { PluginMetadata } from "@admin/types/branding";
 
 import { usePluginPageRegistration } from "../usePluginPageRegistration";
 
-const autoRegister = vi.fn();
-vi.mock("@admin/lib/plugins/component-registry", () => ({
-  autoRegisterPluginComponents: (paths: string[]) => autoRegister(paths),
-}));
-
 afterEach(() => {
   clearPluginPages();
   clearDocumentViews();
-  vi.clearAllMocks();
 });
 
 describe("usePluginPageRegistration", () => {
@@ -49,9 +43,6 @@ describe("usePluginPageRegistration", () => {
       component: "@acme/p/admin#Reports",
       requiredPermission: "read-reports",
     });
-    expect(autoRegister).toHaveBeenCalledWith(
-      expect.arrayContaining(["@acme/p/admin#Reports"])
-    );
   });
 
   it("clears stale pages when plugins change", () => {
@@ -76,9 +67,7 @@ describe("usePluginPageRegistration", () => {
     expect(matchPluginPage("/admin/plugins/acme-p/x")).toBeUndefined();
   });
 
-  it("registers document views and imports their component modules", () => {
-    // A plugin contributing only a document view has nothing else whose
-    // import would register the view's component.
+  it("registers document views", () => {
     renderHook(() =>
       usePluginPageRegistration(
         [
@@ -101,9 +90,6 @@ describe("usePluginPageRegistration", () => {
     expect(matchDocumentView("collection", "pages", "builder")).toMatchObject({
       component: "@acme/pb/admin#Builder",
     });
-    expect(autoRegister).toHaveBeenCalledWith(
-      expect.arrayContaining(["@acme/pb/admin#Builder"])
-    );
   });
 
   it("clears a document view whose plugin stops contributing it", () => {
@@ -127,41 +113,5 @@ describe("usePluginPageRegistration", () => {
 
     rerender({ plugins: [{ name: "@acme/pb", collections: [] }] });
     expect(matchDocumentView("collection", "pages", "builder")).toBeUndefined();
-  });
-
-  it("feeds header.slot paths into auto-registration", () => {
-    renderHook(() =>
-      usePluginPageRegistration(
-        [
-          {
-            name: "@acme/plugin-toolbar",
-            collections: [],
-            header: { slot: "@acme/plugin-toolbar/admin#ToolbarButton" },
-          },
-        ] satisfies PluginMetadata[],
-        true
-      )
-    );
-    expect(autoRegister).toHaveBeenCalledWith(
-      expect.arrayContaining(["@acme/plugin-toolbar/admin#ToolbarButton"])
-    );
-  });
-
-  it("falls back to the deprecated headerSlot path", () => {
-    renderHook(() =>
-      usePluginPageRegistration(
-        [
-          {
-            name: "@acme/p",
-            collections: [],
-            headerSlot: "@acme/p/admin#Badge",
-          },
-        ] satisfies PluginMetadata[],
-        true
-      )
-    );
-    expect(autoRegister).toHaveBeenCalledWith(
-      expect.arrayContaining(["@acme/p/admin#Badge"])
-    );
   });
 });

@@ -123,9 +123,6 @@ vi.mock("@admin/hooks/useTranslationMode", () => ({
     exitTranslationMode: vi.fn(),
   }),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 
 import EditEntryPage from "./index";
 

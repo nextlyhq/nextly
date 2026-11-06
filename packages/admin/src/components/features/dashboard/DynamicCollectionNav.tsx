@@ -21,7 +21,6 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSidebarCollectionList } from "@admin/hooks/useSidebarContentLists";
 import {
   filterCollectionItems,
@@ -105,7 +104,6 @@ export function DynamicCollectionNav({
   } = useSidebarCollectionList();
 
   const { data: singlesData } = useSingles();
-  usePluginAutoRegistration(data?.items);
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
   const customGroups = branding?.customGroups;

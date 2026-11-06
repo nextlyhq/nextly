@@ -58,9 +58,6 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({}),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => {},
-}));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
     capabilities: {

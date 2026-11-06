@@ -10,7 +10,6 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-registry";
 import {
   clearPluginPages,
   registerPluginPages,
@@ -19,7 +18,7 @@ import type { PluginMetadata } from "@admin/types/branding";
 
 import { usePluginPageRegistration } from "./usePluginPageRegistration";
 
-// The registry + component-registry internals have their own tests; here we
+// The registry internals have their own tests; here we
 // only care about the routing side-effect (the locationchange emit). The real
 // `pluginPagePath` is kept, since the signature is built from the route it
 // derives and normalization is part of what these tests cover.
@@ -30,10 +29,6 @@ vi.mock("@admin/lib/plugins/plugin-route-registry", async importActual => ({
   registerPluginPages: vi.fn(),
   clearPluginPages: vi.fn(),
 }));
-vi.mock("@admin/lib/plugins/component-registry", () => ({
-  autoRegisterPluginComponents: vi.fn(),
-}));
-
 function locationChangeCount(
   spy: ReturnType<typeof vi.spyOn<typeof window, "dispatchEvent">>
 ): number {
@@ -189,22 +184,5 @@ describe("usePluginPageRegistration", () => {
     rerender({ plugins: [{ name: "acme", collections: [] }] });
     expect(locationChangeCount(spy)).toBe(2);
     spy.mockRestore();
-  });
-
-  it("imports a plugin's form-toolbar slot module so the slot can resolve", () => {
-    // The toolbar slot renders inside the entry form's provider and resolves
-    // by string like any plugin component, but a plugin declaring only this
-    // slot has no page or collection to otherwise trigger its module import.
-    renderWith([
-      {
-        name: "acme",
-        collections: [],
-        entryFormToolbarSlot: "@acme/x/admin#Toolbar",
-      },
-    ]);
-
-    expect(vi.mocked(autoRegisterPluginComponents)).toHaveBeenCalledWith([
-      "@acme/x/admin#Toolbar",
-    ]);
   });
 });

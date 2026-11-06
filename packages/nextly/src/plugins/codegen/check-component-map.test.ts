@@ -427,10 +427,7 @@ describe("a list read back", () => {
 });
 
 describe("a plugin collection's own views", () => {
-  // The map does not collect a collection's own views yet, so this fails
-  // today and is held as an expected failure: it turns red, and becomes a
-  // plain \`it\`, the moment the generator collects them.
-  it.fails(
+  it(
     "does not agree when a collection view is added without regenerating",
     async () => {
       await generate([shop]);

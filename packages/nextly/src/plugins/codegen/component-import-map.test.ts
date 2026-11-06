@@ -1146,10 +1146,7 @@ describe("a plugin collection's own views", () => {
     },
   } as unknown as PluginDefinition;
 
-  // The map does not collect a collection's own views yet, so this fails
-  // today and is held as an expected failure: it turns red, and becomes a
-  // plain \`it\`, the moment the generator collects them.
-  it.fails("registers the edit and list views the collection names", () => {
+  it("registers the edit and list views the collection names", () => {
     const code = buildComponentImportMap([forms]);
 
     expect(code).toContain('import * as _p0 from "@acme/forms/admin";');
