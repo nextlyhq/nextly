@@ -122,12 +122,13 @@ export type {
   DeleteFieldGroupArgs,
 } from "./field-groups";
 
-export type {
-  // The site's languages, from the `locales` map `TypeGenerator` emits where the configuration
-  // locks them: what a read's `locale` and `fallbackLocale` take.
-  Locale,
-  LocaleOption,
-} from "./locales";
+/**
+ * The site's languages, from the `locales` map `TypeGenerator` emits where the configuration
+ * locks them: what a read's `locale` and `fallbackLocale` take.
+ * @public Published from the package root (`nextly`), for an app annotating its own values with
+ * them; nothing inside the package needs to import them.
+ */
+export type { Locale, LocaleOption } from "./locales";
 
 export type {
   FindEmailProvidersArgs,
