@@ -51,6 +51,7 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -1191,6 +1192,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           (single as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        // What the fields were before this save, as the apply states it.
+        recordedFields: recordedFieldsOf(single),
       };
 
       return respondData(
@@ -1370,6 +1373,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             localized: isLocalized,
             // Authored in the Schema Builder: this is the Builder's own save path.
             builderOwned: true,
+            // What the fields were before this save: on SQLite a relationship switched between
+            // one related entry and many is told by nothing else.
+            recordedFields: recordedFieldsOf(single),
           };
 
           const push = builderSchemaPush({

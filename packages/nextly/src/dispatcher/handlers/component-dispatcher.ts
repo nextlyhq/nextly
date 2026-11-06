@@ -42,6 +42,7 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
+import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -390,6 +391,8 @@ export const COMPONENTS_METHODS: Record<
           (component as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        // What the fields were before this save, as the apply states it.
+        recordedFields: recordedFieldsOf(component),
       };
 
       return respondData(
@@ -603,6 +606,9 @@ export const COMPONENTS_METHODS: Record<
             localized: isLocalized,
             // Authored in the Schema Builder: this is the Builder's own save path.
             builderOwned: true,
+            // What the fields were before this save: a relation's previous shape, which SQLite's
+            // column cannot tell (`withRecordedShapes`).
+            recordedFields: recordedFieldsOf(component),
           };
 
           const push = builderSchemaPush({

@@ -30,6 +30,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { relationSwitches } from "./companion-shape-switches";
 import {
   buildDesiredSnapshot,
   desiredSchemaTableNames,
@@ -48,6 +49,7 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { withRecordedShapes } from "./recorded-shapes";
 import { RegexRenameDetector } from "./rename-detector";
 import type { ClassifierEvent } from "./resolution/types";
 import type { DesiredSchema } from "./types";
@@ -141,7 +143,24 @@ export async function previewDesiredSchema(
     extensions,
   });
 
-  const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+  // The live columns given the shape each relation's recorded field stored, so a switch the type
+  // does not show is previewed as the apply plans it (`withRecordedShapes`).
+  // A translated relation's switch on its companion joins them, as the apply plans it
+  // (`relationSwitches`), so what is confirmed here is what runs.
+  const switches = await relationSwitches({
+    db,
+    dialect,
+    desired,
+    live: liveSnapshot,
+    desiredSnapshot,
+  });
+  const allOperations = [
+    ...diffSnapshots(
+      withRecordedShapes(liveSnapshot, desired),
+      desiredSnapshot
+    ),
+    ...switches.ops,
+  ];
 
   // Preview is what the browser asks the operator to confirm, so it must show the operation set the
   // apply can actually run. The apply drops operations on code-first and plugin-owned tables before

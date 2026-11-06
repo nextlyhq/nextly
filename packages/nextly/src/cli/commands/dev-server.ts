@@ -51,6 +51,11 @@ import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/pro
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {
+  recordFieldsOnto,
+  registryRows,
+  type RegistryFieldsRow,
+} from "../../domains/schema/pipeline/recorded-fields";
+import {
   mergeRegisteredCollectionsSafely,
   mergeRegisteredSafely,
 } from "../../domains/schema/pipeline/registered-collections";
@@ -479,7 +484,13 @@ export async function performAutoSync(
   adapter: CLIDatabaseAdapter,
   syncResult: CollectionSyncResultWithValidation,
   options: ResolvedDevOptions,
-  context: CommandContext
+  context: CommandContext,
+  /**
+   * The collections' registry rows as they were before the collection sync replaced them: what
+   * each field was, which on SQLite is all that tells a relationship switched between one related
+   * entry and many. Absent, nothing is switched there, as before.
+   */
+  recordedCollections: readonly RegistryFieldsRow[] = []
 ): Promise<void> {
   const { logger } = context;
 
@@ -670,6 +681,16 @@ export async function performAutoSync(
       logger
     ),
   };
+  // What each field was before this sync. The Singles' rows are read now: their sync runs after
+  // this apply.
+  recordFieldsOnto(desired.collections, recordedCollections);
+  recordFieldsOnto(
+    desired.singles,
+    await registryRows(() => singleRegistry.getAllSingles(), {
+      kind: "singles",
+      tableExists: name => drizzleAdapter.tableExists(name),
+    })
+  );
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.
   // Mirrors the pattern in init/reload-config.ts. The DI-bound entry point
