@@ -112,7 +112,58 @@ describe("the canvas's reader", () => {
         sort: "-title",
       })
     ).resolves.toMatchObject({ meta: { total: 7 } });
+    // Asked of the same source first, as the published page's reader asks
+    // it: anonymous, published, one id. Its own field rules refuse there
+    // what declarations cannot say. Then read as the person.
+    expect(find).toHaveBeenCalledTimes(2);
+    expect(find.mock.calls[0]?.[0]).toMatchObject({
+      overrideAccess: false,
+      user: undefined,
+      status: "published",
+      limit: 1,
+      select: { id: true },
+    });
+    expect(find.mock.calls[1]?.[0]).toMatchObject({
+      user: person.user,
+      status: "all",
+    });
+  });
+
+  it("refuses a field the source's own rules deny the visitor, never reading as the person", async () => {
+    // The source refuses the anonymous read, as core refuses a filter on a
+    // field the caller may not read.
+    const refusal = NextlyError.validation({
+      errors: [
+        { path: "where.memo", code: "FIELD_NOT_READABLE", message: "No." },
+      ],
+    });
+    const find = vi.fn(async (args: { user?: unknown }) => {
+      if (args.user === undefined) throw refusal;
+      return { items: [], meta: { total: 0 } };
+    });
+    const reader = { find } as unknown as PublicReaderSource;
+    await expect(
+      createEditorReader(reader, person, { declarations }).find({
+        collection: "posts",
+        filters: [{ field: "memo", op: "equals", value: "x" }],
+      })
+    ).rejects.toBe(refusal);
     expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a malformed query by its shape before judging its fields", async () => {
+    const { find, reader } = source();
+    const editor = createEditorReader(reader, person, { declarations });
+    for (const query of [
+      null,
+      { collection: "posts", filters: "x" },
+      { collection: "posts", sort: 5 },
+    ]) {
+      await expect(
+        editor.find(query as unknown as Parameters<typeof editor.find>[0])
+      ).rejects.toSatisfy(isRefusal);
+    }
+    expect(find).not.toHaveBeenCalled();
   });
 
   it("takes only the public reader's keys and limits", async () => {
