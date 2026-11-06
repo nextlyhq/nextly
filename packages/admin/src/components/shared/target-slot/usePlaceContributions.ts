@@ -52,11 +52,18 @@ function catalogueBuiltIns(
 export function usePlaceContributions(
   place: AdminPlaceId,
   kind: PlaceKind,
-  entry?: Record<string, unknown>
+  entry?: Record<string, unknown>,
+  /**
+   * The page does not know its context yet: only the page's own parts are
+   * drawn, all of them, as with nothing delivered. A delivered list would
+   * leave out a part a contribution replaces, and that contribution cannot be
+   * drawn yet either, so the slot would stand empty.
+   */
+  held = false
 ): readonly DeliveredAdminEntry[] {
   const { contributions } = useBranding();
   const delivered = contributions?.[place]?.[kind];
-  if (delivered === undefined) return catalogueBuiltIns(place, kind);
+  if (held || delivered === undefined) return catalogueBuiltIns(place, kind);
   return delivered.filter(
     item =>
       "builtIn" in item ||

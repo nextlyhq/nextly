@@ -53,7 +53,7 @@ export function TargetSlot<P extends AdminPlaceId>({
   entry,
   builtIns = {},
 }: TargetSlotProps<P>): ReactNode {
-  const blocks = usePlaceContributions(place, "block", entry);
+  const blocks = usePlaceContributions(place, "block", entry, context === null);
   // Keyed, so the page's own parts keep their state when the contributions
   // arrive or the context becomes known and the list around them grows.
   return blocks.map(item =>
