@@ -253,7 +253,12 @@ export function keysNoUpdateStores(
   );
 }
 
-/** Both spellings of each declared field whose values live in a table of its own. */
+/**
+ * The name of each declared field whose values live in a table of its own,
+ * spelt exactly as declared: the write paths take such a value out of the
+ * payload by `field.name` alone, so any other spelling of it reaches the row
+ * strip and is stored nowhere.
+ */
 function keptInOwnTable(
   fields: readonly (DeclaredField | null | undefined)[]
 ): ReadonlySet<string> {
@@ -262,7 +267,6 @@ function keptInOwnTable(
     if (!field || typeof field.name !== "string") continue;
     if (fieldProducesColumn(field) || isVirtualField(field)) continue;
     keys.add(field.name);
-    keys.add(toSnakeCase(field.name));
   }
   return keys;
 }

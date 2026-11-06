@@ -494,7 +494,7 @@ describe.each(getConfiguredTestDialects())(
             slug: "carded",
             fields: [
               { name: "body", type: "doc" },
-              { name: "teaser", type: "component", component: "teaser" },
+              { name: "heroBlock", type: "component", component: "teaser" },
             ],
           } as unknown as CollectionConfig,
           {
@@ -2734,28 +2734,71 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
-      it("takes a field group an update stores in its own table, and refuses no field for it", async () => {
+      it("takes a field group an update stores in its own table, by the name it is declared under alone", async () => {
         const id = await created("carded", { body: { v: 0 } });
         const entry = { collection: "carded", id };
         const hash = await systemHash(entry, "body");
 
+        // Another spelling of the field group's name is taken out of no
+        // payload and stored nowhere, so it is refused like any such key.
+        const respelt = await rejectionOf(
+          updateIfUnchanged(checked(owner), {
+            ...entry,
+            data: { body: { v: "respelt" }, hero_block: { body: "hi" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(respelt, "INVALID_INPUT")).toBe(true);
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
         await updateIfUnchanged(checked(owner), {
           ...entry,
-          data: { body: { v: "with teaser" }, teaser: { body: "hi" } },
+          data: { body: { v: "with hero" }, heroBlock: { body: "hi" } },
           expect: { field: "body", form: "published", hash },
         });
 
         expect(await systemValue(entry, "body")).toEqual({
           kind: "value",
-          value: { v: "with teaser" },
+          value: { v: "with hero" },
         });
         const row = (await t.nextly.findByID({
           collection: "carded",
           id,
           overrideAccess: true,
           depth: 1,
-        } as never)) as unknown as { teaser?: { body?: unknown } };
-        expect(row.teaser?.body).toBe("hi");
+        } as never)) as unknown as { heroBlock?: { body?: unknown } };
+        expect(row.heroBlock?.body).toBe("hi");
+      });
+
+      it("refuses a caller who may read but not update with the same answer whatever the data names", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await systemHash(page, "body");
+        const codes: string[] = [];
+        for (const identity of [reader, checked(reader)]) {
+          for (const data of [
+            { body: { v: "x" }, updatedAt: new Date(0).toISOString() },
+            { body: { v: "x" } },
+          ]) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(identity, {
+                ...page,
+                data,
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isForbidden(refusal)).toBe(true);
+            codes.push((refusal as NextlyError).code);
+          }
+        }
+        expect(new Set(codes).size).toBe(1);
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
       });
 
       it("refuses a caller who may not read with the same answer whatever the data names, for an entry there or not", async () => {

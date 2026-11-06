@@ -14,7 +14,7 @@ import {
 const FIELDS = [
   { name: "body", type: "json" },
   { name: "toString", type: "text", virtual: true },
-  { name: "teaser", type: "component" },
+  { name: "heroBlock", type: "component" },
   {
     name: "tags",
     type: "relationship",
@@ -33,10 +33,21 @@ describe("the keys no update stores", () => {
     expect([...keys].sort()).toEqual(["toString", "updatedAt"]);
   });
 
+  it("names another spelling of a field kept in its own table, which no write path takes out", () => {
+    expect(
+      keysNoUpdateStores(
+        { body: {}, hero_block: { body: "hi" } },
+        "collection",
+        "dc_cards",
+        FIELDS
+      )
+    ).toEqual(["hero_block"]);
+  });
+
   it("leaves out a field group and a many-to-many, which the update stores in their own tables", () => {
     expect(
       keysNoUpdateStores(
-        { body: {}, teaser: { body: "hi" }, tags: ["t1"] },
+        { body: {}, heroBlock: { body: "hi" }, tags: ["t1"] },
         "collection",
         "dc_cards",
         FIELDS
@@ -48,7 +59,7 @@ describe("the keys no update stores", () => {
     expect(
       Object.keys(
         stripImmutableSystemFields(
-          { body: {}, teaser: { body: "hi" }, tags: ["t1"] },
+          { body: {}, heroBlock: { body: "hi" }, tags: ["t1"] },
           "collection",
           "dc_cards",
           FIELDS

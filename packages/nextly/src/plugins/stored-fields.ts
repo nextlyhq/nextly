@@ -44,7 +44,6 @@ import {
   showsUnpublished,
   STORED_FORMS,
   storesJson,
-  unstoredWriteKeys,
   wholeWriteOf,
   type StoredFieldsRead,
   type FieldScope,
@@ -435,8 +434,9 @@ function publicStateOf(liveState: string | null | undefined): string | null {
  * Data naming a key no update stores (a system column no client writes, a
  * column a schema hook contributed, a field stored nowhere; not a field group
  * or a many-to-many, which it stores in their own tables) is refused with
- * `INVALID_INPUT` before anything is written, once the expectation's read has
- * authorized whoever read it.
+ * `INVALID_INPUT` before anything is written, once the update's own access
+ * has been judged, so a caller who may not update the document is refused
+ * alike whatever the data names.
  * Made as the system, it is an
  * `overrideAccess: true` update, judged by no access rule. The expectation is
  * judged inside the update's own transaction, once it holds the entry's row
@@ -482,24 +482,6 @@ export async function updateIfUnchanged(
     form: expected.form,
     ...inLocale,
   });
-  // Then, once the read has authorized whoever read the expectation, so a
-  // caller who may not read the document is refused alike whatever the data
-  // names: a key the update would never store (a system column no write sets,
-  // one a schema hook contributed, a field stored nowhere) would leave the
-  // write made in part, reported as made whole.
-  const unstored = await unstoredWriteKeys(
-    {
-      ...targetOf(document),
-      fields: [expected.field],
-      form: expected.form,
-    },
-    named.data
-  );
-  if (unstored.length > 0) {
-    throw NextlyError.invalidInput({
-      message: `A conditional write cannot write ${unstored.map(key => `"${key}"`).join(", ")}: an update never stores ${unstored.length === 1 ? "it" : "them"}, so the write would be made in part.`,
-    });
-  }
 
   // The expectation travels with this one write: registered against a
   // context object no other call is handed, which the write path receives
@@ -514,6 +496,9 @@ export async function updateIfUnchanged(
     document,
     expect: expected,
     checked: false,
+    // Judged by the write path once its access is, against the entity's own
+    // table: a key no update stores refuses the write there.
+    sentKeys: Object.keys(named.data),
     ...(person === undefined ? {} : { whole: await wholeWriteOf(named.data) }),
   };
   expectStoredValue(context, pin);
