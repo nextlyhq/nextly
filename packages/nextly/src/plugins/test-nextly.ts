@@ -302,6 +302,12 @@ export interface CreateTestNextlyOptions {
   fieldGroups?: FieldGroupConfig[];
   /** Content-localization config (i18n). Normalized and wired so localized reads resolve. */
   localization?: LocalizationConfig;
+  /**
+   * The config's `db` block, for a test of where the Schema Builder's
+   * definition file and migrations go: both paths resolve below `basePath`.
+   * Absent, the defaults (`./ui-schema.json`, `./migrations`).
+   */
+  db?: { migrationsDir: string; uiSchemaFile: string };
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
   adapter?: TestAdapter;
   /** Override the logger (defaults to a near-silent test logger). */
@@ -881,6 +887,7 @@ async function bootServices(
         : {}),
       singles: opts.singles,
       fieldGroups: opts.fieldGroups,
+      ...(opts.db === undefined ? {} : { db: opts.db }),
       localization: opts.localization
         ? normalizeLocalization(opts.localization)
         : undefined,

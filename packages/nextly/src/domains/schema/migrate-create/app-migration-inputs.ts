@@ -54,9 +54,23 @@ import {
   type SnapshotFile,
 } from "./snapshot-io";
 
+/**
+ * The parts of the app's config a migration is generated from: the code-first
+ * entities, the plugins whose extension schema rides the app's stream, the
+ * default language and the two paths. Narrower than the whole config so the
+ * running app's plugin-transformed config, which a Schema Builder save reads,
+ * is one too.
+ */
+export type AppMigrationConfig = Pick<
+  SanitizedNextlyConfig,
+  "collections" | "singles" | "fieldGroups" | "plugins" | "localization"
+> & {
+  db: Pick<SanitizedNextlyConfig["db"], "uiSchemaFile" | "migrationsDir">;
+};
+
 /** What `appMigrationInputs` is asked with. */
 export interface AppMigrationInputsArgs {
-  config: SanitizedNextlyConfig;
+  config: AppMigrationConfig;
   /** Plugin extends whose target is a Schema Builder entity, as the config loader left them. */
   deferredExtends?: DeferredExtend[];
   /** The project root, which `db.uiSchemaFile` is read from. */

@@ -11,6 +11,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { LanguageRegistry } from "../../domains/i18n/language-registry";
 import type { HookRegistry } from "../../hooks/hook-registry";
+import type { DeferredExtend } from "../../plugins/schema/apply-contributions";
 import type { Logger } from "../../services/shared";
 import type { ImageProcessor } from "../../storage/image-processor";
 import type { MediaStorage } from "../../storage/storage";
@@ -53,6 +54,13 @@ export interface RegistrationContext {
 
   /** Optional override for the dynamic migrations directory. */
   migrationsDir?: string;
+
+  /**
+   * Plugin extends whose target is a Schema Builder entity, as the boot left
+   * them: a Builder save generates its migration with them applied, as
+   * `migrate:create` does.
+   */
+  deferredExtends?: DeferredExtend[];
 
   /**
    * Resolved storage adapter for legacy media services. Null when no

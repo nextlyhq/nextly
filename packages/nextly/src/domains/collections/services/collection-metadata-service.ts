@@ -21,8 +21,13 @@ import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import {
+  writeCollectionSave,
+  type BuilderSaveSetup,
+} from "../../schema/builder-save/collection-save";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import {
   applyCollectionSchemaChange,
@@ -222,6 +227,13 @@ function parseLabels(
  */
 export class CollectionMetadataService extends BaseService {
   private permissionSeedService?: PermissionSeedService;
+  /**
+   * Where a Schema Builder save writes its definition and migration, and with
+   * which config (`writeCollectionSave`). Set by the service registration;
+   * absent, a create runs the collection's own DDL as it did before the
+   * writer existed.
+   */
+  private builderSave?: BuilderSaveSetup;
 
   constructor(
     adapter: DrizzleAdapter,
@@ -230,6 +242,14 @@ export class CollectionMetadataService extends BaseService {
     private readonly collectionService: DynamicCollectionService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Set where a Schema Builder save writes its definition and migration.
+   * Called from the service registration, which knows the app's config.
+   */
+  setBuilderSave(setup: BuilderSaveSetup): void {
+    this.builderSave = setup;
   }
 
   /**
@@ -430,6 +450,79 @@ export class CollectionMetadataService extends BaseService {
     );
   }
 
+  /**
+   * Write a create's definition and migration and, in development, run it,
+   * through the Builder save writer; without one set up, run the create's own
+   * DDL in development and keep its file, as before the writer. A refusal or
+   * failure comes back as the result the caller returns.
+   */
+  private async writeCreate(artifacts: CollectionArtifacts): Promise<{
+    refused?: MetadataServiceResult;
+    /** Whether the migration that ran wrote the registry row already. */
+    rowWritten: boolean;
+  }> {
+    if (
+      this.builderSave !== undefined &&
+      artifacts.manifestEntity !== undefined
+    ) {
+      try {
+        await writeCollectionSave(
+          {
+            ...this.builderSave,
+            adapter: this.adapter,
+            logger: this.logger,
+            applies: this.isDevelopment(),
+          },
+          {
+            slug: artifacts.metadata.slug,
+            previous: null,
+            entity: artifacts.manifestEntity,
+            change: "create",
+          }
+        );
+        return { rowWritten: this.isDevelopment() };
+      } catch (error: unknown) {
+        const refused = errorToMetadataResult(
+          error,
+          {
+            statusCode: 500,
+            defaultMessage: "The collection's migration could not be written",
+          },
+          this.dialect
+        );
+        return { refused, rowWritten: false };
+      }
+    }
+    if (this.isDevelopment()) {
+      try {
+        // The artefact carries the registry-row upsert so the committed file
+        // recreates it where the Builder has never run. This database gets
+        // that row from `registerCollection` below, and it refuses a slug
+        // that already exists -- so what runs HERE is the DDL alone.
+        await this.fileManager.runMigration(
+          artifacts.localMigrationSQL ?? artifacts.migrationSQL
+        );
+      } catch (migrationError: unknown) {
+        const refused = errorToMetadataResult(
+          migrationError,
+          {
+            statusCode: 500,
+            defaultMessage: "The collection's table could not be created",
+          },
+          this.dialect
+        );
+        return { refused, rowWritten: false };
+      }
+    }
+    // The Drizzle `.ts` schema is no longer written — the runtime builds it
+    // from dynamic_collections metadata (see CollectionFileManager.saveMigration).
+    await this.fileManager.saveMigration(
+      artifacts.migrationSQL,
+      artifacts.migrationFileName
+    );
+    return { rowWritten: false };
+  }
+
   private async createCollectionExcluded(
     data: Parameters<CollectionMetadataService["createCollection"]>[0]
   ): Promise<MetadataServiceResult> {
@@ -464,33 +557,13 @@ export class CollectionMetadataService extends BaseService {
             this.dialect
           );
         }
-        try {
-          // The artefact carries the registry-row upsert so the committed file
-          // recreates it where the Builder has never run. This database gets
-          // that row from `registerCollection` below, and it refuses a slug
-          // that already exists -- so what runs HERE is the DDL alone.
-          await this.fileManager.runMigration(
-            artifacts.localMigrationSQL ?? artifacts.migrationSQL
-          );
-        } catch (migrationError: unknown) {
-          return errorToMetadataResult(
-            migrationError,
-            {
-              statusCode: 500,
-              defaultMessage: "The collection's table could not be created",
-            },
-            this.dialect
-          );
-        }
       }
 
-      // Persist the SQL migration. The Drizzle `.ts` schema is no longer
-      // written — the runtime builds it from dynamic_collections metadata,
-      // matching singles/components (see CollectionFileManager.saveMigration).
-      await this.fileManager.saveMigration(
-        artifacts.migrationSQL,
-        artifacts.migrationFileName
-      );
+      // The definition, then the migration `migrate:create` would write for
+      // this collection and, in development, that file run as `nextly migrate`
+      // runs it (`writeCollectionSave`).
+      const write = await this.writeCreate(artifacts);
+      if (write.refused !== undefined) return write.refused;
 
       if (this.isDevelopment()) {
         try {
@@ -534,9 +607,15 @@ export class CollectionMetadataService extends BaseService {
       // through fromDatabaseError's `cause` chain.
       let collection;
       try {
-        collection = await this.collectionService.registerCollection(
-          artifacts.metadata
-        );
+        // A migration the writer ran carries the registry row's upsert, as
+        // every deploy needs it, so the row stands already: it takes the rest
+        // of the metadata. Otherwise the row is written here.
+        collection = write.rowWritten
+          ? await this.collectionService.updateCollectionMetadata(
+              artifacts.metadata.slug,
+              artifacts.metadata
+            )
+          : await this.collectionService.registerCollection(artifacts.metadata);
       } catch (dbError: unknown) {
         return errorToMetadataResult(
           dbError,

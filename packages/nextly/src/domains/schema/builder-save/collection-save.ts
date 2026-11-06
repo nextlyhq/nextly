@@ -101,6 +101,16 @@ export interface CollectionSaveDeps {
   };
 }
 
+/**
+ * What the app's service registration knows of a save's writer: everything
+ * but the database, the logger and whether saves run here, which the service
+ * saving supplies.
+ */
+export type BuilderSaveSetup = Omit<
+  CollectionSaveDeps,
+  "adapter" | "logger" | "applies"
+>;
+
 /** One save of one collection. */
 export interface CollectionSave {
   slug: string;
