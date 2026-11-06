@@ -15,6 +15,7 @@
  *
  * @module components/features/entries/EntryForm/useDocumentActionBindings
  */
+import type { OverridableDocumentAction } from "nextly/config";
 import { useRef, useState } from "react";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
@@ -48,6 +49,26 @@ type BuiltInActionId =
   | "discard-changes"
   | "unpublish"
   | "delete";
+
+/**
+ * How the editor applies a plugin's override of one built-in action.
+ *
+ * `open` is what choosing a replaced action runs; it resolves with what the
+ * replacement came to, so a caller that leaves the document once Delete is
+ * done does not leave one the author backed out of deleting.
+ */
+export type DocumentActionOverride =
+  | { kind: "hidden" }
+  | {
+      kind: "replaced";
+      label?: string;
+      open: () => Promise<DocumentActionOutcome>;
+    };
+
+/** The overrides for one collection's document, by built-in action. */
+export type DocumentActionOverrides = Partial<
+  Record<OverridableDocumentAction, DocumentActionOverride>
+>;
 
 /** A handler whose work is stored, and which says how that went. */
 type StoringHandler = () => void | Promise<SubmitOutcome>;
@@ -137,6 +158,14 @@ export interface DocumentActionBindingsInput {
    * distinguish from a feature that does not exist.
    */
   contributedActions?: readonly ContributedAction[];
+  /**
+   * What a plugin does with a built-in action on this collection's documents:
+   * hides it, or keeps its row and runs its own `open` in place of the
+   * built-in write. A replaced action is offered exactly where the built-in
+   * would be, with every reason it cannot run, so a permission, a colleague's
+   * lock or a past version on screen still holds it.
+   */
+  actionOverrides?: DocumentActionOverrides;
   /**
    * The form's current values, unsaved edits included, which a contributed
    * action is told when it is chosen.
@@ -453,6 +482,7 @@ export function useDocumentActionBindings({
   canEdit = true,
   writesRefused = false,
   contributedActions = [],
+  actionOverrides = {},
   currentValues,
   currentDirty,
   onSubmit,
@@ -539,7 +569,7 @@ export function useDocumentActionBindings({
    * which only the form knows, and about which handler a verb runs, which only
    * the host knows.
    */
-  const documentVerbs = documentActions({
+  const builtInVerbs = documentActions({
     mode,
     hasStatus,
     draftsEnabled: draftsEnabled === true,
@@ -554,6 +584,9 @@ export function useDocumentActionBindings({
     canDuplicate: onDuplicate !== undefined,
     writesRefused,
   });
+  // A plugin's overrides, applied to what the model offers and to what each
+  // verb runs, so the row, its control and `run` agree about them.
+  const documentVerbs = withActionOverrides(builtInVerbs, actionOverrides);
 
   const { reasons, refusalFor } = refusalReasons({
     isSubmitting,
@@ -575,22 +608,28 @@ export function useDocumentActionBindings({
     onSaveChanges,
     onSaveWorkingDraft,
   });
-  const performers = builtInPerformers({
-    hasStatus,
-    runSave,
-    onSubmit,
-    onPublish,
-    storing,
-    onDuplicate,
-    onViewApi,
-    discardDraft: offeredIf(showDiscardDraft, discardDraftConfirmation.request),
-    onCancel: leavingDeliberately(onCancel, leaveWithoutWarning),
-    unpublish: offeredIf(
-      onUnpublish !== undefined,
-      unpublishConfirmation.request
-    ),
-    onDelete,
-  });
+  const performers = overriddenPerformers(
+    builtInPerformers({
+      hasStatus,
+      runSave,
+      onSubmit,
+      onPublish,
+      storing,
+      onDuplicate,
+      onViewApi,
+      discardDraft: offeredIf(
+        showDiscardDraft,
+        discardDraftConfirmation.request
+      ),
+      onCancel: leavingDeliberately(onCancel, leaveWithoutWarning),
+      unpublish: offeredIf(
+        onUnpublish !== undefined,
+        unpublishConfirmation.request
+      ),
+      onDelete,
+    }),
+    actionOverrides
+  );
 
   const actionBindings = bindingsFor(performers, reasons, {
     // A submit-typed control submits the form natively and never calls back;
@@ -657,6 +696,59 @@ export function useDocumentActionBindings({
     saveState,
     lastStoredAt: storedAt(gate.lastStore),
   };
+}
+
+/**
+ * The model's actions with a plugin's overrides applied: a hidden action is
+ * not offered, and a replaced one keeps its place, its flags and every reason
+ * it cannot run, under the plugin's label where it gave one.
+ */
+function withActionOverrides(
+  actions: readonly EditorDocumentAction[],
+  overrides: DocumentActionOverrides
+): EditorDocumentAction[] {
+  return actions.flatMap(action => {
+    const override = overrideOf(overrides, action.id);
+    if (override === undefined) return [action];
+    if (override.kind === "hidden") return [];
+    return [
+      override.label === undefined
+        ? action
+        : { ...action, label: override.label },
+    ];
+  });
+}
+
+/** The override for an action id, when the id is one a plugin may override. */
+function overrideOf(
+  overrides: DocumentActionOverrides,
+  id: string
+): DocumentActionOverride | undefined {
+  return Object.hasOwn(overrides, id)
+    ? overrides[id as OverridableDocumentAction]
+    : undefined;
+}
+
+/**
+ * What each built-in action runs once a plugin's overrides apply. A hidden
+ * action runs nothing, so it is not offered and `run` refuses it as not
+ * offered; a replaced one runs the plugin's `open`, and only where the
+ * built-in would have run at all, so no permission is widened by it.
+ */
+function overriddenPerformers(
+  performers: Partial<
+    Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>
+  >,
+  overrides: DocumentActionOverrides
+): Partial<Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>> {
+  const result = { ...performers };
+  for (const id of Object.keys(result) as BuiltInActionId[]) {
+    const override = overrideOf(overrides, id);
+    if (override === undefined) continue;
+    if (override.kind === "hidden") delete result[id];
+    else result[id] = override.open;
+  }
+  return result;
 }
 
 /**

@@ -368,6 +368,116 @@ describe("running a document action through the host", () => {
  * in. The host stays mounted while the editor switches languages, and a Retry
  * carried across would run the action against the translation now on screen.
  */
+describe("running an action a plugin overrides", () => {
+  it("refuses a hidden action as not offered, without running the built-in", async () => {
+    const onDelete = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const onUnpublish = vi.fn(() => Promise.resolve(saved));
+    const runner = renderHost({
+      entry: published,
+      onDelete,
+      onUnpublish,
+      actionOverrides: { delete: { kind: "hidden" } },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("delete");
+    });
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "refused",
+      message: "This action isn't offered for this document.",
+    });
+  });
+
+  it("runs the plugin's replacement instead of the built-in, and answers what it came to", async () => {
+    const onDelete = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const open = vi.fn(() =>
+      Promise.resolve({
+        ok: false as const,
+        reason: "cancelled" as const,
+        message: "Cancelled.",
+      })
+    );
+    const runner = renderHost({
+      entry: published,
+      onDelete,
+      actionOverrides: { delete: { kind: "replaced", open } },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("delete");
+    });
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "cancelled",
+      message: "Cancelled.",
+    });
+  });
+
+  it("holds a replacement for the reasons the built-in is held", async () => {
+    const open = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const runner = renderHost({
+      entry: published,
+      onDelete: () => Promise.resolve({ ok: true as const }),
+      documentLocked: true,
+      actionOverrides: { delete: { kind: "replaced", open } },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("delete");
+    });
+
+    expect(open).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, reason: "refused" });
+  });
+
+  it("offers no replacement where the built-in is not offered", async () => {
+    // No delete handler: the user may not delete, so a replacement must not
+    // bring the action back.
+    const open = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const runner = renderHost({
+      entry: published,
+      actionOverrides: { delete: { kind: "replaced", open } },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("delete");
+    });
+
+    expect(open).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, reason: "refused" });
+  });
+
+  it("replaces Unpublish without asking the built-in question first", async () => {
+    const onUnpublish = vi.fn(() => Promise.resolve(saved));
+    const open = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const runner = renderHost({
+      entry: published,
+      onUnpublish,
+      actionOverrides: { unpublish: { kind: "replaced", open } },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("unpublish");
+    });
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(onUnpublish).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(outcome).toEqual({ ok: true });
+  });
+});
+
 describe("a failed store's Retry", () => {
   function renderInLocale(onPublish: DocumentActionBindingsInput["onPublish"]) {
     const seen: { saveState: DocumentBindingsSaveState } = {

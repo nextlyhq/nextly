@@ -270,6 +270,9 @@ export type { HookWarning } from "./hooks/side-effect-warnings";
 export type {
   ComponentPath,
   HeaderButtonId,
+  // The document-action overrides a plugin publishes, which the admin draws.
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
 } from "./plugins/admin-contributions";
 //
 // Taken from the leaf modules rather than from `domains/widgets/index.ts`: that

@@ -37,7 +37,7 @@
  * @since 1.0.0
  */
 
-import type { FieldConfig } from "nextly/config";
+import type { FieldConfig, OverridableDocumentAction } from "nextly/config";
 import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
@@ -145,6 +145,59 @@ export interface DocumentViewProps {
    * @experimental
    */
   fieldPath?: string;
+}
+
+/**
+ * @experimental What a plugin tells the editor its document came to, after a
+ * replaced action or a panel section acted on it: `"deleted"` leaves for the
+ * collection's list, as the built-in Delete does; `"changed"` reads the
+ * document again, so the editor shows what the plugin wrote.
+ */
+export type DocumentChangeResult = "deleted" | "changed";
+
+/**
+ * @experimental Props passed to the component a plugin opens in place of a
+ * built-in document action (`views[slug].documentActions`).
+ *
+ * Mounted when the author chooses the action and unmounted when it calls
+ * `close`, so a dialog renders open from the start.
+ */
+export interface DocumentActionReplacementProps {
+  /** Which action the author chose. */
+  action: OverridableDocumentAction;
+  /** The collection's slug. */
+  collectionSlug: string;
+  /** The entry's id. */
+  entryId: string;
+  /**
+   * Close it, with what it came to: `"deleted"` or `"changed"` (see
+   * `DocumentChangeResult`), or nothing when the author backed out.
+   */
+  close: (result?: DocumentChangeResult) => void;
+}
+
+/**
+ * @experimental Props passed to a section a plugin adds to the document panel
+ * (`views[slug].panelSections`). The admin draws the section's heading and
+ * frame; this draws what is under them.
+ */
+export interface DocumentPanelSectionProps {
+  /** The collection's slug. */
+  collectionSlug: string;
+  /** The entry's id. */
+  entryId: string;
+  /**
+   * What holds the document right now: a colleague's claim, a past version on
+   * screen, a reader's page or the editor still readying the document. The
+   * pair a custom edit view is given; a section that writes holds its writes
+   * while `actionsDisabled`.
+   */
+  documentLock: DocumentLockGates;
+  /**
+   * Tell the editor the section changed the document: `"deleted"` leaves for
+   * the collection's list, `"changed"` reads the document again.
+   */
+  documentChanged: (result: DocumentChangeResult) => void;
 }
 
 /**

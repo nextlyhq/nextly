@@ -136,6 +136,7 @@ import {
   type EntryFormMode,
 } from "./useEntryForm";
 import { useLockWithHeldChange } from "./useHeldDocumentChange";
+import { usePluginDocumentSurfaces } from "./usePluginDocumentSurfaces";
 import {
   heldLocaleChange,
   heldWhileRecovering,
@@ -1095,6 +1096,19 @@ export function EntryForm({
     pendingOfferAt: recovery.offer?.savedAt ?? null,
   };
 
+  // What plugins change on this collection's document screen: the actions
+  // they hide or replace, and the sections they add to the panel. A section
+  // is told what holds the document as the fields and the writes are held.
+  const pluginSurfaces = usePluginDocumentSurfaces({
+    collectionSlug: collection.name,
+    entryId: savedEntryId,
+    documentLock: {
+      readOnly: contentHeld,
+      actionsDisabled: writesHeld || recovering,
+    },
+    onDeleted: onDelete,
+  });
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1112,6 +1126,7 @@ export function EntryForm({
     canEdit: mayEdit,
     writesRefused: removedFromCode,
     contributedActions: documentActions,
+    actionOverrides: pluginSurfaces.actionOverrides,
     // Read when a contribution is chosen: the page above holds only the
     // saved entry, and a schedule says when edits are not saved yet.
     currentValues: () => form.getValues(),
@@ -1246,6 +1261,7 @@ export function EntryForm({
             />
           </div>
           {conflictDialog}
+          {pluginSurfaces.replacement}
         </EntryFormProvider>
       </EntryFormContextProvider>
     );
@@ -1653,6 +1669,14 @@ export function EntryForm({
                                     }
                                     // A reader may still open the other languages.
                                     navigationDisabled={navigationHeld}
+                                    pluginSections={pluginSurfaces.sections}
+                                    {...(pluginSurfaces.sectionProps ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          pluginSectionProps:
+                                            pluginSurfaces.sectionProps,
+                                        })}
                                   />
                                 </DocumentSidePanel>
                               ) : null}
@@ -1668,6 +1692,7 @@ export function EntryForm({
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
         {conflictDialog}
+        {pluginSurfaces.replacement}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

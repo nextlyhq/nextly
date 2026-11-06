@@ -1,4 +1,8 @@
-import type { PublishedContentSource } from "nextly/config";
+import type {
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PublishedContentSource,
+} from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -218,6 +222,23 @@ export interface PluginMetadata {
       | { fieldType: string }
     )
   >;
+  /**
+   * @experimental Overrides of a collection's built-in document actions,
+   * contributed via `contributes.admin.views[<slug>].documentActions`: on the
+   * slug the admin routes (rename map applied), `"hidden"` or the component
+   * the action opens instead. Present only for enabled plugins.
+   */
+  documentActions?: Array<{
+    slug: string;
+    action: OverridableDocumentAction;
+    override: PluginDocumentActionOverride;
+  }>;
+  /**
+   * @experimental Sections added to a collection's document panel, after
+   * Details, contributed via `contributes.admin.views[<slug>].panelSections`.
+   * Present only for enabled plugins.
+   */
+  panelSections?: Array<{ slug: string; title: string; component: string }>;
   /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
