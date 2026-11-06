@@ -494,14 +494,14 @@ the collection mutations return, so every mutation reports its outcome the same
 way.
 
 ```typescript
-const settings = await nextly.findSingle({ slug: "site-settings" });
+const current = await nextly.findSingle({ slug: "site-settings" });
 
 const { item, warnings } = await nextly.updateSingle({
   slug: "site-settings",
   data: {
     siteName: "My Awesome Site",
     maintenanceMode: false,
-    _rev: settings._rev,
+    _rev: current._rev,
   },
 });
 
