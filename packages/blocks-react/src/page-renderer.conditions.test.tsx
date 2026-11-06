@@ -174,3 +174,26 @@ describe("a list with no collection inside another list", () => {
     expect(html).not.toContain("Inner featured");
   });
 });
+
+describe("placement gates in a stored document", () => {
+  it("are ignored, so stored data adds no gate an author didn't set", async () => {
+    const stored = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "plain",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Shown to everyone", level: "h2" },
+          // Only the resolver writes this, while a page is drawn.
+          visibility: { within: ["hidden"] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const html = await renderToHtml(
+      <PageRenderer document={stored} blocks={resolver} siteStyles={false} />
+    );
+    expect(html).toContain("Shown to everyone");
+  });
+});

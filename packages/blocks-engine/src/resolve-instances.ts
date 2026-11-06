@@ -1855,13 +1855,16 @@ function withInstanceConditions(
   const carried = conditionGatesOf(instance.visibility);
   if (carried.length === 0) return roots;
   return roots.map(root => {
-    const own = root.visibility;
-    if (own === undefined || own === null) {
-      return { ...root, visibility: { within: [...carried] } };
-    }
-    if (!isPlainRecord(own)) return root;
-    const within = [...placementGatesOf(own), ...carried];
-    return { ...root, visibility: { ...own, within } };
+    const own: unknown = root.visibility;
+    if (own !== undefined && own !== null && !isPlainRecord(own)) return root;
+    const earlier = isPlainRecord(own) ? placementGatesOf(own) : [];
+    const kept: NodeVisibility = root.visibility ?? {};
+    // A render-time key, outside the stored visibility's type: only this
+    // pass writes it, on the document being drawn.
+    const visibility: NodeVisibility = Object.assign({}, kept, {
+      within: [...earlier, ...carried],
+    });
+    return { ...root, visibility };
   });
 }
 

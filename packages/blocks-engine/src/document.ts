@@ -856,15 +856,6 @@ export interface NodeVisibility {
   conditions?: Condition[][];
   /** Per-breakpoint visibility; `false` hides at that breakpoint id. */
   devices?: Record<BreakpointId, boolean>;
-  /**
-   * The gates of the component placements a block was expanded from, each an
-   * envelope as its placement stored it. Written by the resolver when it
-   * expands a conditioned placement, never by an author: every one must hold,
-   * as the block's own conditions must, for the block to be served.
-   *
-   * @experimental Settles with the editor's condition controls.
-   */
-  within?: unknown[];
 }
 
 /** One entry-field predicate, e.g. { field: "status", op: "eq", value: "vip" }. */

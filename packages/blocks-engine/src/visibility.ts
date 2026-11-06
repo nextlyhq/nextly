@@ -67,9 +67,28 @@ function groupsGate(groups: unknown): boolean {
 const UNREADABLE_GATE = "unreadable";
 
 /**
+ * A stored visibility with any placement gates removed. `within` exists only
+ * while a page is drawn, written by the resolver as it expands a conditioned
+ * placement; a stored document holding one is read as if it did not, so
+ * persisted data can never add a gate of its own. The same object when there
+ * is nothing to remove.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function storedVisibilityOf(visibility: unknown): unknown {
+  if (!isPlainRecord(visibility) || !Object.hasOwn(visibility, "within")) {
+    return visibility;
+  }
+  const { within: _placementGates, ...stored } = visibility;
+  return stored;
+}
+
+/**
  * The gates the component placements a block was expanded from put on it,
  * each an envelope as that placement stored it. Only the resolver writes
- * `within`; a value of it that is not a list is one gate nothing can read.
+ * `within`, on the document it draws, never on one stored (see
+ * {@link storedVisibilityOf}); a value of it that is not a list is one gate
+ * nothing can read.
  */
 export function placementGatesOf(
   envelope: Readonly<Record<string, unknown>>

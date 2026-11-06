@@ -4339,6 +4339,10 @@ describe("resolveComponentInstances and the loops it closes", () => {
   });
 });
 
+/** The placement gates the resolver put on a node, a render-time key. */
+const gatesOn = (node: ResolvedBlockNode | undefined): unknown =>
+  (node?.visibility as { within?: unknown } | undefined)?.within;
+
 describe("an instance carrying visibility conditions", () => {
   const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
   const featured = [[{ field: "featured", op: "is_true" }]];
@@ -4403,7 +4407,7 @@ describe("an instance carrying visibility conditions", () => {
     expect(roots.map(each => each.type)).toEqual(["core/text", "core/text"]);
     for (const root of roots) {
       expect(isConditionGated(root)).toBe(true);
-      expect(root.visibility?.within).toContain("hidden");
+      expect(gatesOn(root)).toContain("hidden");
     }
   });
 
@@ -4419,8 +4423,8 @@ describe("an instance carrying visibility conditions", () => {
     const [root] = result.document.nodes;
     expect(root?.type).toBe("core/text");
     expect(root?.visibility?.conditions).toBeUndefined();
-    expect(root?.visibility?.within).toHaveLength(2);
-    expect(root?.visibility?.within).toEqual(
+    expect(gatesOn(root)).toHaveLength(2);
+    expect(gatesOn(root)).toEqual(
       expect.arrayContaining([{ conditions: vip }, { conditions: featured }])
     );
   });
