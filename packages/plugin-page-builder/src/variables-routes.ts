@@ -451,7 +451,8 @@ function withoutVariables(
  * The section as a write left it, with the entries whose identity is among
  * `gone` put back where `original` held them. Each goes back at its index in
  * `original`, in order, so a section the write changed in nothing else comes
- * back exactly as it was read.
+ * back exactly as it was read. One the section already holds again, a later
+ * save having put it there, is left as that save stored it.
  */
 function withVariablesBack(
   written: Record<string, unknown>,
@@ -459,14 +460,43 @@ function withVariablesBack(
   gone: ReadonlySet<string>
 ): Record<string, unknown> {
   const entries = Array.isArray(written.tokens) ? [...written.tokens] : [];
+  const held = new Set(storedVariables({ tokens: entries }).keys());
   const was: unknown[] = Array.isArray(original.tokens) ? original.tokens : [];
   was.forEach((entry, at) => {
     const id = identityOfEntry(entry);
-    if (id !== undefined && gone.has(id)) {
+    if (id !== undefined && gone.has(id) && !held.has(id)) {
       entries.splice(Math.min(at, entries.length), 0, entry);
     }
   });
   return { ...written, tokens: entries };
+}
+
+/** How many times the restore is written before its own failure is reported. */
+const RESTORE_ATTEMPTS = 3;
+
+/**
+ * Put the removed variables back, a page having been saved using one while
+ * the removal ran. Written from the read the removal's write produced, so an
+ * unrelated save of the Single since is never overwritten: when the write is
+ * refused, the Single is read again and the variables are put back into what
+ * it holds now, a bounded number of times.
+ */
+async function restoreRemoved(
+  store: VariableStore,
+  original: Record<string, unknown>,
+  gone: ReadonlySet<string>,
+  after: VariableRead
+): Promise<void> {
+  let from = after;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await store.write(withVariablesBack(from.section, original, gone), from);
+      return;
+    } catch (error) {
+      if (attempt >= RESTORE_ATTEMPTS) throw error;
+      from = await store.read();
+    }
+  }
 }
 
 /** A stored entry's identity, read by the Single's own token rules. */
@@ -547,12 +577,7 @@ export async function removeVariables(
   try {
     await refuseStoredVariableUses(ids, checks.stillUsed);
   } catch (refusal) {
-    // Made from the read the removal's write produced, so a save of the
-    // Single since then refuses this rather than being overwritten.
-    await store.write(
-      withVariablesBack(written.section, read.section, gone),
-      written
-    );
+    await restoreRemoved(store, read.section, gone, written);
     throw refusal;
   }
   return respondMutation(

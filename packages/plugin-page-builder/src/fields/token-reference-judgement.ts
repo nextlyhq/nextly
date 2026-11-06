@@ -24,7 +24,11 @@ import {
   type PluginFieldValidateArgs,
 } from "@nextlyhq/plugin-sdk";
 
-import { tokenUsageOf } from "../token-usage";
+import {
+  tokenUsageOf,
+  UNKNOWN_TOKEN_CODE,
+  undefinedVariablesMessage,
+} from "../token-usage";
 
 import {
   addedUndefinedIds,
@@ -33,12 +37,6 @@ import {
   type StoredForms,
 } from "./added-undefined-ids";
 import { isTopLevel } from "./layers-lock-judgement";
-
-/** The engine's code for a reference to a variable the site does not define. */
-const UNKNOWN_TOKEN = "unknown-token";
-
-/** How many undefined variables one refusal names; the rest are counted. */
-const NAMED_AT_MOST = 5;
 
 /** The stored forms of a field the stored read refuses to name: none held. */
 const NOTHING_HELD: StoredForms = { forms: [], readable: true };
@@ -110,19 +108,11 @@ export async function newTokenReferenceIssues(
     )
   );
   if (added.length === 0) return [];
-  const named = added
-    .slice(0, NAMED_AT_MOST)
-    .map(id => `"${id}"`)
-    .join(", ");
-  const more =
-    added.length > NAMED_AT_MOST
-      ? ` and ${added.length - NAMED_AT_MOST} more`
-      : "";
   return [
     {
       path: args.path,
-      code: UNKNOWN_TOKEN,
-      message: `${label}: ${named}${more} ${added.length === 1 ? "is not a variable" : "are not variables"} on this site. Remove ${added.length === 1 ? "it" : "them"} from the page, or choose a variable the site has.`,
+      code: UNKNOWN_TOKEN_CODE,
+      message: undefinedVariablesMessage(label, added, "the page"),
     },
   ];
 }

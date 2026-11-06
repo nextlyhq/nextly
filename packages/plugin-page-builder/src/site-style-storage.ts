@@ -52,6 +52,12 @@ import {
   type SpacingModeReader,
 } from "./spacing-mode-reader";
 import { readStoredJson, sameStoredValue } from "./stored-json";
+import {
+  sharedStyleVariables,
+  UNKNOWN_TOKEN_CODE,
+  undefinedVariablesMessage,
+} from "./token-usage";
+import { newUndefinedIds } from "./undefined-references";
 
 /** The single the stored tier lives in. One document per site, by design. */
 export const SITE_STYLE_SLUG = "site-style";
@@ -419,6 +425,78 @@ function variableRemovalGuard(
   };
 }
 
+/** Every variable the stored shared styles name, the first entry per id. */
+function sharedStylesVariables(raw: unknown): Set<string> {
+  const found = new Set<string>();
+  for (const entry of classEntriesById(raw).values()) {
+    for (const identity of sharedStyleVariables(entry)) found.add(identity);
+  }
+  return found;
+}
+
+/**
+ * Refuse a write to this Single whose shared styles ADD a reference to a
+ * variable the site will not define once the write lands.
+ *
+ * A write of the classes alone asks no variable check, so without this a
+ * shared style could be saved naming a variable just removed, and every page
+ * wearing it would style with nothing. The rule is the page fence's
+ * (`fields/token-reference-judgement`), judged by the same comparison: a
+ * reference the stored shared styles already held is kept, since a variable
+ * removed before this rule existed must not make them unsavable, and only a
+ * reference this write adds is refused. The variables defined are every tier
+ * as the stylesheet resolves them, with this write's tokens when it writes
+ * them, else the stored ones. Server code acting as nobody, and the remove
+ * route's own write, are not judged, as the variable guard does not judge
+ * them.
+ */
+function sharedStyleVariableGuard(
+  defaults: SiteStyleData | undefined
+): (hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}) => void {
+  return hook => {
+    const data = hook.data;
+    if (data === undefined || !Object.hasOwn(data, "classes")) return;
+    if (hook.user === undefined && hook.principal === undefined) return;
+    if (hook.context?.[VARIABLE_REMOVE_WRITE] === true) return;
+    const used = sharedStylesVariables(data.classes);
+    // Nothing named, nothing to resolve: an ordinary class save pays nothing.
+    if (used.size === 0) return;
+    const tokens = Object.hasOwn(data, "tokens")
+      ? data.tokens
+      : hook.originalData?.tokens;
+    const defined = new Set(
+      resolveSiteTokens(
+        resolveSiteStyle(defaults, readSiteStyleRecord({ tokens })).tokens
+      ).tokens.map(tokenIdentity)
+    );
+    const added = newUndefinedIds(
+      used,
+      defined,
+      sharedStylesVariables(hook.originalData?.classes)
+    );
+    if (added.length === 0) return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "classes",
+          code: UNKNOWN_TOKEN_CODE,
+          message: undefinedVariablesMessage(
+            "Shared styles",
+            added,
+            "the shared style"
+          ),
+        },
+      ],
+    });
+  };
+}
+
 /**
  * The stored variables a write drops: held before, absent after, and not
  * supplied by the code, by identity.
@@ -531,6 +609,7 @@ export function siteStyleSingle(
         refuseBreakpointsOutsideSettings,
         sharedStyleGuard(openRemoval, policy.defaults?.classes),
         variableRemovalGuard(variablesInUse, policy.defaults),
+        sharedStyleVariableGuard(policy.defaults),
       ],
     },
     // No `access` block, deliberately: read and update both fall through to
