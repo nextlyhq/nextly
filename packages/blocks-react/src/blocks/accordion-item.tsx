@@ -118,14 +118,51 @@ export const ACCORDION_ITEM_SUPPORTS = {
   effects: true,
 } as const;
 
-/** The heading levels a title may be drawn as, by what an accordion stores. */
-const TITLE_HEADINGS: ReadonlySet<string> = new Set<AccordionTitleLevel>([
+/**
+ * What an accordion's section titles may be drawn as, in the order the
+ * accordion offers them: the one list, which the accordion's select offers
+ * and from which the headings a section draws are derived.
+ */
+export const ACCORDION_TITLE_LEVELS: readonly AccordionTitleLevel[] = [
+  "text",
   "h2",
   "h3",
   "h4",
   "h5",
   "h6",
-]);
+];
+
+/** The levels drawn as a heading: every offered level but text. */
+const TITLE_HEADINGS: ReadonlySet<string> = new Set(
+  ACCORDION_TITLE_LEVELS.filter(level => level !== "text")
+);
+
+/**
+ * The title's own defaults. A heading title is matched directly by the site's
+ * heading baseline (its size, leading, weight and margins), which would beat
+ * the section's typography, set on its `<details>` and reaching the title only
+ * by inheritance. Reset here, after that baseline and at its weight, so a
+ * title looks as the section is styled whatever level it is.
+ */
+const ACCORDION_ITEM_PARTS = {
+  title: {
+    baseStyles: {
+      base: {
+        base: {
+          fontSize: "inherit",
+          lineHeight: "inherit",
+          fontWeight: "inherit",
+          margin: {
+            blockStart: "0",
+            blockEnd: "0",
+            inlineStart: "0",
+            inlineEnd: "0",
+          },
+        },
+      },
+    },
+  },
+} as const;
 
 /**
  * The element a title is drawn as: the heading its accordion names, or text
@@ -144,6 +181,7 @@ function renderAccordionItem({
   props,
   ctx,
   className,
+  partClass,
   renderSlot,
 }: BlockRenderArgs<AccordionItemProps>): ReactElement {
   // Read defensively rather than trusted. The type states what an author may
@@ -156,7 +194,9 @@ function renderAccordionItem({
     <details className={className} open={props.open === true}>
       <summary>
         <span className={DISCLOSURE_ICON_CLASS} aria-hidden="true" />
-        <Title className={DISCLOSURE_TITLE_CLASS}>{title}</Title>
+        <Title className={`${DISCLOSURE_TITLE_CLASS} ${partClass("title")}`}>
+          {title}
+        </Title>
       </summary>
       {renderSlot("children")}
     </details>
@@ -200,6 +240,7 @@ export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
     // Every block after the `<summary>` is spaced from what precedes it, the
     // first one from the title included.
     childGap: CONTAINER_CHILD_GAP,
+    parts: ACCORDION_ITEM_PARTS,
     supports: ACCORDION_ITEM_SUPPORTS,
     // A `<details>` is interactive content, so nothing that refuses
     // interactive content may hold one, and like any element but a plain box it

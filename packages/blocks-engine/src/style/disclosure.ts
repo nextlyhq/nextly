@@ -87,8 +87,13 @@ export const DISCLOSURE_ICON_EXPANSIONS: Readonly<
   ],
   // A row with no marker and no icon: the whole title still toggles.
   none: [...ROW, { descendant: ICON, property: "display", value: "none" }],
-  // The browser's marker, with a heading title kept on its line.
+  // The browser's marker, with a heading title kept on its line. The row's
+  // display and marker style roll back to the browser's own, so Browser
+  // default set on an accordion restores the marker over a row its block
+  // defaults (Chevron) or another tier made.
   browser: [
+    { descendant: SUMMARY, property: "display", value: "revert" },
+    { descendant: SUMMARY, property: "list-style", value: "revert" },
     { descendant: ICON, property: "display", value: "none" },
     { descendant: TITLE, property: "display", value: "inline" },
   ],

@@ -510,8 +510,11 @@ function expandedDeclarations(
   walk: Walk
 ): void {
   const expands = shape.expands;
-  if (expands === undefined || !Object.hasOwn(expands, text)) return;
-  for (const each of expands[text] ?? []) {
+  // Read as the validator reads a keyword: case, surrounding space and CSS
+  // escapes aside, so every spelling it accepts draws what it names.
+  const keyword = asciiLower(decodeIdentifier(trimCssWhitespace(text)));
+  if (expands === undefined || !Object.hasOwn(expands, keyword)) return;
+  for (const each of expands[keyword] ?? []) {
     walk.placed.push({
       path,
       property: each.property,

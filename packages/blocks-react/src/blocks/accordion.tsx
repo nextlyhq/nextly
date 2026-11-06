@@ -57,7 +57,11 @@ import type {
   PageContext,
 } from "../context";
 
-import { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
+import {
+  ACCORDION_BLOCK,
+  ACCORDION_ITEM_BLOCK,
+  ACCORDION_TITLE_LEVELS,
+} from "./accordion-item";
 import { INTERACTIVE } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
 import {
@@ -95,16 +99,6 @@ export const ACCORDION_BASE_STYLES = {
     },
   },
 } as const;
-
-/** What an accordion's section titles may be drawn as, in the order offered. */
-const ACCORDION_TITLE_LEVELS: readonly AccordionTitleLevel[] = [
-  "text",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-];
 
 /** What an author writes on an accordion. */
 export interface AccordionProps extends ContainerProps {

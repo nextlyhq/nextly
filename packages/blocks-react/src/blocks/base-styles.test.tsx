@@ -363,6 +363,7 @@ describe("every default the core library declares", () => {
     expect(
       DECLARING_PARTS.map(([block, part]) => `${block}#${part}`).sort()
     ).toEqual([
+      "core/accordion-item#title",
       "core/form#control",
       "core/form#submit",
       "core/image#caption",

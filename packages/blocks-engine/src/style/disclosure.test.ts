@@ -63,11 +63,21 @@ describe("an Accordion's icon", () => {
     expect(out).toContain(`${ICON} { display: none }`);
   });
 
-  it("keeps the browser's marker for Browser default", () => {
+  it("restores the browser's marker for Browser default, over a row set elsewhere", () => {
+    // A block default of Chevron makes the summary a row with no marker; set
+    // on the node, Browser default rolls both back to the browser's own.
     const out = written({ disclosureIcon: "browser" });
     expect(out).toContain(`${ICON} { display: none }`);
-    expect(out.some(each => each.includes("list-style"))).toBe(false);
-    expect(out.some(each => each.includes("display: flex"))).toBe(false);
+    expect(out).toContain("> details > summary { display: revert }");
+    expect(out).toContain("> details > summary { list-style: revert }");
+  });
+
+  it("expands a keyword stored in any spelling the validator accepts", () => {
+    for (const spelling of [" PLUS ", "Plus", "pl\\75s"]) {
+      expect(written({ disclosureIcon: spelling })).toContain(
+        `${ICON} { background-color: currentColor }`
+      );
+    }
   });
 
   it("writes its own property alone for a CSS-wide keyword", () => {

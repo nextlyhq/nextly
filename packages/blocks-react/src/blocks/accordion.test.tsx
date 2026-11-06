@@ -9,6 +9,7 @@
  * reason this is a port rather than a copy of the older repeater block.
  */
 import {
+  blockPartClassName,
   DISCLOSURE_ICON_CLASS,
   DISCLOSURE_TITLE_CLASS,
   type BlockDocument,
@@ -155,6 +156,9 @@ describe("the accordion pair", () => {
   });
 });
 
+/** The title's part class, which carries its typography reset. */
+const TITLE_PART = blockPartClassName(ACCORDION_ITEM_BLOCK, "title");
+
 describe("an accordion's titles and icon, on a rendered page", () => {
   /** An accordion of one section, with what the accordion is given. */
   const page = (
@@ -212,14 +216,14 @@ describe("an accordion's titles and icon, on a rendered page", () => {
 
   it("draws each title as the heading Titles as names, inside its summary", () => {
     expect(summaryOf(markup(page({ titlesAs: "h3" })))).toBe(
-      `<span class="${DISCLOSURE_ICON_CLASS}" aria-hidden="true"></span><h3 class="${DISCLOSURE_TITLE_CLASS}">What is included?</h3>`
+      `<span class="${DISCLOSURE_ICON_CLASS}" aria-hidden="true"></span><h3 class="${DISCLOSURE_TITLE_CLASS} ${TITLE_PART}">What is included?</h3>`
     );
   });
 
   it("draws a title as text by default, and for a level it does not offer", () => {
     for (const props of [{}, { titlesAs: "h1" }, { titlesAs: "div" }]) {
       expect(summaryOf(markup(page(props)))).toBe(
-        `<span class="${DISCLOSURE_ICON_CLASS}" aria-hidden="true"></span><span class="${DISCLOSURE_TITLE_CLASS}">What is included?</span>`
+        `<span class="${DISCLOSURE_ICON_CLASS}" aria-hidden="true"></span><span class="${DISCLOSURE_TITLE_CLASS} ${TITLE_PART}">What is included?</span>`
       );
     }
   });
@@ -244,10 +248,10 @@ describe("an accordion's titles and icon, on a rendered page", () => {
     };
     const html = markup(page({ titlesAs: "h2" }, [nested]));
     expect(html).toContain(
-      `<h2 class="${DISCLOSURE_TITLE_CLASS}">What is included?</h2>`
+      `<h2 class="${DISCLOSURE_TITLE_CLASS} ${TITLE_PART}">What is included?</h2>`
     );
     expect(html).toContain(
-      `<span class="${DISCLOSURE_TITLE_CLASS}">Inner</span>`
+      `<span class="${DISCLOSURE_TITLE_CLASS} ${TITLE_PART}">Inner</span>`
     );
   });
 
@@ -264,5 +268,81 @@ describe("an accordion's titles and icon, on a rendered page", () => {
     expect(html).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);
     expect(html).not.toContain("list-style: none");
     expect(html).not.toContain("rotate(180deg)");
+  });
+});
+
+describe("an accordion's title levels, as offered and as drawn", () => {
+  const resolver = createBlockResolver([...coreBlocks]);
+  const CONTEXT = {
+    breakpoints: {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    },
+  };
+  const withTitles = (titlesAs: string, itemStyles?: unknown): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "acc",
+          type: ACCORDION_BLOCK,
+          version: 1,
+          props: { as: "div", contained: false, titlesAs },
+          slots: {
+            children: [
+              {
+                id: "s1",
+                type: ACCORDION_ITEM_BLOCK,
+                version: 1,
+                props: { title: "Q", open: false },
+                ...(itemStyles === undefined ? {} : { styles: itemStyles }),
+                slots: { children: [] },
+              },
+            ],
+          },
+        },
+      ],
+    }) as unknown as BlockDocument;
+  const html = (document: BlockDocument) =>
+    renderToStaticMarkup(
+      <PageRenderer
+        document={document}
+        blocks={resolver}
+        styles={resolvePageStyles(document, undefined, CONTEXT, resolver)}
+      />
+    );
+
+  it("draws every level the select offers as that element", () => {
+    const offered = accordion.props?.titlesAs?.options as string[];
+    expect(offered.length).toBeGreaterThan(1);
+    for (const level of offered) {
+      const tag = level === "text" ? "span" : level;
+      expect(html(withTitles(level))).toMatch(
+        new RegExp(
+          `<${tag} class="[^"]*${DISCLOSURE_TITLE_CLASS}[^"]*">Q</${tag}>`
+        )
+      );
+    }
+  });
+
+  it("gives a heading title the section's own typography, not the site's heading look", () => {
+    // The site's baseline styles h3 directly; the title resets it after, so
+    // the item's weight and size (on <details>) reach it by inheritance.
+    const out = html(
+      withTitles("h3", {
+        base: { base: { fontWeight: 400, fontSize: "1rem" } },
+      })
+    );
+    const baseline = out.indexOf(":where(h3)");
+    const reset = out.search(
+      /accordion-item--title\)? \{[^}]*font-weight: inherit/
+    );
+    expect(baseline).toBeGreaterThan(-1);
+    expect(reset).toBeGreaterThan(baseline);
+    expect(out).toMatch(/accordion-item--title\)? \{[^}]*font-size: inherit/);
+    expect(out).toMatch(
+      /accordion-item--title\)? \{[^}]*margin-block-start: 0/
+    );
   });
 });
