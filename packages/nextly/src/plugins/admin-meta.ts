@@ -203,6 +203,27 @@ export { pluginAdminSlug } from "./plugin-slug";
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 /**
+ * The slug a plugin's collection is served under once the host's rename map
+ * applies, or the declared slug where the map does not name it.
+ *
+ * An OWN property only. `renameMap` is an ordinary object, so a plugin whose
+ * collection is legitimately called `constructor` or `toString` would index
+ * into `Object.prototype` and resolve its slug to a function — and `??` cannot
+ * see that, because an inherited method is neither null nor undefined. The
+ * destination would become `/admin/collections/function Object() { [native
+ * code] }` and the gate an equally unseeded permission.
+ */
+function renamedSlug(
+  renameMap: Record<string, string>,
+  collection: string
+): string {
+  const renamed = Object.prototype.hasOwnProperty.call(renameMap, collection)
+    ? renameMap[collection]
+    : undefined;
+  return typeof renamed === "string" ? renamed : collection;
+}
+
+/**
  * Resolve a menu item's destination and gate through the plugin's renameMap.
  *
  * An item naming one of the plugin's own collections is re-pointed at the slug

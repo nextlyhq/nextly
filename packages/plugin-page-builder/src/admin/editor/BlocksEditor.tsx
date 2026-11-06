@@ -489,6 +489,10 @@ function editorInspector(
         view.readMedia,
         view.entryCollection
       )}
+      // A placement's exposed passage the canvas is editing in place: its
+      // field in the placement panel is held meanwhile, as one editor serves
+      // both.
+      canvasPassage={view.inline.editingRich?.exposure ?? null}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}

@@ -118,6 +118,7 @@ import { stopReleasesHolding } from "../../releases/early-stop";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
+import { assertNoInterfaceLanguage } from "../interface-language";
 
 import { emailVerificationColumns } from "./email-verification-write";
 import {
@@ -1803,6 +1804,9 @@ export class UserMutationService extends BaseService {
     options: UpdateUserOptions = {}
   ): Promise<UserMutationResponse> {
     try {
+      // The person's own to set, through their profile: refused here, first,
+      // for every door this edit is reached through.
+      assertNoInterfaceLanguage(changes, { entity: "user", userId });
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getUpdateSchema().safeParse(changes);
       if (!validation.success) {
