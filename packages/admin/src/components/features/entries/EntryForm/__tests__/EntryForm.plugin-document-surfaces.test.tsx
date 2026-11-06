@@ -110,6 +110,10 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
 }));
 
 import { toast } from "@admin/components/ui";
+import {
+  markModulesSettled,
+  resetSettledModules,
+} from "@admin/lib/plugins/component-registry-internal";
 import { entryKeys } from "@admin/services/entryApi";
 
 import { EntryForm } from "../EntryForm";
@@ -238,6 +242,7 @@ afterEach(() => {
   cleanup();
   unregisterComponent(REMOVE);
   unregisterComponent(USAGE);
+  resetSettledModules();
 });
 
 describe("a plugin's document actions", () => {
@@ -414,6 +419,9 @@ describe("a plugin's replacement over time", () => {
 
   it("closes a replacement whose component is not registered, says so, and answers the run as cancelled", async () => {
     const error = vi.spyOn(toast, "error");
+    // Its module has loaded, and registered nothing under this name: the
+    // component is missing, not on its way.
+    markModulesSettled(["test/layouts"]);
     plugins.current = [
       {
         ...LAYOUTS_PLUGIN,
@@ -610,6 +618,83 @@ describe("a plugin's replacement over time", () => {
     await screen.findByText("Used by 2 pages");
     expect(section.current?.documentLock.actionsDisabled).toBe(true);
     expect(section.current?.mayWrite()).toBe(false);
+  });
+});
+
+describe("before a plugin's components have loaded", () => {
+  // On a cold load the plugin list arrives first and its admin module is
+  // imported after the first render; nothing else draws the editor again.
+  const COLD_USAGE = "test/cold#UsageSection";
+  const COLD_REMOVE = "test/cold#RemoveDialog";
+  const LOADING = "Loading this collection's plugin actions…";
+
+  const COLD_PLUGIN = {
+    name: "@acme/cold",
+    documentActions: [
+      {
+        slug: "layouts",
+        action: "delete",
+        override: { component: COLD_REMOVE, label: "Remove layout…" },
+      },
+    ],
+    panelSections: [
+      { slug: "layouts", title: "Used by", component: COLD_USAGE },
+    ],
+  };
+
+  afterEach(() => {
+    unregisterComponent(COLD_USAGE);
+    unregisterComponent(COLD_REMOVE);
+  });
+
+  it("draws a panel section as loading, then draws it once its component registers", async () => {
+    plugins.current = [COLD_PLUGIN];
+    renderEditor("layouts");
+    const panel = await screen.findByRole("complementary", {
+      name: "Document panel",
+    });
+    const region = within(panel).getByRole("region", { name: "Used by" });
+    // The panel's own loading look, not a blank section.
+    expect(region.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(within(region).queryByText("Used by 2 pages")).toBeNull();
+
+    // The plugin's module loads and registers its component.
+    act(() => {
+      registerComponent(COLD_USAGE, UsageSection as never);
+    });
+
+    expect(await within(region).findByText("Used by 2 pages")).toBeVisible();
+    expect(region.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it("holds a replaced action while its component loads, rather than opening it and failing", async () => {
+    const error = vi.spyOn(toast, "error");
+    plugins.current = [COLD_PLUGIN];
+    renderEditor("layouts");
+    const items = await openMenu();
+    const del = items.find(item => item.dataset.action === "delete");
+    expect(del).toHaveAttribute("aria-disabled", "true");
+    expect(del).toHaveTextContent(LOADING);
+    expect(error).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Remove layout" })).toBeNull();
+    await userEvent.setup().keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryAllByRole("menuitem")).toHaveLength(0)
+    );
+
+    // Registered: the plugin's row is offered, and opens its dialog.
+    act(() => {
+      registerComponent(COLD_REMOVE, RemoveLayoutDialog as never);
+    });
+    const ready = (await openMenu()).find(
+      item => item.dataset.action === "delete"
+    );
+    expect(ready).not.toHaveAttribute("aria-disabled", "true");
+    await userEvent.setup().click(ready!);
+    expect(
+      await screen.findByRole("dialog", { name: "Remove layout" })
+    ).toBeInTheDocument();
+    expect(error).not.toHaveBeenCalled();
   });
 });
 

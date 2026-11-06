@@ -4,6 +4,7 @@ import type React from "react";
 
 import { Clock, Hash } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { Skeleton } from "@admin/components/ui";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type { DocumentPanelSectionProps } from "@admin/lib/plugins/component-registry";
@@ -125,7 +126,19 @@ export function DocumentPanel({
               key={`${section.plugin}:${section.component}:${section.title}`}
               title={section.title}
             >
-              <PluginSlot path={section.component} props={pluginSectionProps} />
+              {section.loading === true ? (
+                // The panel's own loading look, as the Publishing section
+                // draws it, until the component has arrived.
+                <div aria-busy="true">
+                  <span className="sr-only">Loading {section.title}</span>
+                  <Skeleton className="h-4 w-40" />
+                </div>
+              ) : (
+                <PluginSlot
+                  path={section.component}
+                  props={pluginSectionProps}
+                />
+              )}
             </PanelSection>
           ))}
     </div>

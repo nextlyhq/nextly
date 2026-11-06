@@ -18,7 +18,14 @@ import {
   OVERRIDABLE_DOCUMENT_ACTIONS,
   type OverridableDocumentAction,
 } from "nextly/config";
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type JSX,
+} from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { toast } from "@admin/components/ui";
@@ -35,6 +42,11 @@ import type {
   DocumentChangeResult,
   DocumentPanelSectionProps,
 } from "@admin/lib/plugins/component-registry";
+import {
+  componentSettled,
+  registryVersionNow,
+  subscribeToRegistry,
+} from "@admin/lib/plugins/component-registry-internal";
 import {
   documentSurfacesFor,
   type CollectionDocumentSurfaces,
@@ -123,16 +135,35 @@ function overridesFor(
   for (const action of Object.keys(actions) as OverridableDocumentAction[]) {
     const override = actions[action];
     if (override === undefined) continue;
-    overrides[action] =
-      override === "hidden"
-        ? { kind: "hidden" }
-        : {
-            kind: "replaced",
-            ...(override.label === undefined ? {} : { label: override.label }),
-            open: () => openReplacement(action, override.component),
-          };
+    overrides[action] = overrideFor(action, override, openReplacement);
   }
   return overrides;
+}
+
+/**
+ * One action's override. A replacement whose component is still loading is
+ * held with the loading words, as before the plugin list arrives: opened now,
+ * it would be taken for a missing component and closed as failed.
+ */
+function overrideFor(
+  action: OverridableDocumentAction,
+  override: NonNullable<
+    CollectionDocumentSurfaces["actions"][OverridableDocumentAction]
+  >,
+  openReplacement: (
+    action: OverridableDocumentAction,
+    component: string
+  ) => Promise<DocumentActionOutcome>
+): DocumentActionOverride {
+  if (override === "hidden") return { kind: "hidden" };
+  if (!componentSettled(override.component)) {
+    return { kind: "held", reason: HELD_WORDS.loading };
+  }
+  return {
+    kind: "replaced",
+    ...(override.label === undefined ? {} : { label: override.label }),
+    open: () => openReplacement(action, override.component),
+  };
 }
 
 /** What the author is told when a plugin's replacement could not be drawn. */
@@ -286,6 +317,14 @@ export function usePluginDocumentSurfaces({
     () => documentSurfacesFor(plugins, collectionSlug),
     [plugins, collectionSlug]
   );
+  // Drawn again whenever a component arrives or a plugin module's loading
+  // ends: registration runs after the first render, and nothing else would
+  // draw a surface whose component arrived since.
+  useSyncExternalStore(
+    subscribeToRegistry,
+    registryVersionNow,
+    registryVersionNow
+  );
   const [open, setOpen] = useState<OpenReplacement | null>(null);
   // The replacement asked for, read when it closes: a close from a render
   // before the open state reached it must still answer the one on screen.
@@ -366,7 +405,12 @@ export function usePluginDocumentSurfaces({
           onError={failed}
         />
       ),
-    sections: surfaces.sections,
+    // Each with whether its component is still loading, so the panel draws
+    // it as loading rather than blank until the component arrives.
+    sections: surfaces.sections.map(section => ({
+      ...section,
+      loading: !componentSettled(section.component),
+    })),
     sectionProps:
       entryId === ""
         ? undefined

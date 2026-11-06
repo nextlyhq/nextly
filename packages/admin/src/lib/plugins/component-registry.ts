@@ -46,6 +46,8 @@ import type { DocumentLockGates } from "@admin/components/features/entries/Entry
 import {
   componentRegistry,
   CORE_COMPONENT_PREFIX,
+  markModulesSettled,
+  resetSettledModules,
   writeComponent,
 } from "./component-registry-internal";
 
@@ -580,7 +582,11 @@ export async function autoRegisterPluginComponents(
     }
   }
 
-  await Promise.all(registrationPromises);
+  // Every attempt ends here, either way, so a surface waiting on one of these
+  // modules learns whether its component arrived or never will.
+  await Promise.all(registrationPromises).finally(() => {
+    markModulesSettled(modulePaths);
+  });
 }
 
 /**
@@ -592,4 +598,5 @@ export async function autoRegisterPluginComponents(
  */
 export function resetAutoRegistration(): void {
   attemptedModules.clear();
+  resetSettledModules();
 }

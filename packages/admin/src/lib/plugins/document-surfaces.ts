@@ -24,6 +24,11 @@ export interface PluginPanelSectionEntry {
   plugin: string;
   title: string;
   component: string;
+  /**
+   * Whether its component is still on its way, so the panel draws the
+   * section as loading rather than blank. Absent, it is not.
+   */
+  loading?: boolean;
 }
 
 /** What plugins change on one collection's document screen. */
