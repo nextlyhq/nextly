@@ -18,6 +18,7 @@
  */
 import type { BindingFieldShape } from "./binding-rules";
 import { isCalendarDay } from "./calendar-day";
+import { isTopLevelFieldName } from "./field-name";
 import { describeValue } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
 
@@ -48,9 +49,6 @@ const NAMED_QUERY_DESCRIPTION_MAX = 120;
  */
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/;
 
-/** An input's key, as a list stores it and run reads it. */
-const PARAM_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
 /** Whether a value is a name a query may be registered under. */
 export function isNamedQueryName(value: unknown): value is string {
   return (
@@ -60,11 +58,9 @@ export function isNamedQueryName(value: unknown): value is string {
   );
 }
 
-/** Whether a value is a key an input may have. */
+/** Whether a value is a key an input may have: a top-level field name. */
 export function isNamedQueryParamKey(value: unknown): value is string {
-  return (
-    typeof value === "string" && PARAM_KEY.test(value) && value !== "__proto__"
-  );
+  return isTopLevelFieldName(value);
 }
 
 /** One literal a list stores for an input. */
@@ -929,6 +925,36 @@ function rowKeyProblem(
   return undefined;
 }
 
+/**
+ * Why declared row fields are not ones a binding can address, or nothing:
+ * each a field shape with a type and a top-level field name, as a list's
+ * filter or a binding's path names one, a group's own fields likewise.
+ */
+function rowFieldsProblem(
+  fields: readonly unknown[],
+  at: string
+): string | undefined {
+  for (const field of fields) {
+    if (!isPlainRecord(field) || typeof field.type !== "string") {
+      return `${at} hold a field that is not { name, type }`;
+    }
+    if (!isTopLevelFieldName(field.name)) {
+      return `${at} hold a field named "${describeValue(field.name)}", which is not a field name a binding can address: letters, digits and underscores`;
+    }
+    if (field.fields !== undefined) {
+      if (!Array.isArray(field.fields)) {
+        return `${at}' field "${field.name}" holds fields that are not a list`;
+      }
+      const nested = rowFieldsProblem(
+        field.fields,
+        `${at}' field "${field.name}"`
+      );
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+
 /** Why a declaration's rows are not a collection or a field schema with a key. */
 function rowsProblem(
   rows: unknown,
@@ -943,19 +969,13 @@ function rowsProblem(
       : `its rows are entries of "${rows.collection}", which it does not declare in reads.collections`;
   }
   const fields = rows.fields;
-  if (
-    !Array.isArray(fields) ||
-    fields.length === 0 ||
-    !fields.every(
-      field =>
-        isPlainRecord(field) &&
-        typeof field.name === "string" &&
-        typeof field.type === "string"
-    )
-  ) {
+  if (!Array.isArray(fields) || fields.length === 0) {
     return "its rows are not { collection } or { fields, key }";
   }
-  return rowKeyProblem(rows, fields as BindingFieldShape[]);
+  return (
+    rowFieldsProblem(fields, "its rows") ??
+    rowKeyProblem(rows, fields as BindingFieldShape[])
+  );
 }
 
 /** Why a declaration's reads are not lists of slugs, or nothing. */

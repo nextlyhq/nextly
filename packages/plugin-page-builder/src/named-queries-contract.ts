@@ -19,7 +19,7 @@ import type {
   NamedQueryChoice,
   NamedQueryParamType,
 } from "@nextlyhq/blocks-engine";
-import type { PaginationMeta } from "nextly";
+import type { PaginationMeta } from "@nextlyhq/plugin-sdk";
 
 /** Where the editor lists the site's named queries, under this plugin's namespace. */
 export const NAMED_QUERIES_ROUTE_PATH = "/named-queries";

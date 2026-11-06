@@ -51,7 +51,18 @@ describe("plugin services inside a named query's frame", () => {
   });
 
   it("refuse every method inside the frame, however deep", () => {
+    // Resolved outside the frame first, so the refusal tested is the
+    // method's own.
+    const store = services().store;
+    const classy = services().classy;
     const frame = openNamedQueryFrame("notes.all");
+    for (const call of [
+      () => store?.read(),
+      () => store?.nested?.read(),
+      () => classy?.read(),
+    ]) {
+      expect(outcome(() => frame.run(call))).toBe("named-query-trusted-read");
+    }
     for (const call of [
       () => services().store?.read(),
       () => services().store?.nested?.read(),
@@ -67,6 +78,23 @@ describe("plugin services inside a named query's frame", () => {
     expect(outcome(() => frame.run(() => read?.()))).toBe(
       "named-query-trusted-read"
     );
+  });
+
+  it("are not even resolved inside the frame, so a factory never runs there", () => {
+    let built = 0;
+    registerPluginService(PLUGIN, "lazy", () => {
+      built += 1;
+      return { read: () => ["SENTINEL"] };
+    });
+    const frame = openNamedQueryFrame("notes.all");
+    // First reached inside the frame: refused before its factory runs.
+    expect(outcome(() => frame.run(() => services().lazy))).toBe(
+      "named-query-trusted-read"
+    );
+    expect(built).toBe(0);
+    // Reached outside it, it resolves as it always did.
+    expect(services().lazy?.read()).toEqual(["SENTINEL"]);
+    expect(built).toBe(1);
   });
 
   it("answer through the frame's own door", () => {

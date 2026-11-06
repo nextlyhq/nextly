@@ -44,6 +44,7 @@ import type { BindingFieldShape } from "./binding-rules";
 import { bindingKindOf } from "./binding-vocabulary";
 import { isCalendarDay } from "./calendar-day";
 import type { BlockDocument, BlockNode } from "./document";
+import { isTopLevelFieldName } from "./field-name";
 import { withHeldSeverity } from "./held-findings";
 import { describeValue, pointer } from "./issue-text";
 import {
@@ -265,17 +266,12 @@ export const LIST_ISSUE_CODES: {
     "A list's custom source lists entries of a collection visitors cannot read.",
 };
 
-/** A field name as a list may write it: no paths, operators or quoting. */
-const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
 /**
  * Whether a value is a field name a list or a condition may write: one
  * top-level field, no paths, operators or quoting.
  */
 export function isListFieldName(value: unknown): value is string {
-  return (
-    typeof value === "string" && FIELD_NAME.test(value) && value !== "__proto__"
-  );
+  return isTopLevelFieldName(value);
 }
 
 /** Whether `op` is one of the closed set. */

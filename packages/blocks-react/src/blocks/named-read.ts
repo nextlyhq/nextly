@@ -600,14 +600,16 @@ function renderRun(
   owner: QueryBudget | undefined,
   key: string,
   start: () => Promise<NamedQueryRunData>
-): Promise<NamedQueryRunData> {
-  if (owner === undefined) return start();
+): { readonly pending: Promise<NamedQueryRunData>; readonly joined: boolean } {
+  if (owner === undefined) return { pending: start(), joined: false };
   const runs =
     runsThisRender.get(owner) ?? new Map<string, Promise<NamedQueryRunData>>();
   runsThisRender.set(owner, runs);
-  const pending = runs.get(key) ?? start();
+  const started = runs.get(key);
+  if (started !== undefined) return { pending: started, joined: true };
+  const pending = start();
   runs.set(key, pending);
-  return pending;
+  return { pending, joined: false };
 }
 
 /**
@@ -667,7 +669,7 @@ export async function readNamedList(
       claim
     );
   };
-  const pending = renderRun(ctx.queries, key.join("\u0000"), () =>
+  const { pending, joined } = renderRun(ctx.queries, key.join("\u0000"), () =>
     host.cache === undefined ? read() : host.cache({ declaration, key, read })
   );
   let data: NamedQueryRunData;
@@ -678,7 +680,11 @@ export async function readNamedList(
     const why = classify(error, declaration, ref);
     return failed(why.code, why.detail, { ...at, ref, error });
   }
-  if (!ranHere && !replayClaims(data.reads, claim)) {
+  // Reads are claimed once per render for each run: as made, or, for a
+  // result the host's cache kept from another render, claimed again. A list
+  // joining a run this render already made claims nothing more: no read is
+  // made for it.
+  if (!ranHere && !joined && !replayClaims(data.reads, claim)) {
     return failed("budget", NAMED_QUERY_TEXT.budget(declaration.label), at);
   }
   const rows = declaration.rows;

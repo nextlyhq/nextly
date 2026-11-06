@@ -33,12 +33,14 @@ import {
   type NamedQueryRegistry,
   type NumberParam,
 } from "@nextlyhq/blocks-engine";
-import type {
-  PluginContext,
-  PluginDeclaration,
-  PluginRouteContext,
+import {
+  collectDeclarations,
+  respondList,
+  type PaginationMeta,
+  type PluginContext,
+  type PluginDeclaration,
+  type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
-import { collectDeclarations, respondList, type PaginationMeta } from "nextly";
 import { z } from "nextly/zod";
 
 import { PAGE_BUILDER_PLUGIN } from "./blocks/registration-service";
