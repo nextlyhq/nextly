@@ -28,6 +28,7 @@ import type {
   StyleCompileContext,
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
+import { resolveTokenPrefix } from "@nextlyhq/blocks-engine";
 
 import { withTypographyDefaults } from "./blocks/typography-defaults";
 import {
@@ -92,6 +93,14 @@ export interface PageStyleCascade {
   readonly entries: readonly StyleTraceEntry[];
   /** The nodes those declarations describe: the tree the sheet was compiled from. */
   readonly nodes: readonly BlockNode[];
+  /**
+   * The prefix the entries' token references were written under (`--site-`),
+   * resolved as the compile resolved it: a reader matching a `var()` in an
+   * entry to a token needs the prefix itself, since a name alone cannot tell
+   * `brand.button.padding-y` under `--site-` from `button.padding-y` under
+   * `--site-brand-`.
+   */
+  readonly tokenPrefix: string;
 }
 
 /**
@@ -262,5 +271,11 @@ export function pageStyleTrace(
     false,
     { trace: true }
   ).trace;
-  return entries === undefined ? undefined : { entries, nodes: nodes.nodes };
+  return entries === undefined
+    ? undefined
+    : {
+        entries,
+        nodes: nodes.nodes,
+        tokenPrefix: resolveTokenPrefix(context?.tokenPrefix).prefix,
+      };
 }
