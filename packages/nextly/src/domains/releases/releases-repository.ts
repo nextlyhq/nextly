@@ -289,9 +289,6 @@ export interface ReleasesSelectOptions
 
 /**
  * What narrows a release listing, whichever way it is ordered or paged.
- *
- * @experimental `search` may change until the releases list redesign is
- *   complete.
  */
 export interface ReleaseListFilters {
   /** Only these releases. An empty list means none, not "no filter". */
@@ -306,8 +303,6 @@ export interface ReleaseListFilters {
    * `end`: a day in a zone, as `zonedDay` works it out. A published release is
    * placed at the instant it went out, any other at its scheduled instant
    * (`placedWithinCondition`).
-   *
-   * @experimental
    */
   placedWithin?: ReleaseTimeSpan;
   /**
@@ -322,8 +317,6 @@ export interface ReleaseListFilters {
  *
  * `tab` takes the tab's own conditions and order; without one, the filters are
  * ordered by scheduled instant, latest first unless `order` says otherwise.
- *
- * @experimental
  */
 export interface ReleasePageQuery extends ReleaseListFilters {
   tab?: ReleaseTab;
@@ -336,7 +329,6 @@ export interface ReleasePageQuery extends ReleaseListFilters {
   limit?: number;
 }
 
-/** @experimental */
 export interface ReleasePage {
   rows: ReleaseRow[];
   /** Every release the query matches, across all pages. */
@@ -375,8 +367,6 @@ export interface ReleaseRow {
 
 /**
  * How many documents a release holds, and what it does with them.
- *
- * @experimental
  */
 export interface ReleaseMemberCounts {
   total: number;
@@ -392,8 +382,6 @@ export type ReleaseDetailsField = "title" | "description";
 /**
  * What a rename wrote: the release as the write left it, and which fields it
  * changed (none when the release already read that way).
- *
- * @experimental
  */
 export interface ReleaseDetailsWrite {
   row: ReleaseRow;
@@ -738,8 +726,6 @@ export interface NewReleaseMember extends DocumentRef {
  * The one shape of a new release, so a release made on its own and one made
  * in the same step as its documents are the same row, and so a caller can
  * check documents against the release before it is written.
- *
- * @experimental
  */
 export function draftReleaseRow(input: NewRelease): ReleaseRow {
   const now = new Date();
@@ -836,8 +822,6 @@ async function insertMember(
 
 /**
  * What adding several documents in one step writes, and to which release.
- *
- * @experimental
  */
 export interface MembersWrite {
   /** The release the documents join. */
@@ -870,8 +854,6 @@ export interface MembersWrite {
 /**
  * What a {@link MembersWrite} wrote: the release as the transaction left it,
  * and its new members in the order written.
- *
- * @experimental
  */
 export interface MembersWritten {
   release: ReleaseRow;
@@ -1778,8 +1760,6 @@ export class ReleasesRepository {
    *
    * Nothing to revalidate. A release's title is not content, and no cached
    * page is bounded by it.
-   *
-   * @experimental
    */
   async updateReleaseDetails(
     id: string,
@@ -1852,8 +1832,6 @@ export class ReleasesRepository {
    *
    * `null` when the release is not there or not in a deletable state;
    * nothing is deleted then.
-   *
-   * @experimental
    */
   async deleteRelease(
     id: string,
@@ -2090,8 +2068,6 @@ export class ReleasesRepository {
    * publishing one) can leave them one apart for that response. Holding a
    * transaction open across both to close that would cost every listing for
    * a gap the next request closes by itself.
-   *
-   * @experimental
    */
   async findReleasePage(query: ReleasePageQuery): Promise<ReleasePage> {
     const listing = this.listingFor(query);
@@ -2108,8 +2084,6 @@ export class ReleasesRepository {
    * The question a dashboard asks ("how many need attention?"). It counts the
    * same where clause {@link findReleasePage} counts for its total, built by
    * the same {@link listingFor}, so the two cannot disagree.
-   *
-   * @experimental
    */
   async countReleases(query: ReleasePageQuery): Promise<number> {
     const listing = this.listingFor(query);
@@ -2158,8 +2132,6 @@ export class ReleasesRepository {
    * Through {@link listingFor}, with the plain soonest-first order, so the
    * releases a day shows are the first rows of that day's list and the window
    * narrows by `kind` exactly as the list does.
-   *
-   * @experimental
    */
   async findReleaseCalendar(query: {
     days: readonly ZonedDay[];
@@ -2524,8 +2496,6 @@ export class ReleasesRepository {
    * author is not indexed. Two queries either way, and none when nothing is
    * named. A list of ids too long for one statement is read in runs
    * ({@link IDS_PER_LOOKUP}).
-   *
-   * @experimental
    */
   async scheduledMembersFor(
     target: ReleaseRecheckTarget
@@ -2616,8 +2586,6 @@ export class ReleasesRepository {
    * counts are made of. The port has no grouped count, so the rows are
    * counted here; a page is at most a few hundred releases of at most a few
    * hundred documents each, two short columns a row.
-   *
-   * @experimental
    */
   async memberActionCountsOf(
     releaseIds: readonly string[]
@@ -2652,8 +2620,6 @@ export class ReleasesRepository {
    * The order is the same one so that anything worked out over a release's
    * members reads the same whether its members were read alone or with a
    * page of others.
-   *
-   * @experimental
    */
   async listMembersInOrderOf(
     releaseIds: readonly string[]
@@ -2767,8 +2733,6 @@ export class ReleasesRepository {
    *   `allowedStates`, or moved before its schedule; the limit's refusal; and
    *   a unique violation as the driver reported it, for the caller to say
    *   which index refused.
-   *
-   * @experimental
    */
   async addMembers(write: MembersWrite): Promise<MembersWritten> {
     assertNamesOneRelease(write);

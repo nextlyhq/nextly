@@ -11,7 +11,6 @@
  * no inbox.
  *
  * @module api/notices
- * @experimental Until the notices feature is complete.
  */
 import { z } from "zod";
 

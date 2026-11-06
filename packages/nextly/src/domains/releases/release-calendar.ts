@@ -22,8 +22,6 @@
  * one day in the calendar and another in its "+N more" list.
  *
  * @module domains/releases/release-calendar
- * @experimental The calendar's names and shapes may change until the releases
- *   redesign is complete.
  */
 import { NextlyError } from "../../errors";
 import type { ReleaseState } from "../../schemas/releases/types";
@@ -36,8 +34,6 @@ import type { ReleaseRow } from "./releases-repository";
  * The longest window a calendar read covers, in days: six weeks, the most a
  * month grid shows. A bound on the read as much as on the screen, since every
  * release in the window is tallied.
- *
- * @experimental
  */
 export const RELEASE_CALENDAR_MAX_DAYS = 42;
 
@@ -45,8 +41,6 @@ export const RELEASE_CALENDAR_MAX_DAYS = 42;
  * How many of a day's releases the calendar sends with the day. The rest are
  * counted, so the screen can say how many more there are, and read from the
  * list filtered to that day.
- *
- * @experimental
  */
 export const RELEASE_CALENDAR_RELEASES_PER_DAY = 3;
 
@@ -58,8 +52,6 @@ export interface ReleaseTimeSpan {
 
 /**
  * One day in a zone: its date as written, and the instants it covers.
- *
- * @experimental
  */
 export interface ZonedDay extends ReleaseTimeSpan {
   /** `YYYY-MM-DD`. */
@@ -68,8 +60,6 @@ export interface ZonedDay extends ReleaseTimeSpan {
 
 /**
  * How many releases a day holds in each state, every state present.
- *
- * @experimental
  */
 export type ReleaseStateCounts = Record<ReleaseState, number>;
 
@@ -78,8 +68,6 @@ export type ReleaseStateCounts = Record<ReleaseState, number>;
  *
  * `total` and `counts` cover every release on the day; `releases` holds the
  * first of them in time order, at most {@link RELEASE_CALENDAR_RELEASES_PER_DAY}.
- *
- * @experimental
  */
 export type ReleaseCalendarDay = {
   date: string;
@@ -90,8 +78,6 @@ export type ReleaseCalendarDay = {
 
 /**
  * A calendar read: the window asked for, and each of its days in order.
- *
- * @experimental
  */
 export type ReleaseCalendar = {
   timezone: string;
@@ -125,8 +111,6 @@ const CALENDAR_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
  *
  * `Intl` is the only authority on which zones this runtime knows, so it is
  * asked directly; a list kept here would fall behind the platform's own.
- *
- * @experimental
  */
 export function isKnownTimeZone(zone: string): boolean {
   try {
@@ -310,8 +294,6 @@ function daysBetween(first: number, last: number, zone: string): ZonedDay[] {
  * Refused when either date is not a real `YYYY-MM-DD` date, when the zone is
  * unknown, when `to` is before `from`, and when the window is longer than
  * {@link RELEASE_CALENDAR_MAX_DAYS}.
- *
- * @experimental
  */
 export function zonedDays(window: {
   from: unknown;
@@ -339,8 +321,6 @@ export function zonedDays(window: {
 
 /**
  * One day in `timezone`, with the instants it covers.
- *
- * @experimental
  */
 export function zonedDay(day: { date: unknown; timezone: unknown }): ZonedDay {
   const zone = knownTimeZone(day.timezone, "timezone");
@@ -363,8 +343,6 @@ export function zonedDay(day: { date: unknown; timezone: unknown }): ZonedDay {
  * the next day only, and consecutive days share no release. Comparisons only,
  * so every dialect evaluates it the same way and in memory it is evaluated the
  * same way again.
- *
- * @experimental
  */
 export function placedWithinCondition(span: ReleaseTimeSpan): VersionsWhere {
   const published = "published" satisfies ReleaseState;
@@ -402,8 +380,6 @@ function noReleases(): ReleaseStateCounts {
  * {@link placedWithinCondition} it meets, evaluated as the database evaluates
  * them, so the calendar and the list filtered to that day hold the same
  * releases.
- *
- * @experimental
  */
 export function tallyByDay(
   days: readonly ZonedDay[],

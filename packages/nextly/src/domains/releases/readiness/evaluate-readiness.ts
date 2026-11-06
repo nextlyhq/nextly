@@ -7,7 +7,6 @@
  * sources, so none of them can come to disagree with another.
  *
  * @module domains/releases/readiness/evaluate-readiness
- * @experimental
  */
 import { NextlyError } from "../../../errors";
 import type { ReleaseMemberAction } from "../../../schemas/releases/types";
@@ -23,8 +22,6 @@ import {
 /**
  * One finding as a reader is shown it: what was found, by which source, and
  * which document it is about.
- *
- * @experimental
  */
 export interface ReadinessFinding<Code extends string = string>
   extends ReleaseCheckFinding<Code> {
@@ -39,8 +36,6 @@ export interface ReadinessFinding<Code extends string = string>
 /**
  * Every finding for a release, hard ones apart from soft ones, each in the
  * order its members were added.
- *
- * @experimental
  */
 export interface ReleaseReadiness<Code extends string = string> {
   releaseId: string;

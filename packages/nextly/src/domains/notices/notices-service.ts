@@ -22,7 +22,6 @@
  * transaction, because a statement against a missing table would abort it.
  *
  * @module domains/notices/notices-service
- * @experimental Until the notices feature is complete.
  */
 import { createHash } from "node:crypto";
 
@@ -88,7 +87,7 @@ export interface NoticesLogger {
   warn(message: string, context?: Record<string, unknown>): void;
 }
 
-/** One notice to write. @experimental */
+/** One notice to write. */
 export interface RecordNoticeInput<TData> {
   /** The registered kind; its schema types and validates `data`. */
   kind: NoticeKind<TData>;
@@ -105,7 +104,7 @@ export interface RecordNoticeInput<TData> {
   data: TData;
 }
 
-/** What a write did. @experimental */
+/** What a write did. */
 export interface RecordNoticeResult {
   /** True only for the call that created the notice. */
   created: boolean;
@@ -115,14 +114,14 @@ export interface RecordNoticeResult {
 
 /**
  * One notice as stored, as far as a writer's follow-up needs it: whom it is
- * for, what it is about, and its snapshot. @experimental
+ * for, what it is about, and its snapshot.
  */
 export type StoredNotice = Pick<
   NoticeRow,
   "id" | "userId" | "kind" | "subjectId" | "data"
 >;
 
-/** One notice as its person sees it. @experimental */
+/** One notice as its person sees it. */
 export interface NoticeView {
   id: string;
   kind: string;
@@ -140,7 +139,7 @@ export interface NoticeView {
   readAt: Date | null;
 }
 
-/** A page of a person's notices. @experimental */
+/** A page of a person's notices. */
 export interface NoticePage {
   rows: NoticeView[];
   total: number;
