@@ -12,6 +12,8 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import {
   createTestNextly,
@@ -257,6 +259,107 @@ describe.each(getConfiguredTestDialects())(
       expect(columns.get("bio")).toMatch(/text/);
       expect(columns.get("price")).not.toMatch(/int/);
     });
+
+    /** The Builder's field change, as the admin applies it. */
+    const applyFields = (
+      collectionName: string,
+      fields: unknown[],
+      extra: Record<string, unknown> = {}
+    ) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName },
+        { fields, confirmed: true, schemaVersion: 1, ...extra }
+      );
+
+    it("writes a field change, with the person's rename, as its own applied file", async () => {
+      process.env.NODE_ENV = "development";
+      const service = t.getService<CollectionService>("collectionService");
+      await service.createCollection(created("articles"), {});
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      await adapter.executeQuery(
+        "INSERT INTO dc_articles (id, title, body, slug, created_at, updated_at) VALUES ('a', 'T', 'kept', 'a', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+
+      await applyFields(
+        "articles",
+        [
+          { name: "content", type: "text" },
+          { name: "subtitle", type: "text" },
+        ],
+        {
+          renameResolutions: [
+            {
+              tableName: "dc_articles",
+              fromColumn: "body",
+              toColumn: "content",
+              choice: "rename",
+            },
+          ],
+        }
+      );
+
+      const folder = join(t.basePath, "database", "history");
+      const files = readdirSync(folder)
+        .filter(f => f.endsWith(".sql"))
+        .sort();
+      expect(files.map(f => f.replace(/^\d{8}_\d{6}_\d{3}_/, ""))).toEqual([
+        "articles_create.sql",
+        "articles_update.sql",
+      ]);
+      expect(readFileSync(join(folder, files[1]!), "utf-8")).toMatch(
+        /RENAME COLUMN/
+      );
+      const rows = (await adapter.executeQuery(
+        "SELECT content FROM dc_articles"
+      )) as unknown as { content: string }[];
+      expect(JSON.stringify(rows)).toContain("kept");
+      const definition = JSON.parse(
+        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
+      ) as { collections: { slug: string; fields: { name: string }[] }[] };
+      expect(
+        definition.collections
+          .find(c => c.slug === "articles")
+          ?.fields.map(f => f.name)
+      ).toEqual(["content", "subtitle"]);
+    });
+
+    it.runIf(dialect !== "sqlite")(
+      "changes a relationship's foreign-key action when its onDelete changes",
+      async () => {
+        process.env.NODE_ENV = "development";
+        const service = t.getService<CollectionService>("collectionService");
+        await service.createCollection(created("people"), {});
+        const author = (onDelete: string) => ({
+          name: "author",
+          type: "relationship",
+          options: { target: "people", relationType: "manyToOne", onDelete },
+        });
+        await service.createCollection(
+          {
+            name: "notes",
+            label: "Note",
+            fields: [author("set null")],
+          } as Parameters<CollectionService["createCollection"]>[0],
+          {}
+        );
+
+        await applyFields("notes", [author("cascade")]);
+
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        const live = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          adapter.getCapabilities().dialect,
+          ["dc_notes"]
+        );
+        expect(
+          live.tables[0]?.foreignKeys?.find(
+            fk => fk.referencesTable === "dc_people"
+          )?.onDelete
+        ).toBe("cascade");
+      }
+    );
 
     it("outside development writes them and runs nothing", async () => {
       process.env.NODE_ENV = "production";

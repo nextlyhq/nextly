@@ -34,11 +34,21 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
+import { container } from "../../di/container";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
+import {
+  writeCollectionSave,
+  type BuilderSaveSetup,
+} from "../../domains/schema/builder-save/collection-save";
+import {
+  saveOfSchemaChange,
+  type SchemaChangeAnswers,
+} from "../../domains/schema/builder-save/schema-change-save";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
@@ -50,6 +60,7 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
@@ -874,21 +885,49 @@ const COLLECTIONS_METHODS: Record<
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy
           // per-field answers are translated to typed resolutions inside the prompt dispatcher.
-          const result = await applyCollectionSchemaChange({
+          // With the Builder save writer set up, the change is the migration
+          // `migrate:create` would write for this collection, with the
+          // person's renames and answers in it, run in development as
+          // `nextly migrate` runs it (`writeCollectionSave`).
+          const acknowledgedConversions = (
+            body as { acknowledgedConversions?: string[] }
+          ).acknowledgedConversions;
+          const written = await saveThroughWriter({
             slug: p.collectionName,
             collection,
             fields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
-            // The dialog does not change Draft/Published: the persisted status, before and after.
-            status: collection.status === true,
-            wasStatus: collection.status === true,
-            renameResolutions: renameResolutions ?? [],
-            eventResolutions: eventResolutions ?? [],
-            legacyResolutions: resolutions
-              ? { tableName, byFieldName: resolutions }
-              : undefined,
+            localized: isLocalized,
+            answers: {
+              renameResolutions: renameResolutions ?? [],
+              eventResolutions: eventResolutions ?? [],
+              ...(resolutions === undefined ? {} : { resolutions }),
+              ...(acknowledgedConversions === undefined
+                ? {}
+                : { acknowledgedConversions }),
+            },
           });
+          const storedFields =
+            written === undefined
+              ? (fields as unknown as FieldDefinition[])
+              : written.fields;
+          const result =
+            written !== undefined
+              ? { summary: undefined }
+              : await applyCollectionSchemaChange({
+                  slug: p.collectionName,
+                  collection,
+                  fields: fields as unknown as FieldDefinition[],
+                  wasLocalized,
+                  isLocalized,
+                  // The dialog does not change Draft/Published: the persisted status, before and after.
+                  status: collection.status === true,
+                  wasStatus: collection.status === true,
+                  renameResolutions: renameResolutions ?? [],
+                  eventResolutions: eventResolutions ?? [],
+                  legacyResolutions: resolutions
+                    ? { tableName, byFieldName: resolutions }
+                    : undefined,
+                });
 
           // pipeline.apply mutates the live DB (renamed/added/dropped
           // columns) but does NOT persist the updated `fields` JSON on
@@ -914,8 +953,13 @@ const COLLECTIONS_METHODS: Record<
             await adapter.update(
               "dynamic_collections",
               {
-                fields: JSON.stringify(fields),
+                fields: JSON.stringify(storedFields),
                 schema_version: newSchemaVersion,
+                // Written but not run outside development: `nextly migrate`
+                // applies it on deploy.
+                ...(written !== undefined && !written.applied
+                  ? { migration_status: "pending" }
+                  : {}),
                 // i18n: persist the state this apply actually ran with (mirrors
                 // the singles apply). The DDL above already performed any
                 // false→true transition, so leaving the stored flag behind would
@@ -987,7 +1031,7 @@ const COLLECTIONS_METHODS: Record<
             // per-language reads/writes resolve in THIS process without a restart.
             const { table: freshTable } = generateRuntimeSchema(
               tableName,
-              fields as FieldDefinition[],
+              storedFields,
               dialect,
               { localized: isLocalized, status: collection.status === true }
             );
@@ -1579,3 +1623,61 @@ export const formatToastSummaryForTest = formatToastSummary;
 // Test seam for the hint-receipt decision helper. The behavioural
 // contract is "non-empty renames map -> log; everything else -> silent".
 export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
+
+/**
+ * A field change through the Builder save writer, when the app registered
+ * one: the definition as it stands, the change read as one save
+ * (`saveOfSchemaChange`), written and, in development, run. Undefined without
+ * a writer, where the push pipeline applies the change as it did before.
+ */
+async function saveThroughWriter(args: {
+  slug: string;
+  collection: { tableName: string; fields?: FieldDefinition[] };
+  fields: FieldDefinition[];
+  localized: boolean;
+  answers: SchemaChangeAnswers;
+}): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
+  if (!container.has("builderSaveSetup")) return undefined;
+  const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
+  const adapter = getAdapterFromDI();
+  if (!adapter) throw new Error("Database adapter not initialized");
+  const logger = getLoggerFromDI() ?? consoleLogger;
+  const dynamic = new DynamicCollectionService(adapter, logger);
+  const before = args.collection.fields ?? [];
+  const { save, fields } = saveOfSchemaChange({
+    slug: args.slug,
+    definition: await loadUiSchema({
+      projectRoot: setup.projectRoot,
+      uiSchemaFile: setup.config.db.uiSchemaFile,
+    }),
+    row: args.collection,
+    fields: args.fields,
+    localized: args.localized,
+    answers: args.answers,
+    junctions: dynamic.junctionStatements(
+      args.collection.tableName,
+      before,
+      args.fields
+    ),
+    keys: {
+      before: dynamic.relationshipForeignKeys(
+        args.collection.tableName,
+        before
+      ),
+      after: dynamic.relationshipForeignKeys(
+        args.collection.tableName,
+        args.fields
+      ),
+    },
+  });
+  const result = await writeCollectionSave(
+    {
+      ...setup,
+      adapter,
+      logger,
+      applies: process.env.NODE_ENV === "development",
+    },
+    save
+  );
+  return { fields, applied: result.applied };
+}
