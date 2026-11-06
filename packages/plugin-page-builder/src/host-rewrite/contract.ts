@@ -169,3 +169,19 @@ export function documentKeyOf(
     ? ["single", host.slug].join(KEY_SEPARATOR)
     : ["collection", host.slug, host.id ?? ""].join(KEY_SEPARATOR);
 }
+
+/**
+ * A host and form as one key, so what a step saw is what its writer writes:
+ * a breakpoint removal keeps what it strips by it, and its undo reads that
+ * back by it.
+ */
+export function formKey(host: HostAddress, form: HostForm): string {
+  return JSON.stringify([
+    host.kind,
+    host.slug,
+    host.id ?? "",
+    host.path,
+    host.locale ?? "",
+    form,
+  ]);
+}

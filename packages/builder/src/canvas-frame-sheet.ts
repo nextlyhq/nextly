@@ -358,11 +358,13 @@ ${ROOT} [data-nx-list-empty-because="failed"]::before {
 
 /* A region of the page's Layout, drawn locked around the page. Its content
    keeps the site's own colours, quietened, so it reads as what surrounds the
-   page; its links and forms are inert. The region is one focus stop: its
-   badge says where it comes from at rest, and a click or Enter opens the tag
-   with the way to edit it. The badge and tag are the admin's words, so they
-   read the admin's tokens, which the frame hands those elements alone as
-   values. */
+   page; its links and forms are inert. Its mark never covers that content: a
+   lock outside the region, at the edge it shares with the page (below a
+   header, above a footer), which widens into a badge on hover or focus and
+   opens the tag beside it on a click or Enter. Where outside has no room on
+   screen the mark is placed inside instead, by its data-placement. The mark
+   holds the admin's words, so it reads the admin's tokens, which the frame
+   hands it alone as values. */
 .nx-canvas-region {
   position: relative;
   cursor: default;
@@ -382,57 +384,91 @@ ${ROOT} [data-nx-list-empty-because="failed"]::before {
 }
 
 .nx-canvas-region:hover,
-.nx-canvas-region[data-open] {
+.nx-canvas-region:focus-within,
+.nx-canvas-region[data-state="open"] {
   box-shadow: inset 0 0 0 1px var(--nx-builder-border);
 }
 
-.nx-canvas-region:focus-visible {
-  outline: 2px solid var(--nx-builder-accent);
-  outline-offset: -2px;
+/* Placed in the page's own pixels, so its edge is the region's: the left
+   offset is measured to keep it on screen. Only its body takes the pointer. */
+.nx-canvas-region__mark {
+  position: absolute;
+  z-index: 3;
+  left: 0.5rem;
+  display: flex;
+  pointer-events: none;
+}
+
+.nx-canvas-region[data-nx-region="header"] > .nx-canvas-region__mark[data-placement="outside"] {
+  top: 100%;
+}
+
+.nx-canvas-region[data-nx-region="footer"] > .nx-canvas-region__mark[data-placement="outside"] {
+  bottom: 100%;
+}
+
+.nx-canvas-region > .nx-canvas-region__mark[data-placement="inside"] {
+  top: 0;
 }
 
 /* The admin's face and scheme rather than the site's, and the admin's size
    however far the frame is painted down: the scale the canvas publishes is
    undone here. */
-.nx-canvas-region__badge,
-.nx-canvas-region__tag {
+.nx-canvas-region__mark-body {
   zoom: calc(1 / var(--nx-canvas-zoom, 1));
   color-scheme: var(--nx-builder-scheme, light);
   font-family: var(--font-sans, system-ui), sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.375rem 0;
+  pointer-events: auto;
 }
 
-.nx-canvas-region__badge {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
+/* At rest a lock alone; on hover or focus it widens into the badge. */
+.nx-canvas-region__lock {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.125rem 0.5rem;
+  min-width: 1.375rem;
+  height: 1.375rem;
+  padding: 0 0.3125rem;
   border: 1px solid var(--nx-builder-border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: var(--nx-builder-surface-raised);
   color: var(--nx-builder-text-muted);
+  font: inherit;
   font-size: var(--text-xs, 0.75rem);
-  line-height: 1.4;
-  pointer-events: none;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-/* The badge opens into the tag, in the same place. */
-.nx-canvas-region[data-open] .nx-canvas-region__badge {
+.nx-canvas-region__lock:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: 2px;
+}
+
+.nx-canvas-region__lock[aria-expanded="true"] {
+  border-color: var(--nx-builder-text-muted);
+  color: var(--nx-builder-text);
+}
+
+.nx-canvas-region__badge {
   display: none;
+  padding-right: 0.125rem;
+}
+
+.nx-canvas-region[data-state="hover"] .nx-canvas-region__badge {
+  display: inline;
 }
 
 .nx-canvas-region__tag {
-  position: absolute;
-  z-index: 3;
-  top: 0.5rem;
-  right: 0.5rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.375rem 0.5rem;
-  max-width: calc(100% - 1rem);
+  max-width: 32rem;
   padding: 0.375rem 0.625rem;
   border: 1px solid var(--nx-builder-border);
   border-radius: 0.375rem;

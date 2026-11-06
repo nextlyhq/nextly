@@ -682,7 +682,7 @@ describe("removing unused shared styles", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("refuses a used, a locked and a code-defined style, naming each", async () => {
+  it("refuses a used, a locked and a code-defined style as a conflict naming each", async () => {
     const { store, write } = storeOf([
       card,
       { ...hero, locked: true },
@@ -702,8 +702,32 @@ describe("removing unused shared styles", () => {
         )
       )
     ).toMatchObject({
-      // A style the index counts as used makes it the in-use refusal, its
-      // one issue naming every reason, as the rescan's refusal does.
+      // Not every reason is a use, so none carries the in-use code: the lock
+      // and the code's style would read as uses otherwise.
+      code: "CONFLICT",
+      publicMessage:
+        "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses styles all of whose reasons are uses as the in-use refusal, its one issue naming each", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE, {
+      "c-card": [{ collection: "pages", documents: ["p1", "p2"] }],
+      "c-hero": [{ collection: "pages", documents: ["p3"] }],
+    });
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card", "c-hero"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
       code: "VALIDATION_ERROR",
       publicData: {
         errors: [
@@ -711,7 +735,7 @@ describe("removing unused shared styles", () => {
             path: "",
             code: SHARED_STYLE_IN_USE_CODE,
             message:
-              "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+              "Nothing was removed. Card is used on 2 documents. Hero is used on 1 document.",
           },
         ],
       },

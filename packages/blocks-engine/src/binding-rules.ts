@@ -108,6 +108,9 @@ const PROP_VALUE_SHAPE: {
   media: "image",
   url: "link",
   link: "link",
+  // An icon id is a short string, judged as text; whether the set draws it
+  // is the renderer's question, which draws nothing for one it cannot.
+  icon: "text",
   relationship: "reference",
   repeater: null,
   group: null,

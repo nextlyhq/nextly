@@ -215,6 +215,16 @@ describe("contributedAdminContributions", () => {
       },
     ],
     [
+      "an action that reads rather than writes",
+      {
+        id: "acme-support.a",
+        kind: "rowAction",
+        place: "collection.list",
+        label: "A",
+        action: { run: { method: "GET", path: "/escalate" } },
+      },
+    ],
+    [
       "an action with an unknown method",
       {
         id: "acme-support.a",
@@ -535,6 +545,74 @@ describe("contributedAdminContributions", () => {
     ).toMatchObject({
       reason: "admin-contribution-invalid",
       logMessage: expect.stringContaining("signed-in person"),
+    });
+  });
+
+  it.each<[string, { method: "GET" | "POST"; path: string }]>([
+    // Declared, so the refusal is for the method and not a missing route.
+    [
+      "a route that reads rather than writes",
+      { method: "GET", path: "/escalate" },
+    ],
+    // Its `:id` has nothing to fill it from: the rows travel in the body.
+    [
+      "a route whose path takes parameters",
+      { method: "POST", path: "/tickets/:id/archive" },
+    ],
+  ])(
+    "refuses an action that runs %s, though the plugin declares it",
+    (_case, run) => {
+      const action = {
+        id: "acme-support.a",
+        kind: "rowAction",
+        place: "collection.list",
+        label: "A",
+        action: { run },
+      };
+      expect(
+        refusalOf(() =>
+          contributedAdminContributions([
+            plugin("@acme/support", [action], {
+              contributes: {
+                admin: { contributions: [action] as AdminContribution[] },
+                routes: [{ ...run, handler: () => new Response() } as never],
+              },
+            }),
+          ])
+        )
+      ).toMatchObject({ reason: "admin-contribution-invalid" });
+    }
+  );
+
+  it("refuses an action that runs a public route, which has no caller to judge", () => {
+    const action = {
+      id: "acme-support.a",
+      kind: "rowAction",
+      place: "collection.list",
+      label: "A",
+      action: { run: { method: "POST", path: "/open" } },
+    };
+    expect(
+      refusalOf(() =>
+        contributedAdminContributions([
+          plugin("@acme/support", [action], {
+            contributes: {
+              admin: { contributions: [action] as AdminContribution[] },
+              routes: [
+                {
+                  method: "POST",
+                  path: "/open",
+                  handler: () => new Response(),
+                  public: true,
+                },
+              ],
+            },
+          }),
+        ])
+      )
+    ).toMatchObject({
+      reason: "admin-contribution-invalid",
+      logMessage: expect.stringContaining("a public route"),
     });
   });
 

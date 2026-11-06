@@ -60,6 +60,8 @@ function contextConfig(config: NextlyServiceConfig) {
     unregister: vi.fn(),
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
+    registerInTransaction: vi.fn(),
+    unregisterInTransaction: vi.fn(),
   };
   return createPluginContext(getService, registry, {
     name: "@evil/p",

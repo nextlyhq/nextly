@@ -16,13 +16,14 @@
 import {
   getBlock,
   isComponentInstance,
-  isTokenRef,
   walkNodes,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
+
+import { collectStyleTokens, forEachStyleValues } from "../style-token-refs";
 
 /** The references one or more documents make, each kind de-duplicated. */
 export interface TransferReferences {
@@ -109,19 +110,19 @@ export function collectDocumentReferences(
   }
 }
 
-/** Add the variables and breakpoints a style envelope names. */
+/**
+ * Add the variables and breakpoints a style envelope names. The walk is the
+ * one the variable usage index records from (`style-token-refs`), so an
+ * export carries exactly the variables a removal counts as used.
+ */
 export function collectStyleReferences(
   styles: NodeStyles | undefined,
   into: TransferReferences
 ): void {
-  if (!isRecord(styles)) return;
-  for (const byBreakpoint of Object.values(styles)) {
-    if (!isRecord(byBreakpoint)) continue;
-    for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
-      into.breakpoints.add(breakpoint);
-      collectTokens(values, into.tokens);
-    }
-  }
+  forEachStyleValues(styles, (breakpoint, values) => {
+    into.breakpoints.add(breakpoint);
+    collectStyleTokens(values, into.tokens);
+  });
 }
 
 function collectNodeReferences(
@@ -189,16 +190,6 @@ function collectVariantMedia(
     const overrides = isRecord(variant) ? variant.overrides : undefined;
     if (isRecord(overrides)) collectImageValues(overrides, images, into);
   }
-}
-
-/** Every `$token` inside a style value, structured values included. */
-function collectTokens(value: unknown, into: Set<string>): void {
-  if (isTokenRef(value)) {
-    into.add(value.$token);
-    return;
-  }
-  if (!isRecord(value)) return;
-  for (const inner of Object.values(value)) collectTokens(inner, into);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

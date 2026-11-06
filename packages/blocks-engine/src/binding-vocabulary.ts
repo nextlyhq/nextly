@@ -162,6 +162,7 @@ export type BindablePropType =
   | "media"
   | "url"
   | "link"
+  | "icon"
   | "relationship"
   | "repeater"
   | "group";
@@ -175,7 +176,8 @@ export type BindablePropType =
  * that renders them as text; without one they do not fill it. Rich text
  * accepts only rich text. An image (`media`, or `upload` as the field catalog
  * names it) accepts a media field or a URL field and no other text, and a link
- * only a URL field. Structured props are composed rather than bound.
+ * only a URL field, and an icon its id as text or a chosen option. Structured
+ * props are composed rather than bound.
  *
  * @experimental Settles with the editor's binding controls.
  */
@@ -198,6 +200,10 @@ export const BINDABLE_KINDS: Readonly<
   media: ["media", "url"],
   url: ["url"],
   link: ["url"],
+  // An icon id is a string, so an icon field (which binds as text), a text
+  // field or a select of ids can fill it. One the set does not draw renders
+  // nothing, as a stored unknown id does.
+  icon: ["text", "option"],
   relationship: ["reference"],
   repeater: [],
   group: [],
