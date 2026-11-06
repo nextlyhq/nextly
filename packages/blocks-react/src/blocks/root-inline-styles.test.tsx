@@ -97,6 +97,7 @@ const EXPECTED_BLOCKS = [
   "core/form",
   "core/gallery",
   "core/heading",
+  "core/icon",
   "core/image",
   "core/list",
   "core/quote",

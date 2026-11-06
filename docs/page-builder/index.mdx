@@ -14,10 +14,18 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## What you get
 
-- **20 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
+- **21 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
-  image, gallery, button, embed, form), and one that reads from your content
+  image, gallery, icon, button, embed, form), and one that reads from your content
   ([Collection list](#reading-content-into-a-page)).
+- **Icons.** The Icon block draws one icon from the built-in [Lucide](https://lucide.dev)
+  set as inline SVG, rendered on the server, so a published page ships no script for it.
+  Its **Icon** control (Content tab) opens a search-first picker that offers the icons you
+  used last first. It is sized by its font size and drawn in its text colour (Style tab).
+  Leave **Screen reader label** empty for a decorative icon, which screen readers skip;
+  fill it in for an icon that says something on its own. A linked icon is named by its
+  label, or by the icon's name when there is none. The page stores the icon's id
+  (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
 - **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
   section's title as text or as a heading from level 2 to 6, and its **Icon** and
   **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
