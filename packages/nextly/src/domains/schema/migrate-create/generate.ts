@@ -88,6 +88,7 @@ import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
+import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import {
   resolutionStatement,
@@ -640,12 +641,20 @@ export async function generateMigration(
     previousSnapshot,
     history: companionHistory,
   });
+  // A translated field renamed: its column in the translations table is
+  // renamed where the rename is accepted, as a main-table column is.
+  const companionRenames = await companionRenameDecisions(
+    entities,
+    previousSnapshot,
+    args
+  );
   const companionPlans = planCompanionMigrations(
     entities,
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en",
-    companionHistory
+    companionHistory,
+    companionRenames
   );
 
   // 3. Diff.
@@ -1505,7 +1514,8 @@ function planCompanionMigrations(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string,
-  history: TranslationRecords
+  history: TranslationRecords,
+  renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map()
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const { entity: c, kind: entityKind } of entities) {
@@ -1585,7 +1595,15 @@ function planCompanionMigrations(
     if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
     // A companion that was there and stays: the translated fields it gains.
     const adds = companionExisted
-      ? addsEntryFor(c, entityKind, prevTable, joining, dialect, defaultLocale)
+      ? addsEntryFor(
+          c,
+          entityKind,
+          prevTable,
+          joining,
+          dialect,
+          defaultLocale,
+          renames.get(c.tableName) ?? []
+        )
       : undefined;
     if (adds) entries.push(adds);
   }
@@ -1655,18 +1673,46 @@ function addsEntryFor(
   prevTable: TableSpec | undefined,
   joining: ReadonlySet<string>,
   dialect: SupportedDialect,
-  defaultLocale: string
+  defaultLocale: string,
+  renamed: readonly CompanionRename[] = []
 ): CompanionPlanEntry | undefined {
   if (prevTable?.localizedColumns === undefined) return undefined;
-  const there = new Set([...prevTable.localizedColumns, ...joining]);
+  // A renamed column is there under its new name once the rename runs.
+  const there = new Set([
+    ...prevTable.localizedColumns,
+    ...joining,
+    ...renamed.map(r => r.to),
+  ]);
   const translated = c.fields.filter(f => isFieldLocalized(f, true));
   const isAdded = (f: (typeof translated)[number]) => {
     const column = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
     return column != null && !there.has(column.name);
   };
   const added = translated.filter(isAdded);
-  if (added.length === 0) return undefined;
-  const { spec, upSql, downSql } = planFieldAddedToTranslationMigration({
+  if (added.length === 0 && renamed.length === 0) return undefined;
+  const renames = companionRenameStatements(
+    `${c.tableName}_locales`,
+    renamed,
+    dialect
+  );
+  if (added.length === 0) {
+    const spec = planFieldAddedToTranslationMigration({
+      slug: c.slug,
+      kind: entityKind,
+      tableName: c.tableName,
+      dialect,
+      defaultLocale,
+      status: c.status === true,
+      recorded: translated,
+      added: [],
+    }).spec;
+    return {
+      spec,
+      plan: { kind: "adds", spec, upSql: renames.up, downSql: renames.down },
+      entity: entityKind,
+    };
+  }
+  const planned = planFieldAddedToTranslationMigration({
     slug: c.slug,
     kind: entityKind,
     tableName: c.tableName,
@@ -1676,11 +1722,114 @@ function addsEntryFor(
     recorded: translated.filter(f => !isAdded(f)),
     added,
   });
+  // The renames first, so a column added beside them is added to the table
+  // as it stands once they ran; the down undoes them last.
   return {
-    spec,
-    plan: { kind: "adds", spec, upSql, downSql },
+    spec: planned.spec,
+    plan: {
+      kind: "adds",
+      spec: planned.spec,
+      upSql: joinSql(renames.up, planned.upSql),
+      downSql: joinSql(planned.downSql, renames.down),
+    },
     entity: entityKind,
   };
+}
+
+/** A translated column renamed in its translations table. */
+interface CompanionRename {
+  from: string;
+  to: string;
+}
+
+/** Two SQL texts as one, with the statement breakpoint between them. */
+const joinSql = (a: string, b: string) =>
+  a === "" ? b : b === "" ? a : `${a}\n--> statement-breakpoint\n${b}`;
+
+/**
+ * The statements renaming `renamed`'s columns in `table`, and the ones
+ * renaming them back: a plain `RENAME COLUMN`, which every supported dialect
+ * runs in place keeping the column's definition, and which `nextly migrate`'s
+ * checks read as the rename it is.
+ */
+function companionRenameStatements(
+  table: string,
+  renamed: readonly CompanionRename[],
+  dialect: SupportedDialect
+): { up: string; down: string } {
+  const render = (pairs: readonly CompanionRename[]) =>
+    pairs
+      .map(
+        r =>
+          `ALTER TABLE ${quoteIdent(table, dialect)} RENAME COLUMN ${quoteIdent(r.from, dialect)} TO ${quoteIdent(r.to, dialect)};`
+      )
+      .join("\n--> statement-breakpoint\n");
+  return {
+    up: render(renamed),
+    down: render(renamed.map(r => ({ from: r.to, to: r.from }))),
+  };
+}
+
+/**
+ * Which translated columns are renamed, by entity table: for each translated
+ * entity whose translations table the previous snapshot records, every pair
+ * of a column it recorded that the entity no longer translates and one it
+ * translates now that was not recorded is a candidate, decided as main-table
+ * renames are (`renameDecisions`). Each column takes part in one rename at
+ * most, the first accepted.
+ */
+async function companionRenameDecisions(
+  entities: readonly TaggedConfigEntity[],
+  previous: NextlySchemaSnapshot,
+  args: GenerateArgs
+): Promise<Map<string, CompanionRename[]>> {
+  const byTable = new Map<string, CompanionRename[]>();
+  for (const { entity } of entities) {
+    if (entity.localized !== true) continue;
+    const recorded = previous.tables.find(
+      t => t.name === entity.tableName
+    )?.localizedColumns;
+    if (recorded === undefined) continue;
+    const now = entity.fields
+      .filter(f => isFieldLocalized(f, true))
+      .flatMap(f => {
+        const column = fieldToLocalizedColumnSpec(f, args.dialect, "codeFirst");
+        return column == null ? [] : [column.name];
+      });
+    const gone = recorded.filter(c => !now.includes(c));
+    const added = now.filter(c => !recorded.includes(c));
+    if (gone.length === 0 || added.length === 0) continue;
+    const table = `${entity.tableName}_locales`;
+    const candidates = gone.flatMap(from =>
+      added.map(
+        (to): RenameCandidate => ({
+          tableName: table,
+          fromColumn: from,
+          toColumn: to,
+          fromType: "text",
+          toType: "text",
+          typesCompatible: true,
+          preservesValues: true,
+          defaultSuggestion: "rename",
+        })
+      )
+    );
+    const used = new Set<string>();
+    const accepted: CompanionRename[] = [];
+    for (const { candidate, accepted: yes } of await renameDecisions(
+      candidates,
+      args
+    )) {
+      if (!yes) continue;
+      if (used.has(`from:${candidate.fromColumn}`)) continue;
+      if (used.has(`to:${candidate.toColumn}`)) continue;
+      used.add(`from:${candidate.fromColumn}`);
+      used.add(`to:${candidate.toColumn}`);
+      accepted.push({ from: candidate.fromColumn, to: candidate.toColumn });
+    }
+    if (accepted.length > 0) byTable.set(entity.tableName, accepted);
+  }
+  return byTable;
 }
 
 /** One entity's fields that stop being translated, and the two files that move their values. */

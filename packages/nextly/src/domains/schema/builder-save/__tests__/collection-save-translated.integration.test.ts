@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runFileMigrations } from "../../../../cli/commands/migrate";
+import { migrateCore } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import {
@@ -24,6 +24,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { NO_CONSENT } from "../../migrate/data-loss-consent";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
@@ -142,20 +143,43 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(files);
       const here = await tablesOf(t, ["dc_posts", "dc_posts_locales"]);
 
-      // An empty database replaying the folder ends with the same tables.
+      // A deploy's database, with a post written before the rename: replaying
+      // the folder renames its translated column, so the value is kept under
+      // the new name, and its tables end as here.
       await t.destroy();
       instance = await boot(dialect);
       const fresh = instance.adapter as unknown as DrizzleAdapter;
-      await runFileMigrations({
-        adapter: fresh as never,
-        db: fresh.getDrizzle(),
-        dialect: fresh.getCapabilities().dialect,
-        migrationsDir: folder,
-        logger: createLogger({ quiet: true }),
-      });
+      const replay = (step?: number) =>
+        migrateCore({
+          ...(step === undefined ? {} : { step }),
+          extensionSchema: undefined,
+          dialect: fresh.getCapabilities().dialect,
+          db: fresh.getDrizzle(),
+          adapter: fresh as never,
+          migrationsDir: folder,
+          logger: createLogger({ quiet: true }),
+          lockMode: "fail-fast",
+          consent: NO_CONSENT,
+          interactive: false,
+        } as never);
+      const beforeRename = files.findIndex(f =>
+        f.endsWith("_posts_update.sql")
+      );
+      await replay(beforeRename);
+      await fresh.executeQuery(
+        "INSERT INTO dc_posts (id, title, slug, views, created_at, updated_at) VALUES ('p1', 'T', 'p1', 7, '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
+      );
+      await fresh.executeQuery(
+        "INSERT INTO dc_posts_locales (_parent, _locale, heading) VALUES ('p1', 'en', 'Hello')"
+      );
+      await replay();
       expect(
         await tablesOf(instance, ["dc_posts", "dc_posts_locales"])
       ).toEqual(here);
+      const kept = (await fresh.executeQuery(
+        "SELECT title2 FROM dc_posts_locales"
+      )) as unknown as { title2: string }[];
+      expect(kept.map(r => r.title2)).toEqual(["Hello"]);
     });
   }
 );
