@@ -329,6 +329,8 @@ const DOCUMENT_ISSUE_CODES = {
     "More than one named class in the site library carries the same name.",
   "duplicate-class-id":
     "More than one named class in the site library carries the same id, which is what documents reference.",
+  "duplicate-own-look":
+    "More than one class in the site library is the same block type's own look; only the first is read.",
   "invalid-style-value":
     "A style value does not match the shape its property declares.",
   "token-not-allowed":
