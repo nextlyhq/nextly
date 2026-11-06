@@ -2096,6 +2096,9 @@ export function createPluginContext(
   const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
   const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
+  // Whose secrets and webhook types this context reaches: the plugin's, or
+  // core's for a context built without one.
+  const owner = plugin?.name ?? "nextly";
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -2237,7 +2240,7 @@ export function createPluginContext(
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
       secrets: createOneTimeSecrets({
-        owner: plugin?.name ?? "nextly",
+        owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
         // Every generation, the unkeyed one included: a secret minted before
         // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
@@ -2248,7 +2251,7 @@ export function createPluginContext(
     // Kept within this plugin's name, which decides the types it may record.
     // The adapter is read per call and through this context's own resolver,
     // as the secrets helper's is.
-    webhooks: createPluginWebhooks(plugin?.name ?? "nextly", () =>
+    webhooks: createPluginWebhooks(owner, () =>
       asSecretsAdapter(getServiceFn("adapter"))
     ),
     // Present only when the plugin declared a settings schema: without one
