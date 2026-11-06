@@ -558,25 +558,6 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * Whether a save assembles its documents in read shape: for the outbox
-   * event, for the activity trail whenever it will record the save (it names
-   * the fields a save changed by comparing them), and for an in-transaction
-   * handler, which is handed both. Otherwise the raw row stands in, and the
-   * per-component reads are skipped.
-   */
-  private assemblesSaveDocuments(
-    recordingEnabled: boolean,
-    actor: ReturnType<typeof actorForWrite>,
-    hookCollection: string
-  ): boolean {
-    return (
-      recordingEnabled ||
-      willRecordSingleActivity(actor) ||
-      this.hookRegistry.hasInTransaction(hookCollection)
-    );
-  }
-
-  /**
    * The id of the Single's one row, locked, or undefined when it has none.
    *
    * A Single is one row, so a call that names no document acts on the one the
@@ -5363,6 +5344,25 @@ export class SingleMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * Whether a save assembles its documents in read shape: for the outbox
+   * event, for the activity trail whenever it will record the save (it names
+   * the fields a save changed by comparing them), and for an in-transaction
+   * handler, which is handed both. Otherwise the raw row stands in, and the
+   * per-component reads are skipped.
+   */
+  private assemblesSaveDocuments(
+    recordingEnabled: boolean,
+    actor: ReturnType<typeof actorForWrite>,
+    hookCollection: string
+  ): boolean {
+    return (
+      recordingEnabled ||
+      willRecordSingleActivity(actor) ||
+      this.hookRegistry.hasInTransaction(hookCollection)
+    );
   }
 
   /**
