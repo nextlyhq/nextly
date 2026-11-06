@@ -92,7 +92,14 @@ function plugin(): PluginContext {
   return shop;
 }
 
-/** Register an endpoint, as the admin's form does, and return its id. */
+/**
+ * Register an endpoint, as the admin's form does, and return its id.
+ *
+ * Dated well before the events the test records: an endpoint receives only
+ * events from after it was created, and MySQL keeps `created_at` to the whole
+ * second, rounded, so one created a moment before an event can read as
+ * created after it.
+ */
 async function endpoint(
   t: TestNextly,
   eventTypes: WebhookEventSubscription[]
@@ -101,6 +108,11 @@ async function endpoint(
   const { endpoint: created } = await service.createEndpoint(
     { name: eventTypes.join(","), url: PUBLIC_URL, eventTypes },
     null
+  );
+  await t.adapter.update(
+    "nextly_webhooks",
+    { created_at: new Date("2020-01-01T00:00:00.000Z") },
+    { and: [{ column: "id", op: "=", value: created.id }] }
   );
   return created.id;
 }
