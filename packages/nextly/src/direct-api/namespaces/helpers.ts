@@ -22,6 +22,11 @@ import {
   type AuthContext,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
+import {
+  currentNamedQuery,
+  outsideNamedQuery,
+  refusedInsideNamedQuery,
+} from "../../auth/named-query-scope";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { visitorReadsSystemResource } from "../../auth/resource-readable";
@@ -103,6 +108,19 @@ export async function runAsCaller<
   // One memo of access lookups for the call, so a list whose field rules ask
   // about the caller on every row looks the caller up once. A call made inside
   // a request shares that request's memo.
+  // Inside a page builder named query, only a call that reads as an
+  // anonymous visitor runs, with the instance's defaults applied, so a call
+  // naming no access (the server's, by default) is refused. One that passes
+  // runs outside the frame, so the hooks it reaches are judged as for any
+  // published list's read.
+  if (currentNamedQuery() !== undefined) {
+    const refused = refusedInsideNamedQuery(
+      { ...mergeConfig(defaultConfig, args), principal: args.principal },
+      "a collection or Single operation"
+    );
+    if (refused !== undefined) throw refused;
+    return outsideNamedQuery(() => runAsCaller(defaultConfig, args, operation));
+  }
   return withCurrentLanguages(() =>
     runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
   );

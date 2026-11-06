@@ -14,6 +14,7 @@
  * @module direct-api/principal-boundary
  */
 import { runWithAccessMemo } from "../auth/access/request-memo";
+import { refusedInsideNamedQuery } from "../auth/named-query-scope";
 import { runAsPrincipal } from "../auth/principal-scope";
 import { NextlyError } from "../errors/nextly-error";
 
@@ -71,12 +72,17 @@ function refusingPrincipal(
   self: unknown,
   operation: string
 ): (...args: unknown[]) => unknown {
-  return (...args: unknown[]) =>
-    namesPrincipal(args)
+  return (...args: unknown[]) => {
+    // Inside a page builder named query, no call outside the collection and
+    // Single operations is made: none of them reads as an anonymous visitor.
+    const insideQuery = refusedInsideNamedQuery(undefined, operation);
+    if (insideQuery !== undefined) return Promise.reject(insideQuery);
+    return namesPrincipal(args)
       ? Promise.reject(refusal(operation))
       : runAsPrincipal(null, () =>
           runWithAccessMemo(() => method.apply(self, args))
         );
+  };
 }
 
 /**

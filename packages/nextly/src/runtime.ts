@@ -146,6 +146,12 @@ export type {
   PublicSourceReader,
 } from "./runtime/routing/public-reader";
 
+// The frame a page builder named query's `run` executes in: inside it, the
+// Direct API refuses every call that would not read as an anonymous visitor,
+// so developer code cannot read past the reader it is handed.
+// `@experimental` with named queries.
+export { runInsideNamedQuery } from "./auth/named-query-scope";
+
 // What a binding on a published page reads besides a list, `@experimental`
 // with the reader: the site settings through their public allowlist (a write
 // to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
