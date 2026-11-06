@@ -16,7 +16,7 @@
 const LANGUAGE_SHAPE = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 
 /** The longest tag kept, which every dialect's column holds whole. */
-export const LANGUAGE_TAG_MAX_LENGTH = 35;
+const LANGUAGE_TAG_MAX_LENGTH = 35;
 
 /** What is wrong with a language tag, when something is. */
 export type LanguageTagProblem =

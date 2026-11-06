@@ -122,9 +122,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     beforeAll(async () => {
-      t = await createTestNextly({
-        ...(dialect === "sqlite" ? {} : { dialect }),
-      });
+      t = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
       direct = t.nextly as unknown as Direct;
       const seeder = t.getService("permissionSeedService") as unknown as {
         seedSystemPermissions: () => Promise<unknown>;

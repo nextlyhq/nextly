@@ -17,7 +17,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { languageTagProblem } from "../../shared/lib/language-tag";
 
 /** The field's name, as a request and the merged user spell it. */
-export const INTERFACE_LANGUAGE_FIELD = "interfaceLanguage";
+const INTERFACE_LANGUAGE_FIELD = "interfaceLanguage";
 
 /** A language tag, or `null` to follow the browser, then English. */
 const interfaceLanguageSchema = z

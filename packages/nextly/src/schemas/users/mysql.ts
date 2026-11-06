@@ -43,7 +43,7 @@ export function usersColumns() {
     // tag (`fr`, `pt-BR`); null follows the browser, then English. Kept apart
     // from any content language. Nullable, so adding it to an existing table
     // rewrites no row and every existing person keeps today's behaviour.
-    // Sized to the longest tag kept (`LANGUAGE_TAG_MAX_LENGTH`).
+    // Sized to the longest tag kept (`shared/lib/language-tag`).
     interfaceLanguage: varchar("interface_language", { length: 35 }),
     passwordHash: varchar("password_hash", { length: 255 }),
     isActive: boolean("is_active").notNull().default(false),
