@@ -191,6 +191,42 @@ describe("what is refused", () => {
     expect(refusalsOf(html).join(" ")).toContain(reason);
   });
 
+  it("holds every URL a stylesheet fetches to the attribute rule", () => {
+    expect(
+      refusalsOf(
+        "<style>body{background:url(//tracker.example/p)}</style>"
+      ).join(" ")
+    ).toContain(
+      'its styles load "//tracker.example/p", which points at another site without saying https:'
+    );
+    expect(
+      refusalsOf('<style>@import "http://fonts.example/a.css";</style>').join(
+        " "
+      )
+    ).toContain("which uses http:");
+    expect(
+      refusalsOf(
+        "<style>@font-face{font-family:x;src:url(https://fonts.example/x.woff2)} .a{background:url(/img/a.png)}</style>"
+      )
+    ).toEqual([]);
+  });
+
+  it("runs every JavaScript type a browser runs, in any case, and refuses one with parameters", () => {
+    expect(
+      refusalsOf('<script type="application/javascript">a()</script>')
+    ).toEqual([]);
+    expect(refusalsOf('<script type=" TEXT/JavaScript ">a()</script>')).toEqual(
+      []
+    );
+    expect(refusalsOf('<script type="">a()</script>')).toEqual([]);
+    // A browser keeps this as data and never runs it, so it is refused.
+    expect(
+      refusalsOf(
+        '<script type="text/javascript; charset=utf-8">a()</script>'
+      ).join(" ")
+    ).toContain("isn't allowed");
+  });
+
   it("refuses text outside an element", () => {
     expect(refusalsOf("hello <script>a()</script>")).toEqual([
       "Text outside an element isn't allowed.",

@@ -293,6 +293,7 @@ export type {
 export {
   SITE_CODE_LIMITS,
   siteCodeEntryProblem,
+  siteCodeScriptKind,
   siteCodeUrlProblem,
 } from "./site-code/rules";
 export type {
@@ -315,4 +316,7 @@ export type {
   CspFinding,
   CspPolicy,
   SiteCodeFacts,
+  SiteCodeInlineKind,
+  SiteCodeLoad,
+  SiteCodeResourceKind,
 } from "./site-code/csp";
