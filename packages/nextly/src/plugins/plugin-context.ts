@@ -72,7 +72,11 @@ import { secretGenerations } from "../shared/lib/secret-generations";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
-import type { PluginContributions } from "./contributions";
+import type {
+  PluginContributions,
+  PluginStoredValue,
+  PluginStoredValueTarget,
+} from "./contributions";
 import { getCoreVersion } from "./core-version";
 import type { ContributedColumn } from "./database/access";
 import {
@@ -356,6 +360,26 @@ export interface InTransactionContext<T = Record<string, unknown>>
    * has settled, and has no `transaction` of its own: it is one already.
    */
   db: PluginTransaction;
+  /**
+   * Read one stored value of a field type this plugin contributes, on the
+   * write's transaction: what the write stored is seen, and every other
+   * document as last committed.
+   *
+   * The read a field type's validator is handed (`PluginFieldWrite.readStored`),
+   * with the same scope, for the same reason: a field type judging a value
+   * against other stored values can judge it again here, on the value finally
+   * stored. A type this plugin does not contribute is refused. Like `db`, it
+   * refuses once the handler has settled.
+   *
+   * Collection writes that run in-transaction handlers read committed on every
+   * dialect, so a handler that serializes its writes with a row lock reads what
+   * committed before it took the lock. A Single's write reads at the
+   * dialect's default.
+   */
+  readStored(
+    fieldType: string,
+    target: PluginStoredValueTarget
+  ): Promise<PluginStoredValue>;
 }
 
 /**
@@ -2104,10 +2128,60 @@ export function createPluginContext(
     if (known) return known;
     const runner: InTransactionRunner = (tx, write) =>
       bindToTransaction(tx, async bound => {
-        await handler({ ...write, db: bound });
+        const read = storedReadOn(tx);
+        try {
+          await handler({ ...write, db: bound, readStored: read.readStored });
+        } finally {
+          read.settle();
+        }
       });
     inTransactionRunners.set(handler, runner);
     return runner;
+  };
+
+  // The stored read an in-transaction handler is handed: on the write's own
+  // transaction, scoped to the field types this plugin contributes, as a
+  // validator's is scoped to its own. Refused once the handler settles, so a
+  // read kept past it cannot reach a transaction that has moved on.
+  const storedReadOn = (tx: TransactionContext) => {
+    let settled = false;
+    return {
+      settle: () => {
+        settled = true;
+      },
+      readStored: async (
+        fieldType: string,
+        target: PluginStoredValueTarget
+      ): Promise<PluginStoredValue> => {
+        const own = plugin?.contributes?.fieldTypes ?? [];
+        if (settled || !own.some(entry => entry.type === fieldType)) {
+          throw NextlyError.internal({
+            logContext: {
+              reason: settled
+                ? "in-transaction-read-after-settle"
+                : "in-transaction-read-of-another-field-type",
+              plugin: pluginName,
+              fieldType,
+            },
+          });
+        }
+        // Loaded on first use, as the phase is: a process whose handlers never
+        // read loads nothing more.
+        const { readStoredField } = await import(
+          "../domains/collections/services/stored-field-read"
+        );
+        return readStoredField(
+          {
+            db: tx,
+            executor: tx.getDrizzle(),
+            defaultLocale:
+              getServiceFn("config").localization?.defaultLocale ?? null,
+          },
+          fieldType,
+          target
+        );
+      },
+    };
   };
 
   // Bound here, as both are optional on the registry this context is given.

@@ -29,6 +29,8 @@ async function registrations(options?: PageBuilderOptions): Promise<string[]> {
       off: vi.fn(),
       onBeforeOperation: vi.fn(),
       offBeforeOperation: vi.fn(),
+      onInTransaction: vi.fn(),
+      offInTransaction: vi.fn(),
     },
     services: {
       collections: { getCollection: vi.fn(async () => ({})) },

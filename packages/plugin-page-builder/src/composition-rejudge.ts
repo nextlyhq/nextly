@@ -1,0 +1,217 @@
+/**
+ * Every write that changes a blocks value is judged again inside its own
+ * transaction, after it is stored and while it holds the composition graph
+ * lock (`composition-graph-lock`).
+ *
+ * The blocks field's validation judges a write before the write's transaction
+ * opens, against the graph as it then stands. Two writes made at once can each
+ * pass against a graph without the other, and together store a component loop
+ * or a page composed past the depth limit. Here, in core's in-transaction
+ * phase, the write locks the graph and its stored value is judged against
+ * every definition as last committed: a second writer waits at the lock until
+ * the first commits, and then judges against what the first stored. A write
+ * this refuses is rolled back whole.
+ *
+ * Only what depends on other documents is judged again: loops, the composed
+ * nesting and depth of the document, and for a component the documents placing
+ * it (`compositionGraphIssues`). Everything else was judged by the validation
+ * already, and nothing another write commits can change it.
+ *
+ * The lock is taken only by a write whose blocks value or status changed, so a
+ * write to a collection holding no blocks field, or one leaving its blocks
+ * alone, never waits on it. Singles are left to their validation: their
+ * transactions read at MySQL's default isolation, where a read made under the
+ * lock could answer from before it.
+ *
+ * @module composition-rejudge
+ */
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
+import {
+  NextlyError,
+  type InTransactionContext,
+  type PluginContext,
+  type PluginFieldWrite,
+} from "@nextlyhq/plugin-sdk";
+
+import { indexHostFinder } from "./component-hosts";
+import { componentUsageIndex } from "./component-usage";
+import { holdCompositionGraph } from "./composition-graph-lock";
+import {
+  compositionGraphIssues,
+  type CompositionSetup,
+  type HostFinder,
+} from "./fields/blocks-composition";
+import { BLOCKS_TYPE } from "./fields/blocksField";
+import { readStoredJson, sameStoredValue } from "./stored-json";
+import { usageTableOf, usageTableRows } from "./usage-index-tables";
+
+/** How a Single's writes are named to the in-transaction phase. */
+const SINGLE_PREFIX = "single:";
+
+/** How deep into named groups a blocks value is looked for. */
+const MOST_GROUP_DEPTH = 4;
+
+/**
+ * Judge every write that changes a blocks value again in its transaction,
+ * under the graph lock. `setup` is read per write: it exists once the plugin is
+ * installed.
+ */
+export function registerCompositionRejudge(
+  ctx: Pick<PluginContext, "hooks" | "dialect">,
+  setup: () => CompositionSetup | undefined
+): void {
+  ctx.hooks.onInTransaction("*", async write => {
+    const judging = setup();
+    if (judging === undefined) return;
+    const issues = await rejudgedIssues(write, judging, ctx.dialect);
+    if (issues.length > 0) throw NextlyError.validation({ errors: issues });
+  });
+}
+
+/** The issues one stored write raises, judged under the lock. */
+async function rejudgedIssues(
+  write: InTransactionContext,
+  setup: CompositionSetup,
+  dialect: PluginContext["dialect"]
+): Promise<{ path: string; code: string; message: string }[]> {
+  if (write.operation === "delete" || write.data === undefined) return [];
+  if (write.collection.startsWith(SINGLE_PREFIX)) return [];
+  const data = write.data;
+  const original = write.originalData;
+  const statusChanged = !sameStoredValue(data.status, original?.status);
+  const changed = forestPaths(data).filter(
+    path =>
+      statusChanged ||
+      !sameStoredValue(valueAt(data, path), valueAt(original, path))
+  );
+  if (changed.length === 0) return [];
+
+  const fieldWrite: PluginFieldWrite = {
+    kind: "collection",
+    slug: write.collection,
+    id: write.id,
+    inTransaction: true,
+    readStored: target => write.readStored(BLOCKS_TYPE, target),
+  };
+  const fields = await blocksFieldsAmong(changed, fieldWrite);
+  if (fields.length === 0) return [];
+
+  await holdCompositionGraph(write.db, dialect);
+  const judging: CompositionSetup = {
+    ...setup,
+    hostsOf: hostsOnTransaction(write),
+    hostsInTransaction: true,
+    // Said by the validation already, which judged every host it could not
+    // vouch for before the transaction opened.
+    onUnjudged: undefined,
+    // Lists are judged by their shape here: their schema is read on another
+    // connection, and nothing another write commits changes it.
+    listFields: undefined,
+  };
+  // A held working draft is the only form the write changed.
+  const nextStatus =
+    data._isWorkingDraft === true || typeof data.status !== "string"
+      ? undefined
+      : data.status;
+  const issues: { path: string; code: string; message: string }[] = [];
+  for (const path of fields) {
+    issues.push(
+      ...(await compositionGraphIssues(
+        readStoredJson(valueAt(data, path)),
+        {
+          write: fieldWrite,
+          path,
+          nextStatus,
+          before: readStoredJson(valueAt(original, path)),
+        },
+        judging
+      ))
+    );
+  }
+  return issues;
+}
+
+/**
+ * The paths whose value is a blocks forest, at the top level and inside named
+ * groups, as `readStored` names them (`hero.body`). Keys core adds to a
+ * document (`_isWorkingDraft`) are not fields.
+ */
+function forestPaths(data: Record<string, unknown>, depth = 0): string[] {
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(data)) {
+    if (key.startsWith("_")) continue;
+    const parsed = readStoredJson(value);
+    if (isPlainRecord(parsed) && Array.isArray(parsed.nodes)) {
+      paths.push(key);
+    } else if (isPlainRecord(parsed) && depth < MOST_GROUP_DEPTH) {
+      for (const inner of forestPaths(parsed, depth + 1)) {
+        paths.push(`${key}.${inner}`);
+      }
+    }
+  }
+  return paths;
+}
+
+/** The value at a dotted path, or undefined where the path holds none. */
+function valueAt(
+  data: Record<string, unknown> | undefined,
+  path: string
+): unknown {
+  let at: unknown = data;
+  for (const segment of path.split(".")) {
+    const record = readStoredJson(at);
+    if (!isPlainRecord(record)) return undefined;
+    at = record[segment];
+  }
+  return at;
+}
+
+/**
+ * Which of the paths are blocks fields. The stored read is scoped to the
+ * blocks field type and refuses any other field, so a JSON value shaped like
+ * a forest is told apart from a blocks value by the declaration, not by its
+ * shape. A field this cannot read (a language store not ready) is left to the
+ * validation.
+ */
+async function blocksFieldsAmong(
+  paths: readonly string[],
+  write: PluginFieldWrite
+): Promise<string[]> {
+  if (write.id === undefined) return [];
+  const fields: string[] = [];
+  for (const path of paths) {
+    try {
+      await write.readStored({
+        collection: write.slug,
+        id: write.id,
+        field: path,
+        form: "draft",
+      });
+      fields.push(path);
+    } catch {
+      // Not a blocks field, or not one readable here.
+    }
+  }
+  return fields;
+}
+
+/**
+ * The documents placing a component, as the usage index lists them, read on
+ * the write's own transaction. Whether the index lists every document was the
+ * validation's to warn about; under the lock only what it lists is judged.
+ */
+function hostsOnTransaction(write: InTransactionContext): HostFinder {
+  const listed = indexHostFinder({
+    rows: () => usageTableRows(write.db, usageTableOf(componentUsageIndex)),
+    health: () =>
+      Promise.reject(
+        NextlyError.internal({
+          logContext: { reason: "usage-health-read-under-graph-lock" },
+        })
+      ),
+  });
+  return {
+    whole: () => Promise.resolve(true),
+    placing: ids => listed.placing(ids),
+  };
+}
