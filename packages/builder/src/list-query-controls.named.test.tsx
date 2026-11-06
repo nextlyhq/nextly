@@ -15,6 +15,7 @@
  *   kept; a read visitors can't read is a caution, never a refusal.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -398,5 +399,48 @@ describe("a list whose source is a custom one", () => {
     expect(
       screen.getByText("Enter city. Upcoming events needs it to run.")
     ).toBeDefined();
+  });
+});
+
+describe("custom sources when a read fails", () => {
+  it("offers them alone when the collections cannot be listed", async () => {
+    mount(
+      { namedQuery: { name: "posts.most-read" } },
+      { listLoopCollections: vi.fn(() => Promise.reject(new Error("down"))) }
+    );
+    expect(
+      await screen.findByText(
+        "The site's collections could not be listed, so only its custom sources are offered here."
+      )
+    ).toBeDefined();
+    await openSource("Most read this month");
+    const groups = within(
+      screen.getByRole("listbox", { name: "Sources" })
+    ).getAllByRole("group");
+    expect(groups.map(group => group.getAttribute("aria-label"))).toEqual([
+      "Custom sources",
+    ]);
+  });
+
+  it("asks again for the custom sources after a failed read, without the field being drawn again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const listCustomSources = vi
+        .fn<() => Promise<readonly CustomSource[]>>()
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValue([UPCOMING]);
+      mount({ collection: "posts" }, { listCustomSources });
+      await waitFor(() => expect(listCustomSources).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      await waitFor(() => expect(listCustomSources).toHaveBeenCalledTimes(2));
+      await openSource("Posts");
+      expect(
+        screen.getByRole("option", { name: /^Upcoming events/ })
+      ).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

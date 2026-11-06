@@ -79,6 +79,11 @@ export interface ListEntriesNamedRequest {
     readonly offset: number;
     readonly locale?: string;
     readonly node?: string;
+    /**
+     * The reads the canvas's draw has left: the run may spend no more, so a
+     * page of many lists shares one allowance across their runs.
+     */
+    readonly allowance?: number;
   };
 }
 

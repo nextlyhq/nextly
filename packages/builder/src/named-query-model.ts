@@ -163,8 +163,10 @@ export function emptyWords(param: NamedQueryParam): string | undefined {
 export type StoredParams = Readonly<Record<string, NamedQueryParamValue>>;
 
 /**
- * The inputs with one set, or emptied: an empty input is left out, never
- * stored as `null` or "", so it reads its default.
+ * The inputs with one set, or emptied: an emptied input (`undefined`) is
+ * left out, never stored as `null`, so it reads its default. Each control
+ * says when it is empty; an empty string is a value, as a choice may
+ * declare `""` among its options.
  */
 export function withInput(
   params: StoredParams,
@@ -172,7 +174,7 @@ export function withInput(
   value: NamedQueryParamValue | undefined
 ): StoredParams {
   const next: Record<string, NamedQueryParamValue> = { ...params };
-  if (value === undefined || value === "") delete next[key];
+  if (value === undefined) delete next[key];
   else next[key] = value;
   return next;
 }

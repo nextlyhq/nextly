@@ -707,6 +707,14 @@ function renderRun(
   return { pending, joined: false };
 }
 
+/** The reads a render's allowance has left, when it can say. */
+function allowanceOf(budget: QueryBudget | undefined): {
+  readonly allowance?: number;
+} {
+  const left = budget?.remaining?.();
+  return left === undefined ? {} : { allowance: left };
+}
+
 /**
  * A run that threw, as the list draws it. A failure judged where the run
  * was made keeps that place's words and the reference its log names it by;
@@ -818,7 +826,7 @@ export async function readNamedList(
           declaration,
           key,
           read,
-          asked: { params: named.params, window },
+          asked: { params: named.params, window, ...allowanceOf(ctx.queries) },
         })
   );
   let data: NamedQueryRunData;

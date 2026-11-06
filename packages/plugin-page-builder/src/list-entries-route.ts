@@ -55,6 +55,7 @@ import {
 import {
   createQueryBudget,
   createStandaloneContext,
+  DEFAULT_MAX_QUERIES,
   type ListBaseReader,
   type NamedQueryFailure,
   type NamedQueryHost,
@@ -195,6 +196,7 @@ const ListEntriesNamedBody = z
         offset: z.number().int().min(0),
         locale: z.string().max(64).optional(),
         node: z.string().max(200).optional(),
+        allowance: z.number().int().min(0).max(DEFAULT_MAX_QUERIES).optional(),
       })
       .strict(),
   })
@@ -249,8 +251,10 @@ export interface NamedListEntriesReads {
 }
 
 /** A budget that counts what it gave, so the answer says what a run cost. */
-function countingBudget(): QueryBudget & { readonly taken: () => number } {
-  const budget = createQueryBudget();
+function countingBudget(
+  max: number | undefined
+): QueryBudget & { readonly taken: () => number } {
+  const budget = createQueryBudget(max);
   let taken = 0;
   return {
     take: () => {
@@ -273,7 +277,8 @@ export async function readNamedListEntries(
   request: ListEntriesNamedRequest,
   reads: NamedListEntriesReads
 ): Promise<ListEntriesNamedResponse> {
-  const { name, params, limit, offset, locale, node } = request.named;
+  const { name, params, limit, offset, locale, node, allowance } =
+    request.named;
   const definition = reads.definitionOf(name);
   const host: NamedQueryHost = {
     definitionOf: asked => (asked === name ? definition : undefined),
@@ -283,7 +288,9 @@ export async function readNamedListEntries(
     ...(reads.frame === undefined ? {} : { frame: reads.frame }),
     report: failure => reads.report(failure),
   };
-  const budget = countingBudget();
+  // No more than the canvas's draw has left, so the page's lists share one
+  // allowance whichever of them runs where.
+  const budget = countingBudget(allowance);
   const ctx = createStandaloneContext({
     namedQueries: host,
     queries: budget,

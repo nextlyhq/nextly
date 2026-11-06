@@ -159,6 +159,19 @@ describe("a named run on the canvas", () => {
     expect(made.failures.map(each => each.ref)).toEqual([failure?.ref]);
   });
 
+  it("spends no more reads than the canvas's draw has left", async () => {
+    // The query reads twice; the draw has one read left.
+    const answer = await readNamedListEntries(
+      { named: { ...asked().named, allowance: 1 } },
+      reads()
+    );
+    expect(answer.items).toEqual([]);
+    expect(answer.meta.named).toMatchObject({
+      reads: 1,
+      failure: { code: "budget" },
+    });
+  });
+
   it("judges its inputs as the save does, never running a query that lacks one", async () => {
     const run = vi.fn(() => Promise.resolve({ rows: [] }));
     const made = reads({ definitionOf: () => ({ ...upcoming, run }) });

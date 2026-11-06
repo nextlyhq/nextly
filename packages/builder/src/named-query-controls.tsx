@@ -222,7 +222,15 @@ function BooleanInput(
 }
 
 /** The menu value that empties an optional choice. */
-const ANY_CHOICE = "\u0000any";
+const ANY_CHOICE = "any";
+
+/**
+ * The menu's own value for an option, by its place: an option's value may
+ * be any text, the empty one included, which the menu cannot carry as is.
+ */
+function optionKey(index: number): string {
+  return `option:${String(index)}`;
+}
 
 /** A choice input: its options, and "Any city" first where it is optional. */
 function ChoiceInput(props: TypedProps): React.JSX.Element {
@@ -232,12 +240,17 @@ function ChoiceInput(props: TypedProps): React.JSX.Element {
     param.type === "choice" &&
     param.required !== true &&
     param.default === undefined;
+  const chosen = options.findIndex(option => option.value === value);
   return (
     <Select
-      value={typeof value === "string" ? value : ""}
+      value={chosen < 0 ? "" : optionKey(chosen)}
       disabled={disabled}
-      onValueChange={chosen =>
-        onInput(chosen === ANY_CHOICE ? undefined : chosen)
+      onValueChange={key =>
+        onInput(
+          key === ANY_CHOICE
+            ? undefined
+            : options.find((_, index) => optionKey(index) === key)?.value
+        )
       }
     >
       <SelectTrigger
@@ -254,8 +267,8 @@ function ChoiceInput(props: TypedProps): React.JSX.Element {
         {optional ? (
           <SelectItem value={ANY_CHOICE}>{emptyWords(param)}</SelectItem>
         ) : null}
-        {options.map(option => (
-          <SelectItem key={option.value} value={option.value}>
+        {options.map((option, index) => (
+          <SelectItem key={optionKey(index)} value={optionKey(index)}>
             {option.label}
           </SelectItem>
         ))}

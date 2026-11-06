@@ -90,6 +90,7 @@ function canvasQueryBudget(): CanvasQueryBudget {
   let current = createQueryBudget();
   return {
     take: () => current.take(),
+    remaining: () => current.remaining?.() ?? 0,
     renew: () => {
       current = createQueryBudget();
     },

@@ -203,6 +203,32 @@ describe("the canvas's runs of a named query", () => {
     });
   });
 
+  it("starts no run once the draw's allowance is spent, and hands the server what is left", async () => {
+    const run = vi.fn(() =>
+      Promise.resolve(answer({ counted: true, reads: 1 }))
+    );
+    const host = canvasNamedHost(SOURCES, run, undefined);
+    const ask = (allowance: number) =>
+      host.cache?.({
+        declaration: upcoming,
+        key: ["k"],
+        read: () => Promise.reject(new Error("never read here")),
+        asked: {
+          params: { city: "lahore" },
+          window: { limit: 6, offset: 0 },
+          allowance,
+        },
+      });
+    await expect(ask(0)).rejects.toMatchObject({
+      namedQueryFailure: { code: "budget" },
+    });
+    expect(run).not.toHaveBeenCalled();
+    await ask(4);
+    expect(run).toHaveBeenCalledWith({
+      named: expect.objectContaining({ allowance: 4 }) as unknown,
+    });
+  });
+
   it("never runs a query in the browser: its lookup's run refuses", async () => {
     const host = canvasNamedHost(SOURCES, vi.fn(), undefined);
     const definition = host.definitionOf("events.upcoming");
@@ -239,6 +265,55 @@ describe("canvasNamedRuns", () => {
     await runs(body);
     expect(run).toHaveBeenCalledTimes(1);
     at = 16_000;
+    await runs(body);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares a run in flight however long it takes, and keeps its answer from when it settles", async () => {
+    let at = 0;
+    let finish: (answer: ListEntriesNamedResponse) => void = () => undefined;
+    const run = vi.fn(
+      () =>
+        new Promise<ListEntriesNamedResponse>(resolve => {
+          finish = resolve;
+        })
+    );
+    const runs = canvasNamedRuns(run, () => at);
+    const first = runs(body);
+    // Longer than an answer is kept, still running: the same run is joined.
+    at = 20_000;
+    const second = runs(body);
+    expect(run).toHaveBeenCalledTimes(1);
+    finish(answer({ counted: true, reads: 1 }));
+    await Promise.all([first, second]);
+    // Kept from when it settled, not from when it started.
+    at = 30_000;
+    await runs(body);
+    expect(run).toHaveBeenCalledTimes(1);
+    at = 36_000;
+    await runs(body);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops only the run that failed, never one started after it", async () => {
+    const at = 0;
+    let fail: (error: Error) => void = () => undefined;
+    const run = vi
+      .fn<
+        (asked: ListEntriesNamedRequest) => Promise<ListEntriesNamedResponse>
+      >()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = reject;
+          })
+      )
+      .mockResolvedValue(answer({ counted: true, reads: 1 }));
+    const runs = canvasNamedRuns(run, () => at);
+    const old = runs(body);
+    fail(new Error("refused"));
+    await expect(old).rejects.toThrow("refused");
+    await runs(body);
     await runs(body);
     expect(run).toHaveBeenCalledTimes(2);
   });

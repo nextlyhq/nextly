@@ -159,6 +159,25 @@ function carried(
   });
 }
 
+/**
+ * A run refused before it starts, the draw's allowance spent: carried as the
+ * renderer reads a budget failure, under a reference of its own, since the
+ * server never saw it and logged nothing.
+ */
+function spentAllowance(label: string): Error {
+  const ref = `NQ-${Math.floor(Math.random() * 0x1000000)
+    .toString(16)
+    .toUpperCase()
+    .padStart(6, "0")}`;
+  return Object.assign(new Error("The page's read allowance is spent."), {
+    namedQueryFailure: {
+      code: "budget",
+      detail: NAMED_QUERY_TEXT.budget(label),
+      ref,
+    },
+  });
+}
+
 /** The route's refusal, worded as a refusal the renderer shows the words of. */
 function refusalOf(error: unknown): Error {
   if (!(error instanceof Error)) return new Error(String(error));
@@ -195,8 +214,10 @@ async function runThrough(
 
 /**
  * The canvas's runs: each distinct run made once and its answer kept a
- * short while, a run in flight shared. A refusal is not kept, so the next
- * draw asks again.
+ * short while once it settles, a run in flight shared however long it
+ * takes (a query may run longer than an answer is kept). A refusal is not
+ * kept, so the next draw asks again; only the run that failed is dropped,
+ * never one started after it.
  */
 export function canvasNamedRuns(
   run: (
@@ -204,18 +225,32 @@ export function canvasNamedRuns(
   ) => Promise<ListEntriesNamedResponse> = runThrough,
   now: () => number = Date.now
 ): (body: ListEntriesNamedRequest) => Promise<ListEntriesNamedResponse> {
-  const kept = new Map<
-    string,
-    { readonly at: number; readonly answer: Promise<ListEntriesNamedResponse> }
-  >();
+  /** One run, and when its answer arrived, if it has. */
+  interface Kept {
+    readonly answer: Promise<ListEntriesNamedResponse>;
+    settledAt?: number;
+  }
+  const kept = new Map<string, Kept>();
   return async body => {
     const key = JSON.stringify(body);
     const held = kept.get(key);
-    if (held !== undefined && now() - held.at < KEPT_FOR_MS) return held.answer;
-    const answer = run(body);
-    kept.set(key, { at: now(), answer });
-    answer.catch(() => kept.delete(key));
-    return answer;
+    if (
+      held !== undefined &&
+      (held.settledAt === undefined || now() - held.settledAt < KEPT_FOR_MS)
+    ) {
+      return held.answer;
+    }
+    const entry: Kept = { answer: run(body) };
+    kept.set(key, entry);
+    entry.answer.then(
+      () => {
+        entry.settledAt = now();
+      },
+      () => {
+        if (kept.get(key) === entry) kept.delete(key);
+      }
+    );
+    return entry.answer;
   };
 }
 
@@ -259,6 +294,9 @@ export function canvasNamedHost(
     // The run is the server's: asked for as the list stores it, judged and
     // made there, and its answer taken as this render's result.
     cache: async ({ declaration, asked }) => {
+      // Nothing left of the draw's allowance: no run is started, as a read
+      // the page could not claim is never made.
+      if (asked.allowance === 0) throw spentAllowance(declaration.label);
       const answer = await run({
         named: {
           name: declaration.name,
@@ -266,6 +304,9 @@ export function canvasNamedHost(
           limit: asked.window.limit,
           offset: asked.window.offset,
           ...(locale === undefined ? {} : { locale }),
+          ...(asked.allowance === undefined
+            ? {}
+            : { allowance: asked.allowance }),
         },
       });
       const named = answer.meta.named;

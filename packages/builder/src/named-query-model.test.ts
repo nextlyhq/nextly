@@ -89,9 +89,35 @@ describe("a draft of the inputs", () => {
 
   it("leaves an emptied input out rather than storing it empty", () => {
     expect(
-      withInput({ city: "lahore", keyword: "jazz" }, "keyword", "")
+      withInput({ city: "lahore", keyword: "jazz" }, "keyword", undefined)
     ).toEqual({ city: "lahore" });
     expect(withInput({ city: "lahore" }, "city", undefined)).toEqual({});
+  });
+
+  it("stores a choice's empty value, which is one of its options, not an emptied input", () => {
+    const blank = namedQueryDeclaration(
+      defineNamedQuery({
+        name: "events.by-tier",
+        label: "Events by tier",
+        params: {
+          tier: param.choice({
+            label: "Tier",
+            required: true,
+            options: [
+              { value: "", label: "Untiered" },
+              { value: "gold", label: "Gold" },
+            ],
+          }),
+        },
+        reads: { collections: ["events"] },
+        rows: { key: "id", fields: [{ name: "id", type: "text" }] },
+        run: () => Promise.resolve({ rows: [] }),
+      })
+    );
+    const set = withInput({}, "tier", "");
+    expect(set).toEqual({ tier: "" });
+    // The required choice is set, so the source can be written.
+    expect(judgedDraft(blank, set).writable).toBe(true);
   });
 });
 

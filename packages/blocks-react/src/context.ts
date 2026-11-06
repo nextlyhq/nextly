@@ -236,6 +236,11 @@ export interface NamedQueryHost {
     readonly asked: {
       readonly params: Readonly<Record<string, unknown>>;
       readonly window: { readonly limit: number; readonly offset: number };
+      /**
+       * The reads the render has left, when its allowance can say: a run
+       * made elsewhere may spend no more, and none is started at 0.
+       */
+      readonly allowance?: number;
     };
   }) => Promise<NamedQueryRunData>;
   /**
@@ -337,6 +342,12 @@ export const emptyDataProvider: BlocksDataProvider = {
 export interface QueryBudget {
   /** Claim one read. False when the page has spent its allowance. */
   take(): boolean;
+  /**
+   * How many reads are left, claiming none: what a host that makes a run
+   * elsewhere hands that place, so it never spends more than the page has.
+   * Absent on a budget that cannot say.
+   */
+  remaining?(): number;
 }
 
 /**
@@ -840,6 +851,7 @@ export function createQueryBudget(
   // mistake rather than by a document.
   let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
   return {
+    remaining: () => Math.max(0, remaining),
     take: () => {
       if (remaining <= 0) return false;
       remaining -= 1;

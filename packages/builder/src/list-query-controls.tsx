@@ -417,6 +417,14 @@ function sourceShown(
       ? { words: "Loading sources…", state: "prompt" }
       : { words: `${named.name} · not available`, state: "unknown" };
   }
+  // No collection could be listed: a stored one is shown by its name, as
+  // it is not known to be gone, and an unset one asks for a custom source.
+  if (listed === NO_COLLECTIONS) {
+    const stored = query.relation?.field ?? query.collection;
+    return stored === undefined
+      ? { words: "Choose a custom source", state: "prompt" }
+      : { words: stored, state: "value" };
+  }
   if (query.relation !== undefined) {
     return related === undefined
       ? {
@@ -436,7 +444,7 @@ function sourceShown(
 /** The Source menu's rows: related sources first, then the collections. */
 function sourceChoices(
   related: Related,
-  collections: readonly LoopCollection[],
+  collections: readonly LoopCollection[] | undefined,
   customs: readonly CustomSource[]
 ): SourceChoice[] {
   const relatedRow = (source: RelatedSource): SourceChoice => ({
@@ -460,13 +468,18 @@ function sourceChoices(
         pick: { kind: "custom", source },
       })
     ),
-    {
-      key: "collection:",
-      label: "No collection",
-      group: "collections",
-      pick: { kind: "collection", slug: undefined },
-    },
-    ...alphabetical(collections).map(
+    // No collection row, nor any collection, where none could be listed.
+    ...(collections === undefined
+      ? []
+      : [
+          {
+            key: "collection:",
+            label: "No collection",
+            group: "collections",
+            pick: { kind: "collection", slug: undefined },
+          } satisfies SourceChoice,
+        ]),
+    ...alphabetical(collections ?? []).map(
       (each): SourceChoice => ({
         key: `collection:${each.slug}`,
         label: each.label,
@@ -480,7 +493,8 @@ function sourceChoices(
 /** The Source menu's headings, for the groups that hold a row. */
 function sourceGroups(
   related: Related,
-  customs: readonly CustomSource[]
+  customs: readonly CustomSource[],
+  collectionsOffered: boolean
 ): { group: string; heading: string }[] {
   return [
     ...(related.entry.length === 0
@@ -492,7 +506,9 @@ function sourceGroups(
     ...(customs.length === 0
       ? []
       : [{ group: "custom", heading: "Custom sources" }]),
-    { group: "collections", heading: "Collections" },
+    ...(collectionsOffered
+      ? [{ group: "collections", heading: "Collections" }]
+      : []),
   ];
 }
 
@@ -635,6 +651,9 @@ function sourceDescribedBy(state: {
   return state.hinted ? state.hintId : undefined;
 }
 
+/** The collections where none could be listed: the custom sources stand alone. */
+const NO_COLLECTIONS: LoopCollections = { kind: "ready", collections: [] };
+
 /** The mark the Source control's value wears: a custom or a related source's. */
 function sourceMark(
   query: ListQuery,
@@ -697,7 +716,7 @@ function SourceField({
   problems: readonly string[];
   onPick: (pick: SourceChoice["pick"]) => void;
 }): React.JSX.Element {
-  const { query, collections, customs, related } = reading;
+  const { query, collections, customs, related, collectionsOffered } = reading;
   const labelId = `${id}-label`;
   const ids = { error: `${id}-error`, hint: `${id}-hint` };
   const all = [...related.entry, ...related.item];
@@ -734,8 +753,12 @@ function SourceField({
         }}
         disabled={disabled || listed.kind === "loading"}
         list={{
-          choices: sourceChoices(related, collections, customs),
-          groups: sourceGroups(related, customs),
+          choices: sourceChoices(
+            related,
+            collectionsOffered ? collections : undefined,
+            customs
+          ),
+          groups: sourceGroups(related, customs, collectionsOffered),
           currentKey: sourceKey(query, named),
           label: "Sources",
           searchLabel: "Search sources",
@@ -747,8 +770,10 @@ function SourceField({
           wide: customs.length > 0,
         }}
         around={{
+          // Where no collection could be listed, no related entry could be
+          // either, and the note above says why.
           above:
-            all.length > 0 ? undefined : (
+            all.length > 0 || !collectionsOffered ? undefined : (
               <NoRelated inEmptyState={related.inEmptyState === true} />
             ),
         }}
@@ -2759,6 +2784,11 @@ interface ListQueryReading {
   readonly customs: readonly CustomSource[];
   /** The same, or `undefined` until they are read, so "not set up" waits. */
   readonly customsRead: readonly CustomSource[] | undefined;
+  /**
+   * Whether the site's collections could be listed: where they could not,
+   * the Source menu offers its custom sources alone.
+   */
+  readonly collectionsOffered: boolean;
   readonly collections: readonly LoopCollection[];
   readonly fieldSource: ListFieldSource | undefined;
   readonly issues: Issues;
@@ -2820,6 +2850,7 @@ function useListQueryReading(
     query,
     listed,
     customs: customs ?? [],
+    collectionsOffered: listed?.kind === "ready",
     // A host lending no custom sources has none: a stored one is not set up.
     customsRead: services?.listCustomSources === undefined ? [] : customs,
     collections,
@@ -2857,6 +2888,11 @@ function relatedShownOf(
     each => each.of === relation.of && each.field === relation.field
   )?.words;
 }
+
+/** How long the inspector waits before asking again for custom sources. */
+const SOURCES_RETRY_MS = 2000;
+/** The longest it waits between asks. */
+const SOURCES_RETRY_MOST_MS = 60_000;
 
 /** The host's custom sources, read once for every list asking while it runs. */
 type ListCustomSources = NonNullable<ContentServices["listCustomSources"]>;
@@ -2899,19 +2935,30 @@ function useCustomSources(
     readonly list: ListCustomSources;
     readonly sources: readonly CustomSource[];
   }>();
+  // Each failed read is asked again, after a wait that doubles to a cap, so
+  // one failed request never leaves the menu without its custom sources.
+  const [failures, setFailures] = React.useState(0);
   React.useEffect(() => {
     if (list === undefined) return;
     let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     readCustomSources(list).then(
       sources => {
         if (live) setFound({ list, sources });
       },
-      () => undefined
+      () => {
+        if (!live) return;
+        retry = setTimeout(
+          () => setFailures(count => count + 1),
+          Math.min(SOURCES_RETRY_MS * 2 ** failures, SOURCES_RETRY_MOST_MS)
+        );
+      }
     );
     return () => {
       live = false;
+      if (retry !== undefined) clearTimeout(retry);
     };
-  }, [list]);
+  }, [list, failures]);
   return list !== undefined && found?.list === list ? found.sources : undefined;
 }
 
@@ -3217,6 +3264,62 @@ function QueryParts(props: QueryPartsProps): React.JSX.Element | null {
 }
 
 /**
+ * The Source control, and, where the site's collections could not be
+ * listed, the note saying so: then the custom sources are offered alone, or
+ * no source can be chosen where there are none.
+ */
+function SourcePart({
+  id,
+  reading,
+  editing,
+  held,
+}: {
+  id: string;
+  reading: ListQueryReading;
+  editing: NamedEditing;
+  held: boolean;
+}): React.JSX.Element {
+  const { listed, issues } = reading;
+  const unlisted = listed === undefined || listed.kind === "failed";
+  const offersCustom = reading.customs.length > 0;
+  return (
+    <>
+      {unlisted ? (
+        <p className="nx-inspector__note">
+          {offersCustom ? (
+            <>
+              The site&apos;s collections could not be listed, so only its
+              custom sources are offered here.
+            </>
+          ) : (
+            <>
+              The site&apos;s collections could not be listed, so this
+              list&apos;s source, filters and sort can&apos;t be chosen here.
+            </>
+          )}
+        </p>
+      ) : null}
+      {unlisted && !offersCustom ? null : (
+        <SourceField
+          id={id}
+          reading={reading}
+          listed={unlisted ? NO_COLLECTIONS : listed}
+          named={editing.named}
+          disabled={held}
+          // A source just picked has nothing stored to refuse yet.
+          problems={
+            editing.named?.drafted === true
+              ? []
+              : issuesAt(issues, ["collection", "relation", "namedQuery"])
+          }
+          onPick={editing.pickSource}
+        />
+      )}
+    </>
+  );
+}
+
+/**
  * A collection list's query, drawn as one group in the Content tab where its
  * `collection` prop would sit.
  */
@@ -3243,30 +3346,15 @@ export function ListQueryField({
   const held = LIST_QUERY_PROPS.some(
     name => props.some(prop => prop.name === name) && !writable(name)
   );
-  const { listed, issues } = reading;
+  const { issues } = reading;
   return (
     <div className="nx-list-query" data-content-control="listQuery">
-      {listed === undefined || listed.kind === "failed" ? (
-        <p className="nx-inspector__note">
-          The site&apos;s collections could not be listed, so this list&apos;s
-          source, filters and sort can&apos;t be chosen here.
-        </p>
-      ) : (
-        <SourceField
-          id={`${id}-source`}
-          reading={reading}
-          listed={listed}
-          named={editing.named}
-          disabled={held}
-          // A source just picked has nothing stored to refuse yet.
-          problems={
-            editing.named?.drafted === true
-              ? []
-              : issuesAt(issues, ["collection", "relation", "namedQuery"])
-          }
-          onPick={editing.pickSource}
-        />
-      )}
+      <SourcePart
+        id={`${id}-source`}
+        reading={reading}
+        editing={editing}
+        held={held}
+      />
       <QueryParts
         id={id}
         reading={reading}
