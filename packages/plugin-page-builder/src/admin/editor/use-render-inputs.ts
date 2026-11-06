@@ -13,12 +13,14 @@ import {
   BASE_BREAKPOINT,
   registryNestingSource,
   getBlock,
+  visitorUnreadableBindings,
   type BlockDocument,
   type BreakpointId,
   type StyleState,
   type StyleCompileContext,
   type RemotePattern,
   type BreakpointSet,
+  type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
 import {
   prepareDocumentForRead,
@@ -267,7 +269,19 @@ export type SiteStyleInputs = {
 type CanvasRender = {
   canvasRender: PageRenderInputs;
   classSummaryContext: StyleCompileContext;
+  /**
+   * The bound props on the page a visitor will not see filled, by node id:
+   * the published page's own binding check, asked with the field shapes a
+   * visitor may read, which the canvas's sources carry.
+   */
+  visitorUnreadable: ReadonlyMap<string, readonly VisitorUnreadableBinding[]>;
 };
+
+/** Nothing marked: no sources read yet, or none of their shapes known. */
+const NONE_UNREADABLE: ReadonlyMap<
+  string,
+  readonly VisitorUnreadableBinding[]
+> = new Map();
 
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
@@ -398,6 +412,21 @@ function useCanvasRender({
   );
   // What the page's bindings read, read as the person editing.
   const bindings = useCanvasBindings(presented, locale);
+  // Judged on the author's own document, whose blocks the canvas can point
+  // at; a binding inside a component's definition is the definition's to say.
+  const visitorUnreadable = useMemo(
+    () =>
+      bindings.fieldShapes === undefined
+        ? NONE_UNREADABLE
+        : visitorUnreadableBindings(editor.document, {
+            schema: bindings.fieldShapes,
+            ...(bindings.entryRef === undefined
+              ? {}
+              : { entryRef: bindings.entryRef }),
+            props: { get: getBlock },
+          }),
+    [editor.document, bindings]
+  );
   const canvasRender = useMemo(
     () => ({
       ...pageInputs,
@@ -436,7 +465,7 @@ function useCanvasRender({
     [canvasRender.styleContext, stylePolicy]
   );
 
-  return { canvasRender, classSummaryContext };
+  return { canvasRender, classSummaryContext, visitorUnreadable };
 }
 
 /** What `useCanvasViewport` returns. */
