@@ -333,12 +333,28 @@ export async function newConditionIssues(
   // only what the schema or the host decides is left.
   const found = await errorsIn(
     nodes,
-    listSettingOf(args.write),
+    conditionSettingOf(value, args.write),
     site,
     conditionIssues,
     issue => CONDITION_FIELD_CODES.has(issue.code)
   );
   return asFieldIssues(found, args, label);
+}
+
+/**
+ * Where a write's conditions read. A component's definition is no page: a
+ * condition in it reads the entry of whichever page places it, which its own
+ * save cannot know, so there it is judged by its operator alone and judged
+ * again on each page that places it ({@link composedConditionIssues}). A
+ * list's item inside the definition is still known, and still judged.
+ */
+function conditionSettingOf(
+  value: unknown,
+  write: PluginFieldWrite
+): ListSetting {
+  const setting = listSettingOf(write);
+  if (!isPlainRecord(value) || value.kind !== "component") return setting;
+  return setting.locale === undefined ? {} : { locale: setting.locale };
 }
 
 /** One composed list's issue, with the placement that put the list there. */
@@ -365,29 +381,91 @@ export interface ComposedListIssue {
  * `setting` is the write's ({@link listSettingOf}), or that of a page judged
  * on its behalf, as a component save judges the pages placing it.
  */
-export async function composedListQueryIssues(
+export function composedListQueryIssues(
   composed: unknown,
   host: BlockDocument,
   setting: ListSetting,
   site: ListJudging
 ): Promise<ComposedListIssue[]> {
+  return composedIssues(composed, host, setting, site, {
+    judge: listQueryIssues,
+    // A placed list's every issue counts, its shape included.
+    placed: node => node.type === COLLECTION_LIST_TYPE,
+    counts: () => true,
+    holds: "a collection list it cannot show",
+  });
+}
+
+/**
+ * The issues of the visibility conditions a page's placed components hold,
+ * as the page composes them. A definition's condition reads the entry of the
+ * page it is placed on, or the item of a list it lands in, which only the
+ * composition knows; so a condition the definition's own save judged by its
+ * operator alone is judged here against the fields it will read. Only what
+ * the schema or the host decides counts: the definition's save already
+ * judged its operators. A problem the stored page already composed to is
+ * kept, as for the page's own conditions.
+ */
+export function composedConditionIssues(
+  composed: unknown,
+  host: BlockDocument,
+  setting: ListSetting,
+  site: ListJudging
+): Promise<ComposedListIssue[]> {
+  return composedIssues(composed, host, setting, site, {
+    judge: conditionIssues,
+    placed: () => true,
+    counts: issue => CONDITION_FIELD_CODES.has(issue.code),
+    holds: "a block whose visibility conditions can't be checked there",
+  });
+}
+
+/** What one composed judgement reads, and how its findings are said. */
+interface ComposedJudge<Issue extends ForestIssue> {
+  readonly judge: (
+    forest: readonly unknown[],
+    judgement: ForestJudgement
+  ) => readonly Issue[];
+  /** Which nodes a definition put here are this judgement's. */
+  readonly placed: (node: BlockNode) => boolean;
+  readonly counts: (issue: Issue) => boolean;
+  /** What the component holds, for the finding's words. */
+  readonly holds: string;
+}
+
+/**
+ * The issues `judge` finds in the nodes a page's placed components put on it,
+ * as the page composes them, each named by the component the page places it
+ * through. The page's own nodes are judged by its own checks.
+ */
+async function composedIssues<Issue extends ForestIssue>(
+  composed: unknown,
+  host: BlockDocument,
+  setting: ListSetting,
+  site: ListJudging,
+  by: ComposedJudge<Issue>
+): Promise<ComposedListIssue[]> {
   const nodes = nodesOf(composed);
   if (nodes === undefined) return [];
-  // Each composed list a definition put here, by the host's own placement.
-  const placedLists = new Map<string, string>();
+  // Each composed node a definition put here, by the host's own placement.
+  const placedNodes = new Map<string, string>();
   walkNodes(
     nodes as BlockNode[],
     node => {
       const through = (node as ResolvedBlockNode).instanceOf;
-      if (node.type === COLLECTION_LIST_TYPE && typeof through === "string") {
-        placedLists.set(node.id, through);
+      if (typeof through === "string" && by.placed(node)) {
+        placedNodes.set(node.id, through);
       }
     },
     site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }
   );
-  if (placedLists.size === 0) return [];
-  const found = await listErrorsIn(nodes, setting, site, issue =>
-    placedLists.has(issue.nodeId)
+  if (placedNodes.size === 0) return [];
+  const found = await errorsIn(
+    nodes,
+    setting,
+    site,
+    by.judge,
+    issue => placedNodes.has(issue.nodeId) && by.counts(issue)
   );
   if (found.length === 0) return [];
   const componentOf = new Map<string, string>();
@@ -397,11 +475,11 @@ export async function composedListQueryIssues(
     if (typeof id === "string") componentOf.set(id, placement.target);
   }
   return found.map(issue => {
-    const placement = placedLists.get(issue.nodeId) ?? "";
+    const placement = placedNodes.get(issue.nodeId) ?? "";
     const component = componentOf.get(placement);
     return {
       code: issue.code,
-      message: `${component === undefined ? "A component" : `Component "${component}"`}, as this page places it, holds a collection list it cannot show. ${issue.message}`,
+      message: `${component === undefined ? "A component" : `Component "${component}"`}, as this page places it, holds ${by.holds}. ${issue.message}`,
       placement,
       ...(component === undefined ? {} : { component }),
     };

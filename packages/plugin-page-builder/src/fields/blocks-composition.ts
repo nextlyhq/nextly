@@ -43,6 +43,7 @@ import {
   componentIdsIn,
   compositionFaults,
   contentOnlyExposures,
+  isPlainRecord,
   MAX_COMPOSED_DEPTH,
   contentModelKeyOf,
   nodeLocks,
@@ -92,6 +93,7 @@ import {
 import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
+import type { StoredForms } from "./added-undefined-ids";
 import { isForest } from "./blocks-document";
 import {
   LAYERS_LOCK_CHANGED,
@@ -99,8 +101,10 @@ import {
   variantLockMessage,
 } from "./layers-lock-wording";
 import {
+  composedConditionIssues,
   composedListQueryIssues,
   listSettingOf,
+  type ComposedListIssue,
   type ListFieldsReader,
 } from "./list-query-judgement";
 import {
@@ -742,7 +746,8 @@ async function judgeOwnComposition(args: {
  * variant can change a list's source, filters, sort or bounds, and both read
  * the composed list. Its shape is judged always, and the fields it names
  * where the schema can be read; a problem the stored page already composed
- * to is kept.
+ * to is kept. A placed block's visibility conditions are judged the same way,
+ * against the entry or list item they read where the page places them.
  */
 async function judgeComposedLists(args: {
   document: BlockDocument;
@@ -759,26 +764,39 @@ async function judgeComposedLists(args: {
   report: Report;
 }): Promise<void> {
   const fieldsOf = args.setup.listFields;
-  const found = await composedListQueryIssues(
-    args.composed,
-    args.document,
-    listSettingOf(args.write),
-    {
-      ...(fieldsOf === undefined ? {} : { fieldsOf }),
-      maxNodes: args.setup.limits.maxNodes,
-      // The stored forms composed as this page is, so a list they already
-      // composed to keeps its problem as a warning.
-      storedForms: async () => {
-        const stored = await args.stored();
-        if (!stored.readable) return { forms: [], readable: false };
-        const composed = await composedFormsRead({
-          ...args.reading,
-          hosts: stored.forms,
-        });
-        return { forms: composed.forms as BlockDocument[], readable: true };
-      },
-    }
-  );
+  // The stored forms composed as this page is, so a list or a condition they
+  // already composed to keeps its problem as a warning. Composed once, for
+  // both judgements, and only once one of them finds a problem.
+  let storedForms: Promise<StoredForms> | undefined;
+  const composeStored = async (): Promise<StoredForms> => {
+    const stored = await args.stored();
+    if (!stored.readable) return { forms: [], readable: false };
+    const composed = await composedFormsRead({
+      ...args.reading,
+      hosts: stored.forms,
+    });
+    return { forms: composed.forms as BlockDocument[], readable: true };
+  };
+  const site = {
+    ...(fieldsOf === undefined ? {} : { fieldsOf }),
+    maxNodes: args.setup.limits.maxNodes,
+    storedForms: () => (storedForms ??= composeStored()),
+  };
+  const setting = listSettingOf(args.write);
+  const found = [
+    ...(await composedListQueryIssues(
+      args.composed,
+      args.document,
+      setting,
+      site
+    )),
+    ...(await composedConditionIssues(
+      args.composed,
+      args.document,
+      setting,
+      site
+    )),
+  ];
   for (const issue of found) args.report.add(issue.code, issue.message);
 }
 
@@ -1324,6 +1342,8 @@ function ruleBroken(code: string, setup: CompositionSetup): string {
       return "a locked slot that allows only content changes would have its design or settings changed";
     case LIST_BROKEN:
       return "a collection list would be given a source, filter or sort it can't use";
+    case CONDITION_BROKEN:
+      return "a block's visibility condition would check a field it can't use there";
     default:
       return "a block would sit where it is not allowed to";
   }
@@ -1451,7 +1471,8 @@ async function judgeOneHost(args: {
 }
 
 /**
- * The collection lists the save would newly break in one host, as the host
+ * The collection lists, and the visibility conditions, the save would newly
+ * break in one host, as the host
  * composes them before and after it: an edit can aim a placement's existing
  * value at a list's sort or filters, move the list to another collection, or
  * change what a variant sets, and the page is then read with a list the
@@ -1473,25 +1494,46 @@ async function reportListsBroken(args: {
   listFields: ListFieldsReader | undefined;
 }): Promise<void> {
   const { host, stored, before, after, setup, tally, listFields } = args;
-  const found = await composedListQueryIssues(
-    after.composition.document,
-    stored,
-    host.slug === setup.store.collection ? {} : { entryCollection: host.slug },
-    {
-      ...(listFields === undefined ? {} : { fieldsOf: listFields }),
-      maxNodes: setup.limits.maxNodes,
-      // What the host composed to before this save stands for its stored
-      // form: a problem it held there is kept.
-      storedForms: () =>
-        Promise.resolve({
-          forms: [before.composition.document],
-          readable: true,
-        }),
-    }
-  );
+  const setting =
+    host.slug === setup.store.collection ? {} : { entryCollection: host.slug };
+  const site = {
+    ...(listFields === undefined ? {} : { fieldsOf: listFields }),
+    maxNodes: setup.limits.maxNodes,
+    // What the host composed to before this save stands for its stored
+    // form: a problem it held there is kept.
+    storedForms: () =>
+      Promise.resolve({
+        forms: [before.composition.document],
+        readable: true,
+      }),
+  };
+  // A placed block's visibility conditions read the host's entry, or the
+  // item of a list they land in, so they are judged the same way.
+  const judged = [
+    { code: LIST_BROKEN, judge: composedListQueryIssues },
+    { code: CONDITION_BROKEN, judge: composedConditionIssues },
+  ];
+  for (const { code, judge } of judged) {
+    const found = await judge(
+      after.composition.document,
+      stored,
+      setting,
+      site
+    );
+    reportHostIssues(host, tally, code, found);
+  }
+}
+
+/** Each issue a save would bring to one host, as that host's fault. */
+function reportHostIssues(
+  host: HostRef,
+  tally: Tally,
+  code: string,
+  found: readonly ComposedListIssue[]
+): void {
   for (const issue of found) {
     tally.broke(host, {
-      code: LIST_BROKEN,
+      code,
       instanceId: issue.placement,
       // The log names the placement and the list's problem; the refusal
       // names neither, as for every other host fault.
@@ -1503,6 +1545,9 @@ async function reportListsBroken(args: {
 
 /** The host fault of a collection list a component save would break. */
 const LIST_BROKEN = "collection-list";
+
+/** The host fault of a visibility condition a component save would break. */
+const CONDITION_BROKEN = "visibility-condition";
 
 /**
  * What the save does to one host that was not wrong with it already.
@@ -1675,6 +1720,12 @@ interface SelectionFootprint {
    * name fields it no longer may, with nothing a placement rule reads moved.
    */
   readonly lists: string;
+  /**
+   * Each block of the selection that carries visibility conditions, by id,
+   * with its conditions as stored. A condition changed to check another
+   * field can make a host's entry, or a list item there, one it cannot check.
+   */
+  readonly conditions: string;
 }
 
 /** The footprint of `document` stored as `self`, selection by selection. */
@@ -1721,6 +1772,7 @@ async function footprintOf(
         )
       ),
       lists: listQueries(nodes, setup),
+      conditions: conditionSets(nodes, setup),
     });
   }
   return {
@@ -1747,6 +1799,26 @@ function listQueries(
     );
   });
   return lists.sort().join("\n");
+}
+
+/**
+ * Each block of a composed tree carrying visibility conditions, by id, with
+ * its conditions as stored, as one comparable string.
+ */
+function conditionSets(
+  nodes: readonly BlockNode[],
+  setup: CompositionSetup
+): string {
+  const sets: string[] = [];
+  eachComposed(nodes, setup, entry => {
+    const visibility = (entry as { visibility?: unknown } | undefined)
+      ?.visibility;
+    if (!isPlainRecord(visibility) || visibility.conditions === undefined) {
+      return;
+    }
+    sets.push(`${String(entry.id)}|${JSON.stringify(visibility.conditions)}`);
+  });
+  return sets.sort().join("\n");
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
@@ -1983,6 +2055,8 @@ function selectionWorsens(
   if (after.placement !== before.placement) return true;
   // Any list that changed may now refuse what a host gives it.
   if (after.lists !== before.lists) return true;
+  // Any condition that changed may now check a field a host's entry can't give.
+  if (after.conditions !== before.conditions) return true;
   if (after.depth > before.depth) return true;
   if (after.componentDepth > before.componentDepth) return true;
   for (const type of after.rootTypes) {

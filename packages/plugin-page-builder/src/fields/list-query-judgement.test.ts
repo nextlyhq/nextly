@@ -220,4 +220,40 @@ describe("a write's visibility conditions, judged by the server", () => {
       })
     ).toEqual([]);
   });
+
+  it("judges a component definition's condition on the entry by its operator alone", async () => {
+    // A definition saved to the components collection: the entry its
+    // condition reads is the placing page's, judged on each such page.
+    const definition = {
+      ...conditioned([[{ field: "title", op: "exists" }]]),
+      kind: "component",
+    };
+    const componentsOnly = async () => ({
+      declared: new Set(["id"]),
+      readable: [{ name: "id", type: "text" }],
+    });
+    expect(
+      await newConditionIssues(
+        definition,
+        args({ slug: "components" }),
+        "Document",
+        { fieldsOf: componentsOnly }
+      )
+    ).toEqual([]);
+    // A list's item inside the definition is still judged.
+    const inList = {
+      ...conditioned([[{ field: "nope", op: "exists" }]], true),
+      kind: "component",
+    };
+    expect(
+      (
+        await newConditionIssues(
+          inList,
+          args({ slug: "components" }),
+          "Document",
+          { fieldsOf }
+        )
+      ).map(issue => issue.code)
+    ).toEqual(["condition-field-unknown"]);
+  });
 });

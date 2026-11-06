@@ -1078,7 +1078,10 @@ function nodeProblems(
   return groups.flat().flatMap(stored => {
     const judged = judgeCondition(stored, fields, registry);
     if (judged === undefined || !isProblem(judged)) return [];
-    const identity = `${stored.field}\u0000${String(stored.op)}\u0000${valueIdentity(stored.value)}`;
+    // The operator as it reads, so an older spelling rewritten to its
+    // canonical one is the same condition; an unknown one as stored.
+    const op = conditionOp(stored.op) ?? String(stored.op);
+    const identity = `${stored.field}\u0000${op}\u0000${valueIdentity(stored.value)}`;
     return [{ problem: judged, identity }];
   });
 }

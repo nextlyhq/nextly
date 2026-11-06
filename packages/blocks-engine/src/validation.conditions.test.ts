@@ -21,6 +21,7 @@ import {
   type ValidationIssue,
 } from "./validation";
 import {
+  canonicalConditions,
   CONDITION_FIELD_CODES,
   CONDITION_ISSUE_CODES,
   CONDITION_MAX,
@@ -340,6 +341,19 @@ describe("a block's conditions at save", () => {
       "condition-field-unknown",
       "condition-source-unavailable",
       "condition-unsuited",
+    ]);
+  });
+
+  it("keeps a held problem a warning once its older spelling is rewritten", () => {
+    const storedConditions = [[{ field: "internalScore", op: "gt", value: 3 }]];
+    const stored = page(box("a", storedConditions));
+    const rewritten = page(
+      box("a", canonicalConditions(storedConditions).conditions)
+    );
+    expect(
+      conditionCodes(validate(rewritten, { ...onPost, stored: [stored] }))
+    ).toEqual([
+      "condition-field-protected warning /nodes/0/visibility/conditions/0/0",
     ]);
   });
 });
