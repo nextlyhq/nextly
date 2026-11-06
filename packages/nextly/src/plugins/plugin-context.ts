@@ -37,6 +37,7 @@ import type {
 } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import {
   createPluginWebhooks,
   type PluginWebhooksApi,
@@ -1343,6 +1344,10 @@ export const PLUGIN_SERVICE_NAMES = [
   // never whichever one the process container holds at the time.
   "jobRegistry",
   "jobsDatabase",
+  // The registration's fast webhook drain, or `null` where webhooks are not
+  // registered, so a plugin's committed event is offered to the drain of the
+  // instance that recorded it.
+  "webhookFastDrainScheduler",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1895,7 +1900,9 @@ export function createPluginContext(
                             ? JobRegistry
                             : T extends "jobsDatabase"
                               ? JobsPassDatabase
-                              : never,
+                              : T extends "webhookFastDrainScheduler"
+                                ? WebhookFastDrainScheduler | null
+                                : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2255,8 +2262,10 @@ export function createPluginContext(
     // Kept within this plugin's name, which decides the types it may record.
     // The adapter is read per call and through this context's own resolver,
     // as the secrets helper's is.
-    webhooks: createPluginWebhooks(owner, () =>
-      asSecretsAdapter(getServiceFn("adapter"))
+    webhooks: createPluginWebhooks(
+      owner,
+      () => asSecretsAdapter(getServiceFn("adapter")),
+      () => getServiceFn("webhookFastDrainScheduler")
     ),
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is

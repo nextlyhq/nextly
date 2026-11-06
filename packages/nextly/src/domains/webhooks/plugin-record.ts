@@ -19,7 +19,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
-import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import { linkedTransaction } from "../../plugins/database/plugin-transaction-link";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
@@ -210,23 +209,23 @@ function recordArgs(
 }
 
 /**
- * Offer the fast drain, as core's write paths do once their event commits, so
- * a plugin's event is delivered as promptly as theirs. Read per call, and
- * absent where webhooks are not registered.
- */
-function offerFastDrain(): void {
-  if (!container.has("webhookFastDrainScheduler")) return;
-  container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler").offer();
-}
-
-/**
- * The webhooks API for one plugin, by its name. The adapter is resolved per
- * call: the context can be built before the database connects.
+ * The webhooks API for one plugin, by its name.
+ *
+ * The adapter and the fast drain are resolved per call, through the plugin
+ * context's own resolver: the context can be built before the database
+ * connects, and outlives a container a reload replaces, so the drain a
+ * committed event offers is its own registration's, as the adapter that
+ * recorded it is. `fastDrain` answers `null` where webhooks are not
+ * registered.
  */
 export function createPluginWebhooks(
   pluginName: string,
-  adapter: () => RecordingAdapter
+  adapter: () => RecordingAdapter,
+  fastDrain: () => WebhookFastDrainScheduler | null
 ): PluginWebhooksApi {
+  // Offered as core's write paths offer it once their event commits, so a
+  // plugin's event is delivered as promptly as theirs.
+  const offerFastDrain = (): void => fastDrain()?.offer();
   return {
     async record(event) {
       // Every check runs before anything is written, the open-transaction
