@@ -194,17 +194,26 @@ function iconRows(start: number, end: number): GridRow[] {
 
 /**
  * The grid's rows: the recently used icons under "Recent" and the rest under
- * "All icons" when there are any recent ones to show, otherwise the icons
- * alone, under the heading above the grid.
+ * `label` ("All icons", or the search's matches) when there are any recent
+ * ones to show, otherwise the icons alone, under the heading above the grid.
  */
-function gridRows(recentCount: number, count: number): GridRow[] {
+function gridRows(
+  recentCount: number,
+  count: number,
+  label: string
+): GridRow[] {
   if (recentCount === 0) return iconRows(0, count);
   return [
     { kind: "heading", label: "Recent" },
     ...iconRows(0, recentCount),
-    { kind: "heading", label: "All icons" },
+    { kind: "heading", label },
     ...iconRows(recentCount, count),
   ];
+}
+
+/** What the icons below the Recent row are: the whole set, or a search's matches. */
+function resultsLabel(query: string): string {
+  return query === "" ? "All icons" : `Matches for “${query}”`;
 }
 
 /** The rows the arrow and page keys move the highlight up or down by. */
@@ -255,15 +264,16 @@ function rowOf(rows: readonly GridRow[], index: number): number {
 
 /**
  * The recently used icons to offer, newest first: the ids the host remembers
- * that the set still draws, found among the whole set's icons, so a browse
- * and its Recent row come from one answer. Offered only while browsing.
+ * that the set still draws, found among the whole set's icons, which the
+ * picker has from the browse it opens on. Offered above a search's matches
+ * too, so an icon used a moment ago is one press away whatever is typed.
  */
 function recentAmong(
-  results: readonly IconSourceIcon[],
-  query: string,
+  wholeSet: readonly IconSourceIcon[] | null,
   recentIds: readonly string[] | undefined
 ): IconSourceIcon[] {
-  if (query.trim() !== "" || recentIds === undefined) return [];
+  if (wholeSet === null || recentIds === undefined) return [];
+  const results = wholeSet;
   const byId = new Map(results.map(icon => [icon.id, icon]));
   const recent: IconSourceIcon[] = [];
   for (const id of new Set(recentIds)) {
@@ -326,6 +336,8 @@ interface IconSearch {
   readonly start: SearchStart | null;
   /** Runs the search again, after it failed. */
   readonly retry: () => void;
+  /** The whole set, once the browse the picker opens on has answered. */
+  readonly wholeSet: readonly IconSourceIcon[] | null;
 }
 
 /**
@@ -347,6 +359,10 @@ function useIconSearch(
   recentIds: readonly string[] | undefined
 ): IconSearch {
   const [answer, setAnswer] = React.useState<SearchAnswer | null>(null);
+  /* The whole set, from the browse the picker opens on, for the Recent row. */
+  const [wholeSet, setWholeSet] = React.useState<
+    readonly IconSourceIcon[] | null
+  >(null);
   const [attempt, setAttempt] = React.useState(0);
   const [active, setActive] = React.useState(0);
   const [start, setStart] = React.useState<SearchStart | null>(null);
@@ -360,21 +376,24 @@ function useIconSearch(
   const place = React.useEffectEvent((found: SearchAnswer): void => {
     if (found.status !== "found" || !currentSettled) return;
     placed.current = found;
-    // Placed in the options as drawn: the Recent row first while browsing.
-    const options = [
-      ...recentAmong(found.results, found.query, recentIds),
-      ...found.results,
-    ];
+    // Placed in the options as drawn, the Recent row first. Browsing starts
+    // on the chosen icon, or the first; a search, on its best match.
+    const browsing = found.query.trim() === "";
+    const recent = recentAmong(browsing ? found.results : wholeSet, recentIds);
+    const options = [...recent, ...found.results];
     const chosen =
-      found.query.trim() === "" && currentId
+      browsing && currentId
         ? options.findIndex(icon => icon.id === currentId)
         : -1;
-    const index = Math.max(0, chosen);
+    const index = browsing ? Math.max(0, chosen) : recent.length;
     setActive(index);
     setStart({ index, centred: chosen > 0 });
   });
   const land = React.useEffectEvent((found: SearchAnswer): void => {
     setAnswer(found);
+    if (found.status === "found" && found.query.trim() === "") {
+      setWholeSet(found.results);
+    }
     place(found);
   });
   /*
@@ -413,6 +432,7 @@ function useIconSearch(
     setActive,
     start,
     retry: () => setAttempt(n => n + 1),
+    wholeSet,
   };
 }
 
@@ -620,6 +640,7 @@ export function IconPicker({
     setActive,
     start,
     retry: retrySearch,
+    wholeSet,
   } = useIconSearch(
     source,
     query,
@@ -633,16 +654,16 @@ export function IconPicker({
    * never belong to two different searches.
    */
   const { options, recentCount } = React.useMemo(() => {
-    const recent = recentAmong(results ?? [], answered, recentIcons);
+    const recent = recentAmong(wholeSet, recentIcons);
     return {
       options: [...recent, ...(results ?? [])],
       recentCount: recent.length,
     };
-  }, [results, answered, recentIcons]);
+  }, [results, wholeSet, recentIcons]);
   const count = options.length;
   const rows = React.useMemo(
-    () => gridRows(recentCount, count),
-    [recentCount, count]
+    () => gridRows(recentCount, count, resultsLabel(answered)),
+    [recentCount, count, answered]
   );
   /*
    * No option is active while the query typed is unanswered: the results in
@@ -691,6 +712,15 @@ export function IconPicker({
   const chooseAnswered = (icon: IconSourceIcon): void => {
     if (!pending) onChoose(icon);
   };
+
+  const message = (
+    <PickerMessage
+      results={results}
+      failed={failed}
+      query={answered}
+      onRetry={retry}
+    />
+  );
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
     if (pending) {
@@ -749,18 +779,12 @@ export function IconPicker({
 
       {/* With a Recent row, the grid carries its own headings. */}
       {recentCount > 0 ? null : (
-        <p className={HEADING_TEXT}>
-          {trimmed === "" ? "All icons" : `Matches for “${trimmed}”`}
-        </p>
+        <p className={HEADING_TEXT}>{resultsLabel(trimmed)}</p>
       )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2.5">
-        <PickerMessage
-          results={results}
-          failed={failed}
-          query={answered}
-          onRetry={retry}
-        />
+        {/* Above the grid, or below a Recent row the grid still shows. */}
+        {recentCount > 0 ? null : message}
         <div
           id={listId}
           role="listbox"
@@ -819,6 +843,7 @@ export function IconPicker({
             );
           })}
         </div>
+        {recentCount > 0 ? message : null}
       </div>
 
       {/* Still the earlier answer's highlight while pending, dimmed with it. */}

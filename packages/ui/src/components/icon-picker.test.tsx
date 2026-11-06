@@ -379,8 +379,8 @@ describe("IconField", () => {
     expect(onChange).toHaveBeenCalledWith("fake:heart");
   });
 
-  it("offers no Recent row while searching", async () => {
-    renderField({ recentIcons: ["fake:star"] });
+  it("keeps the Recent row above a search's matches, and starts on the best match", async () => {
+    renderField({ recentIcons: ["fake:heart"] });
     const box = await openPicker(/^Badge/);
     fireEvent.change(box, { target: { value: "star" } });
     await waitFor(() =>
@@ -388,10 +388,12 @@ describe("IconField", () => {
         screen
           .getAllByRole("option")
           .map(option => option.getAttribute("aria-label"))
-      ).toEqual(["Star", "Star half"])
+      ).toEqual(["Heart, recent", "Star", "Star half"])
     );
-    expect(screen.queryByText("Recent")).toBeNull();
+    expect(screen.getByText("Recent")).not.toBeNull();
     expect(screen.getByText("Matches for “star”")).not.toBeNull();
+    // Enter after typing chooses the best match, not the recent icon above it.
+    expect(highlightedIn(box)).toBe("Star");
   });
 
   it("chooses an icon by click", async () => {

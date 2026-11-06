@@ -133,7 +133,7 @@ export const icon: BlockDefinition<IconProps, PageContext> = libraryDefinition(
   defineBlock({
     name: "core/icon",
     version: 1,
-    description: "A symbol from the icon set.",
+    description: "A symbol, decorative or labelled.",
     editor: {
       label: "Icon",
       icon: "star",
@@ -143,7 +143,12 @@ export const icon: BlockDefinition<IconProps, PageContext> = libraryDefinition(
     baseStyles: ICON_BASE_STYLES,
     props: {
       icon: { label: "Icon", role: "content", type: "icon" },
-      label: { label: "Screen reader label", role: "content", type: "text" },
+      label: {
+        label: "Screen reader label",
+        role: "content",
+        type: "text",
+        hint: "Read out in place of the icon. Leave empty when the text beside it already says the same.",
+      },
       ...LINK_PROPS,
     },
     defaultProps: { icon: "lucide:star", label: "" },

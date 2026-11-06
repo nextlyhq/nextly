@@ -306,6 +306,16 @@ export interface ContentControlProps {
 /** A content control: a label and the field it names. */
 export type ContentControl = (props: ContentControlProps) => React.JSX.Element;
 
+/**
+ * The words a block gives a prop to explain it (`hint`), shown under its
+ * control and read as its description, or `undefined` for none.
+ */
+function propHint(prop: EditableProp): string | undefined {
+  return typeof prop.schema.hint === "string" && prop.schema.hint !== ""
+    ? prop.schema.hint
+    : undefined;
+}
+
 /** A prop's value as editable text, or empty when it is not representable. */
 function storedText(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -355,10 +365,12 @@ function TextishControl({
     onCommit(prop.name, draft);
   };
 
+  const hint = propHint(prop);
   const shared = {
     id,
     disabled,
     value: draft,
+    ...(hint === undefined ? {} : { "aria-describedby": `${id}-hint` }),
     onBlur: send,
     onChange: (
       event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -388,6 +400,11 @@ function TextishControl({
             }
           }}
         />
+      )}
+      {hint === undefined ? null : (
+        <p className="nx-inspector__note" id={`${id}-hint`}>
+          {hint}
+        </p>
       )}
     </div>
   );
@@ -480,10 +497,7 @@ function PairSwitch({
   pair: readonly [on: string, off: string];
   on: boolean;
 }): React.JSX.Element {
-  const hint =
-    typeof prop.schema.hint === "string" && prop.schema.hint !== ""
-      ? prop.schema.hint
-      : undefined;
+  const hint = propHint(prop);
   return (
     <div
       className="nx-inspector__field"

@@ -3,10 +3,9 @@
  * canvas draws it, and the Content tab changes it through the picker, which
  * offers the author's recent icons first.
  *
- * - Published, the SVG is in the server's markup and the page draws it with
- *   JavaScript off, so it ships no script; a decorative icon is hidden from
- *   assistive technology, a labelled one is an image with that name, and a
- *   linked one a link named by its label.
+ * - Published, the SVG is in the server's HTML, so the block ships no script;
+ *   a decorative icon is hidden from assistive technology, a labelled one is
+ *   an image with that name, and a linked one a link named by its label.
  * - On the canvas the icon is drawn from the same set, loaded when first
  *   needed.
  * - Choosing another icon in the picker redraws the canvas and is stored as
@@ -78,48 +77,42 @@ async function seed(
 test.describe("the Icon block", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  test("is drawn on a published page with JavaScript off", async ({
+  test("is drawn on a published page from the server's markup", async ({
     page,
-    browser,
-    baseURL,
   }) => {
     const { slug } = await seed(page, "published");
-    const visitor = await browser.newContext({
-      baseURL,
-      javaScriptEnabled: false,
-    });
-    try {
-      const reader = await visitor.newPage();
-      const response = await reader.goto(`/${slug}`);
-      expect(response?.status()).toBe(200);
-      // In the server's markup, not added by a script.
-      const html = (await response?.text()) ?? "";
-      expect(html).toContain('aria-label="Free delivery"');
-      // Decorative: drawn, and hidden from assistive technology.
-      const svgs = reader.locator("main svg, body svg");
-      await expect(
-        reader.getByRole("img", { name: "Free delivery" })
-      ).toBeVisible();
-      const link = reader.getByRole("link", { name: "Write to us" });
-      await expect(link).toHaveAttribute("href", "/contact");
-      await expect(link.locator("svg")).toHaveAttribute("aria-hidden", "true");
-      const hidden = await svgs.evaluateAll(
-        all =>
-          all.filter(
-            svg =>
-              svg.getAttribute("aria-hidden") === "true" &&
-              svg.closest("a") === null &&
-              svg.querySelector("path,circle,rect,polyline,line") !== null
-          ).length
-      );
-      expect(hidden, "the decorative star").toBeGreaterThanOrEqual(1);
-      // Each drawn from the set: stroked shapes, sized by the text.
-      const named = reader.getByRole("img", { name: "Free delivery" });
-      await expect(named).toHaveAttribute("width", "1em");
-      await expect(named).toHaveAttribute("stroke", "currentColor");
-    } finally {
-      await visitor.close();
-    }
+    const response = await page.goto(`/${slug}`);
+    expect(response?.status()).toBe(200);
+    // The SVG comes in the server's HTML, the set's own shapes inside it: the
+    // block runs no script in the browser to draw it.
+    const html = (await response?.text()) ?? "";
+    const svgs = [...html.matchAll(/<svg\b[^>]*>[\s\S]*?<\/svg>/g)].map(
+      match => match[0]
+    );
+    const labelled = svgs.find(svg =>
+      svg.includes('aria-label="Free delivery"')
+    );
+    expect(labelled, "the labelled icon in the HTML").toBeDefined();
+    expect(labelled).toContain('role="img"');
+    expect(labelled).toMatch(/<(path|circle|rect|line|polyline)\b/);
+    // Decorative, the star is drawn and hidden from assistive technology.
+    expect(
+      svgs.filter(
+        svg =>
+          svg.includes('aria-hidden="true"') &&
+          /<(path|circle|rect)\b/.test(svg)
+      ).length
+    ).toBeGreaterThanOrEqual(2);
+
+    // As the page reads to a visitor: an image with its name, and a link
+    // named by its label whose icon is not read a second time.
+    const named = page.getByRole("img", { name: "Free delivery" });
+    await expect(named).toBeVisible();
+    await expect(named).toHaveAttribute("width", "1em");
+    await expect(named).toHaveAttribute("stroke", "currentColor");
+    const link = page.getByRole("link", { name: "Write to us" });
+    await expect(link).toHaveAttribute("href", "/contact");
+    await expect(link.locator("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
   test("is drawn on the canvas, and changed from the Content tab's picker", async ({
