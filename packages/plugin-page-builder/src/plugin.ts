@@ -126,6 +126,10 @@ import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
+import {
+  FIELD_GROUPS_PER_PAGE,
+  readSiteFieldGroups,
+} from "./host-rewrite/field-groups";
 import { registerInTransactionFence } from "./host-rewrite/in-transaction";
 import {
   COMPONENT_DELETE_REWRITE_SERVICE,
@@ -1219,49 +1223,27 @@ function configuredSingles(ctx: {
   return bySlug;
 }
 
-/** How many field groups one page of the registry lists. */
-const FIELD_GROUPS_PER_PAGE = 200;
-
-/** How many pages of the registry one walk reads before it stops. */
-const FIELD_GROUP_PAGES = 50;
-
 /**
- * The site's field groups, by slug, read once per walk: the registry's
- * definitions (made in the admin, or declared in code and synced into it at
- * start), each winning over the code's for its slug, since the registry is
- * what core builds a group's table and reads its schema from; and, for a slug
- * the registry does not hold, the code's. A registry that cannot be read, or
- * holds more than the walk lists, leaves the slugs it did not answer to the
- * code alone, and a slug neither knows answers `undefined`: its reference
- * stays one that may hold blocks.
+ * The site's field groups, read once per walk from the registry through the
+ * Direct API, with the code's declarations for a slug the registry does not
+ * hold; nothing at all where the registry cannot be read to the end
+ * (`host-rewrite/field-groups`).
  */
 function siteFieldGroups(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   nextly: () => Promise<RewriteDirectApi>
 ): () => Promise<(slug: string) => { readonly fields?: unknown } | undefined> {
   const inCode = declaredFieldGroups(ctx);
-  return async () => {
-    const registry = new Map<string, { readonly fields?: unknown }>();
-    try {
-      const api = await nextly();
-      for (let page = 0; page < FIELD_GROUP_PAGES; page += 1) {
-        const listed = await api.fieldGroups.find({
+  return () =>
+    readSiteFieldGroups({
+      page: async offset =>
+        (await nextly()).fieldGroups.find({
           limit: FIELD_GROUPS_PER_PAGE,
-          offset: page * FIELD_GROUPS_PER_PAGE,
-        });
-        for (const group of listed.items) {
-          registry.set(group.slug, { fields: group.fields });
-        }
-        if (!listed.meta.hasNext) break;
-      }
-    } catch (error) {
-      ctx.logger.warn(
-        "[page-builder] the field-group registry could not be read, so only field groups declared in code are read through their definitions",
-        { error }
-      );
-    }
-    return slug => registry.get(slug) ?? inCode(slug);
-  };
+          offset,
+        }),
+      inCode,
+      warn: (message, meta) => ctx.logger.warn(message, meta),
+    });
 }
 
 /**
