@@ -154,6 +154,16 @@ export interface EmailProviderFormProps {
    * places — which is what the hardcoded form did.
    */
   onSubmit: (payload: EmailProviderPayload) => void;
+  /**
+   * The type chosen before the form opened, as the guided setup's first step
+   * chooses it. The type picker is then not shown.
+   */
+  fixedType?: string;
+  /**
+   * The guided setup: the Default and Active switches are not shown, as a
+   * new provider stays off until its test is accepted.
+   */
+  guided?: boolean;
 }
 
 /**
@@ -172,13 +182,15 @@ export function EmailProviderForm({
   descriptorsError,
   isPending,
   onSubmit,
+  fixedType,
+  guided = false,
 }: EmailProviderFormProps): JSX.Element {
   const isEdit = mode === "edit";
 
   // In edit mode the stored type wins, even before the catalog arrives, so the
   // form never briefly renders as a different provider. In create mode the
   // first registered type is the initial selection.
-  const initialType = provider?.type ?? descriptors[0]?.type ?? "";
+  const initialType = provider?.type ?? fixedType ?? descriptors[0]?.type ?? "";
 
   const initialDescriptor = useMemo(
     () => descriptors.find(entry => entry.type === initialType),
@@ -416,10 +428,17 @@ export function EmailProviderForm({
     // Written field by field rather than through a whole-form reset, which
     // would make every current value the new baseline and clear the dirty
     // marks on the identity fields this is deliberately keeping.
-    const next = defaultFormValues(descriptors[0]);
+    // A type chosen before the form opened is never swapped for another: the
+    // form would show one provider's fields while its owner sends the other.
+    // Where it is gone, the owner says so and asks for a new choice.
+    const target = fixedType
+      ? descriptors.find(entry => entry.type === fixedType)
+      : descriptors[0];
+    if (!target) return;
+    const next = defaultFormValues(target);
     form.resetField("type", { defaultValue: next.type });
     form.resetField("configuration", { defaultValue: next.configuration });
-  }, [isEdit, descriptors, form]);
+  }, [isEdit, descriptors, form, fixedType]);
 
   // Replace the configuration when the provider type changes. The two
   // providers have different shapes, so carrying values across is leftover
@@ -468,6 +487,9 @@ export function EmailProviderForm({
       // identity fields — and a rename in progress would then be overwritten
       // by the next refetch with nothing on screen to say so.
       form.resetField("configuration", { defaultValue: configuration });
+      // Messages that belonged to the previous type go with it: its own type
+      // message, and the sender rule, which differs between providers.
+      form.clearErrors(["type", "fromEmail"]);
     },
     [descriptors, form, provider]
   );
@@ -597,43 +619,52 @@ export function EmailProviderForm({
               on this page in both themes. `role="group"` with aria-labelledby
               names the whole picker, which is the relationship these cards
               actually have to their heading. */}
-          <FormField
-            control={form.control}
-            name="type"
-            render={({ field }) => (
-              <FormItem className="m-0">
-                <SettingsRowGroup
-                  label="Provider Type"
-                  description="Select the provider type to match your configuration."
-                >
-                  <ProviderTypePicker
-                    descriptors={descriptors}
-                    value={field.value}
-                    // Locked along with the rest when the stored type is not
-                    // registered: the notice above says the settings cannot be
-                    // edited, and a live picker would make that false by
-                    // letting an orphaned record be converted while every
-                    // other field stays disabled.
-                    disabled={isPending || isUnknownStoredType}
-                    onChange={type => {
-                      field.onChange(type);
-                      handleTypeChange(type);
-                    }}
-                  />
-                  <FormMessage className="mt-1.5" />
-                  {/* Sits with the picker rather than at the top of the
-                      form: it describes the provider that is selected, so
-                      it has to move when the selection does. */}
-                  {selectedDescriptor && (
-                    <ProviderAvailabilityNotice
-                      providerLabel={selectedDescriptor.label}
-                      availability={selectedDescriptor.availability}
+          {/* Not shown when the type was chosen before the form opened. */}
+          {!fixedType && (
+            <FormField
+              control={form.control}
+              name="type"
+              render={({ field }) => (
+                <FormItem className="m-0">
+                  <SettingsRowGroup
+                    label="Provider Type"
+                    description="Select the provider type to match your configuration."
+                  >
+                    <ProviderTypePicker
+                      descriptors={descriptors}
+                      value={field.value}
+                      // Locked along with the rest when the stored type is not
+                      // registered: the notice above says the settings cannot be
+                      // edited, and a live picker would make that false by
+                      // letting an orphaned record be converted while every
+                      // other field stays disabled.
+                      disabled={isPending || isUnknownStoredType}
+                      onChange={type => {
+                        field.onChange(type);
+                        handleTypeChange(type);
+                      }}
                     />
-                  )}
-                </SettingsRowGroup>
-              </FormItem>
-            )}
-          />
+                    <FormMessage className="mt-1.5" />
+                    {/* Sits with the picker rather than at the top of the
+                        form: it describes the provider that is selected, so
+                        it has to move when the selection does. */}
+                    {selectedDescriptor && (
+                      <ProviderAvailabilityNotice
+                        providerLabel={selectedDescriptor.label}
+                        availability={selectedDescriptor.availability}
+                      />
+                    )}
+                  </SettingsRowGroup>
+                </FormItem>
+              )}
+            />
+          )}
+          {fixedType && selectedDescriptor && (
+            <ProviderAvailabilityNotice
+              providerLabel={selectedDescriptor.label}
+              availability={selectedDescriptor.availability}
+            />
+          )}
         </SettingsSection>
 
         {/* ── Section: Provider-specific configuration ───────────── */}
@@ -739,43 +770,47 @@ export function EmailProviderForm({
         </SettingsSection>
 
         {/* ── Section: Defaults ──────────────────────────────────── */}
-        <SettingsSection label="Defaults">
-          <FormField
-            control={form.control}
-            name="isDefault"
-            render={({ field, fieldState }) => (
-              <FieldShell
-                label="Set as Default Provider"
-                description="When enabled, this provider will be used to send all transactional emails unless a specific provider is requested."
-                error={fieldState.error?.message}
-              >
-                <Switch
-                  checked={field.value}
-                  onCheckedChange={field.onChange}
-                  disabled={isPending || isUnknownStoredType}
-                />
-              </FieldShell>
-            )}
-          />
+        {/* Not shown in the guided setup: a new provider stays off until its
+            test is accepted, and the last step turns it on. */}
+        {!guided && (
+          <SettingsSection label="Defaults">
+            <FormField
+              control={form.control}
+              name="isDefault"
+              render={({ field, fieldState }) => (
+                <FieldShell
+                  label="Set as Default Provider"
+                  description="When enabled, this provider will be used to send all transactional emails unless a specific provider is requested."
+                  error={fieldState.error?.message}
+                >
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    disabled={isPending || isUnknownStoredType}
+                  />
+                </FieldShell>
+              )}
+            />
 
-          <FormField
-            control={form.control}
-            name="isActive"
-            render={({ field, fieldState }) => (
-              <FieldShell
-                label="Active"
-                description="Inactive providers are kept but never used to send. Turn off to pause a provider without deleting it."
-                error={fieldState.error?.message}
-              >
-                <Switch
-                  checked={field.value}
-                  onCheckedChange={field.onChange}
-                  disabled={isPending || isUnknownStoredType}
-                />
-              </FieldShell>
-            )}
-          />
-        </SettingsSection>
+            <FormField
+              control={form.control}
+              name="isActive"
+              render={({ field, fieldState }) => (
+                <FieldShell
+                  label="Active"
+                  description="Inactive providers are kept but never used to send. Turn off to pause a provider without deleting it."
+                  error={fieldState.error?.message}
+                >
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    disabled={isPending || isUnknownStoredType}
+                  />
+                </FieldShell>
+              )}
+            />
+          </SettingsSection>
+        )}
       </form>
     </Form>
   );

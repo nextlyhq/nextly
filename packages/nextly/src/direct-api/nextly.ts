@@ -699,7 +699,12 @@ export class Nextly implements NextlyContext {
   /** Update the current user's profile (name/image only). */
   updateMe(args: {
     user: UserContext;
-    data: { name?: string; image?: string };
+    data: {
+      name?: string;
+      image?: string;
+      /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
+      interfaceLanguage?: string | null;
+    };
   }): Promise<AuthResult> {
     return authNs.updateMe(this, args);
   }
@@ -928,7 +933,12 @@ export const nextly = {
   me: (args: { user: UserContext }) => requireNextly().me(args),
   updateMe: (args: {
     user: UserContext;
-    data: { name?: string; image?: string };
+    data: {
+      name?: string;
+      image?: string;
+      /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
+      interfaceLanguage?: string | null;
+    };
   }) => requireNextly().updateMe(args),
   register: (args: RegisterArgs) => requireNextly().register(args),
   changePassword: (args: ChangePasswordArgs & { user: UserContext }) =>

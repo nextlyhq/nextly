@@ -5,9 +5,9 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  "name": "20261106_094102_413_add_breakpoint_removal_undoes",
-  "schemaVersion": 7,
-  "checksum": "c39bc6fd388d996081d23964a62b9bb1d59ee04c8b77529299f2f24597cea5e3",
+  "name": "20261106_095219_741_add_breakpoint_removal_undoes",
+  "schemaVersion": 8,
+  "checksum": "bd09923df56aa2b4215f555ddfc3248d6fe827ffcde1c8471f9697c86b0e029e",
   "dialects": {
     "postgresql": {
       "up": [
@@ -482,6 +482,141 @@ export default {
           ],
           "foreignKeys": [],
           "checks": []
+        },
+        {
+          "name": "page_builder__class_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "class_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__class_usage_class_id",
+              "columns": [
+                "class_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__component_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "kind",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "component_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__component_usage_component_id",
+              "columns": [
+                "component_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
         }
       ]
     },
@@ -920,6 +1055,141 @@ export default {
           ],
           "foreignKeys": [],
           "checks": []
+        },
+        {
+          "name": "page_builder__class_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "varchar(36)",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "varchar(64)",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "class_id",
+              "type": "varchar(255)",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__class_usage_class_id",
+              "columns": [
+                "class_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__component_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "varchar(36)",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "varchar(64)",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "kind",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "component_id",
+              "type": "varchar(512)",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__component_usage_component_id",
+              "columns": [
+                "component_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
         }
       ]
     },
@@ -1352,6 +1622,141 @@ export default {
               "columns": [
                 "run_id",
                 "document_key"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__class_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "class_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__class_usage_class_id",
+              "columns": [
+                "class_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__component_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "kind",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "component_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__component_usage_component_id",
+              "columns": [
+                "component_id"
               ],
               "unique": false
             }
@@ -1790,6 +2195,141 @@ export default {
           ],
           "foreignKeys": [],
           "checks": []
+        },
+        {
+          "name": "page_builder__class_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "class_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__class_usage_class_id",
+              "columns": [
+                "class_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__component_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "kind",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "component_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__component_usage_component_id",
+              "columns": [
+                "component_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
         }
       ]
     },
@@ -2215,6 +2755,141 @@ export default {
           ],
           "foreignKeys": [],
           "checks": []
+        },
+        {
+          "name": "page_builder__class_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "varchar(36)",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "varchar(64)",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "class_id",
+              "type": "varchar(255)",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__class_usage_class_id",
+              "columns": [
+                "class_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__component_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "varchar(36)",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "varchar(255)",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "varchar(64)",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "kind",
+              "type": "varchar(16)",
+              "nullable": false
+            },
+            {
+              "name": "component_id",
+              "type": "varchar(512)",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__component_usage_component_id",
+              "columns": [
+                "component_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
         }
       ]
     },
@@ -2634,6 +3309,141 @@ export default {
               "name": "idx_page_builder__breakpoint_removal_fragments_created_at",
               "columns": [
                 "created_at"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__class_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "class_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__class_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__class_usage_class_id",
+              "columns": [
+                "class_id"
+              ],
+              "unique": false
+            }
+          ],
+          "foreignKeys": [],
+          "checks": []
+        },
+        {
+          "name": "page_builder__component_usage",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "nullable": false,
+              "primaryKey": true
+            },
+            {
+              "name": "scope",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "entity_key",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "field",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "locale",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "variant",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "kind",
+              "type": "text",
+              "nullable": false
+            },
+            {
+              "name": "component_id",
+              "type": "text",
+              "nullable": false
+            }
+          ],
+          "indexes": [
+            {
+              "name": "idx_page_builder__component_usage_entity_entity_key_178r965",
+              "columns": [
+                "entity",
+                "entity_key"
+              ],
+              "unique": false
+            },
+            {
+              "name": "idx_page_builder__component_usage_component_id",
+              "columns": [
+                "component_id"
               ],
               "unique": false
             }

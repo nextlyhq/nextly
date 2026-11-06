@@ -3,7 +3,7 @@
  * command a deployment runs, on every configured dialect: from a release
  * before the removal's runs table (schema 4), from one with it but before
  * the table keeping what each removal took out (schema 5), and from one with
- * both but before a run could mark the removal it undoes (schema 6).
+ * both but before a run could mark the removal it undoes (schema 7).
  *
  * The install is made the way a site at that release made it: a scratch
  * project configured with this plugin as that release shipped it (its first
@@ -73,7 +73,7 @@ const RELEASES = [
     shipped: shippedBefore("_create_breakpoint_removal_fragments"),
   },
   {
-    release: "before a run marks the removal it undoes (schema 6)",
+    release: "before a run marks the removal it undoes (schema 7)",
     shipped: shippedBefore("_add_breakpoint_removal_undoes"),
   },
 ];

@@ -18,7 +18,11 @@ import {
   type DefinitionsById,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginRouteContext,
+  type PluginRouteIdentity,
+} from "@nextlyhq/plugin-sdk";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
 import {
@@ -26,7 +30,6 @@ import {
   AS_THE_SYSTEM,
   publishedStoreSource,
 } from "../component-store-source";
-import { readingAsUser } from "../library-route";
 
 import {
   componentDeleteStep,
@@ -131,6 +134,16 @@ export function runStarterOf(
     : `user:${userIdOf(caller)}`;
 }
 
+/** The caller's identity as the stored read and the conditional write take it. */
+function identityOf(caller: RewriteCaller): Promise<PluginRouteIdentity> {
+  if (caller.caller === null) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "host-rewrite-no-caller" },
+    });
+  }
+  return caller.caller.identity();
+}
+
 /** The signed-in user's id, which a route's caller always carries. */
 function userIdOf(caller: {
   readonly user: { readonly id: string } | null;
@@ -197,7 +210,7 @@ function rewriteAsCaller(
     ...installed.site,
     componentId: args.componentId,
     hints: () => installed.hints(args.componentId),
-    identity: () => readingAsUser(args.caller),
+    identity: () => identityOf(args.caller),
   };
   const limits = installed.limits();
   return rewriteHosts(
