@@ -78,6 +78,7 @@ import {
 import type { Entry } from "@admin/types/collection";
 
 import { drawnFieldPath } from "./drawn-field-path";
+import { refreshAfterEntryChange } from "./entry-cache";
 import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
@@ -125,6 +126,11 @@ export interface UseUpdateEntryOptions<
    * fields names them by; their names are used without them.
    */
   fields?: readonly { name?: string; label?: unknown }[];
+  /**
+   * Reads the form's value at a path, for the conditions that decide whether
+   * a field is drawn when a refusal arrives.
+   */
+  valueAt?: (path: string) => unknown;
   /**
    * The editor's form. A publish refused over out-of-date shared fields
    * offers to take the live values only with it: the action saves the form as
@@ -265,6 +271,7 @@ export function useUpdateEntry<
   draft,
   translationStatus = false,
   fields,
+  valueAt,
   refusedForm,
 }: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
@@ -381,7 +388,7 @@ export function useUpdateEntry<
       // the form keeps the author's values. Reasons no field can show are
       // said by the toast below instead.
       const placed = placeServerRefusal(error, setError, {
-        isFormField: drawnFieldPath(fields),
+        isFormField: drawnFieldPath(fields, valueAt),
       });
       let handledByForm = placed.handled;
 
@@ -433,18 +440,9 @@ export function useUpdateEntry<
         });
       }
 
-      // Invalidate entry list queries for this collection
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.listsByCollection(collectionSlug),
-      });
-
-      // Invalidate this specific entry detail
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-
-      // Invalidate dashboard caches so recent-entries refresh immediately
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Its lists, its own read and the dashboard refetch, as after every
+      // change to an entry.
+      refreshAfterEntryChange(queryClient, collectionSlug, entryId);
 
       if (showToast) {
         // The row IS saved even when a post-commit hook failed, so this stays a

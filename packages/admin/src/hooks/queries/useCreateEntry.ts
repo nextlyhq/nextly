@@ -89,6 +89,11 @@ export interface UseCreateEntryOptions<
    * form draws it, and said by the toast otherwise. Every path, if absent.
    */
   fields?: readonly { name?: string }[];
+  /**
+   * Reads the form's value at a path, for the conditions that decide whether
+   * a field is drawn when a refusal arrives.
+   */
+  valueAt?: (path: string) => unknown;
 }
 
 /**
@@ -195,6 +200,7 @@ export function useCreateEntry<
   showToast = true,
   setError,
   fields,
+  valueAt,
 }: UseCreateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
   Error,
@@ -249,7 +255,7 @@ export function useCreateEntry<
       // the form keeps the author's values. Reasons no field can show are
       // said by the toast below instead.
       const placed = placeServerRefusal(error, setError, {
-        isFormField: drawnFieldPath(fields),
+        isFormField: drawnFieldPath(fields, valueAt),
       });
 
       // Show a toast only for what the form's fields do not already say.

@@ -980,8 +980,10 @@ export function useEntryForm({
     collectionSlug: collection.name,
     showToast: true,
     setError: form.setError,
-    // A refusal's reason goes on its field only where the form draws one.
+    // A refusal's reason goes on its field only where the form draws one,
+    // which its conditions decide from the values on screen.
     fields,
+    valueAt: path => form.getValues(path),
   });
 
   // The read asks every language's translation state only of a user who may
@@ -1010,6 +1012,8 @@ export function useEntryForm({
         setError: form.setError,
         // For the labels a refusal over out-of-date shared fields names them by.
         fields,
+        // And whether the form draws a refused field, by its conditions.
+        valueAt: path => form.getValues(path),
         // Route the save to the active content language.
         locale,
         // Match the editor's read mode so the optimistic update, rollback, and
