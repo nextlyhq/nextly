@@ -35,6 +35,10 @@ import {
   stripAutosavePasswords,
   withLastViewedMarks,
 } from "../../api/versions-access";
+import {
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadEntity } from "../../auth/entity-read-access";
 import { actorForWrite, type RequestActor } from "../../auth/request-actor";
@@ -51,7 +55,11 @@ import {
   type DiscardScopeKind,
 } from "../../domains/versions/discard-working-draft";
 import { lockDocument, lockPerson } from "../../domains/versions/history-locks";
-import { restoreVersion } from "../../domains/versions/restore-version";
+import { changesSinceRecoveryPoint } from "../../domains/versions/recovery-point-changes";
+import {
+  restoreVersion,
+  type RestoreVersionResult,
+} from "../../domains/versions/restore-version";
 import type { TakenLiveValues } from "../../domains/versions/shared-publish-base";
 import { markVersionSeen } from "../../domains/versions/version-views";
 import { VersionsRepository } from "../../domains/versions/versions-repository";
@@ -691,8 +699,10 @@ export async function restoreVersionForDocument(
     params: Params;
     /** The HTTP request behind the restore, when one produced it. */
     request?: Request;
+    /** `_rev` and `_overwrite` from the request: see `restoreVersion`. */
+    version?: Readonly<Record<string, unknown>>;
   }
-): Promise<{ restoredFrom: number; droppedFields: string[] }> {
+): Promise<RestoreVersionResult> {
   const caller = readAccessCallerForDispatch(args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
@@ -737,6 +747,8 @@ export async function restoreVersionForDocument(
     // scope, not the owner's RBAC.
     authenticatedScope: readAuthenticatedScope(),
     request: args.request,
+    // Judged as the update the restore makes is.
+    version: args.version,
   });
 }
 
@@ -796,16 +808,26 @@ async function assertDocumentWriteAllowed(
     slug: string;
     entryId: string;
     user: UserContext;
+    /** The language the write acts in, which the update rule matches in. */
+    locale?: string | null;
   },
   reason: string
 ): Promise<AuthenticatedScope | undefined> {
   const authenticatedScope = await assertDocumentReadAllowed(args, reason);
-  await assertDocumentUpdatable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    authenticatedScope
+  // Asked in the languages the route asked these writes in, the language the
+  // request names kept as named, so the verdict the route kept for them is
+  // the one the update rule's filter is read from.
+  await withRuleLanguage(
+    registeredWriteAsNamedLanguagesFor(args.locale || undefined),
+    () =>
+      assertDocumentUpdatable(
+        args.scopeKind,
+        args.slug,
+        args.entryId,
+        args.user,
+        authenticatedScope,
+        args.locale ?? undefined
+      )
   );
   return authenticatedScope;
 }
@@ -825,6 +847,8 @@ export async function takeLiveSharedValuesForDocument(args: {
   user: UserContext;
   /** The language whose pending change takes them; none means the default. */
   locale?: string | null;
+  /** `_rev` and `_overwrite`: taking the live values saves the change. */
+  version?: Readonly<Record<string, unknown>>;
 }): Promise<TakenLiveValues> {
   const authenticatedScope = await assertDocumentWriteAllowed(
     args,
@@ -839,11 +863,15 @@ export async function takeLiveSharedValuesForDocument(args: {
     overrideAccess: false,
     routeAuthorized: true,
     authenticatedScope,
+    version: args.version,
   };
   const result =
     args.scopeKind === "single"
       ? await getService("singleEntryService").takeLiveSharedValues({
           slug: args.slug,
+          // The document every check above was made against: a Single's row
+          // replaced since is refused rather than written.
+          entryId: args.entryId,
           ...caller,
         })
       : await getService("collectionsHandler")
@@ -890,6 +918,8 @@ export async function discardWorkingDraftForDocument(
      * language — the admin omits `?locale=` when editing that one.
      */
     locale?: string | null;
+    /** `_rev` and `_overwrite`: a discard is judged as a save of the change. */
+    version?: Readonly<Record<string, unknown>>;
   }
 ): Promise<unknown> {
   const authenticatedScope = await assertDocumentWriteAllowed(
@@ -905,6 +935,7 @@ export async function discardWorkingDraftForDocument(
     locale: args.locale ?? null,
     authenticatedScope,
     actor: readAuthenticatedActor(),
+    version: args.version,
   });
   return document;
 }
@@ -1030,5 +1061,19 @@ export async function getAutosaveForDocument(
     args.user,
     authenticatedScope
   );
+  // What changed since the version the point's edits began from, described
+  // as a refused save would describe it, so the editor can say whose work
+  // restoring the point would replace.
+  if (args.scopeKind === "collection" || args.scopeKind === "single") {
+    const changes = await changesSinceRecoveryPoint(getService("adapter"), {
+      scopeKind: args.scopeKind,
+      slug: args.slug,
+      entryId: args.entryId,
+      snapshot: row.snapshot,
+      locale: row.locale ?? null,
+      reader: { user: args.user, trusted: false, authenticatedScope },
+    });
+    if (changes) return { ...row, ...changes };
+  }
   return row;
 }

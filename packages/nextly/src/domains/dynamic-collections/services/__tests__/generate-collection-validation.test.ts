@@ -158,3 +158,41 @@ describe("non-string scalar fields", () => {
     );
   });
 });
+
+describe("generateCollectionUpdate and sibling fields kept under stored names", () => {
+  // A field sent under a spelling of a stored field keeps the stored name
+  // (`namesKeptFromStored`), so two fields that look apart as sent can arrive
+  // at one stored name. The save is refused before anything is planned.
+  async function update(fields: unknown[]): Promise<unknown> {
+    const svc = service();
+    const registry = {
+      getCollection: async () => ({
+        name: "posts",
+        tableName: "dc_posts",
+        fields: [{ name: "metaTitle", type: "text" }],
+      }),
+    };
+    Object.assign(svc, { registryService: registry });
+    return svc
+      .generateCollectionUpdate("posts", { fields } as never)
+      .catch((e: unknown) => e);
+  }
+
+  it("refuses two fields that both keep one stored name", async () => {
+    const err = await update([
+      { name: "metatitle", type: "text" },
+      { name: "meta_title", type: "text" },
+    ]);
+    expect(NextlyError.is(err)).toBe(true);
+    expect((err as NextlyError).publicData).toEqual({
+      errors: [
+        {
+          path: "fields",
+          code: "FIELD_NAME_DUPLICATE",
+          message:
+            "Collection 'posts': fields 'metaTitle' and 'metaTitle' at the top level have the same name. Rename one of them.",
+        },
+      ],
+    });
+  });
+});

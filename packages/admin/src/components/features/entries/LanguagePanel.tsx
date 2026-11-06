@@ -35,7 +35,7 @@ import { CopyFromLanguageMenu } from "./CopyFromLanguageMenu";
 import { useCopyFromLanguageScope } from "./CopyFromLanguageScope";
 import { useEntryLocale } from "./EntryLocaleContext";
 import { StateDot } from "./LanguageStateDot";
-import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
+import { PublishAllConfirm } from "./PublishAllConfirmDialog";
 import {
   languageState,
   languageStateLabel,
@@ -66,6 +66,18 @@ export interface LanguagePanelProps {
    * write the live document). States stay readable.
    */
   actionsDisabled?: boolean;
+  /**
+   * Withholds publishing every language. The same as `actionsDisabled` unless
+   * given: it changes only each language's status, which the publish
+   * permission judges, so a user held from every edit may still be offered it.
+   */
+  publishAllDisabled?: boolean;
+  /**
+   * Withholds opening another language. The same as `actionsDisabled` unless
+   * given: a user who may only read the document is held from every mutation
+   * here and may still read its other languages.
+   */
+  navigationDisabled?: boolean;
   className?: string;
 }
 
@@ -164,6 +176,7 @@ function StateLegend() {
 function PanelHeader({
   counts,
   actionsDisabled,
+  publishAllDisabled,
   canPublishAll,
   publishPending,
   onPublishAll,
@@ -183,6 +196,7 @@ function PanelHeader({
   activeState: LanguageState;
   metaKnown: boolean;
   actionsDisabled: boolean;
+  publishAllDisabled: boolean;
   canPublishAll: boolean;
   publishPending: boolean;
   onPublishAll: () => void;
@@ -194,16 +208,10 @@ function PanelHeader({
       <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         Languages
       </span>
-      <CompletenessMeter translated={counts.translated} total={counts.total} />
-      {/* The unit is stated, not left to the eyebrow above it. Every counter in
-          the admin reads "N of M <unit> translated", and this was the one that
-          did not: with three languages and two translatable fields the panel
-          said "0 of 2" about languages while translation mode said "0 of 2"
-          about fields, a few clicks apart. The numbers coincide exactly where a
-          person first meets them. */}
-      <span className="text-xs tabular-nums text-muted-foreground">
-        {counts.translated} of {counts.total} languages translated
-      </span>
+      {/* No count where the translation states were not read (a user who may
+          not read every language's): zero of them would claim each language
+          missing. */}
+      {metaKnown && <TranslationProgress counts={counts} />}
       <span className="flex-1" />
       {/* Filling the language being EDITED lives here rather than on its row.
           Every other row implies its source — the author is standing in one
@@ -237,13 +245,31 @@ function PanelHeader({
           variant="outline"
           size="sm"
           className="h-7 px-2 text-xs"
-          disabled={actionsDisabled || publishPending}
+          disabled={publishAllDisabled || publishPending}
           onClick={onPublishAll}
         >
           {publishPending ? "Publishing…" : "Publish all"}
         </Button>
       )}
     </div>
+  );
+}
+
+/** How many languages are translated, as a meter and in words. */
+function TranslationProgress({ counts }: { counts: TranslationCounts }) {
+  return (
+    <>
+      <CompletenessMeter translated={counts.translated} total={counts.total} />
+      {/* The unit is stated, not left to the eyebrow above it. Every counter in
+          the admin reads "N of M <unit> translated", and this was the one that
+          did not: with three languages and two translatable fields the panel
+          said "0 of 2" about languages while translation mode said "0 of 2"
+          about fields, a few clicks apart. The numbers coincide exactly where a
+          person first meets them. */}
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {counts.translated} of {counts.total} languages translated
+      </span>
+    </>
   );
 }
 
@@ -264,6 +290,7 @@ function LanguageRows({
   canSeed,
   metaKnown,
   actionsDisabled,
+  navigationDisabled,
   onSelect,
 }: {
   shown: readonly { code: string; label: string; rtl: boolean }[];
@@ -283,6 +310,7 @@ function LanguageRows({
   /** Whether `translations` was supplied at all — see `seedVerb`. */
   metaKnown: boolean;
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
   onSelect:
     | ((code: string, options?: { seedFrom?: string }) => void)
     | undefined;
@@ -325,6 +353,7 @@ function LanguageRows({
             onSelect?.(locale.code, { seedFrom: active });
           }}
           actionsDisabled={actionsDisabled}
+          navigationDisabled={navigationDisabled}
         />
       ))}
     </ul>
@@ -385,8 +414,11 @@ function activeLanguageView(
 function pendingLanguageCount(
   locales: readonly { code: string }[],
   translations: Record<string, LocaleTranslationMeta> | undefined
-): number {
-  return locales.filter(l => translations?.[l.code]?.pendingChange).length;
+): number | null {
+  // Unknown, not none, where the states were not read: the confirmation then
+  // warns that any held change goes live rather than claim there is none.
+  if (translations === undefined) return null;
+  return locales.filter(l => translations[l.code]?.pendingChange).length;
 }
 
 /**
@@ -456,7 +488,7 @@ const MARKER_ACTIONABLE_CLASS =
  * truncated "chan…" is the fact an author needed. `min-w-0` is what lets a flex child shrink
  * below its content at all; without it the strip reports its content width and nothing gives.
  */
-const MARKER_STRIP_CLASS = "flex min-w-0 shrink items-center gap-2";
+const MARKER_STRIP_CLASS = "flex shrink-0 items-center gap-2";
 
 /**
  * The markers a language row shows, in a FIXED order.
@@ -513,6 +545,7 @@ function LanguageRow({
   onSelect,
   onSeed,
   actionsDisabled,
+  navigationDisabled,
 }: {
   code: string;
   label: string;
@@ -529,18 +562,19 @@ function LanguageRow({
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   onSeed?: () => void;
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
 }) {
   return (
-    <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
-      {/* The describing half SHRINKS and the acting half does not. This row
-          lives in a 320px rail, and with a long label, a `default`/`rtl` badge
-          and a state to report there is not always room for both buttons —
-          measured, the "Open" of an untranslated RTL language sat 38px past the
-          row's own right edge, unreachable by pointer. Truncating the state text
-          costs nothing that is not said elsewhere: the dot encodes it by SHAPE,
-          and the language button's accessible name carries it in words. */}
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <StateDot state={state} />
+    <li className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-border last:border-b-0">
+      {/* The row WRAPS rather than truncating. In a 320px rail a long label,
+          its markers and a state do not always leave room for both buttons,
+          and truncating them to fit left "REV", "R" and "not…", which say
+          nothing. The describing half keeps its natural width, so when the
+          row is short of room the buttons move to a line of their own under
+          it instead of pushing past the row's edge or squeezing the words. */}
+      <div className="flex grow basis-auto flex-wrap items-center gap-x-2 gap-y-1">
+        {/* No state is claimed where the states were not read. */}
+        {metaKnown ? <StateDot state={state} /> : null}
         {/* The language NAME does not yield. It is the row's identity, and a
             flex row that shrinks everything proportionally turned "Arabic" into
             "A…" — which names nothing — while the state beside it still read in
@@ -561,12 +595,14 @@ function LanguageRow({
             </span>
           ))}
         </span>
-        <span
-          className="min-w-0 truncate text-xs text-muted-foreground"
-          title={languageStateLabel(state, { pendingChange, stale })}
-        >
-          {LANGUAGE_STATE_LABEL[state]}
-        </span>
+        {metaKnown && (
+          <span
+            className="whitespace-nowrap text-xs text-muted-foreground"
+            title={languageStateLabel(state, { pendingChange, stale })}
+          >
+            {LANGUAGE_STATE_LABEL[state]}
+          </span>
+        )}
       </div>
       {/* The active row carries NO action. Filling the language being edited is
           offered from the panel header instead, because this row cannot hold
@@ -575,11 +611,11 @@ function LanguageRow({
           "English", and 120px for "Brazilian Portuguese". The row's describing
           half is already the part that gives way, and it had no more to give. */}
       {isActive ? (
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           editing now
         </span>
       ) : (
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* Offered on EVERY language, not only an empty one. Filling a
               language that already has content is an overwrite rather than a
               start, which is what the verb reports and what the confirm step
@@ -607,11 +643,11 @@ function LanguageRow({
               variant="ghost"
               size="sm"
               className="h-7 px-2 text-xs"
-              // Switching languages is withheld under the same gate that
-              // withholds the mutations: while a past version is on screen,
-              // changing the document underneath the history banner shows one
-              // language's history labelled as another's.
-              disabled={actionsDisabled}
+              // Switching languages is withheld while a past version is on
+              // screen: changing the document underneath the history banner
+              // shows one language's history labelled as another's. A reader
+              // is not held here, only from the mutations beside it.
+              disabled={navigationDisabled}
               aria-label={`Open ${label}`}
               onClick={() => onSelect(code)}
             >
@@ -624,12 +660,62 @@ function LanguageRow({
   );
 }
 
+/**
+ * Whether a document has languages to show. Two switches, and both have to be
+ * on. `enabled` is the APP's — several languages are configured — while
+ * `collectionLocalized` is this DOCUMENT's. Reading only the first puts a
+ * language panel on a document that has no language dimension, where every
+ * row after the default reads "not translated": a claim about content that
+ * cannot exist rather than work left to do.
+ */
+export function hasLanguages(
+  enabled: boolean,
+  collectionLocalized: boolean,
+  languageCount: number
+): boolean {
+  return enabled && collectionLocalized && languageCount >= 2;
+}
+
+/**
+ * The panel as an editor mounts it, given the document's translations, the
+ * language on screen and the switch to another. The rail and the inline mount
+ * of the entry and Single editors share it, so each reads them the same way.
+ */
+export function DocumentLanguagePanel({
+  translations,
+  locale,
+  onLocaleChange,
+  ...panel
+}: Omit<LanguagePanelProps, "translations" | "activeLocale" | "onSelect"> & {
+  translations?: Record<string, LocaleTranslationMeta> | undefined;
+  locale?: string | undefined;
+  onLocaleChange?: LanguagePanelProps["onSelect"] | undefined;
+}): JSX.Element | null {
+  return (
+    <LanguagePanel
+      {...panel}
+      {...(translations === undefined ? {} : { translations })}
+      {...(locale === undefined ? {} : { activeLocale: locale })}
+      {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+    />
+  );
+}
+
+/** The publish hook's options: the lifecycle flag only where the caller knows it. */
+function publishOptions(
+  hasStatus: boolean | undefined
+): Parameters<typeof usePublishAllLanguages>[0] {
+  return hasStatus === undefined ? {} : { hasStatus };
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
   onSelect,
   hasStatus,
   actionsDisabled = false,
+  publishAllDisabled = actionsDisabled,
+  navigationDisabled = actionsDisabled,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -639,24 +725,15 @@ export function LanguagePanel({
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
   const copy = useCopyFromLanguageScope();
-  const publish = usePublishAllLanguages(
-    hasStatus === undefined ? {} : { hasStatus }
-  );
+  const publish = usePublishAllLanguages(publishOptions(hasStatus));
 
-  // Two switches, and both have to be on. `enabled` is the APP's — several
-  // languages are configured — while `collectionLocalized` is this DOCUMENT's.
-  // Reading only the first puts a language panel on a document that has no
-  // language dimension, where every row after the default reads "not
-  // translated": a claim about content that cannot exist rather than work left
-  // to do.
-  if (!enabled || !collectionLocalized || locales.length < 2) return null;
+  if (!hasLanguages(enabled, collectionLocalized, locales.length)) return null;
 
   const active = activeLocale ?? defaultLocale;
   const pendingCount = pendingLanguageCount(locales, translations);
   const counts = translationCounts(
     translations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
 
   const { offersFilter, shown } = filteredLanguages(locales, filter);
@@ -671,6 +748,7 @@ export function LanguagePanel({
         activeState={activeLanguage.state}
         metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
+        publishAllDisabled={publishAllDisabled}
         canPublishAll={publish.available}
         publishPending={publish.pending}
         onPublishAll={() => setConfirmPublishAll(true)}
@@ -682,16 +760,12 @@ export function LanguagePanel({
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
-      <PublishAllConfirmDialog
+      <PublishAllConfirm
         open={confirmPublishAll}
+        held={publishAllDisabled}
         onOpenChange={setConfirmPublishAll}
-        languageCount={locales.length}
         pendingCount={pendingCount}
-        isLoading={publish.pending}
-        onConfirm={() => {
-          publish.publishAll();
-          setConfirmPublishAll(false);
-        }}
+        publish={publish}
       />
 
       {offersFilter && (
@@ -719,6 +793,7 @@ export function LanguagePanel({
         canSeed={copy?.available ?? false}
         metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
         onSelect={onSelect}
       />
       <StateLegend />

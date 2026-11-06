@@ -23,6 +23,9 @@ const TEXT_INPUT_TYPES = new Set([
   "richText",
   "email",
   "code",
+  // An icon default is typed as its id (`lucide:star`); the schema's own
+  // validation refuses any other shape when the field is saved.
+  "icon",
 ]);
 
 const PICKER_TYPES = new Set(["select", "radio"]);
@@ -105,6 +108,7 @@ function renderEditor({
         id={inputId}
         value={value == null ? "" : String(value)}
         disabled={readOnly}
+        placeholder={field.type === "icon" ? "lucide:star" : undefined}
         onChange={e => onChange(e.target.value === "" ? null : e.target.value)}
       />
     );

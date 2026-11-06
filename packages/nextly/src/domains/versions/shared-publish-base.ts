@@ -111,6 +111,16 @@ export function sharedFieldNames(
  */
 export type SharedViews = ReadonlyMap<string, (value: unknown) => unknown>;
 
+/**
+ * A junction's ids, each once and in one order: the view a junction-backed
+ * field is compared through, since a junction keeps no order and links an id
+ * at most once, so a repeated id names no second link.
+ */
+export function asIdSet(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return [...new Set(value.map(id => String(id)))].sort();
+}
+
 /** The shared fields whose values differ between two copies of a document. */
 export function differingFields(
   shared: readonly string[],
@@ -508,25 +518,78 @@ function editTime(
 
 /**
  * Of these fields, those the caller may write whole. The write rules are run
- * on a copy of their live values, and a field passes only when the rules left
- * it as it was: one with a nested field the caller may not write is not
- * taken, since taking it would write that nested value over the change's.
+ * on a copy of the pending change as taking them would leave it, their live
+ * values over its own, and a field passes only when the rules left it as it
+ * was: one with a nested field the caller may not write is not taken, since
+ * taking it would write that nested value over the change's.
  *
+ * The whole change, not the fields alone, because a rule may read a sibling:
+ * shown only the fields taken, a rule asking about another field sees it
+ * missing and answers for a document that will never exist.
+ *
+ * A rule reading a sibling answers for the document it is shown, and which
+ * document that is depends on which fields are taken: a sibling taken shows
+ * its live value, a sibling left behind shows the change's own. So the set is
+ * settled in two steps, each judging the whole set on the one document it
+ * would write:
+ *
+ * 1. Shrink: judge the set, drop what the rules refuse, and judge again until
+ *    nothing is dropped. A field allowed only beside a sibling's live value
+ *    goes when that sibling does.
+ * 2. Grow: offer each field left out back, one at a time, and keep it when
+ *    the whole set with it still passes. A field refused only beside a
+ *    sibling's live value is taken once that sibling is left behind and the
+ *    change's own value allows it; and a field it in turn allows is offered
+ *    again on the next sweep.
+ *
+ * Every pass either settles or moves a field, so this ends after a number of
+ * passes bounded by the square of the field count, and the fields are the
+ * out-of-date shared fields of one document. Whatever it returns passes every
+ * rule together, on exactly the document the save writes.
+ *
+ * @param pending The pending change the fields would be taken into.
  * @param applyWriteRules The caller's field write rules, which remove what
  *   they refuse from the data they are handed, at any depth.
  */
 export async function wholeWritableFields(
   names: readonly string[],
   live: Record<string, unknown>,
+  pending: Record<string, unknown>,
   applyWriteRules: (data: Record<string, unknown>) => Promise<void>
 ): Promise<string[]> {
-  const data = structuredClone(
-    Object.fromEntries(names.map(name => [name, live[name]]))
-  );
-  await applyWriteRules(data);
-  return names.filter(
-    name => name in data && sameSharedValue(data[name], live[name])
-  );
+  // Of these fields, those the rules leave as they were on the document
+  // taking all of them would write.
+  const passing = async (fields: readonly string[]) => {
+    const data = structuredClone({
+      ...pending,
+      ...Object.fromEntries(fields.map(name => [name, live[name]])),
+    });
+    await applyWriteRules(data);
+    return fields.filter(
+      name => name in data && sameSharedValue(data[name], live[name])
+    );
+  };
+
+  let taken = [...names];
+  for (;;) {
+    const kept = await passing(taken);
+    if (kept.length === taken.length) break;
+    taken = kept;
+  }
+
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const name of names) {
+      if (taken.includes(name)) continue;
+      const offered = [...taken, name];
+      if ((await passing(offered)).length === offered.length) {
+        taken = offered;
+        grew = true;
+      }
+    }
+  }
+  // In the order the fields were asked about.
+  return names.filter(name => taken.includes(name));
 }
 
 /**
@@ -541,8 +604,9 @@ export async function wholeWritableFields(
  * recorded (none when nothing changed).
  *
  * @param live The live document, shaped as a version snapshot is.
- * @param mayTake The out-of-date fields the caller may write; all of them
- *   when omitted, for a trusted caller.
+ * @param mayTake The out-of-date fields the caller may write, judged on the
+ *   pending change it is handed; all of them when omitted, for a trusted
+ *   caller.
  */
 export async function takeLiveSharedValuesInto(
   tx: TransactionContext,
@@ -555,7 +619,10 @@ export async function takeLiveSharedValuesInto(
     pending: Record<string, unknown>;
     createdBy: string | null;
     maxPerDoc?: number | false;
-    mayTake?: (stale: string[]) => Promise<string[]>;
+    mayTake?: (
+      stale: string[],
+      pending: Record<string, unknown>
+    ) => Promise<string[]>;
     views?: SharedViews;
   }
 ): Promise<{ taken: string[]; remaining: string[]; versionNo: number | null }> {
@@ -568,7 +635,9 @@ export async function takeLiveSharedValuesInto(
     pending,
     views,
   });
-  const allowed = args.mayTake ? new Set(await args.mayTake(stale)) : null;
+  const allowed = args.mayTake
+    ? new Set(await args.mayTake(stale, pending))
+    : null;
   const taken = allowed ? stale.filter(name => allowed.has(name)) : stale;
   const remaining = stale.filter(name => !taken.includes(name));
   // Recorded before the save, so the save's retention pass already keeps it.

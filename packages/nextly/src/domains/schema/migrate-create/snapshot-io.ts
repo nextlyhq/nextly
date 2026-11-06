@@ -10,7 +10,8 @@
 //   {
 //     "version": 1,
 //     "migrationHash": "<sha256 of paired .sql file content>",
-//     "snapshot": { "tables": [ ... ] }
+//     "snapshot": { "tables": [ ... ] },
+//     "entities": { "collections": {...}, "singles": {...}, "fieldGroups": {...} }
 //   }
 //
 // JSON is written deterministically (sorted keys + 2-space indent) so
@@ -27,6 +28,11 @@ import type {
   NextlySchemaSnapshot,
 } from "../pipeline/diff/types";
 
+import {
+  isEntitySettingsRecord,
+  type EntitySettingsRecord,
+} from "./entity-settings";
+
 export interface SnapshotFile {
   version: 1;
   migrationHash: string;
@@ -42,6 +48,25 @@ export interface SnapshotFile {
    * to one written before this field existed.
    */
   contributions?: Record<string, ContributedElements>;
+  /**
+   * Every collection's, Single's and field group's settings at this point:
+   * labels, description, admin options, versioning, Draft/Published, the
+   * localisation flag and each field's declaration (`entity-settings.ts`).
+   *
+   * Recorded whole in every snapshot, whatever its migration changed, so a
+   * snapshot alone says what the settings were. Absent from a snapshot written
+   * before settings were recorded, which says nothing about them: a reader
+   * must never take the absence as settings cleared.
+   */
+  entities?: EntitySettingsRecord;
+  /**
+   * That every translated table in `snapshot` carries `localized: true` and its
+   * `localizedColumns`, so a table without them was not translated. Written in
+   * every snapshot, because a snapshot with no translated table looks the same
+   * as one written before tables recorded it. Absent from such an older
+   * snapshot, which may not say which tables were translated.
+   */
+  translatedFieldsRecorded?: true;
 }
 
 /** Empty snapshot used for "first migration" (no prior state). */
@@ -144,13 +169,35 @@ export function parseSnapshotFile(
       "expected snapshot.tables to be an array"
     );
   }
-  if (obj.contributions !== undefined && !isContributions(obj.contributions)) {
-    throw new SnapshotFileError(
-      filename,
-      "expected contributions to map table names to their contributed element names"
-    );
-  }
+  const problem = optionalPartProblem(obj);
+  if (problem !== undefined) throw new SnapshotFileError(filename, problem);
   return obj as unknown as SnapshotFile;
+}
+
+/** What is wrong with the envelope's optional parts, each checked only when present. */
+function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
+  if (obj.contributions !== undefined && !isContributions(obj.contributions)) {
+    return "expected contributions to map table names to their contributed element names";
+  }
+  if (obj.entities !== undefined && !isEntitySettingsRecord(obj.entities)) {
+    return "expected entities to record each collection's, single's and field group's settings by slug";
+  }
+  if (
+    obj.translatedFieldsRecorded !== undefined &&
+    obj.translatedFieldsRecorded !== true
+  ) {
+    return `expected translatedFieldsRecorded to be true when present, got ${JSON.stringify(obj.translatedFieldsRecorded)}`;
+  }
+  return undefined;
+}
+
+/**
+ * Where `writeSnapshot` writes the snapshot of the migration named `baseName`:
+ * `<metaDir>/<baseName>.snapshot.json`, the pairing every reader of a
+ * migrations folder relies on. A dry run names the file by it.
+ */
+export function snapshotPathOf(metaDir: string, baseName: string): string {
+  return resolve(metaDir, `${baseName}.snapshot.json`);
 }
 
 /**
@@ -164,7 +211,9 @@ export async function writeSnapshot(
   baseName: string,
   snapshot: NextlySchemaSnapshot,
   sqlContent: string,
-  contributions: Readonly<Record<string, ContributedElements>> = {}
+  contributions: Readonly<Record<string, ContributedElements>> = {},
+  /** Every entity's settings; omitted only by a caller that has none to record. */
+  entities?: EntitySettingsRecord
 ): Promise<string> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
@@ -177,6 +226,11 @@ export async function writeSnapshot(
           contributions: normalizeContributions(contributions),
         }
       : {}),
+    // Key order is sorted by the replacer below, so the record is written the
+    // same way whatever order the config declares its entities in.
+    ...(entities !== undefined ? { entities } : {}),
+    // The tables below carry the translated-field record as written here.
+    translatedFieldsRecorded: true,
     // Sort tables by name for reproducibility across machines.
     snapshot: {
       tables: [...snapshot.tables]
@@ -218,6 +272,20 @@ export async function writeSnapshot(
                 ...(t.localizedColumns !== undefined
                   ? { localizedColumns: [...t.localizedColumns].sort() }
                   : {}),
+                // Ordered by the column each entry names, whether it is the bare name an older
+                // snapshot holds or the name-and-kind a current one does, so the file stays
+                // stable across writes and the two spellings sort together.
+                ...(t.uniqueLocalizedColumns !== undefined
+                  ? {
+                      uniqueLocalizedColumns: [
+                        ...t.uniqueLocalizedColumns,
+                      ].sort((a, b) =>
+                        (typeof a === "string" ? a : a.column).localeCompare(
+                          typeof b === "string" ? b : b.column
+                        )
+                      ),
+                    }
+                  : {}),
               }
             : {}),
         }))
@@ -225,7 +293,7 @@ export async function writeSnapshot(
     },
   };
   const json = JSON.stringify(file, sortedKeysReplacer, 2);
-  const path = resolve(metaDir, `${baseName}.snapshot.json`);
+  const path = snapshotPathOf(metaDir, baseName);
   await writeFile(path, json + "\n", "utf-8");
   return path;
 }
@@ -298,8 +366,9 @@ function sortedKeysReplacer(_key: string, value: unknown): unknown {
     !Array.isArray(value) &&
     !(value instanceof Date)
   ) {
-    // After narrowing, Object.keys accepts `value` directly.
-    const sorted: Record<string, unknown> = {};
+    // After narrowing, Object.keys accepts `value` directly. A null prototype
+    // keeps an own `__proto__` key (plugin options can hold one) a key.
+    const sorted = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(value).sort()) {
       sorted[k] = (value as Record<string, unknown>)[k];
     }

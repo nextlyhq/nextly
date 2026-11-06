@@ -4,6 +4,8 @@
  * @module domains/document-lock/types
  */
 
+import type { StaleVersionPublicData } from "../../errors/public-data";
+
 import type { DocumentScopeKind } from "./lock-key";
 
 /** The document a claim is about. */
@@ -13,6 +15,18 @@ export interface DocumentRef {
   readonly slug: string;
   readonly entryId: string;
 }
+
+/**
+ * Someone else's change since the version the claimant's copy started from,
+ * told exactly as a save refused for it would tell it: the current version
+ * always, who and when only to a caller who may read the document.
+ *
+ * Present only when the claim or renewal named that version (`_rev`) and the
+ * parts it covers (the document's own row and its language) have moved.
+ *
+ * @experimental
+ */
+export type DocumentLockChange = StaleVersionPublicData;
 
 /** Who holds a claim, and how much of it is left. */
 export interface DocumentLockHolder {
@@ -32,9 +46,10 @@ export interface DocumentLockHolder {
  *
  * A discriminated result rather than a thrown error, because "somebody else is
  * editing this" is an ordinary answer the interface has to RENDER — with a name
- * and a countdown in it — not an exception. The HTTP layer turns `held` into a
- * 409 carrying the same holder; a thrown error would have to smuggle that
- * through log context, which is not public.
+ * and a countdown in it — not an exception. The HTTP layer answers `held` with
+ * a 200 whose item is this outcome, holder included, as it answers
+ * `acquired`; a thrown error would have to smuggle the holder through log
+ * context, which is not public.
  *
  * 🔴 `claimToken` is returned ONLY on success, and only to the caller that
  * succeeded. It identifies this acquisition, and every later heartbeat and
@@ -46,6 +61,12 @@ export type AcquireDocumentLockOutcome =
       readonly status: "acquired";
       readonly holder: DocumentLockHolder;
       readonly claimToken: string;
+      /**
+       * What changed since the version the claimant's copy started from: how
+       * an editor taking a document back learns it changed while they were
+       * away.
+       */
+      readonly changed?: DocumentLockChange;
     }
   | {
       readonly status: "held";
@@ -96,5 +117,11 @@ export type RenewDocumentLockOutcome =
        * who has already gone.
        */
       readonly waiting: boolean;
+      /**
+       * What someone else changed since the version the holder's copy started
+       * from, on the beat the holder already sends, so they are told before
+       * they save rather than by a refused save.
+       */
+      readonly changed?: DocumentLockChange;
     }
   | { readonly status: "lost"; readonly holder?: DocumentLockHolder };

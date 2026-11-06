@@ -1,0 +1,23 @@
+---
+title: LOCALIZATION_NOT_PROVISIONED
+description: "`db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read."
+---
+
+## Cause
+
+`db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read.
+
+A localized collection or Single keeps its translations in tables of their own, which `db:sync` creates beside the entity's table. When that fails, the entity's translations cannot be written or read, so the sync fails rather than reporting the schema in step.
+
+## Fix
+
+Run `nextly db:sync --verbose` to see the statement that failed, fix its cause (often a permission or an existing table in the way), then run it again.
+
+## Example
+
+```text
+✗ Localization could not be brought into step for `posts`.
+  Why:  Their translation tables could not be created, so their translations are either unwritable or unreadable until they are.
+  Next: Run `nextly db:sync --verbose` to see the statement that failed, fix its cause, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/localization-not-provisioned  (LOCALIZATION_NOT_PROVISIONED)
+```

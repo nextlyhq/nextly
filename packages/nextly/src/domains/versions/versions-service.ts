@@ -24,12 +24,14 @@ import type {
   VersionStatus,
 } from "../../schemas/versions/types";
 import { recordWriteEvent } from "../content-events/write-event";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 
 import type { PartVersion } from "./comparison-baselines";
 import type { VersionsDbApi } from "./db-api";
 import { lockDocument } from "./history-locks";
 import {
   VersionsRepository,
+  type AutosaveSupersession,
   type AutosaveWriteResult,
   type PendingEditCursor,
   type PendingEditOrder,
@@ -149,6 +151,9 @@ export class VersionsService {
      */
     by?: { actor: RequestActor; personName?: string | null }
   ): Promise<VersionRow> {
+    // Refused first when the document's collection or Single is removed from
+    // code: a version's name is something recorded about the entry.
+    await refuseHistoryWriteIfRemovedFromCode(ref);
     await this.get(ref, versionNo);
     await this.db.transaction(async tx => {
       // Under the document's lock, which retention's own pass waits for, the
@@ -244,6 +249,9 @@ export class VersionsService {
     ref: VersionRef,
     locale: string | null
   ): Promise<number> {
+    // Refused first when the document's collection or Single is removed from
+    // code: its pending change is its own.
+    await refuseHistoryWriteIfRemovedFromCode(ref);
     return this.repo.deleteWorkingDraft(ref, locale);
   }
 
@@ -267,6 +275,9 @@ export class VersionsService {
     locale?: string | null;
     createdBy?: string | null;
   }): Promise<AutosaveWriteResult> {
+    // Refused first when the document's collection or Single is removed from
+    // code: a recovery point is a write to its history.
+    await refuseHistoryWriteIfRemovedFromCode(input.ref);
     return this.repo.upsertAutosave(input);
   }
 
@@ -282,7 +293,13 @@ export class VersionsService {
   async getAutosave(
     ref: VersionRef,
     createdBy: string | null
-  ): Promise<VersionRow | undefined> {
-    return this.repo.findAutosave(ref, createdBy);
+  ): Promise<(VersionRow & { superseded?: AutosaveSupersession }) | undefined> {
+    const row = await this.repo.findAutosave(ref, createdBy);
+    if (!row) return undefined;
+    // Said by the server, from the counters it keeps: whether the document has
+    // been written since this point began, and by whom, so an editor never
+    // offers older work back as if it were current.
+    const superseded = await this.repo.autosaveSupersession(row);
+    return superseded === undefined ? row : { ...row, superseded };
   }
 }

@@ -42,10 +42,12 @@ function renderField({
   field,
   horizontal,
   source,
+  writesHeld = false,
 }: {
   field: unknown;
   horizontal: boolean;
   source?: Record<string, unknown>;
+  writesHeld?: boolean;
 }) {
   const locale: EntryLocaleContextValue = {
     rtl: false,
@@ -65,7 +67,11 @@ function renderField({
               source ? { sourceValues: source, sourceLabel: "English" } : {}
             }
           >
-            <FieldWrapper field={field as never} horizontal={horizontal}>
+            <FieldWrapper
+              field={field as never}
+              horizontal={horizontal}
+              writesHeld={writesHeld}
+            >
               <input data-testid="control" />
             </FieldWrapper>
           </TranslationFieldProvider>
@@ -78,6 +84,20 @@ function renderField({
 }
 
 describe("FieldWrapper source-fill", () => {
+  it("offers nothing on a field that may not be written", () => {
+    // A read-only page, for a user who may only read the document: filling
+    // the field would dirty a form nothing can save.
+    renderField({
+      field: textField,
+      horizontal: false,
+      source: { title: "Hi" },
+      writesHeld: true,
+    });
+    expect(
+      screen.queryByRole("button", { name: /use the english text for title/i })
+    ).not.toBeInTheDocument();
+  });
+
   it("offers the action on a localized field in the VERTICAL layout", () => {
     renderField({
       field: textField,

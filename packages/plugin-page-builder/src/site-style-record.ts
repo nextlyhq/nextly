@@ -29,9 +29,15 @@ import {
   TOKEN_KINDS,
   emitTokenBlocks,
   isPlainRecord,
+  isSpacingMode,
+  isDefaultLook,
+  isLook,
   isUsableNamedClass,
+  ownLooksRead,
+  namedClassesRead,
   newStyleIssueBudget,
   resolveSiteTokens,
+  tokenLabelIssue,
   usableNamedClasses,
   validateFontFace,
   validateStyleValues,
@@ -121,6 +127,44 @@ const optionalRecord = (
   value === undefined || isPlainRecord(value);
 
 /**
+ * Whether an entry has the shape of a stored token, before any rule about its
+ * values is asked. The type guard is what lets the whitelist below read each
+ * field without a cast.
+ */
+function isStoredTokenShape(entry: unknown): entry is {
+  id?: string;
+  name: string;
+  label?: string;
+  kind: string;
+  values: { light: string; dark?: string };
+  description?: string;
+  extensions?: Readonly<Record<string, unknown>>;
+  unreadExtension?: Readonly<Record<string, unknown>>;
+} {
+  return (
+    isPlainRecord(entry) &&
+    typeof entry.name === "string" &&
+    typeof entry.kind === "string" &&
+    (TOKEN_KINDS as readonly string[]).includes(entry.kind) &&
+    isPlainRecord(entry.values) &&
+    typeof entry.values.light === "string" &&
+    optionalString(entry.values.dark) &&
+    optionalString(entry.description) &&
+    // Shape only. Whether the id can become a custom property is the
+    // emitter's question and it already asks it, holding an id to the same
+    // grammar as a name because it reaches CSS by the same route. What has
+    // to happen HERE is that a non-string is refused rather than skipped:
+    // this identity is what a document's `$token` resolves through, so
+    // letting an unusable one fall out of the object would lose it on a save
+    // the author is told succeeded.
+    optionalString(entry.id) &&
+    optionalString(entry.label) &&
+    optionalRecord(entry.extensions) &&
+    optionalRecord(entry.unreadExtension)
+  );
+}
+
+/**
  * The stored token set, checked with the engine's own rules.
  *
  * Shape first, because `emitTokenBlocks` walks entries it assumes are
@@ -145,28 +189,19 @@ export function checkStoredTokens(
   const issues: string[] = [];
   const tokens: SiteToken[] = [];
   raw.tokens.forEach((entry: unknown, index) => {
-    if (
-      !isPlainRecord(entry) ||
-      typeof entry.name !== "string" ||
-      typeof entry.kind !== "string" ||
-      !(TOKEN_KINDS as readonly string[]).includes(entry.kind) ||
-      !isPlainRecord(entry.values) ||
-      typeof entry.values.light !== "string" ||
-      !optionalString(entry.values.dark) ||
-      !optionalString(entry.description) ||
-      // Shape only. Whether the id can become a custom property is the
-      // emitter's question and it already asks it, holding an id to the same
-      // grammar as a name because it reaches CSS by the same route. What has
-      // to happen HERE is that a non-string is refused rather than skipped:
-      // this identity is what a document's `$token` resolves through, so
-      // letting an unusable one fall out of the object would lose it on a save
-      // the author is told succeeded.
-      !optionalString(entry.id) ||
-      !optionalRecord(entry.extensions) ||
-      !optionalRecord(entry.unreadExtension)
-    ) {
+    if (!isStoredTokenShape(entry)) {
       issues.push(
         `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, and extensions must be an object.`
+      );
+      return;
+    }
+    // A label is display text, judged by the engine's one rule for it. Refused
+    // rather than dropped, because the author is present to fix it and a save
+    // that quietly lost the name they typed would report success.
+    const labelIssue = tokenLabelIssue(entry.label);
+    if (labelIssue !== undefined) {
+      issues.push(
+        `tokens[${index}] has a label that cannot be used. ${labelIssue}`
       );
       return;
     }
@@ -176,6 +211,7 @@ export function checkStoredTokens(
       // every rename into a silent break of every reference.
       ...(entry.id === undefined ? {} : { id: entry.id }),
       name: entry.name,
+      ...(entry.label === undefined ? {} : { label: entry.label }),
       kind: entry.kind as TokenKind,
       values: {
         light: entry.values.light,
@@ -387,12 +423,31 @@ export function unreadableStoredFonts(doc: unknown): readonly string[] {
 
 /** One face's shape, or nothing. Value rules stay `validateFontFace`'s. */
 function readFontFace(entry: unknown): FontFaceDef | undefined {
-  if (!isPlainRecord(entry)) return undefined;
-  if (typeof entry.family !== "string" || !Array.isArray(entry.src)) {
+  if (!isPlainRecord(entry) || typeof entry.family !== "string") {
     return undefined;
   }
+  const src = readFontSources(entry.src);
+  const source = readFontOrigin(entry.source);
+  if (src === undefined || source === null || !descriptorsAreWords(entry)) {
+    return undefined;
+  }
+  return {
+    family: entry.family,
+    src,
+    ...optionalField("weight", entry.weight),
+    ...optionalField("style", entry.style),
+    ...optionalField("display", entry.display),
+    ...optionalField("unicodeRange", entry.unicodeRange),
+    // Kept, so a writer appending to what it read stores it back unchanged.
+    ...(source === undefined ? {} : { source }),
+  };
+}
+
+/** A face's files as `{ url, format? }` records, or nothing when one is not. */
+function readFontSources(raw: unknown): FontFaceDef["src"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
   const src: FontFaceDef["src"][number][] = [];
-  for (const source of entry.src) {
+  for (const source of raw) {
     const record: unknown = source;
     if (
       !isPlainRecord(record) ||
@@ -401,28 +456,53 @@ function readFontFace(entry: unknown): FontFaceDef | undefined {
     ) {
       return undefined;
     }
-    src.push({
-      url: record.url,
-      ...(record.format === undefined ? {} : { format: record.format }),
-    });
+    src.push({ url: record.url, ...optionalField("format", record.format) });
   }
+  return src;
+}
+
+/** Whether a face's descriptors are each absent or a string. */
+function descriptorsAreWords(entry: Record<string, unknown>): boolean {
+  return [entry.weight, entry.style, entry.display, entry.unicodeRange].every(
+    optionalString
+  );
+}
+
+/** `{ [key]: value }` when the value is there, and nothing when it is not. */
+function optionalField<K extends string>(
+  key: K,
+  value: unknown
+): Partial<Record<K, string>> {
+  const field: Partial<Record<K, string>> = {};
+  if (typeof value === "string") field[key] = value;
+  return field;
+}
+
+/**
+ * Where a face came from, read for its shape: `undefined` when it says
+ * nothing, `null` when it is not one of the two kinds with words beside it.
+ * How long those words may be stays `validateFontFace`'s.
+ */
+function readFontOrigin(
+  raw: unknown
+): NonNullable<FontFaceDef["source"]> | undefined | null {
+  if (raw === undefined) return undefined;
   if (
-    !optionalString(entry.weight) ||
-    !optionalString(entry.style) ||
-    !optionalString(entry.display) ||
-    !optionalString(entry.unicodeRange)
+    !isPlainRecord(raw) ||
+    (raw.kind !== "google" && raw.kind !== "upload") ||
+    !optionalString(raw.id) ||
+    !optionalString(raw.licence) ||
+    !optionalString(raw.category) ||
+    !optionalString(raw.subset)
   ) {
-    return undefined;
+    return null;
   }
   return {
-    family: entry.family,
-    src,
-    ...(entry.weight === undefined ? {} : { weight: entry.weight }),
-    ...(entry.style === undefined ? {} : { style: entry.style }),
-    ...(entry.display === undefined ? {} : { display: entry.display }),
-    ...(entry.unicodeRange === undefined
-      ? {}
-      : { unicodeRange: entry.unicodeRange }),
+    kind: raw.kind,
+    ...(raw.id === undefined ? {} : { id: raw.id }),
+    ...(raw.licence === undefined ? {} : { licence: raw.licence }),
+    ...(raw.category === undefined ? {} : { category: raw.category }),
+    ...(raw.subset === undefined ? {} : { subset: raw.subset }),
   };
 }
 
@@ -571,15 +651,20 @@ function mergedLibraryIssues(
   // The cap is applied BEFORE resolution, as an array prefix on the whole
   // library, so it is applied that way here too.
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
-  const before = renderedIds(policy.defaults?.classes ?? []);
-  const after = renderedIds(merged);
+  const before = referableClassIds(policy.defaults?.classes ?? []);
+  const after = referableClassIds(merged);
+  const shadowed = looksShadowed(merged, after);
+  // A block's own look is never a class a page refers to: it takes effect when
+  // it is the one own look of its type the engine reads as that type's base.
+  const ownRead = new Set(ownLooksRead(merged).map(entry => entry.id));
 
   const issues: string[] = [];
   // A class the site used to render and no longer does. This write caused it,
   // whether by claiming its slug, taking its id, reordering it behind another,
-  // or pushing it past the cap.
+  // or pushing it past the cap. A look the site's own style shadows is not
+  // one: the style keeps its name by design, so the site keeps it saved.
   for (const id of before) {
-    if (!after.has(id)) {
+    if (!after.has(id) && !shadowed.has(id)) {
       issues.push(
         `Saving this would stop the class "${id}" rendering: once merged with this site's config it is no longer one of the ${MAX_NAMED_CLASSES} the compiler reads, or another class claims its slug or id first.`
       );
@@ -588,7 +673,7 @@ function mergedLibraryIssues(
   // A class in this write that will not render. Reported by id, because that is
   // what a node references and what the author can act on.
   for (const entry of classes) {
-    if (!after.has(entry.id)) {
+    if (!after.has(entry.id) && !ownRead.has(entry.id)) {
       issues.push(
         `The class "${entry.id}" would not render: once merged with this site's config another class claims its slug or id first, or it falls past the ${MAX_NAMED_CLASSES} the compiler reads.`
       );
@@ -597,13 +682,82 @@ function mergedLibraryIssues(
   return issues;
 }
 
-/** The ids a library actually renders, as the compiler resolves it. */
-function renderedIds(library: readonly NamedClass[]): Set<string> {
-  const read =
-    library.length > MAX_NAMED_CLASSES
-      ? library.slice(0, MAX_NAMED_CLASSES)
-      : library;
-  return new Set(usableNamedClasses(read).map(entry => entry.id));
+/**
+ * The looks a rendered shared style shadows: those left out because a style
+ * holds their name, which the compiler gives the style first so seeding a
+ * look never takes a name a site already uses. Derived from what renders,
+ * so a look left out for any other reason is not among them.
+ */
+function looksShadowed(
+  merged: readonly NamedClass[],
+  rendered: ReadonlySet<string>
+): ReadonlySet<string> {
+  const styleSlugs = new Set(
+    merged
+      .filter(entry => rendered.has(entry.id) && !isLook(entry))
+      .map(entry => entry.slug)
+  );
+  return new Set(
+    merged
+      .filter(
+        entry =>
+          isLook(entry) && !rendered.has(entry.id) && styleSlugs.has(entry.slug)
+      )
+      .map(entry => entry.id)
+  );
+}
+
+/**
+ * The ids a library actually renders, as the compiler resolves it: the part
+ * the compiler reads (its capped prefix), then the ordering and claim rules.
+ * These are also the classes a page may add a reference to.
+ */
+export function referableClassIds(
+  library: readonly NamedClass[]
+): ReadonlySet<string> {
+  return new Set(
+    usableNamedClasses(namedClassesRead(library)).map(entry => entry.id)
+  );
+}
+
+/**
+ * A class entry with its shared-style marks checked: the name an author gave
+ * it and its lock. Each mark that cannot be used adds an issue, which refuses
+ * a write, and is left out of the entry a read keeps.
+ */
+function withUsableMarks(
+  entry: NamedClass,
+  index: number,
+  issues: string[]
+): NamedClass {
+  // Read as unknown: the type states what a usable entry holds, while a
+  // stored one may hold anything under these keys.
+  const record: { readonly label?: unknown; readonly locked?: unknown } = entry;
+  // The name is display text, judged by the engine's one rule for a label, so
+  // a shared style's name and a variable's are held to the same line.
+  const labelIssue = tokenLabelIssue(record.label);
+  // Present or absent, never `false`: one spelling for "unlocked", so a lock
+  // comparison cannot read `false` and absent as a change.
+  const lockUsable = record.locked === undefined || record.locked === true;
+  if (labelIssue !== undefined) {
+    issues.push(
+      `classes[${index}] has a name that cannot be used. ${labelIssue}`
+    );
+  }
+  if (!lockUsable) {
+    issues.push(
+      `classes[${index}] has a lock that cannot be read: it is true while the class is locked, and absent otherwise.`
+    );
+  }
+  if (labelIssue === undefined && lockUsable) return entry;
+  // A read keeps the class and drops only the mark it cannot use; the write
+  // was refused by the issues above.
+  const { label, locked, ...rest } = entry;
+  return {
+    ...rest,
+    ...(labelIssue === undefined && label !== undefined ? { label } : {}),
+    ...(lockUsable && locked !== undefined ? { locked } : {}),
+  };
 }
 
 /**
@@ -654,19 +808,22 @@ export function checkStoredClasses(
       issues.push(`classes[${index}] repeats the id "${entry.id}".`);
       return;
     }
-    if (slugs.has(entry.slug)) {
+    // A block's own look is never written as a class and claims no slug, as
+    // the engine's claim rules have it, so a style may share its name.
+    const claimsSlug = !isDefaultLook(entry);
+    if (claimsSlug && slugs.has(entry.slug)) {
       issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
       return;
     }
     ids.add(entry.id);
-    slugs.add(entry.slug);
+    if (claimsSlug) slugs.add(entry.slug);
     // Reported but still returned, as this module's two postures require: a
     // write refuses the section on any issue, while a read keeps the entry the
     // compiler will narrow for itself.
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
-    classes.push(entry);
+    classes.push(withUsableMarks(entry, index, issues));
   });
   issues.push(...mergedLibraryIssues(classes, policy));
   return { value: classes, issues };
@@ -756,5 +913,8 @@ export function readSiteStyleRecord(doc: unknown): SiteStyleData {
     fonts: checkStoredFonts(doc.fonts).value,
     classes: checkStoredClasses(doc.classes).value,
     breakpoints: checkStoredBreakpoints(doc.breakpoints).value,
+    // Only a model the engine knows; anything else is nothing recorded, and
+    // the engine's default applies.
+    spacingMode: isSpacingMode(doc.spacingMode) ? doc.spacingMode : undefined,
   });
 }

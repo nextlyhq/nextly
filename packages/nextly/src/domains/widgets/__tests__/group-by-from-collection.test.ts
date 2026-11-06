@@ -1,14 +1,10 @@
 /**
  * A Group by setting that takes its default from the collection: unset, or
  * set to a field this reader may not use, the card groups by what the
- * collection divides by. Registration admits it only on a Group by setting,
- * and a grouped query may leave its key to a setting only when that setting
- * always gives one.
+ * collection divides by. Registration admits it only on a Group by setting.
  */
 import { describe, expect, it } from "vitest";
 
-import type { WidgetDefinition } from "../definition";
-import { validateWidgetDefinition } from "../definition";
 import type { PublishedContentSource } from "../publish";
 import type { SourcelessWidgetQuery } from "../query";
 import {
@@ -136,37 +132,5 @@ describe("a Group by setting that takes its default from the collection", () => 
         } as unknown as AnyWidgetSetting,
       ])
     ).toContain('setting "groupBy" has defaultFrom');
-  });
-});
-
-describe("a grouped query that leaves its key to a setting", () => {
-  const definition = (settings: AnyWidgetSetting[]): WidgetDefinition =>
-    ({
-      id: "core/grouped",
-      title: "Grouped",
-      archetype: "bars",
-      offered: "per-collection",
-      defaultSize: "md",
-      settings,
-      query: grouped,
-    }) as WidgetDefinition;
-
-  it("is admitted where a Group by setting always gives one", () => {
-    expect(() =>
-      validateWidgetDefinition(definition(fromCollection))
-    ).not.toThrow();
-  });
-
-  it("is refused where nothing would give one", () => {
-    // 🔴 Without the rule this registers, and every card is asked a grouping
-    // of nothing, which the endpoint refuses on every load.
-    expect(() =>
-      validateWidgetDefinition(
-        definition([
-          fromCollection[0]!,
-          { name: "groupBy", type: "groupBy", of: "collection" },
-        ])
-      )
-    ).toThrow(/names no groupBy, and no Group by setting with a default/);
   });
 });

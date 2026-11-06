@@ -516,3 +516,88 @@ describe("loadDynamicTables — ownership comes from the row", () => {
     expect(await ownershipFor({})).toBeUndefined();
   });
 });
+
+/**
+ * A row removed from code (a code row whose slug the configuration no longer
+ * declares) is registered only while every table it owns exists. Registering a
+ * localized entity creates its missing translation table, so registering one
+ * whose tables a migration dropped would bring part of it back. A Builder row
+ * and a declared code row register whatever their tables, as before.
+ */
+describe("loadDynamicTables — an entity removed from code", () => {
+  const registeredTables = async (
+    rows: Array<Record<string, unknown>>,
+    existing: string[],
+    options?: Parameters<typeof loadDynamicTables>[3]
+  ): Promise<string[]> => {
+    const { adapter } = makeAdapter(rows);
+    Object.assign(adapter, {
+      tableExists: vi.fn(async (name: string) => existing.includes(name)),
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+    });
+    const register = vi.fn(async (tableName: string) => {
+      void tableName;
+    });
+    await loadDynamicTables(adapter, "dynamic_collections", register, options);
+    return register.mock.calls.map(([tableName]) => tableName);
+  };
+  const rows = [
+    {
+      table_name: "dc_posts",
+      fields: JSON.stringify([{ name: "headline", type: "text" }]),
+      slug: "posts",
+      localized: 1,
+      source: "code",
+    },
+    { table_name: "dc_tags", fields: "[]", slug: "tags", source: "code" },
+    { table_name: "dc_drafts", fields: "[]", slug: "drafts", source: "ui" },
+  ];
+  const declared = { declaredSlugs: new Set(["tags"]) };
+
+  it("is not registered once its main table is gone", async () => {
+    expect(await registeredTables(rows, [], declared)).toEqual([
+      "dc_tags",
+      "dc_drafts",
+    ]);
+  });
+
+  it("is not registered while its translation table is gone", async () => {
+    expect(await registeredTables(rows, ["dc_posts"], declared)).toEqual([
+      "dc_tags",
+      "dc_drafts",
+    ]);
+  });
+
+  it("is registered while every table it owns stands", async () => {
+    expect(
+      await registeredTables(rows, ["dc_posts", "dc_posts_locales"], declared)
+    ).toEqual(["dc_posts", "dc_tags", "dc_drafts"]);
+  });
+
+  // A localized entity whose every field is shared has no translatable column,
+  // so nothing creates a translation table for it and none is required.
+  it("is registered with no translation table when it has nothing to translate", async () => {
+    const shared = [
+      {
+        table_name: "dc_notes",
+        fields: JSON.stringify([
+          { name: "title", type: "text", localized: false },
+        ]),
+        slug: "notes",
+        localized: 1,
+        source: "code",
+      },
+    ];
+    expect(await registeredTables(shared, ["dc_notes"], declared)).toEqual([
+      "dc_notes",
+    ]);
+  });
+
+  it("registers every row when the caller declares nothing", async () => {
+    expect(await registeredTables(rows, [])).toEqual([
+      "dc_posts",
+      "dc_tags",
+      "dc_drafts",
+    ]);
+  });
+});

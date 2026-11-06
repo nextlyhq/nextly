@@ -12,6 +12,7 @@
 import type {
   SupportedDialect,
   TransactionContext,
+  TransactionOptions,
 } from "@nextlyhq/adapter-drizzle/types";
 import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
@@ -24,12 +25,10 @@ import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
-import {
-  createJobsNamespace,
-  type JobsNamespace,
-} from "../direct-api/namespaces/jobs";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
+import type { JobRegistry } from "../domains/jobs/job-registry";
+import type { JobsPassDatabase } from "../domains/jobs/jobs-runner";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
@@ -38,6 +37,11 @@ import type {
 } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
+import {
+  createPluginWebhooks,
+  type PluginWebhooksApi,
+} from "../domains/webhooks/plugin-record";
 import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
@@ -59,6 +63,7 @@ import type { UserService } from "../services/users/user-service";
 import { runInPluginTransaction } from "../shared/lib/plugin-transaction-scope";
 import {
   type AfterCommitAdapter,
+  afterCommit as holdUntilCommit,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
 import { secretGenerations } from "../shared/lib/secret-generations";
@@ -79,6 +84,11 @@ import type {
   HookPointValue,
 } from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
+import {
+  contextSweepHost,
+  pluginJobsNamespace,
+  type PluginJobsNamespace,
+} from "./jobs/plugin-jobs";
 import { createPluginLimits } from "./limits/plugin-limits";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
@@ -117,8 +127,10 @@ import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
 import {
   resolveServiceOpts,
+  ownCollectionReads,
   wrapCollectionsForPlugin,
   type PluginCollectionService,
+  type PluginOwnCollectionReads,
   type ServiceOpts,
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
@@ -497,6 +509,13 @@ export interface PluginContext {
      */
     collections: PluginCollectionService;
     /**
+     * @experimental Reads of the collections THIS plugin declared, shaped by no
+     * configured read hook or list-query filter, as the system. Never return
+     * the result to a person: a site's read hooks may be what keeps one
+     * tenant's rows from another.
+     */
+    ownCollections: PluginOwnCollectionReads;
+    /**
      * User service for user management.
      *
      * A plugin may create and update accounts, but not decide who administers
@@ -538,12 +557,13 @@ export interface PluginContext {
      */
     singles: PluginSinglesService;
     /**
-     * @experimental Queue background work — `ctx.services.jobs.queue({...})`.
+     * @experimental Queue background work — `ctx.services.jobs.queue({...})` —
+     * and run one of the plugin's own sweeps now, `runSweepNow(slug)`.
      *
      * Declaring a job type is `defineJob` in `contributes.jobs`; this is how a
      * plugin asks for one of them to happen.
      */
-    jobs: JobsNamespace;
+    jobs: PluginJobsNamespace;
     /**
      * @experimental Services contributed by plugins, keyed by plugin name
      * then service name. Lazily resolved (instantiated on first access). Runtime
@@ -643,6 +663,18 @@ export interface PluginContext {
    * `passwordHasher`: a plugin's people never share a format with staff.
    */
   security: PluginSecurityApi;
+
+  /**
+   * @experimental Recording this plugin's own webhook events, of the types it
+   * declares in `contributes.webhookEvents`, for delivery to the endpoints
+   * subscribed to them. Present on every context: a plugin that declares no
+   * types has every type refused by name.
+   *
+   * Required, like the context's other members: `createPluginContext` and
+   * `createTestNextly` provide it, and a context built by hand, such as a
+   * test double typed as `PluginContext`, adds a `webhooks` of its own.
+   */
+  webhooks: PluginWebhooksApi;
 
   /**
    * @experimental This plugin's stored configuration.
@@ -1307,6 +1339,15 @@ export const PLUGIN_SERVICE_NAMES = [
   "logger",
   "config",
   "adapter",
+  // The registration's job registry and the database its runner uses, so a
+  // plugin's `runSweepNow` runs against the instance that built its context,
+  // never whichever one the process container holds at the time.
+  "jobRegistry",
+  "jobsDatabase",
+  // The registration's fast webhook drain, or `null` where webhooks are not
+  // registered, so a plugin's committed event is offered to the drain of the
+  // instance that recorded it.
+  "webhookFastDrainScheduler",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1402,6 +1443,18 @@ function buildPluginDatabase(
       Object.values(relations()).find(
         entry => getTableName(entry.table as Table) === tableName
       )?.table,
+    // Whose cached reads a `contributed` write changed: the collection, Single
+    // or field group the compiled schema seeded that table from, read per call
+    // like the rest of the schema.
+    contentEntity: tableName => active()?.entityOwners.get(tableName),
+    // Loaded on the first expiry rather than with the context: the context is
+    // built at every boot, and most never see a contributed write.
+    expireContent: async target => {
+      const { expireContentTarget } = await import(
+        "./database/expire-content-target"
+      );
+      await expireContentTarget(target);
+    },
     tableList: () => [
       ...(active()?.tables ?? []).map(table => ({
         name: table.name,
@@ -1450,7 +1503,7 @@ function buildPluginDatabase(
     // On SQLite it also runs marked as a plugin transaction, as `raw`'s does:
     // a service called inside nests as a savepoint, defers what follows its
     // write until the commit, and refuses what a rollback could not undo.
-    transaction: fn => {
+    transaction: (fn, options) => {
       const run = (tx: AdapterTransactionHandles) =>
         fn({
           db: tx.getDrizzle(),
@@ -1458,10 +1511,26 @@ function buildPluginDatabase(
             return tx.drizzleWithRelations(relations());
           },
           adapterTx: asTransactionContext(tx),
+          // Registered from inside the transaction's work, so the adapter
+          // holds it for the transaction this call runs in, or joined.
+          afterCommit: effect => {
+            void holdUntilCommit(transactions, effect);
+          },
         });
       const transactions = adapter();
+      // A snapshot: REPEATABLE READ and read-only on PostgreSQL and MySQL
+      // (MySQL's default level already, named so a server configured
+      // otherwise still gives one). SQLite's transactions are serial, so one
+      // is a snapshot already, and nothing is asked of its adapter.
+      const adapterOptions: TransactionOptions | undefined =
+        options?.isolation === "snapshot" && dialect() !== "sqlite"
+          ? { isolationLevel: "repeatable read", readOnly: true }
+          : undefined;
       return runAdapterTransaction(
-        transactions.transaction.bind(transactions),
+        adapterOptions === undefined
+          ? transactions.transaction.bind(transactions)
+          : <R>(work: (tx: AdapterTransactionHandles) => Promise<R>) =>
+              transactions.transaction(work, adapterOptions),
         (tx: AdapterTransactionHandles) =>
           dialect() === "sqlite"
             ? runInPluginTransaction(() => run(tx))
@@ -1495,7 +1564,9 @@ export interface AdapterTransactions extends AfterCommitAdapter {
    * a call made inside an open transaction nests as a savepoint.
    */
   transaction: <T>(
-    work: (tx: AdapterTransactionHandles) => Promise<T>
+    work: (tx: AdapterTransactionHandles) => Promise<T>,
+    /** The isolation and access mode, where the caller asked for one. */
+    options?: TransactionOptions
   ) => Promise<T>;
   /**
    * The pooled Drizzle handle, relations-enabled when given a config. Used
@@ -1572,12 +1643,13 @@ export interface PluginRawDatabase extends DatabaseInstance {
    * Run `work` in one transaction: it commits when `work` resolves and rolls
    * back when it throws. The handle `work` receives is the restricted builder,
    * without a nested `transaction`; with `rawSql` it is the live handle, whose
-   * `transaction` nests as a savepoint. Write through it: another service or
-   * `ctx.settings` called inside runs on its own connection on PostgreSQL and
-   * MySQL, outside this transaction.
+   * `transaction` nests as a savepoint. Write through it: another service
+   * called inside runs on its own connection on PostgreSQL and MySQL, outside
+   * this transaction. `ctx.settings.set` is refused inside it on every
+   * dialect: write the setting after the transaction.
    *
    * On SQLite the transaction holds the database's only connection until it
-   * ends. A service or `ctx.settings` called inside joins it as a savepoint,
+   * ends. A service called inside joins it as a savepoint,
    * and its rows roll back with it; what it does after its write (after
    * hooks, events, cache revalidation, webhook delivery) waits until this
    * transaction commits, runs before `transaction` resolves, and never runs if
@@ -1824,7 +1896,13 @@ export function createPluginContext(
                         ? NextlyServiceConfig
                         : T extends "adapter"
                           ? AdapterTransactions
-                          : never,
+                          : T extends "jobRegistry"
+                            ? JobRegistry
+                            : T extends "jobsDatabase"
+                              ? JobsPassDatabase
+                              : T extends "webhookFastDrainScheduler"
+                                ? WebhookFastDrainScheduler | null
+                                : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2029,6 +2107,9 @@ export function createPluginContext(
   const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
   const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
+  // Whose secrets and webhook types this context reaches: the plugin's, or
+  // core's for a context built without one.
+  const owner = plugin?.name ?? "nextly";
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -2067,9 +2148,19 @@ export function createPluginContext(
     },
   };
 
+  // Resolved once: `ctx.self` names the collections, and the own-collection
+  // grant is issued for exactly those, so the two cannot disagree.
+  const self: PluginSelf = plugin
+    ? resolvePluginSelf(plugin)
+    : { name: "", collections: {}, singles: {} };
+
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
+      ownCollections: ownCollectionReads(
+        collectionService,
+        Object.values(self.collections)
+      ),
       // The plugin view, refusing the writes that decide who administers the
       // site; core's own callers keep the unrestricted instance. Resolved on
       // access like `versions` below, so a context built by a caller that
@@ -2092,7 +2183,7 @@ export function createPluginContext(
         const versions = getServiceFn("versionsService");
         return Object.freeze({
           ...methodFacade(versions, PLUGIN_VERSIONS_READS),
-          ...pluginVersionWrites(() => versions),
+          ...pluginVersionWrites(() => versions, pluginName),
           listEvents: readEventsForPlugin,
         });
       },
@@ -2111,8 +2202,17 @@ export function createPluginContext(
       // needs somewhere to ASK for one; without this the only route was
       // importing the core `nextly` entry directly, crossing the boundary the
       // SDK exists to draw.
+      //
+      // Built for THIS plugin, so running a sweep now is limited to the sweeps
+      // it contributes; see `plugin-jobs`.
       get jobs() {
-        return createJobsNamespace();
+        return pluginJobsNamespace(
+          plugin?.name,
+          contextSweepHost({
+            registry: () => getServiceFn("jobRegistry"),
+            database: () => getServiceFn("jobsDatabase"),
+          })
+        );
       },
       plugins: buildPluginServicesNamespace(),
     },
@@ -2125,9 +2225,7 @@ export function createPluginContext(
     logger,
     events,
     nextlyVersion: getCoreVersion(),
-    self: plugin
-      ? resolvePluginSelf(plugin)
-      : { name: "", collections: {}, singles: {} },
+    self,
     config: pluginConfigView(config),
     hooks: pluginHooks,
     filters: pluginFilters,
@@ -2153,7 +2251,7 @@ export function createPluginContext(
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
       secrets: createOneTimeSecrets({
-        owner: plugin?.name ?? "nextly",
+        owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
         // Every generation, the unkeyed one included: a secret minted before
         // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
@@ -2161,6 +2259,14 @@ export function createPluginContext(
           secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
       }),
     },
+    // Kept within this plugin's name, which decides the types it may record.
+    // The adapter is read per call and through this context's own resolver,
+    // as the secrets helper's is.
+    webhooks: createPluginWebhooks(
+      owner,
+      () => asSecretsAdapter(getServiceFn("adapter")),
+      () => getServiceFn("webhookFastDrainScheduler")
+    ),
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
     // exactly what this store exists to replace.

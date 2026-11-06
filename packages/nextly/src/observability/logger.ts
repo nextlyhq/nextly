@@ -8,7 +8,7 @@
  * Full observability design (dev-vs-prod formatting, scrub list, audit log,
  */
 
-import { maskEmailsWhenActive } from "./mask-emails";
+import { safeToLog } from "./mask-emails";
 
 export interface NextlyLogger {
   error(payload: object): void;
@@ -56,11 +56,33 @@ export function setNextlyLogger(logger: NextlyLogger | undefined): void {
   // wrapper of its own and mask every line twice.
   currentLogger =
     (logger && registeredBehind.get(logger)) ?? logger ?? defaultLogger;
+  if (currentLogger !== defaultLogger) {
+    for (const listener of whenInstalled) listener();
+  }
 }
 
-/** A payload as it may be written: masked of addresses outside dev and test. */
+/** Called each time an app installs a logger of its own. */
+const whenInstalled = new Set<() => void>();
+
+/**
+ * Calls `listener` whenever an app installs a logger of its own: a line said
+ * before one could be, while Next.js loads the config, can then reach it.
+ */
+export function onNextlyLoggerInstalled(listener: () => void): void {
+  whenInstalled.add(listener);
+}
+
+/** Whether an app has installed a logger of its own, rather than the default. */
+export function nextlyLoggerInstalled(): boolean {
+  return currentLogger !== defaultLogger;
+}
+
+/**
+ * A payload as it may be written: credentials taken out, and addresses masked
+ * outside dev and test.
+ */
 function writable(payload: object): object {
-  return maskEmailsWhenActive(payload);
+  return safeToLog(payload);
 }
 
 /**

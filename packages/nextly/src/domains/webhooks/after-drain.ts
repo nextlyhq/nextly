@@ -4,15 +4,14 @@
  * After a content write records an outbox event, this kicks a bounded drain via
  * Next.js `after()` so the first delivery attempt happens immediately instead of
  * waiting for the next scheduled trigger. `after()` runs the work once the
- * response is sent, so it adds no latency to the write. Everything degrades
- * gracefully: outside a Next request (a CLI or plain-Node write) or on a Next
- * version without `after`, this is a no-op and the scheduled drain delivers.
+ * response is sent, so it adds no latency to the write. Outside a Next request
+ * (a CLI or plain-Node write), a context rather than a version, this is a no-op
+ * and the scheduled drain delivers.
  *
  * @module domains/webhooks/after-drain
  */
 
-import { createRequire } from "node:module";
-
+import { loadNextModule, requireNextApi } from "../../runtime/next-api";
 import type { Logger } from "../../shared/types";
 
 import {
@@ -26,31 +25,13 @@ import type { WebhookEndpointRegistry } from "./endpoint-registry";
 type AfterFn = (callback: () => void | Promise<void>) => void;
 
 /**
- * Resolve Next's `after()` (stable in 15.1) or `unstable_after` (15.0), or null
- * when neither is available (Next 14, or Next not installed).
+ * Resolve Next's `after()`, or null where Next.js is not installed.
  *
- * Loaded with `createRequire` for the reason `api/with-error-handler.ts`
- * documents: a static or dynamic ESM `import` of a Next subpath breaks Node's
- * ESM resolver when this package is an external under `serverExternalPackages`,
- * and the `.js`-suffixed workaround sends Turbopack into Next internals that are
- * not on disk. `createRequire` uses Node's CommonJS resolver and is opaque to
- * the bundler, so neither complains.
+ * Loaded through {@link loadNextModule}, for the reason that module gives.
  */
 export function loadNextAfter(): AfterFn | null {
-  try {
-    const require = createRequire(import.meta.url);
-    const mod = require("next/server") as {
-      after?: unknown;
-      unstable_after?: unknown;
-    };
-    if (typeof mod.after === "function") return mod.after as AfterFn;
-    if (typeof mod.unstable_after === "function") {
-      return mod.unstable_after as AfterFn;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  const mod = loadNextModule("next/server");
+  return mod ? requireNextApi<AfterFn>(mod, "next/server", "after") : null;
 }
 
 /**

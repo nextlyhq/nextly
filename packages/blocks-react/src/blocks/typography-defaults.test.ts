@@ -51,19 +51,66 @@ describe("the typographic baseline", () => {
     }
   });
 
-  it("gives a paragraph MARGINS only, so an author's typography can reach it", () => {
-    // The control on the case above, and the reason `p` carries neither size
-    // nor leading. Both INHERIT, and this tier emits a rule on the `p` itself —
-    // so either one declared here beats what an author set on a containing
-    // block, and `core/rich-text` renders its paragraphs below a styled `div`.
-    // The heading scale escaped that with `em`; leading has no equivalent, so
-    // it is left out rather than made uncontrollable.
+  it("gives a paragraph no size and no leading, so an author's typography can reach it", () => {
+    // Both INHERIT, and this tier emits a rule on the `p` itself — so either
+    // one declared here beats what an author set on a containing block, and
+    // `core/rich-text` renders its paragraphs below a styled `div`.
     expect(base("p", "fontSize")).toBeUndefined();
     expect(base("p", "lineHeight")).toBeUndefined();
-    // Margins stay, and they are safe for the same reason the others are not:
-    // margin does NOT inherit, so declaring one here overrides nothing an
-    // author expressed on a container.
-    expect(base("p", "margin")).toEqual({ blockStart: "0", blockEnd: "1em" });
+  });
+
+  it("gives every element it covers no outer margin, so a block sits flush", () => {
+    // The space between blocks is their container's gap. A margin here leaked
+    // out of the block: an `h2` drew 42px above and 14px below, collapsing
+    // through a section with no padding and pushing the whole band down.
+    // Zero rather than absent, so a host with no reset loses the browser's
+    // own heading, paragraph, list, figure and quote margins too.
+    const tags = [
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "p",
+      "blockquote",
+      "hr",
+      "ol",
+      "ul",
+      "pre",
+    ] as const;
+    for (const tag of tags) {
+      expect(base(tag, "margin"), tag).toEqual({
+        blockStart: "0",
+        blockEnd: "0",
+      });
+    }
+  });
+
+  it("clears a figure's inline margins too, so a captioned image sits as flush as one without", () => {
+    // A browser indents a figure by about 40px on each side; an image with
+    // no caption is a bare `img` and has no such inset.
+    expect(base("figure", "margin")).toEqual({
+      blockStart: "0",
+      blockEnd: "0",
+      inlineStart: "0",
+      inlineEnd: "0",
+    });
+  });
+
+  it("gives every element its own objects, so changing one changes no other", () => {
+    // A published, mutable export: a consumer adjusting one entry in place must
+    // not move the others with it, which holds exactly when no two entries
+    // share an object at any level.
+    const entries = Object.values(TYPOGRAPHY_DEFAULTS);
+    const values = entries.map(entry => entry?.base?.base);
+    const margins = values.map(value => value?.margin);
+    // Population: every element has values and a margin to compare.
+    expect(entries).toHaveLength(13);
+    expect(margins.every(margin => typeof margin === "object")).toBe(true);
+    expect(new Set(entries).size).toBe(entries.length);
+    expect(new Set(values).size).toBe(values.length);
+    expect(new Set(margins).size).toBe(margins.length);
   });
 
   it("keeps a heading's own leading, which is the deliberate asymmetry", () => {

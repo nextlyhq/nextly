@@ -34,8 +34,11 @@ const canReadEntity = vi.fn();
 const callerHoldsPermission = vi.fn();
 vi.mock("../../auth/entity-read-access", () => ({
   readAccessCaller: (caller: { user: unknown }) => caller.user,
-  canReadEntity: (slug: string, caller: unknown) =>
-    canReadEntity(slug, caller) as unknown,
+  // The entity reader's answer, every entry or none; a filter's answer is
+  // the integration test's to judge, against a real document.
+  entityReadFor: async (slug: string, caller: unknown) => ({
+    allowed: (await canReadEntity(slug, caller)) as boolean,
+  }),
   callerHoldsPermission: (slug: string, caller: unknown) =>
     callerHoldsPermission(slug, caller) as unknown,
 }));
@@ -48,6 +51,22 @@ vi.mock("../versions-access", () => ({
     assertDocumentUpdatable(...args) as unknown,
 }));
 
+// The one lookup that names a person, by id: the key maker's name here.
+const peopleById = vi.fn();
+vi.mock("../../domains/versions/author-hydration", () => ({
+  peopleById: (ids: readonly string[]) => peopleById(ids) as unknown,
+}));
+
+// The change a holder is told of, read after a claim or renewal names `_rev`.
+// Its parser stays real; only the read is stood in for, to make it fail.
+const changeSinceHeldVersion = vi.fn();
+vi.mock("../../domains/document-lock/held-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../domains/document-lock/held-version")
+  >()),
+  changeSinceHeldVersion: (...args: unknown[]) =>
+    changeSinceHeldVersion(...args),
+}));
 vi.mock("../authenticated-read", () => ({
   readCaller: (auth: unknown) => Promise.resolve({ user: auth }),
   PRIVATE_NO_STORE_HEADERS: {
@@ -77,6 +96,7 @@ beforeEach(() => {
   );
   callerHoldsPermission.mockResolvedValue(true);
   assertDocumentUpdatable.mockResolvedValue(undefined);
+  peopleById.mockResolvedValue(new Map());
 });
 
 describe("document lock route", () => {
@@ -92,8 +112,152 @@ describe("document lock route", () => {
 
     expect(service.acquire).toHaveBeenCalledWith(
       ref,
-      { ownerId: "u1", ownerLabel: "Ada" },
+      {
+        ownerId: "u1",
+        ownerLabel: "Ada",
+        actor: { type: "user", id: "u1" },
+        personName: "Ada",
+      },
       { takeover: false, requestAccess: false }
+    );
+  });
+
+  it("credits a takeover to the key that made it, and never names a person by email", async () => {
+    // A takeover's history event names its actor from these. A key credited
+    // as its maker, or a person named by the label's email fallback, would
+    // put in history what history keeps out.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    requireAuthentication.mockResolvedValueOnce({
+      userId: "maker",
+      userEmail: "maker@example.com",
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+    });
+    await acquireLock(post({ ...ref, takeover: true }));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({
+        actor: { type: "apiKey", id: "key-1" },
+        personName: null,
+      }),
+      expect.anything()
+    );
+
+    requireAuthentication.mockResolvedValueOnce({
+      userId: "u3",
+      userEmail: "noname@example.com",
+    });
+    await acquireLock(post({ ...ref, takeover: true }));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({
+        actor: { type: "user", id: "u3" },
+        personName: null,
+      }),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    [
+      "a person by name",
+      { userId: "u1", userName: "Ada", userEmail: "ada@example.com" },
+      "Ada",
+    ],
+    [
+      "a person with no name by email",
+      { userId: "u3", userEmail: "noname@example.com" },
+      "noname@example.com",
+    ],
+    [
+      "a person with an empty name by email",
+      { userId: "u3", userName: "", userEmail: "noname@example.com" },
+      "noname@example.com",
+    ],
+    [
+      "a person whose name is only spaces by email",
+      { userId: "u3", userName: "   ", userEmail: "noname@example.com" },
+      "noname@example.com",
+    ],
+    ["a caller nothing names as someone", { userId: "u4" }, "Someone"],
+  ])("labels %s", async (_, caller, label) => {
+    // The label is what the next editor reads: "<label> is editing this
+    // document". Null or empty there reads as "null is editing".
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    requireAuthentication.mockResolvedValueOnce(caller);
+
+    await acquireLock(post(ref));
+
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: label }),
+      expect.anything()
+    );
+  });
+
+  it("labels an API key as one, by its maker's name, and never by their email", async () => {
+    // A script holding a document is not its maker sitting at it: the person
+    // waiting should know it is a key they are waiting on.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    const key = {
+      userId: "maker",
+      userEmail: "maker@example.com",
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+    };
+
+    peopleById.mockResolvedValueOnce(
+      new Map([["maker", { kind: "person", id: "maker", name: "Ana" }]])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    expect(peopleById).toHaveBeenLastCalledWith(["maker"]);
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: "Ana's API key" }),
+      expect.anything()
+    );
+
+    // A maker whose name is as long as a name may be: the label still fits
+    // the 255-character column the claim is stored in, whole characters only.
+    peopleById.mockResolvedValueOnce(
+      new Map([
+        [
+          "maker",
+          { kind: "person", id: "maker", name: `${"N".repeat(244)}😀😀` },
+        ],
+      ])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    const long = (service.acquire.mock.lastCall?.[1] as { ownerLabel: string })
+      .ownerLabel;
+    expect(Array.from(long)).toHaveLength(255);
+    expect(long).toBe(`${"N".repeat(244)}😀's API key`);
+
+    // A maker whose name is only spaces is a maker with no name, not a label
+    // that reads "'s API key".
+    peopleById.mockResolvedValueOnce(
+      new Map([["maker", { kind: "person", id: "maker", name: "   " }]])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: "An API key" }),
+      expect.anything()
+    );
+
+    // A maker with no name, or whose name could not be read.
+    peopleById.mockResolvedValueOnce(
+      new Map([["maker", { kind: "person", id: "maker", name: null }]])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: "An API key" }),
+      expect.anything()
     );
   });
 
@@ -198,6 +362,53 @@ describe("document lock route", () => {
       const response = await acquireLock(post(bad));
       expect(response.status).toBe(400);
     }
+    expect(service.acquire).not.toHaveBeenCalled();
+  });
+
+  it("keeps a claim and a renewal answered when reading what changed fails", async () => {
+    // Both have committed when the change is read. Answered as errors, the
+    // claim's token would never reach the editor, which could then neither
+    // renew nor release the lease it had just taken.
+    changeSinceHeldVersion.mockRejectedValue(new Error("history unreadable"));
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    service.renew.mockResolvedValue({ status: "renewed" });
+
+    const claimed = await acquireLock(post({ ...ref, _rev: "3" }));
+    const renewed = await renewLock(
+      post({ ...ref, claimToken: "t", _rev: "3" }, "PATCH")
+    );
+
+    expect(changeSinceHeldVersion).toHaveBeenCalledTimes(2);
+    expect(claimed.status).toBe(200);
+    const claimItem = (
+      (await claimed.json()) as { item: Record<string, unknown> }
+    ).item;
+    expect(claimItem).toMatchObject({ status: "acquired", claimToken: "t" });
+    expect(claimItem).not.toHaveProperty("changed");
+    expect(renewed.status).toBe(200);
+    expect(
+      ((await renewed.json()) as { item: Record<string, unknown> }).item
+    ).toMatchObject({ status: "renewed" });
+  });
+
+  it("claims and renews without a version, and refuses a malformed one first", async () => {
+    // 🔴 The version is only decoded here, never judged as a write is: an
+    // editor whose copy has none yet, a custom edit view and an older client
+    // all claim without one, whatever a write is required to name.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    service.renew.mockResolvedValue({ status: "renewed" });
+
+    const claimed = await acquireLock(post(ref));
+    const renewed = await renewLock(post({ ...ref, claimToken: "t" }, "PATCH"));
+
+    expect(claimed.status).toBe(200);
+    expect(renewed.status).toBe(200);
+    expect(changeSinceHeldVersion).not.toHaveBeenCalled();
+
+    // A typo is the client's mistake, told before anything is claimed.
+    service.acquire.mockClear();
+    const malformed = await acquireLock(post({ ...ref, _rev: "seven" }));
+    expect(malformed.status).toBe(400);
     expect(service.acquire).not.toHaveBeenCalled();
   });
 

@@ -25,7 +25,13 @@ import {
 import type { JSX } from "react";
 import { useState } from "react";
 
-import type { BasicsField, BuilderConfig } from "./builder-config";
+// The title and description name the kind through the shared table, so the
+// modal spells each kind as every other builder message does.
+import {
+  BUILDER_KIND_NOUN,
+  type BasicsField,
+  type BuilderConfig,
+} from "./builder-config";
 import { AdvancedTab } from "./builder-settings-modal/AdvancedTab";
 import { BasicsTab } from "./builder-settings-modal/BasicsTab";
 
@@ -105,12 +111,6 @@ type Props = {
   onSubmit: (values: BuilderSettingsValues) => void;
 };
 
-const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
-  collection: "collection",
-  single: "single",
-  "field-group": "field group",
-};
-
 /**
  * The answers as everything downstream should see them.
  *
@@ -176,7 +176,7 @@ export function BuilderSettingsModal({
   );
   const [tab, setTab] = useState<"basics" | "advanced">("basics");
 
-  const kindLabel = KIND_TITLE[config.kind];
+  const kindLabel = BUILDER_KIND_NOUN[config.kind];
   const title =
     mode === "create"
       ? `New ${kindLabel}`
@@ -226,6 +226,7 @@ export function BuilderSettingsModal({
             <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0">
               <AdvancedTab
                 fields={config.advancedFields}
+                kind={config.kind}
                 values={values}
                 onChange={setValues}
               />

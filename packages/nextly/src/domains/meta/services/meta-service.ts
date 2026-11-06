@@ -2,10 +2,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, sql, type Column, type SQL } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors/nextly-error";
-import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
-import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
-import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import { affectedRowCount } from "../../auth/services/auth-service";
@@ -63,9 +61,9 @@ export class MetaService extends BaseService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get table(): any {
     const d = this.dialect;
-    if (d === "postgresql") return nextlyMetaPg;
-    if (d === "mysql") return nextlyMetaMysql;
-    return nextlyMetaSqlite;
+    // The loaded dialect's own table, so only that dialect's file is
+    // imported; `createAdapter` loads it.
+    return loadedDialect(d).tables.nextlyMeta;
   }
 
   // Drizzle handle. BaseService already exposes `this.db` via its
@@ -78,6 +76,15 @@ export class MetaService extends BaseService {
   }
 
   /**
+   * The handle a statement runs on: a transaction's own Drizzle executor where
+   * the caller is inside one, so the statement commits or rolls back with it
+   * and runs on its connection, else the pooled one.
+   */
+  private on(executor?: unknown): MetaService["drizzle"] {
+    return executor ?? this.drizzle;
+  }
+
+  /**
    * Read a key together with whether a row for it exists at all.
    *
    * `get` collapses three different situations onto `null`: no row, a row whose
@@ -86,8 +93,11 @@ export class MetaService extends BaseService {
    * different things must use this instead, because for them the difference
    * decides whether it is safe to proceed.
    */
-  async getEntry<T = unknown>(key: string): Promise<MetaEntry<T>> {
-    const rows = await this.drizzle
+  async getEntry<T = unknown>(
+    key: string,
+    executor?: unknown
+  ): Promise<MetaEntry<T>> {
+    const rows = await this.on(executor)
       .select()
       .from(this.table)
       .where(eq(this.table.key, key))
@@ -106,8 +116,8 @@ export class MetaService extends BaseService {
 
   // Delegates so there is one query and one decoding path; an absent row and a
   // row carrying no value both read as `null`, as callers of `get` expect.
-  async get<T = unknown>(key: string): Promise<T | null> {
-    const entry = await this.getEntry<T>(key);
+  async get<T = unknown>(key: string, executor?: unknown): Promise<T | null> {
+    const entry = await this.getEntry<T>(key, executor);
     return entry.present ? entry.value : null;
   }
 
@@ -150,8 +160,12 @@ export class MetaService extends BaseService {
    * Says nothing about who won, deliberately. A caller that needs to know reads the row afterwards
    * and decides from its contents, which also covers losing to a caller that wrote the same value.
    */
-  async insertIfAbsent(key: string, value: unknown): Promise<void> {
-    const insert = this.drizzle
+  async insertIfAbsent(
+    key: string,
+    value: unknown,
+    executor?: unknown
+  ): Promise<void> {
+    const insert = this.on(executor)
       .insert(this.table)
       .values({ key, value: JSON.stringify(value), updatedAt: new Date() });
     if (typeof insert.onConflictDoNothing === "function") {
@@ -193,14 +207,15 @@ export class MetaService extends BaseService {
   async compareAndSet(
     key: string,
     expected: unknown,
-    next: unknown
+    next: unknown,
+    executor?: unknown
   ): Promise<boolean> {
     const holdsExpected = metaValueEquals(
       this.table,
       JSON.stringify(expected),
       this.dialect
     );
-    const result = await this.drizzle
+    const result = await this.on(executor)
       .update(this.table)
       .set({ value: JSON.stringify(next), updatedAt: new Date() })
       .where(and(eq(this.table.key, key), holdsExpected));

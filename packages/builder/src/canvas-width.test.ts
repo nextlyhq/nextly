@@ -22,6 +22,12 @@ import {
   baseWidth,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
+  editingBreakpointOf,
+  fallbackBreakpoint,
+  frameFitScale,
+  frameFillingRegion,
+  previewHeight,
+  previewWidth,
   widthForBreakpoint,
   offeredTiers,
 } from "./canvas-width";
@@ -361,5 +367,268 @@ describe("the width at which the UNCONDITIONAL tier applies", () => {
         container: [{ id: "narrow", label: "Narrow", maxWidth: 1600 }],
       })
     ).toBe(992);
+  });
+});
+
+describe("the width a device is previewed at", () => {
+  it("shows the base breakpoint, Desktop, at 1280", () => {
+    expect(previewWidth(site(), BASE_BREAKPOINT)).toBe(1280);
+  });
+
+  it("shows a bounded breakpoint at its own bound, not a device's width", () => {
+    expect(previewWidth(site(), "tablet")).toBe(991);
+    expect(previewWidth(site(), "mobile")).toBe(575);
+  });
+
+  it("keeps the base outside the widest breakpoint on a site with a wide one", () => {
+    // At 1280 a site whose widest bound is 1439 would put the base preview
+    // inside that breakpoint, so editing "Desktop" would style the wider tier.
+    const wide: BreakpointSet = {
+      viewport: [{ id: "laptop", label: "Laptop", maxWidth: 1439 }],
+      container: [],
+    };
+    expect(previewWidth(wide, BASE_BREAKPOINT)).toBe(1440);
+    expect(editedBreakpointAtWidth(wide, 1440)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("previews nothing for a breakpoint the site does not define", () => {
+    expect(previewWidth(site(), "watch")).toBeUndefined();
+  });
+
+  it("previews nothing on a site with no viewport breakpoints", () => {
+    // Nothing to simulate: the canvas fills its region.
+    const none: BreakpointSet = { viewport: [], container: [] };
+    expect(previewWidth(none, BASE_BREAKPOINT)).toBeUndefined();
+  });
+
+  it("previews each bounded breakpoint at a width that edits that breakpoint", () => {
+    for (const tier of offeredTiers(site())) {
+      const width = previewWidth(site(), tier.id);
+      expect(editedBreakpointAtWidth(site(), width)).toBe(tier.id);
+    }
+  });
+});
+
+describe("the device an edit goes to", () => {
+  it("is the base breakpoint when none was chosen", () => {
+    expect(editingBreakpointOf(site(), null)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("is the breakpoint the author chose", () => {
+    expect(editingBreakpointOf(site(), "tablet")).toBe("tablet");
+    expect(editingBreakpointOf(site(), BASE_BREAKPOINT)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("falls back to the base breakpoint when the chosen one was removed", () => {
+    // Deterministic, and never a breakpoint the site no longer defines: an
+    // edit stored under that would never be drawn.
+    expect(editingBreakpointOf(site(), "watch")).toBe(BASE_BREAKPOINT);
+    const none: BreakpointSet = { viewport: [], container: [] };
+    expect(editingBreakpointOf(none, "tablet")).toBe(BASE_BREAKPOINT);
+  });
+
+  it("never edits a container breakpoint as a device", () => {
+    const withContainer: BreakpointSet = {
+      viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+      container: [{ id: "card", label: "Card", maxWidth: 400 }],
+    };
+    expect(editingBreakpointOf(withContainer, "card")).toBe(BASE_BREAKPOINT);
+  });
+});
+
+describe("the device edited once the chosen one is removed", () => {
+  /*
+   * Four bounded devices, so a removal in the middle has both a narrower and
+   * a wider neighbour, and the answer shows which way the fallback moves.
+   */
+  const four = (): BreakpointSet => ({
+    viewport: [
+      { id: "laptop", label: "Laptop", maxWidth: 1199 },
+      { id: "tablet", label: "Tablet", maxWidth: 991 },
+      { id: "small", label: "Small tablet", maxWidth: 767 },
+      { id: "mobile", label: "Mobile", maxWidth: 575 },
+    ],
+    container: [],
+  });
+  const without = (set: BreakpointSet, ...ids: string[]): BreakpointSet => ({
+    ...set,
+    viewport: set.viewport.filter(entry => !ids.includes(entry.id)),
+  });
+
+  it("moves to the narrowest breakpoint wider than the removed one", () => {
+    // Tablet, the next one up: not Laptop, the widest remaining, and not
+    // Mobile, the next one down.
+    expect(fallbackBreakpoint(four(), without(four(), "small"), "small")).toBe(
+      "tablet"
+    );
+    // With the next one up removed too, the one beyond it.
+    expect(
+      fallbackBreakpoint(four(), without(four(), "small", "tablet"), "small")
+    ).toBe("laptop");
+  });
+
+  it("keeps the width when a breakpoint at the same bound remains", () => {
+    /*
+     * Two at one bound: only the later is offered, until it is removed and the
+     * earlier one is offered at that same width. Strictly wider would skip it
+     * for Laptop.
+     */
+    const doubled: BreakpointSet = {
+      viewport: [
+        { id: "laptop", label: "Laptop", maxWidth: 1199 },
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "tablet-wide", label: "Wide tablet", maxWidth: 991 },
+        { id: "mobile", label: "Mobile", maxWidth: 575 },
+      ],
+      container: [],
+    };
+    expect(
+      fallbackBreakpoint(
+        doubled,
+        without(doubled, "tablet-wide"),
+        "tablet-wide"
+      )
+    ).toBe("tablet");
+  });
+
+  it("moves to the base when no wider breakpoint remains", () => {
+    // Narrower ones remain, and none of them is chosen.
+    expect(
+      fallbackBreakpoint(four(), without(four(), "laptop", "tablet"), "tablet")
+    ).toBe(BASE_BREAKPOINT);
+  });
+
+  it("moves to the base when the removed one was the widest", () => {
+    expect(
+      fallbackBreakpoint(four(), without(four(), "laptop"), "laptop")
+    ).toBe(BASE_BREAKPOINT);
+  });
+
+  it("keeps the chosen breakpoint while the site still has it", () => {
+    // Another one removed, a wider one among them.
+    expect(fallbackBreakpoint(four(), without(four(), "laptop"), "small")).toBe(
+      "small"
+    );
+    // Its own bound moved: still the same breakpoint.
+    const moved: BreakpointSet = {
+      ...four(),
+      viewport: four().viewport.map(entry =>
+        entry.id === "small" ? { ...entry, maxWidth: 1300 } : entry
+      ),
+    };
+    expect(fallbackBreakpoint(four(), moved, "small")).toBe("small");
+    expect(fallbackBreakpoint(four(), four(), null)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("goes to the base for a choice the earlier set never offered", () => {
+    // No width to compare: a stored choice for a breakpoint already gone.
+    expect(fallbackBreakpoint(four(), four(), "watch")).toBe(BASE_BREAKPOINT);
+  });
+});
+
+describe("the height a device is previewed at", () => {
+  it("changes band exactly at 600 and at 1024", () => {
+    // Each pair straddles a bound, so a band written with `<=` instead of `<`
+    // moves one of the four and fails here.
+    expect(previewHeight(599)).toBe(844);
+    expect(previewHeight(600)).toBe(1024);
+    expect(previewHeight(1023)).toBe(1024);
+    expect(previewHeight(1024)).toBe(800);
+  });
+
+  it("gives a site-added breakpoint the height of the band its width is in", () => {
+    // A breakpoint no preset knows about still has a width, and the bands
+    // answer for it. Read through `previewWidth`, which is how the frame gets
+    // its width, so the pair is tested as the frame will use it.
+    const custom: BreakpointSet = {
+      viewport: [
+        { id: "phablet", label: "Phablet", maxWidth: 700 },
+        { id: "small", label: "Small", maxWidth: 480 },
+      ],
+      container: [],
+    };
+    const phablet = previewWidth(custom, "phablet");
+    const small = previewWidth(custom, "small");
+    const base = previewWidth(custom, BASE_BREAKPOINT);
+    expect(phablet).toBe(700);
+    expect(small).toBe(480);
+    expect(base).toBe(1280);
+    expect(previewHeight(phablet ?? 0)).toBe(1024);
+    expect(previewHeight(small ?? 0)).toBe(844);
+    expect(previewHeight(base ?? 0)).toBe(800);
+  });
+});
+
+describe("a frame that fills its region's height", () => {
+  const region = { width: 1000, height: 820 };
+
+  it("fits the device's width, and is as tall as the region at that scale", () => {
+    // Desktop at 1280 in a 1000-wide region: scaled to fit its width, and
+    // tall enough that painted it fills the region from top to bottom.
+    const { scale, height } = frameFillingRegion(1280, region, { kind: "fit" });
+    expect(scale).toBeCloseTo(1000 / 1280);
+    expect(height * scale).toBeCloseTo(820);
+  });
+
+  it("fills the region at a chosen zoom too", () => {
+    for (const chosen of [0.5, 1, 2]) {
+      const { scale, height } = frameFillingRegion(1280, region, {
+        kind: "fixed",
+        scale: chosen,
+      });
+      expect(scale).toBe(chosen);
+      expect(height * scale, String(chosen)).toBeCloseTo(820);
+    }
+  });
+
+  it("is never drawn larger than life to fit", () => {
+    // A phone in a wide region fits at 1, not magnified.
+    const { scale, height } = frameFillingRegion(390, region, { kind: "fit" });
+    expect(scale).toBe(1);
+    expect(height).toBe(820);
+  });
+
+  it("holds a chosen zoom before the region is measured", () => {
+    expect(
+      frameFillingRegion(1280, undefined, { kind: "fixed", scale: 0.5 })
+    ).toEqual({ scale: 0.5, height: previewHeight(1280) });
+  });
+
+  it("keeps the device's own height until the region is measured", () => {
+    expect(frameFillingRegion(1280, undefined, { kind: "fit" })).toEqual({
+      scale: 1,
+      height: previewHeight(1280),
+    });
+  });
+});
+
+describe("the scale that fits a frame into its region", () => {
+  const desktop = { width: 1280, height: 800 };
+
+  it("fits the width when the width is what does not fit", () => {
+    expect(frameFitScale(desktop, { width: 640, height: 2000 })).toBe(0.5);
+  });
+
+  it("fits the HEIGHT when the height is what does not fit", () => {
+    // The case a width-only fit gets wrong: the region is as wide as the
+    // frame, so fitting the width alone answers 1 and the bottom half of the
+    // previewed viewport is off screen.
+    expect(frameFitScale(desktop, { width: 1280, height: 400 })).toBe(0.5);
+  });
+
+  it("takes the smaller ratio when neither dimension fits", () => {
+    expect(frameFitScale(desktop, { width: 960, height: 200 })).toBe(0.25);
+    expect(frameFitScale(desktop, { width: 320, height: 600 })).toBe(0.25);
+  });
+
+  it("never magnifies a frame smaller than its region", () => {
+    expect(frameFitScale(desktop, { width: 4000, height: 4000 })).toBe(1);
+  });
+
+  it("is the identity for a region not measured yet, or of zero", () => {
+    expect(frameFitScale(desktop, {})).toBe(1);
+    expect(frameFitScale(desktop, { width: 640 })).toBe(1);
+    expect(frameFitScale(desktop, { width: 0, height: 800 })).toBe(1);
+    expect(frameFitScale(desktop, { width: 640, height: Number.NaN })).toBe(1);
   });
 });

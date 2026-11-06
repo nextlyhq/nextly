@@ -93,7 +93,7 @@ vi.mock(
 // The language panel is where the withheld-write decision lands for locale
 // actions: a stand-in records what the editor actually handed it.
 vi.mock("@admin/components/features/entries/LanguagePanel", () => ({
-  LanguagePanel: (props: { actionsDisabled?: boolean }) => {
+  DocumentLanguagePanel: (props: { actionsDisabled?: boolean }) => {
     languagePanelProps.current = props;
     return null;
   },
@@ -101,24 +101,21 @@ vi.mock("@admin/components/features/entries/LanguagePanel", () => ({
 // The header is where the history panel normally mounts and publishes both the
 // chosen version and the restore affordance. Standing in for it lets a test
 // name the arrival state directly, which no fixture of the real panel can.
-vi.mock(
-  "@admin/components/features/entries/EntryForm/EntrySystemHeader",
-  () => ({
-    EntrySystemHeader: (props: { hasUnsavedWork?: boolean }) => {
-      headerProps.current = props;
-      const { setViewing, setRestore } = useDocumentHistory();
-      useEffect(() => {
-        setViewing(viewed.current);
-        setRestore({
-          canRestore: true,
-          request: vi.fn(),
-          returnToCurrent: vi.fn(),
-        });
-      }, [setViewing, setRestore]);
-      return null;
-    },
-  })
-);
+vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
+  DocumentBar: (props: { hasUnsavedWork?: boolean }) => {
+    headerProps.current = props;
+    const { setViewing, setRestore } = useDocumentHistory();
+    useEffect(() => {
+      setViewing(viewed.current);
+      setRestore({
+        canRestore: true,
+        request: vi.fn(),
+        returnToCurrent: vi.fn(),
+      });
+    }, [setViewing, setRestore]);
+    return null;
+  },
+}));
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
@@ -194,6 +191,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -207,7 +205,9 @@ describe("SingleForm — a published version replaces the document", () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByTestId("snapshot-form")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restore…" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Restore this version" })
+    ).toBeEnabled();
     // The live editor's own fields stay mounted behind the version so their
     // rich state (undo, selection) survives the round trip — but they are
     // inert: removed from the accessibility tree and from every pointer.
@@ -223,6 +223,7 @@ describe("SingleForm — a published version replaces the document", () => {
       // which is what a disabled or paused read looks like.
       snapshot: undefined,
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -233,7 +234,9 @@ describe("SingleForm — a published version replaces the document", () => {
     // An absent snapshot must not render as an empty version.
     expect(screen.queryByTestId("snapshot-form")).toBeNull();
     expect(screen.getByText(/loading version 7/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Restore this version" })
+    ).toBeDisabled();
   });
 
   it("reports a failed read instead of rendering it as the version", () => {
@@ -241,6 +244,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: undefined,
       locale: null,
+      withheld: [],
       isLoading: false,
       error: new Error("boom"),
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -270,6 +274,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -291,6 +296,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -314,6 +320,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -341,6 +348,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -455,6 +463,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -471,6 +480,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -487,7 +497,7 @@ describe("SingleForm — a published version replaces the document", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Restore…" })
+      screen.queryByRole("button", { name: "Restore this version" })
     ).not.toBeInTheDocument();
   });
 });

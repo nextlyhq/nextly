@@ -44,6 +44,28 @@ export const CORE_CONTENT_EVENT_KINDS = {
     name: "draft-discarded",
     label: "Draft discarded by {actor}",
   },
+  overwritten: {
+    name: "overwritten",
+    label: "Overwritten by {actor}",
+    // How the overwrite stood against the document: no version given, the
+    // current one, or one out of date. Out of date, `replaced` is who made
+    // the latest change it replaced, by id alone, named when history is read
+    // so an erased account is never named from the record; null when the
+    // row records no maker. The event's actor is who overwrote.
+    payload: z
+      .object({
+        given: z.enum(["none", "current", "stale"]),
+        replaced: z
+          .object({
+            kind: z.string().min(1),
+            id: z.string().min(1).nullable(),
+            principalKind: z.string().min(1).nullable(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+  },
   deleted: { name: "deleted", label: "Deleted by {actor}", endsSubject: true },
   versionsRemoved: {
     name: "versions-removed",

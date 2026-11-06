@@ -21,7 +21,6 @@
 import type { Command } from "commander";
 
 import type { NextlyServiceConfig } from "../../di/register";
-import { describeError } from "../../errors/index";
 import { pluginAdminSlug } from "../../plugins/admin-meta";
 import { getCoreVersion } from "../../plugins/core-version";
 import {
@@ -29,9 +28,17 @@ import {
   findPluginInfo,
   type PluginInfo,
 } from "../../plugins/plugin-introspection";
+import { exitWithError, failWithError } from "../errors";
+import { installTargetUnclear, pluginNotFound } from "../errors/areas/plugins";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig } from "../utils/config-loader";
+import {
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import type { Logger } from "../utils/logger";
+
+export { registerPluginsCommand } from "./plugins.command";
 
 interface PluginsCommandOptions {
   config?: string;
@@ -170,10 +177,7 @@ export async function runPluginsInfoCommand(
     infos.find(i => pluginAdminSlug(i.name) === name);
 
   if (!info) {
-    context.logger.error(
-      `Plugin "${name}" not found. Run \`nextly plugins list\` to see installed plugins.`
-    );
-    process.exitCode = 1;
+    failWithError(context.logger, pluginNotFound(name));
     return;
   }
   renderPluginInfo(info, context.logger);
@@ -191,121 +195,114 @@ export function installTarget(
   return name === undefined ? null : { name };
 }
 
-/** Register the `nextly plugins` command group (D48). */
-export function registerPluginsCommand(program: Command): void {
-  const plugins = program
-    .command("plugins")
-    .description("Inspect installed plugins and their contributions");
-
-  plugins
-    .command("list")
-    .description("List installed plugins and their contributions")
-    .action(async (_cmdOptions: unknown, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runPluginsListCommand(
-          { config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
-    });
-
-  plugins
-    .command("install [name]")
-    .description(
-      "Apply a plugin's migrations and run its onInstall hook, or every configured plugin's with --all"
-    )
-    .option(
-      "--all",
-      "Install every configured plugin, dependencies first",
-      false
-    )
-    .action(
-      async (
-        name: string | undefined,
-        cmdOptions: { all?: boolean },
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        // Exactly one of the two: a name with --all would leave which one was
-        // meant to the parser's reading of the line.
-        const target = installTarget(name, cmdOptions.all === true);
-        if (target === null) {
-          context.logger.error(
-            'Name one plugin to install, or pass --all to install every configured plugin: "nextly plugins install <name>" or "nextly plugins install --all".'
-          );
-          process.exit(1);
-        }
-        try {
-          const options = { config: globalOpts.config, cwd: globalOpts.cwd };
-          const { runPluginInstall, runPluginInstallAll } = await import(
-            "./plugin-lifecycle-runner"
-          );
-          if (target === "all") await runPluginInstallAll(options, context);
-          else await runPluginInstall(target.name, options, context);
-        } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
-        }
-      }
+/** The action of `nextly plugins list`, loaded when it runs. */
+export async function pluginsListAction(
+  _cmdOptions: unknown,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runPluginsListCommand(
+      { config: globalOpts.config, cwd: globalOpts.cwd },
+      context
     );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+}
 
-  plugins
-    .command("uninstall <name>")
-    .description("Undo a plugin's schema and run its onUninstall hook")
-    .option("--keep-data", "Leave the plugin's tables in place", false)
-    .option("--yes", "Skip the confirmation before dropping tables", false)
-    .action(
-      async (
-        name: string,
-        cmdOptions: { keepData?: boolean; yes?: boolean },
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        try {
-          const { runPluginUninstall } = await import(
-            "./plugin-lifecycle-runner"
-          );
-          await runPluginUninstall(
-            name,
-            {
-              config: globalOpts.config,
-              cwd: globalOpts.cwd,
-              keepData: cmdOptions.keepData === true,
-              yes: cmdOptions.yes === true,
-            },
-            context
-          );
-        } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
-        }
-      }
-    );
-
-  plugins
-    .command("info <name>")
-    .description(
-      "Show one plugin's details (collections, permissions, routes, admin)"
-    )
-    .action(async (name: string, _cmdOptions: unknown, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runPluginsInfoCommand(
-          name,
-          { config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
+/** The action of `nextly plugins install`, loaded when it runs. */
+export async function pluginsInstallAction(
+  name: string | undefined,
+  cmdOptions: {
+    all?: boolean;
+    acceptDataLoss?: AcceptDataLossOption;
+    dryRun?: boolean;
+  },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  // Exactly one of the two: a name with --all would leave which one was
+  // meant to the parser's reading of the line.
+  const target = installTarget(name, cmdOptions.all === true);
+  if (target === null) {
+    exitWithError(context.logger, installTargetUnclear(name));
+  }
+  try {
+    // The consent to the data the install's modules delete, as `nextly migrate` reads it.
+    const consent = readDataLossConsent({
+      flag: cmdOptions.acceptDataLoss,
+      warn: message => context.logger.warn(message),
     });
+    const options = {
+      config: globalOpts.config,
+      cwd: globalOpts.cwd,
+      consent,
+      dryRun: cmdOptions.dryRun === true,
+    };
+    const { runPluginInstall, runPluginInstallAll } = await import(
+      "./plugin-lifecycle-runner"
+    );
+    if (target === "all") await runPluginInstallAll(options, context);
+    else await runPluginInstall(target.name, options, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+}
+
+/** The action of `nextly plugins uninstall`, loaded when it runs. */
+export async function pluginsUninstallAction(
+  name: string,
+  cmdOptions: {
+    keepData?: boolean;
+    yes?: boolean;
+    acceptDataLoss?: AcceptDataLossOption;
+    dryRun?: boolean;
+  },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    const consent = readDataLossConsent({
+      flag: cmdOptions.acceptDataLoss,
+      warn: message => context.logger.warn(message),
+    });
+    const { runPluginUninstall } = await import("./plugin-lifecycle-runner");
+    await runPluginUninstall(
+      name,
+      {
+        config: globalOpts.config,
+        cwd: globalOpts.cwd,
+        keepData: cmdOptions.keepData === true,
+        yes: cmdOptions.yes === true,
+        consent,
+        dryRun: cmdOptions.dryRun === true,
+      },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
+}
+
+/** The action of `nextly plugins info`, loaded when it runs. */
+export async function pluginsInfoAction(
+  name: string,
+  _cmdOptions: unknown,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runPluginsInfoCommand(
+      name,
+      { config: globalOpts.config, cwd: globalOpts.cwd },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

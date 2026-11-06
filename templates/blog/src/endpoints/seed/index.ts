@@ -1,7 +1,7 @@
 /**
  * Blog Template Seed Script
  *
- * Exports a `seed({ nextly })` function that populates demo content
+ * Exports a `seed({ nextly, config })` function that populates demo content
  * (roles, posts, categories, tags, navigation, site-settings,
  * homepage, newsletter form). Triggered from the auth-gated POST
  * route at `src/app/admin/api/seed/route.ts` — the route validates
@@ -21,6 +21,8 @@ import fs from "fs";
 import path from "path";
 
 import type { Nextly } from "nextly";
+
+import { ownPostsUnlessPublisher } from "../../access/own-posts";
 
 /**
  * Structured summary of what the seed produced. Returned to the
@@ -74,7 +76,7 @@ const TEMPLATE_ROLES = [
     slug: "author",
     name: "Author",
     description:
-      "Can draft and edit posts, but not publish or delete them. Reads taxonomy.",
+      "Can draft and edit posts, but not publish them; on a code-first blog only their own, which they may also delete. Reads taxonomy.",
     level: 10,
   },
 ] as const;
@@ -135,11 +137,32 @@ async function findUserByEmail(
 /**
  * The only posts permissions the author role is given. Named rather than
  * withheld, so an action a site adds later (`manage-posts`, say) is not
- * handed to authors by default. Access rules cannot tell an author's own post
- * from anyone else's, so delete or publish would reach every post (see
- * pickPermissionIdsForRoles).
+ * handed to authors by default. Publish is withheld: it would reach every
+ * post (see pickPermissionIdsForRoles). Delete is added only where Posts'
+ * delete rule limits it to the author's own posts.
  */
 const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
+
+/**
+ * Whether this install's Posts limits a delete to the posts the caller wrote:
+ * its `delete` rule is `ownPostsUnlessPublisher`. A code-first blog registers
+ * Posts with it. A visual blog registers no code collections, and the Posts
+ * its migration creates carries no rule, since the Schema Builder can't store
+ * a function: there the permission alone decides a delete, and granting it
+ * to authors would let each delete every post.
+ */
+export function postsLimitDeletesToTheirAuthor(config: {
+  readonly collections?: ReadonlyArray<{
+    readonly slug: string;
+    readonly access?: { readonly delete?: unknown };
+  }>;
+}): boolean {
+  return (config.collections ?? []).some(
+    collection =>
+      collection.slug === "posts" &&
+      collection.access?.delete === ownPostsUnlessPublisher
+  );
+}
 
 /**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
@@ -150,16 +173,18 @@ const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
  *   /admin/roles/<slug> after seeding).
  * - editor: content + media permissions.
  * - author: posts (create, read, update) + media and read-only access to
- *   the content taxonomy. No delete or publish on posts: access rules
- *   cannot tell an author's own post from anyone else's, so either
- *   permission would reach every post. An editor publishes.
+ *   the content taxonomy, and delete on posts where `authorsDeleteOwnPosts`
+ *   says Posts' rule limits it to the posts they wrote (see
+ *   postsLimitDeletesToTheirAuthor). No publish on posts: it is not limited
+ *   that way, and would reach every post. An editor publishes.
  *
  * Returns an empty array if fetching permissions fails; callers still
  * get a "at least one permission required" error from the core service
  * in that case and the role will be skipped with a warning.
  */
 export async function pickPermissionIdsForRoles(
-  nextly: Nextly
+  nextly: Nextly,
+  options: { authorsDeleteOwnPosts: boolean }
 ): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
   try {
@@ -183,7 +208,12 @@ export async function pickPermissionIdsForRoles(
         const resource = (p as { resource?: string }).resource;
         const action = (p as { action?: string }).action;
         if (resource === "media") return true;
-        if (resource === "posts") return AUTHOR_POST_ACTIONS.has(action ?? "");
+        if (resource === "posts") {
+          return (
+            AUTHOR_POST_ACTIONS.has(action ?? "") ||
+            (options.authorsDeleteOwnPosts && action === "delete")
+          );
+        }
         if (
           (resource === "categories" || resource === "tags") &&
           action === "read"
@@ -202,7 +232,8 @@ export async function pickPermissionIdsForRoles(
 }
 
 async function seedRoles(
-  nextly: Nextly
+  nextly: Nextly,
+  options: { authorsDeleteOwnPosts: boolean }
 ): Promise<{ idsBySlug: Record<string, string>; created: number }> {
   const roleIdBySlug: Record<string, string> = {};
   let created = 0;
@@ -228,7 +259,7 @@ async function seedRoles(
   // satisfied. Requires the Direct API to forward permissionIds through
   // `data.permissionIds` (wired up in packages/nextly Direct API rbac
   // namespace).
-  const rolePermissionIds = await pickPermissionIdsForRoles(nextly);
+  const rolePermissionIds = await pickPermissionIdsForRoles(nextly, options);
   for (const role of TEMPLATE_ROLES) {
     if (roleIdBySlug[role.slug]) continue;
     const permissionIds = rolePermissionIds[role.slug] ?? [];
@@ -270,7 +301,7 @@ interface SeedMediaConfig {
   baseUrl?: string;
 }
 
-interface SeedData {
+export interface SeedData {
   // Optional. Lets the template fetch missing media from a public URL when
   // the local file is absent (e.g. user deleted it, scaffold skipped it).
   seedMedia?: SeedMediaConfig;
@@ -492,15 +523,79 @@ async function uploadMediaFile(
  * Main seed function. Invoked from the auth-gated POST route at
  * `src/app/admin/api/seed/route.ts`. Receives a Nextly instance the
  * route has already initialised with `{ config }` and a verified
- * super-admin session.
+ * super-admin session, and that same config: it says whether Posts limits
+ * an author's deletes to their own posts, which decides whether the author
+ * role is given `delete-posts`.
  *
  * Schema is created via SQL migrations (boot-time auto-apply).
  * This function only populates demo content (Phase C).
  */
+/**
+ * Patch an existing post's categories and tags, sent with the version the
+ * lookup read it at, so a change to the post made since refuses the patch
+ * rather than being overwritten by it.
+ */
+export async function patchPostTaxonomy(
+  nextly: Pick<Nextly, "update">,
+  existing: Record<string, unknown>,
+  links: { categories: unknown[]; tags: unknown[] }
+): Promise<void> {
+  const rev = existing._rev;
+  await nextly.update({
+    collection: "posts",
+    id: String(existing.id),
+    data: {
+      categories: links.categories.length > 0 ? links.categories : undefined,
+      tags: links.tags.length > 0 ? links.tags : undefined,
+      ...(typeof rev === "string" ? { _rev: rev } : {}),
+    },
+  });
+}
+
+/**
+ * Write the demo content of the site's Singles: settings, navigation and the
+ * homepage. Seed content is set whatever the Singles hold, so each write
+ * says so with `_overwrite`.
+ *
+ * A write that fails fails the seed, naming the Single: a site without its
+ * Singles' demo copy is not seeded, and the load is recorded as failed so it
+ * can be run again. Running it again is safe, since each write overwrites.
+ */
+export async function seedSingles(
+  nextly: Pick<Nextly, "updateSingle">,
+  seedData: Pick<SeedData, "siteSettings" | "navigation" | "homepage">
+): Promise<void> {
+  const write = async (slug: string, data: Record<string, unknown>) => {
+    console.log(`  Updating ${slug}...`);
+    try {
+      await nextly.updateSingle({
+        slug,
+        data: { ...data, _overwrite: true },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`The seed could not write the ${slug} Single: ${msg}`, {
+        cause: err,
+      });
+    }
+  };
+  await write("site-settings", {
+    title: seedData.siteSettings.siteName,
+    siteName: seedData.siteSettings.siteName,
+    tagline: seedData.siteSettings.tagline,
+    siteDescription: seedData.siteSettings.siteDescription,
+    social: seedData.siteSettings.social,
+  });
+  if (seedData.navigation) await write("navigation", seedData.navigation);
+  if (seedData.homepage) await write("homepage", seedData.homepage);
+}
+
 export async function seed({
   nextly,
+  config,
 }: {
   nextly: Nextly;
+  config: Parameters<typeof postsLimitDeletesToTheirAuthor>[0];
 }): Promise<SeedResult> {
   const summary: SeedSummary = {
     rolesCreated: 0,
@@ -542,17 +637,22 @@ export async function seed({
   // Per-file failures are captured into `outcomes` for an end-of-run summary.
   console.log("  Uploading seed media...");
   const outcomes: UploadOutcome[] = [];
-  const mediaIdByFilename = new Map<string, string>();
+  // Keyed by file AND alt text: two posts may share an image, and each keeps
+  // its own alt text rather than reading the first post's title as its own.
+  const mediaIdByUpload = new Map<string, string>();
+  const uploadKey = (filename: string, altText: string) =>
+    JSON.stringify([filename, altText]);
 
   const uploadAndTrack = async (
     filename: string,
     altText: string
   ): Promise<void> => {
-    if (mediaIdByFilename.has(filename)) return; // dedupe
+    const key = uploadKey(filename, altText);
+    if (mediaIdByUpload.has(key)) return; // dedupe
     const outcome = await uploadMediaFile(nextly, filename, altText, seedMedia);
     outcomes.push(outcome);
     if ("id" in outcome) {
-      mediaIdByFilename.set(filename, outcome.id);
+      mediaIdByUpload.set(key, outcome.id);
     }
   };
 
@@ -578,7 +678,9 @@ export async function seed({
 
   // Step 2a: Seed roles first so user creation can assign them.
   console.log("  Seeding roles...");
-  const rolesResult = await seedRoles(nextly);
+  const rolesResult = await seedRoles(nextly, {
+    authorsDeleteOwnPosts: postsLimitDeletesToTheirAuthor(config),
+  });
   const roleIdBySlug = rolesResult.idsBySlug;
   summary.rolesCreated = rolesResult.created;
 
@@ -722,24 +824,21 @@ export async function seed({
         .map(slug => tagIdMap[slug])
         .filter(Boolean);
       const featuredImageId = post.featuredImage
-        ? mediaIdByFilename.get(post.featuredImage)
+        ? mediaIdByUpload.get(uploadKey(post.featuredImage, post.title))
         : undefined;
 
       if (existing.meta.total > 0) {
         // Post already exists — patch its categories/tags in case they
-        // were lost during a prior seed run.
-        const existingId = existing.items[0].id as string;
+        // were lost during a prior seed run. Non-critical, so it is reported
+        // as a warning rather than stopping the seed, never dropped.
         try {
-          await nextly.update({
-            collection: "posts",
-            id: existingId,
-            data: {
-              categories: categoryIds.length > 0 ? categoryIds : undefined,
-              tags: tagIds.length > 0 ? tagIds : undefined,
-            },
+          await patchPostTaxonomy(nextly, existing.items[0], {
+            categories: categoryIds,
+            tags: tagIds,
           });
-        } catch {
-          // Non-critical: the post exists, just the taxonomy link is stale.
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`post "${post.slug}" taxonomy: ${msg}`);
         }
         continue;
       }
@@ -768,53 +867,7 @@ export async function seed({
     }
   }
 
-  console.log("  Updating site settings...");
-  try {
-    await nextly.updateSingle({
-      slug: "site-settings",
-      data: {
-        title: seedData.siteSettings.siteName,
-        siteName: seedData.siteSettings.siteName,
-        tagline: seedData.siteSettings.tagline,
-        siteDescription: seedData.siteSettings.siteDescription,
-        social: seedData.siteSettings.social,
-      },
-    });
-  } catch {
-    console.log("  Could not update site settings (will be set up in admin).");
-  }
-
-  // Navigation single: seed default link arrays + UI toggles. Wrapped in
-  // try/catch since Single DDL may not have landed on every install path
-  if (seedData.navigation) {
-    console.log("  Updating navigation...");
-    try {
-      await nextly.updateSingle({
-        slug: "navigation",
-        data: seedData.navigation,
-      });
-    } catch {
-      console.log(
-        "  Could not update navigation (edit in admin under Singles / Navigation)."
-      );
-    }
-  }
-
-  // Homepage single: hero copy + section visibility toggles. Same
-  // try/catch rationale as navigation above.
-  if (seedData.homepage) {
-    console.log("  Updating homepage...");
-    try {
-      await nextly.updateSingle({
-        slug: "homepage",
-        data: seedData.homepage,
-      });
-    } catch {
-      console.log(
-        "  Could not update homepage (edit in admin under Singles / Homepage)."
-      );
-    }
-  }
+  await seedSingles(nextly, seedData);
 
   // Newsletter form: seed via the form-builder plugin. The frontend
   // NewsletterCta component submits to `form-submissions` referencing

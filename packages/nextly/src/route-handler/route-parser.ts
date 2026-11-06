@@ -740,8 +740,9 @@ function parseCollectionEntryDuplicateRoute(
 }
 
 /**
- * Parse the publish-all-languages route for a collection entry (i18n M7).
+ * Parse the publish-all-languages routes for a collection entry.
  * POST /api/collections/{slug}/entries/{id}/publish-all
+ * GET /api/collections/{slug}/entries/{id}/publish-all
  */
 function parseCollectionEntryPublishAllRoute(
   id: string | undefined,
@@ -773,6 +774,28 @@ function parseCollectionEntryPublishAllRoute(
       // permission name nothing seeds.
       operation: "update",
       method: allLocales,
+      routeParams,
+    };
+  }
+
+  // GET /api/collections/{slug}/entries/{id}/publish-all → what publishing
+  // every language would do, language by language, without doing it. A read,
+  // admitted on `publish-{slug}` as the POST is: a caller who may not publish
+  // is not told what a publish would do.
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    additionalParams[0] === "publish-all" &&
+    additionalParams.length === 1 &&
+    httpMethod === "GET"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "previewPublishAllLocales",
       routeParams,
     };
   }
@@ -1431,15 +1454,29 @@ function parseSingleRoutes(
   }
 
   // POST /api/singles/[slug]/publish-all → publish every language at once.
-  // Authorized as an `update` like the collection entry equivalent: the route
-  // gate cannot express `publish`, so the service checks `publish-{slug}` for
-  // itself on top of the update the route authorized.
+  // Admitted on `publish-{slug}` like the collection entry equivalent (see
+  // the route's resolveAuthorization); the service asks the publish rule in
+  // each language the publish puts live.
   if (id && subresource === "publish-all" && !subId && httpMethod === "POST") {
     routeParams.slug = id;
     return {
       service: "singles",
       operation: "update",
       method: "publishAllSingleLocales",
+      routeParams,
+    };
+  }
+
+  // GET /api/singles/[slug]/publish-all → what publishing every language
+  // would do, language by language, without doing it. A read, admitted on
+  // `publish-{slug}` as the POST is: a caller who may not publish is not told
+  // what a publish would do.
+  if (id && subresource === "publish-all" && !subId && httpMethod === "GET") {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "previewPublishAllSingleLocales",
       routeParams,
     };
   }
@@ -1674,17 +1711,25 @@ function parseComponentRoutes(
  * - DELETE /api/email-providers/[id] → delete provider
  * - PATCH /api/email-providers/[id]/default → set as default
  * - GET /api/email-providers/types → registered provider catalog
+ * - GET /api/email-providers/settings → default sender, code provider
+ * - POST /api/email-providers/check → check unsaved settings, sending nothing
+ * - POST /api/email-providers/[id]/check → check a saved provider's changed settings
  * - POST /api/email-providers/[id]/test → send test email
  */
-function parseEmailProviderRoutes(
+/**
+ * The reserved words beside the provider collection: the registered catalog,
+ * how email goes out when no provider is chosen, and a configuration checked
+ * with its provider before it is saved, sending nothing. Each is matched
+ * BEFORE the by-id branch, which would otherwise read the word as a provider
+ * id and answer 404 for a route that has nothing to do with one.
+ */
+function parseEmailProviderCollectionKeywordRoutes(
   id: string | undefined,
   subresource: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   // GET /api/email-providers/types → the registered provider catalog.
-  // Matched BEFORE the by-id branch, which would otherwise read "types" as a
-  // provider id and answer 404 for a route that has nothing to do with one.
   if (id === "types" && !subresource && httpMethod === "GET") {
     return {
       service: "emailProviders",
@@ -1693,6 +1738,46 @@ function parseEmailProviderRoutes(
       routeParams,
     };
   }
+
+  // GET /api/email-providers/settings → the default sender and the provider
+  // set in code, without its configuration. A read, gated as one.
+  if (id === "settings" && !subresource && httpMethod === "GET") {
+    return {
+      service: "emailProviders",
+      operation: "list",
+      method: "getSendingSettings",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-providers/check → check a configuration with its provider
+  // before it is saved. Gated as a create, since it is the first step of
+  // adding one and hands the provider credentials to try.
+  if (id === "check" && !subresource && httpMethod === "POST") {
+    return {
+      service: "emailProviders",
+      operation: "create",
+      method: "checkProvider",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
+function parseEmailProviderRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  const keywordRoute = parseEmailProviderCollectionKeywordRoutes(
+    id,
+    subresource,
+    httpMethod,
+    routeParams
+  );
+  if (keywordRoute) return keywordRoute;
 
   // GET /api/email-providers → list all providers
   if (!id && httpMethod === "GET") {
@@ -1721,6 +1806,21 @@ function parseEmailProviderRoutes(
       service: "emailProviders",
       operation: "update",
       method: "setDefault",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-providers/[id]/check → check a saved provider's changed
+  // settings before they are saved, with its stored secrets standing in for
+  // the masked ones. An edit's first step, gated as one: the stored secrets it
+  // uses are the provider's, and only someone who may change the provider may
+  // try them against another server.
+  if (id && subresource === "check" && httpMethod === "POST") {
+    routeParams.providerId = id;
+    return {
+      service: "emailProviders",
+      operation: "update",
+      method: "checkSavedProvider",
       routeParams,
     };
   }
@@ -2200,8 +2300,12 @@ interface ReleaseRoute {
   id: boolean | string;
   /** The segment after the id, or `null` for none. */
   subresource: string | null;
-  /** Whether the path carries a fourth segment, such as a member id. */
-  subId: boolean;
+  /**
+   * Whether the path carries a fourth segment, such as a member id, or the
+   * word a step over several members is named by in that place. Member ids
+   * are UUIDs, so a word never names a member.
+   */
+  subId: boolean | string;
   verb: string;
   operation: OperationType;
   method: string;
@@ -2233,6 +2337,17 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "GET",
     operation: "list",
     method: "releaseCalendar",
+  },
+  // Scheduling a document in one step: on its own, with an existing release
+  // or in a new one, the path chosen by the body. A word in the id's place,
+  // before the route that reads one release by id, as the calendar is.
+  {
+    id: "schedule-document",
+    subresource: null,
+    subId: false,
+    verb: "POST",
+    operation: "create",
+    method: "scheduleDocument",
   },
   // The readiness of a page of releases at once, named by `?ids=`. Before the
   // route that reads one release by id, like the calendar, for the same
@@ -2287,6 +2402,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "POST",
     operation: "create",
     method: "addReleaseMember",
+  },
+  // Several documents added in one step, all or none. A word in the member
+  // id's place, so it is matched before any route taking a member id.
+  {
+    id: true,
+    subresource: "members",
+    subId: "batch",
+    verb: "POST",
+    operation: "create",
+    method: "addReleaseMembers",
   },
   {
     id: true,
@@ -2390,19 +2515,58 @@ function parseReleaseRoutes(
         ? candidate.id === id
         : candidate.id === Boolean(id)) &&
       candidate.subresource === (subresource ?? null) &&
-      candidate.subId === Boolean(subId) &&
+      (typeof candidate.subId === "string"
+        ? candidate.subId === subId
+        : candidate.subId === Boolean(subId)) &&
       candidate.verb === httpMethod
   );
   if (!route) return null;
 
   // A word in the id's place names the route, not a release.
   if (id && route.id === true) routeParams.releaseId = id;
-  if (subId) routeParams.memberId = subId;
+  // A word in the member id's place names the route, not a member.
+  if (subId && route.subId === true) routeParams.memberId = subId;
 
   return {
     service: "releases",
     operation: route.operation,
     method: route.method,
+    routeParams,
+  };
+}
+
+/**
+ * A reserved path under `/webhooks`: an operation's name, not an endpoint id.
+ * Endpoint ids are generated UUIDs and cannot collide with one.
+ */
+function parseReservedWebhookPath(
+  path: "event-types" | "drain",
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // GET /api/webhooks/event-types → the event types an endpoint may subscribe
+  // to.
+  if (path === "event-types") {
+    if (httpMethod !== "GET") return null;
+    return {
+      service: "webhooks",
+      operation: "list",
+      method: "listWebhookEventTypes",
+      routeParams,
+    };
+  }
+  // GET or POST /api/webhooks/drain → run one drain pass. GET is accepted
+  // because Vercel Cron triggers with a GET; the drain is idempotent, and the
+  // route is authorized regardless of method.
+  if (httpMethod !== "POST" && httpMethod !== "GET") return null;
+  // A drain is not a CRUD OperationType, but the dispatch guard rejects a
+  // route with no operation before the direct-dispatch webhooks branch runs;
+  // a truthy value is required. The webhook handler dispatches on `method` and
+  // does its own authorization, so this value is otherwise unused.
+  return {
+    service: "webhooks",
+    operation: "single",
+    method: "drainWebhooks",
     routeParams,
   };
 }
@@ -2567,24 +2731,10 @@ function parseWebhookRoutes(
     };
   }
 
-  // GET or POST /api/webhooks/drain → run one drain pass. "drain" is a reserved
-  // operation path, not an endpoint id: endpoint ids are generated UUIDs and
-  // cannot collide with it. GET is accepted because Vercel Cron triggers with a
-  // GET; the drain is idempotent, and the route is authorized regardless of
-  // method. Matched before the generic `GET /webhooks/:id` branch so `drain` is
-  // never treated as an endpoint id.
-  if (id === "drain" && !subresource) {
-    if (httpMethod !== "POST" && httpMethod !== "GET") return null;
-    // A drain is not a CRUD OperationType, but the dispatch guard rejects a
-    // route with no operation before the direct-dispatch webhooks branch runs;
-    // a truthy value is required. The webhook handler dispatches on `method` and
-    // does its own authorization, so this value is otherwise unused.
-    return {
-      service: "webhooks",
-      operation: "single",
-      method: "drainWebhooks",
-      routeParams,
-    };
+  // The reserved paths under `/webhooks`, matched before `GET /webhooks/:id`
+  // so neither is read as an endpoint id.
+  if (!subresource && (id === "event-types" || id === "drain")) {
+    return parseReservedWebhookPath(id, httpMethod, routeParams);
   }
 
   if (id && subresource === "secret") {
@@ -2744,22 +2894,30 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
-    onboarding: { operation: "list", method: "getDashboardOnboarding" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
     },
     activity: { operation: "list", method: "getDashboardActivity" },
     layout: { operation: "list", method: "getWidgetLayout" },
+    gallery: { operation: "list", method: "getDashboardGallery" },
+    pins: { operation: "list", method: "getDashboardPins" },
+    summary: { operation: "list", method: "getDashboardSummary" },
+    "new-types": { operation: "list", method: "getDashboardNewTypes" },
+    setup: { operation: "list", method: "getDashboardSetup" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
+    pins: { operation: "create", method: "postDashboardPin" },
+    "new-types": { operation: "create", method: "postDashboardNewType" },
   },
   PUT: {
     layout: { operation: "update", method: "putWidgetLayout" },
+    setup: { operation: "update", method: "putDashboardSetup" },
   },
   DELETE: {
     layout: { operation: "delete", method: "deleteWidgetLayout" },
+    pins: { operation: "delete", method: "deleteDashboardPin" },
   },
 };
 
@@ -2767,13 +2925,21 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
- *   GET  /api/dashboard/onboarding     → getDashboardOnboarding
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   GET  /api/dashboard/gallery        → getDashboardGallery
+ *   GET  /api/dashboard/summary        → getDashboardSummary
  *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   DELETE /api/dashboard/layout       → deleteWidgetLayout
  *   POST /api/dashboard/query          → postWidgetQuery
+ *   GET  /api/dashboard/pins           → getDashboardPins
+ *   POST /api/dashboard/pins           → postDashboardPin
+ *   DELETE /api/dashboard/pins         → deleteDashboardPin
+ *   GET  /api/dashboard/new-types      → getDashboardNewTypes
+ *   POST /api/dashboard/new-types      → postDashboardNewType
+ *   GET  /api/dashboard/setup          → getDashboardSetup
+ *   PUT  /api/dashboard/setup          → putDashboardSetup
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.
@@ -3241,8 +3407,9 @@ export function parseRestRoute(
     if (result) return result;
   }
 
-  // The site's content languages, for Settings.
-  if (resource === "languages") {
+  // The site's content languages, for Settings. Only the bare path: a trailing segment is another
+  // address, which must answer not found rather than list or change the languages.
+  if (resource === "languages" && id === undefined) {
     const method = httpMethod === "GET" ? "getLanguages" : "changeLanguages";
     const operation = httpMethod === "GET" ? "list" : "update";
     return { service: "languages", operation, method, routeParams };
@@ -3256,33 +3423,7 @@ export function parseRestRoute(
     return { service: "generalSettings", operation, method, routeParams };
   }
 
-  // Handle Image Sizes endpoints
-  if (resource === "image-sizes") {
-    // Sub-routes for regeneration
-    if (id === "regeneration-status") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerationStatus",
-        routeParams,
-      };
-    }
-    if (id === "regenerate") {
-      return {
-        service: "imageSizes",
-        operation: "single",
-        method: "regenerate",
-        routeParams,
-      };
-    }
-    if (id) routeParams.imageId = id;
-    return {
-      service: "imageSizes",
-      operation: "list",
-      method: "imageSizes",
-      routeParams,
-    };
-  }
-
+  // Nothing matched: answered as an unknown route. `image-sizes` is among
+  // these, since image sizes are no longer made or offered.
   return {};
 }

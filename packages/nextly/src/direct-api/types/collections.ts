@@ -101,6 +101,22 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   page?: number;
 
   /**
+   * Rows to skip before the first one returned, instead of a page: `offset:
+   * 6, limit: 6` returns items 7 to 12, whether or not that is a page. A whole
+   * number from 0; refused together with `page`. The total stays the full
+   * match count, and `hasNext` and `hasPrev` follow the offset.
+   */
+  offset?: number;
+
+  /**
+   * What a sort key naming no sortable field does: `"drop"` (the default)
+   * warns and sorts by the others; `"refuse"` refuses the read, naming each.
+   *
+   * @experimental
+   */
+  unknownSort?: "drop" | "refuse";
+
+  /**
    * Sort order.
    *
    * Use field name for ascending, prefix with `-` for descending.
@@ -109,9 +125,14 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
    * ```typescript
    * sort: '-createdAt'  // Newest first
    * sort: 'title'       // Alphabetical
+   * sort: ['-featured', '-createdAt'] // Featured first, then newest
    * ```
+   *
+   * Several keys sort in turn. Entries still tied come back in id order, and
+   * an entry with no value for a key comes after those with one, in either
+   * direction.
    */
-  sort?: string;
+  sort?: string | string[];
 
   /**
    * Specific fields to include/exclude.

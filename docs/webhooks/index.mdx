@@ -8,10 +8,10 @@ published, a page is deleted — so another system can react without polling.
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | No plugin required |
-| Admin | A **Webhooks** section for endpoints, secrets and delivery history |
+|            |                                                                                                     |
+| ---------- | --------------------------------------------------------------------------------------------------- |
+| Built in   | No plugin required                                                                                  |
+| Admin      | A **Webhooks** section for endpoints, secrets and delivery history                                  |
 | Permission | Managing endpoints is governed by `create-webhooks`, `update-webhooks` and `delete-webhooks` grants |
 
 ## Endpoints
@@ -19,6 +19,59 @@ published, a page is deleted — so another system can react without polling.
 An endpoint is a URL plus a filter describing which events it wants. Registering everything
 to one URL works, but filtering per endpoint means a receiver is not woken for events it
 will ignore.
+
+## Event types
+
+An endpoint subscribes to event types by their exact ids, or to `*` for every current and future
+one. Core's are `entry.created`, `entry.updated`, `entry.deleted`, `entry.published`,
+`entry.unpublished`, `entry.status_changed`, `single.updated`, `single.published`,
+`single.unpublished`, `media.uploaded`, `media.updated`, `media.deleted`, `user.created`,
+`user.deleted` and the form builder's `form.submission.created`. `*` is the only wildcard. `GET /admin/api/webhooks/event-types` lists every type an endpoint may
+subscribe to, with the plugin or `core` that declares it, to anyone who may read, create or update
+webhooks.
+
+A plugin declares its own types in `contributes.webhookEvents`, each in its namespace (its admin slug
+and a dot):
+
+```ts
+contributes: {
+  webhookEvents: [{ type: "acme-shop.order.paid", label: "Order paid" }],
+}
+```
+
+Startup refuses a type outside that namespace, one of core's, one declared twice, or one that isn't
+lower-case segments separated by dots. These are webhook types, sent to other systems; they are
+separate from `contributes.events`, the plugin's own events inside the server.
+
+An endpoint can subscribe to a declared type, and the admin's webhook form offers it. When a plugin is
+disabled its types are no longer offered and a new subscription to one is refused, while an endpoint
+that already subscribes keeps it, shown in the admin as unavailable.
+
+The plugin records an event of one of its types with `ctx.webhooks.record`. Inside its own
+`ctx.db.transaction`, pass the transaction's handle as `tx`: the event commits with the plugin's
+writes and is never delivered if they roll back. Without `tx` it is recorded on its own, and a call
+made while a transaction is open is refused.
+
+```ts
+await ctx.db.transaction(async tx => {
+  // … the plugin's own writes, through tx …
+  await ctx.webhooks.record({
+    type: "acme-shop.order.paid",
+    id: order.id,
+    data: { total: order.total },
+    tx,
+  });
+});
+```
+
+A type the plugin doesn't declare, another plugin's or one of core's, is refused by name before
+anything is written. The event goes to the endpoints subscribed to its type or to `*`, and to no
+other. Its resource is `{ "kind": "plugin", "plugin": "acme-shop", "id": "…" }`, with the plugin's
+admin slug and no `collection`, so an endpoint limited to certain collections never receives it, even
+one limited to a collection with the same slug as the plugin. The delivery log shows it as
+`plugin acme-shop · <id>`. `previous` is optional, and the event's changed fields are worked out from
+it as core's are. Like core's events, nothing is recorded while no endpoint exists and the audit trail
+is off. This surface is experimental.
 
 ## Signing
 
@@ -47,7 +100,7 @@ split each token on its comma, and accept if any token matches.
 
 The freshness check is not optional. Signing the timestamp proves it was not altered; it does
 not make the delivery expire. Nextly's own `verifySignature` rejects anything outside a
-**300-second (5 minute)** tolerance *before* it compares signatures, and a receiver that skips
+**300-second (5 minute)** tolerance _before_ it compares signatures, and a receiver that skips
 that step will accept a captured request forever.
 
 <Callout type="warn">
@@ -61,15 +114,16 @@ which leaves you replayable indefinitely.
 
 A Standard Webhooks verifier library does all four correctly. Prefer one over hand-rolling
 this.
+
 </Callout>
 
 Three headers travel with each delivery:
 
-| Header | Holds |
-|---|---|
-| `webhook-id` | The delivery's id, and part of the signed content |
+| Header              | Holds                                               |
+| ------------------- | --------------------------------------------------- |
+| `webhook-id`        | The delivery's id, and part of the signed content   |
 | `webhook-timestamp` | When it was signed, also part of the signed content |
-| `webhook-signature` | The signature itself |
+| `webhook-signature` | The signature itself                                |
 
 Because the timestamp is signed, a captured payload cannot be replayed later under its
 original signature.
@@ -87,11 +141,11 @@ rolled back.
 
 Delivery is then retried on a schedule:
 
-| | |
-|---|---|
-| Attempts | 6 by default |
-| First retry | 30 seconds |
-| Longest delay | 1 hour |
+|               |              |
+| ------------- | ------------ |
+| Attempts      | 6 by default |
+| First retry   | 30 seconds   |
+| Longest delay | 1 hour       |
 
 A `2xx` response counts as delivered. A `429` or any `5xx` is retried. Other `4xx`
 responses are not retried, because a receiver rejecting the request as malformed will

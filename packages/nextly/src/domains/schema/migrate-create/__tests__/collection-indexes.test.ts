@@ -67,6 +67,12 @@ async function check(collection: ReturnType<typeof places>) {
     .spyOn(process, "exit")
     .mockImplementation((() => undefined) as never);
   const errors: string[] = [];
+  // A failure prints in the CLI's error shape on standard error; read it with the log.
+  const printed = vi
+    .spyOn(console, "error")
+    .mockImplementation((...parts: unknown[]) => {
+      errors.push(parts.map(String).join(" "));
+    });
   try {
     await runChecks({
       migrationsDir,
@@ -86,6 +92,7 @@ async function check(collection: ReturnType<typeof places>) {
     });
   } finally {
     exit.mockRestore();
+    printed.mockRestore();
   }
   return errors;
 }
@@ -109,6 +116,6 @@ describe("a collection's declared compound indexes", () => {
   it("are reported as drift by migrate:check when the migrations lack one", async () => {
     await create(places([UNIQUE_PLACE]));
     const errors = await check(places([UNIQUE_PLACE, BY_CITY]));
-    expect(errors.some(m => m.startsWith("SCHEMA_DRIFT"))).toBe(true);
+    expect(errors.some(m => m.includes("(SCHEMA_DRIFT)"))).toBe(true);
   });
 });

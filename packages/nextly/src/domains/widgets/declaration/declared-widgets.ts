@@ -7,36 +7,24 @@
  * reported at once. Each declaration is then kept here whole, its server code
  * included, for the server's own use.
  *
- * 🔴 Each is published to the widget registry the admin reads as DATA ONLY,
- * through core's own door: its data function, query function and empty test
- * stay here, and the published definition says only that core builds its
- * card's data (`serverData`). The dashboard asks for such a card by its id and
- * core answers it from the declaration kept here, so a declared widget is
- * published in the same change that answers its cards, never before.
- *
- * Widgets declared in today's shape (`contributes.admin.widgets`) are drawn as
- * today, through their own path. They take part here only in the id rules: two
- * of them sharing an id keep today's first-wins, with a warning, and an id a
- * declared widget also takes stops startup.
+ * 🔴 Each is published to the widget registry the admin reads as DATA ONLY:
+ * its data function, query function and empty test stay here. The dashboard
+ * asks for every card by its id and core answers it from the declaration kept
+ * here, so a declared widget is published in the same change that answers its
+ * cards, never before.
  *
  * @module domains/widgets/declaration/declared-widgets
  */
 
-import { NextlyError } from "../../../errors/nextly-error";
-import { getNextlyLogger } from "../../../observability/logger";
 import type { WidgetDefinition } from "../definition";
-import type { WidgetQuery } from "../query";
-import {
-  deregisterWidget,
-  getWidget,
-  registerDeclaredDefinition,
-  widgetSource,
-} from "../registry";
+import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
+import type { WidgetCondition } from "../lifecycle";
+import { deregisterWidget, registerWidget, widgetSource } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
-import { sizeFromWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
-import { buildCardQuery } from "./card-query";
-import { declaredQueryProblem } from "./displays";
+import type { WidgetAccessGate, WidgetSummary } from "./define-widget";
+import { displayOfView, type WidgetDisplay, type WidgetView } from "./displays";
+import { WIDGET_SKELETON_SKETCH, type WidgetSkeleton } from "./skeleton";
 import {
   collectWidgetDeclarationFaults,
   widgetDeclarationsRefused,
@@ -52,40 +40,106 @@ import {
 export interface DeclaredWidgetGroup extends WidgetDeclarationGroup {
   /** Declared slug to the slug the site uses, for the owner's collections. */
   readonly collections?: Readonly<Record<string, string>>;
+  /**
+   * The plugin that declared these widgets, by its name, which the add panel
+   * lists them under; absent for core's and the site's.
+   */
+  readonly plugin?: string;
+  /**
+   * When each of core's own widgets is offered, by its id: a condition the
+   * add panel and the layout's visibility token judge, published as the
+   * registry's `lifecycle: "conditional"` and `visibleWhen`.
+   *
+   * 🔴 Read from core's own group alone (`core: true`), never from a plugin's
+   * or the site's: the conditions are core's internal vocabulary, so no
+   * declaration a plugin writes can name one, and `WidgetDeclarationInput`
+   * carries no field for it.
+   */
+  readonly conditions?: Readonly<Record<string, WidgetCondition>>;
 }
 
 /** A declaration as startup kept it, with who declared it. */
 export interface DeclaredWidget {
   readonly owner: string;
+  /** The declaration as its author wrote it, its server code included. */
   readonly declaration: DeclaredWidgetShape;
+  /** The display that draws its view (`displayOfView`), read once, here. */
+  readonly display: WidgetDisplay;
   /** The owner's renamed collections, as its group carried them. */
   readonly collections?: Readonly<Record<string, string>>;
+  /** The plugin that declared it, by its name, as its group carried it. */
+  readonly plugin?: string;
 }
 
-/** The fields of a declaration this module reads, checked at startup. */
+/** A declaration as its author writes it (`defineWidget`), checked at startup. */
 interface DeclaredWidgetShape {
   readonly id: string;
-  /**
-   * The widths the widget allows, in core's own words, gaps included: what
-   * publishing it to the registry carries through as its allowed widths.
-   */
-  readonly widths: readonly WidgetWidth[];
-  readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
-  readonly data: unknown;
-  readonly display?: unknown;
-  /** What publishing reads: the card's words, its starting width, and its gates. */
   readonly title: string;
   readonly description: string;
-  readonly category: string;
-  readonly width: WidgetWidth;
-  readonly several?: boolean;
-  readonly permission?: string;
-  readonly sketch?: WidgetDefinition["sketch"];
+  readonly icon?: string;
+  readonly category?: string;
+  /** The card's size and the bounds it may be resized within, in grid units. */
+  readonly size: WidgetSizeDeclaration;
+  /**
+   * Who may be offered it: a permission gate (a permission name, `{ anyOf }`
+   * or `{ allOf }`), published as the registry's `requiredPermission` and
+   * judged when the card is handed; the collections it reads, or a predicate
+   * of the person, judged with the person before `load` runs.
+   */
+  readonly access?:
+    | WidgetAccessGate
+    | { readonly collections: readonly string[] }
+    | ((input: { user: unknown }) => unknown);
+  /** Where the add panel offers it, published as the registry's own `offered`. */
+  readonly offered?: WidgetDefinition["offered"];
+  /** Whether the card shows at all for the person asking, judged before `load`. */
+  readonly shows?: (input: unknown) => unknown;
+  readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
+  /** The card's data, run on the server for each card, as the person asking. */
+  readonly load: (input: unknown) => unknown;
+  readonly view: WidgetView;
+  readonly isEmpty?: (data: unknown) => boolean;
   readonly empty?: {
     readonly message?: string;
-    readonly action?: { label: string; link: string; permission?: string };
+    readonly action?:
+      | { label: string; link: string; permission?: string }
+      | { label: string; opens: "settings" };
   };
+  readonly several?: boolean;
+  readonly hidesWhenEmpty?: boolean;
+  /** The card's loading shape and add-panel sketch, checked at startup. */
+  readonly skeleton?: WidgetSkeleton;
+  /**
+   * The cases the development preview page draws the card's ready state from,
+   * each held at startup to what JSON carries (`previewProblems`).
+   *
+   * 🔴 Kept here, on the server, and never published: `toDefinition` names
+   * every field the registry carries and this is not one of them, so the
+   * admin's workspace payload never holds a case. Only the preview read, which
+   * answers in development alone, sends them, and only for the widgets its
+   * reader may see. The one other reader is the dashboard's add gallery
+   * (`api/dashboard-gallery`), and for core's own widgets alone, whose cases
+   * are core's sample data and draw their gallery tiles; a plugin's or the
+   * site's cases never leave the development preview read.
+   */
+  readonly preview?: readonly DeclaredPreviewCase[];
+  /** A label and a count for the dashboard's header, counted as the reader. */
+  readonly summary?: WidgetSummary;
 }
+
+/** One preview case as a declaration states it, checked at startup. */
+interface DeclaredPreviewCase {
+  readonly name: string;
+  readonly data: unknown;
+  readonly settings?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The add panel's category for a widget that names none. Not for core's own:
+ * the panel shows a category as a label beside the name, and core's widgets
+ * carry none, so a core declaration that names none stays without one.
+ */
+const DEFAULT_CATEGORY = "Other";
 
 /**
  * A declaration's empty state as published: its words and its action, never
@@ -98,19 +152,44 @@ function publishedEmpty(
   const { message, action } = empty;
   const published: NonNullable<WidgetDefinition["empty"]> = {
     ...(message === undefined ? {} : { message }),
-    ...(action === undefined
-      ? {}
-      : {
-          action: {
-            label: action.label,
-            link: action.link,
-            ...(action.permission === undefined
-              ? {}
-              : { requiredPermission: action.permission }),
-          },
-        }),
+    ...(action === undefined ? {} : { action: publishedAction(action) }),
   };
   return Object.keys(published).length === 0 ? undefined : published;
+}
+
+/** An empty state's action as a declaration states it. */
+type DeclaredEmptyAction = NonNullable<
+  NonNullable<DeclaredWidgetShape["empty"]>["action"]
+>;
+
+/**
+ * Whether an empty action opens the card's settings: by the value of `opens`, as the startup check
+ * reads it, not by the key alone. A plain JavaScript declaration may carry `opens: undefined`
+ * beside its link, which the check accepts as the link form; read by the key, it was published as
+ * a settings action with no `opens`, which the registry refuses.
+ */
+function opensSettings(
+  action: DeclaredEmptyAction
+): action is Extract<DeclaredEmptyAction, { opens: "settings" }> {
+  return "opens" in action && action.opens === "settings";
+}
+
+/**
+ * An empty state's action as published: a link with the gate's own name for its permission, or
+ * the card's settings, which need no permission here, since the admin offers the button only
+ * where the person can change that card's settings.
+ */
+function publishedAction(
+  action: DeclaredEmptyAction
+): NonNullable<NonNullable<WidgetDefinition["empty"]>["action"]> {
+  if (opensSettings(action)) return { label: action.label, opens: "settings" };
+  return {
+    label: action.label,
+    link: action.link,
+    ...(action.permission === undefined
+      ? {}
+      : { requiredPermission: action.permission }),
+  };
 }
 
 /** `{ empty }` when there is one to publish, and nothing otherwise. */
@@ -123,13 +202,19 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * 🔴 A fresh object of named fields, never a spread of the declaration: the
  * data function, the query function and the empty test stay on the server,
  * and a field a declaration gains later reaches the browser only once it is
- * named here. `serverData` says core builds the card's data, so there is no
- * query. The widths are carried as declared, gaps included, in the
- * arrangement's own words; the size is only the span of the starting width,
- * for what still reads sizes.
+ * named here. Core builds the card's data from the declaration, so there is
+ * no query. The size is published with every end filled in (`sizeBounds`), the
+ * one reading of a declared size, so no reader fills a missing end its own way.
+ *
+ * Exported for the test harness alone (`nextly/testing`), which describes a
+ * widget to a test exactly as the registry publishes it.
  */
-function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
-  const display = declaration.display;
+export function toDefinition(
+  declaration: DeclaredWidgetShape,
+  owner: string,
+  // One of core's own conditions, from core's group alone (`conditionOf`).
+  condition?: WidgetCondition
+): WidgetDefinition {
   const settings = Object.entries(declaration.settings ?? {}).map(
     // Each was checked at startup by the rules a definition's settings are
     // held to (`widgetSettingsProblems`), so it is one, named.
@@ -139,33 +224,121 @@ function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
     id: declaration.id,
     title: declaration.title,
     description: declaration.description,
-    category: declaration.category,
-    ...(typeof display === "string"
-      ? { archetype: display as WidgetDefinition["archetype"] }
-      : {
-          archetype: "custom" as const,
-          component: (display as { component: string }).component,
-        }),
-    ...(settings.length > 0 ? { settings } : {}),
-    defaultSize: sizeFromWidth(declaration.width),
-    allowedWidths: WIDGET_WIDTHS.filter(width =>
-      declaration.widths.includes(width)
-    ),
-    defaultWidth: declaration.width,
-    ...(declaration.several === true ? { allowsSeveral: true } : {}),
-    ...(declaration.permission === undefined
+    ...publishedLabels(declaration, owner),
+    ...drawnBy(displayOfView(declaration.view), owner),
+    // The display its loading state and its add-panel row are drawn as: the
+    // registry's own `sketch`, which both read.
+    ...(declaration.skeleton === undefined
       ? {}
-      : { requiredPermission: declaration.permission }),
-    ...(declaration.sketch === undefined ? {} : { sketch: declaration.sketch }),
+      : { sketch: WIDGET_SKELETON_SKETCH[declaration.skeleton] }),
+    ...(settings.length > 0 ? { settings } : {}),
+    size: sizeBounds(declaration.size),
+    ...publishedGates(declaration),
     ...withEmpty(publishedEmpty(declaration.empty)),
-    serverData: true,
+    // Offered only while the condition holds, judged where every conditional
+    // widget is: the add panel, and the layout's visibility token.
+    ...(condition === undefined
+      ? {}
+      : { lifecycle: "conditional", visibleWhen: condition }),
   };
 }
 
-/** The ids one owner declares in today's shape. */
-export interface LegacyWidgetIds {
-  readonly owner: string;
-  readonly ids: readonly string[];
+/**
+ * The condition a declaration is offered under: core's own, named in core's
+ * group by the widget's id, and none for any other owner's.
+ */
+function conditionOf(
+  group: Pick<DeclaredWidgetGroup, "core" | "conditions">,
+  id: string
+): WidgetCondition | undefined {
+  return group.core === true ? group.conditions?.[id] : undefined;
+}
+
+/**
+ * What the add panel shows beside a declared widget's name: its icon, and its
+ * category, "Other" when it names none. Not for core's own, whose cards carry
+ * no category label.
+ */
+function publishedLabels(
+  declaration: DeclaredWidgetShape,
+  owner: string
+): Pick<WidgetDefinition, "icon" | "category"> {
+  const category =
+    declaration.category ??
+    (owner === CORE_OWNER ? undefined : DEFAULT_CATEGORY);
+  return {
+    ...(declaration.icon === undefined ? {} : { icon: declaration.icon }),
+    ...(category === undefined ? {} : { category }),
+  };
+}
+
+/**
+ * The archetype a declared view is drawn by, and for a view of its own, its component and who
+ * declared it, so a card whose component is missing can name both.
+ */
+function drawnBy(
+  display: WidgetDisplay,
+  owner: string
+): Pick<WidgetDefinition, "archetype" | "component" | "owner"> {
+  return typeof display === "string"
+    ? { archetype: display }
+    : { archetype: "custom", component: display.component, owner };
+}
+
+/**
+ * Who is offered a declared widget, where, how many times, and whether it
+ * leaves while empty.
+ */
+function publishedGates(
+  declaration: DeclaredWidgetShape
+): Pick<
+  WidgetDefinition,
+  "allowsSeveral" | "hidesWhenEmpty" | "offered" | "requiredPermission"
+> {
+  const requiredPermission = requiredPermissionOf(declaration.access);
+  return {
+    // Published whenever it is stated, `false` included: a widget offered per
+    // collection or on request allows several unless it says otherwise, so a
+    // `several: false` left out would read as the opposite.
+    ...(typeof declaration.several === "boolean"
+      ? { allowsSeveral: declaration.several }
+      : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
+    // As written: startup held it to the registry's own rule (`offeredProblem`).
+    ...(declaration.offered === undefined
+      ? {}
+      : { offered: declaration.offered }),
+    // A permission gate decides who is offered the widget at all; the other
+    // forms are judged per card, with the person, before its `load` runs.
+    ...(requiredPermission === undefined ? {} : { requiredPermission }),
+  };
+}
+
+/**
+ * A declaration's permission gate as the registry's `requiredPermission`, the
+ * one shape the layout and payload gates judge (`widgetGateHolds`), or
+ * `undefined` for an access that is no gate: absent, the collections it
+ * reads, or a predicate.
+ *
+ * 🔴 The registry spells a gate as a declaration does, so each form is copied
+ * as it is written, and every gate is judged by the one path that judges
+ * core's own widgets. A fresh value, so nothing else the author's object
+ * carries is published.
+ */
+function requiredPermissionOf(
+  access: DeclaredWidgetShape["access"]
+): WidgetAccessGate | undefined {
+  if (typeof access === "string") return access;
+  if (typeof access !== "object" || access === null) return undefined;
+  if ("anyOf" in access) return { anyOf: [...access.anyOf] };
+  if ("allOf" in access) {
+    return {
+      allOf: access.allOf.map(entry =>
+        typeof entry === "string" ? entry : { anyOf: [...entry.anyOf] }
+      ),
+    };
+  }
+  return undefined;
 }
 
 const STORE_KEY = "__nextly_declared_widgets";
@@ -181,36 +354,6 @@ function store(): Map<string, DeclaredWidget> {
   >;
   holder[STORE_KEY] ??= new Map();
   return holder[STORE_KEY];
-}
-
-/**
- * The old-shape ids a declared widget also takes, as faults against the
- * declared one, naming the plugin that uses the old shape.
- */
-function sharedWithLegacy(
-  groups: readonly WidgetDeclarationGroup[],
-  legacy: readonly LegacyWidgetIds[]
-): WidgetDeclarationFault[] {
-  const oldOwners = new Map<string, string>();
-  for (const { owner, ids } of legacy) {
-    for (const id of ids) if (!oldOwners.has(id)) oldOwners.set(id, owner);
-  }
-  return groups.flatMap(({ owner, declarations }) =>
-    (Array.isArray(declarations) ? declarations : []).flatMap(declaration => {
-      // An entry that is not an object is a fault already; it has no id here.
-      const id = isRecord(declaration) ? declaration.id : undefined;
-      const oldOwner = typeof id === "string" ? oldOwners.get(id) : undefined;
-      return oldOwner === undefined
-        ? []
-        : [
-            {
-              owner,
-              widget: String(id),
-              problem: `id "${String(id)}" is already used by ${oldOwner}, which declares it in the old shape`,
-            },
-          ];
-    })
-  );
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -238,116 +381,96 @@ function snapshot(group: DeclaredWidgetGroup): DeclaredWidgetGroup {
   };
 }
 
-const WARNED_LEGACY_IDS = new Set<string>();
+/** The owner core's own widgets are reported and registered under. */
+export const CORE_OWNER = "core";
 
-/** Forgets which shared old-shape ids, and which held widgets, were warned about, for tests. */
-export function resetLegacyIdWarnings(): void {
-  WARNED_LEGACY_IDS.clear();
-  WARNED_HELD_COMPONENT_WIDGETS.clear();
+/** Every widget a dashboard can show, by owner, as the one call takes them. */
+export interface DashboardWidgets {
+  /** Each owner's declarations, core's own among them, kept and published. */
+  groups?: readonly DeclaredWidgetGroup[];
+  /**
+   * What names these widgets (the site config's dashboard, a plugin's
+   * suggestions), handed each well-formed declaration as the definition it
+   * becomes and the groups as they were snapshotted, so ownership is read from
+   * the same copy that is kept, and its faults are refused with the
+   * declarations' own, at once.
+   */
+  references?: (
+    declared: ReadonlyMap<string, WidgetDefinition>,
+    groups: readonly DeclaredWidgetGroup[]
+  ) => readonly WidgetDeclarationFault[];
 }
 
 /**
- * Warns, once per process for each id, that old-shape plugins share it.
+ * The one way a widget reaches the dashboard: core's own, every plugin's and
+ * the site's all come through here.
  *
- * Today's rule is kept, the first plugin winning, because widgets in that
- * shape must keep working as they do; the warning is what tells their authors
- * that the new shape refuses this.
+ * Checks every widget of every owner first, then keeps them all, or refuses
+ * startup naming every fault of every owner in one message and keeps none. One
+ * door, so a rule checked here holds for every widget, and a fault in one
+ * owner never leaves the dashboard half registered from the others.
  */
-function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
-  const owners = new Map<string, string[]>();
-  for (const { owner, ids } of legacy) {
-    for (const id of ids) owners.set(id, [...(owners.get(id) ?? []), owner]);
-  }
-  for (const [id, plugins] of owners) {
-    if (plugins.length < 2 || WARNED_LEGACY_IDS.has(id)) continue;
-    WARNED_LEGACY_IDS.add(id);
-    getNextlyLogger().warn({
-      kind: "widget-id-shared-old-shape",
-      widget: id,
-      plugins,
-      message:
-        `${plugins.join(" and ")} each declare a widget "${id}" in the old ` +
-        `shape. The first one is used, as before. Widgets declared with ` +
-        `defineWidget() may not share an id: rename one before moving it.`,
-    });
-  }
-}
-
-/**
- * Checks every declaration, then keeps them all, or refuses startup naming
- * every fault and keeps none.
- *
- * `legacy` is the ids each plugin declares in today's shape.
- */
-export function registerWidgetDeclarations(
-  given: readonly DeclaredWidgetGroup[],
-  legacy: readonly LegacyWidgetIds[] = []
-): void {
+export function registerDashboardWidgets({
+  groups: given = [],
+  references,
+}: DashboardWidgets): void {
   const groups = given.map(snapshot);
-  const faults = [
-    ...collectWidgetDeclarationFaults(groups),
-    ...sharedWithLegacy(groups, legacy),
-  ];
+  const faults = collectWidgetDeclarationFaults(groups);
+  if (references !== undefined) {
+    // Nothing is kept until every check has passed, so what names a widget
+    // finds it here rather than in the registry.
+    faults.push(...references(wellFormedDefinitions(groups, faults), groups));
+  }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
-  warnSharedLegacyIds(legacy);
 
-  for (const { owner, declarations, collections } of groups) {
+  for (const group of groups) {
+    const { owner, declarations, collections, plugin } = group;
     // Every group is a list by now: one that was not is a fault, refused above.
     for (const raw of declarations as readonly unknown[]) {
       const declaration = raw as DeclaredWidgetShape;
       store().set(declaration.id, {
         owner,
         declaration,
+        display: displayOfView(declaration.view),
         ...(collections === undefined ? {} : { collections }),
+        ...(plugin === undefined ? {} : { plugin }),
       });
-      // Published as it is kept, so every declared widget the admin is offered
-      // has a declaration here to answer its cards from. One drawn by its own
-      // component is kept and checked but not published: the admin does not
-      // yet hand a widget's own component the props its declaration types
-      // (`WidgetProps`), and a component reading them would throw in the card.
-      if (drawnByOwnComponent(declaration)) {
-        warnComponentWidgetHeld(declaration, owner);
-        continue;
-      }
-      registerDeclaredDefinition(toDefinition(declaration), owner);
+      // Published as it is kept, so every widget the admin is offered has a
+      // declaration here to answer its cards from. One drawn by its own
+      // component is published as a custom card core answers: the admin hands
+      // that component the props its declaration types (`WidgetProps`).
+      registerWidget(
+        toDefinition(declaration, owner, conditionOf(group, declaration.id)),
+        { source: owner }
+      );
     }
   }
 }
 
-/** Whether a declaration is drawn by its own component rather than a core display. */
-function drawnByOwnComponent(declaration: DeclaredWidgetShape): boolean {
-  return typeof declaration.display !== "string";
-}
-
-const WARNED_HELD_COMPONENT_WIDGETS = new Set<string>();
-
 /**
- * Says, once per process for each widget and only in development, that a
- * widget drawn by its own component is not offered yet, so its author is not
- * left looking for a card that never appears.
+ * The definitions the declarations no fault names would become, by id, so a
+ * reference to a faulty one reads as unknown rather than as a second fault
+ * about the same mistake.
  */
-function warnComponentWidgetHeld(
-  declaration: DeclaredWidgetShape,
-  owner: string
-): void {
-  if (process.env.NODE_ENV === "production") return;
-  if (WARNED_HELD_COMPONENT_WIDGETS.has(declaration.id)) return;
-  WARNED_HELD_COMPONENT_WIDGETS.add(declaration.id);
-  getNextlyLogger().warn({
-    kind: "widget-component-display-held",
-    widget: declaration.id,
-    plugin: owner,
-    message:
-      `"${declaration.id}" (${owner}) declares display.component. Widgets ` +
-      `drawn by their own component are not offered on the dashboard yet, ` +
-      `so it is left out of the add panel until they are; widgets with a ` +
-      `core display are offered as declared.`,
-  });
-}
-
-/** Every declared widget, in the order startup kept them. */
-export function listDeclaredWidgets(): DeclaredWidget[] {
-  return [...store().values()];
+function wellFormedDefinitions(
+  groups: readonly DeclaredWidgetGroup[],
+  faults: readonly WidgetDeclarationFault[]
+): ReadonlyMap<string, WidgetDefinition> {
+  const faulty = new Set(faults.map(fault => fault.widget));
+  const definitions = new Map<string, WidgetDefinition>();
+  for (const group of groups) {
+    const { owner, declarations } = group;
+    if (!Array.isArray(declarations)) continue;
+    for (const raw of declarations as readonly unknown[]) {
+      const id = (raw as { id?: unknown } | null)?.id;
+      if (typeof id !== "string" || faulty.has(id)) continue;
+      definitions.set(
+        id,
+        toDefinition(raw as DeclaredWidgetShape, owner, conditionOf(group, id))
+      );
+    }
+  }
+  return definitions;
 }
 
 /** The declared widget with this id, or `undefined`. */
@@ -356,65 +479,16 @@ export function declaredWidget(id: string): DeclaredWidget | undefined {
 }
 
 /**
- * The query core runs for a card of a declared widget, from the card's stored
- * settings, or `undefined` when the widget is not declared or its data is not
- * a query.
- */
-export function cardQueryFor(
-  widgetId: string,
-  stored: Record<string, unknown> | undefined
-): WidgetQuery | undefined {
-  const declared = store().get(widgetId);
-  return declared === undefined
-    ? undefined
-    : checkedCardQuery(declared, stored);
-}
-
-/**
- * The query core runs for a card of this declared widget, from the card's
- * stored settings, held to what the widget's display draws; `undefined` when
- * its data is not a query or a setting it needs has no value.
- *
- * 🔴 The ONE builder of a card's query, so the card that runs it and anything
- * that asks for it judge the same query. Judged here as well as at startup.
- * Startup builds the query from the starting settings, and a Collection setting
- * with no default leaves it unbuilt there, so a plain JavaScript list with no
- * fields passed startup and was first built here, for a card, with no check in
- * between; and a query function that changes its op for a setting other than
- * the starting one is only ever built here.
- */
-export function checkedCardQuery(
-  declared: DeclaredWidget,
-  stored: Record<string, unknown> | undefined
-): WidgetQuery | undefined {
-  const query = buildCardQuery(
-    declared.declaration,
-    stored,
-    declared.collections
-  );
-  if (query === undefined) return undefined;
-  const problem = declaredQueryProblem(declared.declaration.display, query);
-  if (problem !== undefined) {
-    throw new NextlyError({
-      code: "INTERNAL_ERROR",
-      publicMessage: "An unexpected error occurred.",
-      logMessage: `Declared widget "${declared.declaration.id}" cannot draw its query: ${problem}.`,
-    });
-  }
-  return query;
-}
-
-/**
  * Forgets every declared widget, and withdraws the definitions they published.
- * The registry's declared widgets are derived from this store, so clearing one
- * without the other would offer the admin widgets with no declaration left to
- * answer their cards from, and refuse the same declaration made again. Only
- * what a declaration published goes: its id, under its owner, with
- * `serverData`. Called at boot before declaring again.
+ * The registry's widgets are derived from this store, so clearing one without
+ * the other would offer the admin widgets with no declaration left to answer
+ * their cards from, and refuse the same declaration made again. Only what a
+ * declaration published goes: its id, under its owner. Called at boot before
+ * declaring again.
  */
 export function clearDeclaredWidgets(): void {
   for (const [id, { owner }] of store()) {
-    if (widgetSource(id) === owner && getWidget(id)?.serverData === true) {
+    if (widgetSource(id) === owner) {
       deregisterWidget(id);
     }
   }

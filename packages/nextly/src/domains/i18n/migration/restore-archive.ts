@@ -18,13 +18,27 @@
  * @module domains/i18n/migration/restore-archive
  */
 
-import { and, asc, count, eq, inArray, lte } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  eq,
+  getTableName,
+  inArray,
+  lte,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   nextlyI18nArchiveTables,
   UNATTRIBUTED_ARCHIVE_KINDS,
 } from "../../../schemas/nextly-i18n-archive";
+import {
+  UNKNOWN_ARCHIVE_KIND,
+  UNRESOLVED_ARCHIVE_KIND,
+} from "../../../schemas/nextly-i18n-archive/ddl";
 import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import type { CompanionIntrospectAdapter } from "../runtime/companion-io";
@@ -36,6 +50,8 @@ import {
 import { ensureI18nArchive } from "./ensure-archive";
 import {
   labelLegacyArchiveRows,
+  legacyLabelFor,
+  ownedSince,
   type LabelArchiveAdapter,
 } from "./label-legacy-archive-rows";
 import type { I18nTransitionKind } from "./transition-state";
@@ -98,6 +114,12 @@ export interface RestoreArchiveArgs {
    * want the spec's retention behavior opt in.
    */
   purge?: boolean;
+  /**
+   * `--dry-run`: read and check as a restore does, and write nothing: no
+   * archive created or relabelled, no companion row, no claim and no purge.
+   * The counts returned are what a restore would write.
+   */
+  dryRun?: boolean;
 }
 
 export interface RestoreArchiveResult {
@@ -166,6 +188,93 @@ async function refuseFieldsNotTranslatedNow(
   });
 }
 
+/** A restore that found nothing archived. */
+const NOTHING_RESTORED: RestoreArchiveResult = {
+  rowsRead: 0,
+  rowsRestored: 0,
+  locales: [],
+  rowsClaimed: 0,
+  rowsUnattributed: 0,
+};
+
+/**
+ * The rows of `collection` a restore reads, and how many of its rows are left without an owner,
+ * as `ensureI18nArchive` and `labelLegacyArchiveRows` would leave the archive, read without
+ * either: a row of unknown kind, or every row of an archive older than the kind, takes the kind
+ * the labelling would give it (`legacyLabelFor`, `ownedSince`), and is unresolved otherwise.
+ */
+async function rowsAsLabelled(
+  adapter: RestoreArchiveArgs["adapter"],
+  db: ArchiveReadWriteDb,
+  scope: {
+    collection: string;
+    kinds: readonly string[];
+    locale?: string;
+    field?: string;
+  }
+): Promise<{ rows: ArchiveRow[]; unattributed: number }> {
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  // An archive from before rows recorded their kind has no column for it yet.
+  const hasKind = await companionHasColumn(
+    adapter,
+    getTableName(archive),
+    archive.entityKind.name
+  );
+  const label = await legacyLabelFor(adapter, scope.collection);
+  const owned =
+    label === undefined
+      ? sql<number>`0`
+      : sql<number>`CASE WHEN ${ownedSince(adapter.dialect, archive.archivedAt, label.createdAt)} THEN 1 ELSE 0 END`;
+  const read = (await db
+    .select({
+      id: archive.id,
+      ...(hasKind ? { stored: archive.entityKind } : {}),
+      entryId: archive.entryId,
+      locale: archive.locale,
+      field: archive.field,
+      value: archive.value,
+      owned,
+    })
+    .from(archive)
+    .where(eq(archive.collection, scope.collection))
+    .orderBy(asc(archive.id))) as (Omit<ArchiveRow, "entityKind"> & {
+    stored?: string;
+    owned: number | string | boolean;
+  })[];
+
+  // Each row's kind once labelled: the kind it has, unless it has none yet.
+  const labelled: ArchiveRow[] = read.map(({ stored, owned: own, ...row }) => ({
+    ...row,
+    entityKind:
+      stored !== undefined && stored !== UNKNOWN_ARCHIVE_KIND
+        ? stored
+        : label !== undefined && Number(own) === 1
+          ? label.kind
+          : UNRESOLVED_ARCHIVE_KIND,
+  }));
+  const isUnattributed = (row: ArchiveRow) =>
+    (UNATTRIBUTED_ARCHIVE_KINDS as readonly string[]).includes(row.entityKind);
+  return {
+    rows: labelled.filter(
+      row =>
+        scope.kinds.includes(row.entityKind) &&
+        (scope.locale === undefined || row.locale === scope.locale) &&
+        (scope.field === undefined || row.field === scope.field)
+    ),
+    unattributed: labelled.filter(isUnattributed).length,
+  };
+}
+
+/** Whether the archive table exists, asked without creating it. */
+async function archiveExists(
+  adapter: RestoreArchiveArgs["adapter"]
+): Promise<boolean> {
+  const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
+  return (await adapter.listTables()).includes(getTableName(nextlyI18nArchive));
+}
+
 export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
@@ -175,8 +284,13 @@ export async function restoreI18nArchive(
   const field = args.field !== undefined ? toSnakeCase(args.field) : undefined;
   // An archive from before rows recorded their kind is brought up to date first, and its rows
   // given their owner's kind where the registries can tell; one never written is created empty.
-  await ensureI18nArchive(adapter, adapter.dialect);
-  await labelLegacyArchiveRows(adapter);
+  // A dry run makes neither: an archive never written has nothing to restore.
+  if (args.dryRun === true) {
+    if (!(await archiveExists(adapter))) return NOTHING_RESTORED;
+  } else {
+    await ensureI18nArchive(adapter, adapter.dialect);
+    await labelLegacyArchiveRows(adapter);
+  }
   const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
@@ -187,9 +301,10 @@ export async function restoreI18nArchive(
       ...(locale !== undefined ? [eq(nextlyI18nArchive.locale, locale)] : []),
       ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
     );
-  const where = scope(
-    args.claimUnknown ? [kind, ...UNATTRIBUTED_ARCHIVE_KINDS] : [kind]
-  );
+  const kinds = args.claimUnknown
+    ? [kind, ...UNATTRIBUTED_ARCHIVE_KINDS]
+    : [kind];
+  const where = scope(kinds);
   const unattributed = async (): Promise<number> => {
     const [row] = (await db
       .select({ n: count() })
@@ -203,30 +318,20 @@ export async function restoreI18nArchive(
     return Number(row?.n ?? 0);
   };
 
-  const rows = (await db
-    .select({
-      id: nextlyI18nArchive.id,
-      entityKind: nextlyI18nArchive.entityKind,
-      entryId: nextlyI18nArchive.entryId,
-      locale: nextlyI18nArchive.locale,
-      field: nextlyI18nArchive.field,
-      value: nextlyI18nArchive.value,
-    })
-    .from(nextlyI18nArchive)
-    .where(where)
-    // Oldest first, so that when a value was archived more than once (a field made shared,
-    // translated again, then made shared again) the newest row is the one assigned last below
-    // and is what comes back. The id is the database's own insertion order on every dialect.
-    .orderBy(asc(nextlyI18nArchive.id))) as ArchiveRow[];
+  // A dry run reads the archive as the upgrade and labelling above would leave it, without
+  // either: an older archive may have no kind column yet, and its rows no kind.
+  const planned =
+    args.dryRun === true
+      ? await rowsAsLabelled(adapter, db, { collection, kinds, locale, field })
+      : undefined;
+  const rows =
+    planned?.rows ??
+    (await archivedRowsOldestFirst(db, nextlyI18nArchive, where));
+  const unattributedNow = async () =>
+    planned?.unattributed ?? (await unattributed());
 
   if (rows.length === 0) {
-    return {
-      rowsRead: 0,
-      rowsRestored: 0,
-      locales: [],
-      rowsClaimed: 0,
-      rowsUnattributed: await unattributed(),
-    };
+    return restoreCounts([], 0, 0, await unattributedNow());
   }
 
   await refuseFieldsNotTranslatedNow(
@@ -236,20 +341,19 @@ export async function restoreI18nArchive(
     rows.map(r => r.field)
   );
 
-  // Collapse the per-field archive rows back into one companion row per (entry, locale) so each
-  // language is written in a single upsert rather than once per field.
-  const grouped = new Map<
-    string,
-    { entryId: string; locale: string; data: Record<string, unknown> }
-  >();
-  for (const r of rows) {
-    const key = `${r.entryId}::${r.locale}`;
-    let g = grouped.get(key);
-    if (!g) {
-      g = { entryId: r.entryId, locale: r.locale, data: {} };
-      grouped.set(key, g);
-    }
-    g.data[r.field] = r.value;
+  const grouped = byEntryAndLocale(rows);
+
+  const rowsClaimed = rows.filter(r =>
+    (UNATTRIBUTED_ARCHIVE_KINDS as readonly string[]).includes(r.entityKind)
+  ).length;
+  // What a restore writes, counted and not written.
+  if (args.dryRun === true) {
+    return restoreCounts(
+      rows,
+      grouped.size,
+      rowsClaimed,
+      await unattributedNow()
+    );
   }
 
   // 🔴 Probed ONCE before the loop, because `"clear"` NAMES the column and a companion that
@@ -293,9 +397,6 @@ export async function restoreI18nArchive(
 
   // Bounded to the rows read here, for the reason the purge below gives.
   const maxId = rows.reduce((max, r) => (r.id > max ? r.id : max), rows[0].id);
-  const rowsClaimed = rows.filter(r =>
-    (UNATTRIBUTED_ARCHIVE_KINDS as readonly string[]).includes(r.entityKind)
-  ).length;
   if (rowsClaimed > 0) {
     // Recorded only once their values are back, so a restore refused above claims nothing.
     await db
@@ -320,11 +421,79 @@ export async function restoreI18nArchive(
       .where(and(where, lte(nextlyI18nArchive.id, maxId)));
   }
 
+  return restoreCounts(rows, grouped.size, rowsClaimed, await unattributed());
+}
+
+/** The archive table as its dialect's schema declares it. */
+type ArchiveTable = ReturnType<
+  typeof nextlyI18nArchiveTables
+>["nextlyI18nArchive"];
+
+/**
+ * The archived rows `where` selects, oldest first, so that when a value was archived more than
+ * once (a field made shared, translated again, then made shared again) the newest row is the one
+ * assigned last when grouped and is what comes back. The id is the database's own insertion order
+ * on every dialect.
+ */
+async function archivedRowsOldestFirst(
+  db: ArchiveReadWriteDb,
+  nextlyI18nArchive: ArchiveTable,
+  where: SQL | undefined
+): Promise<ArchiveRow[]> {
+  return (await db
+    .select({
+      id: nextlyI18nArchive.id,
+      entityKind: nextlyI18nArchive.entityKind,
+      entryId: nextlyI18nArchive.entryId,
+      locale: nextlyI18nArchive.locale,
+      field: nextlyI18nArchive.field,
+      value: nextlyI18nArchive.value,
+    })
+    .from(nextlyI18nArchive)
+    .where(where)
+    .orderBy(asc(nextlyI18nArchive.id))) as ArchiveRow[];
+}
+
+/**
+ * The per-field archive rows collapsed back into one companion row per (entry, locale), so each
+ * language is written in a single upsert rather than once per field. A later row's value for a
+ * field replaces an earlier one's.
+ */
+function byEntryAndLocale(
+  rows: readonly ArchiveRow[]
+): Map<
+  string,
+  { entryId: string; locale: string; data: Record<string, unknown> }
+> {
+  const grouped = new Map<
+    string,
+    { entryId: string; locale: string; data: Record<string, unknown> }
+  >();
+  for (const r of rows) {
+    const key = `${r.entryId}::${r.locale}`;
+    const g = grouped.get(key) ?? {
+      entryId: r.entryId,
+      locale: r.locale,
+      data: {},
+    };
+    grouped.set(key, g);
+    g.data[r.field] = r.value;
+  }
+  return grouped;
+}
+
+/** What a restore reports: the rows it read, the companion rows they make, and the claims. */
+function restoreCounts(
+  rows: readonly ArchiveRow[],
+  rowsRestored: number,
+  rowsClaimed: number,
+  rowsUnattributed: number
+): RestoreArchiveResult {
   return {
     rowsRead: rows.length,
-    rowsRestored: grouped.size,
+    rowsRestored,
     locales: [...new Set(rows.map(r => r.locale))].sort(),
     rowsClaimed,
-    rowsUnattributed: await unattributed(),
+    rowsUnattributed,
   };
 }

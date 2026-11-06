@@ -11,9 +11,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
+import { installRegistryResolver } from "../../cli/utils/registry-resolver";
 import { createAdapter } from "../../database/factory";
 import { clearServices } from "../../di/register";
-import { ensureFirstRunSetup } from "../../init/first-run";
+import {
+  ensureFirstRunSetup,
+  firstStartSchemaLock,
+} from "../../init/first-run";
 import type { Logger } from "../../services/shared";
 import type { PluginDefinition } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
@@ -86,7 +90,15 @@ async function seededAdapter(): Promise<
   Awaited<ReturnType<typeof createAdapter>>
 > {
   const adapter = await freshAdapter();
-  await ensureFirstRunSetup({ adapter, logger: silentLogger });
+  // What boot does before first-run setup: the schema lock seeds its row
+  // through an insert, which an adapter refuses for a table its resolver
+  // does not hold.
+  installRegistryResolver(adapter);
+  await ensureFirstRunSetup({
+    adapter,
+    logger: silentLogger,
+    holdSchemaLock: firstStartSchemaLock(adapter, silentLogger),
+  });
   return adapter;
 }
 

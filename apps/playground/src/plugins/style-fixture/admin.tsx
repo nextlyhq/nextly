@@ -19,7 +19,7 @@ import {
   Stat,
 } from "@nextlyhq/plugin-sdk/admin";
 
-import { STYLE_FIXTURE_PATH } from "./constants";
+import { FILL_PROBE_PATH, STYLE_FIXTURE_PATH } from "./constants";
 // Layer 3: the plugin's own scoped, token-driven stylesheet (compiled from
 // admin.source.css by nextly-build-admin-css). Side-effect import so the host
 // bundler includes it.
@@ -58,4 +58,21 @@ export function Showcase() {
   );
 }
 
-registerComponents({ [STYLE_FIXTURE_PATH]: Showcase });
+/**
+ * A document view that only fills the box it is given: its root asks for the
+ * whole height and nothing else, so a browser test can compare that box with
+ * the page's content area. A view drawn shorter or taller than the area shows
+ * up as a gap or as the page scrolling under it.
+ */
+function FillProbe() {
+  return (
+    <div data-testid="fill-probe" className="h-full">
+      Fill probe
+    </div>
+  );
+}
+
+registerComponents({
+  [STYLE_FIXTURE_PATH]: Showcase,
+  [FILL_PROBE_PATH]: FillProbe,
+});

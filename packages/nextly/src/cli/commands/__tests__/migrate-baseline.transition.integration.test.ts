@@ -46,11 +46,10 @@ import { createLogger } from "../../utils/logger";
 import { baselineCore } from "../migrate-baseline";
 import { ensureLocalizedCompanions, syncCollections } from "../dev-build";
 import { ensureCoreTables } from "../dev-server";
-import {
-  parseSqlSections,
-  runFileMigrations,
-  splitSqlStatements,
-} from "../migrate";
+import { runFileMigrations, splitSqlStatements } from "../migrate";
+import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
+import { checksumOf } from "../../../domains/schema/migrate/applied-checksums";
+import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -143,6 +142,27 @@ async function makeHarness(
       migrationsDir,
       dispose: async () => {
         await adapter.disconnect();
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  if (dialect === "mysql") {
+    const scratch = await createScratchDatabase("mysql", "nextly_baseline");
+    process.env.DB_DIALECT = "mysql";
+    process.env.DATABASE_URL = scratch.url;
+    const adapter = await createAdapter({
+      type: "mysql",
+      url: scratch.url,
+    } as Parameters<typeof createAdapter>[0]);
+    return {
+      adapter: adapter as unknown as CLIDatabaseAdapter,
+      db: (adapter as unknown as DrizzleAdapter).getDrizzle(),
+      dialect,
+      migrationsDir,
+      dispose: async () => {
+        await adapter.disconnect();
+        await scratch.drop();
         rmSync(dir, { recursive: true, force: true });
       },
     };
@@ -781,6 +801,63 @@ function runSuite(dialect: SupportedDialect): void {
 }
 
 describe("db:sync to migrations (sqlite)", () => runSuite("sqlite"));
+
+/**
+ * `migrate:baseline` records the checksum of the file it writes, as a run
+ * records one, so a later edit to the baseline is caught: on every dialect.
+ */
+describe.each([
+  { dialect: "sqlite" as const, run: true },
+  { dialect: "postgresql" as const, run: PG_URL !== "" },
+  { dialect: "mysql" as const, run: (process.env.TEST_MYSQL_URL ?? "") !== "" },
+])(
+  "migrate:baseline records its file's checksum on $dialect",
+  ({ dialect, run }) => {
+    let h: Harness;
+    let previousDialect: string | undefined;
+    let previousUrl: string | undefined;
+
+    beforeEach(async () => {
+      if (!run) return;
+      previousDialect = process.env.DB_DIALECT;
+      previousUrl = process.env.DATABASE_URL;
+      clearCachedSnapshot();
+      h = await makeHarness(dialect, "checksum");
+    });
+
+    afterEach(async () => {
+      if (!run) return;
+      await h.dispose();
+      if (previousDialect === undefined) delete process.env.DB_DIALECT;
+      else process.env.DB_DIALECT = previousDialect;
+      if (previousUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousUrl;
+    });
+
+    it.runIf(run)("on the row it records applied", async () => {
+      await runDbSync(h, configV1);
+      const adopted = await baselineCore({
+        adapter: h.adapter,
+        db: h.db,
+        dialect: h.dialect,
+        migrationsDir: h.migrationsDir,
+        logger,
+      });
+      if (adopted.kind !== "baselined") throw new Error("expected a baseline");
+      const recorded = await new SchemaEventsRepository(
+        h.db,
+        h.dialect
+      ).listFileApplies();
+      expect(
+        recorded
+          .filter(r => r.filename === basename(adopted.sqlPath))
+          .map(r => [r.status, r.sha256])
+      ).toEqual([
+        ["applied", checksumOf(await readFile(adopted.sqlPath, "utf-8"))],
+      ]);
+    });
+  }
+);
 
 describe.skipIf(!PG_URL)("db:sync to migrations (postgres)", () =>
   runSuite("postgresql")

@@ -108,6 +108,29 @@ export function isSideEffectHookType(hookType: HookType): boolean {
 }
 
 /**
+ * `context` as a `hookType` handler is handed it: without `afterCommit`
+ * unless the phase runs after the write.
+ *
+ * `afterCommit` waits for the write a hook belongs to. A before-hook runs
+ * before that write opens its transaction, so there is nothing yet to wait
+ * for: an effect handed over there would run at once, for a write a later
+ * hook, validation or the insert itself may still refuse. Withheld here, where
+ * the phase is known, rather than where contexts are built, so every executor
+ * offers it to the same phases.
+ */
+export function contextForPhase<C extends { afterCommit?: unknown }>(
+  hookType: HookType,
+  context: C
+): C {
+  if (isSideEffectHookType(hookType) || context.afterCommit === undefined) {
+    return context;
+  }
+  const withheld = { ...context };
+  delete withheld.afterCommit;
+  return withheld;
+}
+
+/**
  * Global hook registry singleton
  *
  * Manages registration and execution of database lifecycle hooks.
@@ -790,7 +813,7 @@ export class HookRegistry {
       try {
         // Pass current data to hook
         const result = await handler(
-          withCurrentPrincipal({ ...context, data })
+          withCurrentPrincipal({ ...contextForPhase(hookType, context), data })
         );
 
         // If hook returns data (including null), use it for next hook

@@ -39,6 +39,7 @@
 //   7. The remaining index drops, and every constraint add, in the order
 //      their diff produced them.
 
+import { isNextlyOwnedDocumentColumn } from "../../../../lib/system-columns";
 import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
@@ -64,6 +65,11 @@ import type {
   Operation,
   TableSpec,
 } from "./types";
+
+/** A table's columns without the ones a step of `nextly migrate` owns. */
+function withoutMigrateStepColumns(columns: ColumnSpec[]): ColumnSpec[] {
+  return columns.filter(column => !isNextlyOwnedDocumentColumn(column.name));
+}
 
 /** The declared types whose sequence default is part of the type itself. */
 const SERIAL_TYPES = new Set(["serial", "bigserial", "smallserial"]);
@@ -104,8 +110,18 @@ export function diffSnapshots(
       continue;
     }
     if (prevT && curT) {
-      // Pass 2: column-level ops for tables present in both snapshots.
-      columnOps.push(...diffColumns(name, prevT.columns, curT.columns));
+      // Pass 2: column-level ops for tables present in both snapshots. The
+      // columns `nextly migrate` adds to every existing content table are
+      // left out of the comparison on both sides: no migration file carries
+      // them, so a file's snapshot without them beside a table with them is
+      // the same schema, and reporting them would refuse the file as drift.
+      columnOps.push(
+        ...diffColumns(
+          name,
+          withoutMigrateStepColumns(prevT.columns),
+          withoutMigrateStepColumns(curT.columns)
+        )
+      );
       // Pass 3: index-level ops (sentinel: skip when either side untracked).
       // A RE-KEYED index (same name, changed predicate/expression) is the one
       // case where the usual add-first ordering is wrong: the add renders

@@ -23,11 +23,10 @@
  * @module usage-health-service
  */
 import {
-  usageBackfillStateStore,
-  usageCountReader,
-} from "./class-usage-runtime";
-import { backfillGeneration } from "./usage-backfill-scope";
-import { backfillSurvey, type BackfillHost } from "./usage-backfill-wiring";
+  backfillSurvey,
+  hostGeneration,
+  type BackfillHost,
+} from "./usage-backfill-wiring";
 import type { UsageIndex, UsageSubject } from "./usage-index";
 import {
   readUsageIndexHealth,
@@ -67,7 +66,6 @@ export function usageHealthService(
   return {
     read: async (index, indexCollection) => {
       const installed = host();
-      const nextly = await installed.nextly();
 
       // ONE registry walk, both answers. Asking for the scopes and for what the
       // scopes cannot reach separately would walk the registry twice per health
@@ -76,18 +74,19 @@ export function usageHealthService(
 
       return readUsageIndexHealth({
         index,
-        read: usageCountReader(nextly, indexCollection),
+        // The plugin's own read: no site hook on the index collection can hide
+        // the marker rows that make every count a floor.
+        read: installed.ownIndexReader(indexCollection),
         backfill: {
           scopes: () => Promise.resolve(survey.scopes),
-          state: usageBackfillStateStore(
-            nextly,
-            installed.slugs().backfillState,
-            backfillGeneration({
-              limits: installed.limits(),
-              classIndex: installed.slugs().classIndex,
-              componentIndex: installed.slugs().componentIndex,
-            })
-          ),
+          progress: async () => {
+            const snapshot = await installed.bookkeeping().snapshot();
+            return {
+              current: snapshot.generation === hostGeneration(installed),
+              dirty: snapshot.dirty,
+              completed: snapshot.done,
+            };
+          },
           // Either kind of out-of-reach content withholds completeness, and they
           // are independent: a Single holds blocks no plugin can read, and a
           // nested blocks field has no subject a row can name. A site can have

@@ -20,10 +20,13 @@
  * @module components/features/widgets/archetypes/bars
  */
 
+import { answerHasNothing } from "nextly/widget-result";
+
 import { GroupsChart, type GroupsChartGroup } from "../charts/groups-chart";
+import type { CardEmptyContent } from "../frame/states";
 
 import { choiceLabel, type CellColumn } from "./cell-text";
-import type { ArchetypeAccepts, ArchetypeBody } from "./types";
+import type { ArchetypeBody } from "./types";
 
 /**
  * What a bucket that stores no readable value is called, and how it is keyed.
@@ -45,7 +48,7 @@ import type { ArchetypeAccepts, ArchetypeBody } from "./types";
  * arbitrary text — so the placeholder rows are marked and drawn differently
  * instead of relying on their wording to separate them.
  */
-function bucketRow(
+export function bucketRow(
   value: string | null,
   count: number,
   choices: CellColumn["choices"]
@@ -75,14 +78,42 @@ function bucketRow(
       announce: "an empty value",
     };
   }
-  return { key: `v${value}`, value, label: value, count };
+  // A choice field's value with no option to name it (an option since removed, a value written
+  // around the field) reads as a label would rather than as code: "needs_review" as "Needs
+  // review". A field with no choices holds text as people wrote it, and is drawn as stored.
+  const label = choices && choices.length > 0 ? humanised(value) : value;
+  return { key: `v${value}`, value, label, count };
 }
 
-export const barsAccepts: ArchetypeAccepts = definition => {
-  if (definition.query) return undefined;
-  const name = definition.title ?? "This bars widget";
-  return `"${name}" is drawn from a query, and this widget declares none.`;
-};
+/** A stored code as words: separators to spaces, the first letter capital, the rest as stored. */
+function humanised(value: string): string {
+  const words = value.replace(/[_-]+/g, " ").trim();
+  return words === ""
+    ? value
+    : `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/**
+ * What a chart of groups with no group to draw says: the frame's one empty state, worded for
+ * groups, for this archetype and Breakdown's own card alike. Source-neutral: the card may read any
+ * collection's, system's or plugin's data, so it names no kind of row it cannot know.
+ *
+ * A source that stopped at a work bound (`floor`) found no group in what it read, and the rest may
+ * still hold some: that answer is a floor, so it says what was checked rather than claim that
+ * nothing matches.
+ */
+export function groupsEmpty(floor: boolean): CardEmptyContent {
+  return floor
+    ? {
+        title: "None found in what was checked",
+        detail:
+          "This card read only part of the content, so groups may exist beyond what it checked.",
+      }
+    : {
+        title: "Nothing to compare yet",
+        detail: "Groups appear here once something matches this card.",
+      };
+}
 
 export const barsBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "groupBy") {
@@ -96,34 +127,18 @@ export const barsBody: ArchetypeBody = (result, definition) => {
     bucketRow(bucket.value, bucket.count, result.field?.choices)
   );
 
-  if (rows.length === 0) {
-    // The frame's one empty state, worded for groups. Source-neutral: the card may read any
-    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
-    //
-    // A source that stopped at a work bound found no group in what it read, and the rest may
-    // still hold some: that answer is a floor, so it says what was checked rather than claim
-    // that nothing matches.
-    return {
-      ok: true,
-      empty:
-        result.atLeast === true
-          ? {
-              title: "None found in what was checked",
-              detail:
-                "This card read only part of the content, so groups may exist beyond what it checked.",
-            }
-          : {
-              title: "Nothing to compare yet",
-              detail: "Groups appear here once something matches this card.",
-            },
-    };
+  if (answerHasNothing(result)) {
+    // The frame's one empty state, worded for groups (`groupsEmpty`); a source that stopped at a
+    // work bound says what was checked rather than claim that nothing matches.
+    return { ok: true, empty: groupsEmpty(result.atLeast === true) };
   }
 
   return {
     ok: true,
     node: (
       // The chart orders, cuts, colours and describes the groups; this adapter only reads them
-      // out of the answer.
+      // out of the answer. No unit: the answer does not say what it counts, so its tooltip
+      // gives the bare number.
       <GroupsChart
         groups={rows}
         truncated={result.truncated === true}

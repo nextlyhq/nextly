@@ -1,10 +1,18 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { useEffect } from "react";
 
+import {
+  AdminPending,
+  AdminUnavailable,
+} from "@admin/components/guards/AdminPending";
 import { ROUTES } from "@admin/constants/routes";
-import { useAuthSession } from "@admin/hooks/queries/useAuthSession";
+import {
+  restartSessionCheck,
+  useAuthSession,
+} from "@admin/hooks/queries/useAuthSession";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface PrivateRouteProps {
@@ -47,7 +55,8 @@ export function PrivateRoute({
   // The shared session query, not a second verification of the same fact. The
   // data providers read this same key, so a session is fetched once and every
   // reader of it agrees.
-  const { data, status } = useAuthSession();
+  const { data, status, fetchStatus } = useAuthSession();
+  const queryClient = useQueryClient();
 
   // Only acted on once the query has DEFINITIVELY resolved with data. In React
   // Query v5 `isLoading` can be false while data is still undefined — an error
@@ -61,9 +70,16 @@ export function PrivateRoute({
     if (redirect) navigateTo(redirect.path);
   }, [redirect]);
 
-  // Nothing decided yet: an empty themed container, so the layout does not
-  // flash a mismatched background.
-  if (!settled) return <div className="min-h-screen bg-background" />;
+  const retry = () => void restartSessionCheck(queryClient);
+
+  // The server could not answer, after the query's own retries. A refetch from
+  // here keeps the error status while it runs, so its wait shows as a wait.
+  if (status === "error" && fetchStatus !== "fetching") {
+    return <AdminUnavailable onRetry={retry} />;
+  }
+  // Nothing decided yet: the wait is shown, never an empty page, because a
+  // starting server can take a minute to answer.
+  if (!settled) return <AdminPending onRetry={retry} />;
   if (redirect) return <RedirectNotice destination={redirect.destination} />;
 
   return <>{children}</>;

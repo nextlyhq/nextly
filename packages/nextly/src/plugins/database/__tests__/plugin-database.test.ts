@@ -61,7 +61,8 @@ function harness() {
     tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
     db: () => db,
     relationalDb: () => db,
-    transaction: fn => fn({ db, relationalDb: db }),
+    transaction: fn =>
+      fn({ db, relationalDb: db, afterCommit: () => undefined }),
   });
 
   return { surface, inserted, updated };
@@ -182,7 +183,8 @@ describe("a col.serial() key", () => {
       ],
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     return { surface, inserted, updated };
   }
@@ -256,7 +258,8 @@ describe("a col.serial() key", () => {
         ],
         db: () => db,
         relationalDb: () => db,
-        transaction: fn => fn({ db, relationalDb: db }),
+        transaction: fn =>
+          fn({ db, relationalDb: db, afterCommit: () => undefined }),
       });
 
       await expect(
@@ -308,7 +311,8 @@ describe("delete", () => {
       tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     expect(await surface.delete(notes).where({} as never)).toBe(4);
   });
@@ -360,7 +364,8 @@ describe("a definition named by its SQL name", () => {
       tableList: () => opts.tables,
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     return { surface, written };
   }
@@ -431,7 +436,8 @@ describe("resolving an authored name several plugins share", () => {
         opts.tables.map(t => ({ ...t, authored: "notes" as string })),
       db: () => db,
       relationalDb: () => db,
-      transaction: fn => fn({ db, relationalDb: db }),
+      transaction: fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
     });
     return { surface, written };
   }
@@ -571,7 +577,7 @@ describe("transaction", () => {
       relationalDb: () => db,
       transaction: fn => {
         opened();
-        return fn({ db, relationalDb: db });
+        return fn({ db, relationalDb: db, afterCommit: () => undefined });
       },
     });
     const nestedWork = vi.fn();
@@ -625,7 +631,11 @@ describe("transaction", () => {
       relationalDb: () => db,
       transaction: async fn => {
         order.push("begin");
-        const result = await fn({ db, relationalDb: db });
+        const result = await fn({
+          db,
+          relationalDb: db,
+          afterCommit: () => undefined,
+        });
         order.push("commit");
         return result;
       },
@@ -668,7 +678,8 @@ describe("transaction", () => {
       db: () => pooled,
       relationalDb: () => pooled,
       // What the real adapters do: the work runs against the leased client.
-      transaction: fn => fn({ db: scoped, relationalDb: scoped }),
+      transaction: fn =>
+        fn({ db: scoped, relationalDb: scoped, afterCommit: () => undefined }),
     });
 
     await surface.transaction(async tx => {
@@ -716,7 +727,11 @@ describe("transaction", () => {
       db: () => builder(),
       relationalDb: () => pooled,
       transaction: fn =>
-        fn({ db: builder(), relationalDb: relational("transaction-bound") }),
+        fn({
+          db: builder(),
+          relationalDb: relational("transaction-bound"),
+          afterCommit: () => undefined,
+        }),
     });
 
     await surface.transaction(async tx => {
@@ -730,6 +745,101 @@ describe("transaction", () => {
     const { surface } = harness();
     const boom = vi.fn().mockRejectedValue(new Error("rolled back"));
     await expect(surface.transaction(boom)).rejects.toThrow("rolled back");
+  });
+});
+
+describe("a snapshot transaction", () => {
+  /** A surface whose deps record what each transaction was opened with. */
+  function recording() {
+    const opened: unknown[][] = [];
+    const wrote: string[] = [];
+    const db = {
+      insert: () => ({
+        values: () => {
+          wrote.push("insert");
+          return Promise.resolve();
+        },
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => {
+            wrote.push("update");
+            return Promise.resolve({ rowCount: 1 });
+          },
+        }),
+      }),
+      delete: () => ({
+        where: () => {
+          wrote.push("delete");
+          return Promise.resolve({ rowCount: 1 });
+        },
+      }),
+    };
+    const surface = createPluginDatabase({
+      dialect: "postgresql",
+      owner: OWNER,
+      dependsOn: new Set(),
+      owners: () => new Map([["fx__notes", OWNER]]),
+      tables: () => ({ fx__notes: { name: "fx__notes" } }),
+      tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
+      db: () => db,
+      relationalDb: () => db,
+      transaction: (fn, ...rest) => {
+        opened.push(rest);
+        return fn({ db, relationalDb: db, afterCommit: () => undefined });
+      },
+    });
+    return { surface, opened, wrote };
+  }
+
+  it("asks the deps for a snapshot, and an ordinary one for nothing", async () => {
+    // The option is how a supplier learns to open REPEATABLE READ; dropped
+    // here, every snapshot would run at the database's default isolation.
+    const { surface, opened } = recording();
+    await surface.transaction(async () => undefined);
+    await surface.transaction(async () => undefined, { isolation: "snapshot" });
+    expect(opened).toEqual([[], [{ isolation: "snapshot" }]]);
+  });
+
+  it("refuses every write through its handle, sending none", async () => {
+    // Read-only on every dialect, SQLite included, where the database itself
+    // would accept the write.
+    const { surface, wrote } = recording();
+    const refusals = await surface.transaction(
+      async tx =>
+        Promise.all([
+          tx.insert(notes, { bodyText: "x" } as never).catch(error => error),
+          tx
+            .update(notes, { bodyText: "y" })
+            .where(sql`true`)
+            .catch(error => error),
+          tx
+            .delete(notes)
+            .where(sql`true`)
+            .catch(error => error),
+        ]),
+      { isolation: "snapshot" }
+    );
+    expect(
+      refusals.map(error => (error as NextlyError).logContext?.reason)
+    ).toEqual([
+      "write-in-snapshot-transaction",
+      "write-in-snapshot-transaction",
+      "write-in-snapshot-transaction",
+    ]);
+    expect(wrote).toEqual([]);
+  });
+
+  it("CONTROL: the same writes go through in an ordinary transaction", async () => {
+    // Without this, a surface that refused every write everywhere would pass
+    // the case above.
+    const { surface, wrote } = recording();
+    await surface.transaction(async tx => {
+      await tx.insert(notes, { bodyText: "x" } as never);
+      await tx.update(notes, { bodyText: "y" }).where(sql`true`);
+      await tx.delete(notes).where(sql`true`);
+    });
+    expect(wrote).toEqual(["insert", "update", "delete"]);
   });
 });
 
@@ -774,7 +884,12 @@ describe("relational queries", () => {
       tableList: () => [{ name: "fx__notes", authored: "notes", owner: OWNER }],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn({ db: relational, relationalDb: relational }),
+      transaction: fn =>
+        fn({
+          db: relational,
+          relationalDb: relational,
+          afterCommit: () => undefined,
+        }),
     });
 
     return { surface, answered, relational };
@@ -827,7 +942,12 @@ describe("relational queries", () => {
       tableList: () => [],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn({ db: relational, relationalDb: relational }),
+      transaction: fn =>
+        fn({
+          db: relational,
+          relationalDb: relational,
+          afterCommit: () => undefined,
+        }),
     });
 
     const namespace = surface.query;
@@ -858,7 +978,12 @@ describe("relational queries", () => {
       tableList: () => [],
       db: () => relational,
       relationalDb: () => relational,
-      transaction: fn => fn({ db: relational, relationalDb: relational }),
+      transaction: fn =>
+        fn({
+          db: relational,
+          relationalDb: relational,
+          afterCommit: () => undefined,
+        }),
     });
 
     await surface.transaction(async tx => {
@@ -1044,7 +1169,12 @@ describe("relational queries that reach other tables", () => {
       tableList: () => [],
       db: () => handle(),
       relationalDb: () => handle(),
-      transaction: fn => fn({ db: handle(), relationalDb: handle() }),
+      transaction: fn =>
+        fn({
+          db: handle(),
+          relationalDb: handle(),
+          afterCommit: () => undefined,
+        }),
     });
     return { surface, received };
   }
@@ -1373,7 +1503,11 @@ function liveHarness() {
     db: () => handle,
     relationalDb: () => handle,
     transaction: async fn => {
-      const result = await fn({ db: handle, relationalDb: handle });
+      const result = await fn({
+        db: handle,
+        relationalDb: handle,
+        afterCommit: () => undefined,
+      });
       log.push("commit");
       return result;
     },

@@ -28,19 +28,31 @@ export type ViewFieldRefusal = "hidden" | "readOnly" | "disabled";
 interface GatedField {
   declaration: object;
   within: readonly object[];
-}
-
-/** The groups around the field, outermost first, then the field. */
-function chainOf(field: GatedField): readonly object[] {
-  return [...field.within, field.declaration];
+  /**
+   * The base path each of `within` and then the field sits under, where a
+   * condition on that step reads its value. Absent, every step is read at the
+   * top level, which is where a field outside named groups sits.
+   */
+  bases?: readonly string[];
 }
 
 /**
- * Where a field's condition reads. Fields a view can address sit at the top
- * level, so every condition among them reads from the document's root.
+ * The groups around the field, outermost first, then the field, each with the
+ * base path it sits under.
  */
-function conditionPathOf(field: object): string | undefined {
-  return conditionSourcePath(fieldAdminGates(field).condition, "");
+function chainOf(field: GatedField): { step: object; base: string }[] {
+  return [...field.within, field.declaration].map((step, index) => ({
+    step,
+    base: field.bases?.[index] ?? "",
+  }));
+}
+
+/**
+ * Where a step's condition reads: the field it names, beside the step, under
+ * the step's own base path. A field inside a `hero` group reads `hero.<name>`.
+ */
+function conditionPathOf(field: object, base: string): string | undefined {
+  return conditionSourcePath(fieldAdminGates(field).condition, base);
 }
 
 /**
@@ -52,8 +64,8 @@ export function viewFieldRefusal(
   field: GatedField,
   valueAt: (path: string) => unknown
 ): ViewFieldRefusal | null {
-  const gate = chainOf(field).reduce<FieldGate>((inherited, step) => {
-    const path = conditionPathOf(step);
+  const gate = chainOf(field).reduce<FieldGate>((inherited, { step, base }) => {
+    const path = conditionPathOf(step, base);
     return effectiveFieldGate(
       step,
       inherited,
@@ -77,7 +89,9 @@ export function useConditionValues(
   const paths = [
     ...new Set(
       fields.flatMap(field =>
-        chainOf(field).flatMap(step => conditionPathOf(step) ?? [])
+        chainOf(field).flatMap(
+          ({ step, base }) => conditionPathOf(step, base) ?? []
+        )
       )
     ),
   ];

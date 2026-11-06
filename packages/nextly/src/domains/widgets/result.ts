@@ -12,9 +12,29 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { toDefinition } from "./declaration/declared-widgets";
 import type { TransportableValue } from "./declaration/transportable";
-import type { WidgetQuery } from "./query";
+import type { GridSize } from "./grid-size";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
+
+/**
+ * What an activity row says happened, as a reader is told it: an entry or
+ * Single was created, saved, published, unpublished or deleted.
+ *
+ * The `event` of a `system:activity` row and of a `GET /dashboard/activity`
+ * row, published here beside the rows' other wire types so a consumer can
+ * switch on it exhaustively. A closed set: the server names an event only by
+ * one of these (`activityEventOf`), and leaves it out of a row it cannot name
+ * one for.
+ *
+ * @experimental
+ */
+export type ActivityEvent =
+  | "created"
+  | "saved"
+  | "published"
+  | "unpublished"
+  | "deleted";
 
 /**
  * One column of a list result, as the admin needs to head it.
@@ -89,6 +109,35 @@ export type WidgetResult =
        * widget chose and nothing honest to head them with.
        */
       fields?: WidgetResultField[];
+      /**
+       * How many rows the read matched in all, of which `items` is the first page.
+       *
+       * Taken from the same read that returned `items` -- its own count under the
+       * same filter and the same caller -- so a card's "View all (N)" names the rows
+       * the list it links to holds, never a second count that could disagree with
+       * the first. Absent from a source that does not count its rows; a card then
+       * says only that more exist, as a floor.
+       *
+       * @experimental
+       */
+      total?: number;
+      /**
+       * Whether `total` is a FLOOR rather than the whole count, as the count arm's
+       * `atLeast` is. Absent means `total` is whole.
+       *
+       * @experimental
+       */
+      atLeast?: boolean;
+      /**
+       * How `total` divides among the kinds of thing the rows are, for a
+       * source whose rows are of several kinds and each says which (`kind`):
+       * `{ collection: 8, single: 5 }` for 13 rows. Counted by the same read
+       * as `total`, so the parts add up to it. Absent from a source whose rows
+       * are of one kind.
+       *
+       * @experimental
+       */
+      totalByKind?: Readonly<Record<string, number>>;
       /**
        * The span of time the source looked at, in whole days back from now.
        *
@@ -189,6 +238,74 @@ export type WidgetResult =
     };
 
 /**
+ * Whether an answer holds nothing a core display would draw: a list with no
+ * items, groups with no bucket, a series with no point. A count always holds
+ * its number, and a declared widget's own data is judged by its `isEmpty`.
+ *
+ * The one rule: each core display draws its empty state by it, and the layout
+ * read leaves a card that hides while empty off the dashboard by it, so the
+ * page is drawn without the card exactly when the card would draw nothing.
+ */
+export function answerHasNothing(result: WidgetResult): boolean {
+  switch (result.op) {
+    case "list":
+      return result.items.length === 0;
+    case "groupBy":
+      return result.buckets.length === 0;
+    case "timeseries":
+      return result.points.length === 0;
+    case "count":
+    case "data":
+      return false;
+  }
+}
+
+/**
+ * Whether a card's answer holds nothing: its widget's own empty test held
+ * (`empty`), or the core display that draws it would find nothing in it
+ * (`answerHasNothing`).
+ *
+ * The one rule a card that hides while empty is judged by, on both sides of
+ * the dashboard: the layout read leaves such a card off the page when its
+ * answer holds nothing, and the admin shows a card it was drawn without once
+ * the card's own batch answer holds something.
+ */
+export function cardAnswerIsEmpty(answer: {
+  result: WidgetResult;
+  empty?: boolean;
+}): boolean {
+  return answer.empty === true || answerHasNothing(answer.result);
+}
+
+/**
+ * A setting's label as it reads inside a sentence: "Collection" becomes
+ * "collection". The one rule for every prompt built from a label, on the
+ * server and in the admin, so the two never write it differently.
+ */
+export function settingInSentence(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
+/**
+ * What a card missing a setting says: "No collection chosen yet". The
+ * server's needs-setting answer and the admin's empty state alike.
+ */
+export function noSettingChosen(label: string): string {
+  return `No ${settingInSentence(label)} chosen yet`;
+}
+
+/**
+ * The widget as `/admin-meta/workspace` serves it to the admin: one entry of the
+ * workspace payload's `widgets`. Never written by a widget author; declare a
+ * widget with `defineWidget`.
+ *
+ * Derived from the function the registry publishes every widget through
+ * (`toDefinition`), so the admin reads the shape the server actually sends and
+ * the two cannot drift. A type only: importing it adds nothing to a bundle.
+ */
+export type PublishedWidget = ReturnType<typeof toDefinition>;
+
+/**
  * One slot of the dashboard batch response: what ONE widget's query answered.
  *
  * 🔴 A failure is a VALUE here, not a thrown error, because the batch answers
@@ -226,6 +343,27 @@ export type WidgetSlot =
        * Absent for every other failure, which the card shows as an error with Retry.
        */
       code?: "unavailable";
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The card's widget cannot be loaded until a setting has a value: its `load` was not
+       * run, and the card asks its reader for the setting rather than showing an error. Not a
+       * failure, so never a Retry.
+       */
+      code: "needs-setting";
+      /** The setting's label, as the card's settings name it. */
+      setting: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The widget's own `shows` answered no for this person: the card is left out of their
+       * dashboard, neither drawn nor counted, and its `load` was not run. Not a failure.
+       */
+      code: "not-shown";
     };
 
 /**
@@ -240,91 +378,81 @@ export interface WidgetQueryBatchResponse {
 }
 
 /**
- * The props a widget component is handed, whatever it draws.
+ * A card's current size, which changes as the card is resized or the screen
+ * it is drawn on does.
  *
- * 🔴 Declared in core rather than in the admin that builds it or the plugin-sdk
- * that publishes it, because those two cannot both see a third place: plugin-sdk
- * already depends on the admin, so an admin dependency on plugin-sdk closes a
- * cycle the build refuses. Core is the one package both already depend on, and
- * it is not a stranger to presentation -- a widget definition here declares its
- * `component`, its `chrome` and its default size.
+ * `w` and `h` are the card's size in grid units (`{ w, h }`, twelve columns
+ * wide), within its widget's declared bounds. `tier` is how much room the card
+ * has on this screen, read from the width it is drawn at: below 340 pixels
+ * `small`, from 700 `large`, `medium` between. On a narrow dashboard a card is
+ * drawn wider than its `w` says, so a component that lays itself out by the
+ * room it has reads `tier`, not `w`.
  *
- * The admin ANNOTATES the object it builds with this type, so a renamed or
- * dropped prop fails to compile rather than silently leaving plugin authors
- * compiling against a contract nothing keeps.
+ * Declared here, beside the props it travels in, so the admin that builds
+ * those props and the declaration that types them read one shape.
  *
- * Nested rather than spread: a widget declaring a setting named `slot` would
- * otherwise overwrite the answer to its own query.
+ * @experimental
+ */
+export interface WidgetRenderSize extends GridSize {
+  tier: "small" | "medium" | "large";
+}
+
+/**
+ * What a setting's own editor is handed by the card's settings sheet: the
+ * setting's value and a way to change it, and the card's other settings as
+ * the sheet holds them now, so an editor whose choices depend on another
+ * setting (a collection's fields, say) can offer the right ones.
+ *
+ * A change is the sheet's like any field's: kept in the form, checked by the
+ * setting's own rules, and saved with the rest when the reader saves.
+ *
+ * @experimental While the dashboard widget SDK is being built.
+ */
+export interface SettingEditorProps<Value> {
+  /** The setting's key among the card's settings. */
+  name: string;
+  /** Its label, as the settings sheet names it. */
+  label: string;
+  /** Its value in the sheet; `undefined` while none is chosen. */
+  value: Value | undefined;
+  /**
+   * Sets its value in the sheet; `undefined` clears it, so the setting is
+   * saved unset and the card reads its default, or no value where it has none.
+   */
+  onChange: (value: Value | undefined) => void;
+  /** The card's other settings, by key, as the sheet holds them now. */
+  settings: Readonly<Record<string, unknown>>;
+  /** True while the sheet is saving: the editor takes no input then. */
+  disabled: boolean;
+}
+
+/**
+ * What a widget declared with `defineWidget` and drawn by its own component is
+ * handed, as the admin builds it: the shape `WidgetProps<W>` types from the
+ * declaration, its settings and data left untyped here because only the
+ * declaration knows them.
  *
  * 🔴 A `type` and not an `interface`, for a reason the compiler enforces: an
  * interface has no implicit index signature, so it is not assignable to the
- * `Record<string, unknown>` that `PluginSlot` forwards props through -- the
- * admin could not annotate the object it builds with it, which is the whole
- * point of publishing it. Losing declaration merging is a second, smaller
- * benefit: a plugin cannot widen a contract the host has to satisfy.
+ * `Record<string, unknown>` that `PluginSlot` forwards props through, and the
+ * admin annotates the object it forwards with this, so a renamed or dropped
+ * prop fails to compile there.
+ *
+ * @experimental
  */
-export type WidgetComponentProps = {
-  /** The widget definition's id -- what the plugin registered. */
+export type DeclaredComponentProps = {
   widgetId: string;
-  /**
-   * The CARD's id, which is what identifies this instance.
-   *
-   * 🔴 Not `widgetId`. One widget may sit on a dashboard twice -- a "recent
-   * entries" card for posts beside one for pages -- and everything belonging to
-   * a card, its settings and its answer included, is keyed by this.
-   */
+  /** The card's id: one widget may sit on a dashboard more than once. */
   placementId: string;
-  /**
-   * This card's settings, RESOLVED: the reader's stored values where they are
-   * usable and the declared defaults everywhere else, so a component never
-   * decides what a missing or unusable setting should have been.
-   */
   settings: Record<string, unknown>;
+  size: WidgetRenderSize;
   /**
-   * This card's answer, when it has one.
-   *
-   * 🔴 `undefined` means TWO different things, and a component that treats them
-   * alike will draw an empty state over a request that is still running: the
-   * widget asks for nothing (no query, and no data of its own core builds), so
-   * no answer is ever coming; or the batch carrying this card's question has not
-   * answered YET. `isFetching` tells them apart. A widget that declares its own
-   * data gets it here as `{ op: "data", data }`.
+   * The card's data, always present: the host draws loading, no permission
+   * and error itself, and calls the component only once there is data.
    */
-  slot: WidgetSlot | undefined;
-  /**
-   * The answer to each of this card's cells, by key, for a card that declares
-   * several reads (`cells`); absent for one that declares none. A key with no
-   * answer yet is absent from it, as `slot` is.
-   *
-   * @experimental While the content widgets are being built.
-   */
-  cells?: Readonly<Record<string, WidgetSlot>>;
-  /**
-   * Whether this card's question is in flight, the FIRST request included: its
-   * query, or the data core builds for a widget that declares its own.
-   *
-   * Always `false` for a widget that asks for nothing, which is what makes it
-   * the discriminator for an absent `slot`.
-   */
-  isFetching: boolean;
-  /**
-   * The query this card ASKED: its declaration's, with its reader's settings
-   * applied, the "Number of items" among them. A component drawing rows sizes
-   * them from this, as core's lists do. When the widget declares `sizedQuery`,
-   * the batch sent it sized to the card, one row more than the card draws, so
-   * that extra row says more exist; otherwise it was sent exactly as asked.
-   *
-   * Absent for a widget that declared no query.
-   *
-   * @experimental
-   */
-  query?: WidgetQuery;
-  /**
-   * Asks this card's question again, when the batch's answer was an error the
-   * component draws: the Retry a framed card's error offers. Absent while there
-   * is nothing to retry.
-   *
-   * @experimental
-   */
-  onRetry?: () => void;
+  data: unknown;
+  /** True while a newer answer is on its way; `data` is the last one. */
+  refreshing: boolean;
+  /** Asks for the card's data again. */
+  retry: () => void;
 };

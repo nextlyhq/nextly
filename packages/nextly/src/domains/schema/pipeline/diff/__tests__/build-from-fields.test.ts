@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { MIGRATE_STEP_COLUMN_NAMES } from "../../../../../lib/system-columns";
+
 import { getColumnDescriptor } from "../../../services/field-column-descriptor";
 import {
   buildDesiredTableFromComponentFields,
@@ -70,6 +72,8 @@ const RESERVED_NAMES = new Set([
   "created_at",
   "updated_at",
   "created_by",
+  // The per-document version counter and last changer.
+  ...MIGRATE_STEP_COLUMN_NAMES,
 ]);
 
 function userColumns(columns: ColumnSpec[]): ColumnSpec[] {

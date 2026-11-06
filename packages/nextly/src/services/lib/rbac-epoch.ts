@@ -56,89 +56,124 @@ import { RBAC_EPOCH_ROW_ID, rbacEpochTables } from "../../schemas/rbac-epoch";
 export const EPOCH_TTL_MS = 1000;
 
 /**
- * The epoch this process is currently answering with, and when it was read.
- *
- * `readAt` is zero until the first successful read, which is what makes the
- * first `refreshEpoch()` of a process actually go to the database rather than
- * trusting an initial value nothing established.
+ * What this process knows of the epoch, held in one place for every copy of
+ * this module in the process: a production build of a Next.js app loads a
+ * package's modules once per route and rendering layer, and the service
+ * container they reach is shared on `globalThis`. A role changed through one
+ * copy, while a check asked through a service another copy registered kept its
+ * own epoch, was retired there only at that copy's next read of the shared row,
+ * as on another instance. An instance's own change is seen at once by every
+ * copy only if they hold the one epoch.
  */
-let revision = 0;
-let generation = "";
-let readAt = 0;
+interface EpochState {
+  /**
+   * The epoch this process is currently answering with, and when it was read.
+   *
+   * `readAt` is zero until the first successful read, which is what makes the
+   * first `refreshEpoch()` of a process actually go to the database rather than
+   * trusting an initial value nothing established.
+   */
+  revision: number;
+  generation: string;
+  readAt: number;
 
-/**
- * A refresh already on its way, shared by every ORDINARY caller while it runs.
- *
- * Without this the interval bounds how often a read STARTS being allowed, not
- * how many run: every check arriving after expiry sees the same stale `readAt`
- * and issues its own query before any of them finishes, so a burst turns one
- * read per second into one per request — the cost this design exists to avoid.
- *
- * A forced caller does not join it; see {@link refreshEpoch}.
- */
-let inFlight: Promise<string> | null = null;
+  /**
+   * A refresh already on its way, shared by every ORDINARY caller while it runs.
+   *
+   * Without this the interval bounds how often a read STARTS being allowed, not
+   * how many run: every check arriving after expiry sees the same stale `readAt`
+   * and issues its own query before any of them finishes, so a burst turns one
+   * read per second into one per request — the cost this design exists to avoid.
+   *
+   * A forced caller does not join it; see {@link refreshEpoch}.
+   */
+  inFlight: Promise<string> | null;
 
-/**
- * Local invalidations the shared row has not accepted yet.
- *
- * Only ever above zero while the shared store is unreachable. It is a COUNT
- * rather than a second epoch on purpose: two counters that both advance
- * diverge, and the local one then wins every comparison, so an instance that
- * invalidated while degraded would stay permanently ahead and stop noticing
- * anybody else's changes. Nothing here invents an epoch; the only values
- * `epoch` ever takes are ones the shared row gave it.
- */
-let pendingBumps = 0;
+  /**
+   * Local invalidations the shared row has not accepted yet.
+   *
+   * Only ever above zero while the shared store is unreachable. It is a COUNT
+   * rather than a second epoch on purpose: two counters that both advance
+   * diverge, and the local one then wins every comparison, so an instance that
+   * invalidated while degraded would stay permanently ahead and stop noticing
+   * anybody else's changes. Nothing here invents an epoch; the only values
+   * `epoch` ever takes are ones the shared row gave it.
+   */
+  pendingBumps: number;
 
-/**
- * Whether the value this process is answering with came from the row.
- *
- * A write can land and the read that follows it fail, which leaves this process
- * holding the value from BEFORE the write while owing nothing: the count is
- * clear, so every stamp comparison starts passing again — against a stamp that
- * predates the change. Trust needs both halves, so it is tracked as its own
- * fact rather than inferred from the backlog being empty.
- */
-let observed = true;
+  /**
+   * Whether the value this process is answering with came from the row.
+   *
+   * A write can land and the read that follows it fail, which leaves this
+   * process holding the value from BEFORE the write while owing nothing: the
+   * count is clear, so every stamp comparison starts passing again — against a
+   * stamp that predates the change. Trust needs both halves, so it is tracked
+   * as its own fact rather than inferred from the backlog being empty.
+   */
+  observed: boolean;
 
-/**
- * How many retirements are running right now.
- *
- * A retirement forgets what this process keeps and publishes the epoch, and
- * the publish is an awaited database write, preceded, while the retired stored
- * answers still exist, by emptying them: while those run the epoch has not
- * moved yet, so a check that starts and finishes inside that window sees two
- * values that never changed and keeps an answer the change is about to retire.
- * A batch of permission writes holds this for its whole length, where the
- * deferral is deliberate and the window is as long as the batch.
- *
- * It lives HERE rather than beside the caches because every tier has to ask it
- * and only some of them remembered to. The one that did not was a derived cache
- * in another module, which no list of maps to clear was ever going to reach.
- */
-let retirements = 0;
+  /**
+   * How many retirements are running right now.
+   *
+   * A retirement forgets what this process keeps and publishes the epoch, and
+   * the publish is an awaited database write, preceded, while the retired
+   * stored answers still exist, by emptying them: while those run the epoch has
+   * not moved yet, so a check that starts and finishes inside that window sees
+   * two values that never changed and keeps an answer the change is about to
+   * retire. A batch of permission writes holds this for its whole length, where
+   * the deferral is deliberate and the window is as long as the batch.
+   *
+   * It lives HERE rather than beside the caches because every tier has to ask
+   * it and only some of them remembered to. The one that did not was a derived
+   * cache in another module, which no list of maps to clear was ever going to
+   * reach.
+   */
+  retirements: number;
 
-/**
- * Whether the shared counter has been found not to be in play.
- *
- * Held so the warning is emitted once rather than on every check: an install
- * that has not reconciled its core tables would otherwise log per request, and
- * a log nobody can read is the same as no log.
- */
-let degraded = false;
+  /**
+   * Whether the shared counter has been found not to be in play.
+   *
+   * Held so the warning is emitted once rather than on every check: an install
+   * that has not reconciled its core tables would otherwise log per request,
+   * and a log nobody can read is the same as no log.
+   */
+  degraded: boolean;
 
-/**
- * Retirements this process made and could not announce.
- *
- * A retirement whose shared half failed publishes nothing, so every other
- * instance keeps the epoch it has. This process still knows the roles changed.
- * Counted into its own stamps, the retirement makes everything it filed before
- * no longer current HERE, in every cache that asks {@link stampIsCurrent},
- * including the ones in other modules. The count is never written to the
- * shared row and no other instance compares against it, so it is not a second
- * epoch: the shared value stays whatever the row last gave.
- */
-let unannounced = 0;
+  /**
+   * Retirements this process made and could not announce.
+   *
+   * A retirement whose shared half failed publishes nothing, so every other
+   * instance keeps the epoch it has. This process still knows the roles
+   * changed. Counted into its own stamps, the retirement makes everything it
+   * filed before no longer current HERE, in every cache that asks
+   * {@link stampIsCurrent}, including the ones in other modules. The count is
+   * never written to the shared row and no other instance compares against it,
+   * so it is not a second epoch: the shared value stays whatever the row last
+   * gave.
+   */
+  unannounced: number;
+}
+
+/** A process that has read nothing yet, and owes and runs nothing. */
+function freshState(): EpochState {
+  return {
+    revision: 0,
+    generation: "",
+    readAt: 0,
+    inFlight: null,
+    pendingBumps: 0,
+    observed: true,
+    retirements: 0,
+    degraded: false,
+    unannounced: 0,
+  };
+}
+
+/** On `globalThis`, as the container is, so every copy holds this one. */
+const globalForEpoch = globalThis as unknown as {
+  __nextly_rbacEpoch?: EpochState;
+};
+const state = (globalForEpoch.__nextly_rbacEpoch ??= freshState());
 
 /**
  * The narrow view of the query builder this module uses.
@@ -214,8 +249,8 @@ const ROW_NOT_ESTABLISHED =
  * both sends an operator to the wrong place, so the caller names its own.
  */
 function reportDegraded(message: string, detail?: string): void {
-  if (degraded) return;
-  degraded = true;
+  if (state.degraded) return;
+  state.degraded = true;
   getAuthLogger()?.log?.("warn", {
     category: "auth",
     op: "cache",
@@ -233,12 +268,14 @@ function reportDegraded(message: string, detail?: string): void {
  */
 export function currentEpoch(): string {
   const published = publishedEpoch();
-  return unannounced === 0 ? published : `${published}+${String(unannounced)}`;
+  return state.unannounced === 0
+    ? published
+    : `${published}+${String(state.unannounced)}`;
 }
 
 /** The epoch as the shared row last gave it, which every instance sees. */
 export function publishedEpoch(): string {
-  return `${generation}:${String(revision)}`;
+  return `${state.generation}:${String(state.revision)}`;
 }
 
 /**
@@ -246,7 +283,7 @@ export function publishedEpoch(): string {
  * announce nothing; see {@link unannounced}.
  */
 export function retireHereOnly(): void {
-  unannounced += 1;
+  state.unannounced += 1;
 }
 
 /**
@@ -264,7 +301,7 @@ export function retireHereOnly(): void {
  * than an invisible stale grant, and it is the direction to fail in.
  */
 export function epochIsTrustworthy(): boolean {
-  return pendingBumps === 0 && observed;
+  return state.pendingBumps === 0 && state.observed;
 }
 
 /**
@@ -287,7 +324,7 @@ export function stampIsCurrent(stamp: string): boolean {
   // are not all empty yet and the epoch has not moved, so the comparison below
   // would compare two values that have not changed since the answer was
   // computed — and pass.
-  if (retirements > 0) return false;
+  if (state.retirements > 0) return false;
   if (!epochIsTrustworthy()) return false;
   return stamp === currentEpoch();
 }
@@ -303,11 +340,11 @@ export function stampIsCurrent(stamp: string): boolean {
  * these open across its whole body while each write inside it opens another.
  */
 export async function duringRetirement<T>(run: () => Promise<T>): Promise<T> {
-  retirements += 1;
+  state.retirements += 1;
   try {
     return await run();
   } finally {
-    retirements -= 1;
+    state.retirements -= 1;
   }
 }
 
@@ -322,7 +359,7 @@ export async function refreshEpoch(options?: {
   force?: boolean;
 }): Promise<string> {
   const force = options?.force === true;
-  if (!force && Date.now() - readAt < EPOCH_TTL_MS) return currentEpoch();
+  if (!force && Date.now() - state.readAt < EPOCH_TTL_MS) return currentEpoch();
 
   // Joining a read already running is honest for an ordinary caller: it asked
   // for a value no older than the interval, and that read will supply one.
@@ -334,21 +371,21 @@ export async function refreshEpoch(options?: {
   // post-write verification. So a forced caller waits out the reads ahead of it
   // and then makes one of its own.
   if (!force) {
-    if (inFlight) return inFlight;
+    if (state.inFlight) return state.inFlight;
   } else {
     // Sequential by design: each read ahead of this one has to finish before a
     // new observation may start, or the observation is not a new one.
-    let ahead = inFlight;
+    let ahead = state.inFlight;
     while (ahead) {
       await ahead;
-      ahead = inFlight;
+      ahead = state.inFlight;
     }
   }
 
   const reading = readShared().finally(() => {
-    if (inFlight === reading) inFlight = null;
+    if (state.inFlight === reading) state.inFlight = null;
   });
-  inFlight = reading;
+  state.inFlight = reading;
   return reading;
 }
 
@@ -389,7 +426,7 @@ async function readShared(): Promise<string> {
       // below with the previous store's stamp still trusted, and every answer
       // cached against that store then reads as current for as long as this
       // process runs.
-      observed = false;
+      state.observed = false;
       establishing = true;
       await raiseSharedRevision(0);
       rows = await selectSharedRow();
@@ -399,14 +436,14 @@ async function readShared(): Promise<string> {
     // invalidated while degraded stay permanently ahead of everyone else, and
     // taking only the number is what let a REPLACED store read as the same one.
     const adopted = rows.length > 0;
-    revision = adopted ? Number(rows[0].revision) : 0;
-    generation = adopted ? String(rows[0].generation) : "";
-    readAt = Date.now();
+    state.revision = adopted ? Number(rows[0].revision) : 0;
+    state.generation = adopted ? String(rows[0].generation) : "";
+    state.readAt = Date.now();
     if (adopted) {
-      degraded = false;
+      state.degraded = false;
       // The value came from the row, which is the only thing that makes it
       // worth comparing against.
-      observed = true;
+      state.observed = true;
     } else {
       // Seeded without an error and still absent. Zero is still the answer
       // rather than a refused authorization check, but it is an answer with no
@@ -421,7 +458,7 @@ async function readShared(): Promise<string> {
     // Rate-limit the FAILING path too. Left unset, a missing table means one
     // failing query per authorization check rather than one per interval,
     // which is the upgrade window turned into a load problem.
-    readAt = Date.now();
+    state.readAt = Date.now();
   }
   return currentEpoch();
 }
@@ -506,16 +543,16 @@ async function raiseSharedRevision(by: number): Promise<void> {
 }
 
 async function persistPendingBumps(): Promise<void> {
-  const owed = pendingBumps;
+  const owed = state.pendingBumps;
   if (owed === 0) return;
 
   await raiseSharedRevision(owed);
 
-  pendingBumps -= owed;
+  state.pendingBumps -= owed;
   // The row has moved and this process has not seen where to. Until a read
   // succeeds, the value here is the one from before the write, so nothing may
   // be compared against it.
-  observed = false;
+  state.observed = false;
 }
 
 /**
@@ -539,7 +576,7 @@ async function persistPendingBumps(): Promise<void> {
  * cache until the shared row accepts it.
  */
 export async function bumpEpoch(): Promise<string> {
-  pendingBumps += 1;
+  state.pendingBumps += 1;
   return refreshEpoch({ force: true });
 }
 
@@ -552,13 +589,5 @@ export async function bumpEpoch(): Promise<string> {
  * state is this module's own.
  */
 export function resetEpochForTests(): void {
-  revision = 0;
-  generation = "";
-  readAt = 0;
-  degraded = false;
-  pendingBumps = 0;
-  observed = true;
-  retirements = 0;
-  unannounced = 0;
-  inFlight = null;
+  Object.assign(state, freshState());
 }

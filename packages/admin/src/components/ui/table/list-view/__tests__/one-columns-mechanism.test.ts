@@ -60,7 +60,6 @@ const ENTITY_TABLE_SURFACES = [
   join("pages", "dashboard", "plugins", "components", "PluginsTable.tsx"),
   join("pages", "dashboard", "roles", "components", "RoleTable.tsx"),
   join("pages", "dashboard", "email", "sending", "index.tsx"),
-  join("pages", "dashboard", "settings", "image-sizes", "index.tsx"),
   join("pages", "dashboard", "singles", "components", "SinglesTable.tsx"),
   join("pages", "dashboard", "users", "components", "UserTable.tsx"),
 ];

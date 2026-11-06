@@ -9,6 +9,7 @@
  */
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { createDatabaseLimitStore } from "../../database-limit-store";
 import type { StoredLimit } from "../../limit-store";
 
@@ -20,6 +21,9 @@ const keys = keyList.split(",");
 
 const adapter = createSqliteAdapter({ url: `file:${file}` });
 await adapter.connect();
+// What `registerServices` does for an adapter handed to it, which this
+// process, standing in for a second site, skips.
+await loadDialectTables("sqlite");
 const store = createDatabaseLimitStore({
   adapter,
   generation,

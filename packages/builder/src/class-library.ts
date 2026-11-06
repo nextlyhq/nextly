@@ -58,7 +58,9 @@ import {
   STYLE_STATES,
   compileStyleValues,
   isPlainRecord,
-  namedClassName,
+  classNameOf,
+  isLook,
+  namedClassesRead,
   usableNamedClasses,
   type Declaration,
   type NamedClass,
@@ -138,27 +140,25 @@ export interface ClassRow extends ClassChoice {
 /**
  * The classes the compiler will actually emit rules for, in precedence order.
  *
- * The bound is the compiler's, applied the compiler's way: the cap slices the
- * STORED order, before any sorting, so it is not the same set as the first
- * `MAX_NAMED_CLASSES` by precedence. Reproducing it here rather than ordering
- * the whole library keeps a tail entry from being offered as though applying it
- * would do something.
+ * The bound is the compiler's, read through the compiler's own function: the
+ * cap slices the STORED order, before any sorting, and counts shared styles and
+ * looks each under a cap of its own, so a tail entry is never offered as though
+ * applying it would do something, and a look past the shared styles' cap still
+ * is.
  */
 export function usableSiteClasses(
   library: readonly NamedClass[]
 ): NamedClass[] {
-  const bounded =
-    library.length > MAX_NAMED_CLASSES
-      ? library.slice(0, MAX_NAMED_CLASSES)
-      : library;
-  return usableNamedClasses(bounded);
+  // The engine's own read: shared styles and looks each under their cap.
+  return usableNamedClasses(namedClassesRead(library));
 }
 
 export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
   return usableSiteClasses(library).map(entry => ({
     id: entry.id,
     slug: entry.slug,
-    className: namedClassName(entry.slug),
+    // A look's class under its own prefix, as the compiler writes it.
+    className: classNameOf(entry),
   }));
 }
 
@@ -341,6 +341,30 @@ export function classDeclarations(
 }
 
 /**
+ * Every declaration a class writes, in every state and at every breakpoint it
+ * stores values for, compiled as the summary above compiles its base.
+ *
+ * What a search by property or value reads: a class that sets a padding only
+ * on hover, or only on phones, still sets a padding.
+ */
+export function everyClassDeclaration(
+  styles: NodeStyles,
+  context?: StyleCompileContext
+): Declaration[] {
+  return storedContexts(styles).flatMap(
+    pair =>
+      compileStyleValues(
+        pair.values,
+        SUMMARY_PATH,
+        undefined,
+        undefined,
+        undefined,
+        { mayFetchUrl: context?.mayFetchUrl }
+      ).declarations
+  );
+}
+
+/**
  * Every class the site renders, in the order that decides precedence.
  *
  * Ordered by the library's own precedence rather than by name, because that
@@ -382,41 +406,13 @@ export function filterClassRows(
 }
 
 /**
- * The rows whose name contains what the author typed.
- *
- * Beside {@link filterClassRows} rather than inside it, because they answer
- * different questions: a filter narrows by what the INDEX or the open document
- * says, and this narrows by the name. Folding them together would make one
- * function whose result depends on two unrelated inputs, and the chips would
- * then have to know about the query to explain an empty list.
- *
- * Matched on the SLUG alone. A class has no other name — the id is storage and
- * an author never sees it — so matching an id would return rows for a string
- * they cannot see in the list.
- *
- * Case-insensitive because a slug is lowercase by construction and an author
- * typing capitals means the same class rather than none. Substring rather than
- * prefix: the useful search on `hero-banner-wide` is `banner`.
- */
-export function searchClassRows(
-  rows: readonly ClassRow[],
-  query: string
-): ClassRow[] {
-  const needle = query.trim().toLowerCase();
-  if (needle === "") return [...rows];
-  return rows.filter(row => row.slug.toLowerCase().includes(needle));
-}
-
-/**
  * The class ids on a node that the compiler will actually read.
  *
  * The engine applies the first `MAX_CLASSES_PER_NODE` and warns about the rest,
  * so a node holding more is a node whose tail styles nothing. `styleSubjectFor`
  * bounds its own read the same way; this is the same bound, not a second one.
  */
-export function readableNodeClassIds(
-  nodeClassIds: readonly string[]
-): string[] {
+function readableNodeClassIds(nodeClassIds: readonly string[]): string[] {
   return nodeClassIds.slice(0, MAX_CLASSES_PER_NODE);
 }
 
@@ -441,16 +437,16 @@ export function appliedClasses(
 }
 
 /**
- * The classes a node could still be given, narrowed by what the author typed.
+ * The classes a node could still be given, narrowed to those `matches` keeps.
  *
- * Matched against the SLUG rather than the emitted class name, because the
- * prefix every emitted name carries is identical on all of them and would make
- * an author's first keystrokes match everything.
+ * The match is the caller's: the picker asks the Shared styles tab's own
+ * search (name, class name, property or value), so a style is found the same
+ * way in both places.
  */
 export function applicableClasses(
   library: readonly NamedClass[],
   nodeClassIds: readonly string[],
-  query: string
+  matches: (choice: ClassChoice) => boolean
 ): ClassChoice[] {
   /*
    * The WHOLE stored array, deliberately not the readable prefix that
@@ -460,23 +456,20 @@ export function applicableClasses(
    * offering it would append a second copy of an id the node already holds.
    */
   const applied = new Set(nodeClassIds);
-  const needle = query.trim().toLowerCase();
   return siteClasses(library)
     .filter(choice => !applied.has(choice.id))
-    .filter(choice => needle === "" || choice.slug.includes(needle));
+    .filter(matches);
 }
 
 /**
- * One thing the selector can do with what the author typed.
- *
- * The two are one list rather than a list plus a special case, because they
- * compete for the same keystroke: pressing Enter has to resolve to exactly one
- * action, and a surface holding "the matches" separately from "the new name"
- * has to invent a precedence between them. Here the order IS the precedence.
+ * One row the selector offers: a shared style the block may wear. Styles are
+ * made from a block ("Save as shared style…"), never typed into being here, so
+ * an empty one cannot be created by a stray Enter.
  */
-export type ClassOption =
-  | { readonly kind: "apply"; readonly choice: ClassChoice }
-  | { readonly kind: "create"; readonly slug: string };
+export type ClassOption = {
+  readonly kind: "apply";
+  readonly choice: ClassChoice;
+};
 
 export interface SelectorOptions {
   /** The rows to draw, in the order Enter would take them. */
@@ -490,34 +483,18 @@ export interface SelectorOptions {
   readonly hidden: number;
 }
 
-/**
- * What the selector offers for a query, applying first and creating last.
- *
- * Creating is offered only when the typed name could become a class, which
- * already excludes a name the library holds — so a query naming an existing
- * class never offers to create a second one under the same slug, and a query
- * naming a class the node already carries offers nothing at all. Both fall out
- * of {@link newClassName} rather than being re-decided here.
- *
- * Create sits LAST so that Enter on a partially typed name applies the match
- * rather than creating a near-duplicate. An author who means to create keeps
- * typing until nothing matches, which is the same gesture that makes the name
- * unambiguous. It is never dropped by the cap, for the same reason: it is the
- * one row the author's own typing produced.
- */
+/** What the selector offers: the styles `matches` keeps, capped. */
 export function selectorOptions(
   library: readonly NamedClass[],
   nodeClassIds: readonly string[],
-  query: string
+  matches: (choice: ClassChoice) => boolean
 ): SelectorOptions {
-  const applicable = applicableClasses(library, nodeClassIds, query);
+  const applicable = applicableClasses(library, nodeClassIds, matches);
   const shown = applicable.slice(0, MAX_SELECTOR_OPTIONS);
   const options: ClassOption[] = shown.map(choice => ({
     kind: "apply",
     choice,
   }));
-  const outcome = newClassName(query, library);
-  if (outcome.ok) options.push({ kind: "create", slug: outcome.slug });
   return { options, hidden: applicable.length - shown.length };
 }
 
@@ -553,10 +530,12 @@ export type ClassNameOutcome =
  * library of malformed entries draws nothing while every slot is taken.
  *
  * Counts the STORED entries, which is what capacity is about. The drawn list
- * is a different question and answering one with the other is the bug.
+ * is a different question and answering one with the other is the bug. Only
+ * shared styles count: looks come from code under a cap of their own, and a
+ * new class here is always a shared style.
  */
-export function classLibraryHasRoom(library: readonly NamedClass[]): boolean {
-  return library.length < MAX_NAMED_CLASSES;
+function classLibraryHasRoom(library: readonly NamedClass[]): boolean {
+  return library.filter(entry => !isLook(entry)).length < MAX_NAMED_CLASSES;
 }
 
 /**

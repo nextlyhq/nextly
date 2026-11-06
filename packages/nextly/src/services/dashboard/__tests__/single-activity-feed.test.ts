@@ -24,11 +24,15 @@ vi.mock("../../lib/document-visibility", async importOriginal => ({
     }),
 }));
 
+import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../../../domains/email/provider-activity";
 import {
   ActivityLogService,
   type ActivitySingles,
 } from "../activity-log-service";
 import { someResources } from "../readable-resources";
+
+/** A namespace install-level settings changes are filed under. */
+const EMAIL_PROVIDERS = EMAIL_PROVIDER_ACTIVITY_COLLECTION;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -141,5 +145,38 @@ describe("a row stating a Single with no document id", () => {
     const result = await drawFeed({ ...row, subjectKind: "settings" });
     expect(result.activities).toHaveLength(1);
     expect(result.activities[0]?.subjectKind).toBe("settings");
+  });
+});
+
+describe("a settings change written before the kind was recorded", () => {
+  const drawFeed = async (row: Record<string, unknown>) => {
+    const { service, adapter } = makeService();
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValueOnce([row]);
+    return service.getRecentActivity({
+      limit: 5,
+      scope: someResources([row.collection as string]),
+      caller: { user: { id: "reader", roles: ["editor"] } },
+      singles: { labels: new Map(), keptOff: new Set(), complete: true },
+    });
+  };
+  const legacy = {
+    id: "r1",
+    action: "update",
+    entryId: null,
+    entryTitle: null,
+    subjectKind: null,
+    metadata: JSON.stringify({ changedFields: ["host"] }),
+    createdAt: new Date(2026, 0, 1),
+  };
+
+  it("arrives as a settings change when it is filed under a settings namespace", async () => {
+    const result = await drawFeed({ ...legacy, collection: EMAIL_PROVIDERS });
+    expect(result.activities.map(row => row.subjectKind)).toEqual(["settings"]);
+  });
+
+  it("keeps no kind when it is filed under any other name", async () => {
+    // The control: the same row filed under a name no settings change uses is not one.
+    const result = await drawFeed({ ...legacy, collection: "notes" });
+    expect(result.activities.map(row => row.subjectKind)).toEqual([null]);
   });
 });

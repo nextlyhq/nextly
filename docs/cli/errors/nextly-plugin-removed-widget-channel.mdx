@@ -1,0 +1,24 @@
+---
+title: NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL
+description: "A plugin declares widgets or widget data sources through a key Nextly no longer reads."
+---
+
+## Cause
+
+A plugin declares widgets or widget data sources through a key Nextly no longer reads.
+
+A plugin adds dashboard widgets one way: each declared with `defineWidget()` under `contributes.dashboard.widgets`, its data read by the widget's `load` as the person asking. `contributes.admin.widgets` and `contributes.widgetSources` are not read, so a plugin that still carries either, enabled or not, is refused at startup. The message names the plugin and the key.
+
+## Fix
+
+- Declare each widget with `defineWidget()` under `contributes.dashboard.widgets`, read its data in that widget's `load`, and remove the key.
+- If the plugin is not yours, update it to a release that declares its widgets that way.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares `contributes.widgetSources`, which Nextly no longer reads.
+  Why:  A plugin adds dashboard widgets one way: each declared with `defineWidget()` under `contributes.dashboard.widgets`, whose `load` reads its data as the person asking.
+  Next: Declare each widget with `defineWidget()` under `contributes.dashboard.widgets`, read its data in that widget's `load`, and remove the key. If the plugin is not yours, update it to a release that declares its widgets that way.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-plugin-removed-widget-channel  (NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL)
+```

@@ -96,6 +96,12 @@ function store(): void {
  */
 const heldAtExit: unknown[] = [];
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
   const nothing = (): null => null;
@@ -132,6 +138,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     TokensPanel: nothing,
     OnboardingChecklist: nothing,
@@ -195,8 +202,45 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+// The question before a publish registers a before-action of its own, which
+// this harness would take for the host commit's; it has its own tests.
+vi.mock("./publish-offer", () => ({
+  usePublishOffer: () => null,
+  useFormPublishOffer: () => null,
+}));
+vi.mock("./removal-hold-client", () => ({
+  useRemovalHold: () => null,
+}));
+
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
+  // No preview here: the surrounding editor offers none.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   useDocumentIdentity: () => null,
   navigateTo: vi.fn(),
@@ -234,9 +278,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   }) => {
     chromeRequests.push(request);
   },
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: (handler: () => void) => {
     beforeStore = handler;
   },
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () =>
     React.useSyncExternalStore(
       listener => {
@@ -246,11 +295,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       () => documentActions
     ),
   useDocumentStatus: () => null,
-  useSingleDocument: () => ({
-    data: undefined,
-    isPending: false,
-    error: null,
-  }),
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -547,9 +593,12 @@ describe("a colleague taking the document over", () => {
     // unmounts, after the page that replaces it has read the field, so a page
     // drawn in the same commit showed the work from before it while the form
     // held the edit: the screen contradicting the banner above it.
-    // Read by the count the card states: the edit is one block, and the page
-    // from before it was empty, which the card says in words of its own.
-    await waitFor(() => expect(container.textContent).toContain("1 block"));
+    // Read by what the card says: the page from before the edit was empty,
+    // which the card says in words of its own, and the edit holds a block, so
+    // the card offers its preview instead.
+    await waitFor(() =>
+      expect(container.textContent).toContain("Live preview")
+    );
     expect(container.textContent).not.toContain("Nothing here yet");
     // Into this browser\'s form only. Nothing left the editor through its
     // exit, and nothing here saves.

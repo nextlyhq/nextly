@@ -1,19 +1,19 @@
 "use client";
 
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { CountWidgetData } from "nextly/core-widget-data";
+import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 
 import { CountValue, countLabel } from "../widgets/archetypes/count-value";
+import { pointLabel } from "../widgets/archetypes/timeseries";
+import { ChartTableDisclosure } from "../widgets/charts/chart-table-disclosure";
+import { useCollectionUnit } from "../widgets/charts/chart-unit";
 import { OverTimeChart } from "../widgets/charts/over-time-chart";
+import { FrameState } from "../widgets/frame/card-state";
 import { CardFigure } from "../widgets/frame/figure";
-import {
-  CardError,
-  CardSkeleton,
-  CardUnavailable,
-} from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
 import {
@@ -22,38 +22,42 @@ import {
   type CountPart,
 } from "./count-card-model";
 
+/** What the Count card is handed: its declaration's props, with the data its `load` answers. */
+export type CountCardProps = Omit<DeclaredComponentProps, "data"> & {
+  data: CountWidgetData;
+};
+
 /**
  * Count: how many entries a collection holds, by the card's own width.
  *
  * Small draws the number alone; medium adds the published and draft split, each part linking to
  * its list under the card's Filter, and what scheduled releases will publish, for a reader with a
  * release to read; large adds the last 30 days, and the change against the 30
- * before. Drawn from the card's cells, so each part arrives on its own and the number never waits
- * for the trend.
+ * before, with the days as a table on request ("View as table"). Drawn from the data its `load` answered for the size it was asked at, each part only
+ * where it is there: the frame drew loading, no permission and error before this is reached.
  */
-export const CountCard: React.FC<WidgetComponentProps> = ({
-  cells,
-  settings,
-  onRetry,
-}) => {
+export const CountCard: React.FC<CountCardProps> = ({ data, settings }) => {
   const tier = useCardTier() ?? "medium";
-  const view = countView(cells, settings);
+  const view = countView(data, settings);
   // Named in the number's accessible name, as the frame's title names it, so
   // two Count cards for different collections can be told apart aloud.
   const collection = collectionLabelOf(settings, useBranding().widgetSources);
+  // What its trend counts, for the chart's tooltip ("3 new posts").
+  const unit = useCollectionUnit(
+    typeof settings.collection === "string" ? settings.collection : undefined,
+    "new"
+  );
 
-  if (view.state === "loading") return <CardSkeleton shape="figure" />;
-  if (view.state === "unavailable") return <CardUnavailable />;
-  if (view.state === "error") {
-    // The Retry the frame offers every card: a failed Count is asked again.
-    return (
-      <CardError
-        title="Count"
-        message={view.message}
-        {...(onRetry ? { onRetry } : {})}
-      />
-    );
+  // A card set to no collection: the frame's one "not available" state.
+  if (view.state === "unavailable") {
+    return <FrameState state={{ kind: "no-access" }} />;
   }
+  // Each day of the trend, keyed by its instant and named by its UTC calendar day.
+  const days = (view.trend?.points ?? []).map(point => ({
+    key: point.start,
+    label: pointLabel(point.start, "day"),
+    count: point.count,
+  }));
 
   return (
     <div className="grid gap-3" data-testid="count-card">
@@ -78,23 +82,29 @@ export const CountCard: React.FC<WidgetComponentProps> = ({
           <p className="text-xs text-muted-foreground">
             {trendSentence(view.trend.recent, view.trend.change)}
           </p>
-          <OverTimeChart
-            title="Entries created, last 30 days"
+          {/* The same days, as a table, on request: one list of days for both, so the
+              chart and the table name each day alike. */}
+          <ChartTableDisclosure
             labelHeading="Day"
-            intervals={view.trend.points.map(point => ({
-              key: point.start,
-              label: point.start.slice(0, 10),
-            }))}
-            series={[
-              {
-                key: "created",
-                name: "Entries created",
-                points: view.trend.points.map(point => ({
-                  key: point.start,
-                  value: point.count,
-                })),
-              },
-            ]}
+            rows={days}
+            chart={
+              <OverTimeChart
+                title="Entries created, last 30 days"
+                labelHeading="Day"
+                unit={unit}
+                intervals={days.map(({ key, label }) => ({ key, label }))}
+                series={[
+                  {
+                    key: "created",
+                    name: "Entries created",
+                    points: days.map(({ key, count }) => ({
+                      key,
+                      value: count,
+                    })),
+                  },
+                ]}
+              />
+            }
           />
         </div>
       )}

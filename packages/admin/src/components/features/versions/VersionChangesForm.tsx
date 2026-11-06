@@ -18,11 +18,13 @@ import { Fragment } from "react";
 import type { JSX } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
+import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
 import { cn } from "@admin/lib/utils";
 
 import { FieldDiffNode } from "./diff/FieldDiffNode";
 import { UnchangedFieldsToggle } from "./UnchangedFieldsToggle";
 import type { NoChanges, VersionChanges } from "./version-changes";
+import { useHoldsWithheld } from "./withheld-fields-context";
 
 /** What the editor says when no authored field changed. */
 const NO_CHANGES_IN_EDITOR: Record<NoChanges, string> = {
@@ -36,31 +38,112 @@ export function changeAnchorId(name: string): string {
   return `version-change-${name}`;
 }
 
-/** One stretch of the form: a changed field, or a run of unchanged ones. */
+/**
+ * One stretch of the form: a changed field, a field that holds something
+ * held back from the reader, or a run of unchanged ones.
+ */
 type Stretch =
   | { kind: "changed"; name: string }
+  | { kind: "withheld"; field: FieldConfig }
   | { kind: "unchanged"; fields: FieldConfig[] };
 
-/** The form's fields split into changed ones and runs of unchanged ones. */
+/**
+ * The form's fields split into changed ones, held-back ones and runs of
+ * unchanged ones. A held-back field is not a change the comparison can show,
+ * but neither is it unchanged: whether it changed is exactly what the reader
+ * may not learn, so it stands on its own rather than folding with the rest.
+ */
 function stretchesOf(
   fields: readonly FieldConfig[],
-  changes: VersionChanges
+  changes: VersionChanges,
+  holdsWithheld: (name: string) => boolean
 ): Stretch[] {
+  const laidOut = laidOutByField(fields);
   const stretches: Stretch[] = [];
   for (const field of fields) {
-    const name =
-      "name" in field && typeof field.name === "string"
-        ? field.name
-        : undefined;
+    const name = nameOf(field);
     if (name !== undefined && changes.byField.has(name)) {
       stretches.push({ kind: "changed", name });
       continue;
     }
+    const own = laidOut.get(field) ?? [];
+    // An unnamed group is drawn without the changed fields it lays out,
+    // folded or not: those are drawn once, as their marked change, where the
+    // form draws a change it does not lay out itself. One left with nothing
+    // to draw is not drawn.
+    const changedInside = new Set(
+      own.filter(
+        inner => inner !== field && changes.byField.has(nameOf(inner) ?? "")
+      )
+    );
+    const drawn =
+      changedInside.size > 0 ? without(field, changedInside) : field;
+    if (drawn === null) continue;
+    if (own.some(inner => holdsWithheld(nameOf(inner) ?? ""))) {
+      stretches.push({ kind: "withheld", field: drawn });
+      continue;
+    }
     const last = stretches.at(-1);
-    if (last?.kind === "unchanged") last.fields.push(field);
-    else stretches.push({ kind: "unchanged", fields: [field] });
+    if (last?.kind === "unchanged") last.fields.push(drawn);
+    else stretches.push({ kind: "unchanged", fields: [drawn] });
   }
   return stretches;
+}
+
+/** A field's name, when it has one. */
+function nameOf(field: FieldConfig): string | undefined {
+  return "name" in field && typeof field.name === "string" && field.name !== ""
+    ? field.name
+    : undefined;
+}
+
+/**
+ * Each field of the form with the fields it lays out at the document's own
+ * level: itself, or an unnamed group's fields at any depth, which the read
+ * and the comparison name without the group (`secret`, not `group.secret`).
+ * One walk over the whole form, through the one that answers which fields a
+ * document addresses at its own level, so a group that lays itself out is
+ * walked once.
+ */
+function laidOutByField(
+  fields: readonly FieldConfig[]
+): ReadonlyMap<FieldConfig, FieldConfig[]> {
+  const byField = new Map<FieldConfig, FieldConfig[]>();
+  for (const { field, within } of addressableFieldsWithin(fields)) {
+    const top = within[0] ?? field;
+    const own = byField.get(top);
+    if (own) own.push(field);
+    else byField.set(top, [field]);
+  }
+  return byField;
+}
+
+/**
+ * An unnamed group without the fields in `omit`, wherever it lays them out,
+ * or `null` when that leaves it nothing to draw; any other field as it is.
+ * The group keeps its heading and its own rules; its values still come from
+ * the document, so a condition reading a field left out still reads it.
+ * An unnamed group is recognised as the walk recognises one, and one already
+ * open on its own path is left as it is rather than walked again.
+ */
+function without(
+  field: FieldConfig,
+  omit: ReadonlySet<FieldConfig>,
+  open: ReadonlySet<FieldConfig> = new Set()
+): FieldConfig | null {
+  const inner = (field as { fields?: unknown }).fields;
+  const unnamedGroup =
+    field.type === "group" &&
+    nameOf(field) === undefined &&
+    Array.isArray(inner);
+  if (!unnamedGroup || open.has(field)) return field;
+  const path = new Set([...open, field]);
+  const kept = (inner as FieldConfig[]).flatMap(child => {
+    if (omit.has(child)) return [];
+    const drawn = without(child, omit, path);
+    return drawn === null ? [] : [drawn];
+  });
+  return kept.length === 0 ? null : { ...field, fields: kept };
 }
 
 export interface VersionChangesFormProps {
@@ -123,7 +206,7 @@ export function VersionChangesForm({
     )
   );
   const outside = order.filter(name => !inLayout.has(name));
-  const stretches = stretchesOf(fields, changes);
+  const stretches = stretchesOf(fields, changes, useHoldsWithheld());
   const unchangedCount = stretches.reduce(
     (count, stretch) =>
       stretch.kind === "unchanged" ? count + stretch.fields.length : count,
@@ -147,6 +230,15 @@ export function VersionChangesForm({
             name={stretch.name}
             changes={changes}
             current={current === stretch.name}
+          />
+        ) : stretch.kind === "withheld" ? (
+          // Through the editor's own renderer, which says in the field's
+          // place that it is hidden: always in view, whatever the fold.
+          <ReadOnlyDocumentForm
+            key={`withheld-${index}`}
+            fields={[stretch.field]}
+            values={values}
+            mode="edit"
           />
         ) : showUnchanged ? (
           <ReadOnlyDocumentForm

@@ -39,7 +39,10 @@ vi.mock("@admin/lib/api/csrf", () => ({
 }));
 
 import { usePluginRoute } from "../usePluginRoute";
-import { usePluginRouteMutation } from "../usePluginRouteMutation";
+import {
+  usePluginRouteMutation,
+  writePluginRoute,
+} from "../usePluginRouteMutation";
 
 let client: QueryClient;
 function wrapper() {
@@ -455,5 +458,78 @@ describe("usePluginRouteMutation", () => {
     });
 
     await waitFor(() => expect(result.current.pending).toBe(false));
+  });
+});
+
+describe("writePluginRoute", () => {
+  beforeEach(() => {
+    postSpy.mockReset();
+    patchSpy.mockReset();
+  });
+
+  it("sends the body to the plugin's own route, with the write's token", async () => {
+    postSpy.mockResolvedValue({ message: "Saved.", item: { ok: true } });
+    const answer = await writePluginRoute<{ message: string }>({
+      plugin: "@acme/plugin",
+      path: "/site/thing",
+      body: { value: 1 },
+    });
+    expect(answer).toEqual({ message: "Saved.", item: { ok: true } });
+    expect(postSpy).toHaveBeenCalledWith(
+      "/plugins/@acme/plugin/site/thing",
+      { value: 1 },
+      { headers: { "x-csrf-token": "token" } }
+    );
+  });
+
+  it("uses the method asked for", async () => {
+    patchSpy.mockResolvedValue(null);
+    await writePluginRoute({
+      plugin: "@acme/plugin",
+      path: "/site/thing",
+      method: "PATCH",
+      body: {},
+    });
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it("sends a write asked to outlive the page with keepalive, beside its token", async () => {
+    putSpy.mockResolvedValue(null);
+    await writePluginRoute({
+      plugin: "@acme/plugin",
+      path: "/site/thing",
+      method: "PUT",
+      body: { value: 1 },
+      keepalive: true,
+    });
+    expect(putSpy).toHaveBeenCalledWith(
+      "/plugins/@acme/plugin/site/thing",
+      { value: 1 },
+      { headers: { "x-csrf-token": "token" }, keepalive: true }
+    );
+  });
+
+  it("sends an ordinary request when the body is larger than keepalive allows", async () => {
+    postSpy.mockResolvedValue(null);
+    await writePluginRoute({
+      plugin: "@acme/plugin",
+      path: "/site/thing",
+      body: { value: "x".repeat(64 * 1024) },
+      keepalive: true,
+    });
+    expect(postSpy.mock.calls[0]?.[2]).toEqual({
+      headers: { "x-csrf-token": "token" },
+    });
+  });
+
+  it("rejects with the refusal, where the hook would resolve undefined", async () => {
+    const refusal = new Error(
+      "The site's breakpoints are changed in Settings."
+    );
+    postSpy.mockRejectedValue(refusal);
+    await expect(
+      writePluginRoute({ plugin: "@acme/plugin", path: "/site/thing" })
+    ).rejects.toBe(refusal);
   });
 });

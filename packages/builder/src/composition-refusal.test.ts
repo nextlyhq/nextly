@@ -36,6 +36,7 @@ const EVERY_PROBLEM = [
   "self-reference",
   "not-a-component",
   "condition-gated",
+  "composed-depth",
 ] as const;
 
 describe("a sentence for every cause", () => {

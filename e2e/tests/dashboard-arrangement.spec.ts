@@ -6,7 +6,8 @@
  * but not where it puts it. These measure the drawn page: the order a reader
  * sees, the order the page is read in and the order Tab visits must be one
  * order, at a width where cards sit side by side and at one where they wrap
- * differently.
+ * differently, with cards of mixed heights: a short card beside a tall one
+ * leaves a gap below it, and no later card is drawn out of order to fill it.
  *
  * Each test returns the reader to the default dashboard when it ends, so the
  * specs that follow see the dashboard a new site has.
@@ -17,19 +18,27 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
+import { resetToDefault } from "./support/dashboard-layout";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CELLS = '[data-testid^="widget-cell-"]';
 
-/** The cards' widget ids in DOM order: the order the page is read in. */
+/**
+ * The cards' widget ids in DOM order: the order the page is read in. A card
+ * hidden while empty keeps its cell but is not drawn (`display: none`), so a
+ * reader never meets it; it is left out here as it is from the visual order.
+ */
 async function readingOrder(page: Page): Promise<string[]> {
   return page
     .locator(CELLS)
     .evaluateAll(cells =>
-      cells.map(cell => cell.getAttribute("data-testid") ?? "")
+      cells
+        .filter(cell => cell.checkVisibility())
+        .map(cell => cell.getAttribute("data-testid") ?? "")
     );
 }
 
@@ -52,15 +61,30 @@ async function visualOrder(page: Page): Promise<string[]> {
     .map(box => box.id);
 }
 
-/** Back to the default dashboard, through the guarded reset a reader uses. */
-async function resetToDefault(page: Page): Promise<void> {
+/**
+ * Save the default dashboard with its cards at mixed heights: each card alternately at the
+ * shortest and the tallest height its widget allows. Answers whether any two heights differ.
+ */
+async function placeMixedHeights(page: Page): Promise<boolean> {
   const read = await page.request.get("/admin/api/dashboard/layout");
-  const body = (await read.json()) as { version: number; scope: string };
-  if (body.version === 0) return;
-  const reset = await page.request.delete(
-    `/admin/api/dashboard/layout?version=${body.version}&scope=${encodeURIComponent(body.scope)}`
-  );
-  expect(reset.status()).toBe(200);
+  const layout = (await read.json()) as {
+    version: number;
+    scope: string;
+    placements: Array<{ id: string; widgetId: string; w: number; h: number }>;
+  };
+  const placements = [];
+  for (const [index, placement] of layout.placements.entries()) {
+    const bounds = await sizeBoundsOf(page, placement.widgetId);
+    placements.push({
+      ...placement,
+      h: index % 2 === 0 ? bounds.max.h : bounds.min.h,
+    });
+  }
+  const write = await page.request.put("/admin/api/dashboard/layout", {
+    data: { placements, version: layout.version, scope: layout.scope },
+  });
+  expect(write.ok()).toBe(true);
+  return new Set(placements.map(p => p.h)).size > 1;
 }
 
 /** Opens customise mode from the keyboard. */
@@ -81,7 +105,12 @@ for (const width of [1440, 820]) {
   }) => {
     await page.setViewportSize({ width, height: 900 });
     await gotoAdmin(page, "/");
-    await expect(page.locator(CELLS).first()).toBeVisible();
+    // Mixed heights, or a grid that backfilled gaps could still pass.
+    expect(await placeMixedHeights(page)).toBe(true);
+    await page.reload();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).first()
+    ).toBeVisible();
 
     const reading = await readingOrder(page);
     // More than one card, or "agree" proves nothing.
@@ -113,7 +142,9 @@ test("removes a card, brings it back and saves a removal, by keyboard alone", as
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   const before = await readingOrder(page);
 
   await customize(page);
@@ -182,7 +213,9 @@ test("removes a card, brings it back and saves a removal, by keyboard alone", as
   // other card keeps its order.
   const removedCell = inCustomize[0];
   await page.reload();
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   expect(await readingOrder(page)).toEqual(
     before.filter(id => id !== removedCell)
   );

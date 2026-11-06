@@ -233,7 +233,7 @@ describe("translatePipelinePreviewToLegacy", () => {
     });
   });
 
-  it("returns rowCount=0 when count queries fail (best-effort)", async () => {
+  it("classes a removal it could not count as deleting data, with its count unknown", async () => {
     const currentFields: FieldDefinition[] = [
       { name: "title", type: "text" } as FieldDefinition,
       { name: "body", type: "text" } as FieldDefinition,
@@ -256,7 +256,13 @@ describe("translatePipelinePreviewToLegacy", () => {
       dialect: "sqlite",
     });
 
-    expect(result.changes.removed[0].rowCount).toBe(0);
+    // Not "nothing is deleted": the values were never counted.
+    expect(result.changes.removed[0]).toMatchObject({
+      rowCount: 0,
+      rowCountUnknown: true,
+      classification: "destructive",
+    });
+    expect(result.classification).not.toBe("safe");
   });
 
   it("preserves unchanged field names", async () => {
@@ -289,5 +295,317 @@ describe("translatePipelinePreviewToLegacy", () => {
       dialect: "sqlite",
     });
     expect(result.ddlPreview).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What a removal and a relationship change are classed as, cell by cell.
+//
+// A count the preview cannot read must never read as "nothing is deleted",
+// and a field's values are counted where they are stored. The SQLite double
+// below answers each count query from the table and column it names, and
+// records every query, so a test sees both what was counted and where.
+
+interface CountTable {
+  /** Rows in the table, or an Error the row count throws. */
+  rows: number | Error;
+  /** Null count per column; a column absent here throws, as SQLite does. */
+  nulls: Record<string, number | Error>;
+}
+
+function countingDb(tables: Record<string, CountTable>) {
+  const queries: string[] = [];
+  const db = {
+    all: vi.fn().mockImplementation((query: unknown) => {
+      const text = JSON.stringify(query);
+      queries.push(text);
+      const name = Object.keys(tables).find(t => text.includes(`\\"${t}\\"`));
+      if (!name) throw new Error(`no such table in ${text}`);
+      const table = tables[name];
+      const isNullCount = text.includes("IS NULL");
+      if (!isNullCount) {
+        if (table.rows instanceof Error) throw table.rows;
+        return [{ count: table.rows }];
+      }
+      const column = Object.keys(table.nulls).find(c =>
+        text.includes(`\\"${c}\\" IS NULL`)
+      );
+      if (!column) throw new Error(`no such column in ${text}`);
+      const nulls = table.nulls[column];
+      if (nulls instanceof Error) throw nulls;
+      return [{ count: nulls }];
+    }),
+  };
+  return { db, queries };
+}
+
+const text = (name: string, extra: Record<string, unknown> = {}) =>
+  ({ name, type: "text", ...extra }) as FieldDefinition;
+
+async function removing(
+  removed: FieldDefinition[],
+  db: unknown,
+  options: { localized?: boolean; kept?: FieldDefinition[] } = {}
+) {
+  const kept = options.kept ?? [text("title")];
+  return translatePipelinePreviewToLegacy(emptyPreview, {
+    tableName: "dc_posts",
+    currentFields: [...kept, ...removed],
+    newFields: kept,
+    db,
+    dialect: "sqlite",
+    localized: options.localized,
+  });
+}
+
+describe("a removal the preview cannot count, and where it counts", () => {
+  // --- The dangerous direction: a removal that deletes values. ---
+
+  it("classes every removal as deleting data when the row count throws", async () => {
+    const { db } = countingDb({
+      dc_posts: { rows: new Error("locked"), nulls: { body: 0, summary: 0 } },
+    });
+    const result = await removing([text("body"), text("summary")], db);
+    for (const field of result.changes.removed) {
+      expect(field, field.name).toMatchObject({
+        rowCountUnknown: true,
+        classification: "destructive",
+      });
+    }
+    expect(result.classification).toBe("destructive");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("could not count the rows 'body' holds"),
+        expect.stringContaining("could not count the rows 'summary' holds"),
+      ])
+    );
+  });
+
+  it("classes only the field whose null count throws as uncounted", async () => {
+    const { db } = countingDb({
+      dc_posts: { rows: 10, nulls: { body: new Error("gone"), summary: 4 } },
+    });
+    const result = await removing([text("body"), text("summary")], db);
+    const [body, summary] = result.changes.removed;
+    expect(body).toMatchObject({
+      rowCountUnknown: true,
+      classification: "destructive",
+    });
+    expect(summary).toMatchObject({
+      rowCount: 6,
+      classification: "destructive",
+    });
+    expect(summary).not.toHaveProperty("rowCountUnknown");
+  });
+
+  it("counts a translated field's values in its companion table", async () => {
+    // The main table has no column for a translated field: counting there
+    // throws, which read as 0 rows, "nothing is deleted".
+    const { db, queries } = countingDb({
+      dc_posts: { rows: 3, nulls: {} },
+      dc_posts_locales: { rows: 5, nulls: { summary: 1 } },
+    });
+    const result = await removing([text("summary")], db, { localized: true });
+    expect(result.changes.removed[0]).toMatchObject({
+      rowCount: 4,
+      classification: "destructive",
+    });
+    expect(result.changes.removed[0]).not.toHaveProperty("rowCountUnknown");
+    expect(queries.some(q => q.includes("dc_posts_locales"))).toBe(true);
+  });
+
+  it("counts a field marked not translated on the main table of a translated entity", async () => {
+    const { db } = countingDb({
+      dc_posts: { rows: 3, nulls: { slug: 1 } },
+      dc_posts_locales: { rows: 5, nulls: {} },
+    });
+    const result = await removing([text("slug", { localized: false })], db, {
+      localized: true,
+    });
+    expect(result.changes.removed[0]).toMatchObject({
+      rowCount: 2,
+      classification: "destructive",
+    });
+  });
+
+  it("counts an unflagged field that is not translated by default on the main table", async () => {
+    // A number is not translated unless it says so, so on a translated entity
+    // its column is still on the main table, not the companion.
+    const { db } = countingDb({
+      dc_posts: { rows: 3, nulls: { views: 0 } },
+      dc_posts_locales: { rows: 5, nulls: {} },
+    });
+    const result = await removing(
+      [{ name: "views", type: "number" } as FieldDefinition],
+      db,
+      { localized: true }
+    );
+    expect(result.changes.removed[0]).toMatchObject({
+      rowCount: 3,
+      classification: "destructive",
+    });
+    expect(result.changes.removed[0]).not.toHaveProperty("rowCountUnknown");
+  });
+
+  it("counts fields stored in two tables against each table's own rows", async () => {
+    const { db } = countingDb({
+      dc_posts: { rows: 3, nulls: { views: 1 } },
+      dc_posts_locales: { rows: 8, nulls: { summary: 2 } },
+    });
+    const result = await removing(
+      [text("summary"), { name: "views", type: "number" } as FieldDefinition],
+      db,
+      { localized: true }
+    );
+    const byName = Object.fromEntries(
+      result.changes.removed.map(f => [f.name, f.rowCount])
+    );
+    expect(byName).toEqual({ summary: 6, views: 2 });
+  });
+
+  it("queries a camelCase field by the column it is stored in", async () => {
+    const { db } = countingDb({
+      dc_posts: { rows: 2, nulls: { meta_title: 0 } },
+    });
+    const result = await removing([text("metaTitle")], db);
+    expect(result.changes.removed[0]).toMatchObject({
+      name: "metaTitle",
+      rowCount: 2,
+      classification: "destructive",
+    });
+  });
+
+  it("classes a removed field group, whose values live in their own table, as uncounted", async () => {
+    const { db, queries } = countingDb({ dc_posts: { rows: 2, nulls: {} } });
+    const result = await removing(
+      [{ name: "seo", type: "component" } as FieldDefinition],
+      db
+    );
+    expect(result.changes.removed[0]).toMatchObject({
+      rowCountUnknown: true,
+      classification: "destructive",
+    });
+    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+  });
+
+  it("classes a hasMany toggle as deleting data, in both directions", async () => {
+    for (const [from, to] of [
+      [false, true],
+      [true, false],
+      [undefined, true],
+    ] as const) {
+      const before = {
+        name: "authors",
+        type: "relationship",
+        relationTo: "users",
+        hasMany: from,
+      } as FieldDefinition;
+      const after = { ...before, hasMany: to } as FieldDefinition;
+      const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+        tableName: "dc_posts",
+        currentFields: [before],
+        newFields: [after],
+        db: {},
+        dialect: "sqlite",
+      });
+      expect(result.changes.changed[0], `${from} -> ${to}`).toMatchObject({
+        classification: "destructive",
+      });
+      expect(result.classification).toBe("destructive");
+      expect(result.warnings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(
+            "Changing 'authors' between one and many related entries"
+          ),
+        ])
+      );
+    }
+  });
+
+  it("keeps the type-change warning when a hasMany toggle comes with it", async () => {
+    const before = {
+      name: "count",
+      type: "number",
+      hasMany: false,
+    } as FieldDefinition;
+    const after = { ...before, type: "text", hasMany: true } as FieldDefinition;
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [before],
+      newFields: [after],
+      db: {},
+      dialect: "sqlite",
+    });
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("between one and many"),
+        expect.stringContaining("type (number -> text)"),
+      ])
+    );
+  });
+
+  it("classes a hasMany toggle as deleting data when required changes with it", async () => {
+    const before = {
+      name: "authors",
+      type: "relationship",
+      relationTo: "users",
+      hasMany: false,
+    } as FieldDefinition;
+    const after = {
+      ...before,
+      hasMany: true,
+      required: true,
+    } as FieldDefinition;
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [before],
+      newFields: [after],
+      db: {},
+      dialect: "sqlite",
+    });
+    expect(result.changes.changed[0].classification).toBe("destructive");
+  });
+
+  // --- Deletes nothing: unchanged from before. ---
+
+  it("keeps a removed field whose column holds no values safe", async () => {
+    const { db } = countingDb({ dc_posts: { rows: 4, nulls: { body: 4 } } });
+    const result = await removing([text("body")], db);
+    expect(result.changes.removed[0]).toEqual({
+      name: "body",
+      type: "text",
+      rowCount: 0,
+      classification: "safe",
+    });
+    expect(result.classification).toBe("safe");
+  });
+
+  it("keeps a removed virtual field, which stores nothing, safe without querying", async () => {
+    const { db, queries } = countingDb({ dc_posts: { rows: 4, nulls: {} } });
+    const result = await removing([text("preview", { virtual: true })], db);
+    expect(result.changes.removed[0]).toMatchObject({
+      rowCount: 0,
+      classification: "safe",
+    });
+    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+  });
+
+  it("keeps a hasMany flag spelled false where it was absent from being a toggle", async () => {
+    const before = {
+      name: "author",
+      type: "relationship",
+      relationTo: "users",
+    } as FieldDefinition;
+    const after = { ...before, hasMany: false } as FieldDefinition;
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [before],
+      newFields: [after],
+      db: {},
+      dialect: "sqlite",
+    });
+    expect(result.warnings.some(w => w.includes("between one and many"))).toBe(
+      false
+    );
   });
 });

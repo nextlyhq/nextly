@@ -1,10 +1,16 @@
+import { TABLE_NOT_REGISTERED_CODE as ADAPTER_TABLE_NOT_REGISTERED_CODE } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it } from "vitest";
 
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import {
+  firstIdentifierNamed,
   isMissingColumnError,
   isMissingNamedColumnError,
   missingColumnKind,
+  missingSchemaObject,
+  statementTableOf,
+  TABLE_NOT_REGISTERED_CODE,
+  tableOfMissingColumn,
 } from "../missing-column";
 
 describe("isMissingColumnError", () => {
@@ -179,5 +185,261 @@ describe("isMissingNamedColumnError", () => {
     const b = new Error("inner", { cause: a });
     Object.defineProperty(a, "cause", { value: b });
     expect(isMissingNamedColumnError(a, "_updated_at")).toBe(false);
+  });
+});
+
+describe("missingSchemaObject", () => {
+  it("reads the code the adapters give an unregistered table", () => {
+    // Core keeps its own copy so it imports no database package; this holds
+    // the copy to the adapters' constant.
+    expect(TABLE_NOT_REGISTERED_CODE).toBe(ADAPTER_TABLE_NOT_REGISTERED_CODE);
+  });
+
+  it("reads a missing table from each dialect's code, in any language", () => {
+    // PostgreSQL undefined_table, and MySQL ER_NO_SUCH_TABLE in German: the code
+    // classifies, so the translated wording never has to.
+    expect(
+      missingSchemaObject(
+        driverError('relation "dc_posts" does not exist', "42P01")
+      )?.object
+    ).toBe("table");
+    expect(
+      missingSchemaObject(
+        mysqlError(
+          "Tabelle 'site.dc_posts' existiert nicht",
+          "ER_NO_SUCH_TABLE",
+          1146
+        )
+      )?.object
+    ).toBe("table");
+    // SQLite has no code for it, only its wording.
+    expect(
+      missingSchemaObject(
+        driverError("no such table: dc_posts", "SQLITE_ERROR")
+      )?.object
+    ).toBe("table");
+  });
+
+  it("reads a missing column, SQLite's insert wording included", () => {
+    expect(
+      missingSchemaObject(
+        driverError('column "subtitle" does not exist', "42703")
+      )?.object
+    ).toBe("column");
+    expect(
+      missingSchemaObject(
+        mysqlError(
+          "Unbekannte Spalte 'subtitle' in 'field list'",
+          "ER_BAD_FIELD_ERROR",
+          1054
+        )
+      )?.object
+    ).toBe("column");
+    // An INSERT naming an absent column says so differently from a SELECT.
+    expect(
+      missingSchemaObject(
+        driverError(
+          "table dc_posts has no column named subtitle",
+          "SQLITE_ERROR"
+        )
+      )?.object
+    ).toBe("column");
+    expect(
+      isMissingColumnError(
+        new Error("table dc_posts has no column named subtitle")
+      )
+    ).toBe(true);
+  });
+
+  it("reads a table this instance has not registered from the adapters' code", () => {
+    const refusal = driverError(
+      'Table "dc_posts" not found in schema registry: this running instance has not registered it.',
+      TABLE_NOT_REGISTERED_CODE
+    );
+    expect(missingSchemaObject(refusal)).toEqual({
+      object: "unregistered",
+      text: refusal.message,
+    });
+  });
+
+  it("does not take a missing table for a missing column, or the reverse", () => {
+    // PostgreSQL words both "... does not exist"; the code tells them apart.
+    expect(
+      missingSchemaObject(
+        driverError('relation "subtitle" does not exist', "42P01")
+      )?.object
+    ).toBe("table");
+    expect(
+      missingSchemaObject(
+        driverError('column "dc_posts" does not exist', "42703")
+      )?.object
+    ).toBe("column");
+  });
+
+  it("reads PostgreSQL's write wording for a column as a column, without a code", () => {
+    // It names the relation too, so a level whose code a wrapper dropped must
+    // not be read as a missing table.
+    expect(
+      missingSchemaObject(
+        new Error('column "title" of relation "dc_posts" does not exist')
+      )?.object
+    ).toBe("column");
+  });
+
+  it("answers with the text of the deepest level that reports it", () => {
+    // The wrapper's message is the statement, which names every column it
+    // touches; only the driver's own message says which one is missing.
+    // The adapter copies the driver's code onto its own error, so both levels
+    // classify.
+    const wrapped = Object.assign(
+      new Error("Failed query: select title, subtitle from dc_posts", {
+        cause: driverError('column "subtitle" does not exist', "42703"),
+      }),
+      { code: "42703" }
+    );
+    expect(missingSchemaObject(wrapped)).toEqual({
+      object: "column",
+      text: 'column "subtitle" does not exist',
+    });
+  });
+
+  it("does not fire on an unrelated failure, however it is wrapped", () => {
+    expect(missingSchemaObject(new Error("disk I/O error"))).toBeUndefined();
+    expect(
+      missingSchemaObject(
+        new Error("Failed query: select * from dc_posts", {
+          cause: driverError("duplicate key value", "23505"),
+        })
+      )
+    ).toBeUndefined();
+  });
+
+  it("survives a cause chain that loops", () => {
+    const a = new Error("outer");
+    const b = new Error("inner", { cause: a });
+    Object.defineProperty(a, "cause", { value: b });
+    expect(missingSchemaObject(a)).toBeUndefined();
+  });
+});
+
+describe("firstIdentifierNamed", () => {
+  it("reads only identifiers, never the words of the sentence", () => {
+    expect(
+      firstIdentifierNamed("table dc_posts has no column named title", [
+        "table",
+        "column",
+        "title",
+      ])
+    ).toBe("title");
+    expect(
+      firstIdentifierNamed('column "title" does not exist', ["column", "title"])
+    ).toBe("title");
+  });
+
+  it("matches a whole identifier, never part of a longer one", () => {
+    // `title` is inside `subtitle`, and a missing companion table's name
+    // begins with its parent's.
+    expect(
+      firstIdentifierNamed("Unknown column 'subtitle' in 'field list'", [
+        "title",
+        "subtitle",
+      ])
+    ).toBe("subtitle");
+    expect(
+      firstIdentifierNamed('relation "dc_posts_locales" does not exist', [
+        "dc_posts",
+      ])
+    ).toBeUndefined();
+  });
+
+  it("reads a qualified name and a schema-qualified table", () => {
+    expect(
+      firstIdentifierNamed("column dc_posts.subtitle does not exist", [
+        "subtitle",
+      ])
+    ).toBe("subtitle");
+    expect(
+      firstIdentifierNamed("Table 'site.dc_posts' doesn't exist", ["dc_posts"])
+    ).toBe("dc_posts");
+  });
+
+  it("does not match a name inside a longer dashed one", () => {
+    // `dc_posts` and `dc_posts-archive` both exist; only the second is missing.
+    expect(
+      firstIdentifierNamed("Table 'site.dc_posts-archive' doesn't exist", [
+        "dc_posts",
+      ])
+    ).toBeUndefined();
+    expect(
+      firstIdentifierNamed('relation "dc_posts-archive" does not exist', [
+        "dc_posts",
+        "dc_posts-archive",
+      ])
+    ).toBe("dc_posts-archive");
+  });
+
+  it("answers the candidate named first when several are named", () => {
+    expect(
+      firstIdentifierNamed(
+        'column "subtitle" of relation "dc_posts" does not exist',
+        ["dc_posts", "subtitle"]
+      )
+    ).toBe("subtitle");
+  });
+});
+
+// Each driver's own wording, as it reports a missing column on a table named
+// with a space, a dot or a dash. None of them quotes the table in a qualified
+// name, so the table is everything between the wording's lead-in and the
+// column it names.
+describe("tableOfMissingColumn", () => {
+  it.each([
+    ["lp space", "column lp space.subtitle does not exist"],
+    ["lp space", "Unknown column 'lp space.subtitle' in 'field list'"],
+    ["lp space", "no such column: lp space.subtitle"],
+    ["lp space", "table lp space has no column named subtitle"],
+    ["lp space", 'column "subtitle" of relation "lp space" does not exist'],
+    ["lp.dot", "column lp.dot.subtitle does not exist"],
+    ["lp.dot", "Unknown column 'lp.dot.subtitle' in 'field list'"],
+    ["lp.dot", "no such column: lp.dot.subtitle"],
+    ["lp.dot", "table lp.dot has no column named subtitle"],
+    ["lp-dash", "column lp-dash.subtitle does not exist"],
+    ["lp-dash", "Unknown column 'lp-dash.subtitle' in 'field list'"],
+    ["lp-dash", "no such column: lp-dash.subtitle"],
+    ["dc_posts", "column dc_posts.subtitle does not exist"],
+  ])("reads %s from %s", (table, text) => {
+    expect(tableOfMissingColumn(text, "subtitle")).toBe(table);
+  });
+
+  it("names no table where the wording names none", () => {
+    expect(
+      tableOfMissingColumn(
+        "Unknown column 'subtitle' in 'field list'",
+        "subtitle"
+      )
+    ).toBeUndefined();
+  });
+
+  it("still reads a plain name from a qualifier in a translated wording", () => {
+    // No lead-in it knows: the identifier before the column, as before.
+    expect(
+      tableOfMissingColumn(
+        "Spalte dc_posts.subtitle existiert nicht",
+        "subtitle"
+      )
+    ).toBe("dc_posts");
+  });
+});
+
+describe("statementTableOf", () => {
+  it.each([
+    ["lp space", 'select "id", "subtitle" from "lp space" where "id" = $1'],
+    ["lp.dot", 'update "lp.dot" set "subtitle" = $1'],
+    ["lp space", "insert into `lp space` (`id`, `subtitle`) values (?, ?)"],
+    ["dc_posts", 'delete from "cms"."dc_posts" where "id" = $1'],
+    ["dc_posts", "select `id` from dc_posts"],
+  ])("reads %s from the statement it ran", (table, sql) => {
+    expect(statementTableOf({ sql })).toBe(table);
+    expect(statementTableOf(new Error(`Failed query: ${sql}`))).toBe(table);
   });
 });

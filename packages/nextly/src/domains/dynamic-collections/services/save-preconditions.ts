@@ -6,9 +6,9 @@
  * it holds. MySQL commits each schema statement as it runs, so by then the statements before the
  * refused one have been applied. These are asked of the live table first, on every dialect so the
  * refusal reads the same everywhere, and a save that would fail is refused naming the field and
- * the entries in the way, with nothing changed. (A field made required over entries that hold no
- * value, and a required field added with nothing to give existing entries, are refused by the ALTER
- * generator, which already reads the live table for them.)
+ * the entries in the way, with nothing changed. A field made required over entries that hold no
+ * value, and a required field added with nothing to give existing entries, are counted here too
+ * when the caller names the entity (`requiredColumns`), so the refusal names it and the count.
  *
  * @module domains/dynamic-collections/services/save-preconditions
  */
@@ -16,6 +16,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { ValidationPublicData } from "../../../errors/public-data";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { RequiredColumnEntity } from "../../schema/required-column-refusal";
+import { requiredColumnSaveRefusals } from "../../schema/required-column-save-refusals";
 import {
   getColumnDescriptor,
   isTextStorageKind,
@@ -85,6 +87,8 @@ export async function refusalsForCollectionSave(args: {
    * no entries to check yet, and reading its column would fail.
    */
   presentColumns: ReadonlySet<string>;
+  /** The entity the table belongs to, and its Drizzle handle: asks the required-column count. */
+  requiredColumns?: { db: unknown; entity: RequiredColumnEntity };
 }): Promise<SaveRefusal[]> {
   const { adapter, dialect } = args;
   const table = quote(dialect, args.tableName);
@@ -117,6 +121,17 @@ export async function refusalsForCollectionSave(args: {
       ...(await fieldRefusals(field, previous, quote(dialect, held), column))
     );
   }
+  // Fields made required over rows holding no value, each named with the entity and the count.
+  if (args.requiredColumns)
+    refusals.push(
+      ...(
+        await requiredColumnSaveRefusals({
+          ...args,
+          ...args.requiredColumns,
+          previousOf,
+        })
+      ).map(error => ({ error }))
+    );
   return refusals;
 
   /**

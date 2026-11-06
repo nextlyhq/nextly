@@ -42,10 +42,13 @@ import type {
   ReleaseCalendarQuery,
   ReleaseCountQuery,
   ReleaseDetailsChange,
+  ReleaseMemberRemoval,
   ReleaseMembersView,
   ReleaseReadinessEntry,
   ReleaseReadinessView,
   ReleasesService,
+  ReleaseWithAddedMembers,
+  ScheduleDocumentInput,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
@@ -135,13 +138,18 @@ export interface ReleasesNamespace {
    * member's action, because a release can publish one document while taking
    * another down. Declared in the return type rather than left to the
    * runtime: a caller that cannot see `memberAction` cannot tell which way a
-   * release moves the document it just asked about.
+   * release moves the document it just asked about. Each row also carries
+   * `memberId`, the membership `removeMember` takes the document out with.
    *
    * `tab`, `kind`, `search`, `day` and `page` are `@experimental`.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
-  ): Promise<ListResult<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
+  ): Promise<
+    ListResult<
+      ReleaseRow & { memberAction?: ReleaseMemberAction; memberId?: string }
+    >
+  >;
   /**
    * How many releases a listing holds, without reading them: the same tab,
    * state, window and search `find` takes, and the same answer as its
@@ -263,7 +271,52 @@ export interface ReleasesNamespace {
     args: { releaseId: string } & AddMemberInput & ReleaseCallerArgs
   ): Promise<AddedReleaseMember>;
   /**
+   * Put several documents into a release in one step, each with its action
+   * (`publish` to go live, `unpublish` to come down): all of them, or none.
+   *
+   * Each document is checked as {@link addMember} checks one, and the first
+   * refusal refuses the step with nothing written: a document the caller may
+   * not act on or read, one in a collection with no lifecycle, a document
+   * named twice, more than the release has room for (the refusal says how
+   * many fit), or, for a scheduled release, a document with a hard problem,
+   * named in `data.problems`. Use it for the linked documents an add
+   * offered, too. Answers the release as the step left it and the new
+   * members in the order given, each with its `unpublishedLinks`.
+   *
+   * @experimental
+   */
+  addMembers(
+    args: {
+      releaseId: string;
+      members: readonly AddMemberInput[];
+    } & ReleaseCallerArgs
+  ): Promise<ReleaseWithAddedMembers>;
+  /**
+   * Schedule a document in one step, with the linked documents accepted
+   * with it (`linked`, each going live). `into` says how it goes out:
+   *
+   * - `"own"`: on its own at `at` in `timezone`, in a single-document
+   *   release named `title`; with linked documents, an ordinary release
+   *   holding all of them. Needs `publish` authority on releases as well.
+   * - `"existing"`: with the ordinary draft or scheduled release `releaseId`.
+   * - `"new"`: in a new draft release named `title`.
+   *
+   * All of it lands or none of it does: a refusal, or a failure of any
+   * write, leaves no release, no document and no schedule behind.
+   *
+   * @experimental
+   */
+  scheduleDocument(
+    args: ScheduleDocumentInput & ReleaseCallerArgs
+  ): Promise<ReleaseWithAddedMembers>;
+  /**
    * Take a document back out of a release.
+   *
+   * Out of a single-document release that has not run (draft, scheduled or
+   * stopped), it cancels that release instead, under the cancel authority
+   * (`publish`), and the release is kept as cancelled. This is
+   * `@experimental`. The answer says which happened: `releaseCancelled` is
+   * true when the release was cancelled instead of the document removed.
    *
    * `releaseId` is optional but SHOULD be supplied by any caller that knows it —
    * a transport addressing `/releases/A/members/B` knows which release it meant,
@@ -272,7 +325,7 @@ export interface ReleasesNamespace {
    */
   removeMember(
     args: { memberId: string; releaseId?: string } & ReleaseCallerArgs
-  ): Promise<void>;
+  ): Promise<ReleaseMemberRemoval>;
   /**
    * The release's documents the caller may read, in the order they were
    * added. A caller acting for a user is given only the documents that user
@@ -543,6 +596,28 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       void userRoles;
       void apiKeyId;
       return service().addMember(releaseId, member, actorOf(ctx, args));
+    },
+
+    addMembers: args =>
+      // The members named, not a spread: the caller keys are not members.
+      service().addMembers(args.releaseId, args.members, actorOf(ctx, args)),
+
+    scheduleDocument: args => {
+      const {
+        userId,
+        overrideAccess,
+        authenticatedScope,
+        userRoles,
+        apiKeyId,
+        ...input
+      } = args;
+      void userId;
+      void overrideAccess;
+      void authenticatedScope;
+      void userRoles;
+      void apiKeyId;
+      // Stripped for the reason `find` gives: caller keys are not input.
+      return service().scheduleDocument(input, actorOf(ctx, args));
     },
 
     removeMember: args =>

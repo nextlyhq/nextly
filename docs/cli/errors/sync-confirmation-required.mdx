@@ -1,0 +1,26 @@
+---
+title: SYNC_CONFIRMATION_REQUIRED
+description: "`db:sync --promote` or `--demote` has a confirmation to ask, no terminal is attached to ask it, and `--yes` was not given, so nothing was changed."
+---
+
+## Cause
+
+`db:sync --promote` or `--demote` has a confirmation to ask, no terminal is attached to ask it, and `--yes` was not given, so nothing was changed.
+
+`nextly db:sync --promote <slug>` moves a collection built in the Schema Builder into `nextly.config.ts`, and `--demote <slug>` moves one the other way. Each asks before it changes anything. With no terminal attached, as in CI or a script, or with `--non-interactive` given or `CI` set, it cannot ask, so it stopped before opening the database.
+
+## Fix
+
+- Run the same command with `--yes` to answer the confirmation yes.
+- Or run it in a terminal and answer the prompt.
+
+`--yes` answers only this confirmation. It is not a data-loss consent.
+
+## Example
+
+```text
+✗ `db:sync --promote posts` changed nothing: it asks before it changes anything.
+  Why:  No terminal is attached to ask (or `--non-interactive` was given, or `CI` is set), and `--yes` was not given.
+  Next: Run `nextly db:sync --promote posts --yes` to answer it yes.
+  Docs: https://nextlyhq.com/docs/cli/errors/sync-confirmation-required  (SYNC_CONFIRMATION_REQUIRED)
+```

@@ -22,6 +22,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import {
   afterAll,
@@ -41,29 +42,37 @@ import {
   previewStateClass,
   registerBlocks,
   STYLE_STATES,
+  type BlockDocument,
+  type SiteSheetInput,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
-import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import {
+  INSTANCE_ATTRIBUTE,
+  LIST_ACTION_ATTRIBUTE,
+  NODE_ID_ATTRIBUTE,
+} from "@nextlyhq/blocks-react";
 
 import { markedElementOf } from "./style-subject";
 
 import {
   CANVAS_ROOT_CLASS,
+  CHROME_ATTRIBUTE,
   Canvas,
   DRAG_SOURCE_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   LOCKED_ATTRIBUTE,
+  lockMarksOf,
   SELECTED_ATTRIBUTE,
-  canvasScale,
   contextMenuTargetOf,
+  DropRefusal,
   isOutermostForAddress,
   nodeElement,
   nodeIdFromEvent,
+  outermostElementsOf,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
-import type { CanvasZoom } from "./canvas-zoom";
 
 // Explicit because this package does not enable vitest globals, and without
 // them testing-library never registers its own cleanup: every render stays
@@ -821,1561 +830,6 @@ describe("the gesture a click's modifiers meant", () => {
   });
 });
 
-/**
- * A site sheet with one viewport tier, which is what makes a canvas previewable.
- *
- * A preview compile rewrites every container-axis rule to a query that matches
- * nothing, so the canvas refuses to enter preview mode for a set with no
- * viewport tier to simulate — the price would buy nothing. A fixture without
- * one therefore exercises the published path however the preview props are set,
- * which is a fine thing to test and is NOT what the cases below are about.
- */
-const PREVIEWABLE = {
-  css: "",
-  classes: {},
-  breakpoints: {
-    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-    container: [],
-  },
-} as never;
-
-describe("the preview box the canvas establishes", () => {
-  /** A canvas with nothing selected, so only the box props vary. */
-  function boxed(props: Record<string, unknown>) {
-    return render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={PREVIEWABLE}
-        {...props}
-      />
-    );
-  }
-
-  const root = (container: HTMLElement): HTMLElement => {
-    const found = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
-    if (!(found instanceof HTMLElement)) throw new Error("no canvas root");
-    return found;
-  };
-
-  it("carries the container NAME and TYPE together, or neither", () => {
-    /*
-     * Either alone does nothing and the failure is silent: a named container
-     * left at the default `container-type: normal` is not a size-query
-     * container, so every rule the preview compile emitted stays inactive while
-     * the sheet is valid and the name matches. Resizing the box then changes
-     * nothing, with no error anywhere to say why.
-     */
-    const { container } = boxed({
-      preview: { container: "nx-preview-viewport" },
-    });
-    const style = root(container).style;
-
-    expect(style.containerName).toBe("nx-preview-viewport");
-    expect(style.containerType).toBe("inline-size");
-  });
-
-  it("establishes NO container when the compiler would refuse the name", () => {
-    /*
-     * The symmetry is load-bearing rather than tidy. A refused name makes the
-     * compile PUBLISHED — viewport tiers emit `@media` and container tiers emit
-     * UNNAMED `@container` rules — so a box that established a query container
-     * anyway would let those unnamed rules resolve against IT. Viewport tiers
-     * would then follow the window while container tiers followed the box: a
-     * hybrid neither mode intends.
-     */
-    const { container } = boxed({ preview: { container: "none" } });
-    const style = root(container).style;
-
-    expect(style.containerName).toBe("");
-    expect(style.containerType).toBe("");
-  });
-
-  it("constrains the box to a MAXIMUM, not a fixed width", () => {
-    /*
-     * The region can be narrower than the tier being asked for — a wide
-     * breakpoint inside a half-width editor pane cannot be honoured. A fixed
-     * width would push the page under the inspector rather than admitting the
-     * request could not be met.
-     */
-    const { container } = boxed({
-      preview: { container: "nx-preview-viewport", width: 991 },
-    });
-    const style = root(container).style;
-
-    expect(style.maxWidth).toBe("991px");
-    expect(style.width).toBe("");
-    // Centred: an off-centre narrow box reads as a broken layout rather than as
-    // a viewport being simulated.
-    expect(style.marginInline).toBe("auto");
-  });
-
-  it("leaves the box UNCONSTRAINED when no width was asked for", () => {
-    /*
-     * The control. Without it, a canvas that always constrained would satisfy
-     * the case above while making the widest tier narrower than its region —
-     * the box would gain gutters on selecting the tier it was already showing.
-     *
-     * PREVIEWING, with no width. Not "no preview at all": those are different
-     * states and only this one reaches the width decision. Asserted from an
-     * absent preview instead, this case returns before the width is ever
-     * consulted, and a canvas that constrained every previewing box would
-     * satisfy it — the test would carry the name of a branch it no longer
-     * enters.
-     */
-    const { container } = boxed({
-      preview: { container: "nx-preview-viewport" },
-    });
-    const style = root(container).style;
-
-    expect(style.maxWidth).toBe("");
-    expect(style.marginInline).toBe("");
-    // Previewing, though: the state under test is "no width", and a box that
-    // established no container would satisfy the two assertions above by not
-    // previewing at all.
-    expect(style.containerName).toBe("nx-preview-viewport");
-  });
-
-  it("establishes NO box at all when the canvas is not previewing", () => {
-    /*
-     * Distinct from the case above, and the distinction is the whole contract:
-     * a canvas rendering at the region's own width against a published sheet
-     * must not establish a query container. One that did would let the
-     * UNNAMED `@container` rules a published compile emits for container tiers
-     * resolve against the canvas, so those would follow the box while viewport
-     * tiers followed the window.
-     */
-    const { container } = boxed({});
-    const style = root(container).style;
-
-    expect(style.containerName).toBe("");
-    expect(style.containerType).toBe("");
-    expect(style.maxWidth).toBe("");
-  });
-});
-
-describe("how far the canvas must shrink for a width to fit", () => {
-  it("is the ratio when the region is too narrow", () => {
-    // The measured case: ~912px of canvas on the supported 1280px shell.
-    expect(canvasScale(1280, 912)).toBe(912 / 1280);
-  });
-
-  it("never MAGNIFIES a box the region can already hold", () => {
-    /*
-     * A region wider than the request means the box is simply narrower than
-     * the space, which the auto margins centre. Scaled up it would show the
-     * author a page larger than life, and every judgement they make from the
-     * screen — type size, spacing, whether a line wraps — would be wrong in the
-     * flattering direction.
-     */
-    expect(canvasScale(600, 912)).toBe(1);
-    expect(canvasScale(912, 912)).toBe(1);
-  });
-
-  it("is the IDENTITY for anything it cannot divide", () => {
-    /*
-     * Each of these reaches the real code. The unmeasured region runs on every
-     * mount before the first observation; a region of zero is what a collapsed
-     * pane reports. Neither `NaN` nor `Infinity` fails loudly — both paint the
-     * canvas nowhere while leaving it present in the tree, which reads as the
-     * editor having lost the page rather than as a bad number.
-     */
-    expect(canvasScale(1280, undefined)).toBe(1);
-    expect(canvasScale(undefined, 912)).toBe(1);
-    expect(canvasScale(1280, 0)).toBe(1);
-    expect(canvasScale(0, 912)).toBe(1);
-    expect(canvasScale(1280, Number.NaN)).toBe(1);
-  });
-});
-
-describe("what the canvas reports about the box it got", () => {
-  /**
-   * A `ResizeObserver` that records what it was asked to watch and hands the
-   * test the callback, so a measurement can be delivered on demand.
-   *
-   * jsdom ships none at all, which is not merely an inconvenience: the canvas
-   * guards on the global being CALLABLE and silently reports nothing when it is
-   * not, so without a stub every assertion here would pass on absence.
-   */
-  class FakeResizeObserver {
-    /**
-     * Every observer built since the last reset, newest first.
-     *
-     * The canvas builds more than one — the box it reports on, and the region
-     * it derives its scale from — so "the last one constructed" names whichever
-     * effect happened to run second. Addressing them by WHAT THEY OBSERVE is
-     * the structural question; construction order is a proxy that silently
-     * re-points when an effect is added, and every case here would then drive
-     * an observer watching a different element and assert against nothing.
-     */
-    static all: FakeResizeObserver[] = [];
-    static last: FakeResizeObserver | undefined;
-    readonly observed: Element[] = [];
-    disconnected = false;
-    constructor(readonly callback: ResizeObserverCallback) {
-      FakeResizeObserver.all.unshift(this);
-      FakeResizeObserver.last = this;
-    }
-    observe(element: Element): void {
-      this.observed.push(element);
-    }
-    disconnect(): void {
-      this.disconnected = true;
-    }
-    unobserve(): void {}
-    /** Deliver one entry, as the browser would after a layout. */
-    deliver(entry: Partial<ResizeObserverEntry>): void {
-      this.callback([entry as ResizeObserverEntry], this as never);
-    }
-  }
-
-  const original = globalThis.ResizeObserver;
-
-  beforeAll(() => {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver =
-      FakeResizeObserver;
-  });
-
-  afterAll(() => {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = original;
-  });
-
-  afterEach(() => {
-    FakeResizeObserver.all = [];
-    FakeResizeObserver.last = undefined;
-  });
-
-  /**
-   * The observer watching the canvas ROOT, which is the box the sheet queries.
-   *
-   * Found by the element rather than taken as the newest, so a case reading the
-   * reported width cannot be handed the region observer instead.
-   */
-  function rootObserver(): FakeResizeObserver | undefined {
-    return FakeResizeObserver.all.find(observer =>
-      observer.observed.some(element =>
-        element.classList.contains(CANVAS_ROOT_CLASS)
-      )
-    );
-  }
-
-  /** The observer watching the REGION, which is the canvas root's parent. */
-  function regionObserver(): FakeResizeObserver | undefined {
-    return FakeResizeObserver.all.find(observer =>
-      observer.observed.some(
-        element => !element.classList.contains(CANVAS_ROOT_CLASS)
-      )
-    );
-  }
-
-  /**
-   * Report a region width, and REFUSE if there is no observer to report it to.
-   *
-   * `regionObserver()?.deliver(...)` is silent when the observer was never
-   * built: the width is never delivered, the canvas keeps its unmeasured style,
-   * and a case asserting the unscaled shape passes for the wrong reason. The
-   * assertion is what turns a missing observer into a failure.
-   *
-   * Wrapped in `act` because this one sets React state rather than calling a
-   * host's reporter — without it the render that reads the new width has not
-   * happened when the assertions run.
-   */
-  function region(inlineSize: number): void {
-    const observer = regionObserver();
-    expect(observer).toBeDefined();
-    act(() => {
-      observer?.deliver({
-        contentBoxSize: [{ inlineSize, blockSize: 700 }],
-      } as never);
-    });
-  }
-
-  /** A canvas asked for `width`, so it has a region to scale against. */
-  function atWidth(width: number, zoom?: CanvasZoom) {
-    return render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={PREVIEWABLE}
-        preview={{ container: "nx-preview-viewport", width }}
-        {...(zoom === undefined ? {} : { zoom })}
-      />
-    );
-  }
-
-  const rootOf = (container: HTMLElement): HTMLElement =>
-    container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement;
-
-  /**
-   * The canvas's `zoom`, normalised to a string.
-   *
-   * jsdom does not implement `zoom` as a CSS property: React's assignment lands
-   * as a plain own property, so `getPropertyValue("zoom")` answers `""` even
-   * where it was set, while `style.zoom` is `undefined` where it was not. Read
-   * either way alone, one of the two states below reports the other's value —
-   * and the case that would break is the one asserting the canvas is NOT
-   * scaled, which is satisfied by absence.
-   */
-  const zoomOf = (root: HTMLElement): string =>
-    String((root.style as { zoom?: string }).zoom ?? "");
-
-  describe("which ancestor the region is measured from", () => {
-    /*
-     * `parentElement` is the DOM parent and not necessarily the element the
-     * canvas is laid out by. `display: contents` leaves a node in the tree
-     * while generating no box, so its children are laid out by ITS parent — and
-     * a `ResizeObserver` on one reports an inline size of zero. Measured in a
-     * browser: a boxless wrapper inside a 911px container observes `0` while
-     * the container observes `911`.
-     *
-     * The block context menu wraps the canvas in exactly such a node, and
-     * deliberately: a `span` around a block box would change the layout it is
-     * meant to be transparent over. So the canvas measured zero, `canvasScale`
-     * took its identity branch, and the fit was `1` forever — an author who
-     * pinned Tablet at 1024 edited at the region's own width with the control
-     * still showing Tablet selected.
-     */
-    it("skips an ancestor that generates no box", () => {
-      const wrapper = document.createElement("div");
-      wrapper.style.display = "contents";
-      const laidOutBy = document.createElement("div");
-      laidOutBy.id = "laid-out-by";
-      laidOutBy.append(wrapper);
-      document.body.append(laidOutBy);
-
-      render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={PREVIEWABLE}
-          preview={{ container: "nx-preview-viewport", width: 1024 }}
-        />,
-        { container: wrapper }
-      );
-
-      const watched = regionObserver()?.observed ?? [];
-      // The element it measures is the one that HAS a box, not the DOM parent.
-      expect(watched.map(element => (element as HTMLElement).id)).toContain(
-        "laid-out-by"
-      );
-      expect(watched).not.toContain(wrapper);
-
-      laidOutBy.remove();
-    });
-
-    it("measures the DOM parent when that parent has a box", () => {
-      /*
-       * The control. A walk that skipped every ancestor, or that returned the
-       * document element, would satisfy the case above while measuring
-       * something the canvas is not laid out by — and the fit would be computed
-       * against the whole window rather than the pane the canvas sits in.
-       */
-      const parent = document.createElement("div");
-      parent.id = "ordinary-parent";
-      document.body.append(parent);
-
-      render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={PREVIEWABLE}
-          preview={{ container: "nx-preview-viewport", width: 1024 }}
-        />,
-        { container: parent }
-      );
-
-      const watched = regionObserver()?.observed ?? [];
-      expect(watched.map(element => (element as HTMLElement).id)).toContain(
-        "ordinary-parent"
-      );
-
-      parent.remove();
-    });
-  });
-
-  describe("a tier wider than the region it has to fit in", () => {
-    it("takes its FULL width and is scaled down to the region", () => {
-      /*
-       * The regression this exists for. The canvas region is around 912px on
-       * the supported 1280px shell, so against a site whose widest bound is
-       * 1024 there is no width an author can ask for that puts the box above
-       * it — every edit lands in the tier below, and the unconditional one
-       * cannot be reached at all.
-       *
-       * The width must therefore be EXACT rather than a maximum. Capped at the
-       * region the box is not simulating a 1280px viewport; it is simulating a
-       * 912px one and naming the wrong tier with confidence.
-       */
-      const { container } = atWidth(1280);
-      region(912);
-
-      const root = rootOf(container);
-      expect(root.style.width).toBe("1280px");
-      /*
-       * `zoom`, not a transform, and the difference is what the SCROLL
-       * CONTAINER sees. Both leave the layout width alone — which is what keeps
-       * the container queries at the requested tier — but a transform is
-       * paint-time, so the canvas section goes on reserving the unscaled box:
-       * measured at 368px of blank horizontal scroll in a 912px region, and
-       * 161px vertical once the height is compensated to fill it. `zoom`
-       * participates in layout, so the section reserves what is painted.
-       */
-      expect(zoomOf(root)).toBe(`${912 / 1280}`);
-      expect(root.style.transform).toBe("");
-    });
-
-    it("draws a chosen scale at the tier that asks for no width", () => {
-      /*
-       * The widest tier requests nothing — the box IS the region — and that is
-       * the state the editor opens in, so it is where a zoom control is used
-       * most. Nothing has to be fitted there, and a chosen scale still has to
-       * reach the box: the alternative is a control whose label moves while
-       * the canvas stays at `zoom: 1`.
-       */
-      const { container } = render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={PREVIEWABLE}
-          preview={{ container: "nx-preview-viewport" }}
-          zoom={{ kind: "fixed", scale: 1.5 }}
-        />
-      );
-
-      const root = rootOf(container);
-      expect(zoomOf(root)).toBe("1.5");
-      /*
-       * And the width is COMPENSATED, which is the point rather than an
-       * incidental. `zoom` participates in layout and divides the logical width
-       * the container queries resolve against, so a plain full width came out
-       * at region/scale: at 200% a 911px region became 455px and the canvas
-       * started previewing the MOBILE tier. Magnifying showed a different
-       * layout instead of a larger one.
-       *
-       * Multiplying the percentage back restores the width the box had. No
-       * measurement is involved, so nothing here has to observe a region that
-       * the zoom is itself changing.
-       */
-      // Matched on the RATIO rather than the spelling: engines normalise the
-      // expression differently — jsdom reports `calc(150%)` for what is
-      // authored as `calc(100% * 1.5)` — and the ratio is the behaviour.
-      expect(root.style.width.replace(/\s+/g, "")).toMatch(/(100%\*1\.5|150%)/);
-    });
-
-    it("leaves that tier alone while FITTING", () => {
-      // The control on the other side. A rule that zoomed whenever there was no
-      // requested width would scale the default view by whatever the fit
-      // produced, which is the behaviour this replaces rather than repeats.
-      const { container } = render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={PREVIEWABLE}
-          preview={{ container: "nx-preview-viewport" }}
-        />
-      );
-
-      expect(zoomOf(rootOf(container))).toBe("");
-    });
-
-    it("draws a chosen scale on a site that previews no viewport at all", () => {
-      /*
-       * Previewing needs a container name AND a site declaring viewport tiers,
-       * and the default configuration has neither — so there is no preview
-       * object, which is the state most sites are in. Nesting the scale inside
-       * that object left the control moving a number on screen and changing
-       * nothing for exactly those sites.
-       */
-      const { container } = render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={{ css: "", classes: {} } as never}
-          zoom={{ kind: "fixed", scale: 1.5 }}
-        />
-      );
-
-      expect(zoomOf(rootOf(container))).toBe("1.5");
-    });
-
-    it("refuses a scale it cannot paint at", () => {
-      /*
-       * `CanvasZoom` is exported, so a host can build one directly and never
-       * pass through the storage guard. Interpolated into a `zoom` declaration
-       * these produce either a rule the browser drops or a canvas beyond reach
-       * of the control that would undo it, so the check belongs where a scale
-       * is USED rather than only where one is parsed.
-       */
-      /*
-       * WITH a preview, which is the path the validation is load-bearing on.
-       * Without one the box style already declines to apply an unchosen scale,
-       * so a no-preview fixture passes whether or not the scale was checked —
-       * it cannot separate the two guards.
-       */
-      const previewing = atWidth(1280, { kind: "fixed", scale: Number.NaN });
-      region(912);
-      expect(zoomOf(rootOf(previewing.container))).not.toContain("NaN");
-      previewing.unmount();
-
-      for (const scale of [Number.NaN, Infinity, 0, 500]) {
-        const { container, unmount } = render(
-          <Canvas
-            document={
-              {
-                formatVersion: 1,
-                kind: "page",
-                nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-              } as never
-            }
-            siteStyles={{ css: "", classes: {} } as never}
-            zoom={{ kind: "fixed", scale }}
-          />
-        );
-        // Falls back to fitting, which paints nothing rather than painting a
-        // value the browser cannot use.
-        expect(zoomOf(rootOf(container))).toBe("");
-        unmount();
-      }
-    });
-
-    it("draws a CHOSEN scale where fitting would not have", () => {
-      /*
-       * The case the old shape could not express. A fit that needs no shrinking
-       * is left unzoomed and centred, so every scale at or above 1 took the
-       * `maxWidth` path — and no reading of `maxWidth` magnifies. Choosing 150%
-       * has to reach `zoom`, or the control moves a number on screen and
-       * nothing else.
-       */
-      const { container } = atWidth(600, { kind: "fixed", scale: 1.5 });
-      region(912);
-
-      const root = rootOf(container);
-      expect(zoomOf(root)).toBe("1.5");
-      // And NOT the fitting shape, which has no way to magnify.
-      expect(root.style.maxWidth).toBe("");
-    });
-
-    it("holds a chosen scale when the region changes under it", () => {
-      /*
-       * Choosing a scale means it stops moving when the panels do. Re-deriving
-       * it anyway is the defect this replaces: the canvas fell from 89% to
-       * 59.5% because a panel opened, with nothing said and no way back.
-       *
-       * The region is moved to a width that WOULD have produced a different
-       * fit, so a canvas still fitting reports something else here.
-       */
-      const { container } = atWidth(1280, { kind: "fixed", scale: 1 });
-      region(912);
-
-      const root = rootOf(container);
-      expect(zoomOf(root)).toBe("1");
-      expect(root.style.width).toBe("1280px");
-    });
-
-    it("leaves a tier that FITS unscaled and centred", () => {
-      /*
-       * The control, and it has to come out different or the case above says
-       * only that the canvas sets styles. A request the region can honour is
-       * not a simulation of anything and must stay pixel-exact: resampling it
-       * would soften a page the author is judging type and spacing on.
-       */
-      const { container } = atWidth(600);
-      region(912);
-
-      const root = rootOf(container);
-      expect(root.style.maxWidth).toBe("600px");
-      expect(root.style.marginInline).toBe("auto");
-      expect(zoomOf(root)).toBe("");
-      expect(root.style.width).toBe("");
-    });
-
-    it("does not scale before the region has been measured", () => {
-      /*
-       * Every mount runs this before the first measurement. A scale derived
-       * from an unmeasured region is `NaN`, which does not fail loudly — it
-       * paints the canvas nowhere and leaves nothing to aim at, on a surface
-       * that looks present in the tree.
-       */
-      const { container } = atWidth(1280);
-
-      const root = rootOf(container);
-      expect(zoomOf(root)).toBe("");
-      expect(root.style.maxWidth).toBe("1280px");
-    });
-
-    it("observes NOTHING extra when no width was asked for", () => {
-      // A canvas filling its region has no scale to derive, and an observer
-      // that exists to answer a question nobody asked still fires on every
-      // pane drag.
-      render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={PREVIEWABLE}
-          preview={{ container: "nx-preview-viewport" }}
-        />
-      );
-
-      expect(regionObserver()).toBeUndefined();
-    });
-  });
-
-  describe("where in the region a box narrower than it sits", () => {
-    /*
-     * Every case here asserts `marginInline`, and it is the whole subject
-     * rather than an incidental of one: measured in a browser, a 912px region
-     * leaves a half-scale box 228px of free space on each side WITH the margin
-     * and 456px on one side without it. The alignment is the only thing that
-     * differs, so nothing else in these cases can carry the assertion.
-     *
-     * The control is not here. "Previewing with no width" — in the box suite
-     * above — requires `marginInline` to be EMPTY, because a box that fills its
-     * region has no free space to distribute and a margin governing nothing
-     * misleads whoever reads the canvas root. That case and these are the two
-     * halves of the same rule, and a change that makes all of them agree has
-     * broken one of them.
-     */
-    it("centres a tier at the scale its author chose, not only where it fits", () => {
-      /*
-       * The tier is 600px in a 912px region either way. FITTING, the canvas
-       * centres it; the moment a scale is chosen the same tier took the branch
-       * below, which set a width and no margin — so touching the zoom control
-       * moved the page to the left edge without changing what it was showing.
-       *
-       * Asserted at 1 deliberately. A defect reported as "zooming out breaks
-       * centring" is really "choosing a scale breaks it", and 1 is the value
-       * that separates the two: at 1 nothing is magnified or shrunk, so a fix
-       * addressing only scales below 1 leaves this case exactly as it was.
-       */
-      const { container } = atWidth(600, { kind: "fixed", scale: 1 });
-      region(912);
-
-      const root = rootOf(container);
-      expect(root.style.width).toBe("600px");
-      expect(root.style.marginInline).toBe("auto");
-    });
-
-    it("keeps that tier centred at a scale below 1", () => {
-      // The reported case. Separate from the one above rather than a second
-      // assertion inside it, because they fail independently: the branch is
-      // shared but a fix guarded on `scale < 1` passes here and not there.
-      const { container } = atWidth(600, { kind: "fixed", scale: 0.5 });
-      region(912);
-
-      const root = rootOf(container);
-      expect(root.style.width).toBe("600px");
-      expect(root.style.marginInline).toBe("auto");
-    });
-
-    it("centres the widest tier when an author zooms out of it", () => {
-      /*
-       * The widest tier requests no width, so the box IS the region — until a
-       * scale is chosen, which pins the width and paints it smaller. That is
-       * the state the editor opens in, so it is where the zoom control is used
-       * most, and it reached a different branch from the case above.
-       */
-      const { container } = render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={PREVIEWABLE}
-          preview={{ container: "nx-preview-viewport" }}
-          zoom={{ kind: "fixed", scale: 0.5 }}
-        />
-      );
-
-      expect(rootOf(container).style.marginInline).toBe("auto");
-    });
-
-    it("centres a site that previews no viewport at all", () => {
-      // No container name and no declared tiers is the DEFAULT configuration,
-      // so this is the branch most sites take. It carries no preview object at
-      // all, which is why it is reached separately from every case above.
-      const { container } = render(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={{ css: "", classes: {} } as never}
-          zoom={{ kind: "fixed", scale: 0.5 }}
-        />
-      );
-
-      expect(rootOf(container).style.marginInline).toBe("auto");
-    });
-  });
-
-  /** A canvas previewing, with a reporter the test can read. */
-  function measured(onMeasured: (width: number | undefined) => void) {
-    return render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={PREVIEWABLE}
-        preview={{ container: "nx-preview-viewport", onMeasured }}
-      />
-    );
-  }
-
-  it("reports the box's CONTENT-box inline size", () => {
-    /*
-     * `contentBoxSize` rather than the bounding rect, because the editor
-     * applies a canvas zoom and the rect is the TRANSFORMED size. A container
-     * query asks the element's own layout size, so at any zoom but 100% the
-     * visual number names a different tier than the one the browser is
-     * applying — and the canvas would look right while the inspector wrote to
-     * the wrong breakpoint.
-     *
-     * The two are given DIFFERENT values here deliberately: equal ones would
-     * let an implementation reading either satisfy this.
-     */
-    const onMeasured = vi.fn();
-    measured(onMeasured);
-
-    FakeResizeObserver.last?.deliver({
-      contentBoxSize: [{ inlineSize: 900, blockSize: 500 }],
-      contentRect: { width: 450 } as DOMRectReadOnly,
-    });
-
-    expect(onMeasured).toHaveBeenCalledWith(900);
-  });
-
-  it("observes the canvas ROOT, which is the box the sheet queries", () => {
-    /*
-     * The element carrying the container name is the element the queries
-     * resolve against. Observing anything else would report a width that
-     * decides nothing — and would do it convincingly, since the number moves
-     * whenever the editor is resized.
-     */
-    const onMeasured = vi.fn();
-    const { container } = measured(onMeasured);
-
-    expect(FakeResizeObserver.last?.observed).toEqual([
-      container.querySelector(`.${CANVAS_ROOT_CLASS}`),
-    ]);
-  });
-
-  it("falls back to contentRect when contentBoxSize is absent", () => {
-    /*
-     * Polyfills and older engines expose only `contentRect`. Read as an array
-     * alone, they report `undefined` on every notification — and the caller
-     * cannot tell that from "nothing measured yet", so the canvas applies a
-     * narrower tier's rules while the inspector stays on base and the author's
-     * edits land in a breakpoint they are not looking at.
-     *
-     * `contentRect` is a LAYOUT size like `contentBoxSize`, so the canvas zoom
-     * does not scale it; it is a fallback, not a compromise.
-     */
-    const onMeasured = vi.fn();
-    measured(onMeasured);
-
-    FakeResizeObserver.last?.deliver({
-      contentRect: { width: 880 } as DOMRectReadOnly,
-    });
-
-    expect(onMeasured).toHaveBeenCalledWith(880);
-  });
-
-  it("reads contentBoxSize when it is a single object rather than a sequence", () => {
-    /*
-     * The spec settled on a sequence; Firefox shipped a single object first and
-     * that shape is still reachable. Indexing `[0]` on it yields `undefined`,
-     * which is the same silent stall as having no size at all.
-     */
-    const onMeasured = vi.fn();
-    measured(onMeasured);
-
-    FakeResizeObserver.last?.deliver({
-      contentBoxSize: { inlineSize: 640, blockSize: 480 } as never,
-    });
-
-    expect(onMeasured).toHaveBeenCalledWith(640);
-  });
-
-  it("says UNDEFINED rather than a number when the entry carries no size", () => {
-    /*
-     * An entry without `contentBoxSize` is a real answer from older engines,
-     * and `undefined` is what the caller must be told: it means nothing has
-     * been observed, which is the state where a caller must not name a tier.
-     * Reporting 0 instead would put the box in the narrowest tier the site
-     * defines.
-     */
-    const onMeasured = vi.fn();
-    measured(onMeasured);
-
-    FakeResizeObserver.last?.deliver({ contentBoxSize: [] });
-
-    expect(onMeasured).toHaveBeenCalledWith(undefined);
-  });
-
-  it("stops observing when the canvas goes away", () => {
-    /*
-     * The observer outlives the element otherwise, and reports into a caller
-     * whose surface has been unmounted.
-     */
-    const { unmount } = measured(vi.fn());
-    const observer = FakeResizeObserver.last;
-
-    unmount();
-
-    expect(observer?.disconnected).toBe(true);
-  });
-
-  it("reports UNDEFINED when the canvas goes away", () => {
-    /*
-     * The box is gone, so the last width it reported describes nothing.
-     *
-     * The editor unmounts this canvas whenever the site's stored styles stop
-     * being readable, which a cached query can do on a refocus long after the
-     * first measurement. Left standing, the caller keeps deriving a tier from a
-     * width no element has — so the inspector writes into that tier with no
-     * preview box on screen and the control that sets it disabled.
-     */
-    const onMeasured = vi.fn();
-    const { unmount } = measured(onMeasured);
-    FakeResizeObserver.last?.deliver({
-      contentBoxSize: [{ inlineSize: 900, blockSize: 500 }],
-    });
-    expect(onMeasured).toHaveBeenLastCalledWith(900);
-
-    unmount();
-
-    expect(onMeasured).toHaveBeenLastCalledWith(undefined);
-  });
-
-  it("compiles the sheet against the container the BOX establishes", () => {
-    /*
-     * Registered here, because this describe does not otherwise need blocks and
-     * an UNregistered type renders as a placeholder whose styles never compile
-     * — which would leave this asserting against an empty sheet and passing on
-     * the `not.toContain` half alone.
-     */
-    clearBlocks();
-    registerBlocks(
-      [
-        {
-          name: "acme/leaf",
-          version: 1,
-          description: "A block.",
-          example: { props: {} },
-          render: ({ className }: { className: string }) =>
-            createElement("div", { className }),
-        },
-      ] as never,
-      { source: "canvas-coupling-test" }
-    );
-    /*
-     * The two are one fact with two places to say it, and a caller saying it
-     * twice can say it differently. A box establishing `a` while the sheet was
-     * compiled against `b` observes and constrains a query container whose
-     * rules nothing wrote: the window decides what is rendered, the measured
-     * width decides what is reported, and nothing anywhere reads as wrong.
-     *
-     * Asserted against the EMITTED SHEET rather than against the props the
-     * canvas passed on, because the sheet is the artifact that either names
-     * this box or does not — comparing the canvas's own inputs to its own
-     * output would be two readings of one value.
-     *
-     * The host is given a DIFFERENT name deliberately, so this fails on a
-     * version that defaults rather than overwrites.
-     */
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [
-              {
-                id: "a",
-                type: "acme/leaf",
-                version: 1,
-                props: {},
-                styles: { base: { tablet: { color: "#f00" } } },
-              },
-            ],
-          } as never
-        }
-        siteStyles={{ css: "", classes: {} } as never}
-        preview={{ container: "nx-preview-box" }}
-        render={{
-          styleContext: {
-            breakpoints: {
-              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-              container: [],
-            },
-            previewContainer: "nx-preview-somewhere-else",
-          },
-        }}
-      />
-    );
-
-    // `forEach` rather than spreading: a `NodeList` is only iterable under a
-    // lib this package does not compile with, which `canvas.tsx` records for
-    // the same reason. The suite transpiles without type checking, so the
-    // spread ran green here and failed only under `tsc`.
-    const sheets: string[] = [];
-    container.querySelectorAll("style").forEach(node => {
-      sheets.push(node.textContent ?? "");
-    });
-    const sheet = sheets.join("\n");
-
-    expect(sheet).toContain("@container nx-preview-box");
-    expect(sheet).not.toContain("nx-preview-somewhere-else");
-    // And the element the queries resolve against is the same one.
-    const box = container.querySelector(`.${CANVAS_ROOT_CLASS}`);
-    expect((box as HTMLElement | null)?.style.containerName).toBe(
-      "nx-preview-box"
-    );
-    clearBlocks();
-  });
-
-  it("compiles the SITE sheet against the box as well as the page's", () => {
-    /*
-     * Two tiers emit breakpoint rules, not one: the page's node styles and the
-     * site's named classes. Bound on only the page tier, a class's tablet rule
-     * stays an `@media` answered by the WINDOW while the node's tablet rule
-     * became a `@container` answered by the box — so narrowing the canvas moves
-     * one and not the other, and a block styled by a class does not respond at
-     * all.
-     *
-     * Driven through `siteStyles` with NO `render.styleContext`, which is the
-     * stored-artifact path a host can legitimately use, and the branch the page
-     * tier's coupling skips.
-     */
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={
-          {
-            breakpoints: {
-              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-              container: [],
-            },
-            classes: [
-              {
-                id: "c1",
-                slug: "card",
-                styles: { base: { tablet: { color: "#f00" } } },
-              },
-            ],
-          } as never
-        }
-        preview={{ container: "nx-preview-box" }}
-      />
-    );
-
-    const sheets: string[] = [];
-    container.querySelectorAll("style").forEach(node => {
-      sheets.push(node.textContent ?? "");
-    });
-    const sheet = sheets.join("\n");
-
-    expect(sheet).toContain("@container nx-preview-box");
-    // The published form must NOT survive beside it: a sheet carrying both
-    // would answer the same tier from two different boxes.
-    expect(sheet).not.toContain("@media (max-width: 991px)");
-  });
-
-  it("leaves the SITE sheet alone when the canvas is not previewing", () => {
-    /*
-     * The control. Without it, a canvas that rewrote the site sheet
-     * unconditionally would satisfy the case above while turning every
-     * published canvas into a preview one.
-     */
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={
-          {
-            breakpoints: {
-              viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-              container: [],
-            },
-            classes: [
-              {
-                id: "c1",
-                slug: "card",
-                styles: { base: { tablet: { color: "#f00" } } },
-              },
-            ],
-          } as never
-        }
-      />
-    );
-
-    const sheets: string[] = [];
-    container.querySelectorAll("style").forEach(node => {
-      sheets.push(node.textContent ?? "");
-    });
-    const sheet = sheets.join("\n");
-
-    expect(sheet).toContain("@media (max-width: 991px)");
-    expect(sheet).not.toContain("@container");
-  });
-
-  it("neither constrains nor measures when the NAME is refused", () => {
-    /*
-     * `previewContainerStyle` turns down a reserved name, so no query container
-     * exists and the sheet falls back to published `@media`. A box that went on
-     * narrowing and measuring itself would then resize without changing a
-     * single tier — and a caller deriving an edit target from the measurement
-     * would write to a breakpoint the canvas is not displaying.
-     *
-     * A refused name is therefore not a preview at all, for the width and the
-     * measurement as much as for the container.
-     */
-    const onMeasured = vi.fn();
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={PREVIEWABLE}
-        preview={{ container: "none", width: 991, onMeasured }}
-      />
-    );
-
-    const style = (
-      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
-    )?.style;
-    expect(style?.containerName).toBe("");
-    expect(style?.maxWidth).toBe("");
-    expect(FakeResizeObserver.last).toBeUndefined();
-  });
-
-  it("does not report a removal when the CALLBACK identity changes", () => {
-    /*
-     * A host writing `onMeasured={w => setWidth(w)}` inline hands a new
-     * function every render. If the observer effect depended on it, each real
-     * measurement would update the parent, produce a new identity, tear the
-     * observer down — reporting `undefined` as if the canvas had gone — and
-     * rebuild it, so the derived tier oscillates and the churn can sustain a
-     * render loop, on a host that did nothing wrong.
-     *
-     * Asserted as "never called with undefined while mounted" rather than on a
-     * call count, because the count is allowed to grow: what must not happen is
-     * the false removal.
-     */
-    const onMeasured = vi.fn();
-    const view = measured(onMeasured);
-    FakeResizeObserver.last?.deliver({
-      contentBoxSize: [{ inlineSize: 900, blockSize: 500 }],
-    });
-
-    // A re-render with a BRAND NEW callback identity, which is what an inline
-    // arrow produces.
-    React.act(() => {
-      view.rerender(
-        <Canvas
-          document={
-            {
-              formatVersion: 1,
-              kind: "page",
-              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-            } as never
-          }
-          siteStyles={PREVIEWABLE}
-          preview={{
-            container: "nx-preview-viewport",
-            onMeasured: (width: number | undefined) => onMeasured(width),
-          }}
-        />
-      );
-    });
-
-    expect(onMeasured).not.toHaveBeenCalledWith(undefined);
-  });
-
-  it("tells the CURRENT reporter about the removal, not the one it started with", () => {
-    /*
-     * The effect deliberately does not re-run when the callback identity
-     * changes, so the reporter captured when the observer was built can be
-     * stale by the time the canvas goes away. Notifying that one leaves the
-     * host that is actually listening holding the last real width, deriving a
-     * tier from a box that no longer exists — the same stale-measurement bug
-     * the removal notice was added to prevent, arrived at one layer down.
-     */
-    const first = vi.fn();
-    const second = vi.fn();
-    const tree = (report: (width: number | undefined) => void) => (
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={PREVIEWABLE}
-        preview={{ container: "nx-preview-viewport", onMeasured: report }}
-      />
-    );
-
-    const view = render(tree(first));
-    React.act(() => {
-      view.rerender(tree(second));
-    });
-    view.unmount();
-
-    expect(second).toHaveBeenCalledWith(undefined);
-    expect(first).not.toHaveBeenCalledWith(undefined);
-  });
-
-  it("does not preview when there is nowhere to BIND the container", () => {
-    /*
-     * A preview has exactly two binding sites: the page tier's style context
-     * and the site tier's sheet. `siteStyles={false}` opts out of the shared
-     * sheet and no `styleContext` is the stored-artifact path — so nothing is
-     * compiled against this box, its viewport rules stay `@media` and follow
-     * the window, and a box that established a container and reported its width
-     * anyway would have a caller deriving edits for a tier the canvas is not
-     * displaying.
-     *
-     * The name here is perfectly VALID, which is what separates this from the
-     * refused-name case: the failure is having nowhere to put it.
-     */
-    const onMeasured = vi.fn();
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={false as never}
-        preview={{
-          container: "nx-preview-viewport",
-          width: 991,
-          onMeasured,
-        }}
-      />
-    );
-
-    const style = (
-      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
-    )?.style;
-    expect(style?.containerName).toBe("");
-    expect(style?.maxWidth).toBe("");
-    expect(FakeResizeObserver.last).toBeUndefined();
-  });
-
-  it("stays PUBLISHED for a set with no viewport tier to simulate", () => {
-    /*
-     * A preview compile rewrites every container-axis rule to
-     * `@container nx-not-previewable (width < 0px)`, which matches nothing.
-     * With viewport tiers to gain that is a fair trade; with none it costs a
-     * container-only site every breakpoint it has on the canvas while they keep
-     * working on the published page.
-     *
-     * Decided HERE rather than at one mount, so every consumer of this API gets
-     * it. The container name is valid and the sheet is bindable — the only
-     * thing missing is anything to simulate.
-     */
-    const onMeasured = vi.fn();
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={
-          {
-            css: "",
-            classes: {},
-            breakpoints: {
-              viewport: [],
-              container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
-            },
-          } as never
-        }
-        preview={{ container: "nx-preview-viewport", width: 991, onMeasured }}
-      />
-    );
-
-    const style = (
-      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
-    )?.style;
-    expect(style?.containerName).toBe("");
-    expect(style?.maxWidth).toBe("");
-    expect(FakeResizeObserver.last).toBeUndefined();
-  });
-
-  it("decides from the SITE's breakpoints, which are the ones that compile", () => {
-    /*
-     * `sharedStyleInputs` resolves `breakpoints` as
-     * `firstStated(stored.breakpoints, route.breakpoints)` — the site tier
-     * wins, "because stored overrides code, which is the layering every
-     * global-styles system uses".
-     *
-     * Read the other way round, a route context carrying viewport tiers beside
-     * a container-only stored set turns preview ON, and the compile that
-     * actually runs then disables every container-axis rule as
-     * `nx-not-previewable` with no viewport tier to show for it — the exact
-     * loss the eligibility rule exists to prevent, caused by deciding it from
-     * inputs the renderer does not use.
-     *
-     * The two sets DISAGREE here deliberately: equal ones could not tell which
-     * was consulted.
-     */
-    const onMeasured = vi.fn();
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={
-          {
-            css: "",
-            classes: {},
-            breakpoints: {
-              viewport: [],
-              container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
-            },
-          } as never
-        }
-        render={
-          {
-            styleContext: {
-              breakpoints: {
-                viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-                container: [],
-              },
-            },
-          } as never
-        }
-        preview={{ container: "nx-preview-viewport", width: 991, onMeasured }}
-      />
-    );
-
-    const style = (
-      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
-    )?.style;
-    expect(style?.containerName).toBe("");
-    expect(FakeResizeObserver.last).toBeUndefined();
-  });
-
-  it("treats a stated NULL breakpoint set as the site having none", () => {
-    /*
-     * `firstStated` is `find(tier => tier !== undefined)`, so a stored `null` —
-     * which runtime or imported data can supply — is KEPT by the renderer and
-     * read as defining no viewport tiers. Nullish coalescing falls through to
-     * the route set instead, turning preview on for a canvas the renderer left
-     * on the unconditional tier: the box then measures and selects a route tier
-     * that is not on screen.
-     *
-     * The route set carries a viewport tier deliberately, so the two readings
-     * give opposite answers.
-     */
-    const onMeasured = vi.fn();
-    const { container } = render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={{ css: "", classes: {}, breakpoints: null } as never}
-        render={
-          {
-            styleContext: {
-              breakpoints: {
-                viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-                container: [],
-              },
-            },
-          } as never
-        }
-        preview={{ container: "nx-preview-viewport", width: 991, onMeasured }}
-      />
-    );
-
-    const style = (
-      container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement | null
-    )?.style;
-    expect(style?.containerName).toBe("");
-    expect(FakeResizeObserver.last).toBeUndefined();
-  });
-
-  it("does not re-render the page when only the box WIDTH changes", () => {
-    /*
-     * The width changes on every switcher selection and alters no emitted rule,
-     * but rebuilding the compile inputs rebuilds the rendered page — which
-     * re-runs `PageRenderer` and recompiles the document and site sheet
-     * synchronously. On a large document that is a whole compile per width
-     * change, and continuous resizing pays it per frame.
-     *
-     * Counted at a BLOCK's own render function, which is the only thing here
-     * that runs if and only if the page re-rendered. Asserting on DOM identity
-     * would not do it: React reuses the element across a re-render, so the node
-     * is the same whether the page was rebuilt or not — measured, that version
-     * of this case passed against the defect.
-     */
-    let drawn = 0;
-    clearBlocks();
-    registerBlocks(
-      [
-        {
-          name: "acme/counted",
-          version: 1,
-          description: "A block that reports being drawn.",
-          example: { props: {} },
-          render: ({ className }: { className: string }) => {
-            drawn += 1;
-            return createElement("div", { className });
-          },
-        },
-      ] as never,
-      { source: "canvas-memo-test" }
-    );
-
-    /*
-     * ONE document object across both renders. The rendered page is memoised on
-     * the document's identity, so a fresh literal per render rebuilds it for a
-     * reason that has nothing to do with the width — measured, that version of
-     * this fixture reported the defect while the code was correct.
-     */
-    const doc = {
-      formatVersion: 1,
-      kind: "page",
-      nodes: [{ id: "a", type: "acme/counted", version: 1, props: {} }],
-    } as never;
-    const tree = (width: number | undefined) => (
-      <Canvas
-        document={doc}
-        siteStyles={PREVIEWABLE}
-        preview={{
-          container: "nx-preview-viewport",
-          ...(width === undefined ? {} : { width }),
-        }}
-      />
-    );
-    const view = render(tree(undefined));
-    const before = drawn;
-    expect(before).toBeGreaterThan(0);
-
-    React.act(() => {
-      view.rerender(tree(640));
-    });
-
-    expect(drawn).toBe(before);
-    // And the width really did change, or this proves nothing.
-    expect(
-      (view.container.querySelector(`.${CANVAS_ROOT_CLASS}`) as HTMLElement)
-        .style.maxWidth
-    ).toBe("640px");
-    clearBlocks();
-  });
-
-  it("observes NOTHING when no reporter was given", () => {
-    /*
-     * The control. Without it, an implementation that observed unconditionally
-     * would satisfy every case above while costing a `ResizeObserver` to every
-     * canvas that is not previewing.
-     */
-    render(
-      <Canvas
-        document={
-          {
-            formatVersion: 1,
-            kind: "page",
-            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-          } as never
-        }
-        siteStyles={PREVIEWABLE}
-        preview={{ container: "nx-preview-viewport" }}
-      />
-    );
-
-    expect(FakeResizeObserver.last).toBeUndefined();
-  });
-});
-
-describe("reporting the scale to a host that keeps changing its mind", () => {
-  /**
-   * The document every case here draws, which is beside the point in all of
-   * them: what varies is the reporter, not what is under it.
-   */
-  const DOCUMENT = {
-    formatVersion: 1,
-    kind: "page",
-    nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
-  } as never;
-
-  it("does not report again when only the reporter's IDENTITY changed", () => {
-    /*
-     * The conventional host writes the reporter inline, so every render of it
-     * hands the canvas a new function. Depended on directly, each report would
-     * update the host, the update would produce a new identity, and the new
-     * identity would report again — a render loop on a host that did nothing
-     * wrong. Two renders with the same scale must produce ONE report.
-     */
-    const reports: number[] = [];
-    const view = render(
-      <Canvas
-        document={DOCUMENT}
-        siteStyles={PREVIEWABLE}
-        zoom={{ kind: "fixed", scale: 1.5 }}
-        onScale={scale => reports.push(scale)}
-      />
-    );
-
-    expect(reports).toEqual([1.5]);
-
-    view.rerender(
-      <Canvas
-        document={DOCUMENT}
-        siteStyles={PREVIEWABLE}
-        zoom={{ kind: "fixed", scale: 1.5 }}
-        onScale={scale => reports.push(scale)}
-      />
-    );
-
-    expect(reports).toEqual([1.5]);
-  });
-
-  it("reports the CURRENT scale to a reporter that arrives late", () => {
-    /*
-     * A host can resolve its reporter from its own state, so the prop moves
-     * from `undefined` to a function after the canvas has already settled on a
-     * scale. Keyed on the scale alone the effect would not re-run at that
-     * moment, and the host would hold its initial guess until the author
-     * happened to pick a different zoom.
-     *
-     * The scale is deliberately NOT 1 here: a reporter told `1` cannot be
-     * distinguished from one told the default, so the case would pass against
-     * an implementation that reports nothing and a host that assumed.
-     */
-    const reports: number[] = [];
-    const view = render(
-      <Canvas
-        document={DOCUMENT}
-        siteStyles={PREVIEWABLE}
-        zoom={{ kind: "fixed", scale: 1.5 }}
-      />
-    );
-
-    view.rerender(
-      <Canvas
-        document={DOCUMENT}
-        siteStyles={PREVIEWABLE}
-        zoom={{ kind: "fixed", scale: 1.5 }}
-        onScale={scale => reports.push(scale)}
-      />
-    );
-
-    expect(reports).toEqual([1.5]);
-  });
-
-  it("reports each scale the canvas actually takes", () => {
-    // The control for both cases above: an implementation that never reported
-    // after the first render would satisfy the identity case, and one that
-    // reported on every render would satisfy the arrival case.
-    const reports: number[] = [];
-    const onScale = (scale: number) => reports.push(scale);
-    const view = render(
-      <Canvas
-        document={DOCUMENT}
-        siteStyles={PREVIEWABLE}
-        zoom={{ kind: "fixed", scale: 1.5 }}
-        onScale={onScale}
-      />
-    );
-
-    view.rerender(
-      <Canvas
-        document={DOCUMENT}
-        siteStyles={PREVIEWABLE}
-        zoom={{ kind: "fixed", scale: 0.75 }}
-        onScale={onScale}
-      />
-    );
-
-    expect(reports).toEqual([1.5, 0.75]);
-  });
-});
-
 describe("forcing the interaction state the panel is editing", () => {
   beforeAll(() => {
     clearBlocks();
@@ -2880,6 +1334,24 @@ describe("the drag in flight is drawn on the canvas", () => {
           render: ({ className }: { className: string }) =>
             createElement("div", { className }),
         },
+        {
+          // Draws a part the way a component placement's definition does: a
+          // re-minted node id the page does not hold, carrying the
+          // placement's address as its instance.
+          name: "acme/placement",
+          version: 1,
+          description: "A block drawn from a definition.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                [NODE_ID_ATTRIBUTE]: "minted-part",
+                [INSTANCE_ATTRIBUTE]: "card",
+              })
+            ),
+        },
       ] as never,
       { source: "canvas-drag-marks-test" }
     );
@@ -2907,6 +1379,9 @@ describe("the drag in flight is drawn on the canvas", () => {
         document={page as never}
         siteStyles={{ css: "", classes: {} } as never}
         drag={drag}
+        // The refusal is chrome, drawn wherever the canvas's chrome is: here,
+        // a canvas in this document, inside its root.
+        overlay={<DropRefusal drag={drag} document={page as never} />}
       />
     );
   }
@@ -2971,10 +1446,10 @@ describe("the drag in flight is drawn on the canvas", () => {
 
     // The whole point of the row: the reason the engine computed reaches the
     // author, in words, naming the container and what it would accept.
-    expect(getByText("Box does not take a Leaf.")).toBeTruthy();
+    expect(getByText("A Leaf can't go inside this Box.")).toBeTruthy();
     // `wrong-parent` carries the MOVING block's valid parents, so the remedy
     // says where the leaf can go — never that the box accepts a Twice.
-    expect(getByText("Leaf goes inside Twice")).toBeTruthy();
+    expect(getByText("A Leaf goes inside a Twice.")).toBeTruthy();
   });
 
   it("draws no refusal while a target is still committed", async () => {
@@ -3011,7 +1486,7 @@ describe("the drag in flight is drawn on the canvas", () => {
       container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)
     ).not.toBeNull();
     expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
-    expect(queryByText(/does not take/)).toBeNull();
+    expect(queryByText(/can't go/)).toBeNull();
   });
 
   it("draws no drag marks at all when no drag is supplied", async () => {
@@ -3115,6 +1590,89 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
   });
 
+  it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {
+    /*
+     * A placement's parts carry a re-minted node id plus the placement's
+     * address. Read by the raw id, the lock finds nothing for them and the
+     * selection ring the marks draw from a part is solid, as for an unlocked
+     * block; read by the address, as the selection is, they are locked.
+     */
+    const { container } = draw(undefined, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "card",
+          type: "acme/placement",
+          version: 1,
+          props: {},
+          locked: true,
+        },
+        { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+      ],
+    });
+    await act(async () => undefined);
+
+    const part = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="minted-part"]`
+    );
+    expect(part?.getAttribute(LOCKED_ATTRIBUTE)).toBe("own");
+    // The control: an unlocked block beside it is not marked.
+    expect(
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="leaf"]`)
+        ?.hasAttribute(LOCKED_ATTRIBUTE)
+    ).toBe(false);
+  });
+
+  it("marks a block's own lock and a lock it is held by from around it apart", async () => {
+    // A block inside a locked one is locked too: it is marked `inherited`,
+    // so the canvas can say so without claiming a lock of its own. The marks
+    // come from one walk of the document; the element carries the value.
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          locked: true,
+          slots: {
+            children: [
+              {
+                id: "inner",
+                type: "acme/box",
+                version: 1,
+                props: {},
+                slots: {
+                  children: [
+                    { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        { id: "free", type: "acme/leaf", version: 1, props: {} },
+      ],
+    };
+    expect([...lockMarksOf(page as never)]).toEqual([
+      ["box", "own"],
+      ["inner", "inherited"],
+      ["leaf", "inherited"],
+    ]);
+
+    const { container } = draw(undefined, page);
+    await act(async () => undefined);
+    expect(
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="box"]`)
+        ?.getAttribute(LOCKED_ATTRIBUTE)
+    ).toBe("own");
+  });
+
   it("clears a drag mark from an element that has LOST its node id", async () => {
     /*
      * The stale-mark case, driven at the DOM the way its selection neighbour is.
@@ -3151,5 +1709,708 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(
       document.querySelectorAll(`[${DRAG_SOURCE_ATTRIBUTE}]`)
     ).toHaveLength(1);
+  });
+});
+
+describe("a link drawn on the canvas", () => {
+  /*
+   * The canvas draws a block's link as a real anchor, so the browser's own
+   * default for a click on it is to follow it — out of the editor, away from
+   * unsaved work. The click must still select the block.
+   */
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/link",
+          version: 1,
+          description: "A linked block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("a", { className, href: "/signup" }, "Sign up"),
+        },
+      ] as never,
+      { source: "canvas-link-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  it("selects the block and does not follow the link", () => {
+    const onSelect = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "cta", type: "acme/link", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        onSelect={onSelect as never}
+      />
+    );
+    const link = container.querySelector("a[href]");
+    if (link === null) throw new Error("expected the block's link");
+
+    // `fireEvent` answers false when a listener cancelled the default.
+    const followed = fireEvent.click(link);
+
+    expect(followed).toBe(false);
+    expect(onSelect).toHaveBeenCalledWith("cta", "replace");
+  });
+
+  it("leaves a link in the editor's chrome over the canvas working", () => {
+    const { container } = render(
+      <Canvas
+        document={{ formatVersion: 1, kind: "page", nodes: [] } as never}
+        siteStyles={{ css: "", classes: {} } as never}
+        overlay={
+          <div {...{ [CHROME_ATTRIBUTE]: "" }}>
+            <a href="/help">Help</a>
+          </div>
+        }
+      />
+    );
+    const help = container.querySelector('a[href="/help"]');
+    if (help === null) throw new Error("expected the overlay's link");
+
+    expect(fireEvent.click(help)).toBe(true);
+  });
+});
+
+describe("the site's dark-mode strategy on the canvas root", () => {
+  /*
+   * The stylesheet darkens the canvas page's scheme with the system only for a
+   * site on the `media` strategy, and only the token set says which strategy
+   * that is. So the root carries it — on `data-nx-site-dark-ground`, beside
+   * the dark ground the default token set gives every site here — and carries
+   * the DEFAULT when a site states none: an absent strategy is `attribute`,
+   * which the system's scheme never reaches.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function strategyOf(siteStyles: SiteSheetInput | false): string | null {
+    const { container } = render(
+      <Canvas document={page} siteStyles={siteStyles} />
+    );
+    return (
+      container
+        .querySelector(`.${CANVAS_ROOT_CLASS}`)
+        ?.getAttribute("data-nx-site-dark-ground") ?? null
+    );
+  }
+
+  it("marks a dark ground whatever the deprecated darkMode says", () => {
+    // The site sheet applies dark values with the device whatever a stored
+    // `darkMode` names, so the canvas marks the dark ground the same way.
+    for (const darkMode of ["media", "attribute", undefined] as const) {
+      expect(
+        strategyOf({
+          breakpoints,
+          tokens: {
+            tokens: [],
+            ...(darkMode === undefined ? {} : { darkMode }),
+          },
+        }),
+        String(darkMode)
+      ).toBe("");
+    }
+    expect(strategyOf({ breakpoints })).toBe("");
+  });
+
+  it("states nothing when the host serves no site sheet", () => {
+    expect(strategyOf(false)).toBeNull();
+  });
+});
+
+describe("the elements standing for an address", () => {
+  it("leaves out a nested canvas's elements, whose ids are its own document's", () => {
+    // Component edit mode draws a canvas inside a block. Ids are scoped per
+    // document, so the inner one may hold the same address as a block out
+    // here; it is not this canvas's to measure.
+    const root = document.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    root.innerHTML = `
+      <div data-nx-node="a" id="outer"></div>
+      <div data-nx-node="host">
+        <div class="${CANVAS_ROOT_CLASS}">
+          <div data-nx-node="a" id="inner"></div>
+        </div>
+      </div>`;
+    document.body.append(root);
+    try {
+      const found = outermostElementsOf(root, new Set(["a"])).get("a") ?? [];
+      expect(found.map(element => element.id)).toEqual(["outer"]);
+    } finally {
+      root.remove();
+    }
+  });
+});
+
+describe("the nearest theme marker above the canvas", () => {
+  /*
+   * The site's token values resolve to the NEAREST `data-nx-theme` marker,
+   * because the sheet declares them on each marker and custom properties
+   * inherit. The canvas states the same nearest marker, read from the DOM, so
+   * its scheme cannot disagree with its values at any depth of nesting.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function mountUnder(markers: readonly ("light" | "dark")[]): {
+    root: () => Element | null;
+    chain: HTMLElement[];
+  } {
+    const chain: HTMLElement[] = [];
+    let parent: HTMLElement = document.body;
+    for (const mode of markers) {
+      const wrapper = document.createElement("div");
+      wrapper.setAttribute("data-nx-theme", mode);
+      parent.append(wrapper);
+      chain.push(wrapper);
+      parent = wrapper;
+    }
+    const mount = document.createElement("div");
+    parent.append(mount);
+    render(<Canvas document={page} siteStyles={{ breakpoints }} />, {
+      container: mount,
+    });
+    return {
+      root: () => mount.querySelector(`.${CANVAS_ROOT_CLASS}`),
+      chain,
+    };
+  }
+
+  it("states the nearest marker through three alternations", async () => {
+    const { root, chain } = mountUnder(["light", "dark", "light"]);
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("light")
+    );
+    chain[2]?.setAttribute("data-nx-theme", "dark");
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("dark")
+    );
+    chain[2]?.removeAttribute("data-nx-theme");
+    // With the nearest gone, the next one out decides.
+    await waitFor(() =>
+      expect(root()?.getAttribute("data-nx-site-theme")).toBe("dark")
+    );
+  });
+
+  it("states the marker in the commit that mounts the canvas, before paint", () => {
+    // A parent's layout effect runs after its children's in the same commit
+    // and before any passive effect, so it sees what the first paint shows.
+    const marker = document.createElement("div");
+    marker.setAttribute("data-nx-theme", "dark");
+    document.body.append(marker);
+    const mount = document.createElement("div");
+    marker.append(mount);
+    let atCommit: string | null | undefined;
+    function Probe(): React.JSX.Element {
+      const holder = React.useRef<HTMLDivElement>(null);
+      React.useLayoutEffect(() => {
+        atCommit = holder.current
+          ?.querySelector(`.${CANVAS_ROOT_CLASS}`)
+          ?.getAttribute("data-nx-site-theme");
+      }, []);
+      return (
+        <div ref={holder}>
+          <Canvas document={page} siteStyles={{ breakpoints }} />
+        </div>
+      );
+    }
+    render(<Probe />, { container: mount });
+    expect(atCommit).toBe("dark");
+  });
+
+  it("states nothing when no marker is above it, so the device decides", async () => {
+    const { root } = mountUnder([]);
+    await waitFor(() => expect(root()).not.toBeNull());
+    expect(root()?.hasAttribute("data-nx-site-theme")).toBe(false);
+  });
+});
+
+describe("the site's body font on the canvas root", () => {
+  /*
+   * The stylesheet sets the page in `--nx-canvas-site-font`, and the root
+   * states which token property that is. The property's name depends on the
+   * prefix the site's tokens are emitted under, so a hard-coded `--site-` left
+   * a site under another prefix in the fallback face.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function fontOf(
+    siteStyles: SiteSheetInput | false,
+    routePrefix?: string
+  ): string {
+    const { container } = render(
+      <Canvas
+        document={page}
+        siteStyles={siteStyles}
+        {...(routePrefix === undefined
+          ? {}
+          : {
+              render: {
+                styleContext: { breakpoints, tokenPrefix: routePrefix },
+              },
+            })}
+      />
+    );
+    const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+    return root?.style.getPropertyValue("--nx-canvas-site-font") ?? "";
+  }
+
+  it("names the body font under the token set's prefix", () => {
+    expect(
+      fontOf({ breakpoints, tokens: { tokens: [], prefix: "--brand-" } })
+    ).toBe("var(--brand-font-body, system-ui)");
+  });
+
+  it("lets the sheet's own prefix win, as the sheet compiler does", () => {
+    expect(
+      fontOf({
+        breakpoints,
+        tokenPrefix: "--acme-",
+        tokens: { tokens: [], prefix: "--brand-" },
+      })
+    ).toBe("var(--acme-font-body, system-ui)");
+  });
+
+  it("takes the route context's prefix when the site states none, as the renderer does", () => {
+    /*
+     * The renderer reconciles the route's prefix into the sheet it emits when
+     * the site states none, so the body font is declared under it. Reading the
+     * site input alone named `--site-font-body`, which nothing declared.
+     */
+    expect(fontOf({ breakpoints }, "--route-")).toBe(
+      "var(--route-font-body, system-ui)"
+    );
+    // The site's own prefix still outranks the route's, as in the sheet.
+    expect(
+      fontOf(
+        { breakpoints, tokens: { tokens: [], prefix: "--brand-" } },
+        "--route-"
+      )
+    ).toBe("var(--brand-font-body, system-ui)");
+  });
+
+  it("uses the default prefix when the site states none", () => {
+    expect(fontOf({ breakpoints })).toBe("var(--site-font-body, system-ui)");
+  });
+
+  it("states nothing when the host serves no site sheet", () => {
+    expect(fontOf(false)).toBe("");
+  });
+});
+
+describe("the site's ground and text on the canvas root", () => {
+  /*
+   * The page is drawn from the site's own background and text tokens, named
+   * under the prefix the renderer emits them with, and its colour scheme goes
+   * dark only where the site's dark values include a dark ground. The
+   * strategy alone says when dark values apply, not that the page is dark.
+   */
+  const page: BlockDocument = { formatVersion: 1, kind: "page", nodes: [] };
+  const breakpoints = { viewport: [], container: [] };
+
+  function rootOf(siteStyles: SiteSheetInput | false): HTMLElement | null {
+    const { container } = render(
+      <Canvas document={page} siteStyles={siteStyles} />
+    );
+    return container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+  }
+
+  it("names the background and text tokens under the site's prefix", () => {
+    const root = rootOf({
+      breakpoints,
+      tokens: { tokens: [], prefix: "--brand-" },
+    });
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe(
+      "var(--brand-color-background, Canvas)"
+    );
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ink")).toBe(
+      "var(--brand-color-text, CanvasText)"
+    );
+  });
+
+  it("marks a dark ground when the site's background has a dark value", () => {
+    // The default token set gives the background a dark value of its own.
+    expect(
+      rootOf({ breakpoints })?.hasAttribute("data-nx-site-dark-ground")
+    ).toBe(true);
+  });
+
+  it("marks no dark ground when the site's dark values keep it light", () => {
+    const light = (dark?: string): SiteSheetInput => ({
+      breakpoints,
+      tokens: {
+        darkMode: "media",
+        tokens: [
+          {
+            name: "color.background",
+            kind: "color",
+            values:
+              dark === undefined
+                ? { light: "#ffffff" }
+                : { light: "#ffffff", dark },
+          },
+        ],
+      },
+    });
+    // A background with no dark value, and one whose dark value is light.
+    expect(rootOf(light())?.hasAttribute("data-nx-site-dark-ground")).toBe(
+      false
+    );
+    expect(
+      rootOf(light("#f3f4f6"))?.hasAttribute("data-nx-site-dark-ground")
+    ).toBe(false);
+  });
+
+  it("judges oklch and hsl grounds by their lightness", () => {
+    // Tailwind themes write oklch, shadcn-style themes hsl; a dark ground in
+    // either is dark, and a light one is not.
+    const marked = (dark: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-dark-ground");
+    expect(marked("oklch(0.145 0 0)")).toBe(true);
+    expect(marked("oklch(14.5% 0 0)")).toBe(true);
+    expect(marked("hsl(222 47% 11%)")).toBe(true);
+    expect(marked("hsl(222, 47%, 11%)")).toBe(true);
+    expect(marked("oklch(0.98 0 0)")).toBe(false);
+    expect(marked("hsl(0 0% 98%)")).toBe(false);
+  });
+
+  it("marks no dark ground for a translucent dark value", () => {
+    /*
+     * A colour with alpha below 1 has no lightness of its own: what shows is
+     * the surface behind it, which the canvas cannot see. So it is unknown,
+     * not dark, in every syntax the ground is read in.
+     */
+    const marked = (dark: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-dark-ground");
+    for (const dark of [
+      "#0000",
+      "#00000080",
+      "rgba(0, 0, 0, 0)",
+      "rgb(0 0 0 / 50%)",
+      "oklch(0.145 0 0 / 0.5)",
+      "oklch(14.5% 0 0 / 50%)",
+      "hsl(222 47% 11% / 0.4)",
+      "hsla(222, 47%, 11%, 0.4)",
+      // Signed and exponent alphas, which CSS reads as numbers like any other.
+      "oklch(0.145 0 0 / +0.5)",
+      "oklch(0.145 0 0 / 5e-1)",
+      "hsl(222 47% 11% / -0.5)",
+      "hsla(222, 47%, 11%, 5e-1)",
+    ]) {
+      expect(marked(dark), dark).toBe(false);
+    }
+    // Fully opaque, in the same syntaxes, is still judged by its lightness.
+    for (const dark of [
+      "#000f",
+      "rgba(0, 0, 0, 1)",
+      "oklch(0.145 0 0 / 1)",
+      "hsl(222 47% 11% / 100%)",
+      "hsla(222, 47%, 11%, 1)",
+      // The same grammar for every component, and an alpha above 1 clamps.
+      "oklch(1.45e-1 0 0 / 1e0)",
+      "oklch(0.145 0 0 / +2)",
+      "hsl(222 47% 1.1e1%)",
+      "hsl(222 47 11)",
+    ]) {
+      expect(marked(dark), dark).toBe(true);
+    }
+  });
+
+  it("marks no dark ground when it cannot read the dark value", () => {
+    // A valid colour this engine does not parse says nothing about luminance,
+    // so the canvas keeps the page's light default rather than guessing dark.
+    for (const dark of [
+      "white",
+      "color-mix(in srgb, white, black)",
+      "var(--elsewhere)",
+    ]) {
+      const site: SiteSheetInput = {
+        breakpoints,
+        tokens: {
+          darkMode: "media",
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff", dark },
+            },
+          ],
+        },
+      };
+      expect(rootOf(site)?.hasAttribute("data-nx-site-dark-ground")).toBe(
+        false
+      );
+    }
+  });
+
+  it("marks the ground opaque only when every value of it is", () => {
+    /*
+     * The page root repeats an opaque ground so a blend inside the isolated
+     * page mixes with it; a translucent one repeated would be composited
+     * twice. So the canvas states which it has, from the same token set.
+     */
+    const opaque = (light: string, dark?: string): boolean | undefined =>
+      rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: dark === undefined ? { light } : { light, dark },
+            },
+          ],
+        },
+      })?.hasAttribute("data-nx-site-ground-opaque");
+    expect(opaque("#ffffff", "#0b0f19")).toBe(true);
+    expect(opaque("white")).toBe(true);
+    expect(opaque("oklch(0.98 0 0)", "hsl(222 47% 11% / 1)")).toBe(true);
+    expect(opaque("rgb(0 0 0 / 50%)")).toBe(false);
+    expect(opaque("#ffffff", "#0b0f1980")).toBe(false);
+    expect(opaque("transparent")).toBe(false);
+    // A value this cannot read is not called opaque.
+    expect(opaque("var(--elsewhere)")).toBe(false);
+  });
+
+  it("judges the ground by the colour it resolves to, which host CSS can change", () => {
+    /*
+     * The tokens say opaque, but the host's own CSS sets the token's
+     * property to a half-transparent colour. What the canvas paints is the
+     * resolved value, so that is what decides whether the page repeats it.
+     */
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") return "rgba(0, 0, 0, 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reads the alpha of a wide-gamut colour the ground resolves to", () => {
+    // A browser can keep `color(display-p3 …)` in the computed value; a
+    // half-transparent one must not be taken for the opaque token.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor")
+              return "color(display-p3 0 0 0 / 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("judges the ground again when the canvas frame resizes", () => {
+    // A site can override the background token under a width or height
+    // query, which a frame resized past it crosses with no render.
+    let narrow = false;
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return narrow ? "rgba(255, 255, 255, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      narrow = true;
+      window.dispatchEvent(new Event("resize"));
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("judges the ground again when the site's theme changes, with no render", async () => {
+    // The theme marker writes the root's theme without a render; a light
+    // ground that is opaque and a dark one that is not must each be judged.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        const dark = element.getAttribute("data-nx-site-theme") === "dark";
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return dark ? "rgba(11, 15, 25, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      root?.setAttribute("data-nx-site-theme", "dark");
+      await act(async () => undefined);
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("names nothing when the host serves no site sheet", () => {
+    const root = rootOf(false);
+    expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");
+    expect(root?.hasAttribute("data-nx-site-dark-ground")).toBe(false);
+  });
+});
+
+describe("a list note's action", () => {
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/noted",
+          version: 1,
+          description: "A list with a note to its author.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement(
+                "div",
+                { "data-nx-list-diagnostic": "sort-fallback" },
+                createElement("span", { "data-testid": "words" }, "Fell back."),
+                createElement(
+                  "button",
+                  {
+                    type: "button",
+                    [LIST_ACTION_ATTRIBUTE]: "choose-sort-field",
+                  },
+                  "Choose a field"
+                )
+              )
+            ),
+        },
+      ] as never,
+      { source: "canvas-list-action-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  it("asks the host to take the author to the list's sort, in place of a plain selection", () => {
+    const onSelect = vi.fn();
+    const onListSortField = vi.fn();
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "list", type: "acme/noted", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        onSelect={onSelect as never}
+        onListSortField={onListSortField}
+      />
+    );
+    // A button's Enter and Space arrive as this same click.
+    fireEvent.click(screen.getByRole("button", { name: "Choose a field" }));
+    expect(onListSortField).toHaveBeenCalledWith("list");
+    expect(onSelect).not.toHaveBeenCalled();
+    // Anywhere else in the note selects the list, as before.
+    fireEvent.click(screen.getByTestId("words"));
+    expect(onSelect).toHaveBeenCalledWith("list", "replace");
+    expect(onListSortField).toHaveBeenCalledTimes(1);
   });
 });

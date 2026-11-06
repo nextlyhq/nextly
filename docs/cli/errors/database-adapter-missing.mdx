@@ -1,0 +1,29 @@
+---
+title: DATABASE_ADAPTER_MISSING
+description: "The database adapter package for the dialect `DATABASE_URL` names is not installed."
+---
+
+## Cause
+
+The database adapter package for the dialect `DATABASE_URL` names is not installed.
+
+Nextly reaches each database through its own adapter package: `@nextlyhq/adapter-postgres`, `@nextlyhq/adapter-mysql` or `@nextlyhq/adapter-sqlite`. The command read which database `DATABASE_URL` names, then could not load that database's adapter.
+
+## Fix
+
+Install the adapter for your database in the project, then run the command again:
+
+```bash
+pnpm add @nextlyhq/adapter-postgres
+```
+
+If you meant a different database, check `DATABASE_URL` (and `DB_DIALECT`, if it is set).
+
+## Example
+
+```text
+✗ The MySQL adapter, `@nextlyhq/adapter-mysql`, is not installed.
+  Why:  `DATABASE_URL` names a MySQL database, and Nextly reaches it through that package.
+  Next: Install it in the project, for example `pnpm add @nextlyhq/adapter-mysql`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-adapter-missing  (DATABASE_ADAPTER_MISSING)
+```

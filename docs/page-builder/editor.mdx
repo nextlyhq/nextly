@@ -1,0 +1,366 @@
+---
+title: Using the editor
+description: The editor's rail and panels, the Design panel's tabs, Help, and the keyboard shortcuts.
+---
+
+The editor opens with the page on the canvas, the inspector on the right for the
+selected block, and a rail of named panels on the left. One panel is open at a time.
+Choosing a panel's item again closes it and gives the canvas the room back.
+
+## The top bar
+
+The top bar runs across the editor in three parts.
+
+| Part   | What it holds                                                                                                                                                     |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Left   | The way back to the entry, the page's title (choose it to switch to a recent page or to all pages), whether it's a draft or published, and **Undo** and **Redo**. |
+| Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                                      |
+| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** where the admin offers one, and **Publish**.  |
+
+**Publish** is the entry's own leading action: **Publish**, **Publish changes** or
+**Save**, as on the entry's page. Its arrow holds **Save draft**, **Schedule publish…**
+and **Unpublish**, each where the entry offers it. An action you can't use right now is
+greyed out and says why. Duplicating, discarding and deleting stay on the entry's page.
+
+### Publishing a page whose parts aren't published
+
+A page, the components it places and its Layout are published separately. When you
+publish a page that places a component that isn't published, or one placed inside
+another component, or names a Layout that isn't published, the editor tells you before
+it publishes. The dialog lists each part, and what visitors see meanwhile: nothing where
+an unpublished component sits, and the site's default Layout around the page until its
+own is published.
+
+- **Publish page only** publishes the page and leaves the parts as they are. It's the
+  first choice, because publishing a page before its parts is an ordinary order of work.
+- **Publish both** (or **Publish all**) publishes the ticked parts first, then the page.
+  It's offered only for parts you may publish yourself, and each is published as you.
+  A part you can't publish is listed with the reason, and stays unpublished.
+- **Cancel** or Escape publishes nothing.
+
+The same question is asked when you publish a page or a component from its own entry
+page. A component you publish from its own view is checked the same way, for the
+components it places.
+
+The save state reads **Saving…**, **Unsaved changes**, **Saved**, or **Not saved** with
+a **Retry** button. It covers the page and the site-wide styles you change in **Design**.
+
+Undo and Redo take the same steps as the keyboard. A text edit still open on the canvas
+is finished first, so its words are the step undone.
+
+A change to the site's shared styles in **Design** (a variable, a class, a font or a
+breakpoint) is a step of the same history. Those are saved as you make them, so undoing
+one saves the style as it was before, and the page's own save state doesn't change.
+
+Hiding a side gives the canvas its room. The left panel you had open comes back when
+you use the rail again. The editor remembers which sides you hid, for you.
+
+The device buttons show Desktop and the site's two widest breakpoints. A site with more
+puts the rest in a menu beside them, under **More devices**. While you style one of those,
+the menu's button shows its name and width. The buttons never change places.
+
+When the bar is narrow, the device buttons drop their label first and keep their icons.
+
+## Search
+
+**Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a
+Mac), finds four kinds of thing as you type, each under its own heading:
+
+- **Add**: blocks and your components to add. Each says where it will go, as the Add panel
+  does ("Adding after Heading"), and choosing one adds it there.
+- **On this page**: the page's blocks, by the names Layers shows, with what each is and
+  what it sits in. Choosing one selects it and scrolls it into view.
+- **Pages**: the site's other pages you may open, by title, with **Draft** beside a page
+  not yet published. Choosing one opens it in the editor.
+- **Commands**: what you can do to the selected block, Undo and Redo, and closing the
+  editor.
+
+The bottom line says what <kbd>Enter</kbd> does to the highlighted result. Saved sections
+are added from the Add panel's **Sections** tab.
+
+## The rail
+
+The rail shows only the panels that work in this editor. A panel that is not built yet
+has no item at all, so nothing on the rail opens an empty panel.
+
+| Item         | What it holds                                                                                                                                                                                                                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                        |
+| **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                   |
+| **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                       |
+| **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. |
+| **Settings** | A dialog with **This page** and **Site**. See [Settings](#settings).                                                                                                                                                                                                                                                                             |
+| **Help**     | The keyboard shortcuts in effect, and links to these pages.                                                                                                                                                                                                                                                                                      |
+
+Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
+
+The editor remembers the panel you left open, and on Design the tab you left on, the
+next time you open it. It remembers them for you, not for the browser, so two people
+who share a browser each find their own.
+
+## Pages
+
+**Pages** in the rail lists the site's pages, grouped by the kind of page when the
+site has more than one, with a search. A page shows **Draft**, **Changed** (published,
+with changes not yet published) or **Scheduled** beside its title when it isn't
+simply published, and the page you're editing is marked **Editing**.
+
+Choose a page to open it in the editor. Each page's **⋯** menu offers:
+
+- **Open**.
+- **Rename**, in place: <kbd>Enter</kbd> keeps the new title, <kbd>Escape</kbd> leaves
+  it. Renaming a published page is a change like any other, published with the page.
+  For the page you're editing, **Rename** opens its Settings, where its title is.
+- **Duplicate**, which makes a draft copy, "Copy of …", and opens it. A draft, or a
+  page with changes not yet published, can't be duplicated yet: publish it first.
+- **Settings**, which opens that page's Settings.
+- **Delete…**, which asks first, naming the page. The page you're editing can't be
+  deleted from here: open another page first.
+
+**New page** asks for a title, then opens the new draft.
+
+The page title in the top bar is a switcher too: it lists the pages you opened most
+recently, in this browser, and **All pages…** opens the Pages panel.
+
+Opening another page with work not yet saved asks first, as leaving the editor does.
+
+## Fonts
+
+**Design → Fonts** lists the fonts on this site, each drawn in itself, and the site's
+font variables. Choose a font to see its styles and where it came from, or to remove it.
+Removing a font keeps its files in your media library.
+
+Fonts are stored on your site. Visitors' browsers never contact Google.
+
+**From Google Fonts.** Choose **+**, then **From Google Fonts**. Search, filter by
+category, or type your own preview text. Choose a family, then its weights (a variable
+family comes as one file covering every weight), italics and languages, and **Add**.
+Your server downloads the files into your media library, in a **Fonts** folder, and the
+published page loads them from your site only.
+
+While you browse, the editor's browser loads previews from the catalogue's file host,
+`cdn.jsdelivr.net` by default. Only the editor contacts it. The list of families and
+every file you add are fetched by your server, from `api.fontsource.org` and
+`cdn.jsdelivr.net`. If your admin sends a Content-Security-Policy, allow
+`font-src https://cdn.jsdelivr.net` for the previews.
+
+**Upload a font file.** Choose **+**, then **Upload a font file**: a `.woff2` or `.woff`
+file, its family, weight and style, and a confirmation that you may use it on the web.
+
+**In the inspector**, Style → Typography → **Font** offers only the site's font
+variables, the fonts on this site and the system fonts. **Add or manage fonts…** opens
+this tab.
+
+Only a role allowed to update the site style can add or remove a font. Others see the
+tab read-only.
+
+The catalogue's hosts and the limits on one add are set on the plugin:
+
+```ts
+pageBuilder({
+  fonts: {
+    // The defaults. `catalogue: false` turns the catalogue off; uploads still work.
+    catalogue: {
+      api: "https://api.fontsource.org",
+      files: "https://cdn.jsdelivr.net",
+    },
+    // Each may be lowered, not raised.
+    limits: {
+      filesPerAdd: 24,
+      bytesPerFile: 2 * 1024 * 1024,
+      bytesPerAdd: 10 * 1024 * 1024,
+      timeoutMs: 15_000,
+    },
+  },
+});
+```
+
+## Spacing
+
+Blocks have no outer margin of their own. The space between two blocks comes from the
+block that holds them:
+
+- **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
+  every block after the first. Set the container to flex or grid and the same gap
+  becomes its `gap`.
+- **Columns** and **Gallery** space their columns and images with a wider gap.
+- **Rich text** spaces its own paragraphs, headings and lists, inside the block.
+- **Section** pads its content above, below and beside it. **Card** pads its content.
+  Box and Column have no padding.
+
+Each value is a variable under **Design → Variables**, and most grow with the screen:
+
+| Variable           | What it sets                                 |
+| ------------------ | -------------------------------------------- |
+| `space.stack`      | The gap between blocks in a container        |
+| `space.section-y`  | A section's padding above and below          |
+| `space.gutter`     | A section's padding at the sides             |
+| `space.columns`    | The gap between columns and gallery images   |
+| `space.card`       | A card's padding                             |
+| `space.paragraph`  | The space between paragraphs of rich text    |
+| `button.padding-y` | A button's padding above and below its label |
+| `button.padding-x` | A button's padding at the sides of its label |
+
+Spacing you set on a block (its margin, padding or gap in **Style → Spacing**, or
+through a shared style) always wins over these defaults on that block. A margin above
+a block meets its container's gap in one of two ways, depending on the container's
+layout:
+
+- In normal flow, the block's own top margin **replaces** the gap: a 40px margin
+  under a 20px gap leaves 40px.
+- In flex or grid, the gap is the container's `gap`, and a margin on a block **adds**
+  to it, as margins do in CSS: the same block sits 60px below its neighbour. To change
+  the spacing of a flex or grid container, set its gap rather than a margin on each
+  block.
+
+A block hidden on a device still counts as a block above the next one. When every
+block above it is hidden, the first block shown in a normal-flow container keeps the
+gap above it; give that block a top margin of 0 on that device to remove it.
+
+With a block selected, the canvas shows the space above it from its container as
+**Gap · from Section** (or the container's name), not as the block's own margin.
+
+### Space between blocks: classic or the container's gap
+
+**Design → Variables** opens with **Space between blocks**, which decides how the
+whole site is spaced:
+
+- **From the container's gap**: the model described above. A new site starts here.
+- **From each block's margins (classic)**: the spacing pages had before container
+  gaps. Headings carry 1.5em above and 0.5em below, paragraphs 1em below, Divider
+  and Quote 1.5em above and below; Section and Card have no padding; Columns,
+  Gallery and Accordion keep the `space.4` gap; an Accordion's sections keep the
+  browser's own triangle (its Icon is **Browser default**); a Button is padded
+  0.5rem × 1rem; and no container puts a gap between its blocks. The variables in the table above
+  are not used.
+
+A site that already had a page, a component or a Layout of its own when it first
+started on the version that added container gaps (the seeded default Layout does not
+count) is put on **Classic** once, so its pages look exactly as they did. That step
+never runs again and never changes a choice made here. To move such a site to
+container gaps, choose **From the container's gap**; the canvas redraws at once, and
+published pages follow on their next render. Changing it needs the permission to
+update the site style.
+
+The choice is kept in the plugin's own table `page_builder__site_options`, created by
+the plugin's migration (`npx nextly migrate`). A route that renders with
+`loadSiteStyle({ nextly })` reads it with the rest of the site style, and a change to it
+expires the cached pages that name the `site-style` single among their `singles`, as a
+saved variable does.
+
+## The bottom bar
+
+The bottom bar shows where you are: **Page**, then each block holding the selected
+one, ending with the selected block. Choose any of them to select it; choose **Page**
+to clear the selection.
+
+On its right, a hint names the keys that work from there, such as
+
+<kbd>Enter</kbd> to edit the selected block's text, <kbd>Escape</kbd> to go up
+to the block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+
+<kbd>K</kbd> on a Mac) for the command palette.
+
+## Settings
+
+**Settings** at the bottom of the rail opens a dialog with two tabs.
+
+**This page** holds the entry's own fields, such as its title, address and SEO, as the
+entry's page draws them. They save with the page, from **Save** or **Publish** in the top
+bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
+It uses the SEO fields where the page has them, then the page's first heading, text and
+image, then its title. Your site's own metadata may differ. Pressing Enter in a field
+never saves the page.
+
+**Site** applies to the live site as soon as you change it. You see it only if your role
+may manage the page builder's site settings.
+
+- **Breakpoints** lists the site's devices, in the same words as the device buttons.
+  **Edit breakpoints** opens the editor in place. **Save breakpoints** stores the whole
+  set at once, after checking it, and **Cancel** leaves it as it was. If you close
+  Settings with an edit open, it asks before throwing the edit away.
+- **Default Layout** is the Layout pages without one of their own are shown in. Choosing
+  another saves it at once and says **Saved**, or **Not saved** with **Retry**. Changing
+  it also needs the rights to update and publish Layouts. Without them, you can see it
+  but not change it.
+
+The site's breakpoints change only here. A write to the site style that changes them
+any other way, through the API or the site style's own form, is refused.
+
+## Moving blocks in Layers
+
+Drag a row in Layers to move its block. A line shows where it will land. Drag the row
+to the right to put the block inside the block above it, and to the left to take it
+out. Rest on a closed block for a moment and it opens, so you can drop inside it. A
+drop the block is not allowed to make shows a red line and says why, and letting go
+leaves the block where it was. Press <kbd>Escape</kbd> to cancel a drag. Dragging is off
+while a search filters the list.
+
+Every move also works without dragging: select the block and press
+
+<kbd>Alt</kbd>+<kbd>↑</kbd>, <kbd>Alt</kbd>+<kbd>↓</kbd>, <kbd>Alt</kbd>+
+<kbd>→</kbd> or
+<kbd>Alt</kbd>+<kbd>←</kbd>, or right-click it on the canvas and choose **Move
+up**, **Move down**, **Move in** or **Move out**.
+
+## Working with a block's row in Layers
+
+- **Point at a row** and its block is outlined on the canvas. **Click a row** to select
+  its block; the canvas scrolls to it.
+- **Hide a block on one device.** Point at a row and click its eye: the block is hidden
+  on the device you are editing, on the canvas and on the published page. Every other
+  device keeps showing it. A hidden row is dimmed and says **Hidden**. Select a hidden
+  block in Layers and the canvas shows it while it is selected, tagged "Hidden on" the
+  device. **Visible on**, in the Content tab, shows each device and hides or shows the
+  block on any one of them.
+- **Lock a block** with the padlock on its row. A locked block can't be moved, changed or
+  deleted, nor can anything inside it, until it is unlocked.
+- **Rename a block** by double-clicking its row, pressing <kbd>F2</kbd>, or choosing
+  **Rename** from the row's menu. <kbd>Enter</kbd> keeps the name and <kbd>Escape</kbd>
+  keeps the old one. An empty name goes back to the block's type. The name is for you:
+  it never appears on the published page.
+- **Right-click a row** for its menu: Rename, hide or show on the device, Lock or
+  Unlock, and the block's other actions.
+- **Search** filters the rows, keeping the blocks around each match. Arrow keys move
+  through the rows, <kbd>→</kbd> and <kbd>←</kbd> open and close a block, and
+  <kbd>Home</kbd> and <kbd>End</kbd> go to the first and last row.
+
+## Help
+
+Help lists the keyboard shortcuts the editor has right now, read from the same list the
+keyboard uses. So a key shows there only if pressing it does what Help says. When the
+editor and the page around it both bind a key, Help shows the binding that runs inside
+the editor.
+
+Escape closes Help and returns you to the rail.
+
+## Keyboard shortcuts
+
+On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
+
+| Keys                                                                          | What they do                                                                                                                      |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                  | Undo the last change                                                                                                              |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo the last undone change                                                                                                       |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                  | Duplicate the selected block                                                                                                      |
+| <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                     | Delete the selected block                                                                                                         |
+| <kbd>Enter</kbd>                                                              | Edit the selected block's text                                                                                                    |
+| <kbd>Escape</kbd>                                                             | Select the block holding this one, or clear the selection at the top of the page                                                  |
+| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                     | Move the selected block up or down                                                                                                |
+| <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                     | Move the selected block into the container above it, or out of its container                                                      |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open search: blocks to add, this page's blocks, other pages and commands                                                          |
+| <kbd>F6</kbd>                                                                 | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
+| <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                 | Hide both side panels, or show them again                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                  | Show the page at actual size                                                                                                      |
+| <kbd>Shift</kbd>+<kbd>1</kbd>                                                 | Fit the page to the canvas                                                                                                        |
+| <kbd>F2</kbd>                                                                 | In Layers, rename the focused row's block                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>                                 | In Layers, hide or show the focused row's block on the device you are editing                                                     |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>                                 | In Layers, lock or unlock the focused row's block                                                                                 |
+| <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key                               | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
+
+Help is the complete list for the editor you have open, including any shortcut the
+page around it adds, such as saving.
+
+## Related
+
+- [Page Builder](/docs/page-builder) — install the plugin and render its pages
+- [Locked areas](/docs/page-builder/locked-areas) — keep a section's structure while authors edit it

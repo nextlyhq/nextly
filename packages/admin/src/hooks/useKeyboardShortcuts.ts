@@ -226,7 +226,7 @@ export function useEntryListShortcuts({
  * Keyboard shortcuts for the entry form page.
  *
  * Shortcuts:
- * - Ctrl+S: Save entry (when form is dirty and not submitting)
+ * - Ctrl+S: Save (when form is dirty and not submitting)
  * - Escape: Cancel and go back (only when `onCancel` is given)
  *
  * @param options - Entry form shortcut options
@@ -243,7 +243,9 @@ export function useEntryFormShortcuts({
       key: "s",
       ctrl: true,
       action: onSave,
-      description: "Save entry",
+      // "Save", not "Save entry": the same binding saves a Single and, in the
+      // Page Builder, a page, and its Help lists it under this name.
+      description: "Save",
       when: () => isDirty && !isSubmitting,
       // The one shortcut that fires mid-sentence. Save is the command a person reaches for
       // WITHOUT leaving the field they are editing, and refusing it there is the behaviour people

@@ -146,6 +146,12 @@ unset, `csrf` checks only the request's origin, which a same-origin write passes
 write. A page that writes with its own `fetch` leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token`.
 
+`writePluginRoute({ plugin, path, method, body })` (experimental) makes one write
+outside React, with the same session handling and token. Where
+`usePluginRouteMutation` reports a failure on `error` at the next render,
+`writePluginRoute` rejects with the parsed error. Use it when you need the reason
+at the moment you await, such as to show it beside the field that was refused.
+
 On a public route, `csrf: true` also checks the origin of a write no session
 authenticates, without asking it for a token; only such a write that sends an
 `Authorization: Bearer` token is exempt. A write a session authenticates is
@@ -236,6 +242,59 @@ ambient one:
 
 A session caller carries no scope at all, and resolves exactly as it always has —
 super-admin bypass included.
+
+## Reading and writing your own route from the admin
+
+A plugin's admin components can call the routes the same plugin contributed
+through helpers exported from `@nextlyhq/plugin-sdk/admin`, so neither half of
+the plugin hand-rolls the session, its refresh or the error envelope:
+
+```ts
+import { usePluginRoute, readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
+
+// In a component: cached and deduplicated like every other admin read.
+const list = usePluginRoute({ plugin: "@acme/p", path: "/summary" });
+// list.pending until an answer arrives; list.error is `Error | null`.
+
+// Outside React: one read per call. Abort the older read yourself when a
+// newer one starts — nothing does it for you, and a stale slow answer that
+// is never aborted can land last and overwrite the latest.
+let searchRead: AbortController | undefined;
+
+export async function searchPlugins(query: string) {
+  searchRead?.abort();
+  searchRead = new AbortController();
+  return readPluginRoute({
+    plugin: "@acme/p",
+    path: `/search?q=${encodeURIComponent(query)}`,
+    signal: searchRead.signal,
+  });
+}
+```
+
+`usePluginRoute` answers `{ data, pending, error, refetch, fetching }`, and
+`pending` is a real third state beside the data: `data` being `undefined` is
+both "the route answered nothing" and "the route has not answered yet".
+`error` is an `Error` or `null`: a refusal the route answered arrives parsed,
+with `status`, `code` and `data` to read, while a request that never got an
+answer — offline, a DNS or CORS failure, a cancelled read — stays a native
+`Error` with none of those. `readPluginRoute` is not cached, answers
+`undefined` for a route that answered with nothing, and rejects the same way:
+the parsed error on an HTTP refusal, a native error when the read never got
+one. Both go through the same session handling as the admin's own reads, so an
+expired session is renewed rather than surfacing as a failure.
+
+Both address the route through the dispatcher's own path builder, so the
+address agrees with where the route actually answers — a hand-spelled one is
+what drifts when the mount moves. On the default mount that address is
+`/plugins/<package name><path>`; a route the plugin declared with
+`mount: "root"` answers at the path it declared, and the package name plays no
+part in its address. The builder only builds: nothing checks that the name a
+call passes is the calling plugin's. A path no plugin route and no built-in
+endpoint serves is a request failure, not an empty answer — the admin's
+catch-all falls through to the built-in parser and refuses it. Writes have
+their own pair, `usePluginRouteMutation` and `writePluginRoute`, described with
+the `csrf` options above.
 
 ## Middleware (D27)
 

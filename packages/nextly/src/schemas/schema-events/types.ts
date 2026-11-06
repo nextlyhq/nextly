@@ -32,7 +32,13 @@ export type SchemaEventStatus =
   | "applied"
   | "failed"
   | "rolled_back"
-  | "superseded";
+  | "superseded"
+  // An attempt that ended knowing no statement of its file took effect, such
+  // as one that stopped at its first statement waiting for a busy table. It
+  // resolves the attempt without being an outcome, so the migration's state
+  // stays what it was before the attempt (`migration-state.ts`). A status
+  // value, not a column: the column is text, or a VARCHAR(32), everywhere.
+  | "nothing_applied";
 
 /** Which surface triggered the event. */
 export type SchemaEventSource =

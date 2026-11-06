@@ -105,6 +105,7 @@ export {
 export {
   useMedia,
   useMediaItem,
+  useMediaResolver,
   useUploadMedia,
   useUpdateMedia,
   useDeleteMedia,
@@ -119,6 +120,8 @@ export { useRecentActivity } from "./hooks/queries/useRecentActivity";
 
 // Custom hooks
 export { useDebouncedValue } from "./hooks/useDebouncedValue";
+// The signed-in user's id, for a surface that keeps something per user.
+export { useCurrentUserId } from "./hooks/useCurrentUserId";
 // Permission gating (D36) — client-side UX checks for admin + plugin UI.
 export { useCan } from "./hooks/useCan";
 /**
@@ -160,6 +163,15 @@ export {
   useDocumentStatus,
   hasPendingWorkingDraft,
   type DocumentStatus,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * The surrounding document's full-page preview, for a field that shows the
+ * page and offers to open it as the editor's own Preview action does. Null
+ * wherever that action is absent.
+ */
+export {
+  useDocumentPreview,
+  type DocumentPreview,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
  * The fields an active takeover hid, for the surface that took the body over.
@@ -218,6 +230,7 @@ export type {
   BeforeDocumentAction,
   DocumentActionOutcome,
   DocumentSaveState,
+  StoreReadiness,
 } from "./components/features/entries/EntryForm/useDocumentActionBindings";
 export type {
   ActionGroup,
@@ -225,6 +238,23 @@ export type {
   DocumentAction,
 } from "./components/features/entries/EntryForm/document-actions";
 export type { SubmitRefusal } from "./components/features/entries/EntryForm/submit-outcome";
+/**
+ * The header's save state and leading action, drawn for a document view that
+ * replaces the header. Exported for the plugin surface, so the view shows the
+ * header's own controls rather than a copy of them.
+ */
+export {
+  DocumentSaveIndicator,
+  DocumentPrimaryAction,
+} from "./components/features/entries/EntryForm/DocumentSurfaceControls";
+/**
+ * How a document view restores its own field from a recovery point, as an edit
+ * it can undo. Exported for the plugin surface.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
+} from "./components/features/entries/EntryForm/DocumentRestoreContext";
 export {
   pillStateFromForm,
   PILL_LABEL,
@@ -324,7 +354,10 @@ export type {
 // to hand-roll auth and error parsing or to read something else instead.
 // Through `protectedApi` and TanStack Query, so the session, its refresh and
 // the typed error envelope are the ones the rest of the admin uses.
-export { usePluginRoute } from "@admin/hooks/queries/usePluginRoute";
+export {
+  readPluginRoute,
+  usePluginRoute,
+} from "@admin/hooks/queries/usePluginRoute";
 export type {
   PluginRouteRead,
   PluginRouteRequest,
@@ -332,7 +365,10 @@ export type {
 // The WRITE half of the same seam. A plugin could read its own route and not
 // write to it, so a feature that saves something had to hand-roll the session
 // and the error envelope after all.
-export { usePluginRouteMutation } from "@admin/hooks/queries/usePluginRouteMutation";
+export {
+  usePluginRouteMutation,
+  writePluginRoute,
+} from "@admin/hooks/queries/usePluginRouteMutation";
 export type {
   PluginRouteMethod,
   PluginRouteWrite,
@@ -353,6 +389,16 @@ export {
   // Reads a plugin's own PUBLIC config from admin metadata; see
   // `usePluginClientConfig`.
   usePluginClientConfig,
+} from "./components/field-ui";
+
+// The translator a plugin's component reads its own strings with, from the
+// catalogs it declared in `contributes.translations`. Re-exported by
+// `@nextlyhq/plugin-sdk/admin`.
+export { usePluginTranslate } from "./lib/i18n/I18nProvider";
+
+export {
+  FieldPicker,
+  describeFieldTypes,
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
@@ -362,6 +408,11 @@ export {
   EDITABLE_VALIDATION_RULES,
 } from "./components/field-ui";
 export type {
+  FieldPickerProps,
+  FieldPickerConfig,
+  FieldPickerChoice,
+  FieldGroupOption,
+  FieldTypeDescription,
   FieldTypePickerProps,
   FieldDefaultValueInputProps,
   FieldDefaultOption,
@@ -691,17 +742,10 @@ export {
 
 // Dashboard Components
 export { StatsCard } from "./components/features/dashboard/StatsCard";
-export {
-  RecentActivity,
-  type RecentActivityProps,
-} from "./components/features/dashboard/RecentActivity";
 export { WelcomeHeader } from "./components/features/dashboard/WelcomeHeader";
 export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGrid";
-export { RecentEntriesWidget } from "./components/features/dashboard/RecentEntriesWidget";
 export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
-export { CollectionQuickLinks } from "./components/features/dashboard/CollectionQuickLinks";
 export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
-export { OnboardingChecklist } from "./components/features/dashboard/OnboardingChecklist";
 export {
   StatsGridSkeleton,
   ActivitySkeleton,
@@ -709,7 +753,6 @@ export {
   ContentStatusSkeleton,
   CollectionQuickLinksSkeleton,
   ProjectStatsSkeleton,
-  OnboardingChecklistSkeleton,
   DashboardPageSkeleton,
 } from "./components/features/dashboard/DashboardSkeleton";
 
@@ -733,6 +776,49 @@ export type {
   RecentEntriesResponse,
 } from "./types/dashboard/recent-entries";
 export type { ProjectStatItem } from "./types/dashboard/project-stats";
+
+// The widget kit: the parts core's own dashboard cards are drawn from, for a
+// widget's own component. Plugins reach them only through
+// `@nextlyhq/plugin-sdk/admin`, so the admin stays the host's single copy and
+// a card part reads the tier of the card it is drawn in.
+// @experimental while the dashboard widget SDK settles.
+export {
+  type CardEmptyContent,
+  type SkeletonShape,
+} from "./components/features/widgets/frame/states";
+export {
+  FrameState,
+  type CardState,
+  type SkeletonHint,
+} from "./components/features/widgets/frame/card-state";
+// The parts of a card's body, under the names a plugin uses: `Widget.*`. The formatters and the
+// colour accessor are the SDK root's, from `@nextlyhq/ui`'s server-safe entries.
+export {
+  Widget,
+  type WidgetBarChartGroup,
+  type WidgetBarChartProps,
+  type WidgetChartUnit,
+  type WidgetFigureProps,
+  type WidgetKit,
+  type WidgetListProps,
+  type WidgetListTotal,
+  type WidgetRowAction,
+  type WidgetSeries,
+  type WidgetSeriesChartProps,
+  type WidgetSeriesInterval,
+  type WidgetSeriesPoint,
+  type WidgetTableColumn,
+  type WidgetTableProps,
+} from "./components/features/widgets/kit";
+export type { WidgetRenderSize } from "nextly/widget-result";
+// A row's time as core's list cards word it ("5m ago", then the date in the
+// admin's timezone and date format), and the clock those cards re-render on,
+// so a widget's own list words and moves its times as theirs do.
+export { formatRelativeTime as formatWidgetTime } from "./lib/dashboard";
+export { useNowTick as useWidgetClock } from "./hooks/useNowTick";
+// Asks the dashboard's cards and header summary again, for a widget whose own
+// write changes what they answer.
+export { useRefreshDashboard } from "./hooks/queries/useRefreshDashboard";
 
 // Constants
 export {

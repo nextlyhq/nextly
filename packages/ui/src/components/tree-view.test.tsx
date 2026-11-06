@@ -17,7 +17,15 @@ import {
   screen,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type { TreeNode } from "./tree-view";
 import { TreeView } from "./tree-view";
@@ -595,5 +603,136 @@ describe("a tree holding more than one selected row", () => {
 
     fireEvent.keyDown(tree, { key: "Enter", shiftKey: true });
     expect(onSelectedChange).toHaveBeenCalledWith("a", "extend");
+  });
+});
+
+describe("a selection made outside the tree", () => {
+  // jsdom scrolls nothing, so a request to scroll would leave the rendered
+  // window where it was whether or not the tree asked. Scrolling as a browser
+  // does — set the offset, report it — is what lets these cases see the window
+  // actually move to the row.
+  const original = HTMLElement.prototype.scrollTo;
+  const sizes = ["scrollHeight", "clientHeight"] as const;
+  const described = sizes.map(name =>
+    Object.getOwnPropertyDescriptor(Element.prototype, name)
+  );
+  beforeEach(() => {
+    // The scrollable range, which the virtualizer clamps a scroll to: the
+    // tree's full height in a viewport as tall as the one stubbed above.
+    // jsdom reports zero for both, which clamps every scroll to the top.
+    Object.defineProperty(Element.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: Element) {
+        return this.firstElementChild instanceof HTMLElement
+          ? Number.parseFloat(this.firstElementChild.style.height) || 0
+          : 0;
+      },
+    });
+    Object.defineProperty(Element.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return 200;
+      },
+    });
+    HTMLElement.prototype.scrollTo = function (
+      this: HTMLElement,
+      options?: ScrollToOptions | number
+    ) {
+      const top = typeof options === "object" ? options.top : undefined;
+      if (top === undefined) return;
+      this.scrollTop = top;
+      this.dispatchEvent(new Event("scroll"));
+    } as typeof HTMLElement.prototype.scrollTo;
+  });
+  afterEach(() => {
+    HTMLElement.prototype.scrollTo = original;
+    sizes.forEach((name, index) => {
+      const descriptor = described[index];
+      if (descriptor)
+        Object.defineProperty(Element.prototype, name, descriptor);
+    });
+  });
+
+  const many: TreeNode[] = Array.from({ length: 500 }, (_unused, index) => ({
+    id: `n${index}`,
+    label: `Node ${index}`,
+  }));
+
+  it("brings the selected row into view when the selection changes from outside", () => {
+    // A canvas click or an address opening the editor at a block selects it
+    // without the tree's keyboard path, which was the only one that scrolled:
+    // the row stayed outside the rendered window, so Layers showed nothing
+    // selected.
+    const { rerender } = render(
+      <TreeView nodes={many} aria-label="Layers" selectedId={null} />
+    );
+    expect(screen.queryByRole("treeitem", { name: "Node 400" })).toBeNull();
+
+    rerender(<TreeView nodes={many} aria-label="Layers" selectedId="n400" />);
+
+    expect(
+      screen
+        .getByRole("treeitem", { name: "Node 400" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("brings the row into view again when it is selected again after a clear", () => {
+    // Selected, cleared, the tree scrolled back to the top, then the same row
+    // selected again: a new selection, which is revealed like any other.
+    const { rerender, container } = render(
+      <TreeView nodes={many} aria-label="Layers" selectedId="n400" />
+    );
+    rerender(<TreeView nodes={many} aria-label="Layers" selectedId={null} />);
+    const scroller = container.firstElementChild;
+    if (!(scroller instanceof HTMLElement)) throw new Error("no scroller");
+    act(() => {
+      scroller.scrollTo({ top: 0 });
+    });
+    expect(screen.queryByRole("treeitem", { name: "Node 400" })).toBeNull();
+
+    rerender(<TreeView nodes={many} aria-label="Layers" selectedId="n400" />);
+
+    expect(screen.getByRole("treeitem", { name: "Node 400" })).toBeDefined();
+  });
+
+  it("waits for an ancestor to open, then brings the row into view", () => {
+    // The row of a nested block exists only once its ancestors are expanded,
+    // which the caller does after selecting it.
+    const nested: TreeNode[] = [
+      ...many.slice(0, 300),
+      {
+        id: "box",
+        label: "Box",
+        children: [{ id: "inner", label: "Inner" }],
+      },
+    ];
+    const { rerender } = render(
+      <TreeView
+        nodes={nested}
+        aria-label="Layers"
+        selectedId={null}
+        expandedIds={[]}
+      />
+    );
+
+    rerender(
+      <TreeView
+        nodes={nested}
+        aria-label="Layers"
+        selectedId="inner"
+        expandedIds={[]}
+      />
+    );
+    rerender(
+      <TreeView
+        nodes={nested}
+        aria-label="Layers"
+        selectedId="inner"
+        expandedIds={["box"]}
+      />
+    );
+
+    expect(screen.getByRole("treeitem", { name: "Inner" })).toBeDefined();
   });
 });

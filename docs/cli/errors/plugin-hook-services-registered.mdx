@@ -1,0 +1,23 @@
+---
+title: PLUGIN_HOOK_SERVICES_REGISTERED
+description: "A plugin's install or uninstall hook was not run, because the process already had services registered."
+---
+
+## Cause
+
+A plugin's install or uninstall hook was not run, because the process already had services registered.
+
+A plugin's `onInstall` and `onUninstall` hooks run with services the command registers for them, and tears down afterwards. In a process that already registered its own, tearing down would take those with it, so the hook was not run.
+
+## Fix
+
+Run the plugin command on its own, as `nextly plugins install` or `nextly plugins uninstall`, rather than from a process that has already started Nextly.
+
+## Example
+
+```text
+✗ Services are already registered in this process, so @acme/seo's onInstall was not run.
+  Why:  The hook runs with services of its own, and tearing them down afterwards would take the existing ones with them.
+  Next: Run the plugin command on its own, as `nextly plugins install` or `nextly plugins uninstall`, outside a process that has already started Nextly.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-services-registered  (PLUGIN_HOOK_SERVICES_REGISTERED)
+```

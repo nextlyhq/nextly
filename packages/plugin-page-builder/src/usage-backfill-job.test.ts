@@ -10,8 +10,14 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { PluginTransaction } from "@nextlyhq/plugin-sdk/schema";
+
 import { usageBackfillJob } from "./usage-backfill-job";
 import { backfillScopeKey, type BackfillScope } from "./usage-backfill-scope";
+import { usageBookkeeping } from "./usage-bookkeeping";
+
+/** What a rebuild that walked its scope to the end answers. */
+const WHOLE = { finished: true };
 
 function scope(field: string): BackfillScope {
   return { entity: "pages", field, locale: "", variant: "published" };
@@ -19,14 +25,70 @@ function scope(field: string): BackfillScope {
 
 function store(initial: string[] = []) {
   const done = new Set(initial);
+  const cursors = new Map<string, string>();
+  const finished = { count: 0 };
   return {
     done,
-    state: () => ({
+    cursors,
+    finished,
+    state: async () => ({
       completed: async () => done,
       record: async (key: string) => {
         done.add(key);
+        cursors.delete(key);
+      },
+      cursorOf: (key: string) => cursors.get(key),
+      checkpoint: async (key: string, cursor: string) => {
+        cursors.set(key, cursor);
+      },
+      fenced: <T>(write: () => Promise<T>) => write(),
+      finish: async () => {
+        finished.count += 1;
       },
     }),
+  };
+}
+
+/** The refusal a write meets once a newer run has replaced its own. */
+async function supersededRefusal(): Promise<unknown> {
+  // A database whose run row no longer carries the pass's token: the fence's
+  // update matches nothing.
+  const tx = {
+    table: () => new Proxy({}, { get: () => ({}) }),
+    update: () => ({ where: async () => 0 }),
+  } as unknown as PluginTransaction;
+  const db = {
+    transaction: <R>(fn: (handle: PluginTransaction) => Promise<R>) => fn(tx),
+  };
+  return usageBookkeeping(db, "postgresql")
+    .fenced("replaced", async () => undefined)
+    .catch((error: unknown) => error);
+}
+
+/**
+ * A rebuild over `documents`, walking them in order after the walk's cursor,
+ * and stopping as a real one does: after a document, when the budget is
+ * spent, recording that document first.
+ */
+function walkOver(documents: readonly string[], walked: string[]) {
+  return async (
+    _sc: BackfillScope,
+    walk: {
+      after?: string;
+      checkpoint(cursor: string): Promise<void>;
+      stop(): boolean;
+    }
+  ) => {
+    const start =
+      walk.after === undefined ? 0 : documents.indexOf(walk.after) + 1;
+    for (const id of documents.slice(start)) {
+      walked.push(id);
+      if (walk.stop()) {
+        await walk.checkpoint(id);
+        return { finished: false };
+      }
+    }
+    return WHOLE;
   };
 }
 
@@ -61,6 +123,7 @@ describe("one pass of the backfill sweep", () => {
       state: s.state,
       rebuild: async sc => {
         walked.push(sc.field);
+        return WHOLE;
       },
       clock: () => PASS_START,
     });
@@ -81,6 +144,7 @@ describe("one pass of the backfill sweep", () => {
       state: s.state,
       rebuild: async sc => {
         walked.push(sc.field);
+        return WHOLE;
       },
       // Two scopes' worth of budget, then past the deadline.
       clock: () => {
@@ -102,7 +166,7 @@ describe("one pass of the backfill sweep", () => {
     const job = usageBackfillJob({
       scopes: async () => [scope("a"), scope("b")],
       state: s.state,
-      rebuild: async () => undefined,
+      rebuild: async () => WHOLE,
       clock: () => {
         ticks += 1;
         return ticks > 1 ? PASS_START + 10_000 : PASS_START;
@@ -124,6 +188,7 @@ describe("one pass of the backfill sweep", () => {
       state: s.state,
       rebuild: async () => {
         rebuilds += 1;
+        return WHOLE;
       },
       clock: () => PASS_START,
     });
@@ -133,13 +198,105 @@ describe("one pass of the backfill sweep", () => {
     expect(rebuilds).toBe(0);
   });
 
+  it("STOPS inside a scope at the deadline, and the next tick resumes after it", async () => {
+    // A scope larger than one tick used to start again on every tick and never
+    // finish. The cursor is what lets the second tick pick up at d2.
+    const s = store();
+    const walked: string[] = [];
+    let ticks = 0;
+    let spentFrom = 2;
+    const job = usageBackfillJob({
+      scopes: async () => [scope("a")],
+      state: s.state,
+      rebuild: walkOver(["d1", "d2", "d3"], walked),
+      // The first check, before the scope, is within budget; the one after d1
+      // is past it. The second tick's budget never runs out.
+      clock: () => {
+        ticks += 1;
+        return ticks >= spentFrom ? PASS_START + 10_000 : PASS_START;
+      },
+    });
+
+    await job.handler(null as never, context(5_000) as never);
+    expect({ walked: [...walked], done: [...s.done] }).toEqual({
+      walked: ["d1"],
+      done: [],
+    });
+
+    spentFrom = Number.POSITIVE_INFINITY;
+    await job.handler(null as never, context(5_000) as never);
+    expect({ walked, done: [...s.done] }).toEqual({
+      walked: ["d1", "d2", "d3"],
+      done: [backfillScopeKey(scope("a"))],
+    });
+  });
+
+  it("clears the dirty mark only on the tick that walks the LAST scope", async () => {
+    // Cleared early, a failed write would stop showing while documents after
+    // the cursor were still unwalked.
+    const s = store();
+    let ticks = 0;
+    const job = usageBackfillJob({
+      scopes: async () => [scope("a"), scope("b")],
+      state: s.state,
+      rebuild: async () => WHOLE,
+      clock: () => {
+        ticks += 1;
+        return ticks > 1 ? PASS_START + 10_000 : PASS_START;
+      },
+    });
+
+    await job.handler(null as never, context(5_000) as never);
+    expect(s.finished.count).toBe(0);
+
+    ticks = Number.NEGATIVE_INFINITY;
+    await job.handler(null as never, context(5_000) as never);
+    expect(s.finished.count).toBe(1);
+  });
+
+  it("ends QUIETLY when a newer run has replaced the one it walks", async () => {
+    // The newer run walks every scope itself; failing the job would only
+    // retry work that is already being redone.
+    const s = store();
+    const refusal = await supersededRefusal();
+    const job = usageBackfillJob({
+      scopes: async () => [scope("a")],
+      state: s.state,
+      rebuild: async () => {
+        throw refusal;
+      },
+      clock: () => PASS_START,
+    });
+
+    await expect(
+      job.handler(null as never, context(10_000) as never)
+    ).resolves.toBeUndefined();
+    expect([...s.done]).toEqual([]);
+  });
+
+  it("CONTROL: still fails on any other error", async () => {
+    const s = store();
+    const job = usageBackfillJob({
+      scopes: async () => [scope("a")],
+      state: s.state,
+      rebuild: async () => {
+        throw new Error("the database went away");
+      },
+      clock: () => PASS_START,
+    });
+
+    await expect(
+      job.handler(null as never, context(10_000) as never)
+    ).rejects.toThrow("the database went away");
+  });
+
   it("is declared a sweep, which is what keeps one queued", async () => {
     // Without this the handler is registered and nothing ever enqueues it - a
     // job that exists, is reachable, and never runs.
     const job = usageBackfillJob({
       scopes: async () => [],
       state: store().state,
-      rebuild: async () => undefined,
+      rebuild: async () => WHOLE,
     });
 
     expect({ sweep: job.sweep, slug: job.slug }).toEqual({

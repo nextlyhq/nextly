@@ -28,6 +28,10 @@ import {
   COMPONENT_LIBRARY_ROUTE_PATH,
   LIBRARY_ROUTE_PATH,
 } from "../library-contract";
+import {
+  LAYOUT_CHOICES_ROUTE_PATH,
+  PAGE_COLLECTION_ROUTE_PATH,
+} from "../layout-choices-contract";
 
 /**
  * What the library route answers, for the one case that cares.
@@ -74,7 +78,7 @@ let componentError: Error | null = null;
  * The real shell draws one at a time and calls `renderPanel` only for that one,
  * so this is how a case says "the author is looking at something else".
  */
-let shownPanel = "insert";
+let shownPanel = "add";
 
 /** How many times the whole LIBRARY was asked for — the panel's read. */
 let routeReads = 0;
@@ -95,6 +99,9 @@ const paths = vi.hoisted(() => ({
   library: "/library",
   components: "/library/components",
   capability: "/capability",
+  componentFacts: "/component-facts",
+  layoutChoices: "/layouts/choices",
+  pageCollection: "/layouts/page-collection",
 }));
 
 /** Props the recorders captured on the most recent render. */
@@ -135,6 +142,12 @@ let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
     error: null,
   };
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
    * The real module SPREAD, with only the surfaces this file drives replaced.
@@ -166,12 +179,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       inspector,
       topBar,
+      topBarCenter,
+      topBarEnd,
       children,
       renderPanel,
       notices,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
       notices?: {
         notices: readonly { message: string }[];
@@ -186,6 +203,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          * would leave its assertions passing on absence.
          */}
         {topBar}
+        {topBarCenter}
+        {topBarEnd}
         {inspector}
         {/*
          * The real shell draws one panel at a time and this mock draws none,
@@ -206,16 +225,27 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     InspectorPanel: record("inspector"),
     Canvas: (props: Record<string, unknown>): React.JSX.Element => {
       seen.canvas = props;
-      /*
-       * The overlay is RENDERED, not dropped. The toolbar and the spacing
-       * bands are passed to the canvas as overlay content, so a recorder that
-       * returned a bare div would leave them unmounted — and every assertion
-       * about whether they are hidden would be an assertion about `undefined`.
-       */
-      return (
-        <div data-recorder="canvas">{props.overlay as React.ReactNode}</div>
-      );
+      return <div data-recorder="canvas" />;
     },
+    /*
+     * The frame's overlay is RENDERED, not dropped. The toolbar and the
+     * spacing bands are the frame's overlay content, so a recorder that
+     * dropped it would leave them unmounted — and every assertion about
+     * whether they are hidden would be an assertion about `undefined`. The
+     * canvas is passed through, as jsdom never loads a page into a frame.
+     */
+    CanvasFrame: ({
+      children,
+      overlay,
+    }: {
+      children?: React.ReactNode;
+      overlay?: React.ReactNode;
+    }): React.JSX.Element => (
+      <>
+        {children}
+        {overlay}
+      </>
+    ),
     // Passed through AND recorded: the canvas renders inside it, and what the
     // host hands it decides how a keyboard move is judged.
     BlockKeyboardActions: ({
@@ -238,6 +268,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: record("insertPanel"),
+    RepairNotice: nothing,
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
@@ -278,13 +309,38 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({ ...siteStyleRead, refetch: refetchStoredStyle }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   /*
    * Never awaited by these cases: the loader is reached only when an author
    * double-clicks a passage, and none of them do. Present because the mock
    * REPLACES the module wholesale, so an export the subject imports and this
    * omits is a missing-export error rather than an unused stub.
    */
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // Which document the field sits in. Mutable so one case can put the
@@ -308,7 +364,31 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // library when the insert panel opens, and the capability eagerly on mount —
   // and a mock that counted both as one made "does not read the library" fail
   // for a read of something else entirely.
-  usePluginRoute: (args: { path: string }) => {
+  usePluginRoute: (args: { path: string; enabled?: boolean }) => {
+    // The component editor's own facts, read only while a component is open;
+    // a page's editor leaves the read disabled, so it answers nothing here.
+    if (args.path.startsWith(paths.componentFacts)) {
+      return {
+        data: undefined,
+        pending: args.enabled !== false,
+        error: null,
+        refetch: () => {},
+      };
+    }
+    // The page's Layout reads, reads of their own: which collection holds the
+    // pages, answered with nothing so this form is not a page's, and the
+    // choices, asked for nothing. Neither is the library these count.
+    if (
+      args.path.startsWith(paths.layoutChoices) ||
+      args.path === paths.pageCollection
+    ) {
+      return {
+        data: undefined,
+        pending: false,
+        error: null,
+        refetch: () => {},
+      };
+    }
     if (args.path === paths.capability) {
       capabilityReads += 1;
       return {
@@ -349,18 +429,28 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
   // the top bar without putting a second subject in the assertions below.
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // The stored style tier. Answered as "nothing stored yet" here, because what
   // this file asserts is which props reach the two enforcing surfaces — the
   // merge of stored over defaults is `site-style-client`'s own question and has
   // its own coverage. Standing a real query client up here would put a second
   // subject in every assertion below.
-  useSingleDocument: () => siteStyleRead,
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -436,7 +526,7 @@ afterEach(() => {
   componentError = null;
   editorOptions = undefined;
   documentIdentity = null;
-  shownPanel = "insert";
+  shownPanel = "add";
   routeReads = 0;
   componentReads = 0;
   capabilityReads = 0;
@@ -571,6 +661,8 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(paths.library).toBe(LIBRARY_ROUTE_PATH);
     expect(paths.components).toBe(COMPONENT_LIBRARY_ROUTE_PATH);
     expect(paths.capability).toBe(CAPABILITY_ROUTE_PATH);
+    expect(paths.layoutChoices).toBe(LAYOUT_CHOICES_ROUTE_PATH);
+    expect(paths.pageCollection).toBe(PAGE_COLLECTION_ROUTE_PATH);
   });
 
   it("asks what the author may do EAGERLY, before any panel is opened", () => {
@@ -586,8 +678,8 @@ describe("what the editor reads before anyone asks for it", () => {
 
   it("does not read the library while another panel is open", () => {
     // Reading in the editor's own body fetched every saved pattern document on
-    // every editor mount — for authors who open Layers, or Tokens, or no panel
-    // at all, and never visit Insert. The library is the panel's data, so the
+    // every editor mount — for authors who open Layers, or Design, or no panel
+    // at all, and never visit Add. The library is the panel's data, so the
     // panel's mount is when it is asked for.
     shownPanel = "layers";
 
@@ -609,10 +701,10 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(routeReads).toBe(0);
   });
 
-  it("reads it once the insert panel is the one on screen", () => {
+  it("reads it once the Add panel is the one on screen", () => {
     // The control. Without it the assertion above is satisfied by a hook that
     // never reads at all, which is the tier being unreachable again.
-    shownPanel = "insert";
+    shownPanel = "add";
 
     openEditor();
 
@@ -647,6 +739,47 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(
       document.querySelector('[data-recorder="notices"]')?.textContent
     ).toContain("no room left");
+  });
+
+  it("tells the author why an edit a lock refuses did nothing", () => {
+    openEditor();
+
+    const onLockRefused = editorOptions?.onLockRefused as (r: {
+      sentence: string;
+    }) => void;
+    act(() => {
+      onLockRefused({
+        sentence:
+          "This area of Fixed row is locked. Its blocks can't be added, removed or moved.",
+      });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("Fixed row is locked");
+  });
+
+  it("tells the author why an edit was refused for where it put a block", () => {
+    // The op store refuses a placement whichever surface asked for it; this is
+    // where the author learns why.
+    openEditor();
+
+    const onPlacementRefused = editorOptions?.onPlacementRefused as (r: {
+      verdict: unknown;
+    }) => void;
+    act(() => {
+      onPlacementRefused({
+        verdict: {
+          allowed: false,
+          reason: "holds-no-blocks",
+          blockType: "core/button",
+          parentType: "core/heading",
+          slot: "children",
+        },
+      });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("Heading can't hold blocks.");
   });
 
   it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {

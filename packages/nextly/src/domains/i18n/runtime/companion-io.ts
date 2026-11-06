@@ -14,18 +14,46 @@
 import type {
   SqlParam,
   SupportedDialect,
+  TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, sql } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
+import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import type { ColumnSpec } from "../../schema/pipeline/diff/types";
+import {
+  readIndexUniqueness,
+  readPgColumnCollations,
+} from "../../schema/pipeline/live-table-facts";
+import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
+import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
+import { languageRevisionTable } from "../../schema/services/runtime-schema-generator";
+import {
+  CHANGED_AT_COLUMN,
+  changerColumns,
+  DOCUMENT_REVISION_COLUMN,
+  translationChangeColumns,
+} from "../../versions/document-revision";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import {
   COMPANION_STRUCTURAL_COLUMNS,
   COMPANION_UPDATED_AT_COLUMN,
 } from "../companion-columns";
 import type { LocalizedFieldRef } from "../companion-join";
+import {
+  companionColumnsThatCannotHold,
+  judgeCompanionColumns,
+} from "../migration/companion-column-holds";
+import { companionIndexFacts } from "../migration/reconcile-companion";
+import {
+  recordedBeforeOf,
+  type RecordedEntities,
+  type RecordedEntity,
+} from "../migration/recorded-before";
 import { claimGuardCondition } from "../migration/transition-state";
 import type {
   I18nTransitionKind,
@@ -34,6 +62,7 @@ import type {
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
 import { encodeStamp } from "./companion-stamp-column";
+import { localizableConfigEntities } from "./localizable-config-entities";
 
 /**
  * A held transition, plus the condition a statement can carry to prove it is still held.
@@ -97,12 +126,55 @@ function toColumn(name: string): string {
 }
 
 /**
+ * Companion schemas already built, by everything that decides one. A Single's and a component's
+ * reads ask for their companion on every read, once per dynamic-zone row for a component, and
+ * building one makes a Drizzle table. The schema is a function of its inputs alone, so keying it
+ * on them needs no invalidation: a changed field list is another key, on any connection and in any
+ * transaction. Bounded, oldest first out, since every schema change in a process adds a key.
+ */
+const builtCompanionSchemas = new Map<string, CompanionSchema | null>();
+const BUILT_COMPANION_SCHEMA_LIMIT = 500;
+
+/**
  * Build the companion schema for a localized entity from its physical inputs. Entity-agnostic:
  * the caller supplies the resolved table name (`dc_*` / `single_*` / `comp_*`) and fields, so this
  * works for collections, singles, and components alike. Returns `null` when the entity has no
- * translatable fields (nothing lives in a companion).
+ * translatable fields (nothing lives in a companion). Built once per set of inputs; each caller
+ * gets its own copy of the field list, sharing the Drizzle table, which nothing changes.
  */
 export function buildCompanionSchema(args: {
+  slug: string;
+  tableName: string;
+  fields: CompanionFieldLike[];
+  dialect: SupportedDialect;
+  status?: boolean;
+}): CompanionSchema | null {
+  const key = JSON.stringify([
+    args.slug,
+    args.tableName,
+    args.dialect,
+    args.status === true,
+    args.fields,
+  ]);
+  let built = builtCompanionSchemas.get(key);
+  if (built === undefined && !builtCompanionSchemas.has(key)) {
+    built = companionSchemaOf(args);
+    if (builtCompanionSchemas.size >= BUILT_COMPANION_SCHEMA_LIMIT) {
+      const oldest = builtCompanionSchemas.keys().next().value;
+      if (oldest !== undefined) builtCompanionSchemas.delete(oldest);
+    }
+    builtCompanionSchemas.set(key, built);
+  }
+  return built
+    ? {
+        ...built,
+        localizedFields: built.localizedFields.map(field => ({ ...field })),
+      }
+    : null;
+}
+
+/** The companion schema for `args`, built now. */
+function companionSchemaOf(args: {
   slug: string;
   tableName: string;
   fields: CompanionFieldLike[];
@@ -249,7 +321,23 @@ export async function upsertCompanionRow(
   locale: string,
   companionData: Record<string, unknown>,
   status?: string,
-  options: { now?: Date; updatedAt?: CompanionStampMode } = {}
+  options: {
+    now?: Date;
+    updatedAt?: CompanionStampMode;
+    /**
+     * Who made this save, when it is a save of the document: the row's version counter is then
+     * incremented (a row this creates starts at its default, 1) and its last changer recorded,
+     * in this same statement. Absent for a write that is not a save of the language, such as an
+     * archive replay.
+     */
+    savedBy?: RequestActor;
+    /**
+     * Set when this save already took the row's next version with
+     * {@link claimCompanionRevision}: the counter is then not moved a second
+     * time. The changer is still written, the same one the claim wrote.
+     */
+    revisionClaimed?: boolean;
+  } = {}
 ): Promise<void> {
   const withStatus =
     status !== undefined
@@ -316,7 +404,18 @@ export async function upsertCompanionRow(
               options.now
             ),
           };
-  const cols = Object.keys(withStamp);
+  const withChanger =
+    options.savedBy === undefined
+      ? withStamp
+      : {
+          ...withStamp,
+          ...translationChangeColumns(
+            options.savedBy,
+            adapter.dialect,
+            options.now
+          ),
+        };
+  const cols = Object.keys(withChanger);
 
   const isMysql = adapter.dialect === "mysql";
   const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
@@ -328,23 +427,150 @@ export async function upsertCompanionRow(
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withStamp[c]
+        c === "_parent" ? parentId : c === "_locale" ? locale : withChanger[c]
       );
       return ph();
     })
     .join(", ");
 
+  // An existing row's counter moves by one in the conflict branch, from the row's own value under
+  // the lock the upsert holds; an inserted row takes the column default.
+  const increment =
+    options.savedBy === undefined || options.revisionClaimed
+      ? []
+      : [
+          isMysql
+            ? `${q(DOCUMENT_REVISION_COLUMN)} = ${q(DOCUMENT_REVISION_COLUMN)} + 1`
+            : `${q(DOCUMENT_REVISION_COLUMN)} = ${q(companionTableName)}.${q(DOCUMENT_REVISION_COLUMN)} + 1`,
+        ];
   const conflict = isMysql
-    ? `ON DUPLICATE KEY UPDATE ${cols.map(c => `${q(c)} = VALUES(${q(c)})`).join(", ")}`
-    : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${cols
-        .map(c => `${q(c)} = excluded.${q(c)}`)
-        .join(", ")}`;
+    ? `ON DUPLICATE KEY UPDATE ${[...cols.map(c => `${q(c)} = VALUES(${q(c)})`), ...increment].join(", ")}`
+    : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${[
+        ...cols.map(c => `${q(c)} = excluded.${q(c)}`),
+        ...increment,
+      ].join(", ")}`;
 
   await adapter.executeQuery(
     `INSERT INTO ${q(companionTableName)} (${allCols.map(q).join(", ")}) ` +
       `VALUES (${valuePlaceholders}) ${conflict}`,
     params
   );
+}
+
+/**
+ * Take a translation row's next version for a save judged on it, as that
+ * save's first write of the row, before it writes anything else: a
+ * compare-and-set, so it succeeds only when the row still holds the version
+ * the save was made from (`expected`), and a stale save is found with
+ * nothing of it written.
+ *
+ * `expected` 0 means the save was made with no row in this language: the
+ * row is inserted bare, with its counter at the column default (1) and this
+ * save's changer, and its values follow in {@link upsertCompanionRow}. A row
+ * already there means someone else's save created it since.
+ *
+ * Takes no lock on a row that is not there. A locking read of an absent
+ * translation row locks a range of the table's key on MySQL, and two
+ * documents' first translations that each lock the same range and then
+ * insert into it deadlock. Every writer of a document's translation rows
+ * holds the document's own row lock first, so nothing else moves this row
+ * between the claim and the write that follows it.
+ *
+ * @returns Whether the row was claimed; false when it is out of date.
+ */
+export async function claimCompanionRevision(
+  tx: Pick<TransactionContext, "getDrizzle" | "execute">,
+  dialect: SupportedDialect,
+  companionTableName: string,
+  parentId: string,
+  locale: string,
+  expected: number,
+  savedBy: RequestActor
+): Promise<boolean> {
+  if (expected > 0) {
+    // Through the translation table's revision model, which declares the
+    // counter, the changer and its time; it encodes the time as the row's
+    // other writes store it.
+    const table = languageRevisionTable(dialect, companionTableName);
+    const update = tx
+      .getDrizzle<ClaimsRows>()
+      .update(table as never)
+      .set({
+        [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
+        ...changerColumns(savedBy),
+        [CHANGED_AT_COLUMN]: new Date(),
+      })
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale),
+          eq(table[DOCUMENT_REVISION_COLUMN] as never, expected)
+        )
+      );
+    // MySQL answers how many rows changed; the others return them.
+    if (dialect === "mysql") {
+      const result: unknown = await update;
+      const header = (Array.isArray(result) ? result[0] : result) as {
+        affectedRows?: number;
+      };
+      return header?.affectedRows === 1;
+    }
+    const rows = await update.returning({ parent: table._parent });
+    return rows.length === 1;
+  }
+
+  // The bare row, through the same revision model: its values follow in the
+  // upsert above, on the same transaction. Its counter takes the column's
+  // default, 1.
+  const table = languageRevisionTable(dialect, companionTableName);
+  const insert = tx
+    .getDrizzle<InsertsRows>()
+    .insert(table as never)
+    .values({
+      _parent: parentId,
+      _locale: locale,
+      ...changerColumns(savedBy),
+      [CHANGED_AT_COLUMN]: new Date(),
+    });
+  if (dialect === "mysql") {
+    // A duplicate fails this statement alone: MySQL keeps the transaction,
+    // which the rest of a batch goes on with.
+    try {
+      await insert;
+      return true;
+    } catch (error) {
+      if (isUniqueViolation(dialect, error)) return false;
+      throw error;
+    }
+  }
+  // PostgreSQL would abort the whole transaction on a failed insert, so the
+  // conflict is answered by the statement itself, with the row it inserted.
+  const rows = await insert
+    .onConflictDoNothing()
+    .returning({ parent: table._parent });
+  return rows.length === 1;
+}
+
+/** A Drizzle handle that updates rows, as `getDrizzle()` answers it. */
+/** A Drizzle handle that inserts rows, as `getDrizzle()` answers it. */
+interface InsertsRows {
+  insert(table: never): {
+    values(values: Record<string, unknown>): PromiseLike<unknown> & {
+      onConflictDoNothing(): {
+        returning(fields: Record<string, unknown>): PromiseLike<unknown[]>;
+      };
+    };
+  };
+}
+
+interface ClaimsRows {
+  update(table: never): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): PromiseLike<unknown> & {
+        returning(fields: Record<string, unknown>): PromiseLike<unknown[]>;
+      };
+    };
+  };
 }
 
 /**
@@ -394,6 +620,160 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
 }
 
 /**
+ * Why a code-first run that starts an entity's translation must not copy its values into the
+ * translations table that survived turning translation off, or undefined when it may.
+ *
+ * Turning translation off keeps the translations table, and turning it back on copies the main
+ * table's values into that table's columns before the push, and before the reconcile judges a
+ * column. A field changed while translation was off may have outgrown its column there, which
+ * would cut or refuse its values (a decimal's added digits rounded away). So such a column is
+ * judged first, by the rule a column taken as a field's own is judged by
+ * (`companionColumnsThatCannotHold`), and the run is refused before anything is copied, pushed or
+ * dropped. Only a run whose recorded entity was not translated is asked: undefined
+ * `recordedBefore` judges nothing.
+ */
+export async function survivingCompanionRefusal(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    tableName: string;
+    fields: CompanionFieldLike[];
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+    recordedBefore?: RecordedEntity | null;
+  }
+): Promise<Error | undefined> {
+  if (args.recordedBefore === undefined) return undefined;
+  if (args.recordedBefore?.localized === true) return undefined;
+  const live = await liveCompanionColumns(adapter, args.tableName);
+  if (live.length === 0) return undefined;
+  const translated = new Set(resolveLocalizedFieldNames(args.fields, true));
+  const cannotHold = companionColumnsThatCannotHold({
+    fields: args.fields.filter(f => translated.has(f.name)),
+    live,
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+    surface: "code",
+  });
+  return cannotHold.length > 0
+    ? new Error(cannotHold.map(c => c.refusal.message).join(" "))
+    : undefined;
+}
+
+/**
+ * Refuses a run whose translated entities' companions hold a column the column reconcile would
+ * refuse (`judgeCompanionColumns`): one that cannot hold a field the run newly translates, or one
+ * that cannot be widened to a field the run changed. `nextly migrate` asks this once its migration
+ * files have applied and before their metadata is recorded. Its reconcile runs after the metadata,
+ * so a refusal there left the registry on the new definitions, and the next run judged the same
+ * change as made before and only warned. Asked here, a refusal leaves the registry as it was, and
+ * the next run is refused the same way. Undefined `recordedBefore` judges nothing.
+ */
+export async function refuseCompanionColumnsThatCannotHold(
+  adapter: CompanionIntrospectAdapter,
+  config: Parameters<typeof localizableConfigEntities>[0],
+  recordedBefore: RecordedEntities | undefined
+): Promise<void> {
+  if (recordedBefore === undefined) return;
+  const reasons: string[] = [];
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const [kind, group, resolveTableName] of localizableConfigEntities(
+    config
+  )) {
+    for (const entity of group) {
+      if (!entity.slug || entity.localized !== true) continue;
+      const tableName = resolveTableName(entity);
+      const live = await liveCompanionColumns(adapter, tableName);
+      if (live.length === 0) continue;
+      const fields = entity.fields ?? [];
+      const translated = new Set(resolveLocalizedFieldNames(fields, true));
+      const { refused } = judgeCompanionColumns({
+        fields: fields.filter(f => translated.has(f.name)),
+        recordedBefore:
+          recordedBeforeOf(recordedBefore, kind, entity.slug) ?? null,
+        live,
+        dialect: adapter.dialect,
+        builtBy: "codeFirst",
+      });
+      for (const { refusal } of refused) {
+        errors.push({ ...refusal, path: `${entity.slug}.${refusal.path}` });
+        reasons.push(
+          `The translations table for "${entity.slug}" (${tableName}_locales): ${refusal.message}`
+        );
+      }
+    }
+  }
+  if (errors.length === 0) return;
+  // The CLI prints a refusal's context, so its reasons travel there as well as in its errors.
+  throw NextlyError.validation({ errors, logContext: { reasons } });
+}
+
+/**
+ * What the column reconcile needs besides reading: a transaction, which holds one connection for
+ * a MySQL statement built from the catalog in a session variable (`restatedColumn`).
+ */
+export interface CompanionReconcileAdapter extends CompanionIntrospectAdapter {
+  transaction<T>(
+    work: (tx: { execute(sql: string): Promise<unknown> }) => Promise<T>
+  ): Promise<T>;
+}
+
+/**
+ * Alters each `widen` column of `table` to the type its field declares, which holds everything the
+ * column holds, and keeps the rest of the column's definition as it is.
+ *
+ * - PostgreSQL: `ALTER COLUMN ... TYPE` keeps the column's NULL rule and default but sets the new
+ *   type's default collation, so a collation of the column's own is restated with its schema
+ *   (`readPgColumnCollations`). A decimal's new precision rewrites the table.
+ * - MySQL: `MODIFY COLUMN` drops whatever it does not restate, so the statement is built from the
+ *   column's own catalog entry with only its type changed (`restatedColumn`), on one connection.
+ *   It can rebuild the table.
+ * - SQLite enforces no size, so nothing is ever widened there.
+ *
+ * Each column is one statement that commits on its own. A failure is reported and answers false:
+ * the columns already widened stay so, and the next run, which judges the columns again, widens
+ * the rest.
+ */
+async function widenCompanionColumns(
+  adapter: CompanionReconcileAdapter,
+  table: string,
+  widen: readonly { column: string; type: string }[],
+  onError?: (error: unknown) => void
+): Promise<boolean> {
+  if (widen.length === 0) return true;
+  try {
+    if (adapter.dialect === "postgresql") {
+      const q = (name: string) => quoteIdent(name, "postgresql");
+      const collations = await readPgColumnCollations(
+        adapter.getDrizzle(),
+        table
+      );
+      for (const { column, type } of widen) {
+        const collation = collations.get(column);
+        // Named with its schema, so a collation outside the search path is the one restated.
+        await adapter.executeQuery(
+          `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} TYPE ${type}` +
+            (collation === undefined
+              ? ""
+              : ` COLLATE ${q(collation.schema)}.${q(collation.name)}`)
+        );
+      }
+    } else if (adapter.dialect === "mysql") {
+      for (const { column, type } of widen) {
+        await adapter.transaction(async tx => {
+          for (const statement of restatedColumn(table, column, { type })) {
+            await tx.execute(statement);
+          }
+        });
+      }
+    }
+    return true;
+  } catch (error) {
+    onError?.(error);
+    return false;
+  }
+}
+
+/**
  * Add localized columns an EXISTING companion is missing. No-op when the companion is absent —
  * creating it is {@link ensureCompanionTable}'s job.
  *
@@ -436,8 +816,13 @@ export function versionScopeForEntityKind(
   return kind === "collection" ? "collection" : undefined;
 }
 
+/**
+ * Brings an existing companion's translated columns in step with the entity's fields, additively.
+ * Resolves false when it reported a failure through `onError`, a refused column among them, so
+ * the caller builds nothing more on the companion's columns this run.
+ */
 export async function reconcileCompanionColumns(
-  adapter: CompanionIntrospectAdapter,
+  adapter: CompanionReconcileAdapter,
   args: {
     /**
      * Which builder made the main table. This function CREATES or ALTERS the physical companion, so
@@ -457,16 +842,33 @@ export async function reconcileCompanionColumns(
      * NULL is the true answer rather than a gap.
      */
     versionScope?: VersionScopeKind;
+    /**
+     * The entity as the registry recorded it before this run changed it (`recordedBeforeOf`), so
+     * a field the run newly translates is told from one translated before it. `null` for an
+     * entity the registry did not hold, every translated field of which is new. Left out by a
+     * caller that judges nothing.
+     */
+    recordedBefore?: RecordedEntity | null;
   },
-  onError?: (error: unknown) => void
-): Promise<void> {
+  onError?: (error: unknown) => void,
+  /** Told of a column left as it is that cannot hold its field, which fails nothing. */
+  onWarning?: (message: string) => void
+): Promise<boolean> {
   const companionTableName = `${args.tableName}_locales`;
   // Hoisted so the concurrency recheck in the catch can reuse it.
   const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
   const desired = args.fields.filter(f => localizedNames.has(f.name));
+  // Whether the companion's columns are left in step: false once a failure is reported, so the
+  // caller builds nothing more on them, such as a unique index over a column this run refused.
+  let failed = false;
+  const fail = (error: unknown) => {
+    failed = true;
+    onError?.(error);
+  };
   try {
-    if (!(await companionTableExists(adapter, companionTableName))) return;
-    if (desired.length === 0) return;
+    if (!(await companionTableExists(adapter, companionTableName)))
+      return !failed;
+    if (desired.length === 0) return !failed;
 
     const { introspectLiveSnapshot } = await import(
       "../../schema/pipeline/diff/introspect-live"
@@ -476,11 +878,39 @@ export async function reconcileCompanionColumns(
       adapter.dialect,
       [companionTableName]
     );
-    const present = new Set(
-      snapshot.tables
-        .find(t => t.name === companionTableName)
-        ?.columns.map(c => c.name) ?? []
-    );
+    const liveColumns =
+      snapshot.tables.find(t => t.name === companionTableName)?.columns ?? [];
+    const present = new Set(liveColumns.map(c => c.name));
+    // A column already there is taken below as its field's. For a field this run newly
+    // translates it may be another field's leftover, so it is taken only if it can hold the
+    // field's values, judged as the Schema Builder judges it. A field translated before the run
+    // had its column then, and the column is widened when the field now declares a wider one
+    // (`planColumnsTranslatedBefore`). What cannot be taken or widened stops the reconcile
+    // before it changes anything, and the run is told which column and why.
+    if (args.recordedBefore !== undefined) {
+      const { refused, plan } = judgeCompanionColumns({
+        fields: desired,
+        recordedBefore: args.recordedBefore,
+        live: liveColumns,
+        dialect: args.dialect,
+        builtBy: args.builtBy,
+      });
+      if (refused.length > 0) {
+        fail(new Error(refused.map(c => c.refusal.message).join(" ")));
+        return !failed;
+      }
+      for (const warning of plan.warn) onWarning?.(warning.refusal.message);
+      if (
+        !(await widenCompanionColumns(
+          adapter,
+          companionTableName,
+          plan.widen,
+          fail
+        ))
+      ) {
+        return !failed;
+      }
+    }
     // `_status` is deliberately NOT reconciled here. Adding the column is one statement and
     // backfilling the default-locale row from the main row is another, and the pair cannot be
     // made retryable from physical shape alone: when the ADD lands and the backfill does not,
@@ -521,7 +951,7 @@ export async function reconcileCompanionColumns(
     // Only this direction is a problem. Status switched OFF while the column remains is
     // harmless: the column is simply unused, and the additive policy keeps it.
     if (args.status === true && !hasStatus) {
-      onError?.(
+      fail(
         new Error(
           `The translations table ${companionTableName} predates Draft/Published being enabled ` +
             `for "${args.slug}", so it has no _status column. Run \`nextly migrate\` to add it: ` +
@@ -529,7 +959,7 @@ export async function reconcileCompanionColumns(
             `default locale's status cannot be retried safely if only the first half lands.`
         )
       );
-      return;
+      return !failed;
     }
 
     // Nothing missing — the overwhelmingly common case, and worth leaving before the statement
@@ -546,7 +976,7 @@ export async function reconcileCompanionColumns(
     // version scope emits no back-fill at all, so for it this stays a plain early return.
     const columnsInStep =
       hasUpdatedAt && desired.every(f => present.has(toColumn(f.name)));
-    if (columnsInStep && args.versionScope === undefined) return;
+    if (columnsInStep && args.versionScope === undefined) return !failed;
 
     // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
     // emits is exactly the difference. `old` is a subset of `new` by construction here, which
@@ -585,9 +1015,10 @@ export async function reconcileCompanionColumns(
     // exactly like one never seeded, so no introspection can report that. The back-fill is
     // re-issued on the next reconcile instead of being inferred complete here.
     if (await companionShapeIsPresent(adapter, companionTableName, desired))
-      return;
-    onError?.(error);
+      return !failed;
+    fail(error);
   }
+  return !failed;
 }
 
 /**
@@ -747,16 +1178,26 @@ export async function companionColumnNames(
   adapter: CompanionIntrospectAdapter,
   tableName: string
 ): Promise<string[]> {
-  return (await liveColumnsOf(adapter, `${tableName}_locales`)).map(
-    c => c.name
-  );
+  return (await liveCompanionColumns(adapter, tableName)).map(c => c.name);
+}
+
+/**
+ * The same columns of `<tableName>_locales`, each as this database declares it (type, size,
+ * nullability), so a preflight that judges a column's definition and one that needs only its name
+ * share one read. Empty when there is no companion.
+ */
+export async function liveCompanionColumns(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string
+): Promise<readonly ColumnSpec[]> {
+  return liveColumnsOf(adapter, `${tableName}_locales`);
 }
 
 /** `tableName`'s columns as this database has them; empty when the table is missing. */
 async function liveColumnsOf(
   adapter: CompanionIntrospectAdapter,
   tableName: string
-): Promise<ReadonlyArray<{ name: string; nullable?: boolean }>> {
+): Promise<readonly ColumnSpec[]> {
   const { introspectLiveSnapshot } = await import(
     "../../schema/pipeline/diff/introspect-live"
   );
@@ -780,8 +1221,13 @@ async function liveColumnsOf(
  *   apply that moved a value and stopped before the registry recorded it left its column in place.
  * - `liveCompanionColumns`: every companion column, so a rename, a move or a drop an earlier apply
  *   already made is not made again.
+ * - `liveCompanionIndexes` and `liveCompanionNotUnique`: the indexes the companion actually
+ *   carries. Read from the database rather than inferred from the fields, because configuration
+ *   is not proof of a database object: an entity marked translated and unique before the rule was
+ *   enforced carries the flags and no index, and a plan that believed the flags created nothing,
+ *   leaving later writes unconstrained.
  *
- * The companion's columns are read once and serve the last two.
+ * The companion's columns are read once and serve two of these.
  */
 export async function liveCompanionShape(
   adapter: CompanionIntrospectAdapter,
@@ -796,6 +1242,8 @@ export async function liveCompanionShape(
   existingMainColumns: string[];
   presentOnCompanion?: string[];
   liveCompanionColumns?: string[];
+  liveCompanionIndexes?: readonly string[];
+  liveCompanionNotUnique?: readonly string[];
 }> {
   const { tableName, companionExists } = args;
   const live = companionExists
@@ -814,6 +1262,17 @@ export async function liveCompanionShape(
             live
           ),
     liveCompanionColumns: live,
+    // Only for a companion that exists: there are no indexes on a table that is about to be
+    // created, and the transition plans its creates from that.
+    ...(companionExists
+      ? companionIndexFacts(
+          await readIndexUniqueness(
+            adapter.getDrizzle(),
+            adapter.dialect,
+            `${tableName}_locales`
+          )
+        )
+      : {}),
   };
 }
 

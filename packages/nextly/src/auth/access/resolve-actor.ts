@@ -10,8 +10,11 @@
  *   a request those lookups are kept, so an actor costs no query after the
  *   request's first; outside a request they run per call, as they always have;
  * - a key's come from its scope exactly as authentication resolved them, and
- *   a key never holds super-admin authority, whoever made it;
- * - a plugin's person and a visitor carry no lookup at all.
+ *   only a full-access key whose maker is an active super-admin holds
+ *   super-admin authority, as authentication found it;
+ * - a visitor's permissions are the Public role's, read once per request as a
+ *   user's are, and kept per process behind the role version;
+ * - a plugin's person carries no lookup at all.
  *
  * A caller handed in by server code (a Direct API `user`, a service's `as`)
  * is resolved like any other, so a narrower caller is its own actor.
@@ -24,10 +27,17 @@ import {
   isSuperAdmin,
   isSuperAdminOrRefuse,
   listEffectiveGrants,
+  listPublicGrants,
   listRoleSlugsForUser,
+  type PublicRoleDatabase,
 } from "../../services/lib/permissions";
 import { consoleLogger } from "../../shared/types";
-import { scopeGrants, type AuthenticatedScope } from "../authenticated-scope";
+import {
+  scopeGrants,
+  scopeHoldsSuperAdmin,
+  type AuthenticatedScope,
+} from "../authenticated-scope";
+import { currentPrincipal } from "../principal-scope";
 
 import {
   keyActor,
@@ -169,19 +179,23 @@ export function userIsSuperAdmin(
 
 /**
  * An API key's actor, from what authentication resolved for it: the key's
- * own permissions and roles, and the user who made it.
+ * own permissions and roles, the user who made it, and whether it carries
+ * that user's super-admin authority. Required, so every way a key's actor is
+ * made says where that answer came from.
  */
 export function actorForKey(fields: {
   keyId: string;
   userId: string;
   grants: readonly PermissionGrant[];
   roles: readonly string[];
+  superAdmin: boolean;
 }): KeyActor {
   return keyActor({
     keyId: fields.keyId,
     userId: fields.userId,
     roles: fields.roles,
     permissions: fields.grants,
+    superAdmin: fields.superAdmin,
   });
 }
 
@@ -192,7 +206,9 @@ export function actorForKey(fields: {
  * and grant rows disagree is refused here, as it is wherever it is read.
  *
  * A gate holds the key's scope but not its id, so the actor names none; a
- * way in that knows the id builds the actor with {@link actorForKey}.
+ * way in that knows the id builds the actor with {@link actorForKey}. The
+ * key's super-admin authority is the scope's, which only authentication can
+ * give, so a scope built by hand or narrowed carries none.
  */
 export function actorForScope(
   scope: AuthenticatedScope,
@@ -204,6 +220,7 @@ export function actorForScope(
     userId: user.id,
     grants: scope.grants ?? [],
     roles: scope.roles ?? user.roles ?? [],
+    superAdmin: scopeHoldsSuperAdmin(scope),
   });
 }
 
@@ -212,7 +229,44 @@ export function actorForPrincipal(principal: Principal): PrincipalActor {
   return principalActor(principal);
 }
 
-/** A caller with no session, no key and no plugin person. */
-export function actorForVisitor(): VisitorActor {
-  return visitorActor();
+/**
+ * A caller with no session, no key and no plugin person, holding what the
+ * Public role grants. With `executor`, the grants are read on the caller's
+ * transaction rather than the pool, as a user's lookups are inside one; with
+ * `own` too, on a database of the caller's own (see `listPublicGrants`). A
+ * lookup that fails refuses: it throws, as a user's lookups do.
+ */
+export async function actorForVisitor(
+  options: { executor?: unknown; own?: PublicRoleDatabase } = {}
+): Promise<VisitorActor> {
+  return visitorActor(await listPublicGrants(options.executor, options.own));
+}
+
+/**
+ * Whether a read is judged as a visitor's, as the collection and Single gates
+ * judge it: checked (`overrideAccess` not true), made as no plugin person, and
+ * naming no user. Such a read sees published content only, whatever it asks
+ * for and whatever the Public role grants.
+ */
+export function readsAsVisitor(read: {
+  readonly overrideAccess?: boolean;
+  readonly user?: unknown;
+}): boolean {
+  return (
+    read.overrideAccess !== true && currentPrincipal() === null && !read.user
+  );
+}
+
+/**
+ * A visitor's actor for a reader that refuses rather than fails, as
+ * {@link actorForUserFailingClosed} is a user's: Public's grants that could
+ * not be read count as none (the failed read is logged where it failed), so
+ * the visitor is refused whatever needs them.
+ */
+export async function actorForVisitorFailingClosed(): Promise<VisitorActor> {
+  try {
+    return await actorForVisitor();
+  } catch {
+    return visitorActor();
+  }
 }

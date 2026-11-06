@@ -318,7 +318,7 @@ describe("the notification's email template", () => {
   }
 
   it("links to the chosen template in the Email hub, in a new tab", async () => {
-    serve(["read-email-templates", "manage-email-templates"]);
+    serve(["read-email-templates", "update-email-templates"]);
     notifications = [aNotification({ templateSlug: "form-submitted" })];
     await openEditor();
 
@@ -344,8 +344,21 @@ describe("the notification's email template", () => {
     expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
   });
 
+  it("offers no link to a role holding only the retired manage-email-templates", async () => {
+    // A role `nextly upgrade` has not converted: the server refuses it the
+    // editor, so no link is shown.
+    const answered = serve(["read-email-templates", "manage-email-templates"]);
+    notifications = [aNotification({ templateSlug: "form-submitted" })];
+    await openEditor();
+
+    await screen.findByText("Form submitted");
+    await waitFor(() => expect(answered()).toBe(true));
+    await act(async () => {});
+    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
+  });
+
   it("offers no link until a template is chosen", async () => {
-    serve(["manage-email-templates"]);
+    serve(["update-email-templates"]);
     notifications = [aNotification()];
     await openEditor();
     expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();

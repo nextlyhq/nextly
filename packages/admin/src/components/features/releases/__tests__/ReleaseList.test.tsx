@@ -597,9 +597,10 @@ describe("the open tab and its count", () => {
 describe("paging when a tab shrinks", () => {
   it("moves back to the last page when the only row on a later page goes", async () => {
     const user = userEvent.setup();
-    const rows = Array.from({ length: 25 }, (_, i) =>
-      release({ id: `r${i}`, title: `Release ${i}` })
-    );
+    // The pager reads the server's total, not the rows it is handed, so one
+    // row stands for a full first page: rendering 25 rows made this the
+    // slowest test in the suite while testing nothing more.
+    const rows = [release({ id: "r0", title: "Release 0" })];
     let total = 26;
     mocks.listPage.mockImplementation(({ page: number }: { page: number }) =>
       number === 1 ? page(rows, total) : page([], total)

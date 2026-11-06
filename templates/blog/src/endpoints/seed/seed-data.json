@@ -1,6 +1,6 @@
 {
   "seedMedia": {
-    "baseUrl": "https://raw.githubusercontent.com/nextlyhq/nextly/main/templates/blog/seed/media/"
+    "baseUrl": "https://raw.githubusercontent.com/nextlyhq/nextly/main/templates/blog/src/endpoints/seed/media/"
   },
   "users": [
     {
@@ -568,7 +568,7 @@
       "tags": ["typescript"],
       "publishedAt": "2026-02-05T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-developer-experience.svg",
+      "featuredImage": "shipping-culture-small-commit-fast-review.webp",
       "content": {
         "root": {
           "type": "root",
@@ -654,7 +654,7 @@
       "tags": ["css"],
       "publishedAt": "2026-01-20T10:00:00.000Z",
       "status": "published",
-      "featuredImage": "post-design-systems.svg",
+      "featuredImage": "tailwindcss-a-prictical-guide.webp",
       "content": {
         "root": {
           "type": "root",

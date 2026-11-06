@@ -9,8 +9,7 @@
  *   permissions), `delete-roles`;
  * - permissions: `create-permissions` or `manage-permissions`,
  *   `delete-permissions` or `manage-permissions`;
- * - field groups: `create-settings`, `update-settings`, `delete-settings`, or
- *   `manage-settings` for any of them.
+ * - field groups: `create-settings`, `update-settings`, `delete-settings`.
  *
  * A super-admin passes, an API key is judged by its own grants, and a checked
  * call that names nobody is refused with AUTH_REQUIRED. Every refusal leaves
@@ -150,7 +149,11 @@ describe.each(getConfiguredTestDialects())(
         await role(`permission-keepers-${tag}`, ["manage-permissions"]),
       ]);
       settingsKeeperId = await account("settings-keeper@example.com", [
-        await role(`settings-keepers-${tag}`, ["manage-settings"]),
+        await role(`settings-keepers-${tag}`, [
+          "create-settings",
+          "update-settings",
+          "delete-settings",
+        ]),
       ]);
       for (const slug of [
         "create-permissions",
@@ -385,7 +388,7 @@ describe.each(getConfiguredTestDialects())(
         ).toBe("Kept");
       });
 
-      it("lets someone holding manage-settings create, update and delete a field group", async () => {
+      it("lets someone holding create-, update- and delete-settings create, update and delete a field group", async () => {
         const slug = `fg_${tag}_managed`;
         const as = checkedAs(settingsKeeperId);
         await as.fieldGroups.create({ slug, label: "Managed", fields: FIELDS });

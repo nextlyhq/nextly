@@ -79,7 +79,8 @@ export function RoleBasicInfo({
             <Textarea
               placeholder="Describe the role's permissions..."
               {...field}
-              disabled={isLoading}
+              // A built-in role saves its permissions alone.
+              disabled={isLoading || isSystemRole}
               className="min-h-[100px] resize-none"
             />
           </FieldShell>

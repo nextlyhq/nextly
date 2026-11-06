@@ -25,6 +25,12 @@
  * suite, and an empty selection stands only while Vitest still discovers tests
  * in the package; otherwise the package's own `test` script decides.
  *
+ * The root `scripts/` tests, when the change reaches them, run BEFORE the
+ * packages, and a failure there stops the run without them. They take a few
+ * minutes and the package suites a quarter of an hour, so a push that fails
+ * them learns it before the long leg rather than after it. Nothing is skipped
+ * on a passing run: both legs run, with the verdicts they gave before.
+ *
  * Usage (from the pre-push, after the build):
  *   node scripts/test-changed.mjs [base] [--max-workers=N]   # base defaults to origin/main
  *
@@ -244,7 +250,7 @@ const DEPENDENCY_FIELDS = [
   "optionalDependencies",
 ];
 
-function workspaceDependencies(manifest) {
+export function workspaceDependencies(manifest) {
   const entries = DEPENDENCY_FIELDS.flatMap(field =>
     Object.entries(manifest?.[field] ?? {})
   );
@@ -315,7 +321,7 @@ function guardsIn(root, dir) {
  * The test files `vitest list` prints for a package, with `extra` arguments
  * (`--changed <base>` to select), or null when it could not say.
  */
-function vitestList(root, dir, extra) {
+export function vitestList(root, dir, extra) {
   const { command, args, shell } = pnpmInvocation([
     "exec",
     "vitest",
@@ -365,7 +371,7 @@ function testPackage(root, workspace, plan, workers) {
 }
 
 /** A workspace's own manifest. */
-function manifestOf(root, workspace) {
+export function manifestOf(root, workspace) {
   return JSON.parse(readFileSync(join(root, workspace.dir, "package.json"), "utf8"));
 }
 
@@ -378,22 +384,26 @@ function stampPath(root, dir) {
 }
 
 /** Records that every test of a package just passed at HEAD, so every record describes HEAD. */
-function stampFullRun(root, dir) {
+export function stampFullRun(root, dir) {
   const path = stampPath(root, dir);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${git(root, ["rev-parse", "HEAD"]).trim()}\n`);
 }
 
+/** The commit a package's dependency records describe, or null when no full run here has stamped one. */
+export function readStamp(root, dir) {
+  try {
+    const stamped = readFileSync(stampPath(root, dir), "utf8").trim();
+    return /^[0-9a-f]{40}$/.test(stamped) ? stamped : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The package's files changed since its last passing full run, or null when that commit is unknown here. */
 function changedSinceFullRun(root, dir) {
-  const stamped = (() => {
-    try {
-      return readFileSync(stampPath(root, dir), "utf8").trim();
-    } catch {
-      return "";
-    }
-  })();
-  if (!/^[0-9a-f]{40}$/.test(stamped)) return null;
+  const stamped = readStamp(root, dir);
+  if (stamped === null) return null;
   const diff = spawnSync("git", ["diff", "--name-only", stamped, "HEAD", "--", dir], {
     cwd: root,
     encoding: "utf8",
@@ -417,7 +427,12 @@ function fullReasonFor(root, workspace, context) {
         changed: paths,
         changedPackages: filters,
       }),
-    () => staleRecordsReason(changedSinceFullRun(root, workspace.dir), new Set(paths)),
+    // Whether the records still describe the tree: the pre-push's own rule
+    // unless the caller judges them another way (CI, against main as tested).
+    () =>
+      context.recordsReason
+        ? context.recordsReason(workspace)
+        : staleRecordsReason(changedSinceFullRun(root, workspace.dir), new Set(paths)),
   ];
   for (const check of checks) {
     const reason = check();
@@ -427,7 +442,7 @@ function fullReasonFor(root, workspace, context) {
 }
 
 /** What to run for one package. */
-function planFor(root, workspace, context) {
+export function planFor(root, workspace, context) {
   const reason = fullReasonFor(root, workspace, context);
   return reason ? { full: true, reason } : selectionPlan(root, workspace.dir, context.mergeBase);
 }
@@ -456,7 +471,7 @@ function workersFrom(argv) {
 }
 
 /** What turbo declares the test tasks read outside their packages, or everything when it cannot say. */
-function turboDeclaration(root, paths) {
+export function turboDeclaration(root, paths) {
   const { command, args, shell } = pnpmInvocation(["turbo", "run", "test", "--dry=json"]);
   const dry = spawnSync(command, args, { cwd: root, encoding: "utf8", maxBuffer: 1024 * 1024 * 64, shell });
   return (dry.status === 0 && declaredReaders(parsedJson(dry.stdout), paths)) || UNDECLARED;
@@ -499,8 +514,8 @@ function testScripts(root, paths) {
 
 /**
  * The command line as options. `--scripts-only` is for a run whose packages are
- * already being tested in full, as the pre-push does when the change redefines
- * the workspace graph. `--all` keeps the same scope and runs each package in
+ * tested in full by the caller, after this, as the pre-push does when the
+ * change redefines the workspace graph. `--all` keeps the same scope and runs each package in
  * full, for `NEXTLY_PREPUSH_ALL_TESTS=1`.
  */
 function optionsFrom(argv) {
@@ -512,12 +527,28 @@ function optionsFrom(argv) {
   };
 }
 
+/**
+ * Runs the two legs, the root scripts tests first, and returns the exit status.
+ * Each leg is a function returning how many of its runs failed. A failed
+ * scripts leg returns 1 without calling `packages`: its suites would take a
+ * quarter of an hour to give a verdict the push has already lost.
+ */
+export function runInOrder({ scripts, packages, log = console.error }) {
+  if (scripts() !== 0) {
+    log("test-changed: the root scripts tests failed; not running the package tests, fix these first");
+    return 1;
+  }
+  return packages() === 0 ? 0 : 1;
+}
+
 function main() {
   const { base, scriptsOnly, all, workers } = optionsFrom(process.argv.slice(2));
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
   const paths = changedPaths(root, base);
-  const packageFailures = scriptsOnly ? 0 : testTouchedPackages(root, base, paths, workers, all);
-  process.exitCode = packageFailures + testScripts(root, paths) === 0 ? 0 : 1;
+  process.exitCode = runInOrder({
+    scripts: () => testScripts(root, paths),
+    packages: () => (scriptsOnly ? 0 : testTouchedPackages(root, base, paths, workers, all)),
+  });
 }
 
 if (isCliEntry(import.meta.url, process.argv[1])) main();

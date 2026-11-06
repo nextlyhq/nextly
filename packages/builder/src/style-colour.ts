@@ -63,12 +63,17 @@ import {
   checkContrast,
   emitTokenBlocks,
   isPlainRecord,
+  isStyleLeaf,
   isTokenRef,
+  leafAcceptsValue,
   locateNode,
   parseColor,
   resolveSiteTokens,
   STYLE_CATALOG,
+  styleUnionVariant,
   tokenCustomProperty,
+  tokenDisplayLabel,
+  trimCssWhitespace,
   tokenIdentity,
   type BlockNode,
   type ContrastResult,
@@ -80,11 +85,20 @@ import {
   type TokenMode,
   type StyleLeaf,
   type StyleValue,
+  type UnionShape,
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
+import { CSS_NUMBER } from "./style-numeric";
+import { lengthFamilyOf, type LengthFamily } from "./tokens-studio";
+
 /**
- * One token a colour control may offer, in the three forms it is needed in.
+ * One site variable a control may offer, in the forms it is needed in.
+ *
+ * Every kind, not only colours: a font size, a spacing step and a shadow are
+ * offered through this same record, so "which variables does the site have
+ * here" is answered once for every field. The swatch fields are filled for a
+ * colour and left `undefined` for the rest.
  *
  * The split between {@link identity} and {@link name} is the whole point of the
  * type and is not a convenience. A stored `{ $token }` holds the IDENTITY:
@@ -100,15 +114,23 @@ import { toHex } from "@nextlyhq/ui/color";
  * failure `SiteToken.id` was added to prevent, reintroduced by the control that
  * writes the reference.
  */
-export interface ColourToken {
+export interface SiteVariable {
   /** What a reference STORES, and what a rename never changes. */
   readonly identity: string;
   /** What the author reads and edits. Free to change. */
   readonly name: string;
+  /**
+   * What the token is CALLED where an author picks it: the label they gave
+   * it, else words made from its name ("Brand" for `color.brand`), as the
+   * Variables tab shows it.
+   */
+  readonly label: string;
+  /** Its light and dark values as swatches paint them. See {@link colourPairOf}. */
+  readonly pair: ColourPairValues;
   /** What the token holds, so a leaf can be asked whether it admits one. */
   readonly kind: TokenKind;
-  /** The literal this token holds, as the site recorded it. */
-  readonly colour: string;
+  /** The literal this token holds in the mode asked for, as the site recorded it. */
+  readonly value: string;
   /**
    * The colour a preset swatch may be PAINTED with, or `undefined` when this
    * package cannot resolve one.
@@ -123,34 +145,49 @@ export interface ColourToken {
   readonly swatch: string | undefined;
 }
 
+/** A colour variable's two values, resolved for painting, or `undefined` each. */
+export interface ColourPairValues {
+  readonly light: string | undefined;
+  readonly dark: string | undefined;
+}
+
+/**
+ * A colour variable's light and dark values as a swatch may paint them.
+ *
+ * A token with no dark value shows its light one for dark, because that is
+ * what the page does: no dark declaration is written for it. Resolved with an
+ * empty table, for the reason {@link siteVariableOf} gives.
+ */
+export function colourPairOf(token: SiteToken): ColourPairValues {
+  return {
+    light: colourHexOf(token.values.light, undefined),
+    dark: colourHexOf(token.values.dark ?? token.values.light, undefined),
+  };
+}
+
 /**
  * Which mode's value a token resolves to on the canvas right now.
  *
- * `emitTokenBlocks` writes a second block for every token carrying a dark
- * value, and WHEN it applies is the site's strategy: `media` wraps it in
- * `@media (prefers-color-scheme:dark)`, so a viewer whose system prefers dark
+ * The site sheet writes every dark value under
+ * `@media (prefers-color-scheme:dark)`, so a viewer whose device prefers dark
  * sees the dark value with nothing else having to happen. A control resolving
  * `values.light` regardless would then paint a swatch and report a ratio for a
  * colour the canvas is not showing — the one failure this module exists to
  * prevent, reached through the mode rather than through the notation.
  *
- * `attribute` — the default — answers `light`, and that is a STATED LIMIT
- * rather than a claim. The dark block is written under
- * `[data-nx-theme="dark"]`, which the HOST sets on an ancestor of its choosing;
- * nothing tells this panel whether it did. Reading the DOM to find out would
- * make a pure projection depend on where the canvas happens to be mounted.
+ * The sheet also honours a `data-nx-theme` marker, which the editor does not
+ * set on its canvas, so the device preference is the whole answer here.
  */
-export function activeTokenMode(
-  tokens: SiteTokenSet | undefined,
-  prefersDark: boolean
-): TokenMode {
-  return tokens?.darkMode === "media" && prefersDark ? "dark" : "light";
+export function activeTokenMode(prefersDark: boolean): TokenMode {
+  return prefersDark ? "dark" : "light";
 }
 
 /**
- * The tokens a colour control may offer at this leaf.
+ * The variables a control may offer at this leaf: a colour field's colours, a
+ * font size's type sizes and lengths, a shadow's shadows.
  *
- * Both halves of the filter are the ENGINE's answer rather than this module's.
+ * The first two halves of the filter are the ENGINE's answer rather than this
+ * module's.
  * Which kinds a leaf admits is `leaf.tokenKinds`, taken from the catalog, so a
  * leaf that admits no token offers no picker without a rule being written here;
  * and a token's own `kind` is what the site recorded. A control that offered a
@@ -168,14 +205,149 @@ export function activeTokenMode(
  * resolves. A dark-only preview would be a second question and is not this
  * control's.
  */
-export function colourTokensFor(
+export function variablesFor(
   leaf: StyleLeaf,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
-): readonly ColourToken[] {
-  return offeredTokens(tokens, mode).filter(token =>
-    leaf.tokenKinds.includes(token.kind)
+): readonly SiteVariable[] {
+  return offeredTokens(tokens, mode).filter(
+    token =>
+      leaf.tokenKinds.includes(token.kind) &&
+      // Each field its own family: a font size the type sizes, a line height
+      // the line heights, margin, padding and gap the spacing steps, a radius
+      // the radii. A type size and its line height share a name, and a
+      // spacing step and a radius often do ("Md"), so a list of every length
+      // named one variable twice; any other length takes every length.
+      madeFor(token, leaf) &&
+      // A variable whose value the field would refuse, such as a negative
+      // length for a padding or 1.5 for an opacity, is not offered: picked,
+      // it would be stored and then dropped by the browser with no refusal.
+      valueFits(token, leaf)
   );
+}
+
+/**
+ * Whether the leaf accepts this variable's value, in the mode asked for, by
+ * the engine's own rule for the leaf, the one a typed value goes through.
+ *
+ * Kept wherever this cannot judge: a value through a function (`calc()`,
+ * `clamp()`, `var()`) resolves only on the page, and a value whose kind is not
+ * the leaf's own (a length offered on a line height's number form, which the
+ * field writes as its length form) is the other form's to judge.
+ */
+function valueFits(token: SiteVariable, leaf: StyleLeaf): boolean {
+  const folded = FOLDED_ARMS.get(leaf);
+  const text = trimCssWhitespace(token.value);
+  // A number variable holds its number as text; a number form takes a number.
+  const asNumber = CSS_NUMBER.test(text) ? Number(text) : text;
+  // A folded field's forms: the variable is judged by the form the ENGINE
+  // picks for its value, the one the compiler will judge it by, so a font
+  // weight holding "bold" is judged by the keyword form and one holding 700
+  // by the number form's 1 to 1000.
+  const arm =
+    folded === undefined
+      ? judgedAt(token.kind, leaf.kind)
+        ? leaf
+        : undefined
+      : armForValue(folded, token.kind, asNumber);
+  if (arm === undefined) return true;
+  // A length or a number through a function resolves only on the page.
+  if (arm.kind !== "cssValue" && throughFunction(token.value)) return true;
+  return leafAcceptsValue(arm, arm.kind === "number" ? asNumber : text);
+}
+
+/**
+ * The form of a folded field that judges a value: the engine's own choice of
+ * the union's arm for it, when the field's union is known, else the form a
+ * variable of its kind is written in.
+ */
+function armForValue(
+  folded: { readonly arms: readonly StyleLeaf[]; readonly union?: UnionShape },
+  kind: TokenKind,
+  value: unknown
+): StyleLeaf | undefined {
+  if (folded.union !== undefined) {
+    const index = styleUnionVariant(folded.union, value);
+    const chosen = index === undefined ? undefined : folded.union.of[index];
+    if (chosen !== undefined && isStyleLeaf(chosen)) return chosen;
+  }
+  return folded.arms.find(each => judgedAt(kind, each.kind));
+}
+
+/**
+ * Whether a value goes through a function (`clamp()`, `calc()`, `min()`,
+ * `var()`), whose result this cannot judge before the page draws it.
+ */
+function throughFunction(value: string): boolean {
+  return value.includes("(");
+}
+
+/** Whether a variable of this kind is written in the form this leaf judges. */
+function judgedAt(kind: TokenKind, leafKind: StyleLeaf["kind"]): boolean {
+  switch (leafKind) {
+    case "dimension":
+      return kind === "dimension";
+    case "number":
+      return kind === "number" || kind === "fontWeight";
+    case "color":
+      return kind === "color";
+    case "cssValue":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * The forms behind a leaf drawn as one field over a union, by the leaf
+ * {@link foldedLeaf} made for them.
+ */
+const FOLDED_ARMS = new WeakMap<
+  StyleLeaf,
+  { readonly arms: readonly StyleLeaf[]; readonly union?: UnionShape }
+>();
+
+/**
+ * One leaf for a field drawn over a union's forms (a line height's number or
+ * length, a font weight's keyword or number): it takes every token kind any
+ * form takes, and each variable offered there is judged by the form its kind
+ * is written in, not by whichever form the field happens to show.
+ */
+export function foldedLeaf(
+  arms: readonly StyleLeaf[],
+  union?: UnionShape
+): StyleLeaf {
+  const [first] = arms;
+  if (first === undefined) throw new Error("a folded field has no forms");
+  const tokenKinds = [...new Set(arms.flatMap(arm => arm.tokenKinds))];
+  const leaf: StyleLeaf = { ...first, tokenKinds };
+  // With the union they came from, when known, so a variable is judged by
+  // the arm the engine picks for its value.
+  FOLDED_ARMS.set(leaf, union === undefined ? { arms } : { arms, union });
+  return leaf;
+}
+
+/** Whether a variable belongs to the family this leaf's field offers. */
+function madeFor(token: SiteVariable, leaf: StyleLeaf): boolean {
+  const family = fieldFamilyOf(leaf.cssProperty);
+  return family === undefined || lengthFamilyOf(token) === family;
+}
+
+/**
+ * The family of length variables a CSS property's field offers, or
+ * `undefined` for a field that offers every variable of its kinds.
+ *
+ * By the property the leaf writes, so every side of a margin or a padding and
+ * every corner of a radius is answered by one rule.
+ */
+function fieldFamilyOf(cssProperty: string): LengthFamily | undefined {
+  if (cssProperty === "font-size" || cssProperty === "line-height") {
+    return cssProperty;
+  }
+  if (/^(margin|padding)(-|$)/.test(cssProperty)) return "spacing";
+  if (/(^|-)gap$/.test(cssProperty)) return "spacing";
+  if (/radius$/.test(cssProperty)) return "radius";
+  return undefined;
 }
 
 /**
@@ -202,14 +374,14 @@ export function colourTokensFor(
 function offeredTokens(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode
-): readonly ColourToken[] {
+): readonly SiteVariable[] {
   if (tokens === undefined) return [];
-  const byMode = cache.get(tokens) ?? new Map<TokenMode, ColourToken[]>();
+  const byMode = cache.get(tokens) ?? new Map<TokenMode, SiteVariable[]>();
   const hit = byMode.get(mode);
   if (hit !== undefined) return hit;
   const resolved = resolveSiteTokens(tokens);
   const built = emittableTokens(resolved, mode).map(token =>
-    colourTokenOf(token, mode)
+    siteVariableOf(token, mode)
   );
   byMode.set(mode, built);
   cache.set(tokens, byMode);
@@ -225,7 +397,7 @@ function offeredTokens(
  * engine's own `memoizeTokenLookup` is: these are immutable props, so a set
  * that is the same object is the same data.
  */
-const cache = new WeakMap<SiteTokenSet, Map<TokenMode, ColourToken[]>>();
+const cache = new WeakMap<SiteTokenSet, Map<TokenMode, SiteVariable[]>>();
 
 /**
  * The tokens the canvas will actually declare a custom property for.
@@ -346,14 +518,14 @@ function kindMatches(token: SiteToken, mode: TokenMode): boolean {
  * a collision the reader cannot see would be explaining a distinction that is
  * not on screen.
  */
-export function colourTokenLabel(
-  token: ColourToken,
-  among: readonly ColourToken[]
+export function variableLabel(
+  token: SiteVariable,
+  among: readonly SiteVariable[]
 ): string {
   const shared = among.some(
-    other => other.name === token.name && other.identity !== token.identity
+    other => other.label === token.label && other.identity !== token.identity
   );
-  return shared ? `${token.name} (${token.identity})` : token.name;
+  return shared ? `${token.label} (${token.identity})` : token.label;
 }
 
 /**
@@ -363,21 +535,23 @@ export function colourTokenLabel(
  * applied once: a second copy is one edit from storing the NAME, which compiles
  * to a custom property nothing declares and loses the style with no symptom.
  */
-function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
+function siteVariableOf(token: SiteToken, mode: TokenMode): SiteVariable {
   // `light` is required and `dark` is not, so a token defined only for light
   // resolves to it in either mode — which is what the canvas does too: no dark
   // declaration is emitted for it, so the light one goes on applying.
-  const colour = token.values[mode] ?? token.values.light;
+  const value = token.values[mode] ?? token.values.light;
   return {
     identity: tokenIdentity(token),
     name: token.name,
+    label: tokenDisplayLabel(token),
+    pair: colourPairOf(token),
     kind: token.kind,
-    colour,
+    value,
     // Resolved with an EMPTY table, which is what stops this recursing: a token
     // whose value is itself a reference would otherwise re-enter the lookup that
     // is building this record. Unresolvable then means unpainted, which is the
     // honest answer for a value this package cannot follow.
-    swatch: colourHexOf(colour, undefined),
+    swatch: colourHexOf(value, undefined),
   };
 }
 
@@ -394,11 +568,11 @@ function colourTokenOf(token: SiteToken, mode: TokenMode): ColourToken {
  * warning rather than an error in the engine's own issue table, so the value
  * goes on compiling and the control must go on showing it.
  */
-export function colourTokenFor(
+export function variableFor(
   identity: string,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
-): ColourToken | undefined {
+): SiteVariable | undefined {
   // The OFFERED projection, not the raw set. Searching the raw set resolved a
   // reference the canvas never declares — an imported document naming a token
   // the emitter rejects painted its value anyway — and, for two identities that
@@ -452,7 +626,7 @@ function resolvedColourOf(
   // {@link colourShowable} routes on — so what counts as a token here and what
   // the panel sends to a colour control cannot drift apart.
   if (isTokenRef(value)) {
-    return colourTokenFor(value.$token, tokens, mode)?.colour;
+    return variableFor(value.$token, tokens, mode)?.value;
   }
   return undefined;
 }

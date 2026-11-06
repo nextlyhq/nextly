@@ -44,6 +44,9 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
       supportsOnConflict: true,
       supportsFts: true,
     }),
+    // Answered as inside a transaction, so a registry read goes to `selectOne` as these tests
+    // drive it rather than to the registry row cache, which has tests of its own.
+    transactionOpenInFlow: vi.fn(() => true),
     select: vi.fn().mockResolvedValue([]),
     selectOne: vi.fn().mockResolvedValue(null),
     insert: vi.fn().mockResolvedValue({ id: "new-id" }),

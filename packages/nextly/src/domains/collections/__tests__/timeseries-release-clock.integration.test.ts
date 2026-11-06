@@ -61,6 +61,10 @@ type Timeseries = {
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The timeline is read as a checked visitor, judged by the Public role a
+    // real boot makes, which reads the collection by its rule. A visitor reads
+    // published rows only, the bound these cases already read under.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: SLUG,

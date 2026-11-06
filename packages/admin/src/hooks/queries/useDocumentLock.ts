@@ -89,6 +89,16 @@
  * out minutes ago. The deadline leaves two intervals of lease in hand, so it
  * lands while the editor is still protected.
  *
+ * ## The beat also says whether the document changed
+ *
+ * Given the version the editor's copy started from, every claim and beat
+ * carries it, and the answer says when someone else has changed the document
+ * since. Read from a getter where each request is BUILT, never captured,
+ * because the copy's version moves with each of the editor's own saves; and
+ * judged against the copy as it is when the answer ARRIVES, because a save of
+ * the editor's own can land while a beat is out, and the beat then names that
+ * save's version as the current one. Each version is told once.
+ *
  * @module hooks/queries/useDocumentLock
  */
 
@@ -96,14 +106,17 @@ import {
   DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS,
   DOCUMENT_LOCK_LOSS_AFTER_MS,
   type AcquireDocumentLockOutcome,
+  type DocumentLockChange,
   type DocumentLockHolder,
   type DocumentScopeKind,
   type RenewDocumentLockOutcome,
 } from "nextly/document-lock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { MutationResponse } from "@admin/lib/api/response-types";
+import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
 
 /** Where a claim stands from this editor's point of view. */
 export type DocumentLockState =
@@ -158,6 +171,22 @@ export interface UseDocumentLockOptions {
   entryId?: string | null;
   /** Off for a read-only surface: a past version is not being edited. */
   enabled?: boolean;
+  /**
+   * The version the editor's copy started from now, the one its next save
+   * would send. Given, the claim and every beat name it, so the holder is told
+   * when someone else changes the document.
+   */
+  version?: () => string | undefined;
+}
+
+/** Someone else's change to the document, as the claim was told it. */
+export interface DocumentLockChangeNotice {
+  readonly change: DocumentLockChange;
+  /**
+   * Told by the claim that took the document back, after a takeover or a
+   * lapse: the change was made while this editor could not save.
+   */
+  readonly whileAway: boolean;
 }
 
 /** What is waiting for the acquisition slot. A decision outranks a poll. */
@@ -181,17 +210,68 @@ function documentKey(
   return `${scopeKind}:${slug}:${entryId}`;
 }
 
+/**
+ * Send one claim, and send it once more at once if the server refuses it as a
+ * conflict.
+ *
+ * A claim's only conflict is the row it was writing vanishing under it, which
+ * the server reports as one the caller may retry: a release landing while the
+ * same editor claims again, as when a page reloads, or React mounts an effect
+ * twice in development. Left to the next beat, nobody would hold the document
+ * for up to a beat, and a colleague opening it then would take it. One retry,
+ * so a second refusal is reported as before rather than looped on.
+ */
+async function sendClaim(body: object): Promise<AcquireDocumentLockOutcome> {
+  const send = () =>
+    protectedApi.post<MutationResponse<AcquireDocumentLockOutcome>>(
+      "/document-lock",
+      body
+    );
+  try {
+    return (await send()).item;
+  } catch (refusal) {
+    if (!isApiError(refusal) || refusal.code !== "CONFLICT") throw refusal;
+  }
+  return (await send()).item;
+}
+
 export function useDocumentLock({
   scopeKind,
   slug,
   entryId,
   enabled = true,
+  version,
 }: UseDocumentLockOptions): {
   state: DocumentLockState;
+  /**
+   * How many times this editor has gained a document it was kept out of: a
+   * claim won after a colleague's was reported, by their release, their lease
+   * lapsing or this editor's take-over. The form unlocks then over a copy read
+   * while the colleague held it, so each gain is a reason to load the document
+   * again. Never decreases, across documents too, so a consumer acts on a
+   * change rather than on a value.
+   */
+  gains: number;
   takeOver: () => void;
   requestAccess: () => void;
+  /**
+   * Someone else's change since the version the copy started from, not yet
+   * answered by the editor; null when there is none, or the copy holds no
+   * version to compare.
+   */
+  change: DocumentLockChangeNotice | null;
+  /** The editor has been told of `change`: clear it until a newer one. */
+  settleChange: () => void;
 } {
   const [state, setState] = useState<DocumentLockState>({ status: "idle" });
+  const [gains, setGains] = useState(0);
+  const [change, setChange] = useState<DocumentLockChangeNotice | null>(null);
+  const settleChange = useCallback(() => setChange(null), []);
+
+  // Read where a request is built and where its answer lands, never captured
+  // by the effect: a getter that moved would otherwise restart the claim.
+  const versionRef = useRef(version);
+  versionRef.current = version;
 
   // Published by the running effect, which is the only thing that may touch a
   // claim. A stable callback delegating through it keeps the consumer's
@@ -277,11 +357,51 @@ export function useDocumentLock({
     // past its own deadline. The beat then waits for the person rather than
     // re-taking a claim they were just told they had lost.
     let surrendered = false;
+    // Whether a colleague's claim has been reported since this editor last
+    // held the document, and whether it has held it at all in this run. A
+    // claim won after the first, and never the second, is a gain.
+    //
+    // 🔴 Not after holding. An editor who held the document and lost it has
+    // their unsaved work on screen, and a gain would load the document over it.
+    // A failed poll does not clear the first: the form stays read-only through
+    // it while the colleague outlives it.
+    let keptOut = false;
+    let heldHere = false;
+
+    // The version last told as someone else's change, so a beat that names
+    // it again while the copy is still older says nothing new; and which beat
+    // last spoke for it, so an older answer arriving late is not news.
+    let told: string | null = null;
+    let changeBeat = 0;
+    const versionNow = () => versionRef.current?.();
+    /** `body` naming the version the copy holds now, when it holds one. */
+    const withVersion = <T extends object>(body: T) => {
+      const held = versionNow();
+      return held === undefined
+        ? body
+        : { ...body, [DOCUMENT_VERSION_KEY]: held };
+    };
+    /**
+     * Tell the editor of `changed`: unless it names the copy's own version,
+     * which is a save of theirs that landed while the request was out, or the
+     * one already told.
+     */
+    const tell = (
+      changed: DocumentLockChange | undefined,
+      whileAway: boolean
+    ) => {
+      if (cancelled || changed === undefined) return;
+      if (changed.currentVersion === versionNow()) return;
+      if (changed.currentVersion === told) return;
+      told = changed.currentVersion;
+      setChange({ change: changed, whileAway });
+    };
 
     // 🔴 Reset before asking. The document may have changed under a mounted
     // editor, and leaving the previous one's answer on screen would name an
     // unrelated holder — or say this editor holds a document it has not claimed.
     setState({ status: "acquiring" });
+    setChange(null);
 
     // Best effort. The claim lapses on its own, so a release that never arrives
     // costs the next editor a wait rather than access.
@@ -336,12 +456,16 @@ export function useDocumentLock({
       // has to let this claim's own first beat speak. `renewSeq` is deliberately
       // NOT reset: it only ever has to increase.
       awaitedBeat = 0;
+      if (keptOut && !heldHere) setGains(count => count + 1);
+      keptOut = false;
+      heldHere = true;
       setState({ status: "held-by-me", someoneWaiting: false });
     };
 
     /** Store a refusal, quietly when neither the holder nor the ask has moved. */
     const installHeld = (current: DocumentLockHolder, sent: boolean) => {
       token = null;
+      keptOut = true;
       // 🔴 The ask is part of what this state SAYS, so it is part of what decides
       // whether to re-render. Comparing holders alone would leave the button on
       // screen after the request that replaced it landed -- the holder does not
@@ -446,7 +570,16 @@ export function useDocumentLock({
         return;
       }
 
-      if (item.status === "acquired") installAcquired(item.claimToken, sentAt);
+      if (item.status === "acquired") {
+        // Read before installing, which records this claim as held here.
+        // A gain loads the document before the form unlocks, so its change
+        // needs no telling; taking back a document held here before is a
+        // return to it, and its change was made while this editor was away.
+        const gain = keptOut && !heldHere;
+        const away = heldHere;
+        installAcquired(item.claimToken, sentAt);
+        if (!gain) tell(item.changed, away);
+      }
       // 🔴 Both halves. `item.waiting` says somebody is waiting, which is also
       // true when the person in front of this editor has asked for nothing and a
       // THIRD colleague has. Only the conjunction says "we told them, for you".
@@ -476,9 +609,9 @@ export function useDocumentLock({
       // never mentioned it.
       const asked = requesting;
       try {
-        ({ item } = await protectedApi.post<
-          MutationResponse<AcquireDocumentLockOutcome>
-        >("/document-lock", { ...ref, takeover, requestAccess: asked }));
+        item = await sendClaim(
+          withVersion({ ...ref, takeover, requestAccess: asked })
+        );
       } catch {
         clearTimeout(slotExpiry);
         failClaim(seq, intent);
@@ -518,6 +651,39 @@ export function useDocumentLock({
       drain();
     };
     void acquire(false);
+
+    /**
+     * Hand the claim back as the page goes away, and ask again if it returns.
+     *
+     * 🔴 Closing the tab, reloading and following a link out run no React
+     * cleanup, so the release below never fires for them and a colleague waits
+     * out a whole lease for an editor nobody has open. `pagehide` is the one
+     * signal every way of leaving sends, and `keepalive` lets the request finish
+     * after the page has gone. Sent once: the token is forgotten as it goes, so
+     * neither the cleanup nor a second `pagehide` finds anything to send.
+     *
+     * A page the browser keeps in its back-forward cache can be shown again,
+     * holding nothing, so it claims again as an editor opening does.
+     */
+    const onLeave = () => {
+      if (token === null) return;
+      const sent = token;
+      token = null;
+      void protectedApi
+        .delete(
+          "/document-lock",
+          { ...ref, claimToken: sent },
+          { keepalive: true }
+        )
+        .catch(() => undefined);
+    };
+    const onReturn = (event: PageTransitionEvent) => {
+      if (cancelled || !event.persisted) return;
+      setState({ status: "acquiring" });
+      void acquire(false);
+    };
+    window.addEventListener("pagehide", onLeave);
+    window.addEventListener("pageshow", onReturn);
 
     const heartbeat = setInterval(() => {
       if (cancelled) return;
@@ -560,10 +726,10 @@ export function useDocumentLock({
       // `renewSeq` above for why these are two different instruments.
       const beat = (renewSeq += 1);
       void protectedApi
-        .patch<MutationResponse<RenewDocumentLockOutcome>>("/document-lock", {
-          ...ref,
-          claimToken: sent,
-        })
+        .patch<MutationResponse<RenewDocumentLockOutcome>>(
+          "/document-lock",
+          withVersion({ ...ref, claimToken: sent })
+        )
         .then(({ item }) => {
           if (cancelled || sent !== token) return;
           if (item.status === "renewed") {
@@ -587,6 +753,12 @@ export function useDocumentLock({
                 });
               }
             }
+            // Fenced on the beat as the courtesy notice is: an older answer
+            // landing after a newer one describes a moment that has passed.
+            if (beat > changeBeat) {
+              changeBeat = beat;
+              tell(item.changed, false);
+            }
             return;
           }
           surrender({ status: "taken-over", holder: item.holder });
@@ -604,9 +776,11 @@ export function useDocumentLock({
       // and refuses a document it does not own, so a late reply cannot wake an
       // editor that has gone or one looking at something else.
       clearInterval(heartbeat);
+      window.removeEventListener("pagehide", onLeave);
+      window.removeEventListener("pageshow", onReturn);
       if (token !== null) release(token);
     };
   }, [active, ref]);
 
-  return { state, takeOver, requestAccess };
+  return { state, gains, takeOver, requestAccess, change, settleChange };
 }

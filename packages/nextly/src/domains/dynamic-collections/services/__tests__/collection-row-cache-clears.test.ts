@@ -16,7 +16,7 @@ import { registerFromMigrations } from "../../../schema/migrate/metadata-registe
 import { createApplyDesiredSchema } from "../../../schema/pipeline/apply";
 import {
   cachedCollectionRow,
-  clearCollectionRowCache,
+  clearRegistryRowCache,
 } from "../collection-row-cache";
 
 const database = {};
@@ -31,7 +31,7 @@ async function cachedThenRead(run: () => Promise<unknown>): Promise<boolean> {
 }
 
 beforeEach(() => {
-  clearCollectionRowCache();
+  clearRegistryRowCache();
 });
 
 describe("writes outside the registry services clear the collection row cache", () => {

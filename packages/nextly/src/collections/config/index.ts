@@ -70,3 +70,13 @@ export {
   type SingleAccessControl,
   type MinimalUser,
 } from "../../domains/auth/services/access-control-types";
+
+// What a collection's read rule may answer: a filter typed by the
+// collection's fields. Experimental while filter rules are.
+export type {
+  CollectionFilterRule,
+  CollectionFilterRuleInput,
+  CollectionRuleAnswer,
+  CollectionRuleFilter,
+  UntypedRuleFilter,
+} from "../../shared/types/rule-filter";

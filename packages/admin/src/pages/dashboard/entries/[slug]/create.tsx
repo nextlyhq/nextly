@@ -19,6 +19,8 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
+import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import {
   CONTENT_MEASURE_LENGTH,
   CONTENT_PAGE_MEASURE,
@@ -238,6 +240,25 @@ export default function CreateEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+
+  // A collection removed from code refuses every create, so no form is
+  // offered: the notice says why and what to do, with the way back to its
+  // entries, which can still be read.
+  if (isRemovedFromCode(collection)) {
+    return (
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
+        <RemovedFromCodeNotice
+          entity={{ kind: "collection", label: collectionLabel, slug }}
+          state={collection.removedFromCodeState}
+        />
+        <div className="mt-6">
+          <Link href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}>
+            <Button variant="outline">← Back to {collectionLabel}</Button>
+          </Link>
+        </div>
+      </PageContainer>
+    );
+  }
 
   // Check for custom Edit view component from plugins
   // The same Edit view handles both create and edit modes

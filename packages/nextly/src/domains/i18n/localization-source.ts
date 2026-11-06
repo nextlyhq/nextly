@@ -14,6 +14,11 @@ import type { SanitizedLocalizationConfig } from "./config/types";
 /** Something that knows the site's languages as they are now. */
 export interface LiveLocalization {
   current(): SanitizedLocalizationConfig | undefined;
+  /**
+   * The languages kept, inactive, with their content after they were removed: none where the
+   * source cannot say.
+   */
+  retained?(): readonly string[];
 }
 
 export type LocalizationSource =
@@ -33,4 +38,17 @@ export function localizationNow(
   source: LocalizationSource
 ): SanitizedLocalizationConfig | undefined {
   return isLiveLocalization(source) ? source.current() : source;
+}
+
+/**
+ * Every language whose content the database keeps: the active ones, then any removed in Settings
+ * and kept inactive. For a reader that has to see every translation stored, whichever languages a
+ * request may use today.
+ */
+export function storedLanguageCodes(source: LocalizationSource): string[] {
+  const active = localizationNow(source)?.locales.map(l => l.code) ?? [];
+  const retained = isLiveLocalization(source)
+    ? (source.retained?.() ?? [])
+    : [];
+  return [...new Set([...active, ...retained])];
 }

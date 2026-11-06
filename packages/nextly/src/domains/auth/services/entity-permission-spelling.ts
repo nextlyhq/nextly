@@ -35,10 +35,11 @@ export function entityPermissionSpelling(
   resource: string
 ): EntityPermissionSpelling {
   const label = slugToLabel(resource);
-  const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
+  // Read as words, so an action of several (`publish-without-review`) is named like one of one.
+  const actionLabel = slugToLabel(action);
   return {
     slug: permissionSlug(action, resource),
     name: `${actionLabel} ${label}`,
-    description: `Permission to ${action} ${label.toLowerCase()}`,
+    description: `Permission to ${action.replace(/-/g, " ")} ${label.toLowerCase()}`,
   };
 }

@@ -14,7 +14,7 @@
 //     of truth)
 //   - timing + ApplyResult discriminated-union shape
 
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 
 import { classifyError, type SchemaApplyErrorCode } from "./errors";
 import type { DesiredSchema } from "./types";
@@ -172,7 +172,7 @@ export function createApplyDesiredSchema(
     } finally {
       // The apply writes registry rows directly, landed or not: the cached
       // ones are out of date either way.
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     if (!pipelineResult.success) {

@@ -1,0 +1,23 @@
+---
+title: DATABASE_DIALECT_UNKNOWN
+description: "The database type could not be told from `DATABASE_URL`, and `DB_DIALECT` is not set."
+---
+
+## Cause
+
+The database type could not be told from `DATABASE_URL`, and `DB_DIALECT` is not set.
+
+The CLI tells the database from the start of `DATABASE_URL`: `postgres://` or `postgresql://` for PostgreSQL, `mysql://` for MySQL, and `file:` or a `.db` path for SQLite. Any other URL needs `DB_DIALECT`.
+
+## Fix
+
+Set `DB_DIALECT` to `postgresql`, `mysql` or `sqlite` in `.env`, or give `DATABASE_URL` in one of the forms above.
+
+## Example
+
+```text
+✗ The database type could not be told from `DATABASE_URL`.
+  Why:  It starts with none of `postgres://`, `mysql://` or `file:`, and `DB_DIALECT` is not set.
+  Next: Set `DB_DIALECT` to `postgresql`, `mysql` or `sqlite` in `.env`.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-unknown  (DATABASE_DIALECT_UNKNOWN)
+```

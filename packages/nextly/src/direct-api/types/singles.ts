@@ -10,9 +10,27 @@
 import type {
   DirectAPIConfig,
   PopulateOptions,
+  RowFromSingleSlug,
   RunAsPrincipal,
   SingleSlug,
 } from "./shared";
+
+/**
+ * What `findSingle` resolves to, by what the call says about
+ * `createIfMissing`.
+ *
+ * `null` is part of the answer only when the call may pass `false`: left out
+ * or `true`, the read creates a missing document and always has one to return,
+ * so every existing call keeps its non-null row type. `TCreate` is inferred
+ * from the argument, and a `boolean` that may be either distributes to the
+ * union of both answers.
+ */
+export type FoundSingle<
+  TSlug extends SingleSlug,
+  TCreate extends boolean | undefined,
+> = TCreate extends false
+  ? RowFromSingleSlug<TSlug> | null
+  : RowFromSingleSlug<TSlug>;
 
 /**
  * Arguments for retrieving a single document.
@@ -64,6 +82,19 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
    * Control relationship population per field.
    */
   populate?: Record<string, boolean | PopulateOptions>;
+
+  /**
+   * Whether reading a Single that has no stored document yet creates its
+   * default document first, which is what every read has always done.
+   *
+   * Pass `false` to read without writing: a Single with no document answers
+   * `null`, and nothing is created — no row, no version, no event and no
+   * creation hook. A Single whose document exists answers the same either way.
+   * The return type includes `null` only when this may be `false`.
+   *
+   * @default true
+   */
+  createIfMissing?: boolean;
 }
 
 /**

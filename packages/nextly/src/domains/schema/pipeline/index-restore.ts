@@ -53,7 +53,14 @@ export function indexRestoreStatements(
     const key = `${tableName.toLowerCase()}::${index.name.toLowerCase()}`;
     if (emitted.has(key)) return;
     emitted.add(key);
-    out.push(generateSQL({ type: "add_index", tableName, index }, dialect));
+    // The desired tables carry each column's type, which MySQL needs to key a TEXT/BLOB by prefix.
+    out.push(
+      generateSQL(
+        { type: "add_index", tableName, index },
+        dialect,
+        desired.tables
+      )
+    );
   };
 
   // A rebuilt table lost every index it had, so all of them are replayed.

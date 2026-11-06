@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { builderAddress } from "./builder-address";
+import {
+  builderAddress,
+  sectionAddress,
+  sectionFromSearch,
+} from "./builder-address";
 
 describe("builderAddress", () => {
   it("is the entry's builder, naming the field", () => {
@@ -24,15 +28,29 @@ describe("builderAddress", () => {
     ).toEqual({ unavailable: "Save this page to open the Page Builder." });
   });
 
-  it("is withheld from a field inside a group or a repeater", () => {
+  it("names a field inside a named group by its path", () => {
     expect(
       builderAddress(
         { kind: "collection", slug: "pages", documentId: "p1" },
-        "sections.0.body"
+        "hero.body"
+      )
+    ).toEqual({
+      href: "/admin/collections/pages/p1/builder?field=hero.body",
+    });
+  });
+
+  it.each([
+    ["a repeater's row", "sections.0.body"],
+    ["a group inside a repeater's row", "sections.12.hero.body"],
+  ])("is withheld from a field inside %s", (_case, path) => {
+    expect(
+      builderAddress(
+        { kind: "collection", slug: "pages", documentId: "p1" },
+        path
       )
     ).toEqual({
       unavailable:
-        "The Page Builder opens for a top-level field only. Move this field to the top level to edit it visually.",
+        "The Page Builder doesn't open for a field inside a repeater. Move this field out of the repeater to edit it visually.",
     });
   });
 
@@ -82,5 +100,42 @@ describe("builderAddress", () => {
     ).toEqual({
       href: "/admin/collections/pages/a%2Fb%20c/builder?field=body",
     });
+  });
+});
+
+describe("sectionAddress", () => {
+  it("names the section after the field, so the address still opens that field", () => {
+    expect(
+      sectionAddress("/admin/collections/pages/p1/builder?field=body", "hero")
+    ).toBe("/admin/collections/pages/p1/builder?field=body&section=hero");
+  });
+
+  it("encodes an id the query would otherwise split or end", () => {
+    const href = sectionAddress(
+      "/admin/singles/home/builder?field=layout",
+      "a&b=c#d"
+    );
+    expect(sectionFromSearch(new URL(href, "http://x").search)).toBe("a&b=c#d");
+  });
+
+  it("replaces a section already named rather than naming two", () => {
+    expect(
+      sectionAddress(
+        "/admin/collections/pages/p1/builder?field=body&section=old",
+        "new"
+      )
+    ).toBe("/admin/collections/pages/p1/builder?field=body&section=new");
+  });
+});
+
+describe("sectionFromSearch", () => {
+  it("reads the section the address names", () => {
+    expect(sectionFromSearch("?field=body&section=hero")).toBe("hero");
+  });
+
+  it("reads none from an address that names none, or names it empty", () => {
+    expect(sectionFromSearch("?field=body")).toBeUndefined();
+    expect(sectionFromSearch("?field=body&section=")).toBeUndefined();
+    expect(sectionFromSearch("")).toBeUndefined();
   });
 });

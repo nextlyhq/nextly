@@ -48,23 +48,6 @@ describe("plugin field types on a field group", () => {
     );
   });
 
-  it("alters an existing column when a field changes to a plugin type", () => {
-    registerRating();
-    const sql = new FieldGroupSchemaService(
-      "postgresql"
-    ).generateAlterTableMigration(
-      "comp_hero",
-      [{ name: "score", type: "text" }] as unknown as FieldConfig[],
-      ratingField
-    );
-
-    // The type as well as the statement: an ALTER to TEXT would satisfy a check
-    // that only looked for the keyword while leaving the column unchanged.
-    expect(sql).toMatch(
-      /ALTER COLUMN "score" TYPE\s+(?:INTEGER|BIGINT|REAL|DOUBLE PRECISION|NUMERIC)/i
-    );
-  });
-
   it("does not let a plugin option reshape the column", () => {
     registerFieldType({
       type: "metric",

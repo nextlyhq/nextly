@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 /**
- * The classes manager reaching an author, which is a different claim from the
+ * The Shared styles tab reaching an author, which is a different claim from the
  * panel working.
  *
- * `class-manager-panel.test.tsx` in the builder asserts the surface and
- * `class-library.test.ts` asserts the rules. Both passed for weeks while the
+ * `shared-styles-panel.test.tsx` in the builder asserts the surface and
+ * `shared-style-library.test.ts` asserts the rules. Both passed for weeks while the
  * panel was exported, styled, covered — and rendered by nothing, so no author
  * could open it. That is the failure this file exists to catch, and it has
  * already happened once on this chain for the fonts panel.
@@ -22,10 +22,16 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  SHARED_STYLE_REMOVE_ROUTE_PATH,
+  sharedStyleUsagePath,
+} from "../library-contract";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -45,7 +51,14 @@ let storedRead: { data: unknown; isPending: boolean; error: unknown };
 let saveResult: { success: boolean } | Error;
 /** When set, every save blocks on this until the test releases it. */
 let holdSaves: Promise<void> | null;
+/**
+ * The bodies the Single was handed, each saved over whatever the style holds
+ * and saying so with `_overwrite: true`, which the expectations state.
+ */
 const saved: Array<Record<string, unknown>> = [];
+/** The shared-style routes: what was read and written. */
+const routeReads: string[] = [];
+const routeWrites: { path: string; body: unknown }[] = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
@@ -69,13 +82,18 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       availablePanels,
       inspector,
     }: {
-      renderPanel?: (panel: string) => React.ReactNode;
+      renderPanel?: (
+        panel: string,
+        view: { current: string | null; choose: (view: string) => void }
+      ) => React.ReactNode;
       availablePanels?: readonly string[];
       inspector?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
-        <div data-testid="panel">{renderPanel?.("classes")}</div>
+        <div data-testid="panel">
+          {renderPanel?.("design", { current: "classes", choose: () => {} })}
+        </div>
         {/* Rendered, not merely constructed: the inspector recorder only runs
             when the element is actually drawn, and the class-creation callback
             reaches the queue through it. */}
@@ -104,7 +122,71 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/*
+ * A designer. The variables studio surrounds every Design tab, so it is drawn
+ * here too, and it asks whether the variables may be changed.
+ */
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
+/** What the usage route answers: every page counted, nothing using any. */
+function usageAnswer(path: string): unknown {
+  const ids = new URL(`http://local${path}`).searchParams.getAll("id");
+  return {
+    whole: true,
+    mayLock: false,
+    styles: Object.fromEntries(
+      ids.map(id => [
+        id,
+        {
+          documents: 0,
+          byKind: { pages: 0, components: 0, patterns: 0, layouts: 0 },
+          complete: true,
+        },
+      ])
+    ),
+  };
+}
+
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({ ...storedRead, refetch: refetchStoredStyle }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The shared-style routes, recorded: the usage read answers every page
+  // counted and nothing used, and the where-used read an empty list.
+  readPluginRoute: async ({ path }: { path: string }) => {
+    routeReads.push(path);
+    return path.startsWith("/shared-styles/usage")
+      ? usageAnswer(path)
+      : { items: [], meta: { total: 0, hasNext: false, hiddenCount: 0 } };
+  },
+  writePluginRoute: async ({ path, body }: { path: string; body: unknown }) => {
+    routeWrites.push({ path, body });
+    return {};
+  },
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -131,16 +213,26 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn
    * a rejection into per-field messages. Answering none exercises the branch
    * that must still refuse when the transport could not describe why.
    */
   validationIssues: () => [],
-  useSingleDocument: () => storedRead,
   useUpdateSingleDocument: () => ({
     mutateAsync: async (value: Record<string, unknown>) => {
       saved.push(value);
@@ -226,164 +318,171 @@ beforeEach(() => {
   holdSaves = null;
   openWith = undefined;
   saved.length = 0;
+  routeReads.length = 0;
+  routeWrites.length = 0;
 });
 
 afterEach(cleanup);
 
-describe("the classes manager reaching an author", () => {
-  it("offers the classes rail slot at all", () => {
-    // The slot was reserved and dark: `LEFT_PANELS` named it and nothing
-    // rendered into it, so the shell drew it disabled as "coming soon".
-    storedRead = { data: { classes: [] }, isPending: false, error: null };
+/** A stored class list read back with these entries. */
+function storedClasses(...classes: Record<string, unknown>[]): void {
+  storedRead = { data: { classes }, isPending: false, error: null };
+}
+
+const CARD = { id: "id-card", slug: "card", orderIndex: 0, styles: {} };
+const HERO = { id: "id-hero", slug: "hero", orderIndex: 1, styles: {} };
+
+/** Let the reads the tab makes on mount answer. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+/** A style's details, opened from its row. */
+async function details(slug: string): Promise<HTMLElement> {
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: new RegExp(`^${slug}, \\.nx-c-${slug}`),
+    })
+  );
+  const dialog = await screen.findByRole("dialog", { name: slug });
+  await settle();
+  return dialog;
+}
+
+/** Commit a name in an open style's details. */
+function commitName(dialog: HTMLElement, value: string): void {
+  const field = within(dialog).getByLabelText("Name");
+  fireEvent.change(field, { target: { value } });
+  fireEvent.keyDown(field, { key: "Enter" });
+}
+
+describe("the Shared styles tab reaching an author", () => {
+  it("offers the Design panel, whose Shared styles tab this is, at all", () => {
+    // The slot was reserved and dark: the shell named it and nothing rendered
+    // into it, so authors never reached it.
+    storedClasses();
     openEditor();
-    expect(screen.getByTestId("rail").textContent).toContain("classes");
+    expect(screen.getByTestId("rail").textContent).toContain("design");
   });
 
-  it("renders the manager into that slot rather than nothing", () => {
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+  it("renders the tab into that slot rather than nothing", () => {
+    storedClasses(CARD);
     openEditor();
     const panel = screen.getByTestId("panel");
-    expect(panel.textContent).toContain("Classes");
-    // The site's OWN class reached it. An empty panel would satisfy the
+    expect(panel.textContent).toContain("Shared styles");
+    // The site's OWN style reached it. An empty panel would satisfy the
     // heading assertion alone, which is the shape this file exists to refuse.
-    expect(panel.textContent).toContain("card");
+    expect(panel.textContent).toContain(".nx-c-card");
   });
 
-  it("draws a read still in flight as loading, not as a site with no classes", () => {
+  it("draws a read still in flight as loading, not as a site with no styles", () => {
     storedRead = { data: undefined, isPending: true, error: null };
     openEditor();
     expect(screen.getByTestId("panel").textContent).toContain(
-      "Loading classes"
+      "Reading this site’s shared styles"
     );
   });
 
-  it("says usage was not read, rather than reporting an empty index", () => {
-    /*
-     * The usage index is a collection and this surface has no read for one.
-     * Passing an empty map would print "Not in index" against every class,
-     * which is a statement about the site made from never having asked — and
-     * it is the direction that reads as permission to delete.
-     */
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+  it("says a failed read failed, rather than loading forever", () => {
+    storedRead = { data: undefined, isPending: false, error: new Error("403") };
     openEditor();
     const panel = screen.getByTestId("panel");
-    expect(panel.textContent).toContain("Usage not read");
-    expect(panel.textContent).not.toContain("Not in index");
+    expect(panel.textContent).toContain("could not be read");
+    expect(panel.textContent).not.toContain("Reading this site");
   });
 
-  it("offers no Delete while nothing can carry out one", () => {
-    // Deleting must strip the class from every document holding it, and no
-    // such write exists. A control that cannot keep its promise is withheld
-    // rather than shown disabled.
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+  it("reads how widely the rows on screen are used through the usage route", async () => {
+    storedClasses(CARD, HERO);
     openEditor();
-    /*
-     * The control first. An absent button is equally what a panel that never
-     * rendered looks like, so without something that must be FOUND this
-     * assertion is satisfied by the very defect the file exists to catch —
-     * measured: it passed with `renderPanel` answering nothing for this key.
-     */
-    expect(screen.getByLabelText("Name of card")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Delete card" })).toBeNull();
+    await settle();
+    // One read: the styles on screen first, then the looks blocks can wear,
+    // which the code supplies; a block's own look has no count to read.
+    const read = routeReads.find(path =>
+      path.startsWith(sharedStyleUsagePath(["id-card", "id-hero"]))
+    );
+    const ids = new URLSearchParams(read?.split("?")[1] ?? "").getAll("id");
+    expect(ids.slice(0, 2)).toEqual(["id-card", "id-hero"]);
+    expect(ids.slice(2)).toEqual(
+      expect.arrayContaining([
+        "look:core/button:outline",
+        "look:core/image:circle",
+      ])
+    );
+    expect(ids.some(id => id === "look:core/button:primary")).toBe(false);
   });
 
-  it("writes the classes section when a name is committed", async () => {
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+  it("removes an unused style through the remove route, never by writing the class list", async () => {
+    storedClasses(CARD);
     openEditor();
-    const field = screen.getByLabelText("Name of card");
-    fireEvent.change(field, { target: { value: "panel" } });
-    fireEvent.blur(field);
+    await settle();
+    const dialog = await details("card");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Remove card" })
+      );
+    });
+    expect(routeWrites).toEqual([
+      { path: SHARED_STYLE_REMOVE_ROUTE_PATH, body: { ids: ["id-card"] } },
+    ]);
+    expect(saved).toEqual([]);
+  });
+
+  it("writes the name and the class name derived from it when a name is committed", async () => {
+    storedClasses(CARD);
+    openEditor();
+    commitName(await details("card"), "Promo card");
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
-    expect(JSON.stringify(saved)).toContain("panel");
+    expect(saved.at(-1)).toEqual({
+      _overwrite: true,
+      classes: [{ ...CARD, label: "Promo card", slug: "promo-card" }],
+    });
   });
 
-  it("shows a refused rename rather than clearing as though it landed", async () => {
-    // The field clears as soon as the author finishes typing, so a refusal
-    // that reported nothing would leave the row reading as renamed until some
-    // later read contradicted it.
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+  it("keeps a locked style's lock when another style is renamed", async () => {
+    storedClasses({ ...CARD, locked: true }, HERO);
+    openEditor();
+    commitName(await details("hero"), "Banner");
+    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    expect(JSON.stringify(saved.at(-1))).toContain('"locked":true');
+  });
+
+  it("shows a refused rename rather than as though it landed", async () => {
+    storedClasses(CARD);
     saveResult = new Error("The site style is locked.");
     openEditor();
-    const field = screen.getByLabelText("Name of card");
+    const dialog = await details("card");
     await act(async () => {
-      fireEvent.change(field, { target: { value: "panel" } });
-      fireEvent.blur(field);
+      commitName(dialog, "panel");
     });
     // The write WAS attempted — otherwise a refusal never shown and a refusal
-    // never requested look identical, and the assertion below would pass on a
-    // panel that simply does not rename.
+    // never requested look identical.
     expect(saved.length).toBeGreaterThan(0);
-    // The HOST's own reason, carried through verbatim rather than replaced by
-    // a generic one. A surface that substitutes its own wording tells the
-    // author less than the server already said.
+    // The HOST's own reason, carried through verbatim.
     expect(await screen.findByText("The site style is locked.")).toBeTruthy();
   });
 
   it("composes a queued rename AFTER the one before it settles", async () => {
     /*
-     * The window that matters: both edits are made while the FIRST save is
-     * still on the network. Serialising transmission alone is not enough —
-     * the second payload is already built by then, so it carries the first
-     * class's old slug and writing it undoes that rename while reporting
-     * success.
-     *
-     * The save is held open deliberately. With a mock that resolves at once,
-     * the second edit composes after the first has advanced the base, and the
-     * test passes against code that does not serialise composition at all.
+     * Both edits are made while the FIRST save is still on the network. The
+     * second payload must be composed after the first settles, or it carries
+     * the first style's old name and writing it undoes that rename.
      */
     let release: (() => void) | undefined;
     holdSaves = new Promise<void>(resolve => {
       release = resolve;
     });
-    storedRead = {
-      data: {
-        classes: [
-          { id: "id-card", slug: "card", orderIndex: 0, styles: {} },
-          { id: "id-hero", slug: "hero", orderIndex: 1, styles: {} },
-        ],
-      },
-      isPending: false,
-      error: null,
-    };
+    storedClasses(CARD, HERO);
     openEditor();
 
-    // BOTH edits committed before anything is released.
-    const first = screen.getByLabelText("Name of card");
-    fireEvent.change(first, { target: { value: "panel" } });
-    fireEvent.blur(first);
-    const second = screen.getByLabelText("Name of hero");
-    fireEvent.change(second, { target: { value: "banner" } });
-    fireEvent.blur(second);
+    const card = await details("card");
+    commitName(card, "panel");
+    fireEvent.keyDown(card, { key: "Escape" });
+    commitName(await details("hero"), "banner");
 
     await act(async () => {
       release?.();
@@ -393,60 +492,19 @@ describe("the classes manager reaching an author", () => {
     });
     await vi.waitFor(() => expect(saved.length).toBe(2));
 
-    const last = JSON.stringify(saved[saved.length - 1]);
-    expect(last).toContain("banner");
-    expect(last).toContain("panel");
+    const last = JSON.stringify(saved.at(-1));
+    expect(last).toContain('"banner"');
+    expect(last).toContain('"panel"');
     expect(last).not.toContain('"card"');
   });
 
-  it("builds a second rename on the FIRST, not on the stale render", async () => {
+  it("uses the HOST's limits to count the blocks on this page", async () => {
     /*
-     * Every write here replaces the whole class list, and the rendered library
-     * does not refresh until the save comes back through the cache. Two
-     * renames inside that window both composed from the same snapshot, so the
-     * second wrote a list in which the first rename never happened — and it
-     * reported success while undoing it.
-     */
-    storedRead = {
-      data: {
-        classes: [
-          { id: "id-card", slug: "card", orderIndex: 0, styles: {} },
-          { id: "id-hero", slug: "hero", orderIndex: 1, styles: {} },
-        ],
-      },
-      isPending: false,
-      error: null,
-    };
-    openEditor();
-    await act(async () => {
-      const first = screen.getByLabelText("Name of card");
-      fireEvent.change(first, { target: { value: "panel" } });
-      fireEvent.blur(first);
-    });
-    await act(async () => {
-      const second = screen.getByLabelText("Name of hero");
-      fireEvent.change(second, { target: { value: "banner" } });
-      fireEvent.blur(second);
-    });
-
-    expect(saved.length).toBe(2);
-    // The SECOND payload is the one that decides, because it is written last.
-    // It must carry both renames; carrying only its own is the defect.
-    const last = JSON.stringify(saved[saved.length - 1]);
-    expect(last).toContain("banner");
-    expect(last).toContain("panel");
-    expect(last).not.toContain('"card"');
-  });
-
-  it("uses the HOST's limits to decide what the page applies", () => {
-    /*
-     * A site that raised or lowered `limits` renders under those, and a walk
-     * here under the engine's defaults selects different nodes — reporting a
-     * class as absent from a page that renders it. A ceiling of one node means
-     * only the first is read, so the second node's class is not marked.
+     * A site that raised or lowered `limits` renders under those, and a count
+     * under the engine's defaults would read different blocks. A ceiling of
+     * one block reads only the first, and says the count is a floor.
      */
     clientConfig = { limits: { maxNodes: 1 } };
-    // Two nodes, each carrying a class, so a ceiling of one truncates the walk.
     openWith = {
       formatVersion: 1,
       kind: "page",
@@ -455,46 +513,35 @@ describe("the classes manager reaching an author", () => {
         { id: "n2", type: "core/text", props: {}, classes: ["id-hero"] },
       ],
     };
-    storedRead = {
-      data: {
-        classes: [
-          { id: "id-card", slug: "card", orderIndex: 0, styles: {} },
-          { id: "id-hero", slug: "hero", orderIndex: 1, styles: {} },
-        ],
-      },
-      isPending: false,
-      error: null,
-    };
+    storedClasses(CARD, HERO);
     openEditor();
-    // Reading fewer nodes than the document holds is reported, rather than the
-    // shortfall being presented as "these classes are not on this page".
-    expect(screen.getByTestId("panel").textContent).toContain(
-      "more blocks than can be read at once"
-    );
+    await settle();
+    expect(
+      screen
+        .getByRole("button", { name: /^card, \.nx-c-card/ })
+        .getAttribute("aria-label")
+    ).toContain("At least 1 block on this page");
+    expect(
+      screen
+        .getByRole("button", { name: /^hero, \.nx-c-hero/ })
+        .getAttribute("aria-label")
+    ).not.toContain("on this page");
   });
 
-  it("carries a ZERO limit rather than substituting the default", () => {
-    // A host that sets `maxNodes: 0` gets a renderer that draws nothing.
-    // Narrowing that away in the admin would mark classes as present on a page
-    // rendering none of them.
+  it("carries a ZERO limit rather than substituting the default", async () => {
+    // A host that sets `maxNodes: 0` gets a renderer that draws nothing, so no
+    // block on this page carries the style.
     clientConfig = { limits: { maxNodes: 0 } };
     openWith = {
       formatVersion: 1,
       kind: "page",
       nodes: [{ id: "n1", type: "core/text", props: {}, classes: ["id-card"] }],
     };
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+    storedClasses(CARD);
     openEditor();
-    const panel = screen.getByTestId("panel");
-    // The row is there (the control), and it is NOT marked as on this page.
-    expect(screen.getByLabelText("Name of card")).toBeTruthy();
-    expect(panel.textContent).not.toContain("on this page");
+    await settle();
+    const row = screen.getByRole("button", { name: /^card, \.nx-c-card/ });
+    expect(row.getAttribute("aria-label")).not.toContain("block on this page");
   });
 
   /*
@@ -516,10 +563,7 @@ describe("the classes manager reaching an author", () => {
      * stale list before the next queued write composed its payload.
      *
      * Asserted as the IDENTITY the surface is handed, which is the property the
-     * write base keys on. Driving two creations through a held-open save does
-     * not reach it: the composition callbacks run as microtasks and React has
-     * not flushed the effect that resets the base by then, so that test passed
-     * with the churn restored and was removed rather than kept as a green.
+     * write base keys on.
      */
     storedRead = { data: {}, isPending: false, error: null };
     const view = openEditor();
@@ -533,44 +577,25 @@ describe("the classes manager reaching an author", () => {
     expect(second).toBe(first);
   });
 
-  it("remembers the name a class is heading for while its write is open", async () => {
+  it("writes a revert typed while the rename before it is still open", async () => {
     /*
-     * The panel cannot remember this: the rail unmounts it on every switch, so
-     * a field holding its own pending name loses it on exactly the switch that
-     * makes the window long enough to matter. The HOST owns the write queue and
-     * therefore the answer.
-     *
-     * Driven end to end: rename `card` to `panel` with the save held open, then
-     * type `card` again. That is a REVERT, and it must reach the host rather
-     * than being read as a no-op against the still-rendered `card`.
+     * The tab cannot remember this: the rail unmounts it on every switch. The
+     * HOST owns the write queue and so the name each style is heading for.
+     * Rename `card` to `panel` with the save held open, then type `card`
+     * again: a REVERT, which must reach the host rather than being read as no
+     * change against the still-stored `card`.
      */
     let release: (() => void) | undefined;
     holdSaves = new Promise<void>(resolve => {
       release = resolve;
     });
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+    storedClasses(CARD);
     openEditor();
 
-    const first = screen.getByLabelText("Name of card");
-    fireEvent.change(first, { target: { value: "panel" } });
-    fireEvent.blur(first);
+    const dialog = await details("card");
+    commitName(dialog, "panel");
     await vi.waitFor(() => expect(saved.length).toBe(1));
-
-    // React fires no change when the value equals the one already there, and
-    // the field reverted to `card` when the draft cleared.
-    fireEvent.change(screen.getByLabelText("Name of card"), {
-      target: { value: "car" },
-    });
-    fireEvent.change(screen.getByLabelText("Name of card"), {
-      target: { value: "card" },
-    });
-    fireEvent.blur(screen.getByLabelText("Name of card"));
+    commitName(dialog, "card");
 
     await act(async () => {
       release?.();
@@ -581,55 +606,31 @@ describe("the classes manager reaching an author", () => {
     await vi.waitFor(() => expect(saved.length).toBe(2));
 
     // The revert was written LAST, so it is the one that stands.
-    const last = JSON.stringify(saved[saved.length - 1]);
-    expect(last).toContain('"card"');
-    expect(last).not.toContain("panel");
+    const last = JSON.stringify(saved.at(-1));
+    expect(last).toContain('"slug":"card"');
+    expect(last).not.toContain('"panel"');
   });
 
-  it("keeps the pending name when an EARLIER rename settles under a later one", async () => {
+  it("keeps the name a style is heading for when an EARLIER rename settles under a later one", async () => {
     /*
-     * Two renames of one class can be in flight together, and the first to
-     * settle used to release the pending name for BOTH — its cleanup ran
-     * unconditionally. The panel then compares the author's next edit against
-     * the rendered slug rather than the name the class is heading for, so
-     * typing the original back reads as a no-op and is never written, while the
-     * second rename goes on to persist a different name.
-     *
-     * The window has to be built deliberately: the first must SETTLE while the
-     * second is still open, which is two releases rather than one. A single
-     * release lets both finish, and then no pending name is owed to anyone and
-     * the no-op is correct.
+     * Two renames of one style can be open together, and the first to settle
+     * must not release the name the SECOND is heading for: the next edit is
+     * judged against it, so typing the original back would read as no change
+     * and be dropped while the second went on to store a different name.
      */
     let releaseFirst: (() => void) | undefined;
     let releaseSecond: (() => void) | undefined;
     holdSaves = new Promise<void>(resolve => {
       releaseFirst = resolve;
     });
-    storedRead = {
-      data: {
-        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+    storedClasses(CARD);
     openEditor();
 
-    // First rename: the class is now heading for `panel`.
-    fireEvent.change(screen.getByLabelText("Name of card"), {
-      target: { value: "panel" },
-    });
-    fireEvent.blur(screen.getByLabelText("Name of card"));
+    const dialog = await details("card");
+    commitName(dialog, "panel");
     await vi.waitFor(() => expect(saved.length).toBe(1));
+    commitName(dialog, "hero");
 
-    // Second rename, committed while the first is still open. The field still
-    // renders `card`, so this is judged against the PENDING `panel`.
-    fireEvent.change(screen.getByLabelText("Name of card"), {
-      target: { value: "hero" },
-    });
-    fireEvent.blur(screen.getByLabelText("Name of card"));
-
-    // The second save will block here instead. The first is already awaiting the
-    // promise it captured, so swapping this does not free it.
     holdSaves = new Promise<void>(resolve => {
       releaseSecond = resolve;
     });
@@ -640,16 +641,8 @@ describe("the classes manager reaching an author", () => {
       await Promise.resolve();
     });
 
-    // The revert, with the SECOND still open. Against the pending `hero` this is
-    // a real change; against the rendered `card` it reads as a no-op and is
-    // dropped, which is the defect.
-    fireEvent.change(screen.getByLabelText("Name of card"), {
-      target: { value: "car" },
-    });
-    fireEvent.change(screen.getByLabelText("Name of card"), {
-      target: { value: "card" },
-    });
-    fireEvent.blur(screen.getByLabelText("Name of card"));
+    // The revert, with the SECOND still open.
+    commitName(dialog, "card");
 
     await act(async () => {
       releaseSecond?.();
@@ -658,61 +651,39 @@ describe("the classes manager reaching an author", () => {
       await Promise.resolve();
     });
 
-    // Written, rather than swallowed as a no-op.
     await vi.waitFor(() => expect(saved.length).toBeGreaterThanOrEqual(3));
-    const last = JSON.stringify(saved[saved.length - 1]);
-    expect(last).toContain('"card"');
+    expect(JSON.stringify(saved.at(-1))).toContain('"slug":"card"');
   });
 
-  it("lets a class whose id is __proto__ retry a rename its save refused", async () => {
+  it("lets a style whose id is __proto__ retry a rename its save refused", async () => {
     /*
      * The rename identity is keyed by class id, and a class id is stored data.
-     * On a plain record `__proto__` read back an inherited object and wrote
-     * through the prototype setter, so the refused attempt never released its
-     * pending name, and the retry, judged against that name, was dropped as no
-     * change at all.
+     * On a plain record `__proto__` read back an inherited object, so the
+     * refused attempt never released its pending name, and the retry, judged
+     * against that name, was dropped as no change at all.
      */
-    storedRead = {
-      data: {
-        classes: [{ id: "__proto__", slug: "card", orderIndex: 0, styles: {} }],
-      },
-      isPending: false,
-      error: null,
-    };
+    storedClasses({ ...CARD, id: "__proto__" });
     saveResult = new Error("The site style is locked.");
     openEditor();
 
+    const dialog = await details("card");
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Name of card"), {
-        target: { value: "panel" },
-      });
-      fireEvent.blur(screen.getByLabelText("Name of card"));
+      commitName(dialog, "panel");
     });
     expect(await screen.findByText("The site style is locked.")).toBeTruthy();
     const refused = saved.length;
     expect(refused).toBeGreaterThan(0);
 
     saveResult = { success: true };
+    const field = within(dialog).getByLabelText("Name");
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Name of card"), {
-        target: { value: "panel" },
-      });
-      fireEvent.blur(screen.getByLabelText("Name of card"));
+      fireEvent.change(field, { target: { value: "panels" } });
+      fireEvent.change(field, { target: { value: "panel" } });
+      fireEvent.keyDown(field, { key: "Enter" });
     });
 
     // Written again, rather than swallowed as a no-op against a stuck name.
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(refused));
-    expect(JSON.stringify(saved[saved.length - 1])).toContain('"panel"');
-  });
-
-  it("says a failed read failed, rather than loading forever", () => {
-    // A read that FAILED will not finish. A panel still saying "loading"
-    // describes a state the site is not in, and the author waits for something
-    // that is never coming.
-    storedRead = { data: undefined, isPending: false, error: new Error("403") };
-    openEditor();
-    const panel = screen.getByTestId("panel");
-    expect(panel.textContent).toContain("could not be read");
-    expect(panel.textContent).not.toContain("Loading classes");
+    expect(JSON.stringify(saved.at(-1))).toContain('"panel"');
   });
 });

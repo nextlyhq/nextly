@@ -56,6 +56,7 @@ afterEach(async () => {
   inserted = [];
   clicks = 0;
   buildsType = "test/heading";
+  buildsProps = {};
 });
 
 /** Pointer ids anything took capture of, so a palette drag can assert none. */
@@ -68,6 +69,11 @@ let inserted: string[] = [];
 let clicks = 0;
 /** What the palette's thunk answers with, so a test can make it disagree. */
 let buildsType = "test/heading";
+/**
+ * The props the palette's thunk builds with: a variation's, which the block
+ * type's own defaults do not carry.
+ */
+let buildsProps: Record<string, unknown> = {};
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<
@@ -162,7 +168,7 @@ function Host({ document: doc }: { document: BlockDocument }) {
             blockName: "test/heading",
             makeNode: () => {
               built += 1;
-              return node(INSERTED, buildsType);
+              return { ...node(INSERTED, buildsType), props: buildsProps };
             },
             onInserted: n => {
               inserted.push(n.id);
@@ -273,7 +279,9 @@ describe("dragging a block from the palette onto the canvas", () => {
     expect(dragState.draggingBlockName).toBe("test/heading");
     expect(ids()).toEqual(["a", "b"]);
     expect(editorRef?.undoDepth).toBe(0);
-    expect(built).toBe(0);
+    // Built once while aiming, so the locks are asked about the node itself;
+    // building is not inserting, and the document is untouched above.
+    expect(built).toBe(1);
 
     release(200, 90);
 
@@ -281,6 +289,7 @@ describe("dragging a block from the palette onto the canvas", () => {
     // Exactly one, and it is the whole point: two would mean the node was
     // materialised early and moved into place.
     expect(editorRef?.undoDepth).toBe(1);
+    // And the node judged is the node that landed: not built a second time.
     expect(built).toBe(1);
   });
 
@@ -869,5 +878,71 @@ describe("dragging a block from the palette onto the canvas", () => {
     expect(dragState.draggingBlockName).toBeNull();
     expect(built).toBe(0);
     expect(editorRef?.undoDepth).toBe(0);
+  });
+});
+
+describe("a palette drag judged by the one placement rule", () => {
+  /** A heading that is a link when its variation sets one. */
+  const LINKABLE: AnyBlockDefinition[] = [
+    {
+      name: "test/heading",
+      version: 1,
+      description: "A heading.",
+      example: { props: {} },
+      editor: { label: "Heading" },
+      contentModel: (props: { link?: string }) => ({
+        is: props.link ? ["flow", "interactive"] : ["flow"],
+      }),
+      render: () => React.createElement("h2", null, "heading"),
+    },
+    {
+      name: "test/card",
+      version: 1,
+      description: "A card that refuses anything clickable inside it.",
+      example: { props: {} },
+      editor: { label: "Card" },
+      slots: { children: {} },
+      contentModel: () => ({
+        is: ["flow", "interactive"],
+        accepts: { without: ["interactive"] },
+      }),
+      render: () => React.createElement("div", null, "card"),
+    },
+  ] as never;
+
+  /** Aims the palette's heading at the card's region and reports the line. */
+  function aimAtCard(): { drawn: boolean; container: HTMLElement } {
+    registerBlocks(LINKABLE, { source: "insert-drag-test" });
+    const { container, getByTestId } = render(
+      <Host document={documentOf([node("card", "test/card")])} />
+    );
+    layout(container, { card: 100 });
+    pressRow(getByTestId("palette-row"), 300, 500);
+    moveTo(200, 50);
+    return {
+      drawn: container.querySelector(".nx-drop-indicator") !== null,
+      container,
+    };
+  }
+
+  it("refuses the node the release would insert, its variation's props included", () => {
+    // The type's defaults make a plain heading, which the card takes; the row
+    // builds the linked one, which it does not. Judging the defaults draws a
+    // line the release cannot honour.
+    buildsProps = { link: "/go" };
+    const { drawn } = aimAtCard();
+    expect(drawn).toBe(false);
+
+    release(200, 50);
+    expect(editorRef?.document.nodes[0]?.slots).toBeUndefined();
+    // Judged and never inserted, from the one build the gesture makes.
+    expect(built).toBe(1);
+  });
+
+  it("takes the same row into the card when what it builds is plain", () => {
+    // The control: the card's region is reachable from the palette, so the
+    // refusal above is the built node's props.
+    const { drawn } = aimAtCard();
+    expect(drawn).toBe(true);
   });
 });

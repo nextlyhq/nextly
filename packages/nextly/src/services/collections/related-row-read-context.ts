@@ -16,6 +16,9 @@
  * @module services/collections/related-row-read-context
  */
 
+import type { SQL } from "drizzle-orm";
+
+import type { FilteredRead } from "../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { CompanionSchema } from "../collection-file-manager";
 
@@ -86,6 +89,15 @@ export interface RelatedRowReadContext {
    * which the layers below do not have.
    */
   locale?: string;
+
+  /**
+   * The languages the surrounding read falls back through, {@link locale}
+   * first. A target collection's read rule that filters on a localized field
+   * is judged in each of them, as a direct read of the target judges it, so
+   * a related row is populated only where the caller could read it directly.
+   * Absent, the rule is judged in {@link locale} alone.
+   */
+  localeChain?: readonly string[];
 
   /**
    * The caller's Draft/Published intent, when they asked to see everything.
@@ -167,21 +179,34 @@ export interface RelatedRowReadContext {
   targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
 
   /**
-   * Whether this caller may read each target collection, decided once per
-   * expansion. The verdict depends on nothing but the caller and the target,
+   * Which rows of each target collection this caller may read, decided once
+   * per expansion. The verdict depends on nothing but the caller and the target,
    * and both are fixed for the whole expansion — a nested hop inherits the
    * same caller — so a `hasMany` field fetching its references concurrently
    * asks its target's rule once rather than once per reference. Holds the
    * PENDING verdict, as the policy map does, and for the same reason.
    */
-  targetVerdicts?: Map<string, Promise<boolean>>;
+  targetVerdicts?: Map<string, Promise<FilteredRead>>;
+
+  /**
+   * Each target's read-rule filter as the match column a fetch selects,
+   * built once per expansion. Keyed by the target and the status and
+   * language the condition is built under, so a `hasMany` field fetching its
+   * references one by one builds the condition, and reads the metadata it
+   * needs, once rather than once per reference. Holds the PENDING column, as
+   * the verdict map does.
+   */
+  targetRuleMatches?: Map<string, Promise<SQL<number> | undefined>>;
 }
 
 /** The per-read caches a {@link RelatedRowReadContext} carries. */
 export type ReadExpansionCaches = Required<
   Pick<
     RelatedRowReadContext,
-    "targetPolicies" | "targetCompanions" | "targetVerdicts"
+    | "targetPolicies"
+    | "targetCompanions"
+    | "targetVerdicts"
+    | "targetRuleMatches"
   >
 >;
 
@@ -197,5 +222,6 @@ export function readExpansionCaches(): ReadExpansionCaches {
     targetPolicies: new Map(),
     targetCompanions: new Map(),
     targetVerdicts: new Map(),
+    targetRuleMatches: new Map(),
   };
 }

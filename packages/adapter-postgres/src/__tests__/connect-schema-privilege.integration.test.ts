@@ -20,6 +20,19 @@ const TEST_DB_URL = process.env.TEST_POSTGRES_URL;
 const ROLE = `nx_schema_priv_${String(process.pid)}`;
 const PASSWORD = "schema_priv_pw";
 const MISSING_SCHEMA = `nx_schema_new_${String(process.pid)}`;
+const RACED_SCHEMA = `nx_schema_raced_${String(process.pid)}`;
+
+/** Polls `check` until it holds, failing after `timeoutMs`. */
+async function waitUntil(
+  check: () => Promise<boolean>,
+  timeoutMs = 10_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
 
 /** The test database's URL, signed in as `user`. */
 function urlAs(user: string, password: string): string {
@@ -65,6 +78,53 @@ describe.skipIf(!TEST_DB_URL)("connect with a configured schema", () => {
       await adapter.disconnect();
     }
   });
+
+  // Another process creates the schema while this one waits for the creation
+  // lock, and this role's sessions default to serializable, which fixes a
+  // transaction's snapshot at its first statement: the lock wait. A lookup
+  // after the wait on that snapshot misses the schema, and the CREATE that
+  // follows is refused for want of the database privilege, failing the
+  // connect. The creation runs at read committed, so the lookup sees it.
+  it("connects as a role that cannot create schemas when another process creates it meanwhile", async () => {
+    await admin.query(`DROP SCHEMA IF EXISTS ${RACED_SCHEMA}`);
+    const creator = new pg.Client({ connectionString: TEST_DB_URL });
+    await creator.connect();
+    const url = new URL(urlAs(ROLE, PASSWORD));
+    url.searchParams.set(
+      "options",
+      "-c default_transaction_isolation=serializable"
+    );
+    const adapter = new PostgresAdapter({
+      url: url.toString(),
+      schema: RACED_SCHEMA,
+    });
+    try {
+      await creator.query("BEGIN");
+      await creator.query(
+        "SELECT pg_advisory_xact_lock(hashtext('nextly:create-schema'), hashtext($1))",
+        [RACED_SCHEMA]
+      );
+      await creator.query(`CREATE SCHEMA ${RACED_SCHEMA}`);
+      await creator.query(`GRANT USAGE ON SCHEMA ${RACED_SCHEMA} TO ${ROLE}`);
+
+      const connecting = adapter.connect();
+      // Commit only once the adapter waits for the lock, its snapshot taken.
+      await waitUntil(async () => {
+        const { rows } = await admin.query(
+          "SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+        );
+        return rows.length > 0;
+      });
+      await creator.query("COMMIT");
+
+      await expect(connecting).resolves.toBeUndefined();
+    } finally {
+      await creator.query("ROLLBACK").catch(() => {});
+      await creator.end();
+      await adapter.disconnect();
+      await admin.query(`DROP SCHEMA IF EXISTS ${RACED_SCHEMA}`);
+    }
+  }, 30_000);
 
   it("creates the schema when it is missing", async () => {
     const adapter = new PostgresAdapter({

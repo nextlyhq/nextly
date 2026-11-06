@@ -1,10 +1,12 @@
 // Collection and dynamic content types for the admin app
 
+import type { RemovedFromCodeMark } from "./removed-from-code";
+
 /**
  * All supported field types in Nextly
  *
  * These map to the field types available in FieldPalette.tsx:
- * - Text: text, textarea, richText, email, password, code
+ * - Text: text, textarea, richText, email, password, code, icon
  * - Number: number
  * - Selection: checkbox, date, select, radio
  * - Media: upload
@@ -19,6 +21,7 @@ export type FieldPrimitiveType =
   | "email"
   | "password"
   | "code"
+  | "icon"
   // Number types
   | "number"
   // Selection types
@@ -212,7 +215,7 @@ export interface CollectionAdminComponents {
   AfterEdit?: string;
 }
 
-export interface Collection {
+export interface Collection extends RemovedFromCodeMark {
   id: string;
   name: string;
   /** Slug for the collection (new API format) */

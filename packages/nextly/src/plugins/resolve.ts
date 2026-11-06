@@ -9,9 +9,15 @@ import {
   orderedMigrations,
 } from "../domains/schema/migrate/plugin/plugin-migration";
 import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schema-version-check";
+import {
+  collectPluginWebhookEventTypes,
+  publishWebhookEventTypes,
+} from "../domains/webhooks/event-type-registry";
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
+import { contributedListFilters } from "./admin-filters";
+import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
@@ -28,14 +34,15 @@ import {
 } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
+import { collectPluginTranslations } from "./plugin-translations";
 import {
   collectPrincipalKinds,
   publishPrincipalKinds,
 } from "./principals/registry";
+import { assertNoRemovedWidgetKeys } from "./removed-widget-keys";
 import { resolutionError } from "./resolution-error";
 import { assertSettingsPermissionsGuardSettings } from "./settings-permission";
 import { topoSortPlugins } from "./topo-sort";
-import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
@@ -132,13 +139,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // other fail-fast checks rather than surfacing when the admin first asks for
   // its metadata and losing the whole branding response with it.
   assertClientConfigs(plugins);
-  // Beside it, and for the same reason one level up: a contributed widget rides
-  // in the SAME `/api/admin-meta/workspace` payload, through the same single
-  // `JSON.stringify`. A bigint under `query.where` is type-legal there, so the
-  // throw lands on the workspace response for every admin rather than on the
-  // one card -- which is a worse failure than a bad `clientConfig`, not a
-  // lesser one.
-  assertAdminWidgets(plugins);
+  // Beside it: a plugin still adding widgets or widget sources through a key
+  // Nextly no longer reads is refused here, by name, rather than having its
+  // cards silently absent.
+  assertNoRemovedWidgetKeys(plugins);
   // And the document views: two screens on one address would leave the admin
   // drawing whichever it reached first, and a transformer can add either.
   assertDocumentViews(plugins);
@@ -163,11 +167,31 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // every emit — the per-plugin bus lets a plugin speak neither for core nor
   // for another plugin. Refused here, the mistake is named at boot.
   assertPluginEventNames(plugins);
+  // Webhook event types, checked and published as hook points are: a type
+  // outside the plugin's namespace, one of core's or one declared twice would
+  // otherwise be offered to subscribers as an event nothing may send. The
+  // published list is the one every subscription and the admin's form read.
+  publishWebhookEventTypes(collectPluginWebhookEventTypes(plugins));
+  // Translations, checked here and read again by the admin metadata: a key
+  // outside the plugin's namespace, or one another plugin declares, would
+  // otherwise show one plugin's text in another's screen, or none at all.
+  collectPluginTranslations(plugins);
   // A settings permission with no settings behind it guards nothing, and
   // reads as though the plugin's credentials were kept to a narrower role.
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // Admin places, checked as hook points are: a place in another plugin's
+  // namespace or core's, or one declared twice, would otherwise surface as a
+  // contribution rendered in the wrong place or nowhere. Last, so two plugins
+  // sharing a slug are refused for the slug before their places collide on
+  // it. Checked only: nothing keeps the result, and a reader computes the
+  // places from the plugin list the app committed.
+  collectAdminPlaces(plugins);
+  // Entry-list filters, for the same reason: a malformed one would
+  // otherwise be offered in the toolbar and fail when chosen. Checked only;
+  // the admin meta is built from the same reduction.
+  contributedListFilters(plugins);
 }
 
 /**

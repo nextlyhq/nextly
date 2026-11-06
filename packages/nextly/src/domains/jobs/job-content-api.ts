@@ -52,6 +52,7 @@ import type {
   FindArgs,
   FindByIDArgs,
   FindSingleArgs,
+  FoundSingle,
   FindSinglesArgs,
   ListResult,
   MutationResult,
@@ -156,6 +157,8 @@ type ForwardedOption =
   | "limit"
   | "page"
   | "offset"
+  // Can only make a read refuse more, never widen it.
+  | "unknownSort"
   | "pagination"
   | "select"
   | "populate"
@@ -164,6 +167,9 @@ type ForwardedOption =
   // from the access options this client owns.
   | "status"
   | "draft"
+  // Whether a Single read creates a missing document. Shaping, not
+  // authority: `false` only declines to write.
+  | "createIfMissing"
   // `findSingles` filters.
   | "source"
   | "migrationStatus"
@@ -235,9 +241,12 @@ export interface JobContentApi {
   duplicate: <TSlug extends CollectionSlug>(
     args: JobArgs<DuplicateArgs<TSlug>>
   ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
-  findSingle: <TSlug extends SingleSlug>(
-    args: JobArgs<FindSingleArgs<TSlug>>
-  ) => Promise<RowFromSingleSlug<TSlug>>;
+  findSingle: <
+    TSlug extends SingleSlug,
+    TCreate extends boolean | undefined = undefined,
+  >(
+    args: JobArgs<FindSingleArgs<TSlug>> & { createIfMissing?: TCreate }
+  ) => Promise<FoundSingle<TSlug, TCreate>>;
   updateSingle: <TSlug extends SingleSlug>(
     args: JobArgs<UpdateSingleArgs<TSlug>>
   ) => Promise<MutationResult<RowFromSingleSlug<TSlug>>>;
@@ -293,6 +302,18 @@ type BoundContract<K extends BoundOperation> = (
 ) => ReturnType<Nextly[K]>;
 
 /**
+ * A bound signature at its constraint, the way `BoundContract` reads the
+ * Direct API's. The reverse comparison below uses it so both sides are judged
+ * at the same point: a generic whose RESULT depends on a type parameter (as
+ * `findSingle`'s does on `createIfMissing`) cannot be shown equal to a
+ * non-generic contract for every instantiation, though at the constraint the
+ * two still differ exactly when the argument or result contract drifted.
+ */
+type AtConstraint<K extends BoundOperation> = (
+  ...args: Parameters<JobContentApi[K]>
+) => ReturnType<JobContentApi[K]>;
+
+/**
  * Fails to compile when a bound signature stops matching the Direct API.
  *
  * Bidirectional: one direction alone would accept an interface that merely
@@ -301,7 +322,7 @@ type BoundContract<K extends BoundOperation> = (
  */
 type AssertBoundContractsMatch = {
   [K in BoundOperation]: JobContentApi[K] extends BoundContract<K>
-    ? BoundContract<K> extends JobContentApi[K]
+    ? BoundContract<K> extends AtConstraint<K>
       ? true
       : ["bound signature drifted from the Direct API", K]
     : ["bound signature drifted from the Direct API", K];

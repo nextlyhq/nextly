@@ -1,0 +1,24 @@
+---
+title: I18N_RESTORE_KIND_INVALID
+description: "`i18n:restore --kind` is not `collection`, `single` or `field-group`."
+---
+
+## Cause
+
+`i18n:restore --kind` is not `collection`, `single` or `field-group`.
+
+`--kind` says which kind of entity the slug names, when a collection or single and a field group share it. It takes one of three values.
+
+## Fix
+
+- Pass `--kind collection`, `--kind single` or `--kind field-group`.
+- Leave `--kind` out when the slug names only one entity.
+
+## Example
+
+```text
+✗ --kind must be collection, single or field-group, not "page".
+  Why:  `--kind` says which kind of entity the slug names, when more than one kind has it.
+  Next: Pass `--kind collection`, `--kind single` or `--kind field-group`, or leave `--kind` out when the slug names one entity.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-kind-invalid  (I18N_RESTORE_KIND_INVALID)
+```

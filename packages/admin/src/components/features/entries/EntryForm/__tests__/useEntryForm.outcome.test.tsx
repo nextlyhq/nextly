@@ -23,6 +23,10 @@ vi.mock("@admin/hooks/queries/useCreateEntry", () => ({
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
   useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
 }));
+// Whether the read asks translation state, which the save keys its cache on.
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useAsksTranslationStatus: () => false,
+}));
 vi.mock("@admin/hooks/queries/useDeleteEntry", () => ({
   useDeleteEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));

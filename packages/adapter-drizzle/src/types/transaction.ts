@@ -60,6 +60,19 @@ export interface TransactionOptions {
   retryDelayMs?: number;
 
   /**
+   * Whether the error that ended an attempt is worth another attempt, within
+   * `retryCount`. Asked first, of every error, application errors included,
+   * so a caller can retry a conflict of its own, such as a version conflict,
+   * that would otherwise reach it unretried. When it answers false, a
+   * dialect still retries its own serialization failures and deadlocks.
+   * Asked of an outermost transaction only: a call joined to an open
+   * transaction is never retried itself.
+   *
+   * @experimental
+   */
+  retryWhen?: (error: unknown) => boolean;
+
+  /**
    * MySQL only: run the transaction in strict mode, so a statement that would
    * cut a string to its column's length or clamp a number to its range fails
    * rather than applying with a warning. The session's own mode is restored
@@ -68,6 +81,32 @@ export interface TransactionOptions {
    * declared length.
    */
   strictSqlMode?: boolean;
+}
+
+/**
+ * Options for a session run outside a transaction (`withSession`).
+ *
+ * @public
+ */
+export interface SessionOptions {
+  /**
+   * MySQL only: run the session in strict mode, as `TransactionOptions`'s
+   * option of the same name does for a transaction, and restore the
+   * session's own mode before the connection returns to the pool.
+   * PostgreSQL and SQLite ignore it.
+   */
+  strictSqlMode?: boolean;
+}
+
+/**
+ * Statements run one after another outside a transaction, each committing as
+ * it runs, on the connection `withSession` holds for them.
+ *
+ * @public
+ */
+export interface StatementSession {
+  /** Runs one statement and returns its rows. */
+  execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
 }
 
 /**

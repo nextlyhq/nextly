@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { keyFor, openSaved, readSaved, settingsOf } from "./saved.mjs";
 
-const options = { docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1", "max-load": "8", revision: "abc", dialects: "mysql" };
+const options = { docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1", "max-load": "8", revision: "abc", modes: "main,per-language", dialects: "mysql" };
 const folders = [];
 afterEach(() => folders.splice(0).forEach(f => rmSync(f, { recursive: true, force: true })));
 const fileIn = () => {
@@ -17,7 +17,7 @@ const fileIn = () => {
 
 describe("the measurements a run keeps as it goes", () => {
   it("records only the settings that make measurements comparable", () => {
-    expect(settingsOf(options)).toEqual({ docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1", "max-load": "8", revision: "abc" });
+    expect(settingsOf(options)).toEqual({ docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1", "max-load": "8", revision: "abc", modes: "main,per-language" });
   });
 
   it("gives back every measurement saved, by database, run and mode", () => {
@@ -42,6 +42,8 @@ describe("the measurements a run keeps as it goes", () => {
     expect(() => openSaved(file, { ...options, "max-load": "4" })).toThrow(/were taken with/);
     // Or measurements taken by other code.
     expect(() => openSaved(file, { ...options, revision: "def" })).toThrow(/were taken with/);
+    // Or measurements kept for another pair, whose `main` would be paired with a measurement taken now.
+    expect(() => openSaved(file, { ...options, modes: "main,e4" })).toThrow(/were taken with/);
     expect(() => readSaved(`${JSON.stringify({ settings: settingsOf(options) })}\n`, settingsOf({ ...options, docs: "50" }))).toThrow(/were taken with/);
   });
 

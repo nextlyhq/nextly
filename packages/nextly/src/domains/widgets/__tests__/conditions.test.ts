@@ -27,7 +27,7 @@ interface Card {
 
 const permanent: Card = { id: "core/team" };
 const transient: Card = {
-  id: "core/get-started",
+  id: "acme/welcome",
   lifecycle: "conditional",
   visibleWhen: "content:empty",
 };
@@ -187,7 +187,7 @@ describe("which widgets are kept", () => {
     const list: Card[] = [permanent, transient, { id: "core/third" }];
     expect(widgetsHeldByVerdict(list, verdict(true)).map(w => w.id)).toEqual([
       "core/team",
-      "core/get-started",
+      "acme/welcome",
       "core/third",
     ]);
   });

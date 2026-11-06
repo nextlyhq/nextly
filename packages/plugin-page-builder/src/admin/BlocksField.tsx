@@ -45,7 +45,9 @@ import { acceptedKinds } from "../fields/blocks-options";
 
 import { builderAddress } from "./editor/builder-address";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
+import { PageLayoutPicker, usePageLayoutAsk } from "./page-layout";
 import { PageBuilderCard } from "./PageBuilderCard";
+import { useFormPublishOffer } from "./publish-offer";
 import { useRestingPageRender } from "./use-resting-page-render";
 
 /*
@@ -180,24 +182,40 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   );
   const resting = useRestingPageRender(PLUGIN_SOURCE, restingDocument);
 
+  // Asked before a publish from the form, as the editor asks before its own:
+  // the components and Layout this document needs that are not live.
+  const publishOffer = useFormPublishOffer({
+    form: control,
+    name,
+    value: () => field.value,
+    ...usePageLayoutAsk(control),
+    subject: restingDocument.kind === "component" ? "component" : "page",
+  });
+
   return (
-    <PageBuilderCard
-      document={restingDocument}
-      siteStyles={resting.siteStyles}
-      styleState={resting.styleState}
-      components={resting.components}
-      render={resting.render}
-      // The gate is passed through rather than restated: `canEditBlocks`
-      // answers it, and two readings of "may this author edit" is one more
-      // than the question has.
-      canEdit={editable}
-      href={"href" in address ? address.href : undefined}
-      onNavigate={navigateTo}
-      {...("unavailable" in address
-        ? { note: address.unavailable }
-        : address.note === undefined
-          ? {}
-          : { note: address.note })}
-    />
+    <>
+      <PageBuilderCard
+        document={restingDocument}
+        siteStyles={resting.siteStyles}
+        styleState={resting.styleState}
+        components={resting.components}
+        render={resting.render}
+        // The gate is passed through rather than restated: `canEditBlocks`
+        // answers it, and two readings of "may this author edit" is one more
+        // than the question has.
+        canEdit={editable}
+        href={"href" in address ? address.href : undefined}
+        onNavigate={navigateTo}
+        // The page's Layout, chosen where its blocks are summarised. Draws
+        // nothing for a form that is not a page's.
+        after={<PageLayoutPicker control={control} disabled={!editable} />}
+        {...("unavailable" in address
+          ? { note: address.unavailable }
+          : address.note === undefined
+            ? {}
+            : { note: address.note })}
+      />
+      {publishOffer}
+    </>
   );
 }

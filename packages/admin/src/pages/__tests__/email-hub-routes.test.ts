@@ -24,42 +24,42 @@ import {
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
 
-import EmailDesignPage from "../dashboard/email/design";
-import EmailMessagesPage from "../dashboard/email/index";
-import CreateEmailTemplatePage from "../dashboard/email/messages/create";
-import EditEmailTemplatePage from "../dashboard/email/messages/edit/[id]";
-import CreateEmailProviderPage from "../dashboard/email/sending/create";
-import EditEmailProviderPage from "../dashboard/email/sending/edit/[id]";
-import EmailProvidersPage from "../dashboard/email/sending/index";
-import EmailSettingsRedirect, {
-  emailHubPathFor,
-} from "../dashboard/redirects/EmailSettingsRedirect";
+import { emailHubPathFor } from "../dashboard/redirects/EmailSettingsRedirect";
+import { routeConfig } from "../registry";
 
 const ID = "3f6c1d2e-8a4b-4c5d-9e6f-7a8b9c0d1e2f";
 
 describe("the Email hub's routes", () => {
   it.each([
-    [ROUTES.EMAIL, EmailMessagesPage, EMAIL_HUB_PERMISSIONS],
-    [ROUTES.EMAIL_DESIGN, EmailDesignPage, EMAIL_TEMPLATE_READ_PERMISSIONS],
-    [ROUTES.EMAIL_SENDING, EmailProvidersPage, EMAIL_PROVIDER_READ_PERMISSIONS],
+    [ROUTES.EMAIL, routeConfig[ROUTES.EMAIL].component, EMAIL_HUB_PERMISSIONS],
+    [
+      ROUTES.EMAIL_DESIGN,
+      routeConfig[ROUTES.EMAIL_DESIGN].component,
+      EMAIL_TEMPLATE_READ_PERMISSIONS,
+    ],
+    [
+      ROUTES.EMAIL_SENDING,
+      routeConfig[ROUTES.EMAIL_SENDING].component,
+      EMAIL_PROVIDER_READ_PERMISSIONS,
+    ],
     [
       ROUTES.EMAIL_MESSAGES_CREATE,
-      CreateEmailTemplatePage,
+      routeConfig[ROUTES.EMAIL_MESSAGES_CREATE].component,
       EMAIL_TEMPLATE_CREATE_PERMISSIONS,
     ],
     [
       buildRoute(ROUTES.EMAIL_MESSAGES_EDIT, { id: ID }),
-      EditEmailTemplatePage,
+      routeConfig[ROUTES.EMAIL_MESSAGES_EDIT].component,
       EMAIL_TEMPLATE_UPDATE_PERMISSIONS,
     ],
     [
       ROUTES.EMAIL_SENDING_CREATE,
-      CreateEmailProviderPage,
+      routeConfig[ROUTES.EMAIL_SENDING_CREATE].component,
       EMAIL_PROVIDER_CREATE_PERMISSIONS,
     ],
     [
       buildRoute(ROUTES.EMAIL_SENDING_EDIT, { id: ID }),
-      EditEmailProviderPage,
+      routeConfig[ROUTES.EMAIL_SENDING_EDIT].component,
       EMAIL_PROVIDER_UPDATE_PERMISSIONS,
     ],
   ] as const)("resolves %s to its page, guarded", (path, page, grants) => {
@@ -85,10 +85,16 @@ describe("the Email hub's routes", () => {
 
   it("does not let the create page be read as an edit id", () => {
     expect(resolveRoute(ROUTES.EMAIL_MESSAGES_CREATE, "").Component).toBe(
-      CreateEmailTemplatePage
+      routeConfig[ROUTES.EMAIL_MESSAGES_CREATE].component
     );
     expect(resolveRoute(ROUTES.EMAIL_SENDING_CREATE, "").Component).toBe(
-      CreateEmailProviderPage
+      routeConfig[ROUTES.EMAIL_SENDING_CREATE].component
+    );
+    expect(routeConfig[ROUTES.EMAIL_MESSAGES_CREATE].component).not.toBe(
+      routeConfig[ROUTES.EMAIL_MESSAGES_EDIT].component
+    );
+    expect(routeConfig[ROUTES.EMAIL_SENDING_CREATE].component).not.toBe(
+      routeConfig[ROUTES.EMAIL_SENDING_EDIT].component
     );
   });
 });
@@ -111,7 +117,9 @@ describe("the old Settings email URLs", () => {
 
   it.each(OLD)("resolves %s to the redirect, unguarded", old => {
     const resolved = resolveRoute(old, "");
-    expect(resolved.Component).toBe(EmailSettingsRedirect);
+    expect(resolved.Component).toBe(
+      routeConfig[ROUTES.SETTINGS_EMAIL_TEMPLATES].component
+    );
     // The page it lands on is guarded; a guard here would refuse on a URL
     // that no longer means anything.
     expect(resolved.requiredPermission).toBeUndefined();

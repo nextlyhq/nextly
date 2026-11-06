@@ -1,13 +1,13 @@
 /**
  * How a count is written when it may be a FLOOR rather than a total.
  *
- * 🔴 One implementation, used by every archetype that draws a count. `metric`
- * and `stats` each formatted their own, and when `WidgetResult` gained
- * `atLeast` only one of them was taught about it — so the same query rendered
- * `2,000+` on a metric card and `2,000` on a stats cell, the second stating as
- * exact a number its own source had declined to vouch for. Two renderers of one
- * value agree on the day they are written; the drift is silent because each
- * reads correctly on its own.
+ * 🔴 One implementation, used by every card that draws a count: the `metric`
+ * archetype and core's count card. Two renderers each formatting their own once
+ * disagreed when `WidgetResult` gained `atLeast` and only one was taught about
+ * it, so the same count read `2,000+` on one card and `2,000` on another, the
+ * second stating as exact a number its own source had declined to vouch for.
+ * Two renderers of one value agree on the day they are written; the drift is
+ * silent because each reads correctly on its own.
  *
  * @module components/features/widgets/archetypes/count-value
  */
@@ -22,7 +22,7 @@ import { cardNumber } from "../frame/format";
  * What assistive technology should HEAR for a count.
  *
  * 🔴 Exported because a rendered node is not always what gets announced. A
- * stats cell that links wraps its number in an `aria-label`, and an
+ * count that links wraps its number in an `aria-label`, and an
  * `aria-label` REPLACES the element's descendants as its accessible name — so
  * everything {@link CountValue} renders, the number included, was dropped from
  * what a screen reader read out. Composing that name from this keeps one

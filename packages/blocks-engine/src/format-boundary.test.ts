@@ -232,11 +232,28 @@ describe("the format entry point's boundary", () => {
     // silently exited 0, an entry file that does not exist. The root reaches
     // the CSS parser, so it must fail here, and its failure is what proves the
     // format entry's success means something.
+    //
+    // Whichever runtime dependency the bundle imports first is the one named:
+    // the root reaches both the CSS parser and the URL policy's matcher, and
+    // which comes first is the bundler's ordering, not the boundary. Asked of
+    // the declared dependencies, so a module name in the error that is not
+    // one of them still fails the control.
     const run = runEntry(join(sandbox, "dist"), ROOT_ENTRY);
+    const dependencies = Object.keys(
+      (
+        JSON.parse(readFileSync(join(PACKAGE, "package.json"), "utf8")) as {
+          dependencies?: Record<string, string>;
+        }
+      ).dependencies ?? {}
+    );
 
     expect(run.ok).toBe(false);
     expect(run.stderr).toContain("ERR_MODULE_NOT_FOUND");
-    expect(run.stderr).toContain("css-tree");
+    expect(dependencies.length).toBeGreaterThan(0);
+    expect(
+      dependencies.some(name => run.stderr.includes(`package '${name}'`)),
+      run.stderr
+    ).toBe(true);
   });
 });
 

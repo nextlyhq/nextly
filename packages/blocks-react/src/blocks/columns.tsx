@@ -54,9 +54,15 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
+import { libraryDefinition } from "./classic-spacing";
 import { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 
@@ -89,77 +95,71 @@ export const COLUMNS_BASE_STYLES = {
        * columns touching. Measured on a published page: three tracks of 427px
        * with no space between them.
        *
-       * A LITERAL, matching `core/gallery` and `core/accordion`, and the reason
-       * is no longer the one those two were given. Both of them shipped
-       * `{ $token: "space.4" }` and rendered their children touching because
-       * nothing turned a token set into CSS; that is fixed, and `PageRenderer`
-       * now compiles a site sheet by default.
-       *
-       * It was not safe HERE until the renderer stopped withholding the token
-       * tier from a consumer holding a stored `styles` artifact. On that path
-       * the stored page CSS carried `gap: var(--site-space-4)` with the property
-       * undeclared, which is invalid at computed-value time, and `gap` fell back
-       * to `normal` — zero for a grid, and the exact defect this block was fixed
-       * for. Measured on that same path now: `--site-space-4` is declared and
-       * resolves to `1rem`, which is the value the literal was standing in for.
-       *
-       * So the gutter follows the site again. A site that redefines `space.4`
-       * moves this row with it, which is what a token set is for and what a
-       * length hard-coded here could never do.
+       * The gutter is the site's `space.columns` token, which grows with the
+       * viewport, so a site that redefines it moves every row with it. The
+       * token tier reaches every render path, a stored artifact handed back
+       * with no context included, so the reference always resolves.
        */
-      gap: { $token: "space.4" },
+      gap: { $token: "space.columns" },
     },
   },
 } as const;
 
 export const columns: BlockDefinition<ContainerProps, PageContext> =
-  defineBlock({
-    name: COLUMNS_BLOCK,
-    version: 1,
-    description:
-      "A row of columns. Restricts its slot to core/column so each column keeps an identity that can be selected and styled.",
-    // Palette metadata. The category is imported rather than spelled here so
-    // nineteen blocks cannot drift into nineteen headings; keywords are what
-    // let a search for a word the description never uses still find this.
-    editor: {
-      label: "Columns",
-      icon: "columns",
-      category: LAYOUT,
-      keywords: ["row", "grid", "split", "side by side"],
-    },
-    props: {
-      as: { type: "select", options: ["div", "section", "article"] },
-      contained: { type: "checkbox" },
-    },
-    defaultProps: { as: "div", contained: false },
-    example: { props: { as: "div" } },
-    // The parent half of the nesting rule. `block.ts` is explicit that this does
-    // NOT imply the child half: a slot naming a type must not confine that type
-    // to it. `core/column` states its own side in `column.tsx`.
-    slots: {
-      children: {
-        allow: [COLUMN_BLOCK],
-        /**
-         * The two columns a freshly placed row starts with.
-         *
-         * A row must start with children at all, because this slot admits only
-         * `core/column` and that block names this one as its only parent — so an
-         * empty row is a container whose single legal child can be placed nowhere
-         * else on the page, and the author has to build both halves by hand.
-         *
-         * Two rather than one, because a row of one is a box and an author who
-         * wanted a box would have reached for one; and rather than three, because
-         * removing a column is a click and adding one is a decision.
-         *
-         * The entries are written out rather than repeated from a count. Each
-         * declares one child, so an unequal split — a different width per column —
-         * is a change to an entry rather than a change of shape, and this list is
-         * the only place the number lives.
-         */
-        defaultBlock: [{ type: COLUMN_BLOCK }, { type: COLUMN_BLOCK }],
+  libraryDefinition(
+    defineBlock({
+      name: COLUMNS_BLOCK,
+      version: 1,
+      // What an author reads, in the Add panel and the block card: one plain
+      // line. What the block does, for whoever maintains it: A row of columns.
+      // Restricts its slot to core/column so each column keeps an identity that
+      // can be selected and styled.
+      description: "Blocks side by side, in columns.",
+      // Palette metadata. The category is imported rather than spelled here so
+      // nineteen blocks cannot drift into nineteen headings; keywords are what
+      // let a search for a word the description never uses still find this.
+      editor: {
+        label: "Columns",
+        icon: "columns",
+        category: LAYOUT,
+        keywords: ["row", "grid", "split", "side by side"],
       },
-    },
-    baseStyles: COLUMNS_BASE_STYLES,
-    supports: CONTAINER_SUPPORTS,
-    render: renderContainer,
-  });
+      props: {
+        as: htmlTagProp(["div", "section", "article"]),
+        contained: { label: "Constrain content width", type: "checkbox" },
+      },
+      defaultProps: { as: "div", contained: false },
+      example: { props: { as: "div" } },
+      // The parent half of the nesting rule. `block.ts` is explicit that this does
+      // NOT imply the child half: a slot naming a type must not confine that type
+      // to it. `core/column` states its own side in `column.tsx`.
+      slots: {
+        children: {
+          allow: [COLUMN_BLOCK],
+          /**
+           * The two columns a freshly placed row starts with.
+           *
+           * A row must start with children at all, because this slot admits only
+           * `core/column` and that block names this one as its only parent — so an
+           * empty row is a container whose single legal child can be placed nowhere
+           * else on the page, and the author has to build both halves by hand.
+           *
+           * Two rather than one, because a row of one is a box and an author who
+           * wanted a box would have reached for one; and rather than three, because
+           * removing a column is a click and adding one is a decision.
+           *
+           * The entries are written out rather than repeated from a count. Each
+           * declares one child, so an unequal split — a different width per column —
+           * is a change to an entry rather than a change of shape, and this list is
+           * the only place the number lives.
+           */
+          defaultBlock: [{ type: COLUMN_BLOCK }, { type: COLUMN_BLOCK }],
+        },
+      },
+      baseStyles: COLUMNS_BASE_STYLES,
+      supports: CONTAINER_SUPPORTS,
+      // What it is as HTML follows the tag it renders.
+      contentModel: containerContentModel,
+      render: renderContainer,
+    })
+  );

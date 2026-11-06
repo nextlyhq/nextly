@@ -10,110 +10,185 @@ import { appendFileSync, existsSync } from "node:fs";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
-import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import { exitWithError } from "../errors";
+import {
+  promoteCollectionNotFound,
+  syncConfirmationRequired,
+} from "../errors/areas/sync";
 import type { CommandContext } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+import type { Logger } from "../utils/logger";
+import { answered } from "../utils/prompt-cancelled";
+
+import {
+  collectionChangedAfterConsent,
+  openCollectionRegistry,
+  sameCollectionRecord,
+  withCollectionRegistryWrite,
+} from "./db-sync-registry";
+
+/**
+ * Whether `db:sync --yes` was given, answering the confirmation of
+ * `--promote` and `--demote` (neither is a data-loss consent). It arrives
+ * with the run's options, which the command's context carries.
+ */
+export function confirmationAnswered(context: CommandContext): boolean {
+  const options: Record<string, unknown> = { ...context.options };
+  return options.yes === true;
+}
+
+/** What a promote acts on, with its prompt and its lock wait as seams a test can stand in for. */
+export interface PromoteCollectionArgs {
+  slug: string;
+  logger: Logger;
+  /** Where `nextly.config.ts` is looked for. */
+  cwd: string;
+  registry: CollectionRegistryService;
+  /** The adapter the registry was opened on; the schema lock is taken on it. */
+  adapter: DrizzleAdapter;
+  /** Shows the generated code and answers whether to go ahead. Runs holding no lock. */
+  confirm: (code: string) => Promise<boolean>;
+  /** How long a held schema lock is waited for, in milliseconds. */
+  lockWaitMs?: number;
+}
+
+/**
+ * Promote one Schema Builder collection: append its code as a commented snippet to the config,
+ * then remove its registry row.
+ *
+ * The operator is asked first, holding no lock, so a confirmation left open blocks nothing. The
+ * write then takes the schema lock and reads the record again: if it changed or vanished since the
+ * preview, nothing is written and the run stops with `PLAN_CHANGED_AFTER_CONSENT`.
+ */
+export async function promoteCollection(
+  args: PromoteCollectionArgs
+): Promise<"promoted" | "cancelled"> {
+  const { slug, logger, registry } = args;
+
+  const confirmed = await registry.getCollectionBySlug(slug);
+  if (!confirmed) throw promoteCollectionNotFound(slug);
+
+  const fields = (confirmed.fields ?? []) as unknown[];
+  const code = serializeCollection({ slug, fields: fields as never[] });
+
+  if (!(await args.confirm(code))) {
+    logger.info("Promote cancelled.");
+    return "cancelled";
+  }
+
+  await withCollectionRegistryWrite(
+    {
+      adapter: args.adapter,
+      logger,
+      label: "db:sync --promote",
+      waitMs: args.lockWaitMs,
+    },
+    async () => {
+      // Read again under the lock: the snippet and the deletion must act on the record the
+      // operator confirmed, not on one another process wrote since.
+      const current = await registry.getCollectionBySlug(slug);
+      if (!sameCollectionRecord(confirmed, current)) {
+        throw collectionChangedAfterConsent({
+          slug,
+          command: "nextly db:sync --promote",
+          confirmed,
+          current,
+        });
+      }
+
+      // Append to config file as a COMMENTED snippet. We do not try to AST-edit the collections
+      // array because users may have custom imports, env-gated branches, or other machinery the
+      // AST transformer cannot safely preserve.
+      const configPath = findConfigFile(args.cwd);
+      if (!configPath) {
+        logger.warn(
+          "Could not locate nextly.config.ts. The snippet is printed below; paste it into the collections array manually."
+        );
+        logger.info(code);
+      } else {
+        const snippet = [
+          "",
+          `// Promoted from UI source on ${new Date().toISOString()}.`,
+          "// Move this entry into your collections array:",
+          ...code.split("\n").map(line => `// ${line}`),
+          "",
+        ].join("\n");
+        appendFileSync(configPath, snippet);
+        logger.info(`Appended commented snippet to ${configPath}.`);
+      }
+
+      // Delete the UI record so there is no collision on next wrapper start. `deleteCollection`
+      // removes the registry row ONLY — it deliberately leaves the data table (and its `_locales`
+      // companion) in place, because promotion hands the same table over to the code-first
+      // definition. Dropping here would destroy the collection's content.
+      await registry.deleteCollection(slug);
+    }
+  );
+
+  logger.info(
+    `Collection '${slug}' removed from UI source. Move the snippet into your collections array, then restart dev server.`
+  );
+  return "promoted";
+}
+
+/** The terminal's confirmation for a promote: a preview on request, then a yes or no. */
+async function askToPromote(slug: string, code: string): Promise<boolean> {
+  // Ctrl+C at either prompt ends the run with exit 130 (`answered`); choosing Cancel, or a no,
+  // is a declined promote.
+  const action = await answered(
+    await p.select({
+      message: `Preview generated code for '${slug}'. Action?`,
+      options: [
+        { value: "preview", label: "Show preview" },
+        { value: "accept", label: "Append to nextly.config.ts" },
+        { value: "decline", label: "Cancel" },
+      ],
+    })
+  );
+  if (action === "decline") return false;
+  if (action === "preview") {
+    p.note(code, "Generated code");
+    const confirm = await answered(
+      await p.confirm({
+        message: "Append this to nextly.config.ts and delete the UI record?",
+      })
+    );
+    if (!confirm) return false;
+  }
+  return true;
+}
 
 export async function runPromote(
   slug: string,
   context: CommandContext
 ): Promise<void> {
-  const { logger } = context;
-
-  // 1. Database wiring. Reuses the same validateDatabaseEnv + createCliAdapter
-  // pipeline as the normal db:sync flow so DATABASE_URL errors look the
-  // same as always.
-  const env = validateDatabaseEnv();
-  if (!env.valid) {
-    logger.error(env.errors.join("; "));
-    process.exit(1);
-  }
-  const adapter = await createCliAdapter({ logger });
-
-  // CollectionRegistryService expects a full DrizzleAdapter. The CLI
-  // adapter is structurally compatible; same cast pattern as dev-build.ts.
-  const registry = new CollectionRegistryService(
-    adapter as unknown as DrizzleAdapter,
-    {
-      info: (msg: string) => logger.debug(msg),
-      warn: (msg: string) => logger.warn(msg),
-      error: (msg: string) => logger.error(msg),
-      debug: (msg: string) => logger.debug(msg),
-    }
-  );
-
-  // 2. Fetch the UI collection record.
-  const record = await registry.getCollectionBySlug(slug);
-  if (!record) {
-    logger.error(
-      `Collection '${slug}' not found in UI source (dynamic_collections).`
-    );
-    process.exit(1);
+  // Its confirmation cannot be asked and `--yes` did not answer it: stop before the database is
+  // opened, so nothing is changed.
+  if (!confirmationAnswered(context) && !canPrompt()) {
+    exitWithError(context.logger, syncConfirmationRequired("--promote", slug));
   }
 
-  // 3. Serialize the record's fields to idiomatic TS source.
-  const fields = (record.fields ?? []) as unknown[];
-  const code = serializeCollection({ slug, fields: fields as never[] });
-
-  // 4. User confirmation flow.
-  const action = await p.select({
-    message: `Preview generated code for '${slug}'. Action?`,
-    options: [
-      { value: "preview", label: "Show preview" },
-      { value: "accept", label: "Append to nextly.config.ts" },
-      { value: "decline", label: "Cancel" },
-    ],
-  });
-
-  if (p.isCancel(action) || action === "decline") {
-    logger.info("Promote cancelled.");
-    return;
-  }
-
-  if (action === "preview") {
-    p.note(code, "Generated code");
-    const confirm = await p.confirm({
-      message: "Append this to nextly.config.ts and delete the UI record?",
+  // Database wiring, shared with --demote, so a missing or unreachable database ends with the
+  // same errors as the rest of db:sync.
+  const { registry, adapter } = await openCollectionRegistry(context.logger);
+  try {
+    await promoteCollection({
+      slug,
+      logger: context.logger,
+      cwd: context.cwd,
+      registry,
+      adapter,
+      // `--yes` answers the confirmation: append, without asking.
+      confirm: code =>
+        confirmationAnswered(context)
+          ? Promise.resolve(true)
+          : askToPromote(slug, code),
     });
-    if (p.isCancel(confirm) || !confirm) {
-      logger.info("Promote cancelled.");
-      return;
-    }
+  } finally {
+    await adapter.disconnect();
   }
-
-  // 5. Append to config file as a COMMENTED snippet. We do not try to AST-
-  // edit the collections array because users may have custom imports,
-  // env-gated branches, or other machinery the AST transformer cannot
-  // safely preserve. A future iteration can add --write-inline once the
-  // AST editor is robust.
-  const configPath = findConfigFile(context.cwd);
-  if (!configPath) {
-    logger.warn(
-      "Could not locate nextly.config.ts. The snippet is printed below; paste it into the collections array manually."
-    );
-    logger.info(code);
-  } else {
-    const snippet = [
-      "",
-      `// Promoted from UI source on ${new Date().toISOString()}.`,
-      "// Move this entry into your collections array:",
-      ...code.split("\n").map(line => `// ${line}`),
-      "",
-    ].join("\n");
-    appendFileSync(configPath, snippet);
-    logger.info(`Appended commented snippet to ${configPath}.`);
-  }
-
-  // 6. Delete the UI record so there is no collision on next wrapper start.
-  // `deleteCollection` removes the registry row ONLY — it deliberately leaves the data
-  // table (and its `_locales` companion) in place, because promotion hands the same table
-  // over to the code-first definition. Dropping here would destroy the collection's content.
-  await registry.deleteCollection(slug);
-
-  logger.info(
-    `Collection '${slug}' removed from UI source. Move the snippet into your collections array, then restart dev server.`
-  );
 }
 
 // Minimal config file locator. Matches the loader's search order but we

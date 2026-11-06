@@ -69,7 +69,7 @@ describe("which slugs a caller may read", () => {
 
   it("asks the shared decision about EVERY session caller, a super admin included", async () => {
     // 🔴 No bypass is decided here. `canReadEntity` hands a session whole to
-    // `checkAccess`, which admits a super admin before it reads a rule or a
+    // the access decision, which admits a super admin before it reads a rule or a
     // grant, so a super admin is answered with every registered slug by the
     // same machinery that answers everyone else -- and a second bypass in
     // this module was a second super-admin path for the lists alone, one a

@@ -228,3 +228,37 @@ export function poolWaitTimeoutError(
     cause,
   });
 }
+
+/**
+ * The code an adapter gives the error it raises when a CRUD call names a
+ * table its table resolver does not hold.
+ *
+ * Such a table is one this running instance never registered: on a running
+ * site, an entity a migration added after the instance started. The code is
+ * the adapters' own, like {@link POOL_WAIT_TIMEOUT_CODE}, so core can answer
+ * it as an entity the instance has not registered rather than as a database
+ * failure, without reading the message.
+ *
+ * @public
+ */
+export const TABLE_NOT_REGISTERED_CODE = "NEXTLY_TABLE_NOT_REGISTERED";
+
+/**
+ * The error for a CRUD call on `table` when the table resolver does not hold
+ * it. The message names the table and what is missing, and nothing about how
+ * the adapter was wired, which an operator cannot act on. It keeps the words
+ * "not found in schema registry" the adapters have always used, for code that
+ * still recognises the refusal by its message rather than by its code.
+ *
+ * @param table - The table the call named
+ *
+ * @public
+ */
+export function tableNotRegisteredError(table: string): DatabaseError {
+  return createDatabaseError({
+    kind: "query",
+    code: TABLE_NOT_REGISTERED_CODE,
+    table,
+    message: `Table "${table}" not found in schema registry: this running instance has not registered it, so no statement can be built for it.`,
+  });
+}

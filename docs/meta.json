@@ -29,6 +29,7 @@
     "admin",
     "telemetry",
     "---Reference---",
+    "cli",
     "templates"
   ]
 }

@@ -35,6 +35,7 @@ import {
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
+import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
 
@@ -102,6 +103,7 @@ function editorSpy(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
   } as unknown as EditorState & {
     apply: ReturnType<typeof vi.fn>;
     select: ReturnType<typeof vi.fn>;
@@ -155,6 +157,40 @@ function mount(
 }
 
 describe("BlockToolbar", () => {
+  it("leaves the editor around its menu in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register();
+    const editor = editorSpy(pair(), "a");
+    // A host offering the component verbs, which are what "More" holds.
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          components={{
+            mayCreate: true,
+            onTurnIntoComponent: () => {},
+          }}
+        >
+          <Canvas
+            document={editor.document}
+            siteStyles={{ css: "", classes: {} } as never}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+            overlay={<BlockToolbar editor={editor} />}
+          />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), {
+      key: "Enter",
+    });
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
   it("draws nothing with no selection", () => {
     register();
     mount(editorSpy(pair(), null));
@@ -296,6 +332,39 @@ describe("BlockToolbar", () => {
     );
   });
 
+  it("says on the bar that the selected block is locked, or locked by the block around it", () => {
+    register();
+    mount(editorSpy(pair({ locked: true }), "a"));
+    expect(document.querySelector("[data-lock-note]")?.textContent).toBe(
+      "Locked"
+    );
+    cleanup();
+
+    const inside = documentOf([
+      {
+        id: "hero",
+        type: "acme/leaf",
+        version: 1,
+        props: {},
+        locked: true,
+        name: "Hero",
+        slots: {
+          children: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+        },
+      } as BlockNode,
+    ]);
+    mount(editorSpy(inside, "a"));
+    const note = document.querySelector("[data-lock-note]");
+    expect(note?.textContent).toBe("Locked by Hero");
+    // Text, not a control: the bar's one tab stop stays on its buttons.
+    expect(note?.closest("button")).toBeNull();
+    cleanup();
+
+    // The control: nothing locks the block, so the bar says nothing.
+    mount(editorSpy(pair(), "a"));
+    expect(document.querySelector("[data-lock-note]")).toBeNull();
+  });
+
   it("keeps an unavailable button FOCUSABLE, and says why", () => {
     // The reason is the information. `disabled` would take the button out of
     // the tab sequence and take the reason with it, so the author most in need
@@ -311,7 +380,7 @@ describe("BlockToolbar", () => {
     const describedBy = remove.getAttribute("aria-describedby");
     expect(describedBy).not.toBeNull();
     expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
-      "This block is locked."
+      "Leaf is locked."
     );
   });
 
@@ -339,6 +408,441 @@ describe("BlockToolbar", () => {
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     expect(document.activeElement).toBe(buttons.at(-1));
+  });
+
+  it("takes focus from anywhere in the editor on Alt+F10, at its tab stop", () => {
+    // The editor convention for reaching a block's toolbar from the keyboard:
+    // from the canvas, or from text being edited inside the block.
+    mount(editorSpy(pair(), "a"));
+    fireEvent.keyDown(document.body, { key: "F10", code: "F10", altKey: true });
+    const stop = screen
+      .getByRole("toolbar", { name: "Block actions" })
+      .querySelector('[tabindex="0"]');
+    expect(stop).not.toBeNull();
+    expect(document.activeElement).toBe(stop);
+  });
+
+  it("leaves Alt+F10 to the browser in an editor drawing no toolbar", () => {
+    // A host may render the keystrokes alone, and the bar is not drawn while
+    // a block is dragged: with no bar to focus, the key is not taken.
+    register();
+    const editor = editorSpy(pair(), "a");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions onSaveAsPattern={() => undefined} editor={editor}>
+          <Canvas
+            document={editor.document}
+            siteStyles={{ css: "", classes: {} } as never}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+          />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+    const taken = !fireEvent.keyDown(document.body, {
+      key: "F10",
+      code: "F10",
+      altKey: true,
+    });
+    expect(taken).toBe(false);
+  });
+
+  it("takes focus on Alt+F10 in ITS editor, with another editor on the page", () => {
+    // Two editors in one document, as two blocks fields on one form give,
+    // each listening for keys inside itself. The bar Alt+F10 reaches is the
+    // one of the editor the key was pressed in, not the first in the page.
+    function Scoped({ editor }: { editor: EditorState }) {
+      const [scope, setScope] = React.useState<HTMLElement | null>(null);
+      return (
+        <div ref={setScope} data-testid="editor">
+          {scope !== null && (
+            <ShortcutProvider target={scope}>
+              <BlockKeyboardActions
+                onSaveAsPattern={() => undefined}
+                editor={editor}
+              >
+                <Canvas
+                  document={editor.document}
+                  siteStyles={{ css: "", classes: {} } as never}
+                  selectedId={editor.selectedId}
+                  onSelect={editor.select}
+                  overlay={<BlockToolbar editor={editor} />}
+                />
+              </BlockKeyboardActions>
+            </ShortcutProvider>
+          )}
+        </div>
+      );
+    }
+    register();
+    render(
+      <>
+        <Scoped editor={editorSpy(pair(), "a")} />
+        <Scoped editor={editorSpy(pair(), "b")} />
+      </>
+    );
+    const second = screen.getAllByTestId("editor")[1];
+    if (second === undefined) throw new Error("no second editor");
+    fireEvent.keyDown(second, { key: "F10", code: "F10", altKey: true });
+    const bar = second.querySelector('[role="toolbar"]');
+    expect(bar).not.toBeNull();
+    expect(bar?.contains(document.activeElement)).toBe(true);
+  });
+
+  it("moves to the screen's top as a tall block is scrolled past its own", () => {
+    // jsdom lays nothing out, so the boxes are given: a page in a scroller
+    // showing 900px of it, and a 2000px block 100px down the page. Scrolling
+    // moves the page under the scroller and changes nothing a render reports.
+    let scrolled = 0;
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(-scrolled, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]'))
+          return box(100 - scrolled, 1000, 2000);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("above");
+      scrolled = 700;
+      const scroller = document.querySelector("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      fireEvent.scroll(scroller);
+      expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("goes below the LAST part a placement draws, never over its content", () => {
+    // A placement whose definition draws two elements, a headline and an
+    // intro, each carrying the placement's address. Anchored to the first
+    // alone, a bar flipped below sits over the intro's line.
+    registerBlocks(
+      [
+        {
+          name: "acme/two-parts",
+          version: 1,
+          description: "A block drawn as two parts.",
+          example: { props: {} },
+          editor: { label: "Two parts" },
+          render: () =>
+            React.createElement(
+              React.Fragment,
+              null,
+              React.createElement("h2", {
+                "data-nx-node": "card-title",
+                "data-nx-instance": "card",
+              }),
+              React.createElement("p", {
+                "data-nx-node": "card-intro",
+                "data-nx-instance": "card",
+              })
+            ),
+        },
+      ] as never,
+      { source: "block-toolbar-test" }
+    );
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="card-title"]'))
+          return box(10, 1000, 24);
+        if (this.matches('[data-nx-node="card-intro"]'))
+          return box(34, 1000, 24);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      const doc = documentOf([
+        {
+          id: "card",
+          type: "acme/two-parts",
+          version: 1,
+          props: {},
+        } as BlockNode,
+      ]);
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(doc, "card"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      // No room above a block 10px down, so below: under the intro's bottom
+      // (34 + 24) and the 6px gap, not under the headline's.
+      expect(bar.getAttribute("data-side")).toBe("below");
+      expect(bar.style.top).toBe("64px");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("leaves out a placement's part hidden on this device, which draws nothing", () => {
+    // The intro is `display: none` here: no box, and a zero rectangle at the
+    // canvas origin. Counted, it would stretch the placement to the top of
+    // the canvas and push the bar off its headline.
+    registerBlocks(
+      [
+        {
+          name: "acme/two-parts",
+          version: 1,
+          description: "A block drawn as two parts.",
+          example: { props: {} },
+          editor: { label: "Two parts" },
+          render: () =>
+            React.createElement(
+              React.Fragment,
+              null,
+              React.createElement("h2", {
+                "data-nx-node": "card-title",
+                "data-nx-instance": "card",
+              }),
+              React.createElement("p", {
+                "data-nx-node": "card-intro",
+                "data-nx-instance": "card",
+              })
+            ),
+        },
+      ] as never,
+      { source: "block-toolbar-test" }
+    );
+    const hidden = (element: Element) =>
+      element.getAttribute("data-nx-node") === "card-intro";
+    const rects = vi
+      .spyOn(Element.prototype, "getClientRects")
+      .mockImplementation(function (this: Element) {
+        const list = hidden(this) ? [] : [new DOMRect()];
+        return Object.assign(list, {
+          item: (index: number) => list[index] ?? null,
+        }) as unknown as DOMRectList;
+      });
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="card-title"]'))
+          return box(200, 1000, 24);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      const doc = documentOf([
+        {
+          id: "card",
+          type: "acme/two-parts",
+          version: 1,
+          props: {},
+        } as BlockNode,
+      ]);
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(doc, "card"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      // Above the headline it does draw: 200 - 40 - 6.
+      expect(bar.getAttribute("data-side")).toBe("above");
+      expect(bar.style.top).toBe("154px");
+    } finally {
+      boxes.mockRestore();
+      rects.mockRestore();
+    }
+  });
+
+  it("watches every part a placement draws for a change of size", () => {
+    // An image or a webfont can resize a placement's later part alone; the
+    // bar is placed against all of them, so each one is watched.
+    registerBlocks(
+      [
+        {
+          name: "acme/two-parts",
+          version: 1,
+          description: "A block drawn as two parts.",
+          example: { props: {} },
+          editor: { label: "Two parts" },
+          render: () =>
+            React.createElement(
+              React.Fragment,
+              null,
+              React.createElement("h2", {
+                "data-nx-node": "card-title",
+                "data-nx-instance": "card",
+              }),
+              React.createElement("p", {
+                "data-nx-node": "card-intro",
+                "data-nx-instance": "card",
+              })
+            ),
+        },
+      ] as never,
+      { source: "block-toolbar-test" }
+    );
+    const watched: Element[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(element: Element) {
+          watched.push(element);
+        }
+        disconnect() {}
+        unobserve() {}
+      }
+    );
+    try {
+      const doc = documentOf([
+        {
+          id: "card",
+          type: "acme/two-parts",
+          version: 1,
+          props: {},
+        } as BlockNode,
+      ]);
+      render(tree(editorSpy(doc, "card"), {}));
+      const names = watched.map(element =>
+        element.getAttribute("data-nx-node")
+      );
+      expect(names).toContain("card-title");
+      expect(names).toContain("card-intro");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("moves when the window resizes the part of the page on screen", () => {
+    // A block 10px down a scroller: the bar goes below it while that fits on
+    // screen, and to the screen's top once the window is too short for it.
+    // Nothing the bar observes resizes: only the scroller's visible part.
+    let shown = 900;
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, shown);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(10, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("below");
+      shown = 150;
+      fireEvent(window, new Event("resize"));
+      expect(bar.getAttribute("data-side")).toBe("pinned");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("fades while the pointer is over another block, and not over its own", () => {
+    // The bar sits over the block above the selection, so a hovered block
+    // there would otherwise be covered by it. Faded rather than removed, so a
+    // pointer heading for the bar still reaches its buttons.
+    function PointAt({ id }: { id: string | null }) {
+      const point = useHoveredBlockSetter();
+      React.useEffect(() => point(id), [id, point]);
+      return null;
+    }
+    const editor = editorSpy(pair(), "a");
+    const { rerender } = render(
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        {tree(editor, {})}
+      </HoveredBlockProvider>
+    );
+    const bar = screen.getByRole("toolbar", { name: "Block actions" });
+    expect(bar.hasAttribute("data-faded")).toBe(true);
+    rerender(
+      <HoveredBlockProvider>
+        <PointAt id="a" />
+        {tree(editor, {})}
+      </HoveredBlockProvider>
+    );
+    expect(bar.hasAttribute("data-faded")).toBe(false);
+  });
+
+  it("keeps its height clear at the top of the scroller while it is drawn", () => {
+    // `scroll-padding-top`, so a block scrolled or focused into view is not
+    // left under the bar (WCAG 2.4.11): the bar's 40px and its 6px gap.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(200, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      const { unmount } = render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      expect(scroller.style.scrollPaddingTop).toBe("46px");
+      unmount();
+      expect(scroller.style.scrollPaddingTop).toBe("");
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("keeps a larger clearance the scroller already had", () => {
+    // A site keeping focused blocks below its sticky header sets its own
+    // scroll-padding-top; the bar's 46px must not shrink it to the bar alone.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(200, 1000, 100);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div
+          data-scroller=""
+          style={{ overflowY: "auto", scrollPaddingTop: "80px" }}
+        >
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+      if (scroller === null) throw new Error("no scroller");
+      expect(scroller.style.scrollPaddingTop).toBe("80px");
+    } finally {
+      boxes.mockRestore();
+    }
   });
 
   it("keeps the roving stop where FOCUS is when the selection moves", () => {

@@ -874,6 +874,16 @@ describe("ownership within and after one migrate run (sqlite)", () => {
         migrationsDir: mkdtempSync(join(tmpdir(), "nx-app-own-")),
         logger: createLogger({ quiet: true }),
         lockMode: "fail-fast",
+        // `adapterFor` is a statement-level double the schema lock cannot hold; the lock is
+        // exercised against real databases in its own suites.
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
         pluginMigrationSets: [
           {
             pluginName: "dropper",
@@ -1045,6 +1055,16 @@ describe("--step across plugin modules and app files (sqlite)", () => {
         migrationsDir,
         logger: createLogger({ quiet: true }),
         lockMode: "fail-fast",
+        // `adapterFor` is a statement-level double the schema lock cannot hold; the lock is
+        // exercised against real databases in its own suites.
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
         pluginMigrationSets: [
           {
             pluginName: "stepper",
@@ -1119,6 +1139,16 @@ describe("--step across plugin modules and app files (sqlite)", () => {
         migrationsDir,
         logger: createLogger({ quiet: true }),
         lockMode: "fail-fast",
+        // `adapterFor` is a statement-level double the schema lock cannot hold; the lock is
+        // exercised against real databases in its own suites.
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
         pluginMigrationSets: [
           {
             pluginName: "adopter",

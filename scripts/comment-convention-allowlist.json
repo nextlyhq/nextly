@@ -225,11 +225,10 @@
     ]
   },
   "packages/nextly/src/cli/commands/migrate-create.ts": {
-    "count": 7,
+    "count": 6,
     "digests": [
       "18f2238cc394bca5",
       "3225700ed3a040a4",
-      "57013c2b13f997f7",
       "73fba5789fd7e691",
       "8b4c17691b8fc012",
       "9ba1974417946f2c",
@@ -300,8 +299,8 @@
     ]
   },
   "packages/nextly/src/di/registrations/register-collections.ts": {
-    "count": 3,
-    "digests": ["09db9bb23ff09965", "6e9fd7109cc9fc33", "94ff8525e044b8a0"]
+    "count": 2,
+    "digests": ["6e9fd7109cc9fc33", "94ff8525e044b8a0"]
   },
   "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
     "count": 8,
@@ -346,7 +345,7 @@
     ]
   },
   "packages/nextly/src/dispatcher/handlers/collection-dispatcher.ts": {
-    "count": 8,
+    "count": 7,
     "digests": [
       "1e8a73b1b250c068",
       "34be3f05d319e7dd",
@@ -354,8 +353,7 @@
       "56303ebc13cade9c",
       "75f892f575725597",
       "9c894904db58afcf",
-      "d8196efde331f07e",
-      "ec5df2b847c937f8"
+      "d8196efde331f07e"
     ]
   },
   "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
@@ -376,13 +374,8 @@
     ]
   },
   "packages/nextly/src/domains/auth/services/permission-seed-service.ts": {
-    "count": 4,
-    "digests": [
-      "378b13e85babb214",
-      "9a21faca767951a1",
-      "9a21faca767951a1",
-      "b486b6c5af6f71d7"
-    ]
+    "count": 3,
+    "digests": ["378b13e85babb214", "9a21faca767951a1", "b486b6c5af6f71d7"]
   },
   "packages/nextly/src/domains/auth/services/permission-service.ts": {
     "count": 1,
@@ -409,16 +402,13 @@
     "digests": ["d5997ab8d4023315"]
   },
   "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
-    "count": 19,
+    "count": 16,
     "digests": [
       "03f5b83d5dd2242f",
-      "0524236cf96cf39b",
       "09e9b38cef55f0e2",
-      "0cf6c1f6791c6d67",
       "21185c2d7cba5586",
       "3334c2660c4178e0",
       "4cc0a776deb9205d",
-      "606368adea554209",
       "6b8890b87c096b79",
       "6e6b410ca569dace",
       "782632344c273aa0",
@@ -430,34 +420,6 @@
       "cb715ac79bb0afd0",
       "d6e13c0d15edf168",
       "e08787490dbf8ff1"
-    ]
-  },
-  "packages/nextly/src/domains/collections/services/collection-query-service.ts": {
-    "count": 23,
-    "digests": [
-      "13831d4dec7eab02",
-      "28f392c8dea7766d",
-      "374fbd2500c1f21d",
-      "401670576a557b49",
-      "542449bc209a7f75",
-      "6ab3ed7302fb99c6",
-      "7e979ca7f5d94b0b",
-      "8623ab6ac27f4a80",
-      "b233f10203ab0427",
-      "bc34f887455ae217",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "cef2412cad43178c",
-      "d24956f183fae02f",
-      "d268ba7d4939e20e",
-      "d2bf74438e37e4a6",
-      "d6d984c369b0071a",
-      "e0fa793c61a3a767",
-      "e472fc3e4568c53a",
-      "fb53c28b1b38a335"
     ]
   },
   "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
@@ -552,10 +514,6 @@
     "count": 1,
     "digests": ["6c1a54197305e411"]
   },
-  "packages/nextly/src/domains/schema/legacy-preview/translate.ts": {
-    "count": 2,
-    "digests": ["0978648f64091f91", "680c7c3d3336fd24"]
-  },
   "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": {
     "count": 1,
     "digests": ["2af35d0fbf0e41ef"]
@@ -577,18 +535,17 @@
     "digests": ["e8838f11906c806e"]
   },
   "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
-    "count": 5,
+    "count": 4,
     "digests": [
       "17f0655986bf0777",
       "22bdeef8b108fa89",
       "40a73a66250cbdba",
-      "90205d6af96dc8ee",
-      "9d1d040c27e42ac0"
+      "90205d6af96dc8ee"
     ]
   },
   "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
-    "count": 2,
-    "digests": ["5274a93d8eead25f", "f119f5f1b50b086c"]
+    "count": 1,
+    "digests": ["f119f5f1b50b086c"]
   },
   "packages/nextly/src/domains/schema/migrate-create/snapshot-io.ts": {
     "count": 4,
@@ -998,13 +955,8 @@
     "digests": ["75133300085c5b1d"]
   },
   "packages/nextly/src/route-handler/route-parser.ts": {
-    "count": 4,
-    "digests": [
-      "618413b00a8fa802",
-      "acaed4e94a6b99c0",
-      "d1938ae75e12cb5f",
-      "f5ffbbe2b158e4dd"
-    ]
+    "count": 3,
+    "digests": ["618413b00a8fa802", "d1938ae75e12cb5f", "f5ffbbe2b158e4dd"]
   },
   "packages/nextly/src/routeHandler.ts": {
     "count": 3,
@@ -1067,15 +1019,14 @@
     "digests": ["f5f700e664b1c588"]
   },
   "packages/nextly/src/services/collection-file-manager.ts": {
-    "count": 3,
-    "digests": ["00bbf87050b2aa4e", "9780f092f71bb287", "b64ae3ab9c465ebb"]
+    "count": 2,
+    "digests": ["00bbf87050b2aa4e", "9780f092f71bb287"]
   },
   "packages/nextly/src/services/collections-handler.ts": {
-    "count": 10,
+    "count": 9,
     "digests": [
       "452725d4fc8fc3c7",
       "7e24d0d33b9cfad2",
-      "8efa878f3f94f2c2",
       "943a6aa9cb1cd7bd",
       "9d2d27923a2a7341",
       "c0d7765e95047d06",

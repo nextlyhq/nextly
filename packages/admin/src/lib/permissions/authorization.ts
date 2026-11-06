@@ -12,6 +12,7 @@
  */
 
 import type { NavigationItem } from "../../constants/navigation";
+import { SYSTEM_RESOURCE_SET } from "../../constants/permissions";
 import type { AdminCapabilities } from "../../types/permissions";
 
 /**
@@ -60,11 +61,14 @@ interface FilterableSingle {
  *
  * @param items - Navigation items (may include requiredPermission)
  * @param capabilities - Current user's admin capabilities
+ * @param hasPermission - The permission check the guards ask, for a system
+ *   permission no capability flag stands for
  * @returns Filtered navigation items the user has permission to see
  */
 export function filterNavigationItems(
   items: NavigationItem[],
-  capabilities: AdminCapabilities
+  capabilities: AdminCapabilities,
+  hasPermission: (permission: string) => boolean
 ): NavigationItem[] {
   if (capabilities.isSuperAdmin) return items;
 
@@ -75,12 +79,16 @@ export function filterNavigationItems(
     // A list is any-of: holding any one of the permissions shows the item.
     if (Array.isArray(item.requiredPermission)) {
       return item.requiredPermission.some(permission =>
-        hasCapabilityForPermission(permission, capabilities)
+        hasCapabilityForPermission(permission, capabilities, hasPermission)
       );
     }
 
     // Check against the user's permission set
-    return hasCapabilityForPermission(item.requiredPermission, capabilities);
+    return hasCapabilityForPermission(
+      item.requiredPermission,
+      capabilities,
+      hasPermission
+    );
   });
 }
 
@@ -132,13 +140,16 @@ export function filterSingleItems<T extends FilterableSingle>(
 /**
  * Check if a user has the capability corresponding to a permission slug.
  *
- * Maps well-known permission slugs to AdminCapabilities boolean flags.
- * Falls back to checking the permission slug against the capabilities
- * collections map for dynamic collection permissions.
+ * Maps well-known permission slugs to AdminCapabilities boolean flags. Any
+ * other permission on a system resource is asked as the guards ask it
+ * (`hasPermission`), a `manage-` permission counting as the plain ones it
+ * stands for. Falls back to checking the permission slug against the
+ * capabilities collections map for dynamic collection permissions.
  */
 function hasCapabilityForPermission(
   permission: string,
-  capabilities: AdminCapabilities
+  capabilities: AdminCapabilities,
+  hasPermission: (permission: string) => boolean
 ): boolean {
   // Map well-known permissions to capability flags
   switch (permission) {
@@ -147,20 +158,13 @@ function hasCapabilityForPermission(
     case "read-roles":
       return capabilities.canViewRoles;
     case "read-media":
-    case "manage-media":
       return capabilities.canViewMedia;
-    case "manage-settings":
-      return capabilities.canViewSettings;
     case "create-users":
     case "update-users":
       return capabilities.canManageUsers;
     case "create-roles":
     case "update-roles":
       return capabilities.canManageRoles;
-    case "manage-email-providers":
-      return capabilities.canManageEmailProviders;
-    case "manage-email-templates":
-      return capabilities.canManageEmailTemplates;
     // Webhooks are a system resource with no collection-capability entry. Any
     // webhook grant reveals the nav item: read/update view the list, create
     // reaches the create form from it.
@@ -182,6 +186,9 @@ function hasCapabilityForPermission(
 
       const action = permission.slice(0, dashIdx);
       const resource = permission.slice(dashIdx + 1);
+      // Settings and the Email hub are system resources, with no entry in the
+      // per-collection map: their permissions are the permission list's.
+      if (SYSTEM_RESOURCE_SET.has(resource)) return hasPermission(permission);
       const collectionCaps = capabilities.collections[resource];
 
       if (!collectionCaps) return false;

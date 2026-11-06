@@ -36,26 +36,46 @@
  * That tree is not something this file can add on top. `aria-activedescendant`
  * and the scroll-into-view are driven from the primitives' own navigation, and
  * a controlled `value` set from outside updates neither: the highlight and
- * this panel's description strip would follow while the announced option and
- * the scroll position stayed where they were. Owning them instead means owning
- * roving focus and the ARIA wiring — the second implementation of this widget
- * that the paragraphs above exist to refuse.
+ * this panel's popover would follow while the announced option and the scroll
+ * position stayed where they were. Owning them instead means owning roving
+ * focus and the ARIA wiring — the second implementation of this widget that
+ * the paragraphs above exist to refuse.
  *
  * So the grid is a LAYOUT. Reading order is left to right and then down, which
  * is the order the primitives already move in, and search is what makes a long
  * palette reachable without arrowing at all.
+ *
+ * ## A refused tile stays, and stays reachable
+ *
+ * A tile the place refuses — by the placement rule or by a lock — is drawn
+ * greyed with its reason, rather than left out: an author who cannot see a
+ * block has no way to learn where it would go. It is NOT the primitives'
+ * `disabled`, and carries no `aria-disabled`, because the primitives skip
+ * every item marked so when the arrow keys move: a keyboard author could then
+ * never reach the reason. It is marked `data-refused` for the eye, its reason
+ * leads its accessible description, and choosing it inserts nothing.
  *
  * @module insert-panel
  */
 
 import {
   allBlocks,
+  asPermittedList,
+  COMPONENT_INSTANCE_TYPE,
+  findNode,
+  permittedLabel,
+  placementSiteIn,
   planInsertPattern,
   registryNestingSource,
   type AnyBlockDefinition,
+  type BlockDocument,
   type BlockNode,
   type ComponentLookup,
   type NestingSource,
+  type NestingVerdict,
+  type OpPosition,
+  type PlacementSources,
+  type PlacementVerdict,
 } from "@nextlyhq/blocks-engine";
 import {
   Command,
@@ -64,35 +84,59 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   useCommandHighlight,
 } from "@nextlyhq/ui";
+import { CornerDownRight } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
 import type { InsertDragEntry } from "./canvas-drag";
-import type { EditorState } from "./editor-state";
+import { isElement } from "./dom-kind";
 import {
-  allowedEntries,
+  placementWording,
+  refusalWording,
+  type RefusalWording,
+} from "./drag-refusal";
+import type { EditorState } from "./editor-state";
+import { EDITOR_WORDS } from "./editor-words";
+import {
   blockLabel,
   blockSourceFor,
   catalogFrom,
-  filterEntries,
-  groupByCategory,
-  insertionPointFor,
+  categoryHeading,
   componentEntriesFrom,
+  entryVerdictAt,
+  filterEntries,
+  insertionCandidates,
+  insertionFor,
   nodeForComponentEntry,
   nodeForEntry,
+  paletteGroups,
   patternEntriesFrom,
   registrySlotSource,
+  slotsShowingEmpty,
+  UNCATEGORISED,
+  type BlockInsertEntry,
   type ComponentInsertEntry,
+  type EntryPlacement,
   type InsertGroup,
-  type InsertionPoint,
+  type InsertionCandidate,
   type InsertEntry,
   type PatternInsertEntry,
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
-import type { BuilderOp } from "./ops";
+import { layerLabel } from "./layers";
+import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
+import { refusalAnnouncement } from "./move-refusal";
+import type { BuilderOp } from "./op-vocabulary";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.
@@ -132,7 +176,7 @@ export interface InsertPanelProps {
    */
   definitions?: readonly AnyBlockDefinition[];
   /**
-   * Saved patterns to offer beside the blocks. Defaults to none.
+   * Saved patterns to offer, under the Sections tab. Defaults to none.
    *
    * Supplied rather than fetched, for the reason `definitions` is: this panel
    * draws what it is given and reads nothing. A pattern lives in a plugin's
@@ -144,8 +188,8 @@ export interface InsertPanelProps {
    */
   patterns?: readonly SavedPattern[];
   /**
-   * The site's component definitions to offer beside the blocks. Defaults to
-   * none.
+   * The site's component definitions to offer, as one "Your components" group
+   * in the Blocks tab. Defaults to none.
    *
    * Supplied rather than fetched, for the reason `patterns` is. Placing one
    * writes a single instance node pointing at the definition; nothing from the
@@ -196,6 +240,12 @@ export interface InsertPanelProps {
    * categories still appear, after these.
    */
   categoryOrder?: readonly string[];
+  /**
+   * Block names to offer first within their category, in order; the rest
+   * follow by label. Supplied by the host for the same reason as
+   * `categoryOrder`.
+   */
+  blockOrder?: readonly string[];
   /** Notified after a successful insert, with the node that was added. */
   onInsert?: (node: BlockNode) => void;
   /**
@@ -215,7 +265,67 @@ export interface InsertPanelProps {
     event: React.PointerEvent<HTMLElement>,
     entry: InsertDragEntry
   ) => void;
+  /**
+   * The container to add INSIDE, by id, when the author chose it with its
+   * "+". Absent, a block goes after the selection (or at the end of the page).
+   *
+   * A prop rather than read from the selection, because selecting a container
+   * and adding still builds the page downward, beside it: going inside is a
+   * gesture of its own, and only the host knows the author made it.
+   */
+  inside?: string;
+  /**
+   * Draws a preview of an entry for the popover beside the panel, when the
+   * host has one (a block's example, rendered). Answering nothing falls back
+   * to the entry's mark, drawn large.
+   *
+   * The host's because drawing a block is the renderer's job, which this panel
+   * does not hold.
+   */
+  renderPreview?: (entry: InsertEntry) => React.ReactNode;
 }
+
+/** The panel's two tabs: blocks and the site's components, and patterns. */
+type PanelTab = "blocks" | "sections";
+
+/** Each tab's own word, as a sentence reads it, from the editor's words. */
+const TAB_WORDS: Readonly<Record<PanelTab, string>> = {
+  blocks: EDITOR_WORDS.blocks.toLowerCase(),
+  sections: EDITOR_WORDS.sections.toLowerCase(),
+};
+
+/** What the search says it searches, per tab. */
+const SEARCH_PLACEHOLDERS: Readonly<Record<PanelTab, string>> = {
+  blocks: `Search ${TAB_WORDS.blocks} and ${EDITOR_WORDS.components.toLowerCase()}`,
+  sections: `Search ${TAB_WORDS.sections}`,
+};
+
+/** Which tab an entry is offered in. Patterns are Sections; the rest Blocks. */
+function tabOf(entry: InsertEntry): PanelTab {
+  return entry.kind === "pattern" ? "sections" : "blocks";
+}
+
+/**
+ * One entry as the panel offers it at the current place: where a click puts
+ * it, or why it cannot go there.
+ */
+export type EntryOffer =
+  | {
+      readonly entry: InsertEntry;
+      readonly place: InsertionCandidate;
+      /**
+       * Whether the place is past the one the placement line names, because
+       * that one refuses this entry: the tile then says where it goes.
+       */
+      readonly climbed: boolean;
+      readonly refusal?: undefined;
+    }
+  | {
+      readonly entry: InsertEntry;
+      readonly place?: undefined;
+      readonly climbed?: undefined;
+      readonly refusal: string;
+    };
 
 /**
  * How many tiles sit in a row.
@@ -234,217 +344,6 @@ export interface InsertPanelProps {
 const GRID_COLUMNS = 3;
 
 /**
- * The strip describing whichever tile the palette has highlighted.
- *
- * A component of its own, and rendered INSIDE the palette, because that is
- * where the highlight lives: `useCommandHighlight` reads the palette's own
- * store,
- * so this follows a pointer, an arrow key and a filter alike without the panel
- * keeping a second copy of which tile is current.
- *
- * Hidden from assistive technology while it shows the whole sentence. That
- * sentence is already the option's own accessible description, so exposing the
- * region as well would have a screen reader read every description twice —
- * once on the tile and once from a region that changed because of it. It
- * becomes a named, focusable region only when it has a tail no pointer-free
- * reader could otherwise reach.
- */
-function DescriptionStrip({
-  groups,
-  tokens,
-}: {
-  groups: readonly InsertGroup<InsertEntry>[];
-  tokens: ReadonlyMap<string, string>;
-}): React.JSX.Element | null {
-  // Empty string is the palette's "nothing highlighted", which is a different
-  // answer from an entry it does not hold — both fall back, but only one of
-  // them would silently match an entry whose token was the empty string.
-  const highlighted = useCommandHighlight();
-  const described = describedEntry(
-    groups,
-    tokens,
-    highlighted === "" ? undefined : highlighted
-  );
-  /*
-   * Back to the top whenever the subject changes.
-   *
-   * The strip is scrollable, and React reuses this same element as the
-   * highlight moves — so a description that was scrolled leaves the next one
-   * opening partway through its own text, with the block's name and first
-   * lines above the fold. The reader is then looking at the middle of a
-   * sentence about a block they have only just pointed at.
-   *
-   * Keyed on the entry's id rather than on the element: two entries can carry
-   * the same description, and scrolling is about which BLOCK is being read.
-   */
-  const body = React.useRef<HTMLParagraphElement>(null);
-  const subject = described?.id;
-  /*
-   * Whether this description has text the box is not showing.
-   *
-   * Measured rather than assumed from length, because whether a sentence
-   * overflows depends on the panel's width — which an author drags — and on
-   * the reader's own font size. A character count would be wrong at both ends
-   * of that range.
-   */
-  const [clipped, setClipped] = React.useState(false);
-  /*
-   * Re-measured from TWO signals, because clipping changes for two unrelated
-   * kinds of reason and neither covers the other.
-   *
-   * The box changes without React knowing: an author drags the panel wider,
-   * changes the browser zoom, or raises their font size. None of those
-   * re-render anything here, so an effect alone would leave a newly overflowing
-   * description out of the tab order with its tail unreachable — and leave a
-   * dead focus stop behind when it stops overflowing.
-   *
-   * The CONTENT changes without the box changing: a longer sentence inside a
-   * strip already at its bound grows `scrollHeight` while the border box stays
-   * exactly where it was, so a `ResizeObserver` never fires. That is a render,
-   * which is why the effect below carries no dependency list — every commit is
-   * a chance for the text to have changed, and naming which ones would be a
-   * second list to keep in step with the first.
-   *
-   * Setting the same boolean back is inert: React compares and does not
-   * re-render, so an effect with no dependencies cannot loop here.
-   */
-  const remeasure = React.useCallback(() => {
-    const element = body.current;
-    if (element === null) return;
-    setClipped(element.scrollHeight > element.clientHeight);
-  }, []);
-  React.useEffect(remeasure);
-  React.useEffect(() => {
-    const element = body.current;
-    if (element === null) return;
-    // Guarded by CALLABILITY rather than presence: jsdom defines the global on
-    // some setups without a working constructor, so a property test passes and
-    // the construction throws.
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(remeasure);
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-    };
-  }, [remeasure]);
-  React.useEffect(() => {
-    if (body.current !== null) body.current.scrollTop = 0;
-  }, [subject]);
-  if (described === undefined) return null;
-  /*
-   * Reachable by keyboard ONLY while there is something hidden to reach.
-   *
-   * The strip is bounded and scrollable, so a description longer than the box
-   * has a tail that a pointer can scroll to and a keyboard cannot: focus stays
-   * in the search field, and nothing else can direct a scroll here.
-   *
-   * Made focusable only when it actually overflows, rather than always. A
-   * permanent stop between the search field and the tiles costs every author a
-   * keystroke on the way to the thing they came for, and buys nothing in the
-   * ordinary case where the whole sentence is already visible.
-   *
-   * `aria-hidden` goes with it, because hiding a focusable element is a
-   * contradiction assistive technology has no good answer to. Nothing is lost
-   * by that: the same sentence is the option's own description, so a screen
-   * reader hears it on the tile whether or not this region exists. What the
-   * region adds when it is reachable is a NAME saying what it holds, so
-   * arriving here is not arriving at unlabelled prose.
-   */
-  return (
-    <p
-      ref={body}
-      className="nx-insert-panel__describes"
-      {...(clipped
-        ? { tabIndex: 0, role: "group", "aria-label": "Block description" }
-        : { "aria-hidden": true })}
-    >
-      <b className="nx-insert-panel__describes-name">{described.label}</b>
-      {` ${described.description}`}
-    </p>
-  );
-}
-
-/**
- * What a press does, for the pointer that has no other way to ask.
- *
- * A press moves the highlight, so the strip above describes the tile under the
- * finger before it lifts. That is the affordance a touch author could not
- * discover: on a pointer that cannot hover, the only way to read a tile looked
- * like the way to take it.
- *
- * WHAT IT DOES NOT CLAIM. An earlier wording offered "slide off to cancel",
- * and that is not reliably true: the canvas sits beside this panel and IS a
- * drop target, so a finger sliding horizontally out of the tile can start a
- * palette drag and insert on release. Only a release over nothing declines,
- * and which regions those are depends on the layout the host mounted. Both
- * clauses here hold wherever the panel is mounted — pressing reads, lifting
- * commits — and an author who knows lifting commits can hold and think.
- *
- * SHOWN FROM THE POINTER THAT WAS ACTUALLY USED, not from a media query.
- * `(pointer: coarse)` describes the PRIMARY pointer, so a touchscreen laptop
- * driven by its trackpad reports `fine` and hides this from the author the
- * moment they reach up and touch the screen. The pointer type on the event is
- * the input in hand rather than the one the device is classified by, and it
- * has the side benefit of appearing exactly when it is relevant: after the
- * first press, which is when the question arises.
- *
- * `aria-hidden`, deliberately. It describes a POINTER gesture, and a screen
- * reader on a touch device does not activate a control by lifting a finger
- * from it — the guidance would be wrong for exactly the people an accessible
- * name is for. The block's description reaches them through each tile's own
- * `aria-describedby` regardless.
- */
-/**
- * What placing this tile DOES, for the two tiers where that is not obvious.
- *
- * A block tile carries no badge: inserting a block is the panel's ordinary
- * act. A pattern is inserted as a COPY that forgets its source, and a
- * component as a LINK that keeps pointing back — and those are opposite
- * promises about what happens the next time the source is edited. An author
- * choosing between two tiles that look alike is choosing between them, so the
- * tile says which.
- *
- * `aria-hidden`, because the tile's accessible NAME is pinned to exactly its
- * visible label so a spoken command matches what is written on it. The same
- * promise reaches a screen reader through the tile's description instead —
- * see {@link tierSentence} — which is read right after the name, before the
- * press.
- */
-function TierBadge({
-  entry,
-}: {
-  entry: InsertEntry;
-}): React.JSX.Element | null {
-  if (entry.kind === "block") return null;
-  return (
-    <span
-      className="nx-insert-panel__tier"
-      data-tier={entry.kind}
-      aria-hidden="true"
-    >
-      {entry.kind === "pattern" ? "Copy" : "Linked"}
-    </span>
-  );
-}
-
-/**
- * The tier's promise as a sentence, for the description a screen reader hears.
- *
- * Empty for a block, whose description already says what it is. Leads the
- * description rather than trailing it, because it is the part that decides
- * whether to press: an author who hears "Header. A site header with
- * navigation." learns what it draws; one who hears "placed as a link" first
- * learns what pressing commits them to.
- */
-function tierSentence(entry: InsertEntry): string {
-  if (entry.kind === "pattern") return "Placed as a copy that keeps no link. ";
-  if (entry.kind === "component") {
-    return "Placed as a link, so an edit to the component changes this page too. ";
-  }
-  return "";
-}
-
-/**
  * The lookup a host that supplies none is judged under: nothing resolves.
  *
  * One shared instance rather than a `new Map()` per render, because the
@@ -452,6 +351,8 @@ function tierSentence(entry: InsertEntry): string {
  * rebuild the catalogue on every keystroke of the filter.
  */
 const NO_DEFINITIONS: ComponentLookup = new Map();
+/** No offers, while they are not being looked at. */
+const NO_OFFERS: ReadonlyMap<string, EntryOffer> = new Map();
 
 /**
  * That a tier of the library was cut, or could not be read, said where an
@@ -471,22 +372,31 @@ const NO_DEFINITIONS: ComponentLookup = new Map();
  * author can reach from here — and a tier that could not be RE-read gets a
  * third, since beside the tiles it left standing the second would be false.
  */
-function LibraryNotices({
+export function LibraryNotices({
   library,
+  tier,
 }: {
   library: InsertPanelProps["library"];
+  /** The tier the surface offers: patterns as sections, or components. */
+  tier: LibraryTier;
 }): React.JSX.Element {
   return (
     <>
-      <CutNotice tiers={tiersIn(library, "cut")} />
-      <StaleNotice tiers={tiersIn(library, "stale")} retry={library?.retry} />
+      <CutNotice tiers={tiersIn(library, "cut", tier)} />
+      <StaleNotice
+        tiers={tiersIn(library, "stale", tier)}
+        retry={library?.retry}
+      />
       <UnavailableNotice
-        tiers={tiersIn(library, "unavailable")}
+        tiers={tiersIn(library, "unavailable", tier)}
         retry={library?.retry}
       />
     </>
   );
 }
+
+/** A tier of the host's library, as a notice names it. */
+export type LibraryTier = "patterns" | "components";
 
 /** The tiers a ceiling cut, and what a cut component means for the page. */
 function CutNotice({
@@ -566,21 +476,55 @@ function RetryButton({
 }
 
 /**
- * The tiers in one state, as the words a sentence names them with — or
- * nothing when no tier is in that state.
+ * The surface's own tier when it is in one state, as the word a sentence
+ * names it with — or nothing. Each surface reports only the tier it offers,
+ * so it never reports content that could not appear in it.
  */
 function tiersIn(
   library: InsertPanelProps["library"],
-  state: LibraryTierState
-): string | undefined {
-  const patterns = library?.patterns === state;
-  const components = library?.components === state;
-  if (patterns && components) return "patterns and components";
-  if (patterns) return "patterns";
-  if (components) return "components";
-  return undefined;
+  state: LibraryTierState,
+  tier: LibraryTier
+): LibraryTier | undefined {
+  return library?.[tier] === state ? tier : undefined;
 }
 
+/**
+ * The tier a tab offers: components among the blocks, patterns as sections.
+ */
+function tierOf(tab: PanelTab): LibraryTier {
+  return tab === "sections" ? "patterns" : "components";
+}
+
+/**
+ * What a press does, for the pointer that has no other way to ask.
+ *
+ * A press moves the highlight, so the popover beside the panel describes the
+ * tile under the finger before it lifts. That is the affordance a touch author
+ * could not discover: on a pointer that cannot hover, the only way to read a
+ * tile looked like the way to take it.
+ *
+ * WHAT IT DOES NOT CLAIM. An earlier wording offered "slide off to cancel",
+ * and that is not reliably true: the canvas sits beside this panel and IS a
+ * drop target, so a finger sliding horizontally out of the tile can start a
+ * palette drag and insert on release. Only a release over nothing declines,
+ * and which regions those are depends on the layout the host mounted. Both
+ * clauses here hold wherever the panel is mounted — pressing reads, lifting
+ * commits — and an author who knows lifting commits can hold and think.
+ *
+ * SHOWN FROM THE POINTER THAT WAS ACTUALLY USED, not from a media query.
+ * `(pointer: coarse)` describes the PRIMARY pointer, so a touchscreen laptop
+ * driven by its trackpad reports `fine` and hides this from the author the
+ * moment they reach up and touch the screen. The pointer type on the event is
+ * the input in hand rather than the one the device is classified by, and it
+ * has the side benefit of appearing exactly when it is relevant: after the
+ * first press, which is when the question arises.
+ *
+ * `aria-hidden`, deliberately. It describes a POINTER gesture, and a screen
+ * reader on a touch device does not activate a control by lifting a finger
+ * from it — the guidance would be wrong for exactly the people an accessible
+ * name is for. The block's description reaches them through each tile's own
+ * `aria-describedby` regardless.
+ */
 function TouchGestureHint({
   shown,
 }: {
@@ -595,78 +539,399 @@ function TouchGestureHint({
 }
 
 /**
- * The entry a command value names, or the first one offered.
+ * The entry a command value names, among those in view, or nothing.
  *
  * Scoped to the GROUPS rather than to the whole catalog, because a filter can
- * remove the highlighted entry between renders and describing something the
- * author cannot see is worse than describing nothing.
- *
- * The fallback is what keeps the strip from being blank on the pass before
- * anything has been highlighted, and after a search removes the entry that
- * was. It is DERIVED rather than written into state: a fallback that stored
- * itself would be a second writer racing the primitives' own selection.
+ * remove the highlighted entry between renders, and describing something the
+ * author cannot see is worse than describing nothing. No fallback to the first
+ * entry: the popover describes a tile the author moved to, never one the
+ * primitives happened to mark when the list drew.
  */
-function describedEntry(
+function highlightedEntry(
   groups: readonly InsertGroup<InsertEntry>[],
   tokens: ReadonlyMap<string, string>,
-  active: string | undefined
+  active: string
 ): InsertEntry | undefined {
-  if (active !== undefined) {
-    for (const group of groups) {
-      for (const entry of group.entries) {
-        if (tokens.get(entry.id) === active) return entry;
-      }
+  if (active === "") return undefined;
+  for (const group of groups) {
+    for (const entry of group.entries) {
+      if (tokens.get(entry.id) === active) return entry;
     }
   }
-  return groups[0]?.entries[0];
+  return undefined;
 }
 
-/** Sentence describing where the next insert will land. */
-function placementLabel(point: InsertionPoint): string {
-  if (point.kind === "inside-selection") {
-    // Names the container, because "inside" is only meaningful if the author
-    // knows what it is inside OF — and this is the one placement that differs
-    // from what selecting a block usually implies. The name is the one every
-    // other surface reads, so a container the palette calls "Box" is not
-    // "the selected block" here; and a container is only ever entered through
-    // a slot, so the other arm is a guard over a target the point cannot carry
-    // rather than a case an author reaches.
-    const container =
-      point.target.kind === "slot"
-        ? blockLabel(point.target.parentType)
-        : "the selected block";
-    return `Adds inside ${container}`;
+/**
+ * Anything a popover can be anchored to: the tile, or nowhere while there is
+ * no tile in the document to measure.
+ */
+interface Measurable {
+  getBoundingClientRect(): DOMRect;
+}
+
+/** The anchor for a popover with no tile under it: a point at the origin. */
+const NOWHERE: Measurable = {
+  getBoundingClientRect: () => new DOMRect(),
+};
+
+/**
+ * The tile in the panel carrying a command value.
+ *
+ * Found by comparing the attribute rather than through a selector, because a
+ * value is an id from `useId` and a selector would need it escaped.
+ */
+function tileElement(
+  root: HTMLElement | null,
+  token: string | undefined
+): HTMLElement | null {
+  if (root === null || token === undefined) return null;
+  for (const item of root.querySelectorAll<HTMLElement>("[cmdk-item]")) {
+    if (item.getAttribute("data-value") === token) return item;
   }
-  return point.kind === "after-selection"
-    ? "Adds after the selected block"
-    : "Adds at the end of the page";
+  return null;
 }
 
-export function InsertPanel({
+/**
+ * The popover beside the panel, describing the tile the author moved to.
+ *
+ * Rendered INSIDE the palette, because that is where the highlight lives:
+ * `useCommandHighlight` reads the palette's own store, so this follows a
+ * pointer, an arrow key and a filter alike without the panel keeping a second
+ * copy of which tile is current.
+ *
+ * Controlled, and open only once the author has moved through the tiles
+ * (`shown`): the primitives mark their first item the moment the list draws,
+ * and a popover opened on that would describe a tile nobody pointed at.
+ *
+ * `aria-hidden`, and it never takes focus: everything it says is the tile's
+ * own accessible description already, so a screen reader hears it on the
+ * tile, and focus has to stay in the search for typing and the arrow keys to
+ * keep working. Anchored to the tile itself, so it sits beside the one it
+ * describes as the highlight moves down the grid.
+ */
+function TilePopover({
+  shown,
+  groups,
+  tokens,
+  offers,
+  root,
+  renderPreview,
+  document,
+  onDismiss,
+}: {
+  shown: boolean;
+  groups: readonly InsertGroup<InsertEntry>[];
+  tokens: ReadonlyMap<string, string>;
+  offers: ReadonlyMap<string, EntryOffer>;
+  root: React.RefObject<HTMLDivElement | null>;
+  renderPreview: InsertPanelProps["renderPreview"];
+  document: BlockDocument;
+  onDismiss: () => void;
+}): React.JSX.Element | null {
+  const highlighted = useCommandHighlight();
+  const entry = shown
+    ? highlightedEntry(groups, tokens, highlighted)
+    : undefined;
+  const anchor = React.useRef<Measurable>(NOWHERE);
+  // Pointed at the tile after the commit has drawn it and BEFORE the anchor's
+  // own effect reads it: layout effects run ahead of passive ones, so the
+  // popover measures the tile it describes rather than the one before it.
+  React.useLayoutEffect(() => {
+    anchor.current =
+      entry === undefined
+        ? NOWHERE
+        : (tileElement(root.current, tokens.get(entry.id)) ?? NOWHERE);
+  });
+  if (entry === undefined) return null;
+  const offer = offers.get(entry.id);
+  const refusal = offer?.refusal;
+  const preview = renderPreview?.(entry);
+  return (
+    <Popover
+      open
+      // Escape, or a press or focus outside the panel, closes it until the
+      // author moves through the tiles again.
+      onOpenChange={open => {
+        if (!open) onDismiss();
+      }}
+    >
+      <PopoverAnchor virtualRef={anchor} />
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        aria-hidden="true"
+        className="nx-insert-popover"
+        // Focus stays in the search, where typing and the arrow keys work.
+        onOpenAutoFocus={event => event.preventDefault()}
+        onCloseAutoFocus={event => event.preventDefault()}
+        // A press on a tile is how touch reads one, and focus stays in the
+        // search, so nothing inside the panel dismisses the popover.
+        onInteractOutside={event => {
+          const target = event.target;
+          // Asked through dom-kind, which answers for a node from any
+          // window, the canvas frame's included.
+          if (isElement(target) && root.current?.contains(target)) {
+            event.preventDefault();
+          }
+        }}
+      >
+        <div className="nx-insert-popover__preview">
+          {preview ?? <BlockIconMark icon={entry.icon} size={28} />}
+        </div>
+        <b className="nx-insert-popover__name">{entry.label}</b>
+        {entry.description === "" ? null : (
+          <span className="nx-insert-popover__description">
+            {entry.description}
+          </span>
+        )}
+        {offer?.climbed === true ? (
+          <span className="nx-insert-popover__place">
+            <CornerDownRight aria-hidden="true" size={12} />
+            <span>{placementWords("Goes", document, offer.place)}</span>
+          </span>
+        ) : null}
+        <span
+          className="nx-insert-popover__hint"
+          data-refused={refusal === undefined ? undefined : "true"}
+        >
+          {refusal ?? howToAdd(entry)}
+        </span>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * How a tile is added. A pattern cannot be dragged: it is a forest placed as
+ * a group, with no one node a drag carries. A block and a component are each
+ * one node, a component's an instance pointing at its definition.
+ */
+function howToAdd(entry: InsertEntry): string {
+  return entry.kind === "pattern"
+    ? "Click to add"
+    : "Click to add · drag to place";
+}
+
+/**
+ * The line under the search that says where the next block goes: where the
+ * highlighted tile goes, or at rest the FIRST place a click may use — the
+ * one an author expects. Following the highlight names a place before the
+ * click wherever a tile goes further than that first place: past a region
+ * that refuses it, or inside the selected container as the last resort.
+ *
+ * A polite live region at rest, because it changes with every selection and
+ * an assertive one would interrupt a screen reader mid-sentence each time.
+ * Not while it follows the highlight: the highlighted tile's own description
+ * already says where it goes, so announcing the line too would say it twice
+ * on every arrow key. The block is named as Layers names it, an author's own
+ * name first, so the line agrees with the tree beside it.
+ */
+function PlacementLine({
+  document,
+  first,
+  shown,
+  groups,
+  tokens,
+  offers,
+}: {
+  document: BlockDocument;
+  first: InsertionCandidate;
+  shown: boolean;
+  groups: readonly InsertGroup<InsertEntry>[];
+  tokens: ReadonlyMap<string, string>;
+  offers: ReadonlyMap<string, EntryOffer>;
+}): React.JSX.Element {
+  const highlighted = useCommandHighlight();
+  const entry = shown
+    ? highlightedEntry(groups, tokens, highlighted)
+    : undefined;
+  const place =
+    (entry === undefined ? undefined : offers.get(entry.id)?.place) ?? first;
+  return (
+    <p
+      className="nx-insert-panel__placement"
+      aria-live={entry === undefined ? "polite" : "off"}
+    >
+      <CornerDownRight aria-hidden="true" size={14} />
+      <span>{placementWords("Adding", document, place)}</span>
+    </p>
+  );
+}
+
+/**
+ * Where a place is, in words: "after", "inside" or "at the end of the page",
+ * and the block it is beside or in, named as Layers names it.
+ */
+function placeParts(
+  document: BlockDocument,
+  candidate: InsertionCandidate
+): { where: string; name?: string } {
+  if (candidate.kind === "document-end") {
+    return { where: "at the end of the page" };
+  }
+  const inside = candidate.kind === "inside";
+  const id = inside ? candidate.insideId : candidate.afterId;
+  const node = id === undefined ? undefined : findNode(document.nodes, id);
+  // The guard is over an id the candidate was built from this same document,
+  // so it holds; the words still say something true if it ever does not.
+  return {
+    where: inside ? "inside" : "after",
+    name: node === undefined ? "the selected block" : layerLabel(node),
+  };
+}
+
+/** "Adding after Heading", say, with the block's name in bold. */
+export function placementWords(
+  lead: string,
+  document: BlockDocument,
+  candidate: InsertionCandidate
+): React.ReactNode {
+  const { where, name } = placeParts(document, candidate);
+  return name === undefined ? (
+    `${lead} ${where}`
+  ) : (
+    <>
+      {`${lead} ${where} `}
+      <b>{name}</b>
+    </>
+  );
+}
+
+/**
+ * Start an entry's drag, when the host has a canvas to drop onto.
+ *
+ * A block or a component. A drag carries ONE node to a drop target, and a
+ * pattern is a forest placed as a group — so there is no node to hand the
+ * drag, and offering the gesture would start something that cannot finish.
+ *
+ * A component lands as the instance node a click writes. The canvas judges
+ * a drop by the node the drag builds, resolving an instance through the
+ * lookup it draws with, so the drop and the tile judge the same roots.
+ *
+ * An entry the click places refuse is still dragged. Its tile says where it
+ * belongs ("drag this into one"), and where a drop may land is the canvas's
+ * question, judged at the destination, not the panel's.
+ *
+ * Shared by every panel that inserts, so a row is dragged the same way
+ * wherever it is offered.
+ */
+export function beginEntryDrag(
+  event: Parameters<NonNullable<InsertPanelProps["beginInsertDrag"]>>[0],
+  entry: InsertEntry,
+  drag: {
+    begin: InsertPanelProps["beginInsertDrag"];
+    definitions: Parameters<typeof nodeForEntry>[1];
+    nesting: NestingSource | undefined;
+    onInserted: InsertPanelProps["onInsert"];
+  }
+): void {
+  if (entry.kind === "component") {
+    drag.begin?.(event, {
+      blockName: COMPONENT_INSTANCE_TYPE,
+      makeNode: () => nodeForComponentEntry(entry),
+      onInserted: drag.onInserted,
+    });
+    return;
+  }
+  if (entry.kind !== "block") return;
+  drag.begin?.(event, {
+    blockName: entry.blockName,
+    makeNode: () => nodeForEntry(entry, drag.definitions, drag.nesting),
+    // The same notification the click path sends, so a host cannot see one
+    // kind of insert and miss the other.
+    onInserted: drag.onInserted,
+  });
+}
+
+/**
+ * What a tile says before what it is: why it cannot go here, or where it goes
+ * when that is past the place the placement line names.
+ */
+export function tileAside(
+  offer: EntryOffer | undefined,
+  document: BlockDocument
+): string | undefined {
+  if (offer?.refusal !== undefined) return offer.refusal;
+  return offer?.climbed === true
+    ? placementSentence("Goes", document, offer.place)
+    : undefined;
+}
+
+/** The same place as one plain sentence, for a tile's description. */
+function placementSentence(
+  lead: string,
+  document: BlockDocument,
+  candidate: InsertionCandidate
+): string {
+  const { where, name } = placeParts(document, candidate);
+  return name === undefined ? `${lead} ${where}.` : `${lead} ${where} ${name}.`;
+}
+
+/**
+ * The keys the palette's primitives move the highlight with: the arrows,
+ * Home and End, and the Ctrl bindings they also honour. A key outside these
+ * leaves the panel at rest.
+ */
+function movesTheHighlight(event: React.KeyboardEvent): boolean {
+  if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return true;
+  return event.ctrlKey && ["n", "j", "p", "k"].includes(event.key);
+}
+
+/** What {@link useInsertOffers} reads: the panel's own sources of blocks. */
+export type InsertOffersInputs = Pick<
+  InsertPanelProps,
+  | "editor"
+  | "definitions"
+  | "patterns"
+  | "components"
+  | "componentDefinitions"
+  | "nesting"
+  | "inside"
+  | "onInsert"
+> & {
+  /**
+   * Whether to judge the offers at all. The editor's search keeps this hook
+   * mounted while it is closed, and judging every entry against every place on
+   * each edit is work nobody is looking at. `true` when absent.
+   */
+  enabled?: boolean;
+};
+
+/** What can be added, where each would go, and the act of adding one. */
+export interface InsertOffers {
+  /** Blocks, then saved patterns and components, in one list. */
+  readonly catalog: readonly InsertEntry[];
+  /** The places a click may use, in the order they are tried. */
+  readonly candidates: readonly InsertionCandidate[];
+  /** Each entry's offer, by entry id: its place, or why it has none. */
+  readonly offers: ReadonlyMap<string, EntryOffer>;
+  /** The definitions an insert builds a block's children from. */
+  readonly blockSource: Parameters<typeof nodeForEntry>[1];
+  /** Add an entry where its offer says, or nothing when it was refused. */
+  readonly insert: (offer: EntryOffer | undefined) => void;
+}
+
+/**
+ * The Add panel's offers and its insert, as a hook.
+ *
+ * The panel and the editor's search both call this, so a search row says the
+ * place a tile would and adds there by the same path: one answer to "what can
+ * be added here, and where does it go".
+ *
+ * @experimental
+ */
+export function useInsertOffers({
   editor,
   definitions,
   patterns,
   components,
   componentDefinitions,
-  library,
   nesting,
-  categoryOrder,
+  inside,
   onInsert,
-  beginInsertDrag,
-}: InsertPanelProps): React.JSX.Element {
-  const [query, setQuery] = React.useState("");
-  /*
-   * Whether a TOUCH has pressed a tile in this panel yet.
-   *
-   * Set from the pointer that was actually used rather than read from a media
-   * query, because `(pointer: coarse)` describes the device's PRIMARY pointer:
-   * a touchscreen laptop driven by its trackpad reports `fine`, and the
-   * guidance would be hidden from an author the moment they reach up and touch
-   * the screen. It also appears exactly when it is relevant — after the first
-   * press, which is when the question arises — and never for a pointer that
-   * reads a tile by hovering it.
-   */
-  const [touchPressed, setTouchPressed] = React.useState(false);
+  enabled = true,
+}: InsertOffersInputs): InsertOffers {
   // ONE snapshot, taken per mount, that both the catalog and the default
   // expansion below read. The panel documents its palette as read once per
   // mount rather than subscribed to, and a second reading of the registry
@@ -681,11 +946,9 @@ export function InsertPanel({
     () => nesting ?? registryNestingSource(),
     [nesting]
   );
-  // Blocks first, then whatever saved patterns the host supplied. One list
-  // rather than two, because the filter, the grouping and the keyboard all run
-  // across both — and a second list would have to be flattened by every one of
-  // them. `groupByCategory` puts each pattern under its own heading, so the two
-  // tiers read apart without the panel deciding anything about order.
+  // Blocks, then whatever saved patterns and components the host supplied.
+  // One list rather than three, because the offer, the tokens and the filter
+  // all run across every tier; the tabs then show their share of it.
   const catalog = React.useMemo<InsertEntry[]>(
     () => [
       ...catalogFrom(palette),
@@ -698,12 +961,12 @@ export function InsertPanel({
     [palette, patterns, components, componentDefinitions, source]
   );
 
-  // Recomputed from the CURRENT document and selection on every render rather
-  // than remembered. The position is only valid against the document it was
-  // read from, and an undo or a remote edit can move it without the selection
-  // changing — a memo keyed on the selection alone would keep a position whose
-  // index no longer names the same place.
-  const slotSource = React.useMemo(registrySlotSource, []);
+  // Inside a list the canvas shows empty, a block goes to its empty state.
+  const showingEmpty = editor.listsShowingEmpty;
+  const slotSource = React.useMemo(
+    () => slotsShowingEmpty(registrySlotSource(), showingEmpty),
+    [showingEmpty]
+  );
 
   // Derived from the SAME snapshot the catalog is, so the row an author sees
   // and the subtree an insert builds cannot come from two different readings.
@@ -712,34 +975,200 @@ export function InsertPanel({
   // declaration is read — so resolving only against the registry would offer
   // that block and then insert it without the children it declares.
   const blockSource = React.useMemo(() => blockSourceFor(palette), [palette]);
-  const point = insertionPointFor(
-    editor.document,
-    editor.selectedId,
-    slotSource
-  );
 
-  // Computed on every render rather than memoised. `insertionPointFor` builds a
-  // fresh target each call, so a memo keyed on it could never hit — it would
-  // recompute exactly as often while reading as though it cached. The work is a
-  // filter and a group over one array, and the render it happens in is already
-  // driven by a keystroke.
-  const groups =
-    point === null
-      ? []
-      : // Allowed first, then the query. Both orders yield the same set, but
-        // this one keeps the empty state honest: "no blocks match" after a
-        // search is a different message from "nothing can go here", and
-        // filtering first would collapse them into one.
-        groupByCategory(
-          filterEntries(
-            // The canvas's lookup travels with the question: a pattern whose
-            // root is a component instance is judged by what that component
-            // draws, as its own tile is.
-            allowedEntries(catalog, point.target, source, componentDefinitions),
-            query
-          ),
-          categoryOrder
-        );
+  // Recomputed from the CURRENT document and selection on every render rather
+  // than remembered. A place is only valid against the document it was read
+  // from, and an undo or a remote edit can move it without the selection
+  // changing — a memo keyed on the selection alone would keep a position whose
+  // index no longer names the same place.
+  const candidates = insertionCandidates(editor.document, editor.selectedId, {
+    slots: slotSource,
+    ...(inside === undefined ? {} : { inside }),
+  });
+
+  // Remembered by what the verdicts depend on — the document, the places, the
+  // catalog, the rule's sources and the locks — and not by the query, so a
+  // keystroke asks no rule anything: judging a pattern walks its forest and a
+  // component composes its definition, once per entry and place.
+  const offerCache = React.useRef<OfferCache | undefined>(undefined);
+  const offers = !enabled
+    ? NO_OFFERS
+    : cachedOffers(offerCache, {
+        document: editor.document,
+        candidates,
+        catalog,
+        source,
+        components: componentDefinitions,
+        expansion: { definitions: blockSource, nesting },
+        editor,
+      });
+  /*
+   * Add an entry where its offer says, or nothing when it was refused.
+   *
+   * The guard is the whole of what a refused tile does on a click or an Enter:
+   * it stays reachable so its reason can be read, and choosing it changes
+   * nothing.
+   */
+  const insert = (offer: EntryOffer | undefined) => {
+    if (offer?.place === undefined) return;
+    const { entry } = offer;
+    const at = offer.place.at;
+    if (entry.kind === "pattern") {
+      insertPattern(entry, at);
+      return;
+    }
+    if (entry.kind === "component") {
+      insertComponent(entry, at);
+      return;
+    }
+    // `nesting` rather than `source`. They differ exactly when the caller
+    // supplied no rules: `source` has already defaulted to the REGISTRY, which
+    // knows nothing about a supplied definition and so reports every one of its
+    // types as unrestricted. Passing it defeats the fallback in
+    // `expandSlotDefaults`, which derives the rules from these same
+    // definitions — the only source that can see a supplied block's `parent`
+    // and its slots' `allow`.
+    const node = nodeForEntry(entry, blockSource, nesting);
+    // `apply` is the only path a document changes by, so undo covers this
+    // insert for free. It answers null when the op is refused, and a refusal
+    // must not be reported as an insert — the panel offers only placements the
+    // rule permits, so a null here means the document moved underneath it.
+    if (editor.apply({ kind: "insert", node, at }) === null) return;
+    // Selecting what was just added is what makes a second insert land after
+    // it, so repeated inserts build downward instead of stacking at one point.
+    editor.select(node.id);
+    onInsert?.(node);
+  };
+
+  /**
+   * Place a component: ONE insert of an instance node.
+   *
+   * No planner, because there is nothing to plan — a pattern is a forest that
+   * has to be re-identified and judged root by root against the destination,
+   * while an instance is a single node whose content lives in the definition.
+   * The placement was judged when the tile was offered, by the definition's
+   * roots, so a refusal here means the document moved underneath the panel.
+   */
+  const insertComponent = (entry: ComponentInsertEntry, at: OpPosition) => {
+    const node = nodeForComponentEntry(entry);
+    // Whether the PAGE has room for it — the one refusal the tile could not
+    // make, because room moves with every edit — is the editor's own apply's
+    // to make: it asks the resolver with the node in place, under the caps it
+    // enforces, and tells the host why when it refuses. A null here is that
+    // refusal, or a document that moved under the panel.
+    if (editor.apply({ kind: "insert", node, at }) === null) return;
+    editor.select(node.id);
+    onInsert?.(node);
+  };
+
+  /**
+   * Place a saved pattern: a whole forest, re-identified, as ONE edit.
+   *
+   * Through `planInsertPattern` rather than by building ops here. The planner
+   * is the dry run — it mints ids that do not collide with the page, records
+   * where each root was copied from, and refuses everything the apply would —
+   * so a second construction in this file would be a second answer to what
+   * inserting a pattern means.
+   *
+   * `applyAll`, so the whole group is one undo step. A pattern placed as
+   * several inserts would come back one root at a time, which is not what the
+   * author did.
+   */
+  const insertPattern = (entry: PatternInsertEntry, at: OpPosition) => {
+    const plan = planInsertPattern(
+      editor.document,
+      { id: entry.patternId, document: entry.document },
+      at,
+      source,
+      // The same lookup the catalogue judged the tile's roots by, so the offer
+      // and the mutation resolve one forest. Without it the planner reads a
+      // nested instance as its own unregistered type: unrestricted under a
+      // parent rule, and barred by any slot naming what it admits.
+      componentDefinitions
+    );
+    // A refusal here means the document moved underneath the panel: the
+    // catalogue offers only patterns the planner accepts, judged against the
+    // same rules. Reported as no insert rather than as a failed one.
+    if (plan.pageOps === undefined) return;
+    if (editor.applyAll(plan.pageOps) === null) return;
+
+    // The FIRST root, so a second insert lands after the group rather than
+    // inside it — the same rule the block path follows by selecting what it
+    // just added.
+    const first = plan.pageOps.find((op: BuilderOp) => op.kind === "insert");
+    if (first === undefined || first.kind !== "insert") return;
+    editor.select(first.node.id);
+    onInsert?.(first.node);
+  };
+
+  return { catalog, candidates, offers, blockSource, insert };
+}
+
+export function InsertPanel({
+  editor,
+  definitions,
+  patterns,
+  components,
+  componentDefinitions,
+  library,
+  nesting,
+  categoryOrder,
+  blockOrder,
+  onInsert,
+  beginInsertDrag,
+  inside,
+  renderPreview,
+}: InsertPanelProps): React.JSX.Element {
+  const [query, setQuery] = React.useState("");
+  // Blocks first: what an author adds most. Sections holds the patterns.
+  const [tab, setTab] = React.useState<PanelTab>("blocks");
+  /*
+   * Whether the author has moved through the tiles, and with what.
+   *
+   * The primitives mark their first item as current the moment the list
+   * draws, so the panel paints that mark — and opens the popover — only once
+   * an arrow key or a pointer has moved it. Which of the two is kept because
+   * a pointer that leaves the list returns the panel to rest, while the
+   * keyboard's highlight stays where the author left it.
+   */
+  const [moved, setMoved] = React.useState<"pointer" | "keyboard" | null>(null);
+  /*
+   * Whether a TOUCH has pressed a tile in this panel yet.
+   *
+   * Set from the pointer that was actually used rather than read from a media
+   * query, because `(pointer: coarse)` describes the device's PRIMARY pointer:
+   * a touchscreen laptop driven by its trackpad reports `fine`, and the
+   * guidance would be hidden from an author the moment they reach up and touch
+   * the screen. It also appears exactly when it is relevant — after the first
+   * press, which is when the question arises — and never for a pointer that
+   * reads a tile by hovering it.
+   */
+  const [touchPressed, setTouchPressed] = React.useState(false);
+  // The panel's own element, which the popover anchors inside and treats as
+  // "not outside".
+  const root = React.useRef<HTMLDivElement | null>(null);
+  // What can be added, where, and the act of adding it: shared with the
+  // editor's search, so a row there and a tile here are one answer.
+  const { catalog, candidates, offers, blockSource, insert } = useInsertOffers({
+    editor,
+    definitions,
+    patterns,
+    components,
+    componentDefinitions,
+    nesting,
+    inside,
+    onInsert,
+  });
+  // The tab's share of the catalog, then the query. Refused entries stay, so
+  // an empty list means the query matched nothing, or the tab holds nothing.
+  const groups = paletteGroups(
+    filterEntries(
+      catalog.filter(entry => tabOf(entry) === tab),
+      query
+    ),
+    categoryOrder,
+    blockOrder
+  );
 
   /*
    * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
@@ -774,8 +1203,8 @@ export function InsertPanel({
    * A host may replace `definitions` while the panel is mounted, and inserting
    * one definition shifts the position of every entry after it. Positional
    * tokens would then be reassigned underneath a highlight the palette is
-   * still holding: the same string would name a different block, so the strip
-   * would describe it and Enter would insert it.
+   * still holding: the same string would name a different block, so the
+   * popover would describe it and Enter would insert it.
    *
    * The allocation lives in a ref because it must survive re-renders without
    * being one — it is DOM identity, not state, and nothing renders differently
@@ -799,161 +1228,86 @@ export function InsertPanel({
     return byEntry;
   }, [catalog, idPrefix]);
 
-  /*
-   * The entry the strip describes, falling back to the first one offered.
-   *
-   * The fallback is what keeps the strip from being blank on the pass before
-   * anything has been highlighted, and after a search removes the entry that
-   * was. It is DERIVED rather than written into state: a fallback that stored
-   * itself would be a second writer racing the primitives' own selection.
-   */
-
-  const insert = (entry: InsertEntry) => {
-    if (point === null) return;
-    if (entry.kind === "pattern") {
-      insertPattern(entry);
-      return;
-    }
-    if (entry.kind === "component") {
-      insertComponent(entry);
-      return;
-    }
-    // `nesting` rather than `source`. They differ exactly when the caller
-    // supplied no rules: `source` has already defaulted to the REGISTRY, which
-    // knows nothing about a supplied definition and so reports every one of its
-    // types as unrestricted. Passing it defeats the fallback in
-    // `expandSlotDefaults`, which derives the rules from these same
-    // definitions — the only source that can see a supplied block's `parent`
-    // and its slots' `allow`.
-    const node = nodeForEntry(entry, blockSource, nesting);
-    // `apply` is the only path a document changes by, so undo covers this
-    // insert for free. It answers null when the op is refused, and a refusal
-    // must not be reported as an insert — the panel offers only placements the
-    // rule permits, so a null here means the document moved underneath it.
-    if (editor.apply({ kind: "insert", node, at: point.at }) === null) return;
-    // Selecting what was just added is what makes a second insert land after
-    // it, so repeated inserts build downward instead of stacking at one point.
-    editor.select(node.id);
-    onInsert?.(node);
-  };
-
-  /**
-   * Place a saved pattern: a whole forest, re-identified, as ONE edit.
-   *
-   * Through `planInsertPattern` rather than by building ops here. The planner
-   * is the dry run — it mints ids that do not collide with the page, records
-   * where each root was copied from, and refuses everything the apply would —
-   * so a second construction in this file would be a second answer to what
-   * inserting a pattern means.
-   *
-   * `applyAll`, so the whole group is one undo step. A pattern placed as
-   * several inserts would come back one root at a time, which is not what the
-   * author did.
-   */
-  /**
-   * Place a component: ONE insert of an instance node.
-   *
-   * No planner, because there is nothing to plan — a pattern is a forest that
-   * has to be re-identified and judged root by root against the destination,
-   * while an instance is a single node whose content lives in the definition.
-   * The placement was judged when the tile was offered, by the definition's
-   * roots, so a refusal here means the document moved underneath the panel.
-   */
-  const insertComponent = (entry: ComponentInsertEntry) => {
-    if (point === null) return;
-    const node = nodeForComponentEntry(entry);
-    // Whether the PAGE has room for it — the one refusal the tile could not
-    // make, because room moves with every edit — is the editor's own apply's
-    // to make: it asks the resolver with the node in place, under the caps it
-    // enforces, and tells the host why when it refuses. A null here is that
-    // refusal, or a document that moved under the panel.
-    if (editor.apply({ kind: "insert", node, at: point.at }) === null) return;
-    editor.select(node.id);
-    onInsert?.(node);
-  };
-
-  const insertPattern = (entry: PatternInsertEntry) => {
-    if (point === null) return;
-    const plan = planInsertPattern(
-      editor.document,
-      { id: entry.patternId, document: entry.document },
-      point.at,
-      source,
-      // The same lookup the catalogue judged the tile's roots by, so the offer
-      // and the mutation resolve one forest. Without it the planner reads a
-      // nested instance as its own unregistered type: unrestricted under a
-      // parent rule, and barred by any slot naming what it admits.
-      componentDefinitions
-    );
-    // A refusal here means the document moved underneath the panel: the
-    // catalogue offers only patterns the planner accepts, judged against the
-    // same rules. Reported as no insert rather than as a failed one.
-    if (plan.pageOps === undefined) return;
-    if (editor.applyAll(plan.pageOps) === null) return;
-
-    // The FIRST root, so a second insert lands after the group rather than
-    // inside it — the same rule the block path follows by selecting what it
-    // just added.
-    const first = plan.pageOps.find((op: BuilderOp) => op.kind === "insert");
-    if (first === undefined || first.kind !== "insert") return;
-    editor.select(first.node.id);
-    onInsert?.(first.node);
-  };
-
-  if (point === null) {
+  const header = <h2 className="nx-insert-panel__title">{EDITOR_WORDS.add}</h2>;
+  const firstPlace = candidates[0];
+  if (firstPlace === undefined) {
+    // Only an `inside` can leave no place: the container it names is gone
+    // from the page, or holds no region a block can be put in.
     return (
       <div className="nx-insert-panel" data-empty="unplaceable">
+        {header}
         <p className="nx-insert-panel__note">
-          The selected block sits somewhere a new block cannot be addressed.
-          Select a different block, or clear the selection to add at the end of
-          the page.
+          The container chosen to add into is no longer on the page. Select a
+          block to add after it, or clear the selection to add at the end of the
+          page.
         </p>
       </div>
     );
   }
 
-  return (
-    <div
-      className="nx-insert-panel"
-      /* The column count, handed to the stylesheet rather than spelled again
-         in it, so the layout has one source.
-
-         LAYOUT ONLY. Nothing reads it to move a highlight — arrow keys are the
-         command primitives' and step by one option, which is what their
-         listbox semantics announce. See this module's documentation.
-
-         On the PANEL rather than on each group, because the primitives own the
-         element the grid is applied to — their items container — and a
-         property set on a wrapper inside it would be inherited by the tiles
-         instead of read by the grid. */
-      style={{ "--nx-insert-columns": GRID_COLUMNS } as React.CSSProperties}
+  /*
+   * The palette, drawn inside whichever tab is open.
+   *
+   * The search, the placement line and the notices belong to it rather than
+   * to the frame above, so the tab's panel holds everything a tab switch
+   * changes, and the query carries over because it lives in this component.
+   */
+  const paletteView = (
+    <Command
+      className="nx-insert-panel__palette"
+      shouldFilter={false}
+      label="Insert a block"
+      onKeyDown={event => {
+        if (movesTheHighlight(event)) setMoved("keyboard");
+      }}
     >
-      <Command shouldFilter={false} label="Insert a block">
-        <CommandInput
-          value={query}
-          onValueChange={setQuery}
-          placeholder="Search blocks"
-        />
-        <p className="nx-insert-panel__placement" aria-live="polite">
-          {placementLabel(point)}
-        </p>
-        <LibraryNotices library={library} />
-        <CommandList>
-          <CommandEmpty>
-            {query.trim() === ""
-              ? "No blocks can be added here."
-              : `No blocks match "${query.trim()}".`}
-          </CommandEmpty>
-          {groups.map(group => (
-            <CommandGroup key={group.category} heading={group.category}>
-              {group.entries.map(entry => (
+      <CommandInput
+        value={query}
+        onValueChange={setQuery}
+        placeholder={SEARCH_PLACEHOLDERS[tab]}
+      />
+      <PlacementLine
+        document={editor.document}
+        first={firstPlace}
+        shown={moved !== null}
+        groups={groups}
+        tokens={tokens}
+        offers={offers}
+      />
+      <LibraryNotices library={library} tier={tierOf(tab)} />
+      <CommandList
+        className="nx-insert-panel__list"
+        // A pointer that leaves the tiles returns the panel to rest; a
+        // keyboard highlight stays where the author left it.
+        onPointerLeave={() => {
+          setMoved(current => (current === "pointer" ? null : current));
+        }}
+      >
+        <CommandEmpty>{emptyStateText(tab, query)}</CommandEmpty>
+        {groups.map(group => (
+          <CommandGroup
+            key={group.category}
+            heading={groupHeading(group.category, tab)}
+          >
+            {group.entries.map(entry => {
+              const offer = offers.get(entry.id);
+              const token = tokens.get(entry.id);
+              const refusal = offer?.refusal;
+              // What the author needs before what the block is: why it
+              // cannot go here, or where it goes when that is past the
+              // place the line above names.
+              const aside = tileAside(offer, editor.document);
+              // The aside's own id, beside the description's, so the tile
+              // is described by the aside first, then what it is.
+              const why = token === undefined ? undefined : `${token}-why`;
+              return (
                 <CommandItem
                   // `value` is what cmdk reports on selection. The entry id is
                   // unique across blocks AND their variations, while a label is
                   // not — two plugins may both label a block "Card".
                   key={entry.id}
-                  value={tokens.get(entry.id)}
-                  onSelect={() => insert(entry)}
+                  value={token}
+                  onSelect={() => insert(offer)}
                   /*
                    * NAMED by the block and DESCRIBED by its sentence, rather
                    * than named by the two run together.
@@ -972,7 +1326,13 @@ export function InsertPanel({
                    * still matches what is written on the tile.
                    */
                   aria-label={entry.label}
-                  aria-describedby={tokens.get(entry.id)}
+                  aria-describedby={
+                    aside === undefined ? token : `${why} ${token}`
+                  }
+                  // Greyed by the stylesheet. Not `disabled`: see this
+                  // module's documentation on why a refused tile stays
+                  // reachable.
+                  data-refused={refusal === undefined ? undefined : "true"}
                   // Beside `onSelect`, never instead of it. A press stays a
                   // click until it has travelled far enough to mean a drag, so
                   // this does not consume the row's own activation — and a host
@@ -986,72 +1346,448 @@ export function InsertPanel({
                     /*
                      * Describe this tile on the PRESS, not only on a hover.
                      *
-                     * A touch screen produces no `pointermove` before contact,
-                     * and hover is what the primitives report a highlight
-                     * from — so on touch the strip would still be describing
-                     * whatever was current when the panel opened, and the tap
-                     * that finally moved it is the same tap that inserts. A
-                     * finger resting on a tile now reads its sentence before
-                     * lifting, and a finger dragging across tiles reads each
-                     * one it passes.
-                     */
-                    /*
                      * Replayed through the primitives' OWN handler rather
                      * than by setting the highlight directly. They move it on
                      * `pointermove`, which a touch screen never sends before
-                     * contact — so without this the strip on touch describes
-                     * whatever was current when the panel opened, and the tap
-                     * that finally moves it is the same tap that inserts.
+                     * contact — so without this the popover on touch would
+                     * never open, and the tap that finally moves the
+                     * highlight is the same tap that inserts.
                      *
                      * Dispatching the event they already listen for keeps the
                      * announced option and the scroll in step, which setting
-                     * the value from outside does not.
+                     * the value from outside does not. The panel's own
+                     * pointer-move handler sees it too, which is what opens
+                     * the popover.
                      */
                     event.currentTarget.dispatchEvent(
                       new PointerEvent("pointermove", { bubbles: true })
                     );
-                    // Blocks only. A drag carries ONE node to a drop target,
-                    // and a pattern is a forest placed as a group — so there is
-                    // no node to hand the drag, and offering the gesture would
-                    // start something that cannot finish. A pattern is inserted
-                    // by the click path, which places the whole group.
-                    if (entry.kind !== "block") return;
-                    beginInsertDrag?.(event, {
-                      blockName: entry.blockName,
-                      makeNode: () => nodeForEntry(entry, blockSource, nesting),
-                      // The same notification the click path sends, so a host
-                      // cannot see one kind of insert and miss the other.
+                    beginEntryDrag(event, entry, {
+                      begin: beginInsertDrag,
+                      definitions: blockSource,
+                      nesting,
                       onInserted: onInsert,
                     });
                   }}
                 >
-                  <BlockIconMark icon={entry.icon} />
+                  <BlockIconMark icon={entry.icon} size={20} />
                   <span className="nx-insert-panel__label">{entry.label}</span>
-                  <TierBadge entry={entry} />
-                  {/* Kept in the tile and no longer drawn: `aria-describedby`
+                  {/* Kept in the tile and not drawn: `aria-describedby`
                       needs an element to point at, and keeping it here is what
                       stops a tile and the sentence describing it from being
                       rendered apart. */}
-                  <span
-                    className="nx-insert-panel__description"
-                    id={tokens.get(entry.id)}
-                  >
-                    {tierSentence(entry)}
+                  {aside === undefined ? null : (
+                    <span className="nx-insert-panel__description" id={why}>
+                      {aside}
+                    </span>
+                  )}
+                  <span className="nx-insert-panel__description" id={token}>
                     {entry.description}
                   </span>
                 </CommandItem>
-              ))}
-            </CommandGroup>
-          ))}
-        </CommandList>
-        <DescriptionStrip groups={groups} tokens={tokens} />
-        {/*
-          Not drawn while nothing is offered: with the search filtered to no
-          matches the panel would show "No blocks match" beside an instruction
-          about pressing tiles, and spend scarce panel height doing it.
-        */}
-        <TouchGestureHint shown={touchPressed && groups.length > 0} />
-      </Command>
+              );
+            })}
+          </CommandGroup>
+        ))}
+      </CommandList>
+      <TilePopover
+        shown={moved !== null}
+        groups={groups}
+        tokens={tokens}
+        offers={offers}
+        root={root}
+        renderPreview={renderPreview}
+        document={editor.document}
+        onDismiss={() => setMoved(null)}
+      />
+      {/*
+        Not drawn while nothing is offered: with the search filtered to no
+        matches the panel would show "No blocks match" beside an instruction
+        about pressing tiles, and spend scarce panel height doing it.
+      */}
+      <TouchGestureHint shown={touchPressed && groups.length > 0} />
+    </Command>
+  );
+
+  return (
+    <div
+      ref={root}
+      className="nx-insert-panel"
+      /* The column count, handed to the stylesheet rather than spelled again
+         in it, so the layout has one source.
+
+         LAYOUT ONLY. Nothing reads it to move a highlight — arrow keys are the
+         command primitives' and step by one option, which is what their
+         listbox semantics announce. See this module's documentation.
+
+         On the PANEL rather than on each group, because the primitives own the
+         element the grid is applied to — their items container — and a
+         property set on a wrapper inside it would be inherited by the tiles
+         instead of read by the grid. */
+      style={{ "--nx-insert-columns": GRID_COLUMNS } as React.CSSProperties}
+      // The current tile is painted once the author has moved through the
+      // tiles, or typed a search whose first match Enter would take.
+      data-highlight={
+        moved !== null || query.trim() !== "" ? "shown" : undefined
+      }
+      // A pointer moving over a tile is a pointer pointing at it. Read here,
+      // where it bubbles, because the primitives own each tile's own
+      // pointer-move handler.
+      onPointerMove={event => {
+        const target = event.target;
+        if (isElement(target) && target.closest("[cmdk-item]")) {
+          setMoved("pointer");
+        }
+      }}
+    >
+      {header}
+      <Tabs
+        value={tab}
+        onValueChange={value =>
+          setTab(value === "sections" ? "sections" : "blocks")
+        }
+        className="nx-insert-panel__tabs"
+      >
+        <TabsList className="nx-insert-panel__tablist">
+          <TabsTrigger value="blocks">{EDITOR_WORDS.blocks}</TabsTrigger>
+          <TabsTrigger value="sections">{EDITOR_WORDS.sections}</TabsTrigger>
+        </TabsList>
+        {/* One tab panel per tab, so each trigger controls an element that
+            exists. A closed tab panel renders none of its children, so the
+            palette is drawn once, in the open one. */}
+        <TabsContent value="blocks" className="nx-insert-panel__tab">
+          {paletteView}
+        </TabsContent>
+        <TabsContent value="sections" className="nx-insert-panel__tab">
+          {paletteView}
+        </TabsContent>
+      </Tabs>
     </div>
   );
+}
+
+/**
+ * A group's heading. Patterns that declared no category are the Sections
+ * tab's remainder, so they read as more sections rather than more blocks.
+ */
+function groupHeading(category: string, tab: PanelTab): string {
+  return tab === "sections" && category === UNCATEGORISED
+    ? `More ${TAB_WORDS.sections}`
+    : categoryHeading(category);
+}
+
+/** What the offer was computed from, and the offer. */
+interface OfferCache {
+  readonly document: unknown;
+  readonly candidates: string;
+  readonly catalog: unknown;
+  readonly source: unknown;
+  readonly components: unknown;
+  readonly definitions: unknown;
+  readonly nesting: unknown;
+  readonly editor: unknown;
+  readonly offers: ReadonlyMap<string, EntryOffer>;
+}
+
+/** What each entry's offer is judged from. */
+interface OfferInputs {
+  readonly document: BlockDocument;
+  readonly candidates: readonly InsertionCandidate[];
+  readonly catalog: readonly InsertEntry[];
+  readonly source: NestingSource;
+  readonly components: ComponentLookup | undefined;
+  readonly expansion: EntryPlacement["expansion"];
+  /** Asked what the locks say of an insert; its identity changes with the document. */
+  readonly editor: Pick<EditorState, "lockRefusalFor">;
+}
+
+/**
+ * Each entry's offer, judged again only when an input the verdicts read has
+ * changed. Every input is compared by identity except the places, which are
+ * rebuilt per render and so are compared by value.
+ */
+function cachedOffers(
+  cache: { current: OfferCache | undefined },
+  inputs: OfferInputs
+): ReadonlyMap<string, EntryOffer> {
+  const candidates = JSON.stringify(inputs.candidates);
+  const held = cache.current;
+  if (
+    held !== undefined &&
+    held.document === inputs.document &&
+    held.candidates === candidates &&
+    held.catalog === inputs.catalog &&
+    held.source === inputs.source &&
+    held.components === inputs.components &&
+    held.definitions === inputs.expansion.definitions &&
+    held.nesting === inputs.expansion.nesting &&
+    held.editor === inputs.editor
+  ) {
+    return held.offers;
+  }
+  const offers = offersFor(inputs);
+  cache.current = {
+    document: inputs.document,
+    candidates,
+    catalog: inputs.catalog,
+    source: inputs.source,
+    components: inputs.components,
+    definitions: inputs.expansion.definitions,
+    nesting: inputs.expansion.nesting,
+    editor: inputs.editor,
+    offers,
+  };
+  return offers;
+}
+
+/**
+ * Each entry's offer: the first place that takes it, by
+ * {@link insertionFor} over the places a click may use, or — when none does —
+ * the reason the FIRST place refused it, which is the one the placement line
+ * names and so the one the author is asking about.
+ */
+function offersFor(inputs: OfferInputs): ReadonlyMap<string, EntryOffer> {
+  // What a place reads for every entry, worked out once per place.
+  const places = new Map(
+    inputs.candidates.map(candidate => [
+      candidate,
+      placeContext(inputs, candidate),
+    ])
+  );
+  const offers = new Map<string, EntryOffer>();
+  for (const entry of inputs.catalog) {
+    const first: { refusal: string | undefined } = { refusal: undefined };
+    const taken = insertionFor(inputs.candidates, candidate => {
+      const context = places.get(candidate);
+      if (context === undefined) return undefined;
+      const refusal = refusalAt(inputs, entry, candidate, context);
+      if (candidate === inputs.candidates[0]) first.refusal = refusal;
+      return refusal === undefined ? candidate : undefined;
+    });
+    offers.set(
+      entry.id,
+      taken === undefined
+        ? {
+            entry,
+            refusal:
+              first.refusal ?? "This can't be added to the page from here.",
+          }
+        : {
+            entry,
+            place: taken.answer,
+            climbed: taken.answer !== inputs.candidates[0],
+          }
+    );
+  }
+  return offers;
+}
+
+/** What judging any entry at one place reads, asked once per place. */
+interface PlaceContext {
+  readonly placement: EntryPlacement | undefined;
+  /**
+   * The locks' answer for the catalog's first block here, which a pattern or
+   * a component follows: each arrives as a block of its own type, which no
+   * lock's starting blocks name. Asked on first use.
+   */
+  readonly firstBlockLock: () => LockRefusalFacts | undefined;
+}
+
+/** {@link PlaceContext} for one place, its lock question asked lazily. */
+function placeContext(
+  inputs: OfferInputs,
+  candidate: InsertionCandidate
+): PlaceContext {
+  const firstBlock = inputs.catalog.find(
+    (entry): entry is BlockInsertEntry => entry.kind === "block"
+  );
+  const asked: { answer?: LockRefusalFacts; done: boolean } = { done: false };
+  return {
+    placement: placementAt(inputs, candidate.at),
+    firstBlockLock: () => {
+      if (!asked.done && firstBlock !== undefined) {
+        const answer = lockAt(inputs, firstBlock, candidate.at);
+        if (answer !== undefined) asked.answer = answer;
+      }
+      asked.done = true;
+      return asked.answer;
+    },
+  };
+}
+
+/**
+ * Why an entry cannot go at a place, in the words the author reads, or
+ * nothing when it can: the one placement rule first, then the locks.
+ *
+ * Each block is judged by its own insert, the store's own question: where a
+ * locked slot is already broken, inserting the block it is missing can repair
+ * it while any other block breaks it further, so one block's answer is not
+ * every block's.
+ */
+function refusalAt(
+  inputs: OfferInputs,
+  entry: InsertEntry,
+  candidate: InsertionCandidate,
+  context: PlaceContext
+): string | undefined {
+  const verdict = entryVerdictAt(
+    entry,
+    candidate.target,
+    inputs.source,
+    inputs.components,
+    context.placement
+  );
+  if (!verdict.allowed) {
+    return (
+      belongsInsideWording(verdict, entry) ??
+      refusalAnnouncement(placementRefusal(verdict, entry, candidate))
+    );
+  }
+  const lock =
+    entry.kind === "block"
+      ? lockAt(inputs, entry, candidate.at)
+      : context.firstBlockLock();
+  return lock === undefined
+    ? undefined
+    : refusalAnnouncement(lockRefusalWording(lock));
+}
+
+/** What the locks say of inserting one block at a position. */
+function lockAt(
+  inputs: OfferInputs,
+  entry: BlockInsertEntry,
+  at: OpPosition
+): LockRefusalFacts | undefined {
+  return inputs.editor.lockRefusalFor([
+    {
+      kind: "insert",
+      node: nodeForEntry(
+        entry,
+        inputs.expansion.definitions,
+        inputs.expansion.nesting
+      ),
+      at,
+    },
+  ]);
+}
+
+/**
+ * The placement rule's refusal in the words a drop's refusal uses, so an
+ * author reads one sentence for one rule wherever they meet it. A block is
+ * the subject, and named beside whatever inside it was refused; a pattern or
+ * a component is named by the block of it that was refused.
+ */
+function placementRefusal(
+  verdict: Exclude<NestingVerdict | PlacementVerdict, { allowed: true }>,
+  entry: InsertEntry,
+  candidate: InsertionCandidate
+): RefusalWording {
+  const regionType =
+    candidate.target.kind === "slot" ? candidate.target.parentType : undefined;
+  if ("blockType" in verdict) {
+    return placementWording(
+      verdict,
+      entry.kind === "block" ? entry.blockName : verdict.blockType,
+      regionType
+    );
+  }
+  // Judged by the name rules alone, which name no block: the entry's own
+  // type, or its first root's.
+  return refusalWording(
+    { reason: verdict.reason, permitted: verdict.permitted },
+    subjectTypeOf(entry),
+    regionType
+  );
+}
+
+/**
+ * A refusal whose rule names the containers an entry belongs inside, said as
+ * one plain instruction: "Goes inside an Accordion. Select an Accordion
+ * first, or drag this into one."
+ *
+ * Generated from the rule, never per block: the containers are the rule's
+ * own permitted list, and the second sentence offers only what the tile can
+ * do (a block can be dragged; a pattern or a component cannot). Selecting
+ * such a container works because a click falls back to inside the selection.
+ * Anything else, or a rule about a block nested within the entry, keeps the
+ * shared refusal wording.
+ */
+function belongsInsideWording(
+  verdict: Exclude<NestingVerdict | PlacementVerdict, { allowed: true }>,
+  entry: InsertEntry
+): string | undefined {
+  if (
+    verdict.reason !== "restricted-at-root" &&
+    verdict.reason !== "wrong-parent"
+  ) {
+    return undefined;
+  }
+  if ("blockType" in verdict && verdict.blockType !== subjectTypeOf(entry)) {
+    return undefined;
+  }
+  const containers = verdict.permitted.map(name =>
+    withArticle(permittedLabel(name, blockLabel))
+  );
+  if (containers.length === 0) return undefined;
+  const select =
+    containers.length === 1
+      ? `Select ${containers[0]} first`
+      : "Select one first";
+  const drag = entry.kind === "block" ? ", or drag this into one." : ".";
+  return `Goes inside ${asPermittedList(containers, "or")}. ${select}${drag}`;
+}
+
+/** "an Accordion", "a Card"; a namespace's "any acme block" as it is. */
+function withArticle(label: string): string {
+  if (label.startsWith("any ")) return label;
+  return `${/^[aeiou]/i.test(label) ? "an" : "a"} ${label}`;
+}
+
+/** The block type an entry is named by in a refusal. */
+function subjectTypeOf(entry: InsertEntry): string {
+  if (entry.kind === "block") return entry.blockName;
+  if (entry.kind === "component") return entry.roots[0] ?? entry.label;
+  return entry.document.nodes[0]?.type ?? entry.label;
+}
+
+/**
+ * A place as the one placement rule sees it, with what its ancestors refuse.
+ * Undefined when the position's parent is not in the document, which the
+ * name rules then judge alone.
+ *
+ * The rule reads block declarations from the palette's own source, the one
+ * its catalog and its inserts read, so a definition the host supplied is the
+ * one judged rather than the registry's under the same name.
+ */
+function placementAt(
+  inputs: OfferInputs,
+  at: OpPosition
+): EntryPlacement | undefined {
+  const sources: PlacementSources = {
+    nesting: inputs.source,
+    definitions: inputs.expansion.definitions,
+    ...(inputs.components === undefined
+      ? {}
+      : { components: inputs.components }),
+  };
+  const site = placementSiteIn(
+    inputs.document.nodes,
+    at.parentId === undefined
+      ? { kind: "root" }
+      : { kind: "slot", parentId: at.parentId, slot: at.slot ?? "" },
+    sources
+  );
+  return site === undefined
+    ? undefined
+    : { site, sources, expansion: inputs.expansion };
+}
+
+/** What the list says when it shows nothing: the tab is empty, or the query matched nothing. */
+function emptyStateText(tab: PanelTab, query: string): string {
+  const searched = query.trim();
+  const word = TAB_WORDS[tab];
+  if (searched !== "") return `No ${word} match "${searched}".`;
+  return tab === "sections"
+    ? `No ${word} are saved yet.`
+    : `No ${word} can be added here.`;
 }

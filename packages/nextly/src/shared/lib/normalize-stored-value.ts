@@ -59,9 +59,10 @@ function isPolymorphicRelation(field: NormalizableField): boolean {
 
 /**
  * Whether this field's value is stored as JSON, and so may arrive as a string.
- * A `hasMany` field of any type stores an array, which is JSON too.
+ * A `hasMany` field of any type stores an array, which is JSON too. Also how a
+ * column conversion decides a field's values compare by what they parse to.
  */
-function isJsonBacked(field: NormalizableField): boolean {
+export function isJsonBacked(field: NormalizableField): boolean {
   return (
     JSON_BACKED_TYPES.has(field.type) ||
     hasMany(field) ||

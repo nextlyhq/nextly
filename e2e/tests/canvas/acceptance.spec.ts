@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 
 import { expect, type Page } from "@playwright/test";
 
+import {
+  CANVAS_FRAME,
+  canvasFrame,
+  canvasLayer,
+} from "../support/canvas-frame";
 import { test } from "../support/test";
 import {
   ACCEPTANCE_PROPERTIES,
@@ -15,9 +20,18 @@ import {
  * The canvas acceptance suite, rebuilt against the v2 canvas.
  *
  * The original was retired in `c12e43472` with the PoC canvas it drove, and the
- * properties went with it. This is not that suite restored: v2 renders
- * SAME-DOCUMENT with no iframe, so the retired driver's cross-frame mapping and
- * its `.nx-pb-*` selectors describe a canvas that no longer exists.
+ * properties went with it. This is not that suite restored: the retired
+ * driver's `.nx-pb-*` selectors describe a canvas that no longer exists.
+ *
+ * ## Two documents
+ *
+ * The harness draws the page in the canvas's own frame, laid out at the
+ * window's size and drawn at 100%, so a block's box in the frame is its box on
+ * the page and the pointer lands on it either way. The blocks are in the
+ * FRAME's document and found through it; the editor's chrome — the drop line
+ * among it — is drawn in the harness's document, over the frame. The harness's
+ * own state attributes (the drag, the target, the undo depth) are on its host,
+ * which is in the harness's document too.
  *
  * ## Every drag here is POINTER MOTION, never a position
  *
@@ -43,18 +57,45 @@ const NODE = "[data-nx-node]";
 const HOST = '[data-testid="canvas-harness"]';
 const INDICATOR = ".nx-drop-indicator";
 
+/** The drop line, where the editor draws it: over the frame, in this document. */
+function indicator(page: Page) {
+  return canvasLayer(page).locator(INDICATOR);
+}
+
 /** Document order, by id. The single question "did the tree change". */
 async function order(page: Page): Promise<(string | null)[]> {
-  return page
+  return canvasFrame(page)
     .locator(NODE)
     .evaluateAll(nodes => nodes.map(n => n.getAttribute("data-nx-node")));
 }
 
 async function boxOf(page: Page, id: string) {
-  const box = await page.locator(`[data-nx-node="${id}"]`).boundingBox();
+  const box = await canvasFrame(page)
+    .locator(`[data-nx-node="${id}"]`)
+    .boundingBox();
   if (box === null)
     throw new Error(`${id} has no box; the fixture is not rendered`);
   return box;
+}
+
+/**
+ * The frame's own viewport, which is what scrolls the page: its document's
+ * scrolling element, read inside the frame.
+ */
+async function frameScroll(
+  page: Page
+): Promise<{ top: number; height: number; client: number }> {
+  return canvasFrame(page)
+    .locator("html")
+    .evaluate(root => {
+      const scroller = root.ownerDocument.scrollingElement;
+      if (scroller === null) throw new Error("nothing scrolls the frame");
+      return {
+        top: scroller.scrollTop,
+        height: scroller.scrollHeight,
+        client: scroller.clientHeight,
+      };
+    });
 }
 
 /**
@@ -80,7 +121,7 @@ async function openCanvas(page: Page): Promise<void> {
   // column that itself holds text — an EMPTY column renders zero pixels tall,
   // and a region with no height contains no pointer, so the refusal it exists
   // to demonstrate would be unreachable.
-  await expect(page.locator(NODE)).toHaveCount(11);
+  await expect(canvasFrame(page).locator(NODE)).toHaveCount(11);
 }
 
 test.describe("the canvas acceptance suite", () => {
@@ -144,16 +185,19 @@ test.describe("the canvas acceptance suite", () => {
     const to = await boxOf(page, "hx-heading");
 
     // None before the drag — the control for the count below.
-    await expect(page.locator(INDICATOR)).toHaveCount(0);
+    await expect(indicator(page)).toHaveCount(0);
 
     await pressAndTravel(
       page,
       { x: from.x + from.width / 2, y: from.y + from.height / 2 },
       { x: from.x + from.width / 2, y: to.y + 2 }
     );
-    await expect(page.locator(INDICATOR)).toHaveCount(1);
+    await expect(indicator(page)).toHaveCount(1);
+    // ONE line, and it is the editor's: nothing is drawn inside the page,
+    // where the site's CSS could reach it.
+    await expect(canvasFrame(page).locator(INDICATOR)).toHaveCount(0);
     await page.mouse.up();
-    await expect(page.locator(INDICATOR)).toHaveCount(0);
+    await expect(indicator(page)).toHaveCount(0);
   });
 
   test(`${titleFor(COVERED.find(p => p.n === 6)!)}`, async ({ page }) => {
@@ -174,7 +218,7 @@ test.describe("the canvas acceptance suite", () => {
       { x: from.x + from.width / 2, y: gapTop + 1 }
     );
 
-    const line = await page.locator(INDICATOR).boundingBox();
+    const line = await indicator(page).boundingBox();
     expect(line).not.toBeNull();
     // Inside the gap, not on top of either neighbour's text.
     expect(line!.y).toBeGreaterThanOrEqual(gapTop - 2);
@@ -185,12 +229,14 @@ test.describe("the canvas acceptance suite", () => {
   test(`${titleFor(COVERED.find(p => p.n === 4)!)}`, async ({ page }) => {
     await openCanvas(page);
     const settled = async () =>
-      page.locator(NODE).evaluateAll(nodes =>
-        nodes.map(n => {
-          const r = n.getBoundingClientRect();
-          return { top: r.top, height: r.height };
-        })
-      );
+      canvasFrame(page)
+        .locator(NODE)
+        .evaluateAll(nodes =>
+          nodes.map(n => {
+            const r = n.getBoundingClientRect();
+            return { top: r.top, height: r.height };
+          })
+        );
     const before = await settled();
 
     const from = await boxOf(page, "hx-text-short");
@@ -308,17 +354,35 @@ test.describe("the canvas acceptance suite", () => {
       { x: from.x + from.width / 2, y: from.y + from.height / 2 },
       { x, y: nested.y + nested.height / 2 }
     );
+    /*
+     * Then along the nested text, past the switch distance, without leaving
+     * the line it is nearest: a rival target replaces the committed one only
+     * once the pointer has travelled that far while it is the candidate, and
+     * coming down through a short block the candidate changes line halfway
+     * down it, which restarts the count. Holding the line is what lets the
+     * reading below be about depth alone.
+     */
+    await page.mouse.move(x + 24, nested.y + nested.height / 2, { steps: 6 });
 
-    const target = await page.locator(HOST).getAttribute("data-nx-drop-target");
-    expect(
-      target,
-      "a drop over a nested block must resolve somewhere"
-    ).toBeTruthy();
-    const resolved = JSON.parse(target!) as { regionId?: string };
-    // The DEEPER region, not the root. A canvas ignoring depth would answer
-    // "root" here and still look correct on a flat document — which is why the
-    // fixture nests.
-    expect(resolved.regionId).not.toBe("root");
+    /*
+     * Read as the engine settles rather than at the instant the pointer
+     * stops: the target is committed through the drag's own hysteresis, and
+     * a reading taken mid-commit describes the gap the pointer came from.
+     * Polled, a canvas that answers "root" here still fails, because it never
+     * answers anything else.
+     */
+    const region = async (): Promise<string | undefined> => {
+      const target = await page
+        .locator(HOST)
+        .getAttribute("data-nx-drop-target");
+      if (target === null || target === "") return undefined;
+      return (JSON.parse(target) as { regionId?: string }).regionId;
+    };
+    // A drop over a nested block resolves somewhere, and to the DEEPER region,
+    // not the root. A canvas ignoring depth would answer "root" here and still
+    // look correct on a flat document — which is why the fixture nests.
+    await expect.poll(region).toBeTruthy();
+    await expect.poll(region).not.toBe("root");
 
     // The control: over a ROOT-level block, the root is the right answer, so a
     // canvas that simply always answered "deepest" is not passing by accident.
@@ -328,10 +392,7 @@ test.describe("the canvas acceptance suite", () => {
       rootLevel.y + rootLevel.height / 2,
       { steps: 16 }
     );
-    const atRoot = await page.locator(HOST).getAttribute("data-nx-drop-target");
-    expect((JSON.parse(atRoot!) as { regionId?: string }).regionId).toBe(
-      "root"
-    );
+    await expect.poll(region).toBe("root");
     await page.mouse.up();
   });
 
@@ -402,17 +463,15 @@ test.describe("the canvas acceptance suite", () => {
   test(`${titleFor(COVERED.find(p => p.n === 8)!)}`, async ({ page }) => {
     await openCanvas(page);
     const host = page.locator(HOST);
-
     // The POPULATION for this property: the canvas must actually overflow, or
     // "it did not scroll" is indistinguishable from "there was nowhere to go".
-    const scrollable = await host.evaluate(
-      el => el.scrollHeight > el.clientHeight + 40
-    );
+    const before = await frameScroll(page);
+    const scrollable = before.height > before.client + 40;
     expect(
       scrollable,
       "the fixture must overflow its box for autoscroll to be askable"
     ).toBe(true);
-    expect(await host.evaluate(el => el.scrollTop)).toBe(0);
+    expect(before.top).toBe(0);
 
     const from = await boxOf(page, "hx-heading");
     const box = await host.boundingBox();
@@ -432,7 +491,7 @@ test.describe("the canvas acceptance suite", () => {
       });
       await page.waitForTimeout(80);
     }
-    const scrolled = await host.evaluate(el => el.scrollTop);
+    const scrolled = (await frameScroll(page)).top;
     await page.mouse.up();
 
     expect(
@@ -441,7 +500,7 @@ test.describe("the canvas acceptance suite", () => {
     ).toBeGreaterThan(0);
 
     // And it STOPS at the bound rather than running past it.
-    const max = await host.evaluate(el => el.scrollHeight - el.clientHeight);
+    const max = before.height - before.client;
     expect(scrolled).toBeLessThanOrEqual(max);
   });
 
@@ -452,17 +511,29 @@ test.describe("the canvas acceptance suite", () => {
     // This watches what the canvas does without changing it, which is the only
     // honest way to assert "measured once" — an engine that reported its own
     // read count could report anything.
+    // In BOTH documents: the blocks are measured in the frame's, and the
+    // chrome drawn over it in this one. Each window has its own prototype,
+    // and both count into this window's tally.
     await page.evaluate(() => {
-      const w = window as unknown as { __rectReads: number };
-      w.__rectReads = 0;
-      const original = Element.prototype.getBoundingClientRect;
-      Element.prototype.getBoundingClientRect = function patched(
+      (window as unknown as { __rectReads: number }).__rectReads = 0;
+    });
+    const spy = (view: Window & typeof globalThis, tally: Window): void => {
+      const original = view.Element.prototype.getBoundingClientRect;
+      view.Element.prototype.getBoundingClientRect = function patched(
         this: Element
       ): DOMRect {
-        w.__rectReads += 1;
+        (tally as unknown as { __rectReads: number }).__rectReads += 1;
         return original.call(this);
       };
-    });
+    };
+    await page.evaluate(`(${spy.toString()})(window, window)`);
+    const frame = await (
+      await page.locator(CANVAS_FRAME).elementHandle()
+    )?.contentFrame();
+    if (frame === null || frame === undefined) {
+      throw new Error("the canvas frame has no document");
+    }
+    await frame.evaluate(`(${spy.toString()})(window, window.parent)`);
     const reads = async () =>
       page.evaluate(
         () => (window as unknown as { __rectReads: number }).__rectReads

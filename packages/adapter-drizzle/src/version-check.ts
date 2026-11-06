@@ -106,6 +106,15 @@ export interface DialectVersionInfo {
    * dialect's own server (and always null on PostgreSQL and SQLite).
    */
   variant: DialectVariant | null;
+  /**
+   * Whether the server can key a unique index on an expression, such as `NULLIF(col, '')`.
+   * PostgreSQL and SQLite always can. MySQL can from 8.0.13 (functional key parts). The
+   * MySQL-compatible variants are reported as unable: MariaDB has no functional key parts, and
+   * the others are not tested, so a rule that needs one is refused there rather than left
+   * unenforced. Optional, so a `DialectVersionInfo` written before this was reported still is
+   * one; absent means unknown, which a caller reads as unable.
+   */
+  functionalIndexes?: boolean;
 }
 
 // What: the variants that reject `SELECT ... FOR SHARE` as a syntax error.
@@ -132,6 +141,20 @@ const SQLITE_REGEX = /^(\d+)\.(\d+)\.(\d+)/;
 interface ParsedVersion {
   major: number;
   minor: number;
+  /** Read where the dialect's minimum is not the whole answer (MySQL's functional key parts). */
+  patch?: number;
+}
+
+/** MySQL's first release with functional key parts. */
+const MYSQL_FUNCTIONAL_KEY_PARTS = { major: 8, minor: 0, patch: 13 };
+
+/** Whether a real MySQL release has functional key parts. */
+function mysqlHasFunctionalKeyParts(version: ParsedVersion): boolean {
+  const { major, minor, patch = 0 } = version;
+  const at = MYSQL_FUNCTIONAL_KEY_PARTS;
+  if (major !== at.major) return major > at.major;
+  if (minor !== at.minor) return minor > at.minor;
+  return patch >= at.patch;
 }
 
 function parsePostgres(raw: string): ParsedVersion | null {
@@ -143,7 +166,11 @@ function parsePostgres(raw: string): ParsedVersion | null {
 function parseMySQL(raw: string): ParsedVersion | null {
   const match = MYSQL_REGEX.exec(raw);
   if (!match) return null;
-  return { major: Number(match[1]), minor: Number(match[2]) };
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
 }
 
 function parseSQLite(raw: string): ParsedVersion | null {
@@ -213,7 +240,7 @@ export async function checkDialectVersion(
       `officially supported in v1 but most operations should work. ` +
       `See ${DOCS_URL}.`;
     if (options?.onWarning) options.onWarning(warning);
-    return { variant };
+    return { variant, functionalIndexes: false };
   }
 
   // Step 2/3: strict regex parse for real dialects.
@@ -253,7 +280,11 @@ export async function checkDialectVersion(
         `${parsed.major}.${parsed.minor}. See ${DOCS_URL}.`,
     });
   }
-  return { variant: null };
+  return {
+    variant: null,
+    functionalIndexes:
+      dialect !== "mysql" || mysqlHasFunctionalKeyParts(parsed),
+  };
 }
 
 // What: PG version query.

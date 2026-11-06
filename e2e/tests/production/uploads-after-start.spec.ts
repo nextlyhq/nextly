@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "../support/visible";
 
 import { dropFiles, pngBuffer } from "../support/media-files";
 

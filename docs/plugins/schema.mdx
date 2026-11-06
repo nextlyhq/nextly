@@ -201,8 +201,8 @@ Nextly does **not** auto-drop them (your data is never deleted behind your back)
 `prune` CLI to review and remove them:
 
 ```bash
-nextly prune           # dry run — lists orphaned plugin:* tables/columns/permissions
-nextly prune --force   # actually drops them (and their data + seeded permissions)
+nextly prune                      # dry run — lists orphaned plugin:* tables/columns/permissions
+nextly prune --accept-data-loss   # actually drops them (and their data + seeded permissions)
 ```
 
 `prune` only ever targets `plugin:<name>` provenance. Code-first (`code`) and
@@ -235,11 +235,24 @@ migrate` applies a plugin's modules but does not install it. Install refuses whi
 (`PLUGIN_DEPENDENCY_NOT_INSTALLED`). Uninstall refuses while another enabled plugin
 depends on it (`PLUGIN_HAS_DEPENDENTS`) or when a module has no DOWN
 (`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks for `--yes` before dropping anything
-(`PLUGIN_UNINSTALL_UNCONFIRMED`). Every refusal comes before anything runs. After an
+(`PLUGIN_UNINSTALL_UNCONFIRMED`). A full uninstall also refuses (`PLUGIN_UNINSTALL_WOULD_DROP_OTHERS`) while
+another owner has built on the plugin's schema: a column, index, foreign key or check the
+app or another plugin added to one of its tables, a key or a relationship field elsewhere
+pointing into them, or an index or key using or referencing a column the plugin added to
+someone else's table. A relationship field the plugin itself added elsewhere, by `extend` or a
+transform and at any depth inside another owner's groups or repeaters, goes with it and does
+not count. Dropping any of it would delete another owner's data, so no consent covers it. The
+refusal names each one and its owner. Remove them in their owner's code and migrate, or
+uninstall with `--keep-data`, which drops nothing. A full uninstall also deletes the
+plugin's settings (secrets included), its owner records and its migration history, so a
+later install starts from nothing. It forgets them only once its DOWNs have removed
+everything it added to other owners' tables; if one is left, it keeps them and refuses
+(`PLUGIN_UNINSTALL_IRREVERSIBLE`), and before anything runs when no applied module is left to remove it: drop what it names and run the uninstall again. Every other refusal comes before anything runs. After an
 uninstall, with or without `--keep-data`, the boot refuses the plugin while it is
 still listed (`PLUGIN_SCHEMA_UNINSTALLED`): remove it from the config, or install it
 again. An uninstall that stopped part way is finished by running it again
-(`PLUGIN_UNINSTALL_UNFINISHED` until then). See
+(`PLUGIN_UNINSTALL_UNFINISHED` until then); one run again after it finished
+reports it done and changes nothing, without running `onUninstall` again. See
 [Installing](/docs/guides/production-migrations#installing) and
 [Uninstalling](/docs/guides/production-migrations#uninstalling) for the rules.
 
@@ -413,7 +426,7 @@ generator cannot tell a rename from a drop and an add, and either loses the
 rows, so it refuses (`PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA`) and names what
 it would have dropped; write the rename, or the deliberate drop, by hand in a
 module from `--blank` (below). With no schema changes it writes nothing and
-exits with code 2, whatever `schemaVersion` says.
+exits with code 0, whatever `schemaVersion` says.
 
 A column added to a table an earlier module created has to give the rows
 already in it a value, so generation refuses one that is `NOT NULL` with no

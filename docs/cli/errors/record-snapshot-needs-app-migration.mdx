@@ -1,0 +1,27 @@
+---
+title: RECORD_SNAPSHOT_NEEDS_APP_MIGRATION
+description: "`--record-snapshot` was given to `nextly migrate:create` with `--blank` or `--plugin`, which write no snapshot of the app."
+---
+
+## Cause
+
+`--record-snapshot` was given to `nextly migrate:create` with `--blank` or `--plugin`, which write no snapshot of the app.
+
+`--record-snapshot` writes a migration that changes nothing and the app's snapshot, which records which fields are translated. A blank migration you write yourself, and a plugin's migration module, come with no snapshot of the app to record them in.
+
+## Fix
+
+Run it on its own:
+
+```bash
+npx nextly migrate:create --record-snapshot
+```
+
+## Example
+
+```text
+✗ `--record-snapshot` can't be combined with `--blank` or `--plugin`.
+  Why:  It writes the app's migration and the snapshot that records which fields are translated, and a blank migration or a plugin module has no such snapshot.
+  Next: Run `nextly migrate:create --record-snapshot` on its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/record-snapshot-needs-app-migration  (RECORD_SNAPSHOT_NEEDS_APP_MIGRATION)
+```

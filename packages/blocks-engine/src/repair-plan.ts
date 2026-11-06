@@ -3,29 +3,33 @@
  * there, for an author to see and confirm before anything changes.
  *
  * One planner, run as a list of rules, each on what the one before left: the
- * lock rule here first, and any later rule (a placement rule, say) appended
- * rather than built beside it. A rule never discards an authored block, and
- * every block it keeps keeps its id.
+ * lock rule here first, and any later rule (the placement rule in
+ * `placement-repair`, say) appended rather than built beside it. A rule never
+ * discards an authored block, and every block it keeps keeps its id.
  *
  * @module repair-plan
  */
-import { nodeLocks } from "./content-only-exposures";
 import type { BlockDocument, BlockNode } from "./document";
-import {
-  countNodes as countForest,
-  DEFAULT_LIMITS,
-  ForestTooLargeError,
-  treeDepth,
-  type DocumentLimits,
-} from "./limits";
+import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import {
   lockBreaksIn,
   type LocatedLockBreak,
   type LockSources,
 } from "./lock-breaks";
+import { surveyDocument } from "./measure-bytes";
 import { placementVerdict, type PlacementTarget } from "./nesting";
+import type { PlacementSources } from "./placement";
+import {
+  placementBreaksIn,
+  type LocatedPlacementBreak,
+} from "./placement-breaks";
 import { isPlainRecord } from "./plain-record";
-import { contentPropsOf, designChanges, withStartingDesign } from "./slot-lock";
+import {
+  contentPropsOf,
+  designChanges,
+  withStartingDesign,
+  type ActiveSlotLock,
+} from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
 import { newId } from "./tree";
 import { walkNodeForest } from "./validation";
@@ -39,16 +43,24 @@ export interface SlotPlace {
 /** One change a repair makes, as a preview names it. */
 export type RepairStep =
   | {
-      /** A block the slot may not hold, moved where no lock fixes the blocks. */
+      /**
+       * A block moved out of the slot it sits in: one a locked slot may not
+       * hold, moved where no lock fixes the blocks, or one the placement rule
+       * refuses there, moved to the nearest place it allows.
+       */
       readonly kind: "move";
+      /** Which rule moved it, so a preview says why. */
+      readonly cause: "lock" | "placement";
       readonly nodeId: string;
       readonly type: string;
       readonly from: SlotPlace;
       /**
        * Placed just after this block, in the slot it sits in or at the top:
-       * the outermost locked block for the first block a slot moves out, and
-       * the block moved before it for each after, so the steps in order give
-       * the result's order.
+       * for a lock move, the outermost locked block for the first block a slot
+       * moves out, and the block moved before it for each after; for a
+       * placement move, the ancestor it leaves, or the block an earlier
+       * placement move put just after that ancestor. So the steps in order
+       * give the result's order.
        */
       readonly after: string;
     }
@@ -58,6 +70,13 @@ export type RepairStep =
       readonly nodeId: string;
       readonly type: string;
       readonly at: SlotPlace & { readonly index: number };
+      /**
+       * Every id the added block brings, its own first, then the starting
+       * blocks inside it in depth-first order: what `result` holds there.
+       * The lock rule always names them. Optional, so a rule written before
+       * the field existed still returns a step of this type.
+       */
+      readonly nodeIds?: readonly string[];
     }
   | {
       /** The slot's blocks put back in their starting order. */
@@ -101,6 +120,13 @@ export interface RepairPlan {
    * keeps every lock; a preview says what is left when it is not.
    */
   readonly remaining: readonly LocatedLockBreak[];
+  /**
+   * The placement breaks the result still holds: a block the placement rule
+   * refuses where it sits that has nowhere nearer the top it may go, or none
+   * that keeps every lock. Empty when the result breaks no placement, and
+   * when the sources carry no nesting rules to judge one with.
+   */
+  readonly remainingPlacements: readonly LocatedPlacementBreak[];
 }
 
 /**
@@ -121,11 +147,7 @@ export function planRepair(
 ): RepairPlan {
   const limits = sources.limits ?? DEFAULT_LIMITS;
   if (!withinLimits(document, limits)) {
-    return {
-      steps: [],
-      result: document,
-      remaining: lockBreaksIn(document, sources),
-    };
+    return { steps: [], result: document, ...breaksLeftIn(document, sources) };
   }
   let result = structuredClone(document);
   const steps: RepairStep[] = [];
@@ -138,13 +160,40 @@ export function planRepair(
   // result a save would refuse is no repair: nothing is planned then, and the
   // breaks are named as before.
   if (!withinLimits(result, limits)) {
-    return {
-      steps: [],
-      result: document,
-      remaining: lockBreaksIn(document, sources),
-    };
+    return { steps: [], result: document, ...breaksLeftIn(document, sources) };
   }
-  return { steps, result, remaining: lockBreaksIn(result, sources) };
+  return { steps, result, ...breaksLeftIn(result, sources) };
+}
+
+/**
+ * The breaks a plan leaves, lock and placement, as the plan names them. Both
+ * walks are bounded by the document's node cap.
+ */
+function breaksLeftIn(
+  document: BlockDocument,
+  sources: LockSources
+): Pick<RepairPlan, "remaining" | "remainingPlacements"> {
+  const judged = placementSourcesOf(sources);
+  return {
+    remaining: lockBreaksIn(document, sources),
+    remainingPlacements:
+      judged === undefined
+        ? []
+        : placementBreaksIn(document, judged, sources.limits ?? DEFAULT_LIMITS),
+  };
+}
+
+/**
+ * The placement rule's sources, read off the lock sources a repair carries,
+ * or undefined without the nesting rules it needs. Component definitions are
+ * not among them, so a component placement's slots are unknown to it, which
+ * the rule treats as allowed rather than refused.
+ */
+export function placementSourcesOf(
+  sources: LockSources
+): PlacementSources | undefined {
+  if (sources.nesting === undefined) return undefined;
+  return { nesting: sources.nesting, definitions: sources.definitions };
 }
 
 /**
@@ -170,7 +219,9 @@ export const lockRepairRule: RepairRule = {
     // for any an outer repair uncovers, bound the work however many locked
     // slots one block declares.
     const most =
-      lockBreaksIn(current, sources).length + countNodes(current, maxNodes) + 1;
+      lockBreaksIn(current, sources).length +
+      countNodes(current, sources, maxNodes) +
+      1;
     const unreachable = new Set<string>();
     // Expanded once for the whole plan, so each added block is a copy of
     // what an insert creates, given ids of its own.
@@ -196,21 +247,26 @@ export const lockRepairRule: RepairRule = {
   },
 };
 
-/** Whether a document's forest is within its node and depth limits. */
+/**
+ * Whether a document is within its limits, measured by the survey validation
+ * judges them with: its bytes, its depth and its node count, in one bounded
+ * walk. A document the walk could not finish is past them.
+ */
 function withinLimits(
   document: BlockDocument,
   limits: DocumentLimits
 ): boolean {
-  try {
-    return (
-      countForest(document.nodes) <= limits.maxNodes &&
-      treeDepth(document.nodes) <= limits.maxDepth
-    );
-  } catch (error) {
-    // Too large for the bounded walk to measure is past the limits too.
-    if (error instanceof ForestTooLargeError) return false;
-    throw error;
-  }
+  const survey = surveyDocument(document, {
+    maxBytes: limits.maxBytes,
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
+  });
+  return (
+    survey.traversed &&
+    !survey.tooLarge &&
+    !survey.tooDeep &&
+    !survey.tooManyNodes
+  );
 }
 
 /** A break by its rule and place, to set aside one no repair reaches. */
@@ -231,7 +287,7 @@ function repairOne(
   }
 ): RepairStep[] {
   const { sources } = context;
-  const places = placesOf(document, context.maxNodes);
+  const places = placesOf(document, sources, context.maxNodes);
   const holder = places.get(found.holderId)?.node;
   if (holder === undefined) return [];
   const starting = context.starting(holder.type, found.slot);
@@ -295,7 +351,7 @@ function refillSlot(
   // Where the blocks the slot may not hold go, asked before anything changes:
   // a block the nesting rules refuse there has nowhere the lock rule can put
   // it, so this break is left to the plan's `remaining`.
-  const outermost = outermostLocked(document, places, holder, sources);
+  const outermost = outermostLocked(places, holder);
   if (!placeable(extras, outermost, sources)) return [];
   const place = { holderId: found.holderId, slot: found.slot };
   const steps: RepairStep[] = [];
@@ -310,6 +366,7 @@ function refillSlot(
       nodeId: added.id,
       type: added.type,
       at: { ...place, index: k },
+      nodeIds: idsOf(added),
     });
     return added;
   });
@@ -338,6 +395,7 @@ function refillSlot(
   for (const extra of extras) {
     moves.push({
       kind: "move",
+      cause: "lock",
       nodeId: extra.id,
       type: extra.type,
       from: place,
@@ -408,27 +466,30 @@ function sameOrder(a: readonly BlockNode[], b: readonly BlockNode[]): boolean {
 }
 
 /** Where a node sits: the list holding it, and the block and slot it is in. */
-interface Place {
+export interface Place {
   readonly node: BlockNode;
   readonly siblings: BlockNode[];
   readonly parent: BlockNode | undefined;
   readonly slot: string | undefined;
+  /** The lock of the slot it sits in, as the walk passes it down. */
+  readonly lock: ActiveSlotLock | undefined;
 }
 
 /**
  * Every node of the document by id, with where it sits, read off
- * validation's own walk (`walkNodeForest`), so the repair finds every block
- * `lockBreaksIn` reports, under the same bounds.
+ * validation's own walk (`walkNodeForest`), so a repair finds every block
+ * `lockBreaksIn` or `placementBreaksIn` reports, under the same bounds.
  */
-function placesOf(
+export function placesOf(
   document: BlockDocument,
+  sources: LockSources,
   maxNodes: number
 ): Map<string, Place> {
   const places = new Map<string, Place>();
   walkNodeForest(
     document.nodes,
     maxNodes,
-    { definitions: undefined, stored: undefined },
+    { definitions: sources.definitions, stored: undefined },
     at => {
       const node: unknown = at.node;
       if (isPlainRecord(node) && typeof node.id === "string") {
@@ -437,6 +498,7 @@ function placesOf(
           siblings: at.siblings as BlockNode[],
           parent: at.parent,
           slot: at.slot,
+          lock: at.lock,
         });
       }
       return false;
@@ -451,14 +513,14 @@ function placesOf(
  * after it changes no lock's fixed blocks.
  */
 function outermostLocked(
-  document: BlockDocument,
   places: ReadonlyMap<string, Place>,
-  holder: BlockNode,
-  sources: LockSources
+  holder: BlockNode
 ): Place {
-  const locks = nodeLocks(document.nodes, sources.definitions);
+  // The lock each place sits under is the walk's own, passed down under the
+  // configured node cap, so a holder the lock walk reports is placed against
+  // the locks that walk read.
   let at = places.get(holder.id)!;
-  while (locks.get(at.node.id)?.lock !== undefined && at.parent !== undefined) {
+  while (at.lock !== undefined && at.parent !== undefined) {
     // An ancestor past the index's cap is not reached; stop where it ends.
     const up = places.get(at.parent.id);
     if (up === undefined) break;
@@ -480,6 +542,23 @@ function withFreshIds(node: BlockNode): BlockNode {
   return copy;
 }
 
-function countNodes(document: BlockDocument, maxNodes: number): number {
-  return placesOf(document, maxNodes).size;
+function countNodes(
+  document: BlockDocument,
+  sources: LockSources,
+  maxNodes: number
+): number {
+  return placesOf(document, sources, maxNodes).size;
+}
+
+/** A block's id and every id inside it, depth-first. */
+function idsOf(node: BlockNode): string[] {
+  const ids: string[] = [];
+  const visit = (each: BlockNode) => {
+    ids.push(each.id);
+    for (const children of Object.values(each.slots ?? {})) {
+      for (const child of children) visit(child);
+    }
+  };
+  visit(node);
+  return ids;
 }

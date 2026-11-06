@@ -13,21 +13,24 @@ import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import {
-  rebuildPageBuilderUsageIndexes,
+  walkPageBuilderUsageIndexes,
   type ClassUsageRebuildReport,
 } from "./class-usage-index-rebuild";
 import {
   classUsageIndexStore,
-  usageBackfillStateStore,
+  fencedIndexStore,
   usageRebuildDocumentStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
+import type { BackfillStateStore } from "./usage-backfill";
 import type { UsageBackfillDeps } from "./usage-backfill-job";
 import {
   backfillGeneration,
   backfillScopesFor,
   type BackfillScope,
 } from "./usage-backfill-scope";
+import type { UsageBookkeeping, UsageRun } from "./usage-bookkeeping";
+import type { GroupedUsageReader } from "./usage-index";
 
 /** What the wiring must be able to ask of the host, named structurally. */
 export interface BackfillHost {
@@ -78,11 +81,61 @@ export interface BackfillHost {
   locales: () => readonly string[];
   /** The bounds the renderer draws under. */
   limits: () => DocumentLimits;
-  /** The RESOLVED slugs of the three collections a pass writes to or reads. */
+  /** The RESOLVED slugs of the two index collections a pass writes to. */
   slugs: () => {
     classIndex: string;
     componentIndex: string;
-    backfillState: string;
+  };
+  /** The run, its progress and the dirty mark, in the plugin's own tables. */
+  bookkeeping: () => UsageBookkeeping;
+  /**
+   * A grouped read of one of the plugin's own index collections that no site
+   * hook shapes, for the health marker probe.
+   */
+  ownIndexReader: (indexCollection: string) => GroupedUsageReader;
+}
+
+/** The derivation the host's index is built under, read now. */
+export function hostGeneration(host: BackfillHost): string {
+  const slugs = host.slugs();
+  return backfillGeneration({
+    limits: host.limits(),
+    classIndex: slugs.classIndex,
+    componentIndex: slugs.componentIndex,
+  });
+}
+
+/**
+ * One run's progress, as the pure backfill reads and writes it.
+ *
+ * Every write goes through the run's token, so once a newer run has started
+ * each of them is refused. The cursors and the completed set are the ones the
+ * run started with, kept current as this pass moves them.
+ */
+function runStateStore(
+  bookkeeping: UsageBookkeeping,
+  run: UsageRun
+): BackfillStateStore {
+  const done = new Set(run.done);
+  const cursors = new Map(run.cursors);
+  return {
+    completed: () => Promise.resolve(done),
+    record: async key => {
+      await bookkeeping.complete(run.token, key);
+      done.add(key);
+      cursors.delete(key);
+    },
+    cursorOf: key => cursors.get(key),
+    checkpoint: async (key, cursor) => {
+      await bookkeeping.checkpoint(run.token, key, cursor);
+      cursors.set(key, cursor);
+    },
+    fenced: write => bookkeeping.fenced(run.token, write),
+    // Nothing to clear on a clean run, and nothing written: a finished site's
+    // sweep stays a read.
+    finish: async () => {
+      if (run.dirty) await bookkeeping.finish(run.token);
+    },
   };
 }
 
@@ -187,37 +240,44 @@ export async function backfillSurvey(
 export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
   return {
     scopes: () => backfillScopes(host),
-    state: async () =>
-      usageBackfillStateStore(
-        await host.nextly(),
-        host.slugs().backfillState,
-        // Read PER PASS, like every other host accessor: a host can reconfigure
-        // the bounds while a backfill is in flight, and the pass that notices
-        // should be the next one rather than whichever one happened to build
-        // the store.
-        backfillGeneration({
-          limits: host.limits(),
-          classIndex: host.slugs().classIndex,
-          componentIndex: host.slugs().componentIndex,
-        })
-      ),
-    rebuild: async scope => {
+    state: async () => {
+      // The generation is read PER PASS, like every other host accessor: a
+      // host can reconfigure the bounds while a backfill is in flight, and the
+      // pass that notices starts a new run, which fences the old one's writes.
+      const bookkeeping = host.bookkeeping();
+      return runStateStore(
+        bookkeeping,
+        await bookkeeping.begin(hostGeneration(host))
+      );
+    },
+    rebuild: async (scope, walk) => {
       const nextly = await host.nextly();
       const slugs = host.slugs();
-      const report = await rebuildPageBuilderUsageIndexes({
-        documents: usageRebuildDocumentStore(nextly),
-        classIndex: classUsageIndexStore(nextly, slugs.classIndex),
-        componentIndex: classUsageIndexStore(nextly, slugs.componentIndex),
-        collection: scope.entity,
-        field: scope.field,
-        locale: scope.locale,
-        variant: scope.variant,
-        // The SAME bounds the renderer draws under. Deriving the index under
-        // different ones records a different document than the page serves.
-        limits: host.limits(),
-      });
+      const { report, finished } = await walkPageBuilderUsageIndexes(
+        {
+          documents: usageRebuildDocumentStore(nextly),
+          // Fenced by the run: a pass a newer run replaced writes nothing.
+          classIndex: fencedIndexStore(
+            classUsageIndexStore(nextly, slugs.classIndex),
+            write => walk.fenced(write)
+          ),
+          componentIndex: fencedIndexStore(
+            classUsageIndexStore(nextly, slugs.componentIndex),
+            write => walk.fenced(write)
+          ),
+          collection: scope.entity,
+          field: scope.field,
+          locale: scope.locale,
+          variant: scope.variant,
+          // The SAME bounds the renderer draws under. Deriving the index under
+          // different ones records a different document than the page serves.
+          limits: host.limits(),
+        },
+        walk
+      );
 
       refuseIncompleteWalk(scope, report);
+      return { finished };
     },
   };
 }

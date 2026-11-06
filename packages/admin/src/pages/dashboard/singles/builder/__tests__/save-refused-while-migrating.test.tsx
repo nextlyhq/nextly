@@ -1,0 +1,140 @@
+/**
+ * A Single's schema apply the server refuses while a migration holds the
+ * database answers 503 with its own sentence, and that sentence is what the
+ * person who pressed Save reads. The page is drawn with the real restart
+ * provider and the real toaster, and the request goes through the real
+ * fetcher, so the text asserted is what reaches the screen from the response
+ * body.
+ */
+import { Toaster } from "@nextlyhq/ui";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { render, screen, waitFor, within } from "@admin/__tests__/utils";
+import { RestartProvider } from "@admin/context/RestartContext";
+import type { ApiSingle } from "@admin/types/entities";
+
+import SingleBuilderEditPage from "../[slug]";
+
+const MIGRATION_RUNNING =
+  "A migration is running on this database, so this change was not saved. Save it again once the migration ends.";
+
+const SINGLE: ApiSingle = {
+  id: "single_home",
+  slug: "home",
+  label: "Home",
+  tableName: "single_home",
+  source: "ui",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  fields: [
+    {
+      name: "intro",
+      label: "Intro",
+      type: "text",
+      required: false,
+      unique: false,
+      index: false,
+    },
+  ],
+};
+
+vi.mock("@admin/hooks/queries", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
+  useSingleSchema: () => ({ data: SINGLE, isLoading: false, error: null }),
+  useUpdateSingle: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+const PREVIEW = {
+  hasChanges: true,
+  hasDestructiveChanges: false,
+  classification: "safe",
+  changes: { added: [], removed: [], changed: [], unchanged: [] },
+  warnings: [],
+  interactiveFields: [],
+  ddlPreview: [],
+  schemaVersion: 4,
+  renamed: [],
+};
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const requests: string[] = [];
+
+beforeEach(() => {
+  requests.length = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/singles/schema/home/preview")) {
+        return Promise.resolve(json(PREVIEW, 200));
+      }
+      if (url.endsWith("/singles/schema/home/apply")) {
+        return Promise.resolve(
+          json(
+            {
+              error: {
+                code: "SERVICE_UNAVAILABLE",
+                message: MIGRATION_RUNNING,
+                requestId: "r1",
+              },
+            },
+            503
+          )
+        );
+      }
+      return Promise.resolve(
+        json(
+          {
+            error: {
+              code: "NOT_FOUND",
+              message: `No stub for ${url}`,
+              requestId: "stub",
+            },
+          },
+          404
+        )
+      );
+    })
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("Single builder save refused while a migration runs", () => {
+  it("shows the server's sentence when the apply answers 503", async () => {
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <SingleBuilderEditPage params={{ slug: "home" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Duplicate intro" })
+    );
+    await user.click(screen.getByRole("button", { name: /^save/i }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: /apply and restart/i })
+    );
+
+    expect(await screen.findByText(MIGRATION_RUNNING)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        requests.filter(url => url.endsWith("/singles/schema/home/apply"))
+      ).toHaveLength(1)
+    );
+  });
+});

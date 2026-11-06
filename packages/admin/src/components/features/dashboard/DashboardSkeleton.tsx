@@ -140,36 +140,6 @@ export const ProjectStatsSkeleton: React.FC = () => {
 
 ProjectStatsSkeleton.displayName = "ProjectStatsSkeleton";
 
-export const OnboardingChecklistSkeleton: React.FC = () => {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <Skeleton className="h-6 w-24" />
-        <Skeleton className="h-6 w-6 rounded-sm" />
-      </CardHeader>
-      <CardContent className="pt-0">
-        <div className="space-y-1.5 mb-4">
-          <Skeleton className="h-2 w-full rounded-sm" />
-          <Skeleton className="h-3 w-28" />
-        </div>
-        <div className="divide-y divide-border">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="flex items-center justify-between py-2">
-              <div className="flex items-center gap-3">
-                <Skeleton className="h-5 w-5 rounded-sm" />
-                <Skeleton className="h-4 w-36" />
-              </div>
-              <Skeleton className="h-4 w-12" />
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-};
-
-OnboardingChecklistSkeleton.displayName = "OnboardingChecklistSkeleton";
-
 export const DashboardPageSkeleton: React.FC = () => {
   return (
     <div className="space-y-6">

@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CollectionAccessService } from "./collection-access-service";
 
 import {
+  callerIsSuperAdmin,
   callerMay,
   createMockDb,
   createMockAdapter,
@@ -36,6 +37,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     const fake = await import("../__tests__/collection-test-helpers");
     return {
       actorForUser: fake.fakeActorForUser,
+      actorForVisitor: fake.fakeActorForVisitor,
       userHoldsPermission: fake.fakeUserHoldsPermission,
       userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
@@ -51,7 +53,6 @@ beforeEach(() => {
 function buildAccessService() {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   const rbac = {
-    checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     // No code-defined access by default: a scoped API key is judged on its
@@ -72,14 +73,16 @@ function buildAccessService() {
   return { service, rbac };
 }
 
-// A caller with no super-admin role. Its `roles` deliberately omit super-admin
-// even though a real super-admin could OWN a scoped API key with these roles —
-// the bypass must key off this authorized set, not the account.
+// A caller with no super-admin role.
 const user = { id: "user-1", roles: ["editor"] };
-const superAdminUser = { id: "user-1", roles: ["super-admin"] };
-// The Direct API collection namespace forwards only `{ id, role }` (singular),
-// so the bypass must also honor a super-admin arriving via the singular slug.
-const singularRoleSuperAdmin = { id: "user-1", role: "super-admin" };
+// A caller naming the super-admin role in both shapes a caller may carry it:
+// the plural set, and the singular `role` the Direct API forwards. The names
+// grant nothing; the gate looks the caller up.
+const namedSuperAdmin = {
+  id: "user-1",
+  role: "super-admin",
+  roles: ["super-admin"],
+};
 
 describe("checkCollectionAccess — route-authorized decoupling", () => {
   it("skips the redundant RBAC gate when routeAuthorized", async () => {
@@ -134,36 +137,37 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
-  it("lets a super-admin (by authorized role) bypass the gate", async () => {
+  it("lets a super-admin, as the lookup finds them, bypass the gate", async () => {
     const { service, rbac } = buildAccessService();
     callerMay();
+    callerIsSuperAdmin();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
       operation: "update",
-      user: superAdminUser,
+      user: { id: "user-1" },
       overrideAccess: false,
       routeAuthorized: false,
     });
 
     expect(result).toBeNull();
+    // Asked of the targeted lookup, not by reading the caller's whole access.
     expect(fakeActorForUser).not.toHaveBeenCalled();
-    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
-  it("lets a super-admin identified by the singular `role` bypass the gate", async () => {
+  it("refuses a caller naming the super-admin role that the lookup does not find holding it", async () => {
     const { service, rbac } = buildAccessService();
     callerMay();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
       operation: "update",
-      user: singularRoleSuperAdmin,
+      user: namedSuperAdmin,
       overrideAccess: false,
       routeAuthorized: false,
     });
 
-    expect(result).toBeNull();
+    expect(result?.statusCode).toBe(403);
   });
 
   it("fails closed when routeAuthorized is set without an authenticated user", async () => {
@@ -179,29 +183,10 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
     // A bare routeAuthorized flag (e.g. a direct bulkUpdateByQuery caller) must
     // not skip the RBAC gate and fall through to the permission-less default.
-    expect(result?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result?.statusCode).toBe(401);
     expect(fakeActorForUser).not.toHaveBeenCalled();
     expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
-  });
-});
-
-describe("CollectionAccessService.isSuperAdmin", () => {
-  it("is true for the plural authorized role set including super-admin", () => {
-    const { service } = buildAccessService();
-    expect(service.isSuperAdmin(superAdminUser)).toBe(true);
-  });
-
-  it("is true for the singular super-admin role (Direct API shape)", () => {
-    const { service } = buildAccessService();
-    expect(service.isSuperAdmin(singularRoleSuperAdmin)).toBe(true);
-  });
-
-  it("is false for a scoped context without the super-admin role", () => {
-    const { service } = buildAccessService();
-    // Keyed on the authorized role set, not the account: an editor (even one
-    // whose account owns a super-admin key elsewhere) gets no bypass.
-    expect(service.isSuperAdmin(user)).toBe(false);
-    expect(service.isSuperAdmin(undefined)).toBe(false);
   });
 });
 
@@ -258,8 +243,8 @@ describe("checkCollectionAccess — scoped API key", () => {
   it("still enforces a code-defined access rule for a scoped key that holds the grant", async () => {
     const { service, rbac } = buildAccessService();
     // The key HAS publish-posts, but the collection's code-defined
-    // `access.publish` denies. The grant must not bypass that rule (which
-    // `rbac.checkAccess` — the path the API-key branch replaces — would have run).
+    // `access.publish` denies. The grant must not bypass that rule (which the
+    // session decision — the path the API-key branch replaces — would have run).
     rbac.getRegisteredAccess.mockReturnValue({ publish: () => false });
 
     const result = await service.checkCollectionAccess({

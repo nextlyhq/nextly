@@ -17,7 +17,9 @@ import {
   previewStateClass,
 } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
+import { overlaid } from "./overlay";
 import {
+  CHILD_GAP_CLASS,
   nodeClassName,
   nodeClassNames,
   PAGE_ROOT_CLASS,
@@ -149,7 +151,8 @@ describe("urls", () => {
     const out = css(
       doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
     );
-    expect(out).toContain('background-image: url("/a.png")');
+    // Behind the overlay's layer, which is laid over every image.
+    expect(out).toContain(`background-image: ${overlaid('url("/a.png")')}`);
   });
 
   it("leaves a keyword alone rather than going looking for a file", () => {
@@ -1774,8 +1777,8 @@ describe("element defaults", () => {
 
   it("drops an element the compiler does not emit", () => {
     // A tag reaches a SELECTOR, so the set is a closed list rather than an
-    // escaped string. `blockquote` is a plausible thing for a host to supply
-    // and is not one of the elements this library renders text as.
+    // escaped string. `table` is a plausible thing for a host to supply and
+    // is not one of the elements this library gives a default.
     //
     // The declared type already refuses it, and that is not the case being
     // covered: a compile context is a HOST's value. It arrives from JavaScript
@@ -1785,11 +1788,11 @@ describe("element defaults", () => {
       ...CTX,
       elementBases: {
         ...TYPOGRAPHY,
-        blockquote: { base: { base: { color: "#111" } } },
+        table: { base: { base: { color: "#111" } } },
       },
     } as unknown as StyleCompileContext);
 
-    expect(out).not.toContain("blockquote");
+    expect(out).not.toContain("table");
     // The control: the tags that ARE in the list still emitted, so this cannot
     // pass by dropping everything.
     expect(out).toContain(":where(h1)");
@@ -1937,5 +1940,363 @@ describe("previewing an interaction state", () => {
     } as unknown as StyleCompileContext);
     expect(out).toContain(`${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} {`);
     expect(out).not.toContain("nx-pb-state-base");
+  });
+});
+
+describe("the space a container puts between its children", () => {
+  /** A container type with a child gap, and the class the gap rule is keyed on. */
+  const GAPS = { "core/box": { $token: "space.stack" } };
+  const FLOW = `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box.${CHILD_GAP_CLASS} > * + *)`;
+
+  /** The rules (one per line) whose selector is exactly `selector`. */
+  function rulesAt(out: string, selector: string): string[] {
+    return out
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.startsWith(`${selector} {`));
+  }
+
+  it("spaces every child after the first with a top margin, weighing one class", () => {
+    const out = css(doc([node("n1")]), { ...CTX, childGaps: GAPS });
+    // Exactly one flow rule, reading the token; `> * + *` so the first child
+    // keeps no margin and nothing reaches the container's own outer edge.
+    expect(rulesAt(out, FLOW)).toEqual([
+      `${FLOW} { margin-block-start: var(--site-space-stack) }`,
+    ]);
+  });
+
+  it("uses the same token as `gap`, which only a flex or grid container reads", () => {
+    const out = css(doc([node("n1")]), { ...CTX, childGaps: GAPS });
+    expect(
+      rulesAt(out, `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box)`)
+    ).toEqual([
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box) { gap: var(--site-space-stack) }`,
+    ]);
+  });
+
+  it("writes nothing for a type the document does not use", () => {
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: { "core/section": { $token: "space.stack" } },
+    });
+    expect(out).not.toContain("> * + *");
+  });
+
+  it("comes after the block defaults, so a child's default margin reset cannot cancel it", () => {
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: GAPS,
+      blockBases: {
+        "core/box": { base: { base: { margin: { blockStart: "0" } } } },
+      },
+    });
+    const lines = out.split("\n");
+    const base = lines.findIndex(line =>
+      line.startsWith(`.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box) { margin`)
+    );
+    const flow = lines.findIndex(line => line.startsWith(`${FLOW} {`));
+    expect(base).toBeGreaterThanOrEqual(0);
+    expect(flow).toBeGreaterThan(base);
+  });
+
+  it("loses to a child's own margin, which weighs more than the gap", () => {
+    const child = node("child", {
+      base: { base: { margin: { blockStart: "40px" } } },
+    });
+    const out = css(
+      doc([node("parent", undefined, { slots: { children: [child] } })]),
+      { ...CTX, childGaps: GAPS }
+    );
+    const own = `${PAGE_ROOT_SELECTOR} .${nodeClassName("child")}`;
+    expect(rulesAt(out, own)).toEqual([`${own} { margin-block-start: 40px }`]);
+    // `.nx-pb-page.nx-pb-page .x` (0-3-0) against `.nx-pb-page :where(…)`
+    // (0-1-0): the author's value wins whatever the source order.
+    expect(own.startsWith(PAGE_ROOT_SELECTOR)).toBe(true);
+    expect(FLOW.startsWith(PAGE_ROOT_SELECTOR)).toBe(false);
+    expect(FLOW.replace(/:where\(.*\)/, "")).toBe(`.${PAGE_ROOT_CLASS} `);
+  });
+
+  it("loses to a node's own gap for a flex container", () => {
+    const out = css(
+      doc([node("n1", { base: { base: { display: "flex", gap: "3rem" } } })]),
+      { ...CTX, childGaps: GAPS }
+    );
+    const own = `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")}`;
+    expect(rulesAt(out, own)[0]).toContain("gap: 3rem");
+  });
+
+  it("drops the flow margin where an author makes the container flex or grid", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: {
+            base: { display: "flex" },
+            tablet: { display: "grid" },
+            mobile: { display: "block" },
+          },
+        }),
+      ]),
+      { ...CTX, childGaps: GAPS }
+    );
+    const children = `.${PAGE_ROOT_CLASS} :where(.${nodeClassName("n1")}.${CHILD_GAP_CLASS} > * + *)`;
+    expect(out).toContain([`${children} { margin-block-start: 0 }`].join("\n"));
+    // Each breakpoint answers for its own display: grid at tablet keeps the
+    // margin off, and block at mobile puts the flow gap back.
+    expect(out).toContain(
+      [
+        `@media (max-width: 1024px) {`,
+        `  ${children} { margin-block-start: 0 }`,
+      ].join("\n")
+    );
+    expect(out).toContain(
+      [
+        `@media (max-width: 640px) {`,
+        `  ${children} { margin-block-start: var(--site-space-stack) }`,
+      ].join("\n")
+    );
+  });
+
+  it("drops it for a named class that makes the container flex", () => {
+    const out = css(doc([node("n1", undefined, { classes: ["c1"] })]), {
+      ...CTX,
+      childGaps: GAPS,
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "row",
+          orderIndex: 0,
+          styles: { base: { base: { display: "inline-flex" } } },
+        },
+      ],
+    } as unknown as StyleCompileContext);
+    expect(out).toContain(
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box.${CHILD_GAP_CLASS}.nx-c-row > * + *) { margin-block-start: 0 }`
+    );
+  });
+
+  it("drops the flow margin where a block's own default makes it a grid", () => {
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: GAPS,
+      blockBases: { "core/box": { base: { base: { display: "grid" } } } },
+    });
+    const flow = rulesAt(out, FLOW);
+    // The gap, then the default's own display taking it back off: same
+    // selector, later rule, so a grid's children are spaced by `gap` alone.
+    expect(flow).toEqual([
+      `${FLOW} { margin-block-start: var(--site-space-stack) }`,
+      `${FLOW} { margin-block-start: 0 }`,
+    ]);
+  });
+
+  it("keeps the flow margin for a block default that stays in block flow", () => {
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: GAPS,
+      blockBases: { "core/box": { base: { base: { display: "block" } } } },
+    });
+    expect(rulesAt(out, FLOW).at(-1)).toBe(
+      `${FLOW} { margin-block-start: var(--site-space-stack) }`
+    );
+  });
+
+  it("writes a class's layout rules only for the containers that wear it", () => {
+    // 200 flex classes and 50 container types, and ONE node wearing two of the
+    // classes: the rules follow the document, not the library times the types.
+    const types = Array.from({ length: 50 }, (_, i) => `acme/c${String(i)}`);
+    const nodes = types.map(
+      (type, i) =>
+        ({
+          id: `n${String(i)}`,
+          type,
+          version: 1,
+          props: {},
+          ...(i === 0 ? { classes: ["k0", "k1"] } : {}),
+        }) as unknown as BlockNode
+    );
+    const out = css(doc(nodes), {
+      ...CTX,
+      childGaps: Object.fromEntries(types.map(type => [type, "1rem"])),
+      namedClasses: Array.from({ length: 200 }, (_, i) => ({
+        id: `k${String(i)}`,
+        slug: `row-${String(i)}`,
+        orderIndex: i,
+        styles: { base: { base: { display: "flex" } } },
+      })),
+    } as unknown as StyleCompileContext);
+    const classRules = out
+      .split("\n")
+      .filter(line => line.includes(".nx-c-") && line.includes("> * + *"));
+    expect(classRules).toEqual([
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.${CHILD_GAP_CLASS}.nx-c-row-0 > * + *) { margin-block-start: 0 }`,
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-acme--c0.${CHILD_GAP_CLASS}.nx-c-row-1 > * + *) { margin-block-start: 0 }`,
+    ]);
+  });
+
+  it("follows a display that switches to flex only on hover", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: { base: { display: "block" } },
+          hover: { base: { display: "flex" } },
+        }),
+      ]),
+      { ...CTX, childGaps: GAPS }
+    );
+    const container = `.${nodeClassName("n1")}.${CHILD_GAP_CLASS}`;
+    const lines = out.split("\n");
+    const base = lines.indexOf(
+      `.${PAGE_ROOT_CLASS} :where(${container} > * + *) { margin-block-start: var(--site-space-stack) }`
+    );
+    const hovered = lines.indexOf(
+      `.${PAGE_ROOT_CLASS} :where(${container}:where(:hover) > * + *) { margin-block-start: 0 }`
+    );
+    expect(base).toBeGreaterThanOrEqual(0);
+    // After the base rule, so while hovered the flex layout's `gap` alone
+    // spaces the children.
+    expect(hovered).toBeGreaterThan(base);
+  });
+
+  it("puts the flow gap back where a flex container turns to block on hover", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: { base: { display: "flex" } },
+          hover: { base: { display: "block" } },
+        }),
+      ]),
+      { ...CTX, childGaps: GAPS }
+    );
+    const container = `.${nodeClassName("n1")}.${CHILD_GAP_CLASS}`;
+    expect(out).toContain(
+      `.${PAGE_ROOT_CLASS} :where(${container} > * + *) { margin-block-start: 0 }`
+    );
+    expect(out).toContain(
+      `.${PAGE_ROOT_CLASS} :where(${container}:where(:hover) > * + *) { margin-block-start: var(--site-space-stack) }`
+    );
+  });
+
+  it("follows a named class's display on focus too", () => {
+    const out = css(doc([node("n1", undefined, { classes: ["c1"] })]), {
+      ...CTX,
+      childGaps: GAPS,
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "row",
+          orderIndex: 0,
+          styles: { focus: { base: { display: "grid" } } },
+        },
+      ],
+    } as unknown as StyleCompileContext);
+    expect(out).toMatch(
+      /:where\(\.nx-bt-core--box\.nx-pb-gap\.nx-c-row:where\(:focus[^)]*\) > \* \+ \*\) \{ margin-block-start: 0 \}/
+    );
+  });
+
+  it("marks every container that spaces its children, and no other block", () => {
+    const child = node("child");
+    const result = compilePageCss(
+      doc([
+        node("parent", undefined, { slots: { children: [child] } }),
+        { ...node("other"), type: "core/text" } as BlockNode,
+      ]),
+      { ...CTX, childGaps: GAPS }
+    );
+    expect(result.classes.get("parent")?.split(" ")).toContain(CHILD_GAP_CLASS);
+    expect(result.classes.get("other")?.split(" ")).not.toContain(
+      CHILD_GAP_CLASS
+    );
+    // Every rule the gap decides is keyed on the marker, so taking the marker
+    // off a container takes exactly those rules away and nothing else.
+    const gapRules = result.css
+      .split("\n")
+      .filter(line => line.includes("> * + *"));
+    expect(gapRules.length).toBeGreaterThan(0);
+    for (const rule of gapRules) {
+      expect(rule).toContain(`.${CHILD_GAP_CLASS} > * + *`);
+    }
+  });
+
+  it("writes no gap and no marker under the classic spacing model", () => {
+    const child = node("child");
+    const document = doc([
+      node("parent", undefined, {
+        slots: { children: [child] },
+        styles: { base: { base: { display: "flex" } } },
+      }),
+    ]);
+    const classic = compilePageCss(document, {
+      ...CTX,
+      childGaps: GAPS,
+      spacingMode: "classic",
+    });
+    // Byte for byte the compile that was never handed a gap: the flag takes
+    // the whole tier away, the layout-mode rules a gap decides included.
+    expect(classic.css).toBe(compilePageCss(document, CTX).css);
+    expect(classic.classes.get("parent")?.split(" ")).not.toContain(
+      CHILD_GAP_CLASS
+    );
+    // The control: the same input under the gaps model writes both.
+    const gaps = compilePageCss(document, {
+      ...CTX,
+      childGaps: GAPS,
+      spacingMode: "gaps",
+    });
+    expect(gaps.css).toContain("> * + *");
+    expect(gaps.classes.get("parent")?.split(" ")).toContain(CHILD_GAP_CLASS);
+  });
+
+  it("writes a child gap only where a margin AND a gap can take it", () => {
+    // `-1rem` is a margin a block-flow container could write, but no `gap`:
+    // written as the one and not the other, a container switched to flex or
+    // grid would lose its spacing. So neither is written, and nothing marks
+    // the container.
+    const result = compilePageCss(doc([node("n1")]), {
+      ...CTX,
+      childGaps: { "core/box": "-1rem" },
+    });
+    expect(result.css).not.toContain("> * + *");
+    expect(result.css).not.toMatch(/\bgap:/);
+    expect(result.classes.get("n1")?.split(" ")).not.toContain(CHILD_GAP_CLASS);
+    expect(
+      result.warnings.some(w => w.path.startsWith("/childGaps/core~1box"))
+    ).toBe(true);
+    // The control: a length both take is written as both.
+    const control = css(doc([node("n1")]), {
+      ...CTX,
+      childGaps: { "core/box": "1rem" },
+    });
+    expect(control).toContain("margin-block-start: 1rem");
+    expect(control).toContain("gap: 1rem");
+  });
+
+  it("writes no layout rule for a node whose type has no child gap", () => {
+    const out = css(
+      doc([node("n1", { base: { base: { display: "flex" } } })]),
+      CTX
+    );
+    expect(out).not.toContain("> * + *");
+  });
+});
+
+describe("the overlay's two properties", () => {
+  it("are reset on every element of a page that uses them, so none inherits", () => {
+    // Inherited, a section's overlay would darken every image nested in it.
+    // The reset has no specificity, so a block's own value beats it.
+    const used = css(
+      doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
+    );
+    expect(
+      used.startsWith(
+        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; --nx-pb-overlay-layer: initial; --nx-pb-overlay-position: initial; --nx-pb-overlay-size: initial; --nx-pb-overlay-repeat: initial; --nx-pb-overlay-attachment: initial; }\n"
+      )
+    ).toBe(true);
+  });
+
+  it("are not reset on a page with no background to lay one over", () => {
+    expect(
+      css(doc([node("n1", { base: { base: { color: "#fff" } } })]))
+    ).not.toContain("--nx-pb-overlay");
   });
 });

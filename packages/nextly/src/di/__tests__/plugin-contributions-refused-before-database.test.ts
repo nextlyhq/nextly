@@ -1,6 +1,6 @@
 /**
- * A plugin route or widget source the boot refuses is refused before the
- * database is touched.
+ * A plugin route the boot refuses, or a plugin carrying widget sources, is
+ * refused before the database is touched.
  *
  * Boot migrations, extension-table creation and the code-first syncs all run
  * inside `registerServices` before plugins initialise. A refusal that waited
@@ -9,9 +9,9 @@
  *
  * The adapter is the real in-memory SQLite one, created where registration
  * creates it (`createAdapterFromEnv`) and counted, and `migrateCore` records
- * that it ran. The positive controls boot the same configuration with a valid
- * contribution and watch it reach both, so the refusals below cannot be
- * satisfied by a boot that never reaches the database for some other reason.
+ * that it ran. The positive control boots the same configuration with a valid
+ * route and watches it reach both, so the refusals below cannot be satisfied
+ * by a boot that never reaches the database for some other reason.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -67,7 +67,10 @@ function routePlugin(method: string): PluginDefinition {
   } as unknown as PluginDefinition;
 }
 
-/** A plugin contributing one widget source with the id `id`. */
+/**
+ * A plugin carrying one widget source under `contributes.widgetSources`, a key
+ * the contributions type does not declare, as a JavaScript plugin can.
+ */
 function widgetSourcePlugin(id: string): PluginDefinition {
   return {
     name: "@acme/widgets",
@@ -131,21 +134,16 @@ describe("a contributed route the boot refuses", () => {
   });
 });
 
-describe("a contributed widget source the boot refuses", () => {
+describe("a plugin carrying contributes.widgetSources", () => {
   it("is refused before an adapter connects or a migration runs", async () => {
-    const error = await bootError(widgetSourcePlugin("collection:ping"));
-    expect(String((error as Error).message)).toContain(
-      "NEXTLY_WIDGET_SOURCE_RESERVED"
-    );
+    // A well-formed `plugin:` id, so the refusal is the key's and not one of
+    // the source rules. The boot reaching the database with a valid
+    // configuration is the route case above.
+    expect(await bootError(widgetSourcePlugin("plugin:ping"))).toMatchObject({
+      code: "NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL",
+      logContext: { plugin: "@acme/widgets", key: "contributes.widgetSources" },
+    });
     expect(seen.adapters).toBe(0);
     expect(seen.migrations).toBe(0);
-  });
-
-  it("lets a valid source through to the database", async () => {
-    expect(await bootError(widgetSourcePlugin("plugin:ping"))).toMatchObject({
-      code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
-    });
-    expect(seen.adapters).toBe(1);
-    expect(seen.migrations).toBe(1);
   });
 });

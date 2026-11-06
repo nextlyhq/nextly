@@ -1,12 +1,20 @@
 import {
+  checkbox,
   defineCollection,
   previewUrlFromTemplate,
+  relationship,
   text,
   type CollectionConfig,
   type PreviewViewportsDeclaration,
 } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
+
+import { LAYOUTS_SLUG } from "./layouts";
+
+/** The slug pages are stored under, before any rename a host applies. */
+export const PAGES_SLUG = "pages";
+
 /**
  * There is no page-level custom CSS field.
  *
@@ -85,6 +93,14 @@ export interface PagesCollectionOptions {
    * on.
    */
   breakpoints?: PreviewViewportsDeclaration;
+
+  /**
+   * The `layout` field's own check, run on every write that sends a value for
+   * it, hooks or not: the floor that refuses a page put on a Layout being
+   * removed (`layout-removal/page-reference-guard`). Absent, the field checks
+   * nothing beyond its relationship.
+   */
+  validateLayout?: (value: unknown) => Promise<string | true>;
 }
 
 /*
@@ -106,10 +122,10 @@ export interface PagesCollectionOptions {
 export function pagesCollection(
   options: PagesCollectionOptions = {}
 ): CollectionConfig {
-  const { previewPath, breakpoints } = options;
+  const { previewPath, breakpoints, validateLayout } = options;
 
   return defineCollection({
-    slug: "pages",
+    slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
     fields: [
       text({ name: "title", required: true }),
@@ -118,8 +134,49 @@ export function pagesCollection(
       // builder arm: a page already holding a block document keeps rendering
       // rather than reading as empty against a field with a new name.
       blocks({ name: "content", label: "Page Builder" }),
+      // The Layout this page is drawn inside. Empty means the site's default,
+      // which is the ordinary case: a page names a Layout only to differ from
+      // the rest of the site. A named Layout that is not published falls back
+      // to the default rather than drawing unpublished regions.
+      //
+      // Hidden, as is the switch below: the form keeps both values, and the
+      // page builder draws ONE Layout picker that writes them together (in the
+      // editor's Settings and on the Page Builder card), so an author makes one
+      // choice rather than reconciling two controls.
+      relationship({
+        name: "layout",
+        label: "Layout",
+        relationTo: LAYOUTS_SLUG,
+        admin: {
+          description: "Leave empty to use the site's default Layout.",
+          hidden: true,
+        },
+        // A function, so it is no part of the stored schema: adding it changes
+        // no column and needs no migration.
+        ...(validateLayout === undefined
+          ? {}
+          : { validate: (value: unknown) => validateLayout(value) }),
+      }),
+      // Draw this page with no header or footer at all. It wins over any
+      // Layout the page also names, whoever wrote either field: a landing page
+      // switched off stays switched off when someone later picks a Layout.
+      // Any writer that may update the page may set it; it changes this page
+      // only.
+      checkbox({
+        name: "noHeaderFooter",
+        label: "No header or footer",
+        defaultValue: false,
+        admin: { hidden: true },
+      }),
     ],
     status: true,
+    // Pages are what a site shows its visitors, so anyone may read one. A
+    // visitor is judged by the Public role, which boot grants a collection's
+    // read only where its rule answers `true`; with no rule, every page would
+    // answer a visitor 404. The rule needs no condition on the page's state: a
+    // visitor's read is held to published content whatever it asks for, so a
+    // draft, and the working draft of a published page, stay unseen.
+    access: { read: () => true },
     // A save keeps a working draft and publishing is its own act, as it is for
     // the components and Layouts a page is built from. Without the split, saving
     // a published page puts the edit live at once while a header it embeds waits

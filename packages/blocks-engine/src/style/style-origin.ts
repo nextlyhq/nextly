@@ -198,7 +198,12 @@ function reachesNode(entry: StyleTraceEntry, subject: StyleSubject): boolean {
     case "blockType":
       return origin.part === undefined && origin.type === subject.blockType;
     case "class":
-      return (subject.classIds ?? []).includes(origin.id);
+      return (
+        (subject.classIds ?? []).includes(origin.id) &&
+        // A look only on its own block type, as the compiler applies it.
+        (origin.blockType === undefined ||
+          origin.blockType === subject.blockType)
+      );
     // The baseline lands on the ELEMENT, so only a node rendering that element
     // is wearing it. A subject that does not state its tag gets `false`: the
     // tag lives in a block's render, and a caller that cannot say is answered

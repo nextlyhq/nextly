@@ -17,7 +17,7 @@ import { cn } from "@admin/lib/utils";
 import { FIGURE_VALUE_CLASS } from "../frame/geometry";
 
 import { CountValue } from "./count-value";
-import type { ArchetypeAccepts, ArchetypeBody } from "./types";
+import type { ArchetypeBody } from "./types";
 
 /**
  * Renders a `count` result, and REFUSES anything else.
@@ -28,23 +28,6 @@ import type { ArchetypeAccepts, ArchetypeBody } from "./types";
  * thousand, which is not wrong-looking in any way the reader could detect. A
  * mismatch is a declaration bug in the widget, and it has to look like one.
  */
-/**
- * A metric is a number from a query, so it needs one.
- *
- * Stated here rather than inferred from `query` being absent at the call site,
- * because drawability has to be ONE question. `resolve-widgets` used to ask two
- * -- "does it declare a query" and "can core draw this archetype" -- and the
- * first is wrong for an archetype that is drawn WITHOUT a query: `actions` is
- * queryless by design, so the query test declared it undrawable and handed
- * every actions widget with a component fallback to that component, bypassing
- * the host renderer and its per-item permission gating.
- */
-export const metricAccepts: ArchetypeAccepts = definition => {
-  if (definition.query) return undefined;
-  const name = definition.title ?? "This metric widget";
-  return `"${name}" is drawn from a query, and this widget declares none.`;
-};
-
 export const metricBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "count") {
     return {
@@ -66,7 +49,7 @@ export const metricBody: ArchetypeBody = (result, definition) => {
         {/* A floor is said in the number itself: the card cannot know the whole
             figure -- the rows behind it are filtered by a rule the database
             cannot apply -- and a bare number would claim it does. Drawn by the
-            shared renderer so a stats cell showing the same query cannot
+            shared renderer so core's count card showing the same count cannot
             disagree with this one about whether it is exact. */}
         <CountValue total={result.total} atLeast={result.atLeast} />
       </p>

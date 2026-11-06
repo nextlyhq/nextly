@@ -32,7 +32,7 @@ describe("refusalReasons", () => {
       documentLocked: true,
       isSubmitting: true,
     });
-    expect(reasons.save).toBe("Someone else is editing this document");
+    expect(reasons.save).toBe("This document is being edited elsewhere");
     expect(refusalFor(reasons.save ?? "")).toBe("refused");
   });
 

@@ -2,11 +2,22 @@ import {
   blockPartClassName,
   blockTypeClassName,
   renderedDomId,
+  resolveNodeBindings,
+  type BindingIssue,
+  type BindingRun,
   type BlockNode,
+  type BoundValues,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
+  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
-import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
+import {
+  Suspense,
+  cloneElement,
+  isValidElement,
+  use,
+  type ReactNode,
+} from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
 import {
@@ -74,6 +85,80 @@ const DETAIL_BY_REASON: ReadonlyMap<string, string> = new Map(
   Object.entries(UNRESOLVED_DETAIL)
 );
 
+/**
+ * What the boundary needs to hand each block its bound values, and to fill a
+ * list item's bindings while the list draws it.
+ */
+export interface BoundaryBindings {
+  /** The render's binding pass, shared with the page's. */
+  readonly run: BindingRun;
+  /** What the page's pass filled, by node id. */
+  readonly bound: ReadonlyMap<string, BoundValues>;
+  /** Where a list item's binding problems go, once each. */
+  readonly report: (issues: readonly BindingIssue[]) => void;
+}
+
+/**
+ * A node with its list item's bindings filled, and what every bound prop of
+ * it holds.
+ *
+ * The page's bindings were filled before rendering began; an item's can only
+ * be filled here, where the item being drawn is on the context. A node with no
+ * item binding comes back as it is.
+ */
+function withItemBindings(
+  node: ResolvedBlockNode,
+  context: PageContext,
+  bindings: BoundaryBindings | undefined
+): { node: ResolvedBlockNode; bound: BoundValues | undefined } {
+  if (bindings === undefined) return { node, bound: undefined };
+  const fromPage = bindings.bound.get(node.id);
+  const itemSource = context.itemSource;
+  const result = resolveNodeBindings(node, bindings.run, {
+    phase: "item",
+    ...(context.item === undefined ? {} : { item: context.item }),
+    ...(typeof itemSource === "string" && itemSource !== ""
+      ? { itemRef: { collection: itemSource } }
+      : {}),
+  });
+  if (result.issues.length > 0) bindings.report(result.issues);
+  if (result.bound === undefined) return { node, bound: fromPage };
+  return {
+    node: { ...node, props: result.props },
+    bound: { ...fromPage, ...result.bound },
+  };
+}
+
+/**
+ * The `bound` render argument, present only for a block with a bound prop, so
+ * a block with none is called exactly as it was before bindings existed.
+ */
+function boundArgument(bound: BoundValues | undefined): {
+  bound?: BoundValues;
+} {
+  return bound === undefined ? {} : { bound };
+}
+
+/**
+ * Whether a definition declares any slot.
+ *
+ * Contained for the same reason the `rendersNothing` declaration is: `slots`
+ * is a property on an object a plugin author wrote, so a getter or a proxy can
+ * throw. A declaration that throws is no declaration, never the page's error.
+ */
+function declaresAnySlot(definition: { readonly slots?: unknown }): boolean {
+  try {
+    const slots: unknown = definition.slots;
+    return (
+      typeof slots === "object" &&
+      slots !== null &&
+      Object.keys(slots).length > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** What a render needs to turn one node into output. */
 export interface BlockBoundaryProps {
   /**
@@ -97,6 +182,11 @@ export interface BlockBoundaryProps {
    */
   hostPolicy?: BlockHostPolicy;
   /**
+   * The site's spacing model, for the few blocks whose markup differs by it.
+   * Threaded down the tree beside `hostPolicy`, for the same reason.
+   */
+  spacingMode?: SpacingMode;
+  /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
    * OFF by default: a published page should not carry editor concerns, which is
@@ -109,6 +199,8 @@ export interface BlockBoundaryProps {
    * address an unstyled node and would resolve to the wrong one.
    */
   nodeAttribute?: boolean;
+  /** The page's bindings, when the page has any to fill. */
+  bindings?: BoundaryBindings;
 }
 
 /**
@@ -225,6 +317,7 @@ export function isAllowedAttribute(name: string): boolean {
 export {
   EDITOR_NAMESPACE,
   INSTANCE_ATTRIBUTE,
+  LIST_ACTION_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
@@ -1073,17 +1166,150 @@ function checkedOutput(
   return <Suspense fallback={fallback}>{withAttributes}</Suspense>;
 }
 
+/** An async block's output once settled, either way, so reading it never throws a rejection. */
+type SettledOutput =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly error: unknown };
+
 /**
- * Awaits an async block's output with the same containment the sync path has.
+ * One settled reading per promise, whichever render asks for it.
  *
- * Split into its own async component rather than making the boundary itself
- * async, because that choice decides whether a static page stays static. An
- * async component suspends, and a boundary that awaited unconditionally would
- * suspend on every block — turning a page of forty ordinary sections into forty
- * streaming chunks, each arriving after its own fallback. Only blocks that are
- * actually asynchronous pay for being asynchronous.
+ * React reads a promise with `use` and, while it is pending, renders again
+ * once it settles; a promise made afresh by that render is a new one, so the
+ * block would wait for ever. Keyed by the promise itself, so the same output
+ * always answers with the same reading.
  */
-async function AsyncBlockOutput({
+const SETTLED = new WeakMap<object, Promise<SettledOutput>>();
+
+function settledOf(pending: PromiseLike<unknown>): Promise<SettledOutput> {
+  const known = SETTLED.get(pending);
+  if (known !== undefined) return known;
+  const settled = Promise.resolve(pending).then(
+    (value): SettledOutput => ({ ok: true, value }),
+    (error: unknown): SettledOutput => ({ ok: false, error })
+  );
+  SETTLED.set(pending, settled);
+  return settled;
+}
+
+/**
+ * The outputs of async blocks the EDITOR has drawn, per page context, so
+ * drawing the page again does not run each one again.
+ *
+ * The editor renders in the browser, and renders the page again for a
+ * selection or a panel opening. Run again, an async block makes a new promise,
+ * and its boundary shows the fallback until that settles: an image or a
+ * button blinks out. Kept by everything the output is made from: the block,
+ * its class, the node as stored and the site's spacing model, so a change to
+ * any of them runs the block again, and by the bound values beside the node's
+ * props, which the output reads too. Per context, because the output also
+ * reads the context (the entry, the language, a loop's item), and a block
+ * under another context is another output.
+ *
+ * Never on a published page: a page served to visitors is rendered per
+ * request, and an output kept across requests would serve one request's data
+ * to the next.
+ */
+const EDITOR_OUTPUTS = new WeakMap<
+  PageContext,
+  Map<string, PromiseLike<unknown>>
+>();
+
+/** How many outputs a context keeps, the oldest dropped first. */
+const EDITOR_OUTPUTS_KEPT = 256;
+
+/** What an editor output is kept by, or `undefined` where it cannot be told. */
+function editorOutputKey(
+  name: string,
+  className: string,
+  node: BlockNode,
+  bound: BoundValues | undefined,
+  spacingMode: SpacingMode | undefined
+): string | undefined {
+  try {
+    // The spacing model too: a render argument a block's markup may read, so
+    // an output drawn under one model is not the block as it stands under
+    // the other.
+    return JSON.stringify([
+      name,
+      className,
+      node,
+      bound ?? null,
+      spacingMode ?? null,
+    ]);
+  } catch {
+    // A node a stringify cannot write (a cycle, a bigint) is drawn afresh.
+    return undefined;
+  }
+}
+
+function keepEditorOutput(
+  context: PageContext,
+  key: string,
+  output: PromiseLike<unknown>
+): void {
+  let kept = EDITOR_OUTPUTS.get(context);
+  if (kept === undefined) {
+    kept = new Map();
+    EDITOR_OUTPUTS.set(context, kept);
+  }
+  kept.set(key, output);
+  if (kept.size > EDITOR_OUTPUTS_KEPT) {
+    const oldest = kept.keys().next();
+    if (oldest.done !== true) kept.delete(oldest.value);
+  }
+}
+
+/** Where a block's output comes from on this render, and where it is kept. */
+interface EditorOutputSlot {
+  /** The output kept for this block as it stands, or the one `run` makes. */
+  readonly output: (run: () => unknown) => unknown;
+  /** Keep an async output just made, for the next time the page is drawn. */
+  readonly keep: (output: PromiseLike<unknown>) => void;
+}
+
+/** A published render's slot: every output is made afresh and none is kept. */
+const UNKEPT: EditorOutputSlot = {
+  output: run => run(),
+  keep: () => undefined,
+};
+
+/**
+ * A block's output slot: on an editor render, the output kept for it as it
+ * stands; on a published one, or where the block cannot be keyed, none. See
+ * `EDITOR_OUTPUTS`.
+ */
+function editorOutputSlot(
+  editorRender: boolean,
+  context: PageContext,
+  name: string,
+  className: string,
+  node: BlockNode,
+  bound: BoundValues | undefined,
+  spacingMode: SpacingMode | undefined
+): EditorOutputSlot {
+  if (!editorRender) return UNKEPT;
+  const key = editorOutputKey(name, className, node, bound, spacingMode);
+  if (key === undefined) return UNKEPT;
+  const kept = EDITOR_OUTPUTS.get(context)?.get(key);
+  return {
+    output: run => kept ?? run(),
+    keep: output => {
+      if (kept === undefined) keepEditorOutput(context, key, output);
+    },
+  };
+}
+
+/**
+ * Reads an async block's output with the same containment the sync path has.
+ *
+ * A component of its own, so only blocks that are actually asynchronous wait,
+ * and a page of forty ordinary sections is not forty streaming chunks. Read
+ * with `use` rather than by being an `async` component: the published page
+ * renders on the server, where either works, but the editor renders the same
+ * tree in the browser, where React refuses an async component.
+ */
+function AsyncBlockOutput({
   pending,
   node,
   fallback,
@@ -1105,10 +1331,11 @@ async function AsyncBlockOutput({
   nodeAttribute?: boolean;
   /** The editor address, snapshotted before the block rendered. */
   identity: EditorIdentity;
-}): Promise<ReactNode> {
-  try {
+}): ReactNode {
+  const settled = use(settledOf(pending));
+  if (settled.ok) {
     return checkedOutput(
-      await pending,
+      settled.value,
       node,
       fallback,
       isBlockRoot,
@@ -1117,17 +1344,16 @@ async function AsyncBlockOutput({
       nodeAttribute,
       identity
     );
-  } catch (error) {
-    return (
-      <BlockPlaceholder
-        reason="render-error"
-        type={node.type}
-        id={node.id}
-        editor={placeholderEditor(nodeAttribute, identity)}
-        detail={describeThrown(error)}
-      />
-    );
   }
+  return (
+    <BlockPlaceholder
+      reason="render-error"
+      type={node.type}
+      id={node.id}
+      editor={placeholderEditor(nodeAttribute, identity)}
+      detail={describeThrown(settled.error)}
+    />
+  );
 }
 
 /**
@@ -1154,13 +1380,15 @@ async function AsyncBlockOutput({
  * component needs the route's `error.tsx`.
  */
 export function BlockBoundary({
-  node,
+  node: stored,
   context,
   blocks,
   classes,
   fallback,
   hostPolicy,
+  spacingMode,
   nodeAttribute,
+  bindings,
 }: BlockBoundaryProps): ReactNode {
   /*
    * FIRST, before anything on this path can run author code.
@@ -1172,7 +1400,12 @@ export function BlockBoundary({
    * here makes the window empty rather than small, which is the only size that
    * does not need arguing about again the next time a guard moves.
    */
-  const identity = editorIdentityOf(node, nodeAttribute);
+  const identity = editorIdentityOf(stored, nodeAttribute);
+
+  // A list item's bindings, filled before anything below reads the props, so
+  // the block, its `rendersNothing` and its slots all see the filled values.
+  // Nothing on this path throws: the pass is total.
+  const { node, bound } = withItemBindings(stored, context, bindings);
 
   // A node the migration pass could not bring to its block's current version
   // keeps its last-good props, which the current render would misread. The
@@ -1261,65 +1494,75 @@ export function BlockBoundary({
     declaresNothing = false;
   }
 
-  // Contained for the same reason `declaresNothing` above is: `slots` is a
-  // property on an object a plugin author wrote, so a getter or a proxy can
-  // throw. A declaration that throws is no declaration, never the page's error.
-  let declaresSlots = false;
-  try {
-    const slots: unknown = definition.slots;
-    declaresSlots =
-      typeof slots === "object" &&
-      slots !== null &&
-      Object.keys(slots).length > 0;
-  } catch {
-    declaresSlots = false;
-  }
+  const declaresSlots = declaresAnySlot(definition);
 
   const marker = propMarker(definition, nodeAttribute === true);
 
+  // An editor render reuses the output it already has for this block as it
+  // stands: see `EDITOR_OUTPUTS`.
+  const editorSlot = editorOutputSlot(
+    nodeAttribute === true,
+    context,
+    definition.name,
+    className,
+    node,
+    bound,
+    spacingMode
+  );
+
   let output: unknown;
   try {
-    output = definition.render({
-      props: node.props,
-      node,
-      className,
-      // Built from the DEFINITION being rendered, so a block cannot name a
-      // neighbour's type and quietly wear its defaults. An undeclared name
-      // returns "" rather than a class, so a typo leaves the element unstyled
-      // instead of marked with a class no rule targets.
-      partClass: (name: string) =>
-        definition.parts !== undefined && Object.hasOwn(definition.parts, name)
-          ? blockPartClassName(definition.name, name)
-          : "",
-      ctx: context,
-      // Undefined rather than a no-op function when this is not an editor
-      // render, so `markProp?.("text")` spreads nothing and a published page
-      // is byte-identical to one rendered before this existed.
-      ...(marker === undefined ? {} : { markProp: marker }),
-      // The renderer's, not the context's. A block may replace the context its
-      // slot children see; it can neither drop nor forge this.
-      ...(hostPolicy === undefined ? {} : { hostPolicy }),
-      // Synchronous by contract: it returns an element describing what to
-      // render, not the rendered result. That is what lets a block call it
-      // inside its own JSX, and what lets a slot that is never shown never run
-      // the work inside it — creating the element costs nothing, and React only
-      // renders it if the block puts it somewhere.
-      renderSlot: (name: string, slotContext?: PageContext) => (
-        <BlockList
-          nodes={slotNodes(node, name)}
-          // A block may replace the context its slot children see — that is how
-          // a repeater sets `item` per iteration — and the policy travels
-          // beside it either way, so a nested block cannot lose the grant by
-          // being nested nor gain one by rebuilding the context.
-          context={slotContext ?? context}
-          blocks={blocks}
-          classes={classes}
-          fallback={fallback}
-          {...(hostPolicy === undefined ? {} : { hostPolicy })}
-          {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
-        />
-      ),
-    });
+    // The output already kept for this block as it stands, or a new one.
+    output = editorSlot.output(() =>
+      definition.render({
+        props: node.props,
+        node,
+        className,
+        // Built from the DEFINITION being rendered, so a block cannot name a
+        // neighbour's type and quietly wear its defaults. An undeclared name
+        // returns "" rather than a class, so a typo leaves the element unstyled
+        // instead of marked with a class no rule targets.
+        partClass: (name: string) =>
+          definition.parts !== undefined &&
+          Object.hasOwn(definition.parts, name)
+            ? blockPartClassName(definition.name, name)
+            : "",
+        ctx: context,
+        // Undefined rather than a no-op function when this is not an editor
+        // render, so `markProp?.("text")` spreads nothing and a published page
+        // is byte-identical to one rendered before this existed.
+        ...(marker === undefined ? {} : { markProp: marker }),
+        // The renderer's, not the context's. A block may replace the context its
+        // slot children see; it can neither drop nor forge this.
+        ...(hostPolicy === undefined ? {} : { hostPolicy }),
+        ...(spacingMode === undefined ? {} : { spacingMode }),
+        // The renderer's too, for the same reason: what a bound prop holds comes
+        // from the pass that filled it, never from a context a block built.
+        ...boundArgument(bound),
+        // Synchronous by contract: it returns an element describing what to
+        // render, not the rendered result. That is what lets a block call it
+        // inside its own JSX, and what lets a slot that is never shown never run
+        // the work inside it — creating the element costs nothing, and React only
+        // renders it if the block puts it somewhere.
+        renderSlot: (name: string, slotContext?: PageContext) => (
+          <BlockList
+            nodes={slotNodes(node, name)}
+            // A block may replace the context its slot children see — that is how
+            // a repeater sets `item` per iteration — and the policy travels
+            // beside it either way, so a nested block cannot lose the grant by
+            // being nested nor gain one by rebuilding the context.
+            context={slotContext ?? context}
+            blocks={blocks}
+            classes={classes}
+            fallback={fallback}
+            {...(hostPolicy === undefined ? {} : { hostPolicy })}
+            {...(spacingMode === undefined ? {} : { spacingMode })}
+            {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+            bindings={bindings}
+          />
+        ),
+      })
+    );
   } catch (error) {
     return (
       <BlockPlaceholder
@@ -1349,6 +1592,8 @@ export function BlockBoundary({
     );
   }
 
+  editorSlot.keep(output);
+
   return (
     <Suspense fallback={fallback}>
       <AsyncBlockOutput
@@ -1373,6 +1618,11 @@ export interface BlockListProps {
   fallback?: ReactNode;
   hostPolicy?: BlockHostPolicy;
   /**
+   * The site's spacing model, for the few blocks whose markup differs by it.
+   * Threaded down the tree beside `hostPolicy`, for the same reason.
+   */
+  spacingMode?: SpacingMode;
+  /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
    * OFF by default: a published page should not carry editor concerns, which is
@@ -1385,6 +1635,8 @@ export interface BlockListProps {
    * address an unstyled node and would resolve to the wrong one.
    */
   nodeAttribute?: boolean;
+  /** The page's bindings, when the page has any to fill. */
+  bindings?: BoundaryBindings;
 }
 
 /**
@@ -1401,7 +1653,9 @@ export function BlockList({
   classes,
   fallback,
   hostPolicy,
+  spacingMode,
   nodeAttribute,
+  bindings,
 }: BlockListProps): ReactNode {
   return nodes
     .filter(isUnconditional)
@@ -1414,7 +1668,9 @@ export function BlockList({
         classes={classes}
         fallback={fallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(spacingMode === undefined ? {} : { spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(bindings === undefined ? {} : { bindings })}
       />
     ));
 }

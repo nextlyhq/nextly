@@ -74,10 +74,14 @@ export async function mayReadDeletedDocument(
   if (hooksMayNarrowReads(owner)) return false;
   const rule = getRBACService()?.getRegisteredAccess(slug)?.read;
   if (typeof rule === "function") {
-    // The session path only: a super-admin's key is judged by its own scope,
-    // which the rule limited like any other.
+    // Only super-admin authority passes a rule that needs the row: a
+    // super-admin's session, or a full-access key carrying its maker's
+    // authority, as authentication found it. Any other key is judged by its
+    // own scope, which the rule limits like any other.
+    if (caller.authMethod === "api-key") {
+      return caller.keyHoldsSuperAdmin === true;
+    }
     return (
-      caller.authMethod === "session" &&
       caller.userId !== undefined &&
       caller.userId !== null &&
       (await isSuperAdmin(caller.userId))

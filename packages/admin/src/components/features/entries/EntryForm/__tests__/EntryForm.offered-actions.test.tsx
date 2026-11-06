@@ -11,7 +11,7 @@
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -64,6 +64,14 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
+// A request judged in other languages, held as `<request>:<slug>`. The
+// module's other hooks stay real: the history panel they serve is not what
+// these cases are about.
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: (slug: string, request: string) =>
+    canFor(`${request}:${slug}`),
+}));
 
 import { EntryForm } from "../EntryForm";
 
@@ -90,9 +98,11 @@ const entry = { id: "c1", title: "News" } as never;
 
 /** The `data-action` of every item in the editor's "More actions" menu. */
 async function menuActions(): Promise<string[]> {
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "More actions" }));
+  // The editor draws no menu with nothing in it, which offers no action.
+  const more = await screen.findByTestId("document-bar");
+  const trigger = within(more).queryByRole("button", { name: "More actions" });
+  if (trigger === null) return [];
+  await userEvent.setup().click(trigger);
   const items = await screen.findAllByRole("menuitem");
   return items.map(item => item.getAttribute("data-action") ?? "");
 }
@@ -133,6 +143,112 @@ describe("the editor's Delete", () => {
   });
 });
 
+describe("an action the page contributes", () => {
+  it("is told the document as the form holds it, an unsaved title included, and that it is unsaved", async () => {
+    // The page sits above the form, so the saved entry is all it has; the
+    // title being typed lives only in the form until it is saved.
+    holding("read-categories", "update-categories");
+    const chosen = vi.fn();
+    render(
+      <EntryForm
+        collection={categories}
+        entry={entry}
+        mode="edit"
+        documentActions={[
+          {
+            action: {
+              id: "add-to-release",
+              label: "Add to release",
+              placement: "menu",
+              group: "document",
+            },
+            binding: { onSelect: chosen },
+          },
+        ]}
+      />,
+      { wrapper: Providers }
+    );
+    const title = screen.getByRole("textbox", { name: /title/i });
+    await userEvent.clear(title);
+    await userEvent.type(title, "Edited headline");
+
+    await userEvent.click(
+      within(await screen.findByTestId("document-bar")).getByRole("button", {
+        name: "More actions",
+      })
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Add to release" })
+    );
+
+    expect(chosen).toHaveBeenCalledWith({
+      values: expect.objectContaining({ title: "Edited headline" }),
+      dirty: true,
+    });
+  });
+});
+
+describe("the other ways to publish", () => {
+  const lifecycle = { ...(categories as object), status: true } as never;
+  const ways = [
+    {
+      action: {
+        id: "schedule-publish",
+        label: "Schedule publish…",
+        placement: "publish-menu" as const,
+      },
+      binding: { onSelect: vi.fn() },
+    },
+    {
+      action: {
+        id: "add-to-release",
+        label: "Add to release…",
+        placement: "publish-menu" as const,
+      },
+      binding: { onSelect: vi.fn() },
+    },
+  ];
+  const editing = (status: "draft" | "published") =>
+    render(
+      <EntryForm
+        collection={lifecycle}
+        entry={{ id: "c1", title: "News", status } as never}
+        mode="edit"
+        documentActions={ways}
+      />,
+      { wrapper: Providers }
+    );
+
+  it("hang off Publish on a draft, as the Publish split", async () => {
+    holding("read-categories", "update-categories", "publish-categories");
+    editing("draft");
+    const bar = await screen.findByTestId("document-bar");
+
+    expect(within(bar).getByRole("button", { name: "Publish" })).toBeTruthy();
+    expect(
+      within(bar).getByRole("button", { name: "More ways to publish" })
+    ).toBeTruthy();
+  });
+
+  it("hang off Save on a clean published document, so it can still be scheduled to come down", async () => {
+    // Nothing to publish, so the arrow holds the ways to do it later, and
+    // More keeps its own rows.
+    holding("read-categories", "update-categories", "publish-categories");
+    editing("published");
+    const bar = await screen.findByTestId("document-bar");
+
+    expect(
+      within(bar).getByRole("button", { name: /^save changes$/i })
+    ).toBeTruthy();
+    expect(
+      within(bar).getByRole("button", { name: "More ways to publish" })
+    ).toBeTruthy();
+    expect(await menuActions()).not.toEqual(
+      expect.arrayContaining(["schedule-publish"])
+    );
+  });
+});
+
 describe("a quick-edit modal's Save", () => {
   it("is not offered without the update permission, and a submit sends nothing", async () => {
     holding("read-categories");
@@ -157,8 +273,25 @@ describe("a quick-edit modal's Save", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it("is offered with the update permission", () => {
+  it("is not offered to a role that may update only in another language than the default", () => {
+    // The modal sends no language, so the server writes the default one.
     holding("read-categories", "update-categories");
+    render(
+      <EntryForm collection={categories} entry={entry} mode="edit" embedded />,
+      { wrapper: Providers }
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /save changes/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("is offered with the update permission in the default language", () => {
+    holding(
+      "read-categories",
+      "update-categories",
+      "updateInDefaultLanguage:categories"
+    );
     render(
       <EntryForm collection={categories} entry={entry} mode="edit" embedded />,
       { wrapper: Providers }

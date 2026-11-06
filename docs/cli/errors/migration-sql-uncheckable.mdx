@@ -1,0 +1,24 @@
+---
+title: MIGRATION_SQL_UNCHECKABLE
+description: "A migration's SQL is in a form the schema guard cannot read, so it cannot check the migration leaves other owners' tables alone."
+---
+
+## Cause
+
+A migration's SQL is in a form the schema guard cannot read, so it cannot check the migration leaves other owners' tables alone.
+
+Before a migration runs, its statements are read to find every table, column and index they drop or change. A statement could not be read that far, so whether it takes something another owner holds is unknown, and the migration is refused. Nothing was applied.
+
+## Fix
+
+- Rewrite the statement as the Next line says, as plain SQL on the table it names.
+- Run it with `--verbose` to see the statement the guard could not read.
+
+## Example
+
+```text
+✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
+  Why:  A statement in `@acme/seo/20261020_120000_add_redirects` could not be read: unterminated block comment. It has been refused.
+  Next: Rewrite that statement as plain SQL the guard can read; `--verbose` shows the statement.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-sql-uncheckable  (MIGRATION_SQL_UNCHECKABLE)
+```

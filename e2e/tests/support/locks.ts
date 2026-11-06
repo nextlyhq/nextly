@@ -39,6 +39,17 @@ export const LOCK = {
    */
   homepage: "homepage",
   /**
+   * The `site-style` single: the site's tokens, classes, fonts and
+   * breakpoints. Its writers change what every page and every editor's device
+   * buttons show; its readers assert the devices or a stored token.
+   */
+  siteStyle: "site-style",
+  /**
+   * The site's default Layout, which every page naming none is drawn inside.
+   * Its writers make a Layout the default and put the previous one back.
+   */
+  siteDefaultLayout: "site-default-layout",
+  /**
    * The schema: collections created at runtime, which also write migration
    * files into the playground, and readers of the whole collection set.
    */

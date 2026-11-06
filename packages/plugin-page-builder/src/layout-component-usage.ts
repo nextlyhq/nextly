@@ -203,6 +203,22 @@ function referencesIn(
 }
 
 /**
+ * Every component a stored Layout's areas name, read with the same row reader
+ * the delete guard matches with, so the two cannot disagree about what a
+ * Layout names. A shape this cannot read names nothing.
+ */
+export function componentsNamedBy(item: unknown): string[] {
+  if (!isRecord(item) || !Array.isArray(item.areas)) return [];
+  const named: string[] = [];
+  for (const row of item.areas) {
+    if (!isRecord(row)) continue;
+    const id = componentIdOf(row.component);
+    if (id !== undefined && id !== "") named.push(id);
+  }
+  return named;
+}
+
+/**
  * How a Layout is named in a refusal, or null when it cannot be.
  *
  * A Layout whose id cannot be read cannot be NAMED, and a refusal an author

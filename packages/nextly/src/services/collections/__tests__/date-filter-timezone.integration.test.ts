@@ -66,7 +66,11 @@ async function writeAt(zone: string): Promise<void> {
 async function countAt(zone: string, where: WhereFilter): Promise<number> {
   if (!connection) throw new Error("no connection");
   await writeAt(zone);
-  const condition = buildDrizzleCondition(buildWhereClause(where), table);
+  const condition = buildDrizzleCondition(
+    buildWhereClause(where),
+    table,
+    "mysql"
+  );
   if (!condition) throw new Error("the filter compiled to no condition");
   const { sql: text, params } = new MySqlDialect().sqlToQuery(condition);
   const [rows] = await connection.query(

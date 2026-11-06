@@ -11,11 +11,29 @@
  */
 export interface CollectionCapabilities {
   canRead: boolean;
+  /**
+   * Whether the user may create an entry as the admin sends a create: with no
+   * language, so in the default one.
+   */
   canCreate: boolean;
   canUpdate: boolean;
   canDelete: boolean;
   canPublish: boolean;
   canUnpublish: boolean;
+  /** A read with every language's translation state: a localized list or a document's overview. */
+  canReadTranslations: boolean;
+  /** The version history of every language, unfiltered. */
+  canReadHistory: boolean;
+  /** Publishing every language at once. */
+  canPublishEveryLanguage: boolean;
+  /** An update sent with no language, as the quick-edit modal sends one. */
+  canUpdateInDefaultLanguage: boolean;
+  /**
+   * Copying a published entry. The server refuses a copy of a draft that was
+   * never published, whoever asks, so a surface offering a copy offers it
+   * only on an entry with a published version. Never true of a Single.
+   */
+  canDuplicate: boolean;
 }
 
 /**
@@ -37,7 +55,10 @@ export interface AdminCapabilities {
   canViewRoles: boolean;
   /** Has 'read-media' */
   canViewMedia: boolean;
-  /** Has 'manage-settings' */
+  /**
+   * Holds a permission that reaches a settings destination, 'read-settings'
+   * among them
+   */
   canViewSettings: boolean;
   /** Has 'read-webhooks' or the 'update-webhooks' management umbrella */
   canViewWebhooks: boolean;
@@ -61,13 +82,16 @@ export interface AdminCapabilities {
   canManageUsers: boolean;
   /** Has 'create-roles' or 'update-roles' */
   canManageRoles: boolean;
-  /** Has 'manage-media' */
+  /**
+   * Holds create, update or delete on media. On media, settings and the Email
+   * hub, a `manage-` permission counts as each of the plain ones.
+   */
   canManageMedia: boolean;
-  /** Has 'manage-settings' */
+  /** Holds create, update or delete on settings */
   canManageSettings: boolean;
-  /** Has 'manage-email-providers' */
+  /** Holds create, update or delete on email providers */
   canManageEmailProviders: boolean;
-  /** Has 'manage-email-templates' */
+  /** Holds create, update or delete on email templates */
   canManageEmailTemplates: boolean;
 }
 
@@ -82,6 +106,19 @@ export interface EntityCapabilitiesAnswer {
   create?: boolean;
   /** Collections only. */
   delete?: boolean;
+  /**
+   * The requests judged in languages other than the one asked about, each as
+   * the server judges it. Absent from a server that predates them, where the
+   * action's own cell stands in.
+   */
+  readTranslations?: boolean;
+  readHistory?: boolean;
+  publishEveryLanguage?: boolean;
+  /** Collections only. */
+  createInDefaultLanguage?: boolean;
+  updateInDefaultLanguage?: boolean;
+  /** Collections only. */
+  duplicate?: boolean;
 }
 
 /**
@@ -105,4 +142,9 @@ export interface UserPermissionsResponse {
   isSuperAdmin: boolean;
   /** User's role slugs (e.g., ['super-admin', 'editor']) */
   roles: string[];
+  /**
+   * When this list stops holding, in epoch ms, or null: the soonest end of a
+   * role assignment it was read under. Absent from a server that predates it.
+   */
+  validUntil?: number | null;
 }

@@ -1,18 +1,18 @@
 service none visitor
   read:A
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service none user-with
   read:A
   update:A
   publish:A
   unpublish:A
 service none user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service none user-partial
   read:A
   update:403 You can't edit home.
@@ -29,10 +29,10 @@ service none super-admin-inherited
   publish:A
   unpublish:A
 service none super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service none super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -44,10 +44,10 @@ service none key-with
   publish:A
   unpublish:A
 service none key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service none key-partial
   read:A
   update:403 You can't edit home.
@@ -80,19 +80,19 @@ service none key-in-the-request
   unpublish:403 You can't unpublish home.
 service true visitor
   read:A
-  update:A
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service true user-with
   read:A
   update:A
   publish:A
   unpublish:A
 service true user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service true user-partial
   read:A
   update:403 You can't edit home.
@@ -109,10 +109,10 @@ service true super-admin-inherited
   publish:A
   unpublish:A
 service true super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service true super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -124,10 +124,10 @@ service true key-with
   publish:A
   unpublish:A
 service true key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service true key-partial
   read:A
   update:403 You can't edit home.
@@ -160,24 +160,24 @@ service true key-in-the-request
   unpublish:403 You can't unpublish home.
 service false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service false user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false super-admin
   read:A
   update:A
@@ -189,70 +189,70 @@ service false super-admin-inherited
   publish:A
   unpublish:A
 service false super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-true visitor
   read:A
-  update:A
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-true user-with
   read:A
   update:A
   publish:A
   unpublish:A
 service returns-true user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-true user-partial
   read:A
   update:403 You can't edit home.
@@ -269,10 +269,10 @@ service returns-true super-admin-inherited
   publish:A
   unpublish:A
 service returns-true super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-true super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -284,10 +284,10 @@ service returns-true key-with
   publish:A
   unpublish:A
 service returns-true key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-true key-partial
   read:A
   update:403 You can't edit home.
@@ -320,24 +320,24 @@ service returns-true key-in-the-request
   unpublish:403 You can't unpublish home.
 service returns-false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-false user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false super-admin
   read:A
   update:A
@@ -349,75 +349,75 @@ service returns-false super-admin-inherited
   publish:A
   unpublish:A
 service returns-false super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-null user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null super-admin
   read:A
   update:A
@@ -429,75 +429,75 @@ service returns-null super-admin-inherited
   publish:A
   unpublish:A
 service returns-null super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-undefined user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined super-admin
   read:A
   update:A
@@ -509,75 +509,75 @@ service returns-undefined super-admin-inherited
   publish:A
   unpublish:A
 service returns-undefined super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-truthy user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy super-admin
   read:A
   update:A
@@ -589,75 +589,75 @@ service returns-truthy super-admin-inherited
   publish:A
   unpublish:A
 service returns-truthy super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service throws user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws super-admin
   read:A
   update:A
@@ -669,70 +669,70 @@ service throws super-admin-inherited
   publish:A
   unpublish:A
 service throws super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service async-true visitor
   read:A
-  update:A
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service async-true user-with
   read:A
   update:A
   publish:A
   unpublish:A
 service async-true user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service async-true user-partial
   read:A
   update:403 You can't edit home.
@@ -749,10 +749,10 @@ service async-true super-admin-inherited
   publish:A
   unpublish:A
 service async-true super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service async-true super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -764,10 +764,10 @@ service async-true key-with
   publish:A
   unpublish:A
 service async-true key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service async-true key-partial
   read:A
   update:403 You can't edit home.
@@ -800,24 +800,24 @@ service async-true key-in-the-request
   unpublish:403 You can't unpublish home.
 service role-name visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service role-name user-with
   read:A
   update:A
   publish:A
   unpublish:A
 service role-name user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service role-name user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service role-name super-admin
   read:A
   update:A
@@ -829,10 +829,10 @@ service role-name super-admin-inherited
   publish:A
   unpublish:A
 service role-name super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service role-name super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -844,10 +844,10 @@ service role-name key-with
   publish:A
   unpublish:A
 service role-name key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service role-name key-partial
   read:A
   update:403 You can't edit home.
@@ -859,20 +859,20 @@ service role-name key-slugs-only
   publish:A
   unpublish:A
 service role-name key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service role-name key-custom-slugs
   read:A
   update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service role-name key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service role-name key-in-the-request
   read:A
   update:403 You can't edit home.
@@ -880,24 +880,24 @@ service role-name key-in-the-request
   unpublish:403 You can't unpublish home.
 service permission-spelling visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service permission-spelling user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling super-admin
   read:A
   update:A
@@ -909,70 +909,70 @@ service permission-spelling super-admin-inherited
   publish:A
   unpublish:A
 service permission-spelling super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service signed-in visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service signed-in user-with
   read:A
   update:A
   publish:A
   unpublish:A
 service signed-in user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service signed-in user-partial
   read:A
   update:403 You can't edit home.
@@ -989,10 +989,10 @@ service signed-in super-admin-inherited
   publish:A
   unpublish:A
 service signed-in super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service signed-in super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -1004,10 +1004,10 @@ service signed-in key-with
   publish:A
   unpublish:A
 service signed-in key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service signed-in key-partial
   read:A
   update:403 You can't edit home.
@@ -1040,9 +1040,9 @@ service signed-in key-in-the-request
   unpublish:403 You can't unpublish home.
 no-service none visitor
   read:A
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 no-service none user-with
   read:A
   update:A
@@ -1084,10 +1084,10 @@ no-service none key-with
   publish:A
   unpublish:A
 no-service none key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 no-service none key-partial
   read:A
   update:403 You can't edit home.
@@ -1120,9 +1120,9 @@ no-service none key-in-the-request
   unpublish:403 You can't unpublish home.
 route-authorized none visitor
   read:A
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized none user-with
   read:A
   update:A
@@ -1200,9 +1200,9 @@ route-authorized none key-in-the-request
   unpublish:A
 route-authorized true visitor
   read:A
-  update:A
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized true user-with
   read:A
   update:A
@@ -1280,9 +1280,9 @@ route-authorized true key-in-the-request
   unpublish:A
 route-authorized false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized false user-with
   read:A
   update:A
@@ -1360,9 +1360,9 @@ route-authorized false key-in-the-request
   unpublish:A
 route-authorized returns-true visitor
   read:A
-  update:A
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-true user-with
   read:A
   update:A
@@ -1440,9 +1440,9 @@ route-authorized returns-true key-in-the-request
   unpublish:A
 route-authorized returns-false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-false user-with
   read:A
   update:A
@@ -1520,9 +1520,9 @@ route-authorized returns-false key-in-the-request
   unpublish:A
 route-authorized returns-null visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-null user-with
   read:A
   update:A
@@ -1600,9 +1600,9 @@ route-authorized returns-null key-in-the-request
   unpublish:A
 route-authorized returns-undefined visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-undefined user-with
   read:A
   update:A
@@ -1680,9 +1680,9 @@ route-authorized returns-undefined key-in-the-request
   unpublish:A
 route-authorized returns-truthy visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-truthy user-with
   read:A
   update:A
@@ -1760,9 +1760,9 @@ route-authorized returns-truthy key-in-the-request
   unpublish:A
 route-authorized throws visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized throws user-with
   read:A
   update:A
@@ -1840,9 +1840,9 @@ route-authorized throws key-in-the-request
   unpublish:A
 route-authorized async-true visitor
   read:A
-  update:A
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized async-true user-with
   read:A
   update:A
@@ -1920,9 +1920,9 @@ route-authorized async-true key-in-the-request
   unpublish:A
 route-authorized role-name visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized role-name user-with
   read:A
   update:A
@@ -2000,9 +2000,9 @@ route-authorized role-name key-in-the-request
   unpublish:A
 route-authorized permission-spelling visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized permission-spelling user-with
   read:A
   update:A
@@ -2080,9 +2080,9 @@ route-authorized permission-spelling key-in-the-request
   unpublish:A
 route-authorized signed-in visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  update:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized signed-in user-with
   read:A
   update:A

@@ -12,10 +12,14 @@
 import type { BaseSyntheticEvent } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import { recordingsSettled } from "@admin/hooks/useSnapshotAutosave";
+
 import { adoptStoredValues } from "./adopt-stored";
 import {
   submitFailed,
+  submitHeld,
   submitInvalid,
+  submitMoved,
   type SubmitOutcome,
 } from "./submit-outcome";
 
@@ -39,8 +43,25 @@ export async function submitDocument(args: {
   write: (payload: Record<string, unknown>) => Promise<DocumentWrite>;
   /** Hears a failed write, after it is logged. */
   onFailure?: (error: unknown) => void;
+  /**
+   * Whether the document may still be written, asked once validation is done
+   * and immediately before the write; a no stores nothing.
+   */
+  mayWrite?: () => boolean;
+  /**
+   * Whether the editor still shows the document and language the submission
+   * started in, asked with `mayWrite`: after a move the form holds another's
+   * values, so a no stores nothing.
+   */
+  stillShown?: () => boolean;
+  /**
+   * The document's recordings, as `documentRecordingKey` spells it, which the
+   * write waits for: see `recordingsSettled`. Null where there are none, as on
+   * a document not created yet.
+   */
+  recordingsFor: string | null;
 }): Promise<SubmitOutcome> {
-  const { form, toPayload, write, onFailure } = args;
+  const { form, toPayload, write, onFailure, mayWrite, stillShown } = args;
   // The values this save is made from, as the form held them, before
   // validation's transforms: what is compared afterwards to find what the
   // author typed while the save was in flight.
@@ -50,13 +71,31 @@ export async function submitDocument(args: {
   let outcome: SubmitOutcome = submitInvalid;
   await form.handleSubmit(
     async validated => {
+      // A recovery point already on its way lands first, so this save, which
+      // deletes it, comes after it: see `recordingsSettled`.
+      await recordingsSettled(args.recordingsFor);
+      // Validation awaits, and the document can change hands meanwhile:
+      // asked with nothing awaited before the write.
+      if (mayWrite && !mayWrite()) {
+        outcome = submitHeld;
+        return;
+      }
+      if (stillShown && !stillShown()) {
+        outcome = submitMoved;
+        return;
+      }
       const payload = toPayload(validated);
       try {
         const written = await write(payload);
-        if (written.stored === null) form.reset(payload);
-        // What the server stored becomes the form's starting point, keeping
-        // anything typed while the save was in flight.
-        else adoptStoredValues(form, written.stored, submitted);
+        // Only where the editor still shows what was written: after a move
+        // the form holds another document's or language's values, which
+        // these would replace for its next Save to write.
+        if (!stillShown || stillShown()) {
+          if (written.stored === null) form.reset(payload);
+          // What the server stored becomes the form's starting point,
+          // keeping anything typed while the save was in flight.
+          else adoptStoredValues(form, written.stored, submitted);
+        }
         outcome = { ok: true, item: written.item };
       } catch (error) {
         console.error("Form submission error:", error);

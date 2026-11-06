@@ -47,8 +47,8 @@ import { registeredSlugsOfKind } from "./registered-content-slugs";
  * - a non-empty list — exactly the resources of `kind` this caller may read.
  *
  * A super admin is not a case here. The shared decision already composes the
- * bypass -- `canReadEntity` delegates a session whole to `checkAccess`, which
- * admits a super admin before it consults a rule or a grant -- so a session
+ * bypass -- `canReadEntity` hands a session whole to the access decision,
+ * which admits a super admin before it consults a rule or a grant -- so a session
  * super admin is answered with every registered slug by the same machinery
  * that answers everyone else. Deciding the bypass here as well was a second
  * super-admin path for the list endpoints alone, one the dashboard scope and

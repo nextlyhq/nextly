@@ -41,12 +41,21 @@ import { describeValue } from "./issue-text";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import {
   placementVerdict,
-  type NestingRefusal,
   type NestingSource,
   type PlacementTarget,
 } from "./nesting";
+import {
+  placementTracker,
+  type PlacementRefusal,
+  type PlacementRefused,
+  type PlacementTracker,
+  type TrackedPlacement,
+} from "./placement";
+import { placementBreaksIn } from "./placement-breaks";
+import { blockLabelFrom, placementRefusalMessage } from "./placement-wording";
 import { isPlainRecord } from "./plain-record";
 import type {
+  ComponentLookup,
   ResolvedBlockNode,
   ResolvedComposition,
 } from "./resolve-instances";
@@ -65,11 +74,11 @@ import {
   type StoredForms,
 } from "./stored-counterparts";
 import { walkNodes, type SlotDefaultSource } from "./tree";
-import { isNodeType } from "./validation";
+import { isNodeType, storedBreakSignatures } from "./validation";
 
 /** Which rule a composition breaks. */
 export type CompositionFaultCode =
-  | NestingRefusal
+  | PlacementRefusal
   /** The composed tree is deeper than `limits.maxDepth`, counted from its root. */
   | "depth-exceeded"
   /** The resolver refused an instance for nesting components too deeply. */
@@ -95,6 +104,12 @@ export interface CompositionFault {
    * edit adds from one the page already had. Absent for every other rule.
    */
   readonly lock?: ComposedLockBreak;
+  /**
+   * For a placement break, the break's identity (`TrackedPlacement`): two
+   * breaks of one code under one placement are told apart by it, so a save
+   * cannot trade an old break for a new one of the same kind.
+   */
+  readonly signature?: string;
 }
 
 /** A lock break in the composed tree: the block whose slot is locked, and how. */
@@ -137,6 +152,22 @@ export interface CompositionFaultOptions {
    * against its starting children alone.
    */
   baselines?: readonly unknown[];
+  /**
+   * The host's stored forms, composed: a placement break one of them already
+   * composes to is kept rather than reported. The stored forms ALONE, never
+   * the host as its components hold it, which is the page being judged and
+   * would make every break it composes to read as old. Absent, every
+   * placement break composition is part of is reported.
+   */
+  storedCompositions?: readonly unknown[];
+  /**
+   * The component definitions the composition was resolved with, so what the
+   * page puts in a placement's slots is judged against the slots it exposes.
+   * Absent, those slots are not judged here.
+   */
+  components?: ComponentLookup;
+  /** The host's stored forms, raw, for the old-or-new rule on those slots. */
+  storedHosts?: readonly unknown[];
 }
 
 /**
@@ -165,6 +196,8 @@ interface Visit {
   readonly lock: ActiveSlotLock | undefined;
   /** The node as the baselines hold it in this place. */
   readonly counterparts: readonly Readonly<Record<string, unknown>>[];
+  /** The node's container, or undefined at the top level. */
+  readonly parent: unknown;
 }
 
 /** What every visit reports into, built once per judgement. */
@@ -176,6 +209,19 @@ interface Judge {
     | ((type: string, slot: string) => readonly BlockNode[])
     | undefined;
   readonly baselines: StoredForms | undefined;
+  /**
+   * The placement rule over the composed tree, when the definitions are in
+   * hand, with the breaks the baselines already compose to: a host whose
+   * stored page already composed to a break is kept, as validation keeps one.
+   */
+  readonly placement:
+    | {
+        readonly tracker: PlacementTracker;
+        readonly old: ReadonlySet<string>;
+        /** Ids of nodes a definition put here, as the walk reaches them. */
+        readonly composed: Set<string>;
+      }
+    | undefined;
   report(code: CompositionFaultCode, instanceId: string, detail: Detail): void;
 }
 
@@ -208,13 +254,28 @@ export function compositionFaults(
       definitions === undefined
         ? undefined
         : storedFormsOf(options.baselines, limits.maxNodes),
+    placement:
+      definitions === undefined || options.nesting === undefined
+        ? undefined
+        : {
+            tracker: placementTracker({
+              nesting: options.nesting,
+              definitions,
+            }),
+            old: storedBreakSignatures(
+              options.storedCompositions,
+              { nesting: options.nesting, definitions },
+              limits.maxNodes
+            ),
+            composed: new Set(),
+          },
     report: (code, instanceId, detail) => {
       // One per placement and rule: a definition breaking a rule at forty nodes
       // is one thing for its author to fix, and forty messages spend the field's
       // issue allowance on the same repair. A lock is per SLOT, though: two
       // locked slots broken are two repairs, and one hidden behind the other
       // would let a save that breaks a second pass as no worse.
-      const key = `${code}\u0000${instanceId}\u0000${detail.holder ?? ""}\u0000${detail.slot ?? ""}`;
+      const key = `${code}\u0000${instanceId}\u0000${detail.holder ?? ""}\u0000${detail.slot ?? ""}\u0000${detail.nodeId ?? ""}`;
       if (reported.has(key)) return;
       reported.add(key);
       const componentId = placed.get(instanceId) ?? "";
@@ -224,6 +285,9 @@ export function compositionFaults(
         componentId,
         message: messageFor(code, componentId, detail, limits),
         ...(detail.lockBreak === undefined ? {} : { lock: detail.lockBreak }),
+        ...(detail.signature === undefined
+          ? {}
+          : { signature: detail.signature }),
       });
     },
   };
@@ -239,6 +303,7 @@ export function compositionFaults(
     // A top-level node sits in no slot, so no lock reaches it.
     lock: undefined,
     counterparts: counterpartsOf(node, undefined, judge.baselines),
+    parent: undefined,
   }));
   // Bounded by the document cap. The resolver holds a composition to it, so on
   // its output this never cuts the walk short; it stands for a caller handing in
@@ -250,7 +315,50 @@ export function compositionFaults(
   ) {
     judgeVisit(pending[head], judge, pending);
   }
+  reportPlacementContents(host, options, judge, placed);
   return faults;
+}
+
+/**
+ * What the page itself puts in its placements' slots, judged against the
+ * slots each component exposes: an exposure the component does not declare
+ * (the content would be dropped) and the exposure's own `allow` list, which
+ * the composed tree no longer carries once the content sits in the inner
+ * block's slot. Read with the component lookup the composition used; a break
+ * the stored page already held is kept.
+ */
+function reportPlacementContents(
+  host: BlockDocument,
+  options: CompositionFaultOptions,
+  judge: Judge,
+  placed: ReadonlyMap<string, string>
+): void {
+  const { nesting, definitions, components } = options;
+  if (
+    nesting === undefined ||
+    definitions === undefined ||
+    components === undefined
+  ) {
+    return;
+  }
+  const sources = { nesting, definitions, components };
+  const old = storedBreakSignatures(
+    options.storedHosts,
+    sources,
+    judge.limits.maxNodes
+  );
+  for (const found of placementBreaksIn(host, sources, judge.limits)) {
+    if (found.parentId === undefined || !placed.has(found.parentId)) continue;
+    if (old.has(found.signature)) continue;
+    judge.report(found.verdict.reason, found.parentId, {
+      type: found.verdict.blockType,
+      sentence: placementRefusalMessage(found.verdict, {
+        labelOf: type => blockLabelFrom(type, definitions.get(type)),
+      }),
+      signature: found.signature,
+      ...(found.id === undefined ? {} : { nodeId: found.id }),
+    });
+  }
 }
 
 /** Judge one node of the composed tree, and queue what lies beneath it. */
@@ -260,6 +368,14 @@ function judgeVisit(visit: Visit, judge: Judge, pending: Visit[]): void {
   const node = raw as unknown as ResolvedBlockNode;
   const composed = typeof node.instanceOf === "string";
   const through = composed ? node.instanceOf : visit.through;
+  // Every node, host's and definition's alike, so each passes down what its
+  // ancestors refuse; only a break composition is part of is reported below.
+  const tracked = judge.placement?.tracker.visit(
+    node,
+    visit.parent,
+    visit.where.kind === "slot" ? visit.where.slot : undefined
+  );
+  if (composed) judge.placement?.composed.add(node.id);
 
   reportDepthRefusal(node, through, judge);
   // Past the limit the reader's tree is cut, and nothing beneath is worth
@@ -270,7 +386,7 @@ function judgeVisit(visit: Visit, judge: Judge, pending: Visit[]): void {
     return;
   }
   if (through !== undefined) {
-    reportComposedRules(node, visit, { composed, through }, judge);
+    reportComposedRules(node, visit, { composed, through, tracked }, judge);
   }
   enqueueSlots(node, visit, { composed, through }, judge, pending);
 }
@@ -290,6 +406,64 @@ function reportDepthRefusal(
   const refused = node.unresolvedComponent;
   if (refused === undefined || !DEPTH_REFUSALS.has(refused)) return;
   judge.report(refused as CompositionFaultCode, through ?? node.id, {});
+}
+
+/**
+ * The placement rule for one node reached through a placement, judged as the
+ * composed tree draws it. Reported when composition is part of the break: the
+ * node or its container came from a definition, or an ancestor a definition
+ * put there is what refuses it. A break wholly among the host's own nodes is
+ * the host's validation's to report, and one the stored page already
+ * composed to is kept.
+ */
+function reportPlacement(
+  node: ResolvedBlockNode,
+  visit: Visit,
+  reached: {
+    composed: boolean;
+    through: string;
+    tracked: TrackedPlacement | undefined;
+  },
+  judge: Judge
+): void {
+  const { tracked } = reached;
+  const placement = judge.placement;
+  if (
+    tracked === undefined ||
+    tracked.verdict.allowed ||
+    placement === undefined
+  ) {
+    return;
+  }
+  const verdict = tracked.verdict;
+  const composedPart =
+    reached.composed ||
+    visit.containerComposed ||
+    refusedByComposed(verdict, placement.composed);
+  if (!composedPart || placement.old.has(tracked.signature)) return;
+  const definitions = judge.definitions;
+  judge.report(verdict.reason, reached.through, {
+    type: node.type,
+    where: visit.where,
+    ...("permitted" in verdict ? { permitted: verdict.permitted } : {}),
+    sentence: placementRefusalMessage(verdict, {
+      labelOf: type => blockLabelFrom(type, definitions?.get(type)),
+    }),
+    signature: tracked.signature,
+    nodeId: node.id,
+  });
+}
+
+/** Whether a content-model refusal comes from a node a definition put here. */
+function refusedByComposed(
+  verdict: PlacementRefused,
+  composed: ReadonlySet<string>
+): boolean {
+  return (
+    verdict.reason === "content-model" &&
+    verdict.refusedBy.id !== undefined &&
+    composed.has(verdict.refusedBy.id)
+  );
 }
 
 /** The nesting rule for one composed node, asked of the one implementation. */
@@ -317,10 +491,16 @@ function reportNesting(
 function reportComposedRules(
   node: ResolvedBlockNode,
   visit: Visit,
-  reached: { composed: boolean; through: string },
+  reached: {
+    composed: boolean;
+    through: string;
+    tracked: TrackedPlacement | undefined;
+  },
   judge: Judge
 ): void {
-  if (reached.composed || visit.containerComposed) {
+  if (judge.placement !== undefined) {
+    reportPlacement(node, visit, reached, judge);
+  } else if (reached.composed || visit.containerComposed) {
     reportNesting(node, visit.where, reached.through, judge);
   }
   // A node a definition put here: its locked slots hold what the placement
@@ -438,6 +618,7 @@ function enqueueSlots(
           },
           judge.baselines
         ),
+        parent: node,
       });
     });
   }
@@ -476,6 +657,16 @@ interface Detail {
   readonly changes?: readonly string[];
   /** For a lock break, the break as a fault carries it. */
   readonly lockBreak?: ComposedLockBreak;
+  /** For a placement break, the rule's own sentence. */
+  readonly sentence?: string;
+  /** For a placement break, its identity across documents. */
+  readonly signature?: string;
+  /**
+   * For a placement break, the block that breaks it. The composed tree and
+   * the page's own placement contents can both see one break; the block is
+   * what makes it one, so it is reported once.
+   */
+  readonly nodeId?: string;
 }
 
 /** What every message is built from, worked out once. */
@@ -489,6 +680,7 @@ interface MessageParts {
   readonly holderType: string;
   readonly lock: string;
   readonly changes: string;
+  readonly sentence: string;
 }
 
 /**
@@ -506,6 +698,12 @@ const MESSAGES: Readonly<
     `${m.named} puts a "${m.type}" inside "${m.parent}" here, but it may only sit inside ${m.permitted}.`,
   "not-allowed-in-slot": m =>
     `${m.named} puts a "${m.type}" where its "${m.parent}" does not accept one. That place accepts ${m.permitted}.`,
+  "undeclared-slot": m =>
+    `${m.named} puts a block where nothing renders it here. ${m.sentence}`,
+  "holds-no-blocks": m =>
+    `${m.named} puts a block inside one that holds none here. ${m.sentence}`,
+  "phrasing-only": m => `${m.named} breaks HTML here. ${m.sentence}`,
+  "content-model": m => `${m.named} breaks HTML here. ${m.sentence}`,
   "depth-exceeded": m =>
     `${m.named} nests content deeper than the maximum of ${m.maxDepth} levels here, counted from the top of this document. Place it higher up, or flatten its content.`,
   "composed-depth": m =>
@@ -543,5 +741,6 @@ function messageFor(
     holderType: describeValue(detail.holderType),
     lock: detail.lock ?? "",
     changes: (detail.changes ?? []).join(", "),
+    sentence: detail.sentence ?? "",
   });
 }

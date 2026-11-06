@@ -6,6 +6,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { configuredLocks } from "./support/configured-locks";
+import { LAYOUT_WRITERS } from "./support/dashboard-layout";
 import { CLAIMED_DOCUMENT_LOCKS, documentsToFree } from "./support/test";
 
 /**
@@ -35,6 +36,18 @@ function opensSingle(source: string, slug: string): boolean {
   return new RegExp(`["'\`]/singles/${slug}(?![a-z-])`).test(source);
 }
 
+/**
+ * Whether a spec writes the layout through one of the suite's own helpers: it imports
+ * `support/dashboard-layout` and calls a helper there that writes (`LAYOUT_WRITERS`). Without
+ * this, a spec whose only write is the shared reset would hold no lock and stay green.
+ */
+function callsLayoutWriter(source: string): boolean {
+  return (
+    /from\s+["'][./]*support\/dashboard-layout["']/.test(source) &&
+    LAYOUT_WRITERS.some(name => new RegExp(`\\b${name}\\(`).test(source))
+  );
+}
+
 /** What writes each piece of shared state, as it appears in a spec's source. */
 const WRITERS: {
   lock: string;
@@ -45,8 +58,9 @@ const WRITERS: {
     lock: "dashboard",
     what: "writes the dashboard layout",
     writes: source =>
-      source.includes("dashboard/layout") &&
-      /request\.(put|delete)\(/.test(source),
+      (source.includes("dashboard/layout") &&
+        /request\.(put|delete)\(/.test(source)) ||
+      callsLayoutWriter(source),
   },
   {
     lock: "homepage",
@@ -75,6 +89,21 @@ const WRITERS: {
     lock: "ownServer",
     what: "starts its own dev server",
     writes: source => source.includes("playground-dev-server"),
+  },
+  {
+    lock: "siteDefaultLayout",
+    what: "changes the site's default Layout",
+    writes: source => source.includes("/make-default"),
+  },
+  {
+    lock: "siteStyle",
+    what: "writes the site style",
+    // The Single's own update, or the Settings route the site's breakpoints
+    // change through, which writes the same Single.
+    writes: source =>
+      (source.includes("singles/site-style") &&
+        /\.(patch|put)\(/.test(source)) ||
+      /\bstoreSiteBreakpoints\(/.test(source),
   },
 ];
 
@@ -143,6 +172,23 @@ test("recognises each kind of write it is there for", () => {
       'page.request.get("/admin/api/dashboard/layout")'
     )
   ).toBe(false);
+  // Through the shared reset, with no layout request of its own in the spec.
+  expect(
+    WRITERS.find(w => w.lock === "dashboard")?.writes(
+      'import { resetToDefault } from "./support/dashboard-layout";\nawait resetToDefault(page);'
+    )
+  ).toBe(true);
+  // A helper from there that only reads, or a reset of the spec's own, is no layout write.
+  expect(
+    WRITERS.find(w => w.lock === "dashboard")?.writes(
+      'import { isLayoutRead } from "./support/dashboard-layout";\nisLayoutRead(url);'
+    )
+  ).toBe(false);
+  expect(
+    WRITERS.find(w => w.lock === "dashboard")?.writes(
+      "async function resetToDefault() {}\nawait resetToDefault();"
+    )
+  ).toBe(false);
   expect(
     WRITERS.find(w => w.lock === "homepage")?.writes(
       "await openEditorWith(page, NODES)"
@@ -174,6 +220,22 @@ test("recognises each kind of write it is there for", () => {
       'from "../support/playground-dev-server"'
     )
   ).toBe(true);
+  expect(
+    WRITERS.find(w => w.lock === "siteStyle")?.writes(
+      'const SITE_STYLE = "/admin/api/singles/site-style";\nawait page.request.patch(SITE_STYLE, { data });'
+    )
+  ).toBe(true);
+  expect(
+    WRITERS.find(w => w.lock === "siteStyle")?.writes(
+      "await storeSiteBreakpoints(page.request, null);"
+    )
+  ).toBe(true);
+  // Reading the site style is not writing it.
+  expect(
+    WRITERS.find(w => w.lock === "siteStyle")?.writes(
+      'await page.request.get("/admin/api/singles/site-style");'
+    )
+  ).toBe(false);
 });
 
 test("reads the locks a spec configures, not the constant anywhere", () => {

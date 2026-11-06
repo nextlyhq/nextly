@@ -59,8 +59,11 @@ export function observeRenderedTree(
   root: Element,
   read: () => void
 ): () => void {
-  if (typeof MutationObserver !== "function") return () => undefined;
-  const observer = new MutationObserver(read);
+  // From the root's own window, so a tree rendered in a frame is watched by
+  // that frame's observer: the realm of the nodes it reports on.
+  const Mutations = root.ownerDocument.defaultView?.MutationObserver;
+  if (typeof Mutations !== "function") return () => undefined;
+  const observer = new Mutations(read);
   observer.observe(root, RENDERED_TREE_MUTATIONS);
   return () => {
     observer.disconnect();

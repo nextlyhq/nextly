@@ -66,7 +66,7 @@ function pluginWithPageFields(
 function renderWith(plugins: PluginMetadata[] | undefined) {
   return renderHook(
     ({ plugins: p }: { plugins: PluginMetadata[] | undefined }) =>
-      usePluginPageRegistration(p),
+      usePluginPageRegistration(p, p !== undefined),
     { initialProps: { plugins } }
   );
 }

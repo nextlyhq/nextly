@@ -25,6 +25,7 @@ import { eq, getColumns, inArray } from "drizzle-orm";
 
 import { isMissingNamedColumnError } from "../../database/missing-column";
 import type { SupportedDialect } from "../../database/schema-registry";
+import type { EntityOwner } from "../../domains/schema/extension/build-extension-schema";
 import { toDrizzleTable } from "../../domains/schema/extension/compile";
 import type {
   ColumnBuilder,
@@ -46,6 +47,7 @@ import {
   type ContributedColumn,
   type TableAccessRules,
 } from "./access";
+import { type ContentTarget, contentTarget } from "./content-target";
 import { runInPluginTransactionFlow } from "./plugin-transaction-in-flow";
 import { linkPluginTransaction } from "./plugin-transaction-link";
 
@@ -106,8 +108,23 @@ export interface PluginDatabaseDeps {
        * (`plugin-transaction-link`).
        */
       adapterTx?: TransactionContext;
-    }) => Promise<R>
+      /**
+       * Hold `effect` until the transaction commits: until the OUTERMOST
+       * transaction commits when this one joined another, dropped when it
+       * rolls back. The adapter's `afterCommit`, called from inside the
+       * transaction, so it knows which transaction the effect waits for.
+       */
+      afterCommit(effect: () => unknown): void;
+    }) => Promise<R>,
+    /** What the caller asked of the transaction; see `PluginDatabase.transaction`. */
+    options?: PluginTransactionOptions
   ) => Promise<R>;
+  /**
+   * Inside a snapshot transaction: refuse every write through this surface,
+   * so the transaction is read-only on every dialect, SQLite included, where
+   * the database itself would let one through.
+   */
+  readOnly?: boolean;
   /**
    * Called with every statement's promise as it starts, and returns the
    * promise the caller receives. Absent outside a transaction; inside one it
@@ -125,6 +142,21 @@ export interface PluginDatabaseDeps {
   contributions?: () => ReadonlyMap<string, readonly ContributedColumn[]>;
   /** The runtime Drizzle table of an entity or core table, by SQL name. */
   entityTable?: (tableName: string) => unknown;
+  /**
+   * The collection, Single or field group an entity table stores, by SQL
+   * name, from the compiled schema. Read per call. With `expireContent`, a
+   * `contributed` write that changed a row expires the cached reads of the
+   * entry or Single that row belongs to; absent, it expires nothing.
+   */
+  contentEntity?: (tableName: string) => EntityOwner | undefined;
+  /** Expires the cached reads of one entry or Single. Never throws. */
+  expireContent?: (target: ContentTarget) => Promise<void>;
+  /**
+   * Inside a transaction: holds work until the transaction commits, and
+   * drops it on a rollback. Absent outside one, where a write's expiry runs
+   * once the write has finished.
+   */
+  afterCommit?: (effect: () => unknown) => void;
 }
 
 /**
@@ -221,6 +253,31 @@ function nestedTransactionError(): NextlyError {
       "Do the nested work in the same callback, through the handle it was given, so it commits or rolls back with the rest.",
     logContext: { reason: "nested-plugin-transaction" },
   });
+}
+
+/** The handles `PluginDatabaseDeps.transaction` passes its callback. */
+type TransactionHandles = Parameters<
+  Parameters<PluginDatabaseDeps["transaction"]>[0]
+>[0];
+
+/**
+ * The refusal for a write inside a snapshot transaction, which is read-only.
+ */
+function readOnlyTransactionError(): NextlyError {
+  return NextlyError.invalidInput({
+    message:
+      'A ctx.db.transaction opened with { isolation: "snapshot" } is read-only: write in a transaction of your own.',
+    logContext: { reason: "write-in-snapshot-transaction" },
+  });
+}
+
+/** Run `work` unless this surface belongs to a read-only transaction. */
+async function writable<R>(
+  deps: PluginDatabaseDeps,
+  work: () => Promise<R>
+): Promise<R> {
+  if (deps.readOnly === true) throw readOnlyTransactionError();
+  return work();
 }
 
 /**
@@ -518,8 +575,10 @@ export interface PluginDatabase {
    * when it throws, and what `fn` threw reaches the caller as thrown. `tx` is
    * this surface bound to the transaction's own connection on every dialect;
    * write through it, since `ctx.db` itself runs outside the transaction on
-   * PostgreSQL and MySQL. On SQLite a core service or `ctx.settings` called
-   * inside joins it as a savepoint and rolls back with it, its after-commit
+   * PostgreSQL and MySQL. `ctx.settings.set` is refused inside it on every
+   * dialect: write the setting after the transaction. On SQLite a core
+   * service called inside joins it as a savepoint and rolls back with it, its
+   * after-commit
    * effects (hooks, events, revalidation) wait for the commit and never run
    * on rollback, and deleting media is refused. Keep it short, and never
    * await network I/O inside it. `tx` lives only as long as `fn`: a statement
@@ -531,8 +590,18 @@ export interface PluginDatabase {
    * failed before `fn` settled is `fn`'s to handle: caught, the transaction
    * carries on. When `fn` itself throws, its error is the one the caller
    * receives.
+   *
+   * With `{ isolation: "snapshot" }` the transaction is read-only, and every
+   * read inside it sees the database as it was at its first read, whatever
+   * other transactions commit meanwhile: REPEATABLE READ on PostgreSQL and on
+   * MySQL, where it is already the default, and on SQLite the serial
+   * transaction every one already is. A write through `tx` is refused. For
+   * reading several facts that must describe one moment.
    */
-  transaction<R>(fn: (tx: PluginTransaction) => Promise<R>): Promise<R>;
+  transaction<R>(
+    fn: (tx: PluginTransaction) => Promise<R>,
+    options?: PluginTransactionOptions
+  ): Promise<R>;
   /**
    * Relational queries (`db.query.<table>.findMany({ with })`), keyed by
    * FINAL table name and owner-checked like every other method. The
@@ -587,6 +656,18 @@ export interface ContributedColumns<
     id: ContributedKey,
     values: Partial<InferInsert<TableDefinition<string, TColumns>>>
   ): Promise<number>;
+}
+
+/**
+ * @experimental What `ctx.db.transaction` may be asked for beyond its default.
+ */
+export interface PluginTransactionOptions {
+  /**
+   * `"snapshot"`: read-only, every read from one snapshot (see
+   * `PluginDatabase.transaction`). Absent, the database's default isolation,
+   * READ COMMITTED on PostgreSQL.
+   */
+  isolation?: "snapshot";
 }
 
 /**
@@ -1149,11 +1230,13 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
     },
 
     insert(definition, values) {
-      return track(writes.insert(definition, values));
+      return track(writable(deps, () => writes.insert(definition, values)));
     },
 
     insertReturning(definition, values) {
-      return track(writes.insertReturning(definition, values));
+      return track(
+        writable(deps, () => writes.insertReturning(definition, values))
+      );
     },
 
     update(definition, set) {
@@ -1172,7 +1255,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           .where(condition);
         return affectedRows(result);
       };
-      return { where: condition => track(run(condition)) };
+      return {
+        where: condition => track(writable(deps, () => run(condition))),
+      };
     },
 
     delete(definition) {
@@ -1185,7 +1270,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           .where(condition);
         return affectedRows(result);
       };
-      return { where: condition => track(run(condition)) };
+      return {
+        where: condition => track(writable(deps, () => run(condition))),
+      };
     },
 
     contributed(tableName, columns) {
@@ -1251,7 +1338,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
             .set(assignments)
             .where(eq(reach.key as never, id as never))
         );
-        return affectedRows(result);
+        const changed = affectedRows(result);
+        if (changed > 0) await expireChangedContent(tableName, id, deps);
+        return changed;
       };
       // Closure-bound rather than methods reading `this`, so a destructured
       // `const { get } = ctx.db.contributed(...)` works like the object form.
@@ -1262,17 +1351,27 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         return row ?? null;
       };
       const set: ContributedColumns<typeof columns>["set"] = (id, values) =>
-        track(write(id, values));
+        track(writable(deps, () => write(id, values)));
       return { get, getMany, set };
     },
 
-    async transaction(fn) {
-      // What core work inside asked to run once this transaction commits
-      // (`LinkedTransaction.afterCommit`). Run below, after `deps.transaction`
-      // has resolved, which it does only once the commit has succeeded; a
-      // rollback rejects first and the effects are dropped with the array.
-      const committed: Array<() => unknown> = [];
-      const result = await deps.transaction(async tx => {
+    async transaction(fn, options) {
+      const snapshot = options?.isolation === "snapshot";
+      // The option is handed on only when asked for, so a supplier is called
+      // exactly as before for every ordinary transaction.
+      //
+      // The name carries meaning: the transaction-escape check in the tests
+      // names the code that opened a transaction by the first frame of its
+      // stack outside the adapters, skipping a frame whose function name
+      // matches /transaction/i as a wrapper. Named otherwise, this frame
+      // would stand for every caller of `ctx.db.transaction` at once.
+      const openTransaction = <T>(
+        work: (tx: TransactionHandles) => Promise<T>
+      ) =>
+        snapshot
+          ? deps.transaction(work, { isolation: "snapshot" })
+          : deps.transaction(work);
+      const result = await openTransaction(async tx => {
         // The same surface, reading the transaction's handles. Built rather
         // than mutated so a caller holding the outer `ctx.db` cannot
         // accidentally write outside the transaction.
@@ -1328,11 +1427,17 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
             return tx.relationalDb;
           },
           transaction: () => Promise.reject(nestedTransactionError()),
+          readOnly: snapshot,
           track: scope.track,
+          // A `contributed` write's expiry waits for the commit with the core
+          // work's, so a rolled-back write expires nothing. Both are held by
+          // the transaction itself, so when this one joined an outer one they
+          // wait for the outer commit rather than for this one's end.
+          afterCommit: effect => tx.afterCommit(effect),
         });
         if (tx.adapterTx) {
           linkPluginTransaction(scoped, tx.adapterTx, scope, effect =>
-            committed.push(effect)
+            tx.afterCommit(effect)
           );
         }
         // Marked as the flow's transaction, so a core write that opens its
@@ -1342,7 +1447,6 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           runInPluginTransactionFlow(scoped, () => fn(scoped))
         );
       });
-      await runCommitEffects(committed);
       return result;
     },
 
@@ -1614,30 +1718,59 @@ async function whenColumnsExist<T>(
  * read from there; read from the pair, every MySQL write reported -1.
  */
 /**
- * Run a committed transaction's effects in the order they were registered.
- * Each is awaited before the next starts, and one that fails is logged rather
- * than thrown: the transaction has committed, and its caller is owed that
- * result, not an effect's failure in its place.
+ * Expire the cached reads of the entry or Single a `contributed` write to row
+ * `id` of `tableName` changed: now, or inside a transaction once it commits.
+ * The row's document is found before the commit, on the write's own
+ * connection, so a field group's parent read sees the transaction's rows.
+ *
+ * Best-effort, never thrown: outside a transaction the row has already been
+ * changed when this runs, so a failed lookup of its document must not tell
+ * the caller the write failed. It is logged, naming the row, and nothing is
+ * expired for it.
  */
-async function runCommitEffects(
-  effects: readonly (() => unknown)[]
+async function expireChangedContent(
+  tableName: string,
+  id: unknown,
+  deps: PluginDatabaseDeps
 ): Promise<void> {
-  for (const effect of effects) {
+  if (typeof id !== "string" && typeof id !== "number") return;
+  try {
+    await findAndExpire(tableName, id, deps);
+  } catch (error) {
+    // Guarded too, as `runCommitEffects` guards its logging: an app logger
+    // that throws must not reject a write that has already happened.
     try {
-      await effect();
-    } catch (error) {
-      // Guarded too: a logger that throws must not replace the committed
-      // result, or stop the effects after this one.
-      try {
-        getNextlyLogger().error({
-          kind: "after-commit-effect-failed",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      } catch {
-        // Nothing is left to report it to.
-      }
+      getNextlyLogger().warn({
+        kind: "contributed-write-expiry-failed",
+        message: `The cached reads of the row "${String(id)}" of "${tableName}" were not expired after a contributed write: ${error instanceof Error ? error.message : String(error)}`,
+        table: tableName,
+        id: String(id),
+      });
+    } catch {
+      // Nothing is left to report it to.
     }
   }
+}
+
+/** Find the document a contributed write changed, and expire it or queue it. */
+async function findAndExpire(
+  tableName: string,
+  id: string | number,
+  deps: PluginDatabaseDeps
+): Promise<void> {
+  const { contentEntity, entityTable, expireContent } = deps;
+  if (!contentEntity || !entityTable || !expireContent) return;
+  const target = await contentTarget(tableName, id, {
+    contentEntity,
+    entityTable,
+    db: deps.db,
+  });
+  if (target === undefined) return;
+  if (deps.afterCommit) {
+    deps.afterCommit(() => expireContent(target));
+    return;
+  }
+  await expireContent(target);
 }
 
 function affectedRows(result: unknown): number {

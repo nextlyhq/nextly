@@ -69,7 +69,27 @@ export interface SubmissionRow {
   submittedAt?: string | null;
   editedAt?: string | null;
   editedBy?: string | null;
+  /** The submission's version as the list read it; see `submissionPatch`. */
+  _rev?: string;
 }
+
+/**
+ * What a change to a submission sends: the change, with the version its row
+ * had when the list read it, so a change made from an older copy is refused
+ * rather than replacing what someone saved since.
+ */
+export function submissionPatch(
+  row: SubmissionRow | undefined,
+  changes: Record<string, unknown>
+): Record<string, unknown> {
+  return typeof row?._rev === "string"
+    ? { ...changes, _rev: row._rev }
+    : changes;
+}
+
+/** What a refused change says when someone saved the submission since. */
+const SUBMISSION_CHANGED_SINCE =
+  "Someone changed this submission since the list loaded. The list now shows their change; make yours again.";
 
 export interface FormOption {
   id: string;
@@ -191,12 +211,16 @@ export function SubmissionsView({
         setSlugs(resolved);
 
         // Page through ALL forms — a capped single fetch would silently
-        // drop forms from the filter and the per-field column lookup.
+        // drop forms from the filter and the per-field column lookup. The
+        // entries API reads the page size from `limit` and answers its
+        // default page when that is absent, so the size goes there: under
+        // any other name the first page comes back short and the loop below
+        // reads it as the last.
         const allForms: FormOption[] = [];
         const formsPageSize = 200;
         for (let formsPage = 1; ; formsPage += 1) {
           const formsRes = await fetch(
-            `/admin/api/collections/${resolved.forms}/entries?pageSize=${formsPageSize}&page=${formsPage}`,
+            `/admin/api/collections/${resolved.forms}/entries?limit=${formsPageSize}&page=${formsPage}`,
             { credentials: "include" }
           );
           if (!formsRes.ok) break;
@@ -265,9 +289,11 @@ export function SubmissionsView({
       if (statusTab === "all") where.status = { not_equals: "spam" };
       else where.status = { equals: statusTab };
 
+      // `limit`, the entries API's page size: the pager counts pages of
+      // PAGE_SIZE, so a page the server cut to its default would skip rows.
       const params = new URLSearchParams({
         page: String(page),
-        pageSize: String(PAGE_SIZE),
+        limit: String(PAGE_SIZE),
         sortBy: "submittedAt",
         sortOrder: "desc",
         where: JSON.stringify(where),
@@ -376,6 +402,9 @@ export function SubmissionsView({
   }, [selectedForm, formNameById, hiddenFieldColumns]);
 
   // --- actions ---------------------------------------------------------------
+  // The rows as last read, for the version a change sends.
+  const rowsNow = useRef(rows);
+  rowsNow.current = rows;
   const patchSubmission = useCallback(
     async (id: string, body: Record<string, unknown>) => {
       const res = await fetch(
@@ -384,10 +413,26 @@ export function SubmissionsView({
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify(body),
+          body: JSON.stringify(
+            submissionPatch(
+              rowsNow.current.find(row => row.id === id),
+              body
+            )
+          ),
         }
       );
-      if (!res.ok) throw new Error(`Update failed (${res.status})`);
+      if (!res.ok) {
+        const refusal = (await res.json().catch(() => null)) as {
+          error?: { code?: string };
+        } | null;
+        // Changed since the list read it: read the list again, so the row
+        // shows the change and carries its version, and say so.
+        if (refusal?.error?.code === "STALE_VERSION") {
+          await fetchRows();
+          throw new Error(SUBMISSION_CHANGED_SINCE);
+        }
+        throw new Error(`Update failed (${res.status})`);
+      }
       await fetchRows();
     },
     [submissionsSlug, fetchRows]
@@ -413,11 +458,18 @@ export function SubmissionsView({
         actions.push({
           id: "not-spam",
           label: "Not spam",
+          // A refusal is said beside the list, as a failed read is: the
+          // row is read again, and without this the click would seem to do
+          // nothing.
           onSelect: target =>
             void patchSubmission(target.id, {
               status: "new",
               spamReason: null,
-            }),
+            }).catch((reason: unknown) =>
+              setError(
+                reason instanceof Error ? reason.message : "Update failed."
+              )
+            ),
         });
       }
       if (canDelete) {

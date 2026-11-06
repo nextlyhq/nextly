@@ -12,7 +12,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 
 import { useWidgetQueries } from "./useWidgetQueries";
 
-import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
+import { MAX_QUERIES_PER_REQUEST } from "nextly/config";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -36,20 +36,12 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-const countQuery = (source: string): WidgetQuery => ({ source, op: "count" });
-
-const groupQuery = (source: string): WidgetQuery => ({
-  source,
-  op: "groupBy",
-  groupBy: "status",
-});
-
-const seriesQuery = (source: string): WidgetQuery => ({
-  source,
-  op: "timeseries",
-  dateField: "createdAt",
-  interval: "day",
-});
+/**
+ * A card asked for by its id, named `name` for both its widget and its card: what the hook sends
+ * for a card the dashboard asks for. Every card is asked for this way, so the answers below are
+ * whatever a widget's `load` gives, a count, a grouped answer or a timeline.
+ */
+const cardOf = (name: string) => ({ widget: name, card: name });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -60,16 +52,12 @@ afterEach(() => {
 });
 
 describe("useWidgetQueries", () => {
-  it("files a `__proto__` widget id as DATA, not onto the prototype", async () => {
-    // 🔴 A contributed widget id is checked only for being usable text, so it
-    // may be `"__proto__"`. On a `{}` dictionary that key is not data: reading
-    // it returns `Object.prototype`, so `dict[id] ??= {}` never assigns and the
-    // cell key is written onto the prototype every object in the admin
-    // inherits. A declarative widget could corrupt property lookup across the
-    // whole app merely by receiving an answer.
-    const canary: Record<string, unknown> = {};
-    expect(canary.total).toBeUndefined();
-
+  it("files a `__proto__` placement id as DATA, not onto the prototype", async () => {
+    // 🔴 A placement id is checked only for being usable text, so it may be
+    // `"__proto__"`. On a `{}` dictionary that key is not data: assigning it
+    // replaces the dictionary's prototype instead of storing an entry, and
+    // reading it back returns that prototype -- the same object -- so only the
+    // dictionary's OWN keys can tell the two apart.
     vi.mocked(protectedApi.post).mockResolvedValue({
       results: [{ ok: true, result: { op: "count", total: 7 } }],
     });
@@ -79,24 +67,22 @@ describe("useWidgetQueries", () => {
         useWidgetQueries([
           {
             placementId: "__proto__",
-            cellKey: "total",
-            query: countQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
     await waitFor(() =>
-      expect(result.current.cellSlots["__proto__"]?.total).toBeDefined()
+      expect(Object.hasOwn(result.current.slots, "__proto__")).toBe(true)
     );
 
-    // The answer is reachable where it was filed, and NOWHERE else.
-    expect(result.current.cellSlots["__proto__"]?.total).toEqual({
+    // The answer is filed as the dictionary's own entry, where it was asked.
+    expect(Object.keys(result.current.slots)).toEqual(["__proto__"]);
+    expect(result.current.slots["__proto__"]).toEqual({
       ok: true,
       result: { op: "count", total: 7 },
     });
-    expect(canary.total).toBeUndefined();
-    expect(({} as Record<string, unknown>).total).toBeUndefined();
   });
 
   it("sends N queries as ONE request", async () => {
@@ -111,9 +97,9 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/a", query: countQuery("collection:posts") },
-          { placementId: "core/b", query: countQuery("collection:pages") },
-          { placementId: "core/c", query: countQuery("collection:media") },
+          { placementId: "core/a", card: cardOf("collection:posts") },
+          { placementId: "core/b", card: cardOf("collection:pages") },
+          { placementId: "core/c", card: cardOf("collection:media") },
         ]),
       { wrapper }
     );
@@ -127,9 +113,9 @@ describe("useWidgetQueries", () => {
     );
     expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
       queries: [
-        countQuery("collection:posts"),
-        countQuery("collection:pages"),
-        countQuery("collection:media"),
+        cardOf("collection:posts"),
+        cardOf("collection:pages"),
+        cardOf("collection:media"),
       ],
     });
   });
@@ -145,8 +131,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/posts", query: countQuery("collection:posts") },
-          { placementId: "core/pages", query: countQuery("collection:pages") },
+          { placementId: "core/posts", card: cardOf("collection:posts") },
+          { placementId: "core/pages", card: cardOf("collection:pages") },
         ]),
       { wrapper }
     );
@@ -175,8 +161,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/broken", query: countQuery("collection:gone") },
-          { placementId: "core/fine", query: countQuery("collection:posts") },
+          { placementId: "core/broken", card: cardOf("collection:gone") },
+          { placementId: "core/fine", card: cardOf("collection:posts") },
         ]),
       { wrapper }
     );
@@ -209,9 +195,9 @@ describe("useWidgetQueries", () => {
         useWidgetQueries([
           {
             placementId: "core/forbidden",
-            query: countQuery("collection:secret"),
+            card: cardOf("collection:secret"),
           },
-          { placementId: "core/odd", query: countQuery("collection:posts") },
+          { placementId: "core/odd", card: cardOf("collection:posts") },
         ]),
       { wrapper }
     );
@@ -230,6 +216,52 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  it("keeps a card's needs-setting code with the setting it names, and its not-shown code", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: false,
+          error: "No Collection chosen yet",
+          code: "needs-setting",
+          setting: "Collection",
+        },
+        { ok: false, error: "Not shown for you", code: "not-shown" },
+        // Naming no setting, it could not ask for one: read as the failure it then is.
+        { ok: false, error: "Choose it", code: "needs-setting" },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "c-needs", card: cardOf("collection:a") },
+          { placementId: "c-hidden", card: cardOf("collection:b") },
+          { placementId: "c-nameless", card: cardOf("collection:c") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["c-nameless"]).toBeDefined()
+    );
+    // Lost here, each would be drawn as a failure with Retry rather than as what it is.
+    expect(result.current.slots["c-needs"]).toEqual({
+      ok: false,
+      error: "No Collection chosen yet",
+      code: "needs-setting",
+      setting: "Collection",
+    });
+    expect(result.current.slots["c-hidden"]).toEqual({
+      ok: false,
+      error: "Not shown for you",
+      code: "not-shown",
+    });
+    expect(result.current.slots["c-nameless"]).toEqual({
+      ok: false,
+      error: "Choose it",
+    });
+  });
+
   it("drops the unavailable code from a refusal with no usable message", async () => {
     // A slot missing its message is a broken answer that may recover; kept, the code would hide
     // that behind the unavailable state, which offers no Retry.
@@ -240,7 +272,7 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/broken", query: countQuery("collection:posts") },
+          { placementId: "core/broken", card: cardOf("collection:posts") },
         ]),
       { wrapper }
     );
@@ -271,8 +303,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/a", query: countQuery("collection:posts") },
-          { placementId: "core/b", query: countQuery("collection:pages") },
+          { placementId: "core/a", card: cardOf("collection:posts") },
+          { placementId: "core/b", card: cardOf("collection:pages") },
         ]),
       { wrapper }
     );
@@ -293,8 +325,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/a", query: countQuery("collection:posts") },
-          { placementId: "core/b", query: countQuery("collection:pages") },
+          { placementId: "core/a", card: cardOf("collection:posts") },
+          { placementId: "core/b", card: cardOf("collection:pages") },
         ]),
       { wrapper }
     );
@@ -307,6 +339,66 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  it("hands a card the SAME slot object on every render while its cached answer is unchanged", async () => {
+    // 🔴 A card keys its component's draw on the slot it is handed: a new object
+    // is a new answer to draw. Rebuilt on every render, a component that throws
+    // was caught, re-rendered the grid by reporting it, met a "new" answer, drew
+    // and threw again until React stopped it, and every component card remounted
+    // whenever the grid re-rendered. An ok slot, a refusal and a short answer
+    // each keep their object.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "count", total: 7 } },
+        { ok: false, error: "Source unavailable." },
+      ],
+    });
+
+    const { result, rerender } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/fine", card: cardOf("collection:posts") },
+          { placementId: "core/broken", card: cardOf("collection:gone") },
+          { placementId: "core/short", card: cardOf("collection:pages") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["core/short"]).toBeDefined()
+    );
+    const first = { ...result.current.slots };
+    rerender();
+    rerender();
+    for (const id of ["core/fine", "core/broken", "core/short"]) {
+      expect(result.current.slots[id]).toBe(first[id]);
+    }
+    // The control: the slots are the answers, not one shared placeholder.
+    expect(first["core/fine"]).toEqual({
+      ok: true,
+      result: { op: "count", total: 7 },
+    });
+    expect(first["core/broken"]).not.toBe(first["core/short"]);
+  });
+
+  it("keeps a whole-request failure's slots the same objects across renders", async () => {
+    vi.mocked(protectedApi.post).mockRejectedValue(new Error("network down"));
+
+    const { result, rerender } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/a", card: cardOf("collection:posts") },
+          { placementId: "core/b", card: cardOf("collection:pages") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    const first = { ...result.current.slots };
+    rerender();
+    expect(result.current.slots["core/a"]).toBe(first["core/a"]);
+    expect(result.current.slots["core/b"]).toBe(first["core/b"]);
+  });
+
   it("says nothing per widget while the request is still being retried", async () => {
     // Absent, not failed: the batch has not settled, so the cards are busy
     // rather than broken.
@@ -317,7 +409,7 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/a", card: cardOf("collection:posts") },
         ]),
       { wrapper }
     );
@@ -333,7 +425,7 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/a", card: cardOf("collection:posts") },
         ]),
       { wrapper }
     );
@@ -352,8 +444,8 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/a", query: countQuery("collection:posts") },
-          { placementId: "core/b", query: countQuery("collection:pages") },
+          { placementId: "core/a", card: cardOf("collection:posts") },
+          { placementId: "core/b", card: cardOf("collection:pages") },
         ]),
       { wrapper }
     );
@@ -372,7 +464,7 @@ describe("useWidgetQueries", () => {
     const over = MAX_QUERIES_PER_REQUEST + 1;
     const requests = Array.from({ length: over }, (_, i) => ({
       placementId: `core/${i}`,
-      query: countQuery(`collection:c${i}`),
+      card: cardOf(`collection:c${i}`),
     }));
     vi.mocked(protectedApi.post).mockImplementation(
       async (_path: string, body: unknown) => ({
@@ -419,7 +511,7 @@ describe("useWidgetQueries", () => {
       { length: MAX_QUERIES_PER_REQUEST },
       (_, i) => ({
         placementId: `core/${i}`,
-        query: countQuery(`collection:c${i}`),
+        card: cardOf(`collection:c${i}`),
       })
     );
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -445,7 +537,7 @@ describe("useWidgetQueries", () => {
     const over = MAX_QUERIES_PER_REQUEST + 1;
     const requests = Array.from({ length: over }, (_, i) => ({
       placementId: `core/${i}`,
-      query: countQuery(`collection:c${i}`),
+      card: cardOf(`collection:c${i}`),
     }));
     vi.mocked(protectedApi.post).mockImplementation(
       async (_path: string, body: unknown) => {
@@ -482,12 +574,11 @@ describe("useWidgetQueries", () => {
     // over the cap is split into partitions that settle separately, so a card
     // whose own request has answered must stop reporting itself busy even while
     // another partition is still running -- otherwise settled numbers stay
-    // dimmed for a reason no reader can see, and the published
-    // `WidgetComponentProps.isFetching` contract is not kept.
+    // dimmed for a reason no reader can see.
     const over = MAX_QUERIES_PER_REQUEST + 1;
     const requests = Array.from({ length: over }, (_, i) => ({
       placementId: `core/${i}`,
-      query: countQuery(`collection:c${i}`),
+      card: cardOf(`collection:c${i}`),
     }));
 
     let releaseSecond: (() => void) | undefined;
@@ -542,7 +633,7 @@ describe("useWidgetQueries", () => {
       const { result } = renderHook(
         () =>
           useWidgetQueries([
-            { placementId: "core/a", query: countQuery("collection:posts") },
+            { placementId: "core/a", card: cardOf("collection:posts") },
           ]),
         { wrapper }
       );
@@ -648,6 +739,85 @@ describe("useWidgetQueries", () => {
      * it: those hand the fields straight to the archetype and never cross this
      * boundary.
      */
+    /*
+     * 🔴 The same loss one property over: the Content card's subtitle reads how the list's total
+     * divides by kind, and a renderer test hands that straight to the card without crossing this
+     * boundary.
+     */
+    it("carries how a list's total divides by kind through", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ slug: "posts" }],
+            total: 13,
+            totalByKind: { collection: 8, single: 5 },
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ slug: "posts" }],
+          total: 13,
+          totalByKind: { collection: 8, single: 5 },
+        },
+      });
+    });
+
+    it.each([
+      ["a part that is not a whole count", { collection: 8, single: 1.5 }],
+      ["a negative part", { collection: -1 }],
+      ["a part that is text", { collection: "8" }],
+      ["a list where an object belongs", [8, 5]],
+      ["a number where an object belongs", 13],
+    ])(
+      "leaves out a breakdown with %s, and keeps the rest of the list",
+      async (_case, totalByKind) => {
+        expect(
+          await slotFor({
+            ok: true,
+            result: {
+              op: "list",
+              items: [{ slug: "posts" }],
+              total: 13,
+              totalByKind,
+            },
+          })
+        ).toEqual({
+          ok: true,
+          result: { op: "list", items: [{ slug: "posts" }], total: 13 },
+        });
+      }
+    );
+
+    it("keeps the window a list was read within, which a card's empty text names", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [], window: { days: 90 } },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "list", items: [], window: { days: 90 } },
+      });
+    });
+
+    it.each([
+      ["days that are not whole", { days: 1.5 }],
+      ["no days", {}],
+      ["days of zero", { days: 0 }],
+      ["a number where an object belongs", 90],
+    ])("leaves out a window with %s", async (_case, window) => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [], window },
+        })
+      ).toEqual({ ok: true, result: { op: "list", items: [] } });
+    });
+
     it("carries the column's declared type through", async () => {
       expect(
         await slotFor({
@@ -896,7 +1066,7 @@ describe("useWidgetQueries", () => {
     const { result } = renderHook(
       () =>
         useWidgetQueries([
-          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/a", card: cardOf("collection:posts") },
         ]),
       { wrapper }
     );
@@ -936,21 +1106,18 @@ describe("useWidgetQueries, grouped results", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "byStatus",
-            query: groupQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
-    await waitFor(() =>
-      expect(result.current.cellSlots.p1?.byStatus).toBeDefined()
-    );
+    await waitFor(() => expect(result.current.slots.p1).toBeDefined());
 
     // The WHOLE slot: a decoder that dropped `truncated` would present a
     // capped bucket set as the entire picture, and one that dropped the null
     // bucket would lose the rows whose column is empty.
-    expect(result.current.cellSlots.p1?.byStatus).toEqual({
+    expect(result.current.slots.p1).toEqual({
       ok: true,
       result: {
         op: "groupBy",
@@ -966,16 +1133,16 @@ describe("useWidgetQueries, grouped results", () => {
   it("carries a grouped answer's floor through to the slot, and only a boolean one", async () => {
     // The decoder rebuilds each result from the fields it knows. A floor it did
     // not carry would be dropped, and every bucket's short count would reach
-    // the chart as a whole one. Answered by source rather than by position, so
+    // the chart as a whole one. Answered by card rather than by position, so
     // the batch's own ordering cannot decide which slot gets which answer.
     vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => ({
-      results: (body as { queries: Array<{ source: string }> }).queries.map(
+      results: (body as { queries: Array<{ widget: string }> }).queries.map(
         query => ({
           ok: true,
           result: {
             op: "groupBy",
             buckets: [{ value: "published", count: 4 }],
-            atLeast: query.source === "collection:posts" ? true : "true",
+            atLeast: query.widget === "collection:posts" ? true : "true",
           },
         })
       ),
@@ -986,24 +1153,22 @@ describe("useWidgetQueries, grouped results", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "bounded",
-            query: groupQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
           {
             placementId: "p2",
-            cellKey: "garbled",
-            query: groupQuery("collection:pages"),
+            card: cardOf("collection:pages"),
           },
         ]),
       { wrapper }
     );
 
     await waitFor(() => {
-      expect(result.current.cellSlots.p1?.bounded).toBeDefined();
-      expect(result.current.cellSlots.p2?.garbled).toBeDefined();
+      expect(result.current.slots.p1).toBeDefined();
+      expect(result.current.slots.p2).toBeDefined();
     });
 
-    expect(result.current.cellSlots.p1?.bounded).toEqual({
+    expect(result.current.slots.p1).toEqual({
       ok: true,
       result: {
         op: "groupBy",
@@ -1012,7 +1177,7 @@ describe("useWidgetQueries, grouped results", () => {
       },
     });
     // A string is not a claim the contract makes, so it is not carried.
-    expect(result.current.cellSlots.p2?.garbled).toEqual({
+    expect(result.current.slots.p2).toEqual({
       ok: true,
       result: { op: "groupBy", buckets: [{ value: "published", count: 4 }] },
     });
@@ -1039,16 +1204,13 @@ describe("useWidgetQueries, grouped results", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "byStatus",
-            query: groupQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
-    await waitFor(() =>
-      expect(result.current.cellSlots.p1?.byStatus?.ok).toBe(false)
-    );
+    await waitFor(() => expect(result.current.slots.p1?.ok).toBe(false));
   });
 });
 
@@ -1076,21 +1238,18 @@ describe("useWidgetQueries, timeline results", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "trend",
-            query: seriesQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
-    await waitFor(() =>
-      expect(result.current.cellSlots.p1?.trend).toBeDefined()
-    );
+    await waitFor(() => expect(result.current.slots.p1).toBeDefined());
 
     // The WHOLE slot. A decoder that dropped the zero point would hand a chart
     // two points where three were read, and the line would join 2 straight to
     // 5 across a day that actually had nothing.
-    expect(result.current.cellSlots.p1?.trend).toEqual({
+    expect(result.current.slots.p1).toEqual({
       ok: true,
       result: {
         op: "timeseries",
@@ -1125,16 +1284,13 @@ describe("useWidgetQueries, timeline results", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "trend",
-            query: seriesQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
-    await waitFor(() =>
-      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
-    );
+    await waitFor(() => expect(result.current.slots.p1?.ok).toBe(false));
   });
 
   it("refuses an interval outside the vocabulary", async () => {
@@ -1158,16 +1314,13 @@ describe("useWidgetQueries, timeline results", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "trend",
-            query: seriesQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
-    await waitFor(() =>
-      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
-    );
+    await waitFor(() => expect(result.current.slots.p1?.ok).toBe(false));
   });
 });
 
@@ -1194,16 +1347,13 @@ describe("useWidgetQueries, a malformed timeline point", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "trend",
-            query: seriesQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
-    await waitFor(() =>
-      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
-    );
+    await waitFor(() => expect(result.current.slots.p1?.ok).toBe(false));
   });
 
   it("refuses a start that parses but is not the canonical spelling", async () => {
@@ -1228,60 +1378,12 @@ describe("useWidgetQueries, a malformed timeline point", () => {
         useWidgetQueries([
           {
             placementId: "p1",
-            cellKey: "trend",
-            query: seriesQuery("collection:posts"),
+            card: cardOf("collection:posts"),
           },
         ]),
       { wrapper }
     );
 
-    await waitFor(() =>
-      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
-    );
-  });
-});
-
-describe("the tier an answer was fetched at", () => {
-  it("travels with the cached answer, to a card that returns while it is still in flight", async () => {
-    // A card asked at small is drawn again wider before its answer lands -- a remount while the
-    // first render still holds the request -- and the first then leaves: the new render takes
-    // over the request already in flight. The answer it receives is the small one, so it must
-    // know that, or it never asks for the rows it is missing. (Once every render has left, the
-    // request is cancelled through its signal, and a card that comes back asks anew.)
-    const client = new QueryClient({
-      defaultOptions: { queries: { retryDelay: 0, gcTime: 60_000 } },
-    });
-    const shared = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={client}>{children}</QueryClientProvider>
-    );
-    let answer: (body: unknown) => void = () => {};
-    vi.mocked(protectedApi.post).mockImplementation(
-      () => new Promise(resolve => (answer = resolve))
-    );
-    const list: WidgetQuery = {
-      source: "collection:posts",
-      op: "list",
-      limit: 8,
-    };
-    const asked = (tier: "small" | "medium") => [
-      {
-        placementId: "p1",
-        query: list,
-        sized: { query: { ...list, limit: tier === "small" ? 4 : 9 }, tier },
-      },
-    ];
-
-    const left = renderHook(() => useWidgetQueries(asked("small")), {
-      wrapper: shared,
-    });
-    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    const back = renderHook(() => useWidgetQueries(asked("medium")), {
-      wrapper: shared,
-    });
-    left.unmount();
-
-    answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
-    await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
-    expect(back.result.current.fetchedTierFor("p1")).toBe("small");
+    await waitFor(() => expect(result.current.slots.p1?.ok).toBe(false));
   });
 });

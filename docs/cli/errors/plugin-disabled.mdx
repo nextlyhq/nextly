@@ -1,0 +1,23 @@
+---
+title: PLUGIN_DISABLED
+description: "The plugin to install or uninstall is disabled in the configuration, so its hooks would not run."
+---
+
+## Cause
+
+The plugin to install or uninstall is disabled in the configuration, so its hooks would not run.
+
+A plugin set to `enabled: false` keeps its schema but none of its behaviour, hooks included. An install or uninstall runs the plugin's `onInstall` or `onUninstall`, so for a disabled plugin it would record a state the hook never produced. The command refused before changing anything.
+
+## Fix
+
+- Enable the plugin in `nextly.config.ts`, then run the install or uninstall again.
+
+## Example
+
+```text
+✗ The plugin "@acme/seo" is disabled in config.
+  Why:  A disabled plugin's hooks do not run, so an install or uninstall of it could record a state its hook never produced. Nothing was changed.
+  Next: Enable it in the config to install or uninstall it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-disabled  (PLUGIN_DISABLED)
+```

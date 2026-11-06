@@ -19,24 +19,37 @@
  *
  * # Force overwrite existing files
  * nextly init --force
+ *
+ * # Name what would be written; write nothing
+ * nextly init --yes --dry-run
  * ```
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { confirm, input } from "@inquirer/prompts";
 import type { Command } from "commander";
 import pc from "picocolors";
 
-import { describeError } from "../../errors/index";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { projectUsesSrcLayout } from "../../shared/lib/generated-output-paths";
+import { reportDryRun, type DryRunChange } from "../dry-run";
+import { exitWithError } from "../errors";
+import {
+  initAnswersRequired,
+  projectAlreadyInitialized,
+} from "../errors/areas/commands";
 import {
   createContext,
   type CommandContext,
   type GlobalOptions,
 } from "../program";
+import {
+  isPromptForceClosed,
+  promptCancelled,
+} from "../utils/prompt-cancelled";
 
 /**
  * Options specific to the init command
@@ -53,6 +66,12 @@ export interface InitCommandOptions {
    * @default false
    */
   force?: boolean;
+
+  /**
+   * Name every file and folder the run would make, and make none
+   * @default false
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -87,6 +106,15 @@ interface InitPaths {
   libDir: string;
 }
 
+/**
+ * One thing init makes, by its path relative to the project as the run names
+ * it: a folder, or a file with its content. A file not announced is logged
+ * only under `--verbose`.
+ */
+type InitStep =
+  | { kind: "folder"; path: string }
+  | { kind: "file"; path: string; content: string; announce: boolean };
+
 function initPaths(cwd: string): InitPaths {
   const base = projectUsesSrcLayout(cwd) ? "./src" : ".";
   return {
@@ -117,9 +145,17 @@ export async function runInit(
 
   const configPath = join(cwd, "nextly.config.ts");
   if (existsSync(configPath) && !options.force) {
-    logger.error("Nextly is already initialized in this directory.");
-    logger.info("Use --force to overwrite existing configuration.");
-    process.exit(1);
+    const refusal = projectAlreadyInitialized(configPath);
+    // A dry run names the refusal the real run would end with, and ends
+    // normally: the refusal is what the real run would do.
+    if (options.dryRun) {
+      reportDryRun(logger, {
+        changes: [],
+        refusals: [`${refusal.what} ${refusal.why}`],
+      });
+      return;
+    }
+    exitWithError(logger, refusal);
   }
 
   const paths = initPaths(cwd);
@@ -132,37 +168,45 @@ export async function runInit(
   if (options.yes) {
     answers = { ...defaults };
     logger.info("Using default configuration...");
+  } else if (!canPrompt()) {
+    // Nobody can answer the questions: stop before anything is written and
+    // name the flag that answers them with the defaults.
+    exitWithError(logger, initAnswersRequired());
   } else {
     logger.info("Answer a few questions to set up your project.\n");
 
     try {
       answers = await promptUser(defaults);
     } catch (error) {
-      // User cancelled (Ctrl+C)
-      if (
-        error instanceof Error &&
-        error.message.includes("User force closed")
-      ) {
+      // Ctrl+C at a prompt: nothing has been written yet, and the run ends
+      // as interrupted, exit 130.
+      if (isPromptForceClosed(error)) {
         logger.warn("\nSetup cancelled.");
-        process.exit(0);
+        await promptCancelled();
       }
       throw error;
     }
+  }
+
+  // The answers decide the steps; the real run makes them and a dry run
+  // names them, so both report the same list.
+  const steps = initSteps(answers, paths);
+  if (options.dryRun) {
+    reportDryRun(logger, {
+      changes: steps.flatMap(step => {
+        const change = stepChange(cwd, step);
+        return change ? [change] : [];
+      }),
+      refusals: filesInTheWay(cwd, steps),
+    });
+    return;
   }
 
   logger.newline();
   logger.info("Initializing Nextly...");
   logger.newline();
 
-  await createDirectories(cwd, answers, paths, context);
-
-  await createConfigFile(cwd, answers, paths, context);
-
-  if (answers.createExampleCollection) {
-    await createExampleCollection(cwd, answers, paths, context);
-  }
-
-  await createGitkeepFiles(cwd, paths, context);
+  for (const step of steps) await makeStep(cwd, step, context);
 
   logger.newline();
   logger.divider();
@@ -189,44 +233,108 @@ async function promptUser(defaults: InitAnswers): Promise<InitAnswers> {
   };
 }
 
-async function createDirectories(
-  cwd: string,
-  answers: InitAnswers,
-  paths: InitPaths,
-  context: CommandContext
-): Promise<string[]> {
-  const { logger } = context;
-
-  const dirs = [
+/** Everything init makes for `answers`, in the order it makes it. */
+function initSteps(answers: InitAnswers, paths: InitPaths): InitStep[] {
+  const folders = [
     answers.collectionsDir,
     paths.schemasDir,
     paths.zodDir,
     paths.migrationsDir,
     paths.typesDir,
   ];
+  const steps: InitStep[] = folders.map(path => ({ kind: "folder", path }));
+  const file = (path: string, content: string, announce = true): InitStep => ({
+    kind: "file",
+    path,
+    content,
+    announce,
+  });
 
-  for (const dir of dirs) {
-    const fullPath = resolve(cwd, dir);
-    await mkdir(fullPath, { recursive: true });
-    logger.success(`Created ${dir}/`);
+  steps.push(file("nextly.config.ts", generateConfigTemplate(answers, paths)));
+
+  if (answers.createExampleCollection) {
+    steps.push(
+      file(
+        `${answers.collectionsDir}/posts.ts`,
+        generateExampleCollectionTemplate()
+      ),
+      file(
+        `${answers.collectionsDir}/index.ts`,
+        generateCollectionsIndexTemplate()
+      ),
+      // The config sits at the project root: two levels up from src/lib/,
+      // one from a root lib/.
+      file(
+        `${paths.libDir}/nextly.ts`,
+        generateNextlyHelperTemplate(
+          paths.base === "./src" ? "../../nextly.config" : "../nextly.config"
+        )
+      )
+    );
   }
 
-  return dirs;
+  steps.push(
+    file(`${paths.typesDir}/.gitkeep`, "", false),
+    file(`${paths.migrationsDir}/.gitkeep`, "", false)
+  );
+  return steps;
 }
 
-async function createConfigFile(
+/**
+ * Makes one step in `cwd`, with any folder a file needs. A path resolves
+ * against `cwd`, so an absolute collections folder answered at the prompt is
+ * where both the folder and its files go.
+ */
+async function makeStep(
   cwd: string,
-  answers: InitAnswers,
-  paths: InitPaths,
+  step: InitStep,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+  const target = resolve(cwd, step.path);
 
-  const content = generateConfigTemplate(answers, paths);
-  const configPath = join(cwd, "nextly.config.ts");
+  if (step.kind === "folder") {
+    await mkdir(target, { recursive: true });
+    logger.success(`Created ${step.path}/`);
+    return;
+  }
 
-  await writeFile(configPath, content, "utf-8");
-  logger.success("Created nextly.config.ts");
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, step.content, "utf-8");
+  if (step.announce) logger.success(`Created ${step.path}`);
+  else logger.debug(`Created ${step.path}`);
+}
+
+/**
+ * What a step would change in `cwd`, as a dry run names it: every file, and
+ * each folder not already there (making one that exists changes nothing).
+ */
+function stepChange(cwd: string, step: InitStep): DryRunChange | null {
+  if (step.kind === "file") return { action: "write", target: step.path };
+  if (existsSync(resolve(cwd, step.path))) return null;
+  return { action: "write", target: `${step.path}/` };
+}
+
+/**
+ * Each folder the steps need that is a file on disk, which the real run's
+ * `mkdir` fails on: a folder step's own path, and every folder above a file.
+ * A dry run names each as the real run's refusal.
+ */
+function filesInTheWay(cwd: string, steps: readonly InitStep[]): string[] {
+  const needed = new Set<string>();
+  for (const step of steps) {
+    let folder = step.kind === "folder" ? step.path : dirname(step.path);
+    while (folder !== "." && folder !== "" && folder !== dirname(folder)) {
+      needed.add(folder);
+      folder = dirname(folder);
+    }
+  }
+  return [...needed]
+    .filter(folder => {
+      const at = resolve(cwd, folder);
+      return existsSync(at) && !statSync(at).isDirectory();
+    })
+    .map(folder => `${folder} is a file, where a folder is needed.`);
 }
 
 function generateConfigTemplate(
@@ -258,30 +366,6 @@ export default defineConfig({
 `;
 }
 
-async function createExampleCollection(
-  cwd: string,
-  answers: InitAnswers,
-  paths: InitPaths,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-
-  const content = generateExampleCollectionTemplate();
-  const collectionPath = join(cwd, answers.collectionsDir, "posts.ts");
-
-  await mkdir(join(cwd, answers.collectionsDir), { recursive: true });
-
-  await writeFile(collectionPath, content, "utf-8");
-  logger.success(`Created ${answers.collectionsDir}/posts.ts`);
-
-  const indexContent = generateCollectionsIndexTemplate();
-  const indexPath = join(cwd, answers.collectionsDir, "index.ts");
-  await writeFile(indexPath, indexContent, "utf-8");
-  logger.success(`Created ${answers.collectionsDir}/index.ts`);
-
-  await createNextlyHelper(cwd, paths, context);
-}
-
 function generateCollectionsIndexTemplate(): string {
   return `/**
  * Collections Index
@@ -294,27 +378,6 @@ export { default as Posts } from "./posts";
 
 // Add more collection exports as you create them.
 `;
-}
-
-async function createNextlyHelper(
-  cwd: string,
-  paths: InitPaths,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-
-  const libDir = join(cwd, paths.libDir);
-  await mkdir(libDir, { recursive: true });
-
-  // The config sits at the project root: two levels up from src/lib/, one
-  // from a root lib/.
-  const content = generateNextlyHelperTemplate(
-    paths.base === "./src" ? "../../nextly.config" : "../nextly.config"
-  );
-  const helperPath = join(libDir, "nextly.ts");
-
-  await writeFile(helperPath, content, "utf-8");
-  logger.success(`Created ${paths.libDir}/nextly.ts`);
 }
 
 /**
@@ -588,26 +651,6 @@ export default defineCollection({
 `;
 }
 
-async function createGitkeepFiles(
-  cwd: string,
-  paths: InitPaths,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-
-  const gitkeepPaths = [
-    `${paths.typesDir}/.gitkeep`,
-    `${paths.migrationsDir}/.gitkeep`,
-  ];
-
-  for (const gitkeepPath of gitkeepPaths) {
-    const fullPath = join(cwd, gitkeepPath);
-    await writeFile(fullPath, "", "utf-8");
-  }
-
-  logger.debug("Created .gitkeep files");
-}
-
 function detectPackageManager(cwd: string): "pnpm" | "yarn" | "npm" {
   if (existsSync(join(cwd, "pnpm-lock.yaml"))) {
     return "pnpm";
@@ -685,36 +728,24 @@ function showNextSteps(cwd: string, context: CommandContext): void {
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-/**
- * Register the init command with the program
- *
- * @param program - Commander program instance
- */
-export function registerInitCommand(program: Command): void {
-  program
-    .command("init")
-    .description("Initialize a new Nextly project")
-    .option("-y, --yes", "Skip prompts and use defaults", false)
-    .option("-f, --force", "Overwrite existing files", false)
-    .action(async (cmdOptions: InitCommandOptions, cmd: Command) => {
-      const globalOpts: GlobalOptions = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/** The action of `nextly init`, loaded when it runs. */
+export async function initAction(cmdOptions: InitCommandOptions, cmd: Command) {
+  const globalOpts: GlobalOptions = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedInitOptions = {
-        ...cmdOptions,
-        cwd: globalOpts.cwd,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-      };
+  const resolvedOptions: ResolvedInitOptions = {
+    ...cmdOptions,
+    cwd: globalOpts.cwd,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+  };
 
-      try {
-        await runInit(resolvedOptions, context);
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
-    });
+  try {
+    await runInit(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

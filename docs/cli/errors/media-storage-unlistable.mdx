@@ -1,0 +1,24 @@
+---
+title: MEDIA_STORAGE_UNLISTABLE
+description: "The media storage cannot list its files, so it cannot be searched for left-behind thumbnails."
+---
+
+## Cause
+
+The media storage cannot list its files, so it cannot be searched for left-behind thumbnails.
+
+`nextly media orphans` finds left-behind thumbnails by listing the files in the media storage. The storage adapter in use cannot list its files, so there is nothing to search, and nothing was changed.
+
+## Fix
+
+- Remove left-behind thumbnails with the storage provider's own tools.
+- Or use a storage plugin that can list its files, then run `nextly media orphans` again.
+
+## Example
+
+```text
+✗ The media storage (uploadthing) cannot list its files, so it cannot be searched for left-behind thumbnails.
+  Why:  The uploadthing storage adapter offers no listing of the files it holds. Nothing was changed.
+  Next: Remove left-behind thumbnails with the storage provider's own tools, or use a storage plugin that can list its files.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-storage-unlistable  (MEDIA_STORAGE_UNLISTABLE)
+```

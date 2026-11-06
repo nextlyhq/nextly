@@ -1,0 +1,29 @@
+---
+title: CONFIG_TOOLING_UNAVAILABLE
+description: "Reading the configuration needs the optional `esbuild` package, which is not installed."
+---
+
+## Cause
+
+Reading the configuration needs the optional `esbuild` package, which is not installed.
+
+The CLI, and the app in development, compile `nextly.config.ts` with esbuild. It is an optional dependency, so a production install without development dependencies can leave it out.
+
+## Fix
+
+Install it as a development dependency, then run the command again:
+
+```bash
+pnpm add -D esbuild
+```
+
+In production it is needed only when `db.runMigrationsOnBoot` is on.
+
+## Example
+
+```text
+✗ The configuration could not be read: the `esbuild` package is not installed.
+  Why:  The CLI and development compile `nextly.config.ts` with esbuild, an optional dependency of `nextly`.
+  Next: Install it as a development dependency, for example `pnpm add -D esbuild`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-tooling-unavailable  (CONFIG_TOOLING_UNAVAILABLE)
+```

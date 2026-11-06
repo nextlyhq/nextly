@@ -40,7 +40,10 @@ import { useCallback, useMemo, useRef } from "react";
 
 import { useDocumentIdentity } from "@admin/components/features/entries/EntryForm/EntryFormContext";
 import { useEntryLocale } from "@admin/components/features/entries/EntryLocaleContext";
-import { autosaveScopeFor } from "@admin/hooks/useDocumentAutosave";
+import {
+  autosaveScopeFor,
+  documentRecordingKey,
+} from "@admin/hooks/useDocumentAutosave";
 import {
   useSnapshotAutosave,
   type AutosaveStatus,
@@ -135,12 +138,12 @@ export function useDocumentCheckpoint({
    * document — or another language — would store this document's content under
    * that one's key.
    */
-  const recordingKey = scope
-    ? `${scope.kind}:${scope.slug}:${"entryId" in scope ? scope.entryId : scope.documentId}:${locale ?? ""}`
-    : null;
+  const document = documentRecordingKey(scope);
+  const recordingKey = document === null ? null : `${document}:${locale ?? ""}`;
 
   return useSnapshotAutosave({
     identity: recordingKey,
+    document,
     save,
     debounceMs,
     enabled,

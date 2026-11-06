@@ -25,6 +25,7 @@ import {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
   isNumberField,
   isCheckboxField,
   isDateField,
@@ -921,6 +922,10 @@ export class TypeGenerator {
     }
     // Code fields
     else if (isCodeField(field)) {
+      tsType = "string";
+    }
+    // Icon fields: the icon id, such as "lucide:star"
+    else if (isIconField(field)) {
       tsType = "string";
     }
     // Number fields (supports hasMany for array of numbers)

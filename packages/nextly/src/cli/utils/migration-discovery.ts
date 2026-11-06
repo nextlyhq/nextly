@@ -153,3 +153,38 @@ export function compareMigrationBaseNames(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
 }
+
+/** The base name of a file a Schema Builder save writes (`isBuilderWrittenMigration`). */
+const BUILDER_MIGRATION_NAME_PATTERN =
+  /^\d{13}_(?:create|update|drop|i18n|status)_./;
+
+/**
+ * A migration file the Schema Builder wrote, by its base name.
+ *
+ * A Builder save names its file `<epoch milliseconds>_<create|update|drop|i18n|status>_<slug>`
+ * (`DynamicCollectionService`, `CollectionFileManager.saveMigration`), and writes no snapshot
+ * beside it. Nothing else names one so: `migrate:create`, `--blank` and the
+ * localisation companions start `YYYYMMDD_HHMMSS_mmm_`, and a template's
+ * files start with a sequence number and a time (`0001_000000_`). Thirteen
+ * digits is every epoch-millisecond count from September 2001 to the year
+ * 2286.
+ */
+export function isBuilderWrittenMigration(baseName: string): boolean {
+  return BUILDER_MIGRATION_NAME_PATTERN.test(baseName);
+}
+
+/**
+ * What to tell an operator about a Builder-written file with no snapshot: it
+ * is not applied as written, and the file to commit instead is the one
+ * `migrate:create` writes for the same change, which carries the snapshot
+ * `nextly migrate` checks the database against.
+ */
+export function builderMigrationRemedy(filename: string): string {
+  return (
+    `${filename} was written by the Schema Builder and has no snapshot beside it ` +
+    `(meta/${filename.replace(/\.sql$/, "")}.snapshot.json), so nothing ` +
+    `says what the database should look like once it has run. Replace it with the ` +
+    `migration \`nextly migrate:create\` writes for that change: delete ${filename}, ` +
+    `run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot.`
+  );
+}

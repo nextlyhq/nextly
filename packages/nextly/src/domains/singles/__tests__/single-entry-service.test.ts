@@ -15,7 +15,7 @@
  * - handleError / ServiceError translation
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 
 import {
   callerLookupFails,
@@ -26,6 +26,7 @@ import {
   resetCallerAccess,
 } from "../../../auth/access/__tests__/fake-caller";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors";
 import { SingleEntryService } from "../services/single-entry-service";
 
@@ -52,9 +53,17 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   return {
     ...(await importOriginal<object>()),
     actorForUser: fake.fakeActorForUser,
+    actorForVisitor: fake.fakeActorForVisitor,
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };
+});
+
+// A visitor's read with no access-control service reads the Public role on
+// the service's own database, with its dialect's tables: the postgresql ones
+// the mock adapter names, which the unit setup loads only for its own dialect.
+beforeAll(async () => {
+  await loadDialectTables("postgresql");
 });
 
 beforeEach(() => {
@@ -86,7 +95,7 @@ function createCtx(
   const registry = createMockSingleRegistry();
   const hookRegistry = createMockHookRegistry();
   const fieldGroupDataService = createMockComponentDataService();
-  const rbac = createMockRBACService(true);
+  const rbac = createMockRBACService();
   const logger = createSilentLogger();
 
   const service = new SingleEntryService(
@@ -369,7 +378,7 @@ describe("SingleEntryService", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
       expect(ctx.adapter.selectOne).not.toHaveBeenCalled();
     });
 
@@ -907,7 +916,24 @@ describe("SingleEntryService", () => {
   // ============================================================
 
   describe("update — RBAC", () => {
-    it("denies with 403 when RBAC reports access denied", async () => {
+    it("refuses an update in words, to a caller who may read the Single", async () => {
+      // One it may read, the caller is told what it may not do.
+      ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle("site-settings", siteSettingsMeta());
+      callerMay("read");
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "X" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.statusCode).toBe(403);
+      expect(result.message).toMatch(/^You can't edit /);
+      expect(ctx.adapter.update).not.toHaveBeenCalled();
+    });
+
+    it("answers a caller who may not read the Single as if it were missing", async () => {
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
       callerMay();
@@ -919,7 +945,13 @@ describe("SingleEntryService", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      // The missing Single's own answer, data and all, so nothing tells the two
+      // apart.
+      expect(result).toMatchObject({
+        statusCode: 404,
+        publicData: { single: "site-settings" },
+      });
       expect(ctx.adapter.update).not.toHaveBeenCalled();
     });
 
@@ -1151,9 +1183,12 @@ describe("SingleEntryService", () => {
       const ctx = lifecycleCtx("publish");
       ctx.adapter.selectOne.mockResolvedValue(null);
 
+      // The write also edits a field, so the update gate admits it and the
+      // publish is refused inside the transaction. A status alone would be
+      // refused by the publish gate before any default is built.
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published" },
+        { status: "published", siteName: "S2" },
         { user: { id: "u1" } }
       );
 
@@ -1203,11 +1238,13 @@ describe("SingleEntryService", () => {
       expect(rowInserts).toHaveLength(1);
       // No delete of the DOCUMENT. A successful save does delete the saving
       // author's recovery point, which is the supersede that keeps a saved
-      // document from offering its own saved work back, so "no deletes at all"
-      // is now too broad a statement of what this test is about.
+      // document from offering its own saved work back, and rewrites the
+      // record of the media the Single uses, so "no deletes at all" is now
+      // too broad a statement of what this test is about.
       expect(
         ctx.adapter.delete.mock.calls.filter(
-          ([table]: [string]) => table !== "nextly_versions"
+          ([table]: [string]) =>
+            table !== "nextly_versions" && table !== "nextly_media_usage"
         )
       ).toHaveLength(0);
     });

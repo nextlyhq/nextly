@@ -18,12 +18,15 @@ import {
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   orderedMigrations,
   pluginModuleStatements,
   qualifiedFilename,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import type { PluginMigrationSet } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
+import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import {
   asLifecycleCommandBoot,
   readPluginLifecycle,
@@ -34,24 +37,33 @@ import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-ow
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
+import { plannedOrRefused } from "../dry-run-refusal";
 import type { CommandContext } from "../program";
-import { createCliAdapter } from "../utils/adapter";
+import { createCliAdapter, openCommandAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
+import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
 import {
   downDatabaseDeps,
-  isDestructiveDown,
+  rollbackDeletions,
   planRollback,
   refusalOf,
   rollBackOne,
   type PlannedDown,
 } from "./migrate-down";
 import {
+  previewPluginInstall,
+  previewPluginInstallAll,
+  previewPluginUninstall,
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
+  type InstallOptions,
   type LifecyclePlugin,
+  type PluginLifecycleDeps,
   type PreparedModuleDown,
+  type UninstallOptions,
 } from "./plugin-lifecycle";
 import { pluginModuleDown } from "./plugin-module-rollback";
 import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
@@ -59,6 +71,11 @@ import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
 interface RunnerOptions {
   config?: string;
   cwd?: string;
+  /**
+   * Show what the command would change and change nothing: the database is
+   * opened read-only, and no lock, consent, hook or write follows.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -150,11 +167,23 @@ async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
-  const { config, appConfig, pluginConsent } = await loadConfig({
+  const {
+    config,
+    appConfig,
+    pluginConsent,
+    projectRoot,
+    fieldsAddedByPlugins,
+  } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
-  const adapter = await createCliAdapter({});
+  // A dry run opens the database read-only; one whose database is not there
+  // has said so, and ends here.
+  const adapter =
+    options.dryRun === true
+      ? await openCommandAdapter({ dryRun: true }, context.logger)
+      : await createCliAdapter({});
+  if (adapter === undefined) return undefined;
   const dialect = adapter.dialect;
   const plugins = toLifecyclePlugins(config.plugins ?? []);
 
@@ -313,16 +342,21 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       if (refusal !== undefined) throw refusal;
     }
     planned = new Map(plans.map(down => [down.filename, down]));
+    // Each module's DOWN judged by the reader `migrate:down` names a
+    // rollback's deletions with, every module read as one run in the order
+    // they run: a module that removes rows, converts a column or calls code
+    // that may delete is destructive, as one that drops is.
+    const deletions = await rollbackDeletions(
+      plans,
+      dialect,
+      deps.readDeletionFacts
+    );
     return plans.map((down, at) => ({
       moduleName: moduleNames[at],
       filename: down.filename,
       statements: down.statements,
       transaction: down.transaction,
-      destructive: isDestructiveDown(
-        down.statements,
-        dialect,
-        down.liveColumns
-      ),
+      deletions: deletions[at] ?? [],
     }));
   };
 
@@ -368,25 +402,27 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const { withMigrateLock } = await import(
       "../../domains/schema/pipeline/locks"
     );
-    const outcome = await withMigrateLock(
-      drizzleAdapter.getDrizzle(),
-      dialect,
-      work,
-      {
-        mode: "wait",
-        logger: {
-          warn: m => context.logger.warn(m),
-          info: m => context.logger.info(m),
-        },
-      }
-    );
+    const outcome = await withMigrateLock(drizzleAdapter, dialect, work, {
+      // The schema lock, which `migrate` and every other schema change take. A held one is
+      // waited for, about a minute, and then the command stops naming its holder.
+      command: "nextly plugins install/uninstall",
+      mode: "wait",
+      logger: {
+        warn: m => context.logger.warn(m),
+        info: m => context.logger.info(m),
+      },
+    });
     if (!outcome.ran) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage:
           `Another migration is holding the migrate lock, so ${notRun}. ` +
           "Nothing was changed — re-run once it finishes.",
-        logContext: { ...logContext, reason: outcome.reason },
+        logContext: {
+          ...logContext,
+          reason: "plugin-lifecycle-lock-busy",
+          outcome: outcome.reason,
+        },
       });
     }
     return outcome.value;
@@ -416,22 +452,16 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     );
 
   /**
-   * Apply this plugin's pending modules, through the phase `migrate` uses.
-   *
-   * Not a second implementation: `runPluginPhase` owns the ledger, the drop
-   * guard and the owner records, and an install that applied modules its own
-   * way would record them differently from every later `migrate`. Scoped to
-   * the one plugin being installed, which is the only difference.
-   *
-   * The caller holds the migrate lock (`underMigrateLock`), as `migrateCore`
-   * does around the same phase: install keeps it from before the modules
-   * apply until after `onInstall`, so an uninstall cannot run in between.
+   * The module sets an install of `plugin` applies (`applyMigrations`):
+   * none when it ships no modules. Read once for the consent and the run, so
+   * the two judge and apply the same modules.
    */
-  const applyMigrations = async (plugin: LifecyclePlugin): Promise<void> => {
+  const installSets = async (
+    plugin: LifecyclePlugin
+  ): Promise<PluginMigrationSet[]> => {
     const definition = definitions.find(d => d.name === plugin.name);
     const modules = definition?.contributes?.schema?.migrations ?? [];
-    if (definition === undefined || modules.length === 0) return;
-    const { runPluginPhase } = await import("./migrate");
+    if (definition === undefined || modules.length === 0) return [];
     const { pluginMigrationSetsFrom } = await import(
       "../../domains/schema/migrate/plugin/run-plugin-migrations"
     );
@@ -476,9 +506,37 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const sorted = await pluginMigrationSetsFrom([
       ...withDependencies.values(),
     ]);
-    const pluginMigrationSets = sorted.filter(
-      set => set.pluginName === definition.name
-    );
+    return sorted.filter(set => set.pluginName === definition.name);
+  };
+
+  /** What the modules an install of `plugin` applies delete (`PluginLifecycleDeps.installDeletions`). */
+  const installDeletions = async (plugin: LifecyclePlugin) => {
+    const sets = await installSets(plugin);
+    if (sets.length === 0) return [];
+    const { pendingPluginDeletions } = await import("./migrate");
+    return pendingPluginDeletions(sets, {
+      adapter,
+      db: drizzleAdapter.getDrizzle(),
+      dialect,
+    });
+  };
+
+  /**
+   * Apply this plugin's pending modules, through the phase `migrate` uses.
+   *
+   * Not a second implementation: `runPluginPhase` owns the ledger, the drop
+   * guard and the owner records, and an install that applied modules its own
+   * way would record them differently from every later `migrate`. Scoped to
+   * the one plugin being installed, which is the only difference.
+   *
+   * The caller holds the migrate lock (`underMigrateLock`), as `migrateCore`
+   * does around the same phase: install keeps it from before the modules
+   * apply until after `onInstall`, so an uninstall cannot run in between.
+   */
+  const applyMigrations = async (plugin: LifecyclePlugin): Promise<void> => {
+    const pluginMigrationSets = await installSets(plugin);
+    if (pluginMigrationSets.length === 0) return;
+    const { runPluginPhase } = await import("./migrate");
 
     const { compileExtensionSchema } = await import(
       "../../domains/schema/extension/publish"
@@ -582,7 +640,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
-        logContext: { plugin: plugin.name, hook },
+        logContext: {
+          reason: "plugin-hook-services-registered",
+          plugin: plugin.name,
+          hook,
+        },
       });
     }
 
@@ -599,17 +661,17 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // As the lifecycle command's boot: the install-state gate would refuse
       // the very plugin this command is installing or uninstalling.
       await asLifecycleCommandBoot(plugin.name, () =>
-        registerServices(
-          buildServiceConfig({
+        registerServices({
+          ...buildServiceConfig({
             // The config as the app wrote it. The boot runs every `setup`
             // transformer and contribution fold itself; booting from the
             // loader's `config`, which holds their result, ran each twice, so
             // a transformer that adds a plugin or a collection added it again.
             //
             // Boot migrations off: the hook runs inside the command's migrate
-            // lock, so a boot that migrated would wait on that lock itself,
-            // and on SQLite, whose lock holds nothing back, it could apply a
-            // module after the uninstall had fixed which ones to undo.
+            // lock, which this process may take again, so a boot that
+            // migrated would apply a pending module after the uninstall had
+            // fixed which ones to undo, on every dialect.
             config: {
               ...appConfig,
               db: { ...appConfig.db, runMigrationsOnBoot: false },
@@ -620,8 +682,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             imageProcessor: getImageProcessor(),
             hookRegistry: getHookRegistry(),
             logger: context.logger,
-          })
-        )
+          }),
+          // The project `--cwd` names, not the directory the CLI ran in: the
+          // start check judges the Next.js and React that app installs.
+          appRoot: projectRoot,
+        })
       );
       const pluginContext = getInitializedPluginContext(plugin.name);
       if (pluginContext === undefined) {
@@ -689,7 +754,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage: `Event handlers that ${plugin.name}'s ${hook} set off were still running after ${LIFECYCLE_HANDLER_WAIT_MS / 1000}s, so the command stopped there. Run it again once what they do can finish.`,
-        logContext: { plugin: plugin.name, hook },
+        logContext: {
+          reason: "plugin-hook-handlers-running",
+          plugin: plugin.name,
+          hook,
+        },
       });
     }
   };
@@ -722,6 +791,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     adapter,
     dialect,
     applyMigrations,
+    installDeletions,
     readLifecycle,
     recordLifecycle,
     // Read PER ACCESS, never captured. The same cast `migrate` makes —
@@ -745,17 +815,205 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     prepareDowns,
     runDown,
     underMigrateLock,
+    // A full uninstall without consent asks the person at a terminal, and is
+    // refused at once where nobody can answer: no terminal, `CI` set, or
+    // `--non-interactive`.
+    interactive: canPrompt(),
+    askToDelete: askToDeleteInTerminal,
+    // What other owners built on or into the plugin's schema. Loaded when an
+    // uninstall asks: nothing else in a command needs the dependents' reader.
+    schemaDependents: async (
+      plugin: LifecyclePlugin,
+      owned: readonly OwnerRecord[]
+    ) => {
+      const definition = definitions.find(d => d.name === plugin.name);
+      const [
+        { databaseDependentsSources },
+        { findUninstallDependents, pluginEntities },
+        { installRegistryResolver },
+      ] = await Promise.all([
+        import("../../domains/collections/services/collection-dependents"),
+        import("../../domains/schema/ownership/uninstall-dependents"),
+        import("../utils/registry-resolver"),
+      ]);
+      // The field registries are read by name through the adapter, which a
+      // command has no boot to teach them to: without a resolver the read
+      // refuses, and the guard, failing closed, would refuse every full
+      // uninstall. Installed on a view of the adapter that shares its
+      // connection, not on the adapter: a resolver naming only core tables
+      // would make the command's later writes by name (the migrate lock row)
+      // refuse a table it does not list.
+      const reader = Object.create(drizzleAdapter) as typeof drizzleAdapter;
+      installRegistryResolver(reader);
+      // What it owns, by the names a host's renames gave it, and the fields
+      // the fold's ledgers record it adding to other owners' entities.
+      const own = await pluginEntities(definition, fieldsAddedByPlugins);
+      const { compileExtensionSchema } = await import(
+        "../../domains/schema/extension/publish"
+      );
+      const extensionSchema = await compileExtensionSchema({
+        dialect,
+        plugins: definitions,
+        config,
+        logger: { warn: m => context.logger.warn(m) },
+      });
+      return findUninstallDependents({
+        pluginName: plugin.name,
+        owned,
+        collectionSlugs: own.collectionSlugs,
+        collectionSlugForTable: own.collectionSlugForTable,
+        // Its own Singles and field groups go with it, and so do their
+        // fields, as do the fields its `extend` added to other entities.
+        ownEntities: {
+          single: own.single,
+          fieldGroup: own.fieldGroup,
+          extendedFields: own.extendedFields,
+        },
+        sources: databaseDependentsSources(reader, () =>
+          Promise.resolve(extensionSchema ?? null)
+        ),
+        recordedRowsOn: tables =>
+          new SchemaOwnersRepository(drizzleAdapter.getDrizzle(), dialect).read(
+            [...tables]
+          ),
+        // Every table's indexes, keys and checks, through the schema
+        // pipeline's introspection: a key pointing in can sit on any table,
+        // its owner's or nobody's, and an element's definition is judged as
+        // the database holds it.
+        liveSchema: async () => {
+          const { introspectLiveSnapshot } = await import(
+            "../../domains/schema/pipeline/diff/introspect-live"
+          );
+          const snapshot = await introspectLiveSnapshot(
+            drizzleAdapter.getDrizzle(),
+            dialect,
+            await drizzleAdapter.listTables()
+          );
+          return snapshot.tables;
+        },
+      });
+    },
+    // A fully uninstalled plugin leaves its lifecycle record and nothing
+    // else: its settings, ledger module rows and owner rows go, so a later
+    // install starts from nothing. Each delete is a no-op when run again.
+    forgetPlugin: async (plugin: LifecyclePlugin) => {
+      // Loaded here: the settings tables module carries every dialect's.
+      const [{ pluginSettingsTables }, { eq }] = await Promise.all([
+        import("../../schemas/plugin-settings"),
+        import("drizzle-orm"),
+      ]);
+      const { nextlyPluginSettings } = pluginSettingsTables(dialect);
+      await drizzleAdapter
+        .getDrizzle<SettingsDeleteDb>()
+        .delete(nextlyPluginSettings)
+        .where(eq(nextlyPluginSettings.owner, plugin.name));
+      await new SchemaEventsRepository(
+        drizzleAdapter.getDrizzle(),
+        dialect
+      ).deletePluginModuleRows(plugin.name);
+      // Its rows only: another owner may share its name.
+      await new SchemaOwnersRepository(
+        drizzleAdapter.getDrizzle(),
+        dialect
+      ).deletePluginOwner(plugin.name);
+    },
+    // Every element the schema pipeline's own introspection reads, so an
+    // element is judged present exactly as a push would see it.
+    liveElements: async (tables: readonly string[]) => {
+      const { introspectLiveSnapshot } = await import(
+        "../../domains/schema/pipeline/diff/introspect-live"
+      );
+      const snapshot = await introspectLiveSnapshot(
+        drizzleAdapter.getDrizzle(),
+        dialect,
+        [...tables]
+      );
+      return new Map(
+        snapshot.tables.map(table => [
+          table.name,
+          [
+            ...table.columns.map(({ name }) => ({
+              kind: "column" as const,
+              name,
+            })),
+            ...(table.indexes ?? []).map(({ name }) => ({
+              kind: "index" as const,
+              name,
+            })),
+            ...(table.foreignKeys ?? []).map(({ name }) => ({
+              kind: "fk" as const,
+              name,
+            })),
+            ...(table.checks ?? []).map(({ name }) => ({
+              kind: "check" as const,
+              name,
+            })),
+          ],
+        ])
+      );
+    },
+    // Read through the schema pipeline's own introspection, so a column is
+    // judged present exactly as a push would see it.
+    liveColumns: async (tables: readonly string[]) => {
+      const { introspectLiveColumns } = await import(
+        "../../domains/schema/pipeline/diff/introspect-live"
+      );
+      const snapshot = await introspectLiveColumns(
+        drizzleAdapter.getDrizzle(),
+        dialect,
+        [...tables]
+      );
+      return new Map(
+        snapshot.tables.map(table => [
+          table.name,
+          new Set(table.columns.map(column => column.name)),
+        ])
+      );
+    },
   };
+}
+
+/** The one statement forgetting a plugin's settings needs from a Drizzle handle. */
+interface SettingsDeleteDb {
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+}
+
+/**
+ * A plugin command's dry run: connected read-only, `plan` worked out from the
+ * command's own reads and reported, or the refusal the real command would
+ * meet, connecting included (a database `nextly migrate` has not prepared).
+ */
+async function reportPluginDryRun(
+  options: RunnerOptions,
+  context: CommandContext,
+  plan: (deps: PluginLifecycleDeps) => Promise<DryRunPlan>
+): Promise<void> {
+  let deps: PluginLifecycleDeps | undefined;
+  try {
+    const report = await plannedOrRefused(async () => {
+      deps = await connect(options, context);
+      return deps === undefined ? undefined : plan(deps);
+    });
+    if (report !== undefined) reportDryRun(context.logger, report);
+  } finally {
+    await deps?.adapter.disconnect();
+  }
 }
 
 export async function runPluginInstall(
   name: string,
-  options: RunnerOptions,
+  options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, deps =>
+      previewPluginInstall(name, deps)
+    );
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
-    await runPluginInstallCommand(name, deps);
+    await runPluginInstallCommand(name, deps, { consent: options.consent });
   } finally {
     await deps.adapter.disconnect();
   }
@@ -763,12 +1021,16 @@ export async function runPluginInstall(
 
 /** Install every configured plugin, in the config loader's dependency order. */
 export async function runPluginInstallAll(
-  options: RunnerOptions,
+  options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, previewPluginInstallAll);
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
-    await runPluginInstallAllCommand(deps);
+    await runPluginInstallAllCommand(deps, { consent: options.consent });
   } finally {
     await deps.adapter.disconnect();
   }
@@ -776,10 +1038,20 @@ export async function runPluginInstallAll(
 
 export async function runPluginUninstall(
   name: string,
-  options: RunnerOptions & { keepData: boolean; yes: boolean },
+  options: RunnerOptions & UninstallOptions,
   context: CommandContext
 ): Promise<void> {
+  if (options.dryRun === true) {
+    return reportPluginDryRun(options, context, deps =>
+      previewPluginUninstall(
+        name,
+        { keepData: options.keepData, yes: options.yes },
+        deps
+      )
+    );
+  }
   const deps = await connect(options, context);
+  if (deps === undefined) return;
   try {
     // The command takes the migrate lock itself, through `underMigrateLock`,
     // once every refusal has been decided: the DOWNs, the ledger rows and the
@@ -787,7 +1059,11 @@ export async function runPluginUninstall(
     // two of them leaves a state no snapshot describes.
     await runPluginUninstallCommand(
       name,
-      { keepData: options.keepData, yes: options.yes },
+      {
+        keepData: options.keepData,
+        yes: options.yes,
+        consent: options.consent,
+      },
       deps
     );
   } finally {

@@ -7,7 +7,8 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
-import { migrateCore } from "../migrate";
+import { CliError } from "../../errors";
+import { migrateCore, migrateExitCode } from "../migrate";
 
 function deps(over: Record<string, unknown> = {}) {
   return {
@@ -24,7 +25,10 @@ function deps(over: Record<string, unknown> = {}) {
     lockMode: "fail-fast" as const,
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
     runFileMigrationsFn: vi.fn(async () => 0),
+    refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
+    assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
+    documentColumnsFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
       singlesRegistered: 0,
@@ -233,6 +237,85 @@ describe("migrateCore", () => {
       "metadata",
       "lock:released",
     ]);
+  });
+
+  it("asks the caller's precondition after the files and before the metadata, inside the lock", async () => {
+    const order: string[] = [];
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 1;
+      }),
+      beforeMetadata: vi.fn(async () => {
+        order.push("precondition");
+      }),
+      reconcileMetadataFn: vi.fn(async () => {
+        order.push("metadata");
+        return {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          marked: 0,
+          stillPending: 0,
+          unreadable: [],
+        };
+      }),
+    });
+
+    await migrateCore(d as never);
+
+    expect(order).toEqual(["files", "precondition", "metadata"]);
+  });
+
+  // Before the files, because a file written once the per-document columns existed may name
+  // them (a SQLite table rebuild copies every column); after the files and the metadata, because a
+  // file written before them creates tables without, whose registry rows the metadata records.
+  it("adds the per-document columns before the files and again after the metadata", async () => {
+    const order: string[] = [];
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 1;
+      }),
+      documentColumnsFn: vi.fn(async () => {
+        order.push("document columns");
+      }),
+      reconcileMetadataFn: vi.fn(async () => {
+        order.push("metadata");
+        return {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          marked: 0,
+          stillPending: 0,
+          unreadable: [],
+        };
+      }),
+    });
+
+    await migrateCore(d as never);
+
+    expect(order).toEqual([
+      "document columns",
+      "files",
+      "metadata",
+      "document columns",
+    ]);
+  });
+
+  // Refused there, the registry keeps the definitions it had, and the next run judges the same
+  // change again; the files that ran stay applied.
+  it("records no metadata when the caller's precondition refuses, and throws its refusal", async () => {
+    const d = deps({
+      runFileMigrationsFn: vi.fn(async () => 2),
+      beforeMetadata: vi.fn(async () => {
+        throw new Error("a translations column cannot hold its field");
+      }),
+    });
+
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /cannot hold its field/
+    );
+    expect(d.runFileMigrationsFn).toHaveBeenCalledOnce();
+    expect(d.reconcileMetadataFn).not.toHaveBeenCalled();
   });
 
   it("THROWS (does not exit) when file migrations reject", async () => {
@@ -454,10 +537,200 @@ describe("a plugin's migration history", () => {
         order.push("core");
         return { changed: false };
       }),
+      withLock: async (
+        _db: unknown,
+        _d: unknown,
+        fn: () => Promise<unknown>
+      ) => {
+        order.push("lock");
+        return { ran: true as const, value: await fn() };
+      },
     });
     // The plugin phase that follows reads the stub database and fails; only
     // what ran before it is under test here.
     await migrateCore(d as never).catch(() => undefined);
-    expect(order).toEqual(["ledger", "core"]);
+    const lock = order.indexOf("lock");
+    // Before the lock only the data-loss consent reads which modules are
+    // pending; under it the history check reads the ledger first, then the
+    // consent is judged again, then the core reconcile runs.
+    expect(order.slice(0, lock)).toEqual(["ledger"]);
+    expect(order.slice(lock)).toEqual(["lock", "ledger", "ledger", "core"]);
+  });
+});
+
+describe("a pending plugin module that deletes data", () => {
+  // Its UP runs in the plugin phase, before the app files: the consent the
+  // run asks for covers it as it covers a file.
+  const deleting: PluginMigration = (() => {
+    const up = ["DELETE FROM posts"];
+    const content = {
+      name: "002_prune",
+      schemaVersion: 2,
+      dialects: {
+        postgresql: { up, down: [] },
+        mysql: { up, down: [] },
+        sqlite: { up, down: [] },
+      },
+      snapshot: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      before: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+    };
+    return { ...content, checksum: migrationChecksum(content) };
+  })();
+
+  it("is refused before anything runs when no consent covers it and nobody can be asked", async () => {
+    const d = deps({
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+    });
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /plugin:fx\/002_prune/
+    );
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+
+  it("names the database's DDL event triggers beside the deletions, and asks no more consent for them", async () => {
+    const planned = {
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+      readEventTriggersFn: vi.fn(async () => ["audit_ddl", "watch_ddl"]),
+    };
+    const refusal = (over: Record<string, unknown>) =>
+      migrateCore(deps({ ...planned, ...over }) as never).then(
+        () => "ran",
+        (error: Error) => error.message
+      );
+    // The triggers add no deletion to judge: the same refusal, told beside it.
+    expect(await refusal({})).toBe(
+      `${await refusal({ readEventTriggersFn: async () => [] })}\nThis database has the DDL event triggers audit_ddl, watch_ddl: they run on schema changes, and Nextly cannot see what they do, so what they delete is not listed.`
+    );
+  });
+
+  it("says when whether the database has DDL event triggers could not be read", async () => {
+    const d = deps({
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+      readEventTriggersFn: vi.fn(async () => {
+        throw new Error("permission denied for pg_event_trigger");
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /could not read whether this database has DDL event triggers/
+    );
+  });
+});
+
+describe("an unresolved app attempt", () => {
+  it("is refused inside the lock, before the core reconcile writes anything", async () => {
+    const order: string[] = [];
+    const refusal = new Error("unresolved attempt");
+    const d = deps({
+      withLock: async (
+        _db: unknown,
+        _d: unknown,
+        fn: () => Promise<unknown>
+      ) => {
+        order.push("lock");
+        return { ran: true as const, value: await fn() };
+      },
+      refuseUnresolvedAttemptsFn: vi.fn(async (args: { command: string }) => {
+        order.push(`refusal:${args.command}`);
+        throw refusal;
+      }),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+      lockCommand: "boot migrations (db.runMigrationsOnBoot)",
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    // The command it names is the one holding the lock, the boot step's here.
+    expect(order).toEqual([
+      "lock",
+      "refusal:boot migrations (db.runMigrationsOnBoot)",
+    ]);
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("an applied file edited since it ran", () => {
+  it("is refused inside the lock, after the attempt check and before the core reconcile", async () => {
+    const order: string[] = [];
+    const refusal = new CliError("MIGRATION_TAMPERED", {
+      what: "edited",
+      why: "edited",
+      next: "restore it",
+    });
+    const d = deps({
+      refuseUnresolvedAttemptsFn: vi.fn(async () => {
+        order.push("attempts");
+      }),
+      assertAppliedFilesUnchangedFn: vi.fn(
+        async (args: { command: string }) => {
+          order.push(`checksums:${args.command}`);
+          throw refusal;
+        }
+      ),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    expect(order).toEqual(["attempts", "checksums:nextly migrate"]);
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+    // The code the guide documents, so a deploy script can tell it apart.
+    expect(migrateExitCode(refusal)).toBe(2);
+    expect(migrateExitCode(new Error("anything else"))).toBe(1);
+    expect(
+      migrateExitCode(
+        new CliError("MIGRATION_MISSING", { what: "x", why: "x", next: "x" })
+      )
+    ).toBe(1);
+  });
+});
+
+describe("how migrateCore asks for the schema lock", () => {
+  /** The options the lock was asked for, observed on the real call. */
+  async function lockOptions(over: Record<string, unknown> = {}) {
+    const withLock = vi.fn(
+      async (
+        _adapter: unknown,
+        _dialect: unknown,
+        fn: () => Promise<unknown>,
+        _options?: Record<string, unknown>
+      ) => ({ ran: true as const, value: await fn() })
+    );
+    await migrateCore(deps({ withLock, ...over }) as never);
+    return withLock.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
+  }
+
+  // A boot — production or development — runs inside a server, whose shutdown may let the
+  // migration run on after a signal; releasing the lock then would free it under running work.
+  it("leaves the lock to lapse on an interrupt unless its caller asks to release it", async () => {
+    expect((await lockOptions())?.releaseOnInterrupt).toBe(false);
+  });
+
+  it("releases it on an interrupt when the command asks, as `nextly migrate` does", async () => {
+    expect(
+      (await lockOptions({ lockReleaseOnInterrupt: true }))?.releaseOnInterrupt
+    ).toBe(true);
   });
 });

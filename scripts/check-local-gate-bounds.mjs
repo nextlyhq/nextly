@@ -78,6 +78,7 @@ export const HEAVY_SCRIPTS = [
   "test:unit",
   "test:coverage",
   "test:scripts",
+  "test:fixture-consumer-bundle",
   "test:integration",
   "test:integration:postgres15",
   "test:integration:postgres17",

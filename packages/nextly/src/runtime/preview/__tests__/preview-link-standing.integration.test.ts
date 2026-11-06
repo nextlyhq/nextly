@@ -147,6 +147,10 @@ interface Install {
 async function boot(dialect: TestDialect): Promise<Install> {
   current = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    // A visitor is judged by the Public role a real boot makes, which reads
+    // the authors by their rule and holds no read of the page or the Single,
+    // whose rule refuses visitors.
+    seedPublic: true,
     collections: [authors(), pages()],
     singles: [settings()],
   });
@@ -235,11 +239,16 @@ async function draftSingleWithTargets(t: TestNextly): Promise<void> {
   const { authorId } = await targets(t);
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", status: "published" },
+    data: { siteName: "Acme", status: "published", _overwrite: true },
   });
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme (pending)", owner: authorId, logo: "cover-1" },
+    data: {
+      siteName: "Acme (pending)",
+      owner: authorId,
+      logo: "cover-1",
+      _overwrite: true,
+    },
   });
 }
 
@@ -251,11 +260,16 @@ const shows = (value: unknown, text: string): boolean =>
 async function draftSingle(t: TestNextly): Promise<void> {
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", notes: "launch-plan", status: "published" },
+    data: {
+      siteName: "Acme",
+      notes: "launch-plan",
+      status: "published",
+      _overwrite: true,
+    },
   });
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme (pending)" },
+    data: { siteName: "Acme (pending)", _overwrite: true },
   });
 }
 
@@ -279,7 +293,7 @@ async function singleLink(minter: string): Promise<string> {
 
 /** The request's cookies: a preview link, a signed-in session, both or none. */
 function cookies(jar: { link?: string; session?: string }) {
-  return () => ({
+  return async () => ({
     get: (name: string) => {
       if (name === PREVIEW_SCOPE_COOKIE && jar.link !== undefined) {
         return { value: encodeURIComponent(jar.link) };

@@ -79,7 +79,11 @@ export function RoleInheritance({
   const baseRoleId = selectedBaseRoleIds[0];
   const baseRole = allRoles.find(r => r.id === baseRoleId);
 
-  /** Permissions ticked on top of whatever the base already grants. */
+  // The form's value is the role's own permissions alone: a base's are
+  // locked beside them, never merged in, so changing the base leaves them as
+  // they are.
+
+  /** The role's own permissions the base does not already give, as counted. */
   const extras = selectedIds.filter(id => !lockedPermissionIds.includes(id));
 
   // Only the newest selection may commit. Two selections in quick succession
@@ -92,7 +96,7 @@ export function RoleInheritance({
     setLockedPermissionIds([]);
     setSelectedBaseRoleIds([]);
     setRolePermissionsMap({});
-    form.setValue("permissions", extras, { shouldDirty: true });
+    form.setValue("permissions", selectedIds, { shouldDirty: true });
   };
 
   const chooseBase = async (roleId: string) => {
@@ -110,15 +114,9 @@ export function RoleInheritance({
       setLockedPermissionIds(inherited);
       setSelectedBaseRoleIds([roleId]);
 
-      // Replaces, not merges: one base means the previous base's permissions
-      // leave with it, while anything ticked by hand stays ticked.
-      form.setValue(
-        "permissions",
-        Array.from(new Set([...extras, ...inherited])),
-        {
-          shouldDirty: true,
-        }
-      );
+      // One base: the previous base's locked permissions leave with it, and
+      // the role's own stay as they are.
+      form.setValue("permissions", selectedIds, { shouldDirty: true });
     } catch {
       if (selection !== selectionRef.current) return;
       const name = allRoles.find(r => r.id === roleId)?.name ?? roleId;

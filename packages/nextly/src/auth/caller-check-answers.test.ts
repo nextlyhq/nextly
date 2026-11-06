@@ -176,6 +176,13 @@ const CALLERS: Record<string, Caller> = {
   "super-admin-inherited": session("admin-inherited"),
   "key-with": key([...POST_GRANTS, ...SYSTEM_GRANTS]),
   "key-without": key([]),
+  // The plain four on settings and nothing else: a retired `manage-settings`
+  // asked of it is held, at every door, as all four.
+  "key-plain-settings": key(
+    ["read", "create", "update", "delete"].map(action =>
+      grant(action, "settings")
+    )
+  ),
   "key-partial": key([
     grant("read", POSTS),
     grant("publish", POSTS),
@@ -213,6 +220,9 @@ const RULES: Record<string, Rule | undefined> = {
     throw new Error("rule failed");
   },
   "role-name": ({ roles }) => roles.includes("editor"),
+  // A filter, which allows only the entries it matches. A yes or no answers
+  // yes to it for a read alone: a write under it names no entry.
+  "returns-filter": () => ({ id: { exists: true } }) as unknown as boolean,
   // The spelling rules were once handed, `<resource>:<operation>`. No rule
   // is handed it any more, so this one never allows.
   "permission-spelling": ({ permissions, operation }) =>
@@ -364,6 +374,62 @@ describe("an entity that registered a rule under a system resource's name", () =
     );
     const gate = await authorizeCaller(auth, "read", "settings");
     expect("statusCode" in gate && gate.statusCode).toBe(403);
+  });
+});
+
+describe("the type-level question: may the caller act on any entry at all", () => {
+  /** Posts, every action guarded by `rule`. */
+  function postsGuardedBy(rule: Rule): void {
+    registered.rbac = serviceFor("service", rule);
+  }
+
+  /** Plain `can` and the type-level `can` for one caller and action. */
+  async function bothAnswers(
+    caller: Caller,
+    action: string
+  ): Promise<{ plain: boolean; anyEntry: boolean }> {
+    const user = { id: caller.user.id, roles: caller.user.roles };
+    return {
+      plain: await callerMayPerform(caller.scope, action, POSTS, user),
+      anyEntry: await callerMayPerform(caller.scope, action, POSTS, user, {
+        anyEntry: true,
+      }),
+    };
+  }
+
+  it("answers yes for a write a row filter limits, where plain `can` answers no", async () => {
+    postsGuardedBy(RULES["returns-filter"]);
+    // A write under a filter names no entry, so plain `can` refuses it; the
+    // type-level question counts the filter as the right held.
+    for (const caller of [CALLERS["user-with"], CALLERS["key-with"]]) {
+      expect(await bothAnswers(caller!, "update")).toEqual({
+        plain: false,
+        anyEntry: true,
+      });
+    }
+  });
+
+  it("still asks for the permission under a filter", async () => {
+    postsGuardedBy(RULES["returns-filter"]);
+    for (const caller of [CALLERS["user-without"], CALLERS["key-without"]]) {
+      expect(await bothAnswers(caller!, "update")).toEqual({
+        plain: false,
+        anyEntry: false,
+      });
+    }
+  });
+
+  it("is refused where the rule refuses, and allowed where it allows", async () => {
+    postsGuardedBy(RULES["returns-false"]);
+    expect(await bothAnswers(CALLERS["user-with"]!, "update")).toEqual({
+      plain: false,
+      anyEntry: false,
+    });
+    postsGuardedBy(RULES["returns-true"]);
+    expect(await bothAnswers(CALLERS["user-with"]!, "update")).toEqual({
+      plain: true,
+      anyEntry: true,
+    });
   });
 });
 

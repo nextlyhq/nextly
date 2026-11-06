@@ -38,6 +38,7 @@ import {
   componentRelationshipHoldsReferenceList,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  componentRelationIsSingleReference,
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
@@ -154,8 +155,8 @@ interface CollectionIndexContext<F> {
   columnNameFor: (field: F) => string | null;
   /**
    * Whether a relationship is indexed as a single foreign key. Defaults to the collection rule; a
-   * component passes the rule its creator follows, which indexes only a relationship with a string
-   * `relationTo`.
+   * component passes the rule its creator follows (`componentRelationIsSingleReference`), which
+   * indexes only a relationship naming one collection whose value is not a JSON list.
    */
   isSingleRelation?: (field: F) => boolean;
   /**
@@ -799,7 +800,11 @@ export function buildDesiredTableFromComponentFields(
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
     ...collectionIndexSpecs(tableName, fields, {
-      columnIsIndexable: (_field, col) =>
+      // A relation holding a list of references takes no plain index even when it asks for one,
+      // as the creator writes none (`componentRelationshipHoldsReferenceList` says why). A single
+      // polymorphic reference is one object and keeps an index it asks for.
+      columnIsIndexable: (field, col) =>
+        !componentRelationshipHoldsReferenceList(field) &&
         columnTypeIsIndexable(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
@@ -812,12 +817,10 @@ export function buildDesiredTableFromComponentFields(
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,
-      // The component creator indexes a relationship only when it names a single collection, so a
-      // many-to-many (which names its target on `options`) gets no index there.
-      isSingleRelation: field =>
-        (field.type === "relationship" || field.type === "upload") &&
-        field.hasMany !== true &&
-        typeof field.relationTo === "string",
+      // The component creator indexes a relationship only when it references one entry, which a
+      // relation holding a JSON list (a many-to-many included) never does. Asked through the rule
+      // the creator asks, so the two declare the same indexes.
+      isSingleRelation: componentRelationIsSingleReference,
       hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
       localizedNames,
       columnNameFor: field =>

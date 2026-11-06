@@ -6,7 +6,9 @@
  *
  * @module runtime/cache/nextly-tags
  */
+import { getNextlyLogger } from "../../observability/logger";
 import {
+  MAX_TAG_LENGTH,
   collectionTag,
   entryIdLocaleTag,
   entryIdTag,
@@ -69,9 +71,55 @@ export function nextlyTags(
 }
 
 /**
+ * Next.js keeps at most 128 tags on one cached read and drops the rest, with a
+ * warning naming them. The limit is per read: a write may expire any number.
+ */
+export const MAX_TAGS_PER_READ = 128;
+
+/** Whether a read past the limit has been reported, so a busy page logs once. */
+let readTagsDropReported = false;
+
+/**
+ * The tags one cached read carries: its own (the collection's or Single's)
+ * first, then the caller's, each once, and no more than Next.js keeps. Its own
+ * come first so the tag every write to it expires is never the one dropped.
+ * A tag longer than Next.js accepts is left out before the count, since Next.js
+ * would drop it anyway and it must not push a valid tag past the limit.
+ */
+export function readTags(
+  own: readonly string[],
+  extra: readonly string[] = []
+): string[] {
+  const tags = [...new Set([...own, ...extra])].filter(
+    tag => tag.length <= MAX_TAG_LENGTH
+  );
+  if (tags.length <= MAX_TAGS_PER_READ) return tags;
+  if (!readTagsDropReported) {
+    readTagsDropReported = true;
+    getNextlyLogger().warn({
+      kind: "read-tags-dropped",
+      message: `A cached read named ${tags.length} tags, more than the ${MAX_TAGS_PER_READ} Next.js keeps; the last ${tags.length - MAX_TAGS_PER_READ} were left off, so a write that expires only those leaves it cached until its own collection or Single changes.`,
+      kept: MAX_TAGS_PER_READ,
+      named: tags.length,
+    });
+  }
+  return tags.slice(0, MAX_TAGS_PER_READ);
+}
+
+/**
  * The tag a singleton / global read should carry, so a write to that single
  * invalidates every page that consumed it.
  */
 export function nextlySingleTags(slug: string): string[] {
   return [singleTag(slug)];
+}
+
+/**
+ * The tag a read of the site's general settings should carry, so a write to
+ * the settings invalidates every page that shows the site's name, address,
+ * logo or time zone. Its own segment after the namespace, so no collection's
+ * or Single's tag can be spelled the same.
+ */
+export function nextlySiteSettingsTags(): string[] {
+  return ["nextly:system:site-settings"];
 }

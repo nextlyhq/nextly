@@ -23,6 +23,11 @@
 
 import { z } from "zod";
 
+import {
+  API_KEY_LIST_COVERS_EVERY_USER,
+  LIST_READ_GATES,
+  requireRouteListRead,
+} from "../auth/list-read-gates";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
@@ -107,13 +112,15 @@ async function requireKeyCreator(req: Request) {
  */
 export const listApiKeys = privateToSession(
   withErrorHandler(async (req: Request): Promise<Response> => {
-    const authResult = await requireApiKeyPermission(req, "read");
-    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+    // The list's gate and reach are the ones the dashboard's key count reads.
+    const authResult = await requireRouteListRead(req, LIST_READ_GATES.apiKeys);
 
     const service = await getApiKeyService();
     const see = await apiKeyViewer(authResult);
     const keys = (
-      await service.listApiKeys(authResult.userId, { allUsers: true })
+      await service.listApiKeys(authResult.userId, {
+        allUsers: API_KEY_LIST_COVERS_EVERY_USER,
+      })
     ).map(see);
 
     // Synthetic single-page meta keeps the canonical list shape even though

@@ -24,6 +24,7 @@ import type {
   PluginFieldValidationResult,
 } from "../../../plugins/contributions";
 import {
+  issueOrigin,
   validateEntryData,
   type EntryWriteContext,
   type ValidatableField,
@@ -118,6 +119,36 @@ describe("plugin field-type validation", () => {
         code: "CUSTOM",
         message: "Document exceeds the node limit.",
       },
+    ]);
+  });
+
+  it("tells an issue addressed outside the field at its path, and keeps the field that found it", async () => {
+    // The path is the validator's to choose; whether its caller may be told
+    // the issue follows the read rules of the field that found it.
+    registerDocument(() => [
+      { path: "", message: "Whole document refused" },
+      { path: "title", message: "Sibling refused" },
+      { path: "bodyCopy", message: "Look-alike refused" },
+      { path: "body.nodes[0]", message: "Inside refused" },
+    ]);
+
+    const issues = await validateEntryData(
+      { body: { nodes: [] } },
+      [{ name: "body", type: "document" }],
+      { mode: "create" }
+    );
+
+    expect(issues.map(issue => issue.path)).toEqual([
+      "",
+      "title",
+      "bodyCopy",
+      "body.nodes[0]",
+    ]);
+    expect(issues.map(issueOrigin)).toEqual([
+      "body",
+      "body",
+      "body",
+      "body.nodes[0]",
     ]);
   });
 
@@ -539,6 +570,83 @@ describe("the write a plugin field type is validated for", () => {
     return { write, scopedTo };
   }
 
+  it("reads in the write's language when a validator's read names none", async () => {
+    // A cycle or a lock held only in the language being saved is judged in
+    // that language, whichever validator asks.
+    const reached: unknown[] = [];
+    registerDocument(async (_value, args) => {
+      await args.write?.readStored({
+        collection: "components",
+        id: "c1",
+        field: "content",
+        form: "published",
+      });
+      await args.write?.readStored({
+        collection: "components",
+        id: "c1",
+        field: "content",
+        form: "published",
+        locale: "fr",
+      });
+      return true;
+    });
+    const { write } = writeContext();
+    const judged = (locale: string) =>
+      validateEntryData(
+        { body: { nodes: [] } },
+        [{ name: "body", type: "document" }],
+        {
+          mode: "update",
+          write: {
+            ...write,
+            defaultLocale: "en",
+            locale,
+            readStored: async (_type, target) => {
+              reached.push((target as { locale?: string }).locale);
+              return { kind: "absent" };
+            },
+          },
+        }
+      );
+
+    await judged("de");
+    await judged("en");
+
+    // Unnamed reads the write's language; a named one is kept; the default
+    // language stays unnamed, which reads the default.
+    expect(reached).toEqual(["de", "fr", undefined, "fr"]);
+  });
+
+  it("hands the validator the write's language, and none for the default language however it is spelled", async () => {
+    const seen: (string | undefined)[] = [];
+    registerDocument(async (_value, args) => {
+      seen.push(args.write?.locale);
+      return true;
+    });
+    const { write } = writeContext();
+    const judged = (locale: string | undefined) =>
+      validateEntryData(
+        { body: { nodes: [] } },
+        [{ name: "body", type: "document" }],
+        {
+          mode: "update",
+          write: {
+            ...write,
+            defaultLocale: "en",
+            ...(locale === undefined ? {} : { locale }),
+          },
+        }
+      );
+
+    await judged("de");
+    await judged("en");
+    await judged(undefined);
+
+    // The default language reaches a validator as no language, whether the
+    // caller named it or left it out.
+    expect(seen).toEqual(["de", undefined, undefined]);
+  });
+
   it("hands the validator which entry is written, and a read scoped to its own type", async () => {
     let seen: PluginFieldValidateArgs["write"];
     let read: unknown;
@@ -640,5 +748,80 @@ describe("the write a plugin field type is validated for", () => {
     );
 
     expect(seen).toBeUndefined();
+  });
+});
+
+describe("an emptied value, for a type that asks to judge it", () => {
+  /** A `json` type whose validate refuses every empty value it is handed. */
+  function registerGuarded(validateEmpty: boolean, seen: unknown[]): void {
+    registerFieldType({
+      type: "document",
+      storage: "json",
+      component: "@acme/docs/admin#DocumentInput",
+      validateEmpty,
+      validate: value => {
+        seen.push(value);
+        return value === null || value === ""
+          ? "Would drop what the stored document holds"
+          : true;
+      },
+    });
+  }
+
+  const BODY: ValidatableField[] = [{ name: "body", type: "document" }];
+
+  it.each([null, ""])(
+    "hands %j to validate and reports what it answers",
+    async empty => {
+      const seen: unknown[] = [];
+      registerGuarded(true, seen);
+
+      const issues = await validateEntryData({ body: empty }, BODY, {
+        mode: "update",
+      });
+
+      expect(seen).toEqual([empty]);
+      expect(issues).toEqual([
+        {
+          path: "body",
+          code: "CUSTOM",
+          message: "Would drop what the stored document holds.",
+        },
+      ]);
+    }
+  );
+
+  it("never hands it on otherwise, where `required` is the only rule", async () => {
+    const seen: unknown[] = [];
+    registerGuarded(false, seen);
+
+    expect(
+      await validateEntryData({ body: null }, BODY, { mode: "update" })
+    ).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  it("does not hand on a field the write left out", async () => {
+    // Absent on an update means untouched, not emptied.
+    const seen: unknown[] = [];
+    registerGuarded(true, seen);
+
+    expect(
+      await validateEntryData({ other: 1 }, BODY, { mode: "update" })
+    ).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  it("still reports a required field as required", async () => {
+    const seen: unknown[] = [];
+    registerGuarded(true, seen);
+
+    const issues = await validateEntryData(
+      { body: null },
+      [{ name: "body", type: "document", required: true }],
+      { mode: "update" }
+    );
+
+    expect(issues.map(issue => issue.code)).toEqual(["REQUIRED", "CUSTOM"]);
   });
 });

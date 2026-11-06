@@ -282,3 +282,166 @@ describe("SingleForm under a document lock", () => {
     expect(write.some(control => !control.hasAttribute("disabled"))).toBe(true);
   });
 });
+
+describe("SingleForm when it gains a Single a colleague held", () => {
+  it("stays read-only and offers to try again when the latest document cannot be loaded", async () => {
+    // The Single on screen was read while Bob held it. A save from here would
+    // put that copy back over whatever Bob saved, so it stays read-only, says
+    // why, and asks again only when the person says so.
+    const reload = vi
+      .fn<() => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(undefined);
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      gains: 0,
+      takeOver,
+    });
+    const { rerender } = render(
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        latest={{ readAt: 1, failed: false, reload }}
+      />
+    );
+
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver,
+    });
+    rerender(
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        latest={{ readAt: 1, failed: false, reload }}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
+        "couldn't load the latest version"
+      )
+    );
+    const hero = screen.getByLabelText("Hero Title") as HTMLInputElement;
+    expect(hero.readOnly).toBe(true);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(
+      (screen.getByLabelText("Hero Title") as HTMLInputElement).readOnly
+    ).toBe(true);
+
+    // The reads made since arrive with what Bob saved, and that is what unlocks.
+    rerender(
+      <SingleForm
+        schema={schema}
+        document={
+          {
+            ...document,
+            updatedAt: "2026-01-01T00:05:00.000Z",
+            heroTitle: "Bob's hero",
+          } as unknown as SingleDocumentData
+        }
+        onSubmit={vi.fn()}
+        latest={{ readAt: 2, failed: false, reload }}
+      />
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Hero Title") as HTMLInputElement).readOnly
+      ).toBe(false)
+    );
+    expect(
+      (screen.getByLabelText("Hero Title") as HTMLInputElement).value
+    ).toBe("Bob's hero");
+  });
+});
+
+describe("SingleForm when a read of the Single on screen fails", () => {
+  it("keeps what the editor typed, read-only, until a read succeeds", async () => {
+    // The read that follows a save, or a refetch, failed while the editor held
+    // the Single. The page keeps the editor rather than replacing it with an
+    // error, so their unsaved text is still there; a save would write it over
+    // a copy that may be out of date, so it waits for the reads.
+    const reload = vi.fn<() => Promise<unknown>>();
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 0,
+      takeOver,
+    });
+    const view = (failed: boolean, readAt: number) => (
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        latest={{ readAt, failed, reload }}
+      />
+    );
+    const { rerender } = render(view(false, 1));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Hero Title"), "Mine");
+
+    rerender(view(true, 1));
+    await waitFor(() =>
+      expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
+        "couldn't load the latest version"
+      )
+    );
+    const hero = () => screen.getByLabelText("Hero Title") as HTMLInputElement;
+    expect(hero().readOnly).toBe(true);
+    expect(hero().value).toBe("Mine");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+
+    rerender(view(false, 2));
+    await waitFor(() => expect(hero().readOnly).toBe(false));
+    expect(hero().value).toBe("Mine");
+  });
+});
+
+describe("SingleForm on each gain, though every save shares one timestamp", () => {
+  it("starts again from the loaded copy each time", async () => {
+    // The form resets to a newer version by `updatedAt`, and keeps what the
+    // editor typed when the version looks unchanged. Two saves inside one
+    // second share it, so each gain's load resets it whatever it says.
+    const reload = vi.fn<() => Promise<unknown>>().mockResolvedValue(undefined);
+    const lockAs = (state: object, gains: number) =>
+      useDocumentLock.mockReturnValue({ state, gains, takeOver });
+    const view = (heroTitle: string, readAt: number) => (
+      <SingleForm
+        schema={schema}
+        document={{ ...document, heroTitle } as unknown as SingleDocumentData}
+        onSubmit={vi.fn()}
+        latest={{ readAt, failed: false, reload }}
+      />
+    );
+    const hero = () => screen.getByLabelText("Hero Title") as HTMLInputElement;
+    const user = userEvent.setup();
+
+    // Typed while the first claim was on its way, before Bob was reported.
+    lockAs({ status: "acquiring" }, 0);
+    const { rerender } = render(view("", 1));
+    await user.type(hero(), "Mine");
+    lockAs({ status: "held-by-other", holder: bob, requestSent: false }, 0);
+    rerender(view("", 1));
+
+    lockAs({ status: "held-by-me", someoneWaiting: false }, 1);
+    rerender(view("", 1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    rerender(view("Bob's first", 2));
+    await waitFor(() => expect(hero().value).toBe("Bob's first"));
+    expect(hero().readOnly).toBe(false);
+
+    await user.type(hero(), " and mine");
+    lockAs({ status: "held-by-other", holder: bob, requestSent: false }, 1);
+    rerender(view("Bob's first", 2));
+    lockAs({ status: "held-by-me", someoneWaiting: false }, 2);
+    rerender(view("Bob's first", 2));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
+    rerender(view("Bob's second", 3));
+    await waitFor(() => expect(hero().value).toBe("Bob's second"));
+  });
+});

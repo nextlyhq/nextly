@@ -7,12 +7,21 @@
  * @module schemas/jobs/__tests__/parity.test
  */
 import { Column, is, type Table } from "drizzle-orm";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
 import { users as mysqlUsers } from "../../users/mysql";
-import { my, pg, sl } from "../index";
+import * as my from "../mysql";
+import * as pg from "../postgres";
+import * as sl from "../sqlite";
 import { JOB_STATES } from "../types";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /**
  * Read the columns by asking Drizzle what each property IS, rather than by

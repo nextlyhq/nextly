@@ -106,13 +106,15 @@ async function tree(dir: string): Promise<Record<string, string>> {
   return files;
 }
 
+// Next.js is at a supported version throughout, so each run reaches the
+// Nextly version check rather than stopping on the framework one.
 async function withPackageJson(nextly?: string, dir = app) {
   await writeFile(
     path.join(dir, "package.json"),
     JSON.stringify(
       {
         name: "app",
-        dependencies: { next: "16.0.0", ...(nextly ? { nextly } : {}) },
+        dependencies: { next: "16.4.2", ...(nextly ? { nextly } : {}) },
       },
       null,
       2
@@ -170,7 +172,7 @@ describe("an existing app with Nextly at another version", () => {
           path.join(app, "package.json"),
           JSON.stringify({
             name: "app",
-            dependencies: { next: "16.0.0", nextly: release },
+            dependencies: { next: "16.4.2", nextly: release },
             optionalDependencies: { nextly: "0.0.1" },
           })
         ),

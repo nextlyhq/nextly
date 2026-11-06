@@ -94,14 +94,17 @@ export interface ReleaseCheckReads {
    */
   actingAs(authorId: string): Promise<UserContext | null>;
   /**
-   * Whether this person may perform this lifecycle action in this scope,
-   * through the same access gate the run's write meets.
+   * Which of these entries in this scope this person may perform this
+   * lifecycle action on, through the same access gate the run's write meets:
+   * every one or none, unless the gate's rule answers a filter, and then the
+   * entries it matches.
    */
   mayPerform(
     user: UserContext,
     scope: ReleaseCheckScope,
-    action: ReleaseMemberAction
-  ): Promise<boolean>;
+    action: ReleaseMemberAction,
+    entryIds: readonly string[]
+  ): Promise<ReadonlySet<string>>;
   /**
    * Whether the scope still declares a draft/published lifecycle: the
    * condition a document had to meet to join the release, asked again.

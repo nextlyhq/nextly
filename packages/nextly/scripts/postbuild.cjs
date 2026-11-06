@@ -162,3 +162,31 @@ console.log("Verifying package.json names only files the build produced...");
   }
   console.log(`${named.length} manifest paths name built files.\n`);
 }
+
+// The field catalog publishes the page-builder engine's binding vocabulary, so
+// the editor's picker and the renderer judge a binding by one table. That holds
+// in the BUILT entry only while the engine stays external: bundled in, the
+// catalog would ship a copy of the engine's code, which drifts once the engine
+// is released without it. The engine is a declared dependency, which tsdown
+// leaves external; this fails the build if that ever stops being so, asked of
+// the loaded modules themselves rather than of the text.
+console.log("Verifying the field catalog publishes the engine's vocabulary...");
+require("child_process").execFileSync(
+  process.execPath,
+  [
+    "--input-type=module",
+    "-e",
+    [
+      'const catalog = await import("./dist/collections/fields/catalog.mjs");',
+      'const engine = await import("@nextlyhq/blocks-engine/format");',
+      'const names = ["bindingKindOf", "canBindFieldToProp", "STORAGE_PRIMITIVE_AS_FIELD_TYPE"];',
+      "const copies = names.filter(name => engine[name] === undefined || catalog[name] !== engine[name]);",
+      "if (copies.length > 0) {",
+      '  console.error("[build-guard] nextly/field-catalog does not export the engine\'s own " + copies.join(", ") + ": is @nextlyhq/blocks-engine bundled into it?");',
+      "  process.exit(1);",
+      "}",
+    ].join("\n"),
+  ],
+  { cwd: join(__dirname, ".."), stdio: "inherit" }
+);
+console.log("The field catalog's binding vocabulary is the engine's.\n");

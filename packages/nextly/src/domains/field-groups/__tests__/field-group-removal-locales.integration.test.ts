@@ -19,6 +19,7 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
@@ -60,6 +61,9 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The boot's seeding, which makes the Public role `checked`, a caller
+        // with no user, is judged by.
+        seedPublic: true,
         // No fallback: a language shows only its own values, so a value held
         // in one language is not seen from another.
         localization: {
@@ -196,6 +200,15 @@ describe.each(getConfiguredTestDialects())(
       // read and update on lwrap, and its rules decide what they may change.
       await userWhoMay(t, "allowed-user", "update", ["lwrap"]);
       await grantTo(t, "allowed-user", "read", ["lwrap"]);
+      // Each collection's rule only narrows the update permission, so Public
+      // holds it, as a site admin would grant it: `checked` then writes and
+      // the field rules alone decide what it may change.
+      await grantPublic(t, [
+        "update-lpages",
+        "update-lwrap",
+        "update-lcoll",
+        "update-ldrafted",
+      ]);
     }, 180_000);
 
     afterAll(async () => {
@@ -223,6 +236,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "es",
         data: {
           one: { id: one.id, heading: `h-${tag}-es`, secret: "es-only" },
+          _overwrite: true,
         },
       } as never);
       return id;
@@ -243,7 +257,7 @@ describe.each(getConfiguredTestDialects())(
       await checked.update({
         collection: "lpages",
         id,
-        data: { one: null },
+        data: { one: null, _overwrite: true },
       } as never);
       expect((await inSpanish(id))?.secret).toBe("es-only");
     });
@@ -254,7 +268,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "lpages",
         id,
         locale: "es",
-        data: { one: null },
+        data: { one: null, _overwrite: true },
       } as never);
       expect((await inSpanish(id))?.secret).toBe("es-only");
     });
@@ -278,7 +292,10 @@ describe.each(getConfiguredTestDialects())(
       await checked.update({
         collection: "lpages",
         id,
-        data: { one: { id: one.id, box: { open: "o2", kept: "forged" } } },
+        data: {
+          one: { id: one.id, box: { open: "o2", kept: "forged" } },
+          _overwrite: true,
+        },
       } as never);
 
       const after = (
@@ -342,6 +359,7 @@ describe.each(getConfiguredTestDialects())(
             data: {
               status: "published",
               many: [{ id: first.id }, { id: second.id, secret: spanish }],
+              _overwrite: true,
             },
           } as never);
         }
@@ -352,11 +370,18 @@ describe.each(getConfiguredTestDialects())(
       async function hold(door: "direct" | "rest", id: string, data: Doc) {
         if (door === "rest") {
           expect(
-            await restPatch(["collections", "ldrafted", "entries", id], data)
+            await restPatch(["collections", "ldrafted", "entries", id], {
+              ...data,
+              _overwrite: true,
+            })
           ).toBe(200);
           return;
         }
-        await checked.update({ collection: "ldrafted", id, data } as never);
+        await checked.update({
+          collection: "ldrafted",
+          id,
+          data: { ...data, _overwrite: true },
+        } as never);
       }
 
       it.each(["direct", "rest"] as const)(
@@ -393,7 +418,7 @@ describe.each(getConfiguredTestDialects())(
       await checked.update({
         collection: "lcoll",
         id,
-        data: { meta: { open: "o2", kept: "forged" } },
+        data: { meta: { open: "o2", kept: "forged" }, _overwrite: true },
       } as never);
 
       const after = (await trusted.findByID({
@@ -426,6 +451,7 @@ describe.each(getConfiguredTestDialects())(
         ).held as Doc;
       const change = (tag: string) => ({
         wrap: { held: { heading: `h-${tag}`, secret: "forged" } },
+        _overwrite: true,
       });
 
       it.each(["direct", "rest"] as const)(
@@ -477,7 +503,7 @@ describe.each(getConfiguredTestDialects())(
       await checked.update({
         collection: "lpages",
         id,
-        data: { one: null },
+        data: { one: null, _overwrite: true },
       } as never);
       expect(await inSpanish(id)).toBeNull();
     });

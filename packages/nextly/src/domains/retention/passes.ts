@@ -21,6 +21,12 @@ import {
   pruneOneTimeSecrets,
   type OneTimeSecretsPruneAdapter,
 } from "../../plugins/security/one-time-secrets-prune";
+import {
+  ledgerFor,
+  LEDGER_PRUNE_INTERVAL_MS,
+  LEDGER_RETENTION_MS,
+  type TagExpiryLedgerAdapter,
+} from "../../runtime/cache/tag-expiry-ledger";
 import type { Logger } from "../../shared/types";
 import { pruneAuditDataSafely, type AuditPruneAdapter } from "../audit/prune";
 import {
@@ -45,6 +51,7 @@ import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-confi
 
 import {
   AUDIT_RETENTION_GATE_KEY,
+  CACHE_TAG_EXPIRIES_RETENTION_GATE_KEY,
   CONTENT_EVENTS_RETENTION_GATE_KEY,
   EMAIL_RETENTION_GATE_KEY,
   NOTICES_RETENTION_GATE_KEY,
@@ -63,7 +70,11 @@ export interface RetentionPassInput {
     OneTimeSecretsPruneAdapter &
     NoticesPruneDb &
     ContentEventsPruneDb &
-    PreviewLinksPruneAdapter;
+    PreviewLinksPruneAdapter &
+    TagExpiryLedgerAdapter & {
+      /** Whether the calling flow holds an open transaction on this adapter. */
+      transactionOpenInFlow?(): boolean;
+    };
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
@@ -76,6 +87,8 @@ export interface RetentionPassInput {
   oneTimeSecrets?: boolean;
   /** Sweep recorded preview links long past their end. */
   previewLinks?: boolean;
+  /** Prune cache tag expiries older than the ledger keeps them. */
+  cacheTagExpiries?: boolean;
   gate: RetentionGateStore;
   now?: () => Date;
   logger?: Logger;
@@ -255,6 +268,33 @@ export function buildRetentionPasses(
       },
     });
 
+  // On wherever a configuration reached the call site, as the sweeps above
+  // are: the cache handlers refuse entries older than the ledger keeps a tag's
+  // expiry, so a row past that age decides nothing, and without the pass the
+  // table keeps one row for every tag ever expired.
+  if (input.cacheTagExpiries)
+    passes.push({
+      key: CACHE_TAG_EXPIRIES_RETENTION_GATE_KEY,
+      intervalMs: () => LEDGER_PRUNE_INTERVAL_MS,
+      run: async maxBatches => {
+        try {
+          await ledgerFor(input.adapter).prune(LEDGER_RETENTION_MS, {
+            maxBatches,
+          });
+        } catch (error) {
+          // Quietly, for the reason the secrets pass is: a failure here must
+          // never reach the write that offered the pass.
+          warnQuietly(
+            input.logger,
+            "Cache tag expiries retention pass failed",
+            {
+              error: error instanceof Error ? error.message : "unknown error",
+            }
+          );
+        }
+      },
+    });
+
   return passes;
 }
 
@@ -286,6 +326,7 @@ export function retentionPoliciesFrom(
   | "emailPolicy"
   | "oneTimeSecrets"
   | "previewLinks"
+  | "cacheTagExpiries"
 > {
   // `undefined` is "no configuration reached this call site", which is not the
   // same as "a configuration that asked for nothing" and must not gain passes.
@@ -297,6 +338,8 @@ export function retentionPoliciesFrom(
     oneTimeSecrets: true,
     // The same holds for recorded preview links.
     previewLinks: true,
+    // And for the cache tag expiry ledger.
+    cacheTagExpiries: true,
     auditPolicy: config.auditRetention,
     // Flattened `emailRetention` when initialization produced one, and
     // otherwise resolved from the NESTED block by the same call the sanitizer
@@ -326,5 +369,8 @@ export function buildRetentionRunner(
     gate: input.gate,
     now: input.now,
     logger: input.logger,
+    // A write offering passes from inside its transaction is offered none:
+    // they would run on the pool, outside it.
+    transactionOpen: () => input.adapter.transactionOpenInFlow?.() ?? false,
   });
 }

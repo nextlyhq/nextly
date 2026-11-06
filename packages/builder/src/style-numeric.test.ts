@@ -14,10 +14,13 @@ import { describe, expect, it } from "vitest";
 import {
   CSS_NUMBER,
   measurementOf,
+  scrubbedValue,
+  scrubOrigin,
   steppedValue,
   toggleOptionsFor,
   toggleShows,
   unitChoicesFor,
+  withDefaultUnit,
   withUnit,
 } from "./style-numeric";
 
@@ -383,5 +386,87 @@ describe("a toggle is a projection of a keyword leaf", () => {
     expect(toggleShows(options, undefined)).toBe(true);
     expect(toggleShows(options, "inherit")).toBe(false);
     expect(toggleShows(options, { $token: "x.y" })).toBe(false);
+  });
+});
+
+describe("a bare number typed into a length field", () => {
+  it("takes the unit the field shows, px unless another is chosen", () => {
+    // "24" was refused as "not a length": the field now reads it as the
+    // author meant it, in the unit beside it.
+    expect(withDefaultUnit(PADDING, "24", "px")).toBe("24px");
+    expect(withDefaultUnit(PADDING, " 1.5 ", "rem")).toBe("1.5rem");
+  });
+
+  it("leaves a value that says its own unit, or is a keyword, as typed", () => {
+    expect(withDefaultUnit(PADDING, "50%", "px")).toBe("50%");
+    expect(withDefaultUnit(MARGIN, "auto", "px")).toBe("auto");
+    expect(withDefaultUnit(PADDING, null, "px")).toBeNull();
+  });
+
+  it("leaves a number the property would refuse with the unit as typed", () => {
+    // A negative padding is refused either way; adding a unit must not turn
+    // a refusal into a different, quieter one.
+    expect(withDefaultUnit(PADDING, "-4", "px")).toBe("-4");
+  });
+
+  it("leaves a unitless property's number alone", () => {
+    expect(withDefaultUnit(OPACITY, "0.5", "px")).toBe("0.5");
+  });
+});
+
+describe("a drag past what the property takes", () => {
+  it("rests a padding dragged past zero at zero, where a key press refuses the step", () => {
+    expect(steppedValue(PADDING, "4px", -20)).toBeUndefined();
+    expect(scrubbedValue(PADDING, "4px", -20)).toBe("0px");
+  });
+
+  it("rests at the drag's own precision, a fine drag at a tenth", () => {
+    expect(scrubbedValue(PADDING, "0.3px", -0.8)).toBe("0px");
+  });
+
+  it("takes the whole step where the property accepts it, the unit kept", () => {
+    expect(scrubbedValue(PADDING, "4rem", 12)).toBe("16rem");
+    expect(scrubbedValue(MARGIN, "4px", -20)).toBe("-16px");
+  });
+
+  it("ends its search on a value written past a double's precision", () => {
+    // Fifteen decimals put the bound some 10^16 steps away, past the safe
+    // integers, where a midpoint can round back onto an end.
+    const rested = scrubbedValue(PADDING, "10.000000000000002px", -20);
+    expect(typeof rested).toBe("string");
+    expect(Number.parseFloat(String(rested))).toBeLessThan(0.001);
+  });
+
+  it("moves an integer leaf only by whole steps", () => {
+    expect(steppedValue(Z_INDEX, 3, 0.1)).toBeUndefined();
+    expect(scrubbedValue(Z_INDEX, 3, 1.3)).toBe(4);
+  });
+
+  it("holds a number leaf to its bounds", () => {
+    expect(scrubbedValue(OPACITY, 0.5, 30)).toBe(1);
+  });
+
+  it("answers undefined where nothing moves, and for a value that is not one measurement", () => {
+    expect(scrubbedValue(PADDING, "0px", -5)).toBeUndefined();
+    expect(scrubbedValue(PADDING, "auto", 5)).toBeUndefined();
+  });
+});
+
+describe("where a drag on a label starts", () => {
+  it("starts from the text in the field, a bare number given the field's unit", () => {
+    expect(scrubOrigin(PADDING, "12px", "px", undefined)).toBe("12px");
+    expect(scrubOrigin(PADDING, "20", "rem", undefined)).toBe("20rem");
+    expect(scrubOrigin(OPACITY, "0.5", "", undefined)).toBe("0.5");
+  });
+
+  it("starts an empty field from the inherited measurement, else from zero in its unit", () => {
+    expect(scrubOrigin(PADDING, "", "px", "16px")).toBe("16px");
+    expect(scrubOrigin(PADDING, "", "rem", undefined)).toBe("0rem");
+    expect(scrubOrigin(PADDING, " ", "px", "auto")).toBe("0px");
+  });
+
+  it("does not start on text that is not one measurement", () => {
+    expect(scrubOrigin(MARGIN, "auto", "px", undefined)).toBeUndefined();
+    expect(scrubOrigin(PADDING, "10px 20px", "px", undefined)).toBeUndefined();
   });
 });

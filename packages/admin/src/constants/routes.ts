@@ -13,6 +13,13 @@ export const ROUTES = {
   // Dashboard route (homepage)
   DASHBOARD: "/admin",
 
+  // The widget preview page, for a development server only. Not in the page
+  // registry: the router resolves it only once the running server has said it
+  // is in development (`components/features/widgets/preview/preview-route`),
+  // and everywhere else it is an address like any other the admin does not
+  // serve.
+  WIDGET_PREVIEWS: "/admin/dev/widget-previews",
+
   // Users routes
   USERS: "/admin/users",
   USERS_CREATE: "/admin/users/create",
@@ -142,9 +149,6 @@ export const ROUTES = {
   // rather than in the rail because it is machinery an operator watches, not
   // editorial work — the same reasoning that puts webhooks there.
   SETTINGS_BACKGROUND_JOBS: "/admin/settings/background-jobs",
-  SETTINGS_IMAGE_SIZES: "/admin/settings/image-sizes",
-  SETTINGS_IMAGE_SIZES_CREATE: "/admin/settings/image-sizes/create",
-  SETTINGS_IMAGE_SIZES_EDIT: "/admin/settings/image-sizes/edit/[id]",
 
   // Plugin routes
   PLUGINS: "/admin/plugins",

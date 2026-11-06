@@ -1,0 +1,17 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "check-types": {
+      // The suite asks the playground how it was built through the
+      // playground's own rule (`tests/support/cache-components.ts` imports
+      // `apps/playground/cache-components.ts`), so that file is in this
+      // package's program. Inputs are package-scoped, so it is named here:
+      // without it, editing the rule would leave this hash unchanged.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "$TURBO_ROOT$/apps/playground/cache-components.ts"
+      ]
+    }
+  }
+}

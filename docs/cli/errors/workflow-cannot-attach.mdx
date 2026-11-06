@@ -1,0 +1,25 @@
+---
+title: WORKFLOW_CANNOT_ATTACH
+description: "A workflow in the configuration is attached to a collection or Single it cannot run on."
+---
+
+## Cause
+
+A workflow in the configuration is attached to a collection or Single it cannot run on.
+
+A workflow runs on drafts, and on targets whose fields and components it can move through its stages. The Why line names each workflow, the collection or Single it is attached to, and what that target lacks.
+
+## Fix
+
+- Give the target what its workflow needs, as the Why line says: for drafts, `status: true` and `versions: { drafts: true }` on the collection or Single.
+- Or attach the workflow to a different collection or Single, or remove it from this one.
+- Then run the command again.
+
+## Example
+
+```text
+✗ A workflow cannot be attached where the configuration attaches it.
+  Why:  `editorial` cannot be attached to `pages`: it does not keep drafts: set `status: true` and `versions: { drafts: true }`.
+  Next: Give each target what its workflow needs, such as drafts, or attach the workflow elsewhere, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/workflow-cannot-attach  (WORKFLOW_CANNOT_ATTACH)
+```

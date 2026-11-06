@@ -1,0 +1,23 @@
+---
+title: PLUGIN_TABLE_IDENTITY_UNREADABLE
+description: "The database could not report the identity of a table a full uninstall drops, so the uninstall could not check its hook left it in place."
+---
+
+## Cause
+
+The database could not report the identity of a table a full uninstall drops, so the uninstall could not check its hook left it in place.
+
+A full uninstall reads each table's identity before and after the plugin's `onUninstall`, so its DOWN migrations never drop a table the hook put in place of the one they were judged against. The database reported none for a table, or on SQLite its schema version could not be read.
+
+## Fix
+
+- Follow the Next line: run the uninstall again, or run it with `--keep-data` to leave the tables in place.
+
+## Example
+
+```text
+✗ The database reports no identity for seo_redirects, so whether @acme/seo's onUninstall leaves it in place could not be checked.
+  Why:  A full uninstall reads each table's identity before and after the plugin's `onUninstall`, so its DOWN migrations never drop a table the hook put in place of the one they were judged against. Nothing was changed.
+  Next: Use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-table-identity-unreadable  (PLUGIN_TABLE_IDENTITY_UNREADABLE)
+```

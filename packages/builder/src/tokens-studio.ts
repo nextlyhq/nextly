@@ -38,6 +38,8 @@
  */
 import {
   emitTokenBlocks,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   tokenNamingProblem,
@@ -48,7 +50,10 @@ import {
   type SiteTokenSet,
   type TokenKind,
   type TokenMode,
+  validateStyleValues,
 } from "@nextlyhq/blocks-engine";
+
+import { lineHeightFromText } from "./style-folded";
 
 /**
  * What each kind is called in the interface.
@@ -163,7 +168,7 @@ export interface TokenRow {
 }
 
 /** The tokens of one kind, in stored order, as rows. */
-export function tokenRows(
+function tokenRows(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
 ): readonly TokenRow[] {
@@ -440,6 +445,115 @@ export function setTokenValue(
   });
 }
 
+/** What a line height that cannot be stored is told, in words. */
+const LINE_HEIGHT_REFUSAL =
+  "A line height is a number like 1.4, or a length like 24px.";
+
+/**
+ * What a dark line height is told when it would need a kind other than
+ * light's. A token has one kind, and a number token refuses a length as surely
+ * as a length token refuses a number; the light value is the one that sets it.
+ */
+export const LINE_HEIGHT_MIXED =
+  "Light and dark line heights are both numbers, like 1.4, or both lengths, like 24px. Use the light value first to change which.";
+
+/** Whether a variable is a line height of the type scale, by its code name. */
+function isLineHeightToken(token: { name: string }): boolean {
+  return token.name.startsWith(LINE_HEIGHT_PREFIX);
+}
+
+/**
+ * The kind a line height is held as for a value: a plain number (`1.4`, a
+ * multiple of the font size, which is what scales with it) is a `number`
+ * token, and anything else (`24px`, `150%`, `calc()`) a `dimension`. Read
+ * with the inspector's own rule for a typed line height, so the two agree on
+ * what a plain number is.
+ */
+function lineHeightKindOf(value: string): TokenKind {
+  return typeof lineHeightFromText(value) === "number" ? "number" : "dimension";
+}
+
+/**
+ * Why a value cannot be a line height, or nothing. Judged by the catalogue's
+ * rule for a block's line height, the value a token here is read into, rather
+ * than by a second list of what a line height may be.
+ */
+function lineHeightValueIssue(value: string): string | undefined {
+  const typed = lineHeightFromText(value);
+  if (typed === null) return LINE_HEIGHT_REFUSAL;
+  const issues = validateStyleValues({ lineHeight: typed }, "", "strict");
+  return issues.some(issue => issue.severity === "error")
+    ? LINE_HEIGHT_REFUSAL
+    : undefined;
+}
+
+/** What writing a variable's value comes to: the new set, or why not. */
+export type TokenValueWrite =
+  | {
+      readonly tokens: SiteTokenSet;
+      /** Something the write changed beyond the field, said in words. */
+      readonly note?: string;
+    }
+  | { readonly issue: string };
+
+/** What the author is told when a light line height's new kind drops dark. */
+export const DARK_FOLLOWS_LIGHT =
+  "Dark now follows the light value; set a dark value again if you need one.";
+
+/**
+ * The set with one variable's value changed for one mode, or why it cannot be.
+ *
+ * Every variable but one is {@link setTokenValue}. A line height is the one
+ * value that is right as a plain number or as a length, so its KIND follows
+ * what is written: held as a `dimension`, `1.4` is a number where a length
+ * belongs, and the save is refused for it. A value no line height can be is
+ * refused here, in words, rather than stored for the page to drop.
+ *
+ * The LIGHT value sets the kind. A light edit of the other kind drops a dark
+ * value that no longer fits, so dark follows light, and says so; a dark edit
+ * of a kind other than light's is refused. Otherwise, with both modes set as
+ * lengths, neither could be the first to become a number.
+ */
+export function writeTokenValue(
+  tokens: SiteTokenSet,
+  at: number,
+  mode: TokenMode,
+  value: string
+): TokenValueWrite {
+  const token = tokens.tokens[at];
+  if (token === undefined || !isLineHeightToken(token)) {
+    return { tokens: setTokenValue(tokens, at, mode, value) };
+  }
+  const issue = lineHeightValueIssue(value);
+  if (issue !== undefined) return { issue };
+  const kind = lineHeightKindOf(value);
+  if (mode === "dark") {
+    if (lineHeightKindOf(token.values.light) !== kind) {
+      return { issue: LINE_HEIGHT_MIXED };
+    }
+    return {
+      tokens: withToken(tokens, at, {
+        ...token,
+        // The kind both values are read as, set rather than kept: a legacy
+        // unitless zero held as a length is a number to this rule, and a
+        // number dark beside it would otherwise be refused as not a length.
+        kind,
+        values: { ...token.values, dark: value },
+      }),
+    };
+  }
+  const dark = token.values.dark;
+  const darkFits = dark === undefined || lineHeightKindOf(dark) === kind;
+  return {
+    tokens: withToken(tokens, at, {
+      ...token,
+      kind,
+      values: darkFits ? { ...token.values, light: value } : { light: value },
+    }),
+    ...(darkFits ? {} : { note: DARK_FOLLOWS_LIGHT }),
+  };
+}
+
 /**
  * The set with one token's dark value REMOVED, so it follows light again.
  *
@@ -472,6 +586,20 @@ export function removeToken(tokens: SiteTokenSet, at: number): SiteTokenSet {
 }
 
 /**
+ * Every custom property the set's names and identities take. A name is folded
+ * in beside the identity because a name is what a later rename freezes into
+ * one.
+ */
+function usedProperties(tokens: SiteTokenSet | undefined): Set<string> {
+  const used = new Set<string>();
+  for (const token of tokens?.tokens ?? []) {
+    used.add(tokenCustomProperty(token.name, ""));
+    used.add(tokenCustomProperty(tokenIdentity(token), ""));
+  }
+  return used;
+}
+
+/**
  * A name nothing in the set is using yet, based on the kind.
  *
  * Suffixed rather than randomised so a second colour token is `color.2` and not
@@ -485,11 +613,7 @@ function freeName(tokens: SiteTokenSet | undefined, kind: TokenKind): string {
   // `--site-color-2`, so a raw-name check hands back a name the emitter will
   // refuse the moment it is written. Names are folded in alongside identities
   // because a name is what a later rename freezes into one.
-  const used = new Set<string>();
-  for (const token of tokens?.tokens ?? []) {
-    used.add(tokenCustomProperty(token.name, ""));
-    used.add(tokenCustomProperty(tokenIdentity(token), ""));
-  }
+  const used = usedProperties(tokens);
   const free = (candidate: string): boolean =>
     !used.has(tokenCustomProperty(candidate, ""));
   const base = kind === "custom" ? "custom" : kind.toLowerCase();
@@ -526,4 +650,473 @@ export function addToken(
     tokens: { ...base, tokens: [...base.tokens, token] },
     at: base.tokens.length,
   };
+}
+
+/* ------------------------------------------------------------------ groups */
+
+/** The groups the Design panel shows variables in, in order. */
+export type VariableGroup = "colours" | "type" | "spacing" | "other";
+
+const VARIABLE_GROUPS: readonly VariableGroup[] = [
+  "colours",
+  "type",
+  "spacing",
+  "other",
+];
+
+/** Each group's heading, in plain words. */
+const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
+  colours: "Colours",
+  type: "Type scale",
+  spacing: "Spacing, radius & shadows",
+  other: "Other",
+};
+
+/**
+ * Every group with its heading, in the order the Design panel lists them, for
+ * a list elsewhere that groups variables the same way.
+ */
+export function variableGroupHeadings(): readonly {
+  group: VariableGroup;
+  heading: string;
+}[] {
+  return VARIABLE_GROUPS.map(group => ({
+    group,
+    heading: VARIABLE_GROUP_LABELS[group],
+  }));
+}
+
+/** The code-name prefixes of a type size and of its line height. */
+const SIZE_PREFIX = "font-size.";
+const LINE_HEIGHT_PREFIX = "line-height.";
+
+/** Code-name prefixes of a spacing step, and of a radius. */
+const SPACING_PREFIXES = ["space.", "spacing.", "gap."];
+const RADIUS_PREFIX = "radius.";
+
+/** The families a length variable belongs to, each made for its own fields. */
+export type LengthFamily = "font-size" | "line-height" | "spacing" | "radius";
+
+/**
+ * The family a length variable belongs to, read from its code name as the
+ * Design panel groups it, or `undefined` for a length that names none (a
+ * content width) and for anything that is not a length.
+ *
+ * The inspector offers each field its own family, so a padding lists the
+ * spacing steps and a radius the radii; asked here so the Design panel's
+ * groups and the inspector's lists cannot disagree about what a variable is.
+ */
+export function lengthFamilyOf(token: {
+  name: string;
+  kind: TokenKind;
+}): LengthFamily | undefined {
+  const type = typeScaleProperty(token);
+  if (type !== undefined) return type;
+  if (token.kind !== "dimension") return undefined;
+  if (token.name.startsWith(RADIUS_PREFIX)) return "radius";
+  return SPACING_PREFIXES.some(prefix => token.name.startsWith(prefix))
+    ? "spacing"
+    : undefined;
+}
+
+/**
+ * The CSS property a type-scale variable is made for: `font-size` for a type
+ * size, `line-height` for its paired line height, or `undefined` for any other
+ * variable.
+ *
+ * Read from the code name, as the Design panel groups by it, and asked here
+ * once so the panel's "Type scale" group and the inspector's offer of a type
+ * size only where text is sized cannot disagree about what a type size is.
+ */
+export function typeScaleProperty(token: {
+  name: string;
+  kind: TokenKind;
+}): "font-size" | "line-height" | undefined {
+  if (token.kind !== "dimension" && token.kind !== "number") return undefined;
+  if (token.name.startsWith(SIZE_PREFIX)) return "font-size";
+  if (token.name.startsWith(LINE_HEIGHT_PREFIX)) return "line-height";
+  return undefined;
+}
+
+/**
+ * Which group a variable belongs in: by kind for colours and shadows, and by
+ * its code name for the lengths, since a size, a gap and a radius are all
+ * dimensions.
+ *
+ * Exported so the inspector's variable list groups exactly as Design does.
+ */
+export function variableGroupOf(token: {
+  name: string;
+  kind: TokenKind;
+}): VariableGroup {
+  if (token.kind === "color") return "colours";
+  if (token.kind === "shadow") return "spacing";
+  const family = lengthFamilyOf(token);
+  if (family === "font-size" || family === "line-height") return "type";
+  if (family === "spacing" || family === "radius") return "spacing";
+  return "other";
+}
+
+/** One row of the Design panel. */
+export interface VariableEntry {
+  /** The variable itself; for a type size, its font size. */
+  readonly row: TokenRow;
+  /** The plain name shown: the label, or one derived from the code name. */
+  readonly label: string;
+  /** A type size's line height, paired by name, when there is one. */
+  readonly lineHeight?: TokenRow;
+  /**
+   * What kind of variable it is, in words ("radius"), when another row is
+   * shown under the same name: `space.card` and `radius.card` both read
+   * "Card", and side by side nothing else says which is which.
+   */
+  readonly kindWord?: string;
+}
+
+/** A row's kind in words, as the panel tells two rows of one name apart. */
+function kindWordOf(row: TokenRow): string {
+  const family = lengthFamilyOf(row);
+  if (family === "font-size") return "type size";
+  if (family === "line-height") return "line height";
+  if (family !== undefined) return family;
+  // The kind's own label, as the panel names kinds elsewhere.
+  return TOKEN_KIND_LABELS[row.kind].toLowerCase();
+}
+
+/**
+ * A group's rows with their kind added where two or more share a name,
+ * ignoring case, as {@link labelClashes} compares names. Where the kinds
+ * clash as well (`space.card` and `spacing.card`, both spacing steps called
+ * "Card"), the code name, which no two variables share, tells them apart.
+ */
+function withKindWhereNamesClash(
+  entries: readonly VariableEntry[]
+): VariableEntry[] {
+  const count = (keys: readonly string[]) => {
+    const seen = new Map<string, number>();
+    for (const key of keys) seen.set(key, (seen.get(key) ?? 0) + 1);
+    return seen;
+  };
+  const names = count(entries.map(entry => entry.label.toLowerCase()));
+  const kinds = count(
+    // JSON, so no label can run into its kind.
+    entries.map(entry =>
+      JSON.stringify([entry.label.toLowerCase(), kindWordOf(entry.row)])
+    )
+  );
+  return entries.map(entry => {
+    const name = entry.label.toLowerCase();
+    if ((names.get(name) ?? 0) < 2) return entry;
+    const kind = kindWordOf(entry.row);
+    const unique = (kinds.get(JSON.stringify([name, kind])) ?? 0) < 2;
+    return { ...entry, kindWord: unique ? kind : entry.row.name };
+  });
+}
+
+/**
+ * Every group with its rows, Other included even when empty: the panel
+ * decides what an empty group shows.
+ *
+ * A font size and the line height of the same name are ONE row, so a type
+ * size reads as "16 / 26" the way designers write it. A line height with no
+ * size of its own still gets a row.
+ */
+export function variableGroups(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
+): readonly {
+  group: VariableGroup;
+  heading: string;
+  entries: readonly VariableEntry[];
+}[] {
+  const rows = tokenRows(tokens, mode);
+  const stored = tokens?.tokens ?? [];
+  const lineHeights = new Map<string, TokenRow>();
+  for (const row of rows) {
+    if (row.name.startsWith(LINE_HEIGHT_PREFIX)) {
+      lineHeights.set(row.name.slice(LINE_HEIGHT_PREFIX.length), row);
+    }
+  }
+  const paired = new Set<TokenRow>();
+  const byGroup = new Map<VariableGroup, VariableEntry[]>(
+    VARIABLE_GROUPS.map(group => [group, []])
+  );
+  for (const row of rows) {
+    const token = stored[row.at];
+    if (token === undefined) continue;
+    const group = variableGroupOf(row);
+    const lineHeight =
+      group === "type" && row.name.startsWith(SIZE_PREFIX)
+        ? lineHeights.get(row.name.slice(SIZE_PREFIX.length))
+        : undefined;
+    if (lineHeight !== undefined) paired.add(lineHeight);
+    byGroup.get(group)?.push({
+      row,
+      label: tokenDisplayLabel(token),
+      ...(lineHeight === undefined ? {} : { lineHeight }),
+    });
+  }
+  // Within each group: rows of one name under two headings are told apart
+  // by the headings already.
+  return variableGroupHeadings().map(({ group, heading }) => ({
+    group,
+    heading,
+    entries: withKindWhereNamesClash(
+      (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
+    ),
+  }));
+}
+
+/* ------------------------------------------------------------------ labels */
+
+/**
+ * Why this label cannot be given to the variable at `at`, or nothing.
+ *
+ * The engine's rule for a label, plus one of the panel's own: two variables
+ * shown under one name cannot be told apart in a list or a picker.
+ */
+export function variableLabelIssue(
+  tokens: SiteTokenSet | undefined,
+  at: number,
+  label: string
+): string | undefined {
+  const trimmed = label.trim();
+  if (trimmed === "") return undefined;
+  const problem = tokenLabelIssue(trimmed);
+  if (problem !== undefined) return problem;
+  const wanted = trimmed.toLowerCase();
+  const clash = visibleNames(tokens).find(
+    shown => !shown.ats.includes(at) && shown.label.toLowerCase() === wanted
+  );
+  return clash === undefined
+    ? undefined
+    : `Another variable is already called "${clash.label}".`;
+}
+
+/**
+ * Each variable as the panel shows it: its name, and the stored positions
+ * behind it, two for a type size and its paired line height. Names are
+ * compared here, over the rows an author sees, so a pair is one name.
+ */
+function visibleNames(
+  tokens: SiteTokenSet | undefined
+): { label: string; ats: number[] }[] {
+  return variableGroups(tokens).flatMap(group =>
+    group.entries.map(entry => ({
+      label: entry.label,
+      ats:
+        entry.lineHeight === undefined
+          ? [entry.row.at]
+          : [entry.row.at, entry.lineHeight.at],
+    }))
+  );
+}
+
+/**
+ * The names shown for more than one variable in a set, once each, ignoring
+ * case, since "Brand" and "brand" cannot be told apart in a list.
+ *
+ * The same rule {@link variableLabelIssue} holds one edit to, asked of a whole
+ * set, as an import produces one.
+ */
+export function labelClashes(tokens: SiteTokenSet): string[] {
+  const seen = new Set<string>();
+  const clashes = new Map<string, string>();
+  for (const { label } of visibleNames(tokens)) {
+    const key = label.toLowerCase();
+    if (seen.has(key)) clashes.set(key, label);
+    seen.add(key);
+  }
+  return [...clashes.values()];
+}
+
+/**
+ * The set with one variable's label changed. A blank label is removed, so the
+ * derived label shows again and nothing is stored for it.
+ */
+export function relabelToken(
+  tokens: SiteTokenSet,
+  at: number,
+  label: string
+): SiteTokenSet {
+  const token = tokens.tokens[at];
+  if (token === undefined) return tokens;
+  const { label: _previous, ...rest } = token;
+  const trimmed = label.trim();
+  return withToken(
+    tokens,
+    at,
+    trimmed === "" ? rest : { ...rest, label: trimmed }
+  );
+}
+
+/* --------------------------------------------------------------- adding */
+
+/** What a group's "+" can add. */
+export type NewVariable =
+  | "colour"
+  | "type size"
+  | "spacing"
+  | "radius"
+  | "shadow"
+  | Exclude<TokenKind, "color" | "shadow">;
+
+/** The code-name prefix, kind and first value of each new variable. */
+const NEW_VARIABLES: Readonly<
+  Record<NewVariable, { prefix: string; kind: TokenKind; value: string }>
+> = {
+  colour: { prefix: "color", kind: "color", value: "#000000" },
+  "type size": { prefix: "font-size", kind: "dimension", value: "16px" },
+  spacing: { prefix: "space", kind: "dimension", value: "16px" },
+  radius: { prefix: "radius", kind: "dimension", value: "4px" },
+  shadow: { prefix: "shadow", kind: "shadow", value: TOKEN_KIND_SEEDS.shadow },
+  dimension: { prefix: "size", kind: "dimension", value: "0px" },
+  fontFamily: { prefix: "font", kind: "fontFamily", value: "sans-serif" },
+  fontWeight: { prefix: "weight", kind: "fontWeight", value: "400" },
+  number: { prefix: "number", kind: "number", value: "0" },
+  duration: { prefix: "duration", kind: "duration", value: "200ms" },
+  custom: { prefix: "custom", kind: "custom", value: "0" },
+};
+
+/**
+ * The line height a new type size starts with: unitless, so it is a multiple
+ * of the size and follows it when the size changes, where a fixed length is
+ * right for one size only. 1.25 sits between the tighter leading a heading
+ * wants and the looser one body text wants, since a new size starts at 16px
+ * and is usually given a heading's size next.
+ */
+const NEW_LINE_HEIGHT = "1.25";
+
+/** The words a new variable's code name is made from, before it is named. */
+const NEW_WORDS: Readonly<Record<NewVariable, string>> = {
+  colour: "new-colour",
+  "type size": "new-size",
+  spacing: "new-spacing",
+  radius: "new-radius",
+  shadow: "new-shadow",
+  dimension: "new-size",
+  fontFamily: "new-font",
+  fontWeight: "new-weight",
+  number: "new-number",
+  duration: "new-duration",
+  custom: "new-value",
+};
+
+/**
+ * The set with a new variable for a group's "+", and where it landed.
+ *
+ * Named so its derived label reads in plain words ("New colour") until the
+ * author names it. A type size adds its line height too, under the same
+ * name, which is what pairs them.
+ */
+export function addVariable(
+  tokens: SiteTokenSet | undefined,
+  what: NewVariable
+): { tokens: SiteTokenSet; at: number } {
+  const base = tokens ?? { tokens: [] };
+  const spec = NEW_VARIABLES[what];
+  const words = freeWords(
+    base,
+    spec.prefix,
+    NEW_WORDS[what],
+    what === "type size"
+  );
+  const added: SiteToken[] = [
+    {
+      name: `${spec.prefix}.${words}`,
+      kind: spec.kind,
+      values: { light: spec.value },
+    },
+  ];
+  if (what === "type size") {
+    added.push({
+      name: `${LINE_HEIGHT_PREFIX}${words}`,
+      // A plain number, so a number token: as a `dimension` it would be a
+      // value the engine reports as not a length.
+      kind: "number",
+      values: { light: NEW_LINE_HEIGHT },
+    });
+  }
+  return {
+    tokens: { ...base, tokens: [...base.tokens, ...added] },
+    at: base.tokens.length,
+  };
+}
+
+/**
+ * The set with a just-added variable labelled, and its code name made from
+ * that label (`Heading 1` gives `font-size.heading-1`), its line height
+ * following.
+ *
+ * Only for a variable created moments ago, which nothing can reference yet:
+ * once a variable may be in use, its code name stays put and only the label
+ * changes, through {@link relabelToken}.
+ */
+export function labelNewVariable(
+  tokens: SiteTokenSet,
+  at: number,
+  label: string
+): SiteTokenSet {
+  const token = tokens.tokens[at];
+  if (token === undefined || token.id !== undefined) {
+    return relabelToken(tokens, at, label);
+  }
+  const relabelled = relabelToken(tokens, at, label);
+  const slug = slugOf(label);
+  if (slug === "") return relabelled;
+  const dot = token.name.indexOf(".");
+  const prefix = dot === -1 ? token.name : token.name.slice(0, dot);
+  const partnerAt = token.name.startsWith(SIZE_PREFIX)
+    ? tokens.tokens.findIndex(
+        other =>
+          other.name ===
+          `${LINE_HEIGHT_PREFIX}${token.name.slice(SIZE_PREFIX.length)}`
+      )
+    : -1;
+  const others = {
+    ...relabelled,
+    tokens: relabelled.tokens.filter(
+      (_, index) => index !== at && index !== partnerAt
+    ),
+  };
+  const words = freeWords(others, prefix, slug, partnerAt !== -1);
+  const next = [...relabelled.tokens];
+  const named = next[at];
+  if (named !== undefined) next[at] = { ...named, name: `${prefix}.${words}` };
+  const partner = partnerAt === -1 ? undefined : next[partnerAt];
+  if (partner !== undefined) {
+    next[partnerAt] = { ...partner, name: `${LINE_HEIGHT_PREFIX}${words}` };
+  }
+  return { ...relabelled, tokens: next };
+}
+
+/** A label as code-name words: lowercase letters, digits and dashes. */
+function slugOf(label: string): string {
+  return label
+    .normalize("NFKD")
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "");
+}
+
+/**
+ * Words free under `prefix` (and under the line-height prefix too, for a type
+ * size), suffixed `-2`, `-3`… when taken. Compared as custom properties, which
+ * is the real uniqueness boundary, against names and identities alike.
+ */
+function freeWords(
+  tokens: SiteTokenSet,
+  prefix: string,
+  words: string,
+  withLineHeight: boolean
+): string {
+  const used = usedProperties(tokens);
+  const free = (candidate: string): boolean =>
+    !used.has(tokenCustomProperty(`${prefix}.${candidate}`, "")) &&
+    (!withLineHeight ||
+      !used.has(tokenCustomProperty(`${LINE_HEIGHT_PREFIX}${candidate}`, "")));
+  if (free(words)) return words;
+  for (let n = 2; ; n += 1) {
+    if (free(`${words}-${n}`)) return `${words}-${n}`;
+  }
 }

@@ -19,6 +19,11 @@ import type {
 } from "../shared/types/access";
 
 import type { AccessTarget } from "./access/decide";
+import {
+  noteFilterNotApplied,
+  reportRuleFilterMisuse,
+  ruleAnswer,
+} from "./access/rule-answer";
 import { buildRuleContext } from "./access/rule-context";
 import type { GrantedPermission } from "./authenticated-scope";
 
@@ -36,7 +41,7 @@ export interface ReadAccessCaller {
   /**
    * An API key's grants in the STORED spelling (`read-posts`): what the coarse
    * `read-{slug}` check compares against. Empty for a session caller, whose
-   * grants `checkAccess` resolves from the database.
+   * grants the access decision resolves from the database.
    */
   permissions: string[];
   /**
@@ -46,6 +51,12 @@ export interface ReadAccessCaller {
   grants?: readonly GrantedPermission[];
   /** Role slugs, already normalized (session roles arrive as ids). */
   roles: string[];
+  /**
+   * Whether an API key carries its maker's super-admin authority, as
+   * authentication found it for the key's scope. Absent for a session, and
+   * for a key whose scope was built by hand or narrowed.
+   */
+  keyHoldsSuperAdmin?: boolean;
 }
 
 /**
@@ -104,9 +115,18 @@ export async function codeAccessAllows(
     { operation, target: { kind: target.kind, slug: target.slug } }
   );
 
+  let answer: unknown;
   try {
-    return (await operationAccess(ctx)) === true;
+    answer = await operationAccess(ctx);
   } catch {
     return false;
   }
+  // Only `true` allows every entry; a filter, which this check does not
+  // apply, refuses, and one that is misused is reported as such.
+  const meaning = ruleAnswer(answer);
+  reportRuleFilterMisuse(target.slug, operation, target.kind, meaning);
+  // Asked only once the caller holds the permission, so the decision would
+  // let it read the entries a filter matches.
+  await noteFilterNotApplied(target.kind, operation, meaning, true);
+  return meaning.kind === "allow";
 }

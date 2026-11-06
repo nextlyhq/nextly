@@ -45,6 +45,16 @@ describe("collectJobs", () => {
     expect(collected.map(c => c.owner)).toEqual(["app", "acme"]);
   });
 
+  it("names the plugin that declared a job apart from the app's own", () => {
+    // `owner` is for messages, and "app" is a name a plugin could also have:
+    // what a plugin may act on is told by `plugin`, absent for the app.
+    const collected = collectJobs(config([job("app:one")]), [
+      plugin("app", [job("acme:two")]),
+    ]);
+
+    expect(collected.map(c => c.plugin)).toEqual([undefined, "app"]);
+  });
+
   it("refuses two declarations of the same slug", () => {
     // Not a warning. Which handler wins would otherwise depend on plugin load
     // order, and the loser would never run with nothing anywhere to say so.

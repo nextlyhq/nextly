@@ -25,8 +25,21 @@ export const DEFAULT_WIDGET_LIMIT = 5;
  * items" setting offers, and the most its list or table draws. A card asks
  * one row above what it draws, to learn whether more exist, which stays
  * within the clamp.
+ *
+ * Ten, because a list card shows whole rows and never scrolls: past ten rows a
+ * card is a page, and "View all" opens the page that list belongs on.
  */
-export const MAX_WIDGET_ROWS = 25;
+export const MAX_WIDGET_ROWS = 10;
+
+/**
+ * How tightly a list card sets its rows: `default`, or `compact`, whose shorter
+ * rows let the same card hold more of them. The card's Density setting names
+ * one, and the admin decides how many rows fit from it.
+ *
+ * @experimental
+ */
+export const LIST_DENSITIES = ["default", "compact"] as const;
+export type ListDensity = (typeof LIST_DENSITIES)[number];
 
 /**
  * The rows a query declaring `limit` is run at.

@@ -1,31 +1,29 @@
 "use client";
 
 /**
- * The editor's way in to the site's breakpoints.
+ * The site's breakpoints, as Settings' Site tab shows and edits them.
  *
- * A TRIGGER plus the dialog, rather than the dialog alone, because open state
- * is the only thing a host would have to invent to use it and every host would
- * invent it the same way. What a host does have to supply is the pair this
- * cannot know: the site's saved set, and how to write one.
+ * A list in the device buttons' own words, and an "Edit breakpoints" control
+ * that turns the section into the editor in place. The editor is the whole of
+ * editing: its rows, its validation, its cascade preview, its Save and Cancel
+ * and the reason a save was refused. A breakpoint set validates as a whole, so
+ * it is saved as a whole, never a row at a time.
  *
- * **In the top bar rather than in a left panel.** Breakpoints are site-wide and
- * set rarely — an author defines them once and then works within them for
- * months — so they do not earn a permanent region beside Insert and Layers,
- * which are used on every edit. Every builder researched puts breakpoint
- * management in the viewport chrome rather than in a content panel, and putting
- * it there also means the manager sits where a breakpoint SWITCHER will go, so
- * the two read as one control instead of two unrelated ones.
+ * **In Settings rather than in the top bar.** Breakpoints are site-wide and set
+ * rarely; the top bar keeps the devices that choose between them.
  *
  * @module breakpoint-manager
  */
 
 import { Button } from "@nextlyhq/ui";
-import { MonitorSmartphone } from "lucide-react";
+import { Check } from "lucide-react";
 import * as React from "react";
 
-import { BreakpointDialog } from "./breakpoint-dialog";
+import { BreakpointEditor } from "./breakpoint-editor";
+import { deviceOptions, tierIcon } from "./breakpoint-switcher";
 import {
   authoredBreakpoints,
+  BASE_BREAKPOINT,
   sameBreakpoints,
   type BreakpointSet,
 } from "./breakpoints";
@@ -38,10 +36,10 @@ export interface BreakpointManagerProps {
   /** The site's saved breakpoints, as the canvas is compiled against them. */
   value: BreakpointSet;
   /**
-   * Persist the edited set. See {@link BreakpointDialogProps.onSave} — a promise
+   * Persist the edited set. See {@link BreakpointEditorProps.onSave} — a promise
    * is awaited and a resolved string is shown as a refusal.
    */
-  onSave: (next: BreakpointSet) => void | Promise<string | undefined>;
+  onSave: (next: BreakpointSet) => void | Promise<string | null | undefined>;
   /**
    * What the SAVED set's read has actually done — not merely whether it is done.
    *
@@ -60,6 +58,34 @@ export interface BreakpointManagerProps {
    * was removed.
    */
   status: "loading" | "unavailable" | "ready";
+  /**
+   * Told when editing starts and ends, so a host can ask before it is left:
+   * a draft open in the editor is work not saved yet.
+   */
+  onEditingChange?: (editing: boolean) => void;
+  /** Told when a save of the set starts and settles; see the editor's. */
+  onSavingChange?: (saving: boolean) => void;
+  /**
+   * Why the breakpoints cannot be edited right now, when the host knows one
+   * the saved set's read cannot (a removal still being carried out, say):
+   * Edit breakpoints is disabled, saying why. Absent, `status` decides.
+   */
+  blocked?: string;
+}
+
+/**
+ * Why Edit breakpoints is disabled, or `undefined` while it may be used: the
+ * host's own reason first, then what the saved set's read has done.
+ */
+function editUnavailable(
+  status: BreakpointManagerProps["status"],
+  blocked: string | undefined
+): string | undefined {
+  if (blocked !== undefined) return blocked;
+  if (status === "ready") return undefined;
+  return status === "loading"
+    ? "Available once the site's saved styles have loaded."
+    : "Your site's saved styles could not be read, so editing them here could overwrite them.";
 }
 
 /**
@@ -70,9 +96,18 @@ export function BreakpointManager({
   value,
   onSave,
   status,
+  onEditingChange,
+  onSavingChange,
+  blocked,
 }: BreakpointManagerProps): React.JSX.Element {
-  const ready = status === "ready";
-  const [open, setOpen] = React.useState(false);
+  const ready = status === "ready" && blocked === undefined;
+  const [editing, setEditingState] = React.useState(false);
+  const setEditing = (next: boolean): void => {
+    setEditingState(next);
+    onEditingChange?.(next);
+  };
+  // Whether this section's last save succeeded, to say so beside it.
+  const [saved, setSaved] = React.useState(false);
   /*
    * The set this surface last wrote, held until the read catches up.
    *
@@ -130,86 +165,94 @@ export function BreakpointManager({
     if (readArrived) setPendingWrite(undefined);
   }, [readArrived]);
   const authored = authoredBreakpoints(stillStale ? pendingWrite.wrote : value);
-  const count = authored.viewport.length + authored.container.length;
 
-  const persist = async (next: BreakpointSet): Promise<string | undefined> => {
+  const persist = async (
+    next: BreakpointSet
+  ): Promise<string | null | undefined> => {
     // Narrowed rather than passed through: `onSave` may return nothing at all,
     // and `void` is not `undefined` to the checker even though it is at runtime.
     const answered = await onSave(next);
-    const outcome = typeof answered === "string" ? answered : undefined;
+    const outcome =
+      typeof answered === "string" || answered === null ? answered : undefined;
     // Held only on success. A refused write changed nothing, so there is no
     // newer set for the read to catch up to.
     if (outcome === undefined) {
       setPendingWrite({ wrote: next, sawAtSave: value });
+      setSaved(true);
     }
     return outcome;
   };
 
-  return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled={!ready}
-        onClick={() => setOpen(true)}
-        /*
-         * The count is in the ACCESSIBLE name, not only in the glyph beside it.
-         * A screen-reader user otherwise reaches a button called "Breakpoints"
-         * that gives no hint whether the site has any — which is the single
-         * thing this label is worth showing.
-         */
-        aria-label={
-          ready
-            ? `Breakpoints: ${count} defined`
-            : status === "loading"
-              ? "Breakpoints: still loading"
-              : "Breakpoints: unavailable"
-        }
-        title={
-          ready
-            ? `Breakpoints: ${count} defined`
-            : status === "loading"
-              ? "Available once the site's saved styles have loaded."
-              : "Your site's saved styles could not be read, so editing them here could overwrite them."
-        }
-      >
-        {/*
-          The glyph carries the control and the word is dropped: the trigger
-          opens a dialog that names itself, and "Breakpoints" beside a count
-          spent more of the bar than the two facts an author reads from here —
-          that this is where tiers are managed, and how many exist.
+  const shown = stillStale ? pendingWrite.wrote : value;
 
-          The accessible name below is unchanged and still says both, so
-          nothing is lost to a reader who cannot see the glyph; the title makes
-          the same sentence reachable by pointer.
-        */}
-        <MonitorSmartphone className="size-4" />
-        {ready && count > 0 ? (
-          <span
-            className="text-muted-foreground tabular-nums"
-            // Already in the button's accessible name above, so announcing it
-            // again would read the number twice.
-            aria-hidden="true"
-          >
-            {count}
-          </span>
-        ) : null}
-      </Button>
-      {/*
-       * Mounted only while open, so the draft is seeded from `value` at the
-       * moment the author opens it. Kept mounted, a set that arrived or changed
-       * in the background would sit behind a closed dialog and the author would
-       * open it onto whatever was current when the editor booted.
-       */}
-      {open ? (
-        <BreakpointDialog
-          open
-          onOpenChange={setOpen}
-          value={authored}
-          onSave={persist}
-        />
-      ) : null}
-    </>
+  if (editing) {
+    // Mounted only while editing, so the draft is seeded from the set at the
+    // moment the author starts, never from one that changed behind it.
+    return (
+      <BreakpointEditor
+        value={authored}
+        onSave={persist}
+        onClose={() => setEditing(false)}
+        {...(onSavingChange === undefined ? {} : { onSavingChange })}
+        // A reason that arrives while editing holds the open editor too.
+        {...(blocked === undefined ? {} : { blocked })}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3" data-breakpoint-manager="">
+      <ul className="divide-y divide-border rounded-md border border-border">
+        {deviceOptions(shown).map(device => {
+          const Glyph = tierIcon(
+            device.id === BASE_BREAKPOINT ? undefined : device.preview
+          );
+          return (
+            <li
+              key={device.id}
+              className="flex items-center gap-2 px-3 py-2 text-sm"
+            >
+              <Glyph
+                className="size-4 shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <span className="font-medium">{device.label}</span>
+              <span className="text-muted-foreground">{device.range}</span>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!ready}
+          onClick={() => {
+            setSaved(false);
+            setEditing(true);
+          }}
+          // Disabled rather than hidden until the saved set is read: opened
+          // on the host's defaults, a save would overwrite the site's real
+          // breakpoints with a set it never chose.
+          title={editUnavailable(status, blocked)}
+        >
+          Edit breakpoints
+        </Button>
+        {/* After a save, in the save chip's word, beside what made it; a
+            refused save stays in the editor with its reason. */}
+        <span
+          role="status"
+          className="flex items-center gap-1.5 text-sm text-muted-foreground"
+        >
+          {saved ? (
+            <>
+              <Check className="size-4 text-success" aria-hidden="true" />
+              Saved
+            </>
+          ) : null}
+        </span>
+      </div>
+    </div>
   );
 }

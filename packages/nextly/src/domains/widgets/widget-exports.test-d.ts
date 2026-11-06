@@ -3,10 +3,10 @@
  *
  * `__tests__/export-contract.test.ts` proves these names are exported and that
  * example values are assignable to them. Neither claim survives a WIDENING:
- * `type WidgetHeight = string` exports the same name and accepts `"tall"`
+ * `type WidgetOp = string` exports the same name and accepts `"count"`
  * happily, so both assertions stay green while every plugin author loses the
  * only thing the type was for -- a typo becoming a compile error instead of a
- * card that silently draws at the wrong height.
+ * card that silently asks a question its source cannot answer.
  *
  * In a `.test-d.ts` rather than a `.test.ts` for the reason
  * `shared/addressable-fields.test-d.ts` states: a passive annotation in a
@@ -25,15 +25,18 @@
  * locally the way those do rather than shared: a `.test-d.ts` exporting a helper
  * would be imported by files that are not type tests.
  */
+import { expectTypeOf } from "vitest";
+
 import type {
-  WidgetArchetype,
-  WidgetHeight,
+  CoreView,
+  GridSize,
   WidgetOp,
   WidgetFieldChoice,
-  WidgetSize,
+  WidgetSizeDeclaration,
   WidgetSourceField,
   WidgetSourceFieldType,
   WidgetSourceKind,
+  WidgetView,
 } from "../../index";
 
 /** `Exact<A, B>` is `false` when the two types differ in either direction. */
@@ -46,8 +49,6 @@ type AssignableTo<A, B> = [A] extends [B] ? true : false;
 
 // The unions, member for member. `toMatchTypeOf`-style containment would be
 // satisfied by a widened alias; equality in BOTH directions is what refuses one.
-assertType<Exact<WidgetHeight, "short" | "tall">>(true);
-assertType<Exact<WidgetSize, "sm" | "md" | "lg" | "xl" | "full">>(true);
 assertType<Exact<WidgetOp, "count" | "list" | "groupBy" | "timeseries">>(true);
 assertType<
   Exact<WidgetSourceKind, "collection" | "single" | "system" | "plugin">
@@ -55,20 +56,12 @@ assertType<
 assertType<
   Exact<WidgetSourceFieldType, "string" | "number" | "boolean" | "date">
 >(true);
-assertType<
-  Exact<
-    WidgetArchetype,
-    | "metric"
-    | "stats"
-    | "table"
-    | "list"
-    | "bars"
-    | "timeseries"
-    | "text"
-    | "actions"
-    | "custom"
-  >
->(true);
+// How a widget names its view: one of core's five, or a component's path,
+// and no display vocabulary beside them.
+expectTypeOf<CoreView>().toEqualTypeOf<
+  "figure" | "list" | "table" | "bars" | "series"
+>();
+expectTypeOf<WidgetView>().toEqualTypeOf<CoreView | { component: string }>();
 
 // The three claims a closed string union makes, stated together per type: the
 // valid member is assignable, and `string` and a plausible near-miss are not.
@@ -87,39 +80,9 @@ assertType<
 assertType<
   Exact<
     [
-      AssignableTo<"tall", WidgetHeight>,
-      AssignableTo<string, WidgetHeight>,
-      AssignableTo<"long", WidgetHeight>,
-    ],
-    [true, false, false]
-  >
->(true);
-assertType<
-  Exact<
-    [
-      AssignableTo<"lg", WidgetSize>,
-      AssignableTo<string, WidgetSize>,
-      AssignableTo<"medium", WidgetSize>,
-    ],
-    [true, false, false]
-  >
->(true);
-assertType<
-  Exact<
-    [
       AssignableTo<"count", WidgetOp>,
       AssignableTo<string, WidgetOp>,
       AssignableTo<"sum", WidgetOp>,
-    ],
-    [true, false, false]
-  >
->(true);
-assertType<
-  Exact<
-    [
-      AssignableTo<"metric", WidgetArchetype>,
-      AssignableTo<string, WidgetArchetype>,
-      AssignableTo<"chart", WidgetArchetype>,
     ],
     [true, false, false]
   >
@@ -159,4 +122,24 @@ assertType<
 >(true);
 assertType<
   Exact<AssignableTo<{ name: string; type: "string" }, WidgetSourceField>, true>
+>(true);
+
+// 🔴 The one size vocabulary: a size is `{ w, h }` in grid units, and a
+// declaration's `size` takes nothing else. A named width or size, the old
+// vocabulary, does not type-check where a size is taken.
+assertType<Exact<GridSize, { w: number; h: number }>>(true);
+assertType<
+  Exact<
+    [
+      AssignableTo<{ default: { w: 6; h: 4 } }, WidgetSizeDeclaration>,
+      AssignableTo<
+        { default: { w: 3; h: 2 }; min: { w: 3; h: 2 }; max: { w: 12; h: 4 } },
+        WidgetSizeDeclaration
+      >,
+      AssignableTo<"lg", WidgetSizeDeclaration>,
+      AssignableTo<{ default: "half" }, WidgetSizeDeclaration>,
+      AssignableTo<{ default: { width: "full" } }, WidgetSizeDeclaration>,
+    ],
+    [true, true, false, false, false]
+  >
 >(true);

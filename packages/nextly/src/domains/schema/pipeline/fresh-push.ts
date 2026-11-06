@@ -146,22 +146,15 @@ async function applyPushResult(
   schema: Record<string, unknown>,
   result: { sqlStatements: string[]; hints: KitHint[] }
 ): Promise<FreshPushResult> {
-  const desiredTableNames = drizzleTableNames(schema);
-  const pieces = splitStatements(result.sqlStatements);
-  // Plugin-migrated tables are never dropped by push, whatever the desired
-  // set says; an unreadable registry reads as "nothing claimed".
-  const safe = filterUnsafeStatements(
-    pieces,
-    desiredTableNames,
-    await pluginMigratedTableSet(db, dialect),
-    dialect
+  // The statements to run and the ones to strip, as `planFreshPush` reports
+  // them; the stripped ones are surfaced via hints + warn below.
+  const { runnable, blocked, degraded } = await planPushResult(
+    dialect,
+    db,
+    schema,
+    result
   );
-
-  // Boot-safety: strip (never execute) destructive statements the kit
-  // emitted unexpectedly, and surface them via hints + warn. See the
-  // header comment for why this path strips where the pipeline throws.
-  const offenders = new Set(findUnexpectedDestructiveStatements(safe));
-  const runnable = safe.filter(s => !offenders.has(s));
+  const offenders = new Set(blocked);
   const hints: KitHint[] = [
     ...result.hints,
     ...[...offenders].map(statement => ({
@@ -193,12 +186,70 @@ async function applyPushResult(
   // A degraded pass cannot add a column, so an index over one it lacks is a
   // casualty of the baseline rather than a fault; the pass that follows builds
   // both in order.
-  const degraded = result.hints.some(h =>
-    h.hint.startsWith(DEGRADED_PASS_HINT)
-  );
   const executed = await executeStatements(dialect, db, runnable, degraded);
 
   return { hints, statementsExecuted: executed };
+}
+
+/** What one push pass would do, worked out without executing anything. */
+export interface FreshPushPlan {
+  /** The statements the pass runs, in order. */
+  runnable: string[];
+  /** The destructive statements it strips and never runs. */
+  blocked: string[];
+  /**
+   * Whether the pass degraded to the additive-tables-only baseline. A second
+   * pass then follows once this one has run; it is not planned here, since
+   * what it emits depends on what this one created.
+   */
+  degraded: boolean;
+}
+
+/**
+ * What a push of `schema` would run and what it would strip, read-only: the
+ * statements drizzle-kit generates against the live database, through the
+ * same filters the push applies them with (`planPushResult`). Nothing is
+ * executed. A dry run names these; the push itself runs them.
+ */
+export async function planFreshPush(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>
+): Promise<FreshPushPlan> {
+  return planPushResult(
+    dialect,
+    db,
+    schema,
+    await pushForDialect(dialect, db, schema)
+  );
+}
+
+/**
+ * One push result filtered for safety: the one judgement of which of its
+ * statements run, for the push and for its plan alike. Plugin-migrated tables
+ * are never dropped by push, whatever the desired set says (an unreadable
+ * registry reads as "nothing claimed"); and destructive statements the kit
+ * emitted unexpectedly are stripped, never executed (boot-safety: see the
+ * header comment for why this path strips where the pipeline throws).
+ */
+async function planPushResult(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>,
+  result: { sqlStatements: string[]; hints: KitHint[] }
+): Promise<FreshPushPlan> {
+  const safe = filterUnsafeStatements(
+    splitStatements(result.sqlStatements),
+    drizzleTableNames(schema),
+    await pluginMigratedTableSet(db, dialect),
+    dialect
+  );
+  const offenders = new Set(findUnexpectedDestructiveStatements(safe));
+  return {
+    runnable: safe.filter(s => !offenders.has(s)),
+    blocked: [...offenders],
+    degraded: result.hints.some(h => h.hint.startsWith(DEGRADED_PASS_HINT)),
+  };
 }
 
 /**
@@ -242,8 +293,19 @@ async function pushForDialect(
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
       const databaseName = await currentMysqlDatabaseName(db);
+      // Introspection scoped to the DESIRED tables, as PostgreSQL's is above
+      // and for the same reason: a site's `dc_*` content tables would
+      // otherwise read as dropped, pair against a table this push adds, and
+      // crash the rename resolver. The fallback below then replays the
+      // baseline, whose `ADD CONSTRAINT` for every core foreign key the
+      // database already holds fails on its duplicate name, so the first
+      // `nextly migrate` after a release that adds a core table failed on
+      // every MySQL site with content.
       return withResolverCrashFallback(
-        () => kit.pushSchema(schema, db, databaseName),
+        () =>
+          kit.pushSchema(schema, db, databaseName, {
+            tables: drizzleTableNames(schema),
+          }),
         async () =>
           kit.generateMigration(
             await kit.generateDrizzleJson({}),
@@ -265,15 +327,19 @@ async function pushForDialect(
   }
 }
 
-// The SQLite/MySQL payload entrypoints accept no tables filter, so their
+// The SQLite payload entrypoint accepts no tables filter, so its
 // introspection sees the WHOLE live database. When an upgrade adds a new
 // core table while any non-core table exists (user dc_* content, the
 // migrate lock), v1's differ pairs the "dropped" orphan against the added
 // table and its rename resolver throws `Internal error: resolver(table) was
 // called without a HintsHandler` BEFORE emitting anything (probe-verified).
-// PG avoids this via the entities filter above; here the recovery is the
-// pre-v1 applyViaGenerate shape: generate the pure-CREATE baseline from an
-// empty snapshot. That set contains no drops by construction, and the
+// PG and MySQL avoid this by scoping introspection to the desired tables
+// above, so on MySQL this is only a backstop. SQLite survives the baseline
+// because its foreign keys live inside CREATE TABLE, which is skipped for a
+// table that exists; MySQL's are separate `ADD CONSTRAINT` statements that
+// fail on an existing name, which is why MySQL must not depend on it. The
+// recovery is the pre-v1 applyViaGenerate shape: generate the pure-CREATE
+// baseline from an empty snapshot. That set contains no drops by construction, and the
 // downstream idempotency-tolerant executor skips tables that already exist,
 // so the reconcile degrades to additive-TABLES-only instead of crashing the
 // boot.

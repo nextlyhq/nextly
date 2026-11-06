@@ -41,6 +41,7 @@ const context = {
     success: (m: string) => printed.push(`OK ${m}`),
     newline: vi.fn(),
     keyValue: (k: string, v: string) => printed.push(`${k}=${v}`),
+    getOptions: () => ({ noColor: true }),
   },
 } as unknown as Parameters<typeof runClearPlaintextPasswords>[1];
 
@@ -62,10 +63,15 @@ describe("users:clear-plaintext-passwords", () => {
   it("refuses --apply without the hasher confirmation, before reading anything", async () => {
     // The app's own hasher is invisible to the CLI, and its hashes can look
     // like plain text; clearing them locks people out.
-    expect(await runClearPlaintextPasswords(true, context)).toBeNull();
+    const refusal = runClearPlaintextPasswords(true, context);
+    await expect(refusal).rejects.toMatchObject({
+      code: "PASSWORD_CLEAR_UNCONFIRMED",
+    });
+    await expect(refusal).rejects.toMatchObject({
+      next: expect.stringContaining("--apply --confirm-default-hasher"),
+    });
     expect(clear).not.toHaveBeenCalled();
     expect(find).not.toHaveBeenCalled();
-    expect(printed.join("\n")).toContain("--confirm-default-hasher");
   });
 
   it("exits with status 1 when --apply lacks the hasher confirmation", async () => {
@@ -74,6 +80,7 @@ describe("users:clear-plaintext-passwords", () => {
     const exit = vi
       .spyOn(process, "exit")
       .mockImplementation(() => undefined as never);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const run = async (...args: string[]) => {
         const program = new Command();
@@ -84,6 +91,9 @@ describe("users:clear-plaintext-passwords", () => {
       };
       await run("--apply");
       expect(exit).toHaveBeenCalledWith(1);
+      expect(String(stderr.mock.calls[0]?.[0])).toContain(
+        "(PASSWORD_CLEAR_UNCONFIRMED)"
+      );
       expect(clear).not.toHaveBeenCalled();
 
       // The control: with the confirmation the same command clears, and does
@@ -94,6 +104,7 @@ describe("users:clear-plaintext-passwords", () => {
       expect(exit).not.toHaveBeenCalled();
     } finally {
       exit.mockRestore();
+      stderr.mockRestore();
     }
   });
 

@@ -1,5 +1,6 @@
-import { expect } from "@playwright/test";
+import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 
+import { CANVAS_FRAME, canvasFrame } from "../support/canvas-frame";
 import { test } from "../support/test";
 
 /**
@@ -44,13 +45,34 @@ const band = (box: string, side: string) =>
 /** Layout is fractional, and a whole-pixel claim about it would be flaky. */
 const TOLERANCE = 1.5;
 
+/**
+ * The canvas frame's own document, for code run against the page itself.
+ *
+ * The harness draws the page in the canvas's frame and the bands over it in
+ * this document, so a block is styled, moved or measured inside the frame,
+ * where `document` and `getComputedStyle` are the frame's, while the bands are
+ * found on the page. The frame is laid out at the window's size and drawn at
+ * 100%, so a box read in either document is in the same coordinates.
+ */
+async function inCanvas(page: Page): Promise<Frame> {
+  const frame = await (
+    await page.locator(CANVAS_FRAME).elementHandle()
+  )?.contentFrame();
+  if (frame === null || frame === undefined) {
+    throw new Error("the canvas frame has no document");
+  }
+  return frame;
+}
+
 test.describe("spacing values on the canvas", () => {
   test("draws nothing until a block is selected", async ({ page }) => {
     await page.goto(ROUTE);
     // The population first: an empty canvas would satisfy the assertion below
     // for a reason that has nothing to do with the overlay.
-    await expect(page.locator(NODE).first()).toBeVisible();
-    await expect(page.locator("[data-nx-selected]")).toHaveCount(0);
+    await expect(canvasFrame(page).locator(NODE).first()).toBeVisible();
+    await expect(canvasFrame(page).locator("[data-nx-selected]")).toHaveCount(
+      0
+    );
 
     await expect(page.locator(BAND)).toHaveCount(0);
   });
@@ -59,7 +81,7 @@ test.describe("spacing values on the canvas", () => {
     page,
   }) => {
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
 
     await block.click();
@@ -104,7 +126,7 @@ test.describe("spacing values on the canvas", () => {
      * shared, and other suites pin geometry that a writing mode would move.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
 
     await block.evaluate(node => {
@@ -123,7 +145,7 @@ test.describe("spacing values on the canvas", () => {
     page,
   }) => {
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.click();
 
@@ -150,7 +172,7 @@ test.describe("spacing values on the canvas", () => {
     page,
   }) => {
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.click();
 
@@ -181,7 +203,7 @@ test.describe("spacing values on the canvas", () => {
      * reading `60` would name a value that appears nowhere in their document.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
 
     await block.evaluate(node => {
@@ -209,7 +231,7 @@ test.describe("spacing values on the canvas", () => {
      * author reaches this by selecting a hidden node in the Layers panel.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
 
     // Selected FIRST, so the bands demonstrably exist and their later absence is
@@ -255,18 +277,22 @@ test.describe("spacing values on the canvas", () => {
      * so it has to be the one observed.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.click();
 
     const before = await page.locator(band("margin", "bottom")).boundingBox();
-    const rootBefore = await page.locator(".nx-canvas").boundingBox();
+    const rootBefore = await canvasFrame(page)
+      .locator(".nx-canvas")
+      .boundingBox();
     if (before === null || rootBefore === null) {
       throw new Error("no margin band or canvas root before the reflow");
     }
 
     const SHIFT = 200;
-    await page.evaluate(shift => {
+    await (
+      await inCanvas(page)
+    ).evaluate(shift => {
       const above = document.querySelector(
         '[data-nx-node="hx-heading"]'
       ) as HTMLElement;
@@ -286,7 +312,9 @@ test.describe("spacing values on the canvas", () => {
 
     // The control for the claim above: the root really did not resize, so the
     // redraw cannot be credited to the root's own entry.
-    const rootAfter = await page.locator(".nx-canvas").boundingBox();
+    const rootAfter = await canvasFrame(page)
+      .locator(".nx-canvas")
+      .boundingBox();
     expect(Math.abs((rootAfter?.height ?? 0) - rootBefore.height)).toBeLessThan(
       TOLERANCE
     );
@@ -314,7 +342,7 @@ test.describe("spacing values on the canvas", () => {
      * shape being set up here is one an author can author.
      */
     await page.goto(ROUTE);
-    const spacer = page.locator('[data-nx-node="hx-spacer"]');
+    const spacer = canvasFrame(page).locator('[data-nx-node="hx-spacer"]');
     await expect(spacer).toBeVisible();
 
     await spacer.evaluate(node => {
@@ -355,7 +383,7 @@ test.describe("spacing values on the canvas", () => {
     ] as const) {
       test(`draws nothing for a block ${name}`, async ({ page }) => {
         await page.goto(ROUTE);
-        const block = page.locator(`[data-nx-node="${PADDED}"]`);
+        const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
         await expect(block).toBeVisible();
 
         /*
@@ -378,10 +406,12 @@ test.describe("spacing values on the canvas", () => {
          * since editing a transform in the inspector changes the document and
          * re-measures on that.
          */
-        await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-          const el = node as HTMLElement;
-          el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-        });
+        await canvasFrame(page)
+          .locator('[data-nx-node="hx-heading"]')
+          .evaluate(node => {
+            const el = node as HTMLElement;
+            el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+          });
 
         await expect(page.locator(BAND)).toHaveCount(0);
       });
@@ -417,7 +447,7 @@ test.describe("spacing values on the canvas", () => {
     ] as const) {
       test(`draws nothing for ${name}`, async ({ page }) => {
         await page.goto(ROUTE);
-        const block = page.locator(`[data-nx-node="${PADDED}"]`);
+        const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
         await expect(block).toBeVisible();
 
         // The positive control, in this test: bands exist before the change.
@@ -458,10 +488,12 @@ test.describe("spacing values on the canvas", () => {
 
         // A style change emits no resize of its own, so a sibling is grown to
         // force the re-measure that re-evaluates the refusal.
-        await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-          const el = node as HTMLElement;
-          el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-        });
+        await canvasFrame(page)
+          .locator('[data-nx-node="hx-heading"]')
+          .evaluate(node => {
+            const el = node as HTMLElement;
+            el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+          });
 
         await expect(page.locator(BAND)).toHaveCount(0);
       });
@@ -484,13 +516,15 @@ test.describe("spacing values on the canvas", () => {
      * reports one, and narrowing the canvas to 120px reports four.
      */
     await page.goto(ROUTE);
-    const text = page.locator('[data-nx-node="hx-text-short"]');
+    const text = canvasFrame(page).locator('[data-nx-node="hx-text-short"]');
     await expect(text).toBeVisible();
 
     await text.click();
     await expect(page.locator(BAND)).not.toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const el = document.querySelector(
         '[data-nx-node="hx-text-short"]'
       ) as HTMLElement;
@@ -521,7 +555,7 @@ test.describe("spacing values on the canvas", () => {
      * only come from `transitionend`.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.click();
 
@@ -573,7 +607,7 @@ test.describe("spacing values on the canvas", () => {
      * reachable with no scrollbar present.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
 
     await block.evaluate(node => {
@@ -588,25 +622,20 @@ test.describe("spacing values on the canvas", () => {
     );
   });
 
-  test("still draws a top margin that collapsed out of the canvas", async ({
+  test("draws the first block's top margin at the top of the canvas", async ({
     page,
   }) => {
     /*
-     * Neither `.nx-pb-page` nor `.nx-canvas` establishes a formatting context, so
-     * the first block's top margin collapses THROUGH both and out of the canvas.
-     * Measured: setting `margin-top: 40px` on the first block moves the canvas
-     * root down by 40 while the block's offset inside it stays 0 — the border box
-     * starts at the root's top edge and the margin band belongs above it.
+     * In the frame the canvas root is a flex item of the body, which holds the
+     * margins of what it contains: the first block's top margin no longer
+     * collapses out of the canvas but stays inside it, at its top, where the
+     * page's content starts exactly as far down as on the published page.
      *
-     * What this asserts is that the overlay still DRAWS it, at a negative offset,
-     * rather than dropping a band it cannot place inside the layer. Whether those
-     * pixels paint is the stylesheet's half — `overflow: clip` with an
-     * `overflow-clip-margin` allowance, which paints outside the layer without
-     * contributing to the scroll extent — and a layout assertion cannot see paint,
-     * so this does not claim to cover it.
+     * So the band for it is drawn from the layer's top edge down, and it is
+     * drawn at all: a margin the overlay could not place would leave no band.
      */
     await page.goto(ROUTE);
-    const first = page.locator('[data-nx-node="hx-heading"]');
+    const first = canvasFrame(page).locator('[data-nx-node="hx-heading"]');
     await expect(first).toBeVisible();
 
     await first.evaluate(node => {
@@ -622,8 +651,7 @@ test.describe("spacing values on the canvas", () => {
 
     await expect(page.locator(band("margin", "top"))).toHaveText("40");
     expect(Math.abs(bandBox.height - 40)).toBeLessThan(TOLERANCE);
-    // Above the layer's own top edge, which is the escaped-margin case.
-    expect(bandBox.y).toBeLessThan(layerBox.y);
+    expect(Math.abs(bandBox.y - layerBox.y)).toBeLessThan(TOLERANCE);
   });
 
   test("bands follow a block inside a scrolling container", async ({
@@ -648,10 +676,12 @@ test.describe("spacing values on the canvas", () => {
      * visibility.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -678,7 +708,9 @@ test.describe("spacing values on the canvas", () => {
     const before = await page.locator(band("margin", "bottom")).boundingBox();
     if (before === null) throw new Error("no band before the scroll");
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       ).scrollTop = 40;
@@ -707,23 +739,31 @@ test.describe("spacing values on the canvas", () => {
      * overlay for most well-built pages.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
-      (
-        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
-      ).style.overflow = "hidden";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      // No padding, so the clip can reach the block: a section's own
+      // padding would hold it clear of a 10px clip.
+      section.style.padding = "0";
     });
     await target.click();
 
     // CONTROL: a clipping ancestor that does not cut still draws.
     await expect(page.locator(BAND)).not.toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       ).style.height = "10px";
@@ -747,10 +787,12 @@ test.describe("spacing values on the canvas", () => {
      * rather than any border at all refusing the block.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -759,6 +801,8 @@ test.describe("spacing values on the canvas", () => {
       ) as HTMLElement;
       section.style.overflow = "hidden";
       section.style.border = "20px solid transparent";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
     });
     await target.click();
     await expect(page.locator(BAND)).not.toHaveCount(0);
@@ -768,7 +812,9 @@ test.describe("spacing values on the canvas", () => {
      * padding edge and below the border-box top, so it is genuinely cut — and a
      * border-box comparison would still call it contained.
      */
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginTop = "-15px";
@@ -796,10 +842,12 @@ test.describe("spacing values on the canvas", () => {
      * the axis being respected rather than the block having stopped overflowing.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -807,6 +855,8 @@ test.describe("spacing values on the canvas", () => {
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
       section.style.overflow = "clip";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
     });
     // Selected while the container still shows it. Shrinking first would clip
     // the target out of reach and the click would land on the page instead.
@@ -815,7 +865,9 @@ test.describe("spacing values on the canvas", () => {
     // CONTROL: a clipping ancestor that does not cut still draws.
     await expect(page.locator(BAND)).not.toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       ).style.height = "10px";
@@ -824,7 +876,9 @@ test.describe("spacing values on the canvas", () => {
     // CONTROL: clipped on BOTH axes, that same vertical overflow IS a cut.
     await expect(page.locator(BAND)).toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const section = document.querySelector(
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
@@ -864,11 +918,13 @@ test.describe("spacing values on the canvas", () => {
      * unscaled one.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
     await target.click();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -877,6 +933,8 @@ test.describe("spacing values on the canvas", () => {
       ) as HTMLElement;
       section.style.overflow = "hidden";
       section.style.border = "20px solid transparent";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
       // From the top left, so the border's rendered thickness is a plain
       // doubling rather than a function of where the box happens to sit.
       section.style.transformOrigin = "0 0";
@@ -888,7 +946,9 @@ test.describe("spacing values on the canvas", () => {
     // the border refusing the block outright.
     await expect(page.locator(BAND)).not.toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginTop = "-5px";
@@ -923,11 +983,13 @@ test.describe("spacing values on the canvas", () => {
      * the control and prove nothing about the clip.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
     await target.click();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const section = document.querySelector(
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
@@ -957,7 +1019,9 @@ test.describe("spacing values on the canvas", () => {
     // The fixture's separating property, asserted rather than assumed: layout
     // that drifted so the block escaped the bounding box would leave this test
     // passing on the comparison below the decline.
-    const contained = await page.evaluate(() => {
+    const contained = await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const outer = (
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       ).getBoundingClientRect();
@@ -978,7 +1042,9 @@ test.describe("spacing values on the canvas", () => {
     // still draws under a rotated — but not yet clipping — ancestor.
     await expect(page.locator(BAND)).not.toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       ).style.overflow = "hidden";
@@ -1004,7 +1070,7 @@ test.describe("spacing values on the canvas", () => {
      * refused the block outright would pass the margin assertion and fail here.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.click();
 
@@ -1020,10 +1086,12 @@ test.describe("spacing values on the canvas", () => {
 
     // A transform changes no layout size, so it emits no resize of its own;
     // growing a sibling forces the re-measure, as the refusal tests do.
-    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-      const el = node as HTMLElement;
-      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-    });
+    await canvasFrame(page)
+      .locator('[data-nx-node="hx-heading"]')
+      .evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+      });
 
     await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
     await expect(page.locator(band("padding", "bottom"))).toHaveCount(1);
@@ -1044,7 +1112,7 @@ test.describe("spacing values on the canvas", () => {
      * between the two implementations and the reason this test exists.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.click();
     await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
@@ -1058,10 +1126,12 @@ test.describe("spacing values on the canvas", () => {
       await block.evaluate((node, value) => {
         (node as HTMLElement).style.transform = value;
       }, transform);
-      await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-        const el = node as HTMLElement;
-        el.style.height = `${el.getBoundingClientRect().height + 8}px`;
-      });
+      await canvasFrame(page)
+        .locator('[data-nx-node="hx-heading"]')
+        .evaluate(node => {
+          const el = node as HTMLElement;
+          el.style.height = `${el.getBoundingClientRect().height + 8}px`;
+        });
       await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
       await expect(page.locator(band("margin", "bottom"))).toHaveText(
         String(MARGIN_BOTTOM)
@@ -1085,7 +1155,7 @@ test.describe("spacing values on the canvas", () => {
      * below covers it. What a plain translate cannot do is pin anything.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.evaluate(node => {
       (node as HTMLElement).style.marginRight = "32px";
@@ -1100,10 +1170,12 @@ test.describe("spacing values on the canvas", () => {
     await block.evaluate(node => {
       (node as HTMLElement).style.transform = "translateY(40px)";
     });
-    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-      const el = node as HTMLElement;
-      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-    });
+    await canvasFrame(page)
+      .locator('[data-nx-node="hx-heading"]')
+      .evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+      });
 
     await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
     // PADDING is the control on the other side: it lies inside the transform and
@@ -1133,7 +1205,7 @@ test.describe("spacing values on the canvas", () => {
      * axis fails this while satisfying every other transform test in the file.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.evaluate(node => {
       (node as HTMLElement).style.marginTop = "28px";
@@ -1164,10 +1236,12 @@ test.describe("spacing values on the canvas", () => {
     // axis rule it exists to reject.
     expect(pinned).toBe(true);
 
-    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-      const el = node as HTMLElement;
-      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-    });
+    await canvasFrame(page)
+      .locator('[data-nx-node="hx-heading"]')
+      .evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+      });
 
     await expect(page.locator(band("margin", "top"))).toHaveCount(1);
     await expect(page.locator(band("margin", "bottom"))).toHaveCount(0);
@@ -1189,7 +1263,7 @@ test.describe("spacing values on the canvas", () => {
      * displacement is exactly zero, so both multipliers agree there.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.evaluate(node => {
       const el = node as HTMLElement;
@@ -1220,10 +1294,12 @@ test.describe("spacing values on the canvas", () => {
     expect(moved).toBeGreaterThan(5);
     expect(moved * OWN_SCALE).toBeLessThan(0.5);
 
-    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-      const el = node as HTMLElement;
-      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-    });
+    await canvasFrame(page)
+      .locator('[data-nx-node="hx-heading"]')
+      .evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+      });
 
     await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
   });
@@ -1242,7 +1318,7 @@ test.describe("spacing values on the canvas", () => {
      * green against the halved geometry. This one reads the rectangle.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.evaluate(node => {
       (node as HTMLElement).style.marginTop = "28px";
@@ -1258,10 +1334,12 @@ test.describe("spacing values on the canvas", () => {
       const shift = (el.getBoundingClientRect().height / 2) * (1 - 0.5);
       el.style.transform = `translateY(${String(-shift)}px) scaleY(0.5)`;
     });
-    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-      const el = node as HTMLElement;
-      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-    });
+    await canvasFrame(page)
+      .locator('[data-nx-node="hx-heading"]')
+      .evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+      });
 
     const after = await page.locator(band("margin", "top")).boundingBox();
     if (after === null) throw new Error("the margin band was dropped");
@@ -1284,7 +1362,7 @@ test.describe("spacing values on the canvas", () => {
      * perpendicular extent is considered. This is the case that separates them.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.evaluate(node => {
       (node as HTMLElement).style.marginTop = "28px";
@@ -1309,10 +1387,12 @@ test.describe("spacing values on the canvas", () => {
     expect(shifted.topStillPinned).toBe(true);
     expect(shifted.movedSideways).toBeGreaterThan(5);
 
-    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-      const el = node as HTMLElement;
-      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-    });
+    await canvasFrame(page)
+      .locator('[data-nx-node="hx-heading"]')
+      .evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+      });
 
     await expect(page.locator(band("margin", "top"))).toHaveCount(0);
   });
@@ -1333,7 +1413,7 @@ test.describe("spacing values on the canvas", () => {
      * rectangle claiming to be it is not.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="hx-nested-text"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="hx-nested-text"]`);
     await expect(block).toBeVisible();
     await block.evaluate(node => {
       (node as HTMLElement).style.marginLeft = "24px";
@@ -1362,7 +1442,9 @@ test.describe("spacing values on the canvas", () => {
      * established by the break instead: removing the ancestor guard puts this
      * band back.
      */
-    const cancelled = await page.evaluate(() => {
+    const cancelled = await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const section = document.querySelector(
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
@@ -1395,10 +1477,12 @@ test.describe("spacing values on the canvas", () => {
     expect(cancelled.ancestorNegative).toBe(true);
     expect(cancelled.composedPositive).toBe(true);
 
-    await page.locator('[data-nx-node="hx-heading"]').evaluate(node => {
-      const el = node as HTMLElement;
-      el.style.height = `${el.getBoundingClientRect().height + 40}px`;
-    });
+    await canvasFrame(page)
+      .locator('[data-nx-node="hx-heading"]')
+      .evaluate(node => {
+        const el = node as HTMLElement;
+        el.style.height = `${el.getBoundingClientRect().height + 40}px`;
+      });
 
     await expect(page.locator(`${BAND}[data-box="margin"]`)).toHaveCount(0);
   });
@@ -1407,7 +1491,7 @@ test.describe("spacing values on the canvas", () => {
     page,
   }) => {
     await page.goto(ROUTE);
-    const padded = page.locator(`[data-nx-node="${PADDED}"]`);
+    const padded = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(padded).toBeVisible();
     await padded.click();
 
@@ -1416,7 +1500,9 @@ test.describe("spacing values on the canvas", () => {
     // as a canvas that stops responding once anything is selected.
     await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
 
-    const neighbour = page.locator('[data-nx-node="hx-text-last"]');
+    const neighbour = canvasFrame(page).locator(
+      '[data-nx-node="hx-text-last"]'
+    );
     await neighbour.click();
 
     await expect(neighbour).toHaveAttribute("data-nx-selected", "primary");
@@ -1425,7 +1511,7 @@ test.describe("spacing values on the canvas", () => {
 
   test("the bands follow the selection to another block", async ({ page }) => {
     await page.goto(ROUTE);
-    const padded = page.locator(`[data-nx-node="${PADDED}"]`);
+    const padded = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(padded).toBeVisible();
 
     await padded.click();
@@ -1434,7 +1520,7 @@ test.describe("spacing values on the canvas", () => {
     // A block the seed gives a margin but no padding. The padding band has to
     // GO — an overlay that only ever added bands would keep the old one and
     // report one block's padding while naming another.
-    await page.locator('[data-nx-node="hx-heading"]').click();
+    await canvasFrame(page).locator('[data-nx-node="hx-heading"]').click();
     await expect(page.locator(band("margin", "bottom"))).toHaveCount(1);
     await expect(page.locator(band("padding", "bottom"))).toHaveCount(0);
   });
@@ -1504,7 +1590,7 @@ test.describe("rounded geometry", () => {
      * its chip over the gap would all satisfy an attribute check.
      */
     await page.goto(ROUTE);
-    const block = page.locator(`[data-nx-node="${PADDED}"]`);
+    const block = canvasFrame(page).locator(`[data-nx-node="${PADDED}"]`);
     await expect(block).toBeVisible();
     await block.scrollIntoViewIfNeeded();
 
@@ -1574,10 +1660,12 @@ test.describe("rounded geometry", () => {
      * a real page and would pass a test that only checked the refusal.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -1594,8 +1682,8 @@ test.describe("rounded geometry", () => {
     await target.click();
 
     /** How far the child reaches past a corner's arc centre, per axis. */
-    const reach = () =>
-      page.evaluate(() => {
+    const reach = async () =>
+      (await inCanvas(page)).evaluate(() => {
         const section = document.querySelector(
           '[data-nx-node="hx-section"]'
         ) as HTMLElement;
@@ -1616,7 +1704,9 @@ test.describe("rounded geometry", () => {
     expect(await reach()).toBeLessThan(1);
     await expect(page.locator(BAND)).not.toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       ).style.padding = "0px";
@@ -1642,10 +1732,12 @@ test.describe("rounded geometry", () => {
      * a block nothing removes.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -1658,7 +1750,9 @@ test.describe("rounded geometry", () => {
     });
     await target.click();
 
-    const axes = await page.evaluate(() => {
+    const axes = await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const style = getComputedStyle(
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       );
@@ -1689,10 +1783,12 @@ test.describe("rounded geometry", () => {
      * 1280x24 child inside it is drawn at 12 — and that child really is cut.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const section = document.querySelector(
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
@@ -1710,7 +1806,9 @@ test.describe("rounded geometry", () => {
     });
     await target.click();
 
-    const geometry = await page.evaluate(() => {
+    const geometry = await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const section = document.querySelector(
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
@@ -1770,10 +1868,12 @@ test.describe("rounded geometry", () => {
      * is the value being unreadable and not the shape being wrong.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -1786,7 +1886,9 @@ test.describe("rounded geometry", () => {
     });
     await target.click();
 
-    const resolved = await page.evaluate(
+    const resolved = await (
+      await inCanvas(page)
+    ).evaluate(
       () =>
         getComputedStyle(
           document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
@@ -1797,13 +1899,17 @@ test.describe("rounded geometry", () => {
     expect(resolved).toBe("15px");
     await expect(page.locator(BAND)).not.toHaveCount(0);
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
       ).style.borderRadius = "calc(10% + 5px)";
     });
 
-    const unresolved = await page.evaluate(
+    const unresolved = await (
+      await inCanvas(page)
+    ).evaluate(
       () =>
         getComputedStyle(
           document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
@@ -1833,10 +1939,12 @@ test.describe("rounded geometry", () => {
      * zero-sized rectangle is outside it on every edge.
      */
     await page.goto(ROUTE);
-    const target = page.locator('[data-nx-node="hx-nested-text"]');
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
     await expect(target).toBeVisible();
 
-    await page.evaluate(() => {
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
@@ -1849,7 +1957,9 @@ test.describe("rounded geometry", () => {
     });
     await target.click();
 
-    const ancestor = await page.evaluate(() => {
+    const ancestor = await (
+      await inCanvas(page)
+    ).evaluate(() => {
       const section = document.querySelector(
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
@@ -1873,5 +1983,73 @@ test.describe("rounded geometry", () => {
     expect(ancestor.area).toBe(0);
 
     await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+});
+
+test.describe("the space a container puts between its children", () => {
+  /**
+   * Put an element before the section's only block, so that block is a child
+   * after the first and the section's gap rule reaches it. Plain markup, not a
+   * block: the gap rule is `> * + *` and counts any element.
+   */
+  async function secondChildOfSection(page: Page): Promise<Locator> {
+    await page.goto(ROUTE);
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const text = document.querySelector('[data-nx-node="hx-nested-text"]');
+      text?.parentElement?.insertBefore(document.createElement("div"), text);
+    });
+    return target;
+  }
+
+  test("names the section a block's top space comes from", async ({ page }) => {
+    const target = await secondChildOfSection(page);
+    await target.click();
+    await expect(page.locator(band("margin", "top"))).toHaveText(
+      /^\d+(\.\d+)? · Gap · from Section$/
+    );
+  });
+
+  test("calls an author's margin the block's own, even when it reads the gap's own token", async ({
+    page,
+  }) => {
+    const target = await secondChildOfSection(page);
+    // At an author's weight (above the gap rule's single class), and the same
+    // length the gap gives, through the very token it reads.
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent =
+        '.nx-pb-page.nx-pb-page [data-nx-node="hx-nested-text"] { margin-block-start: var(--site-space-stack); }';
+      document.head.append(style);
+    });
+    await target.click();
+    const margin = page.locator(band("margin", "top"));
+    await expect(margin).toHaveText(/^\d+(\.\d+)?$/);
+  });
+
+  test("calls an author's percentage margin the block's own inside a padded section", async ({
+    page,
+  }) => {
+    const target = await secondChildOfSection(page);
+    // A percentage resolves against a width the section's own padding decides,
+    // so anything that took the section's defaults away to ask would see it
+    // move. Only the gap marker comes off, and the author's margin stands.
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent =
+        '.nx-pb-page.nx-pb-page [data-nx-node="hx-nested-text"] { margin-block-start: 5%; }';
+      document.head.append(style);
+    });
+    await target.click();
+    await expect(page.locator(band("margin", "top"))).toHaveText(
+      /^\d+(\.\d+)?$/
+    );
   });
 });

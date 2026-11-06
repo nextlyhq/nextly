@@ -34,6 +34,23 @@ export async function signInAsLimitedUser(
   baseURL: string,
   permissions: readonly string[]
 ): Promise<LimitedUser> {
+  const { roleIds, ...user } = await signInWithRoles(browser, admin, baseURL, [
+    permissions,
+  ]);
+  return { ...user, roleId: roleIds[0] };
+}
+
+/**
+ * {@link signInAsLimitedUser} for a user holding several roles, one for each
+ * list of permissions, so a test can show what holding them together gives.
+ */
+export async function signInWithRoles(
+  browser: Browser,
+  /** A request context signed in as the super-admin, to create the roles and user. */
+  admin: APIRequestContext,
+  baseURL: string,
+  roles: readonly (readonly string[])[]
+): Promise<Omit<LimitedUser, "roleId"> & { roleIds: string[] }> {
   const tag = uniqueTag();
 
   // Roles take permission ids, not slugs. The list pages at ten by default,
@@ -43,21 +60,25 @@ export async function signInAsLimitedUser(
   const { items } = (await list.json()) as {
     items: Array<{ id: string; slug: string }>;
   };
-  const permissionIds = permissions.map(slug => {
-    const found = items.find(item => item.slug === slug);
-    if (!found) throw new Error(`[e2e] No permission "${slug}" to grant.`);
-    return found.id;
-  });
+  const idsOf = (permissions: readonly string[]) =>
+    permissions.map(slug => {
+      const found = items.find(item => item.slug === slug);
+      if (!found) throw new Error(`[e2e] No permission "${slug}" to grant.`);
+      return found.id;
+    });
 
-  const role = await admin.post("/admin/api/roles", {
-    data: {
-      name: `E2E limited ${tag}`,
-      slug: `e2e-limited-${tag}`,
-      permissionIds,
-    },
-  });
-  expect(role.status(), await role.text()).toBe(201);
-  const roleId = ((await role.json()) as { item: { id: string } }).item.id;
+  const roleIds: string[] = [];
+  for (const [index, permissions] of roles.entries()) {
+    const role = await admin.post("/admin/api/roles", {
+      data: {
+        name: `E2E limited ${tag} ${index + 1}`,
+        slug: `e2e-limited-${tag}-${index + 1}`,
+        permissionIds: idsOf(permissions),
+      },
+    });
+    expect(role.status(), await role.text()).toBe(201);
+    roleIds.push(((await role.json()) as { item: { id: string } }).item.id);
+  }
 
   const { storageState, email, userId } = await createSignedInUser(
     admin,
@@ -65,7 +86,7 @@ export async function signInAsLimitedUser(
     {
       email: `limited-${tag}@nextly.local`,
       name: "Limited User",
-      roleIds: [roleId],
+      roleIds,
     }
   );
   const context = await browser.newContext({ baseURL, storageState });
@@ -78,5 +99,5 @@ export async function signInAsLimitedUser(
     false
   );
 
-  return { context, email, userId, roleId };
+  return { context, email, userId, roleIds };
 }

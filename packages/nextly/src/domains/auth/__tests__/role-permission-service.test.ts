@@ -681,7 +681,7 @@ describe("RolePermissionService", () => {
       // Arrange
       const role = roleFactory();
       const permission = permissionFactory({
-        action: "manage",
+        action: "update",
         resource: "settings",
       });
 
@@ -715,7 +715,7 @@ describe("RolePermissionService", () => {
 
       // Assert: Permission should be the same
       expect(perms[0].id).toBe(permission.id);
-      expect(perms[0].action).toBe("manage");
+      expect(perms[0].action).toBe("update");
       expect(perms[0].resource).toBe("settings");
     });
 

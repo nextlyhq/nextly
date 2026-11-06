@@ -114,7 +114,8 @@ async function admits(
     { plugin },
     httpMethod
   );
-  return !("statusCode" in result);
+  // `null` is a visitor admitted, which a signed-in request never is.
+  return result !== null && !("statusCode" in result);
 }
 
 const declared = (): unknown[] => [
@@ -163,8 +164,10 @@ describe("a plugin that names its settings permission", () => {
 });
 
 describe("a plugin that names none", () => {
-  it("admits a write from a caller holding manage-settings", async () => {
-    expect(await admits(["manage-settings"], "PATCH", "@acme/plain")).toBe(
+  it("admits a write from a caller holding update-settings", async () => {
+    // Core's default is a settings change. `manage-settings` counts as it in
+    // the real check, which the fake above does not model.
+    expect(await admits(["update-settings"], "PATCH", "@acme/plain")).toBe(
       true
     );
   });

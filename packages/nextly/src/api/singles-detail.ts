@@ -38,7 +38,7 @@ import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
- * Next.js 15+ requires params to be a Promise.
+ * Next.js passes route params as a Promise.
  */
 interface RouteContext {
   params: Promise<{ slug: string }>;
@@ -212,14 +212,22 @@ export const PATCH = withErrorHandler(
     // response stays redacted to what they may read. Without forwarding the
     // user, the standalone route ran the update anonymously and diverged from
     // the dispatcher's updateSingleDocument.
-    const auth = await requireRouteCollectionAccess(request, "update", slug);
+    // The language the write names, read before authorizing: the rule is
+    // told it, as the dispatcher's updateSingleDocument tells it.
+    const { searchParams } = new URL(request.url);
+    const locale = searchParams.get("locale") || undefined;
+
+    // A Single is its one document, refused about it as the dispatcher's
+    // Single routes refuse: a caller who may not read it is told it is missing.
+    const auth = await requireRouteCollectionAccess(request, "update", slug, {
+      method: "updateSingleDocument",
+      params: locale === undefined ? {} : { locale },
+      namesOne: true,
+    });
 
     const service = await getSingleEntryService();
 
     const body = await readJsonBody<Record<string, unknown>>(request, { slug });
-
-    const { searchParams } = new URL(request.url);
-    const locale = searchParams.get("locale") || undefined;
 
     // Include resolved role slugs so field-level `access.read` (which redacts
     // the response under `routeAuthorized`) evaluates against the caller's

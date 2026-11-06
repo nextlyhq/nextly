@@ -11,11 +11,18 @@
  *
  * @module keyboard-actions.test
  */
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  ShortcutProvider,
+  useShortcuts,
+} from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyOps,
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -71,11 +78,12 @@ function editorSpy(doc: BlockDocument, selectedId: string | null): EditorSpy {
     select: vi.fn(),
     apply: vi.fn(() => doc),
     applyAll: vi.fn(() => doc),
-    undo: vi.fn(),
-    redo: vi.fn(),
+    undo: vi.fn(() => Promise.resolve(true)),
+    redo: vi.fn(() => Promise.resolve(true)),
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
   } as unknown as EditorSpy;
 }
 
@@ -193,16 +201,42 @@ describe("useBlockKeyboardActions", () => {
     );
   });
 
-  it("ALLOWS moving a container that holds a locked block", () => {
+  it("refuses moving a block out of a locked one, naming the block that holds it", () => {
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          locked: true,
+          name: "Hero",
+          slots: {
+            children: [
+              { id: "kid", type: "acme/text", version: 1, props: {} },
+              { id: "next", type: "acme/text", version: 1, props: {} },
+            ],
+          },
+        },
+      ] as BlockDocument["nodes"]),
+      "kid"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toBe(
+      "This block is inside Hero, which is locked. Unlock Hero to move this block."
+    );
+  });
+
+  it("REFUSES moving a container that holds a locked block, before applying", () => {
     /*
-     * The direction that is easy to get wrong by being cautious, and the reason
-     * move and delete ask different questions.
-     *
-     * Moving the container leaves the locked child in the same slot at the same
-     * index with the same neighbours, so nothing the lock protects has changed.
-     * Refusing here would let one locked caption freeze the entire section
-     * around it, which an author would experience as the editor breaking rather
-     * than as a lock working.
+     * A locked block does not move until it is unlocked, and moving the
+     * container would carry it. The op layer refuses the move, so the editor
+     * refuses it before applying and says so, rather than handing the store a
+     * move it will throw on.
      */
     const editor = editorSpy(
       documentOf([
@@ -231,8 +265,10 @@ describe("useBlockKeyboardActions", () => {
 
     press("ArrowDown", { altKey: true });
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0][0].kind).toBe("move");
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /text inside this block is locked\. unlock text to move this block/i
+    );
   });
 
   it("moves the selected block up", () => {
@@ -447,7 +483,7 @@ describe("useBlockKeyboardActions", () => {
     const said = screen.getByRole("status").textContent ?? "";
     // A REASON, not merely that something failed — the assertion the previous
     // wording could not make, since "could not be moved" is true of both.
-    expect(said).toMatch(/has to sit inside a container/i);
+    expect(said).toMatch(/has to go inside a container/i);
     // And the remedy, which is what turns a refusal into an instruction.
     expect(said).toMatch(/goes inside/i);
   });
@@ -507,7 +543,7 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.apply).not.toHaveBeenCalled();
     const said = screen.getByRole("status").textContent ?? "";
-    expect(said).toMatch(/has to sit inside a container/i);
+    expect(said).toMatch(/has to go inside a container/i);
   });
 
   it("indents into a component instance through the slot its component exposes, given the definitions", () => {
@@ -842,6 +878,11 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0][0][0].kind).toBe("insert");
+    // And what it applies is accepted, giving a copy that keeps the lock: a
+    // spy that records ops says nothing about whether the store takes them.
+    const applied = applyOps(editor.document, editor.applyAll.mock.calls[0][0]);
+    expect(applied.document.nodes).toHaveLength(2);
+    expect(applied.document.nodes[1]?.locked).toBe(true);
   });
 
   it("does nothing with no selection", () => {
@@ -960,7 +1001,7 @@ describe("useBlockKeyboardActions", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent ?? "").toMatch(
-      /contains .*which is locked/i
+      /text inside this block is locked\. unlock text to delete this block/i
     );
   });
 
@@ -1022,7 +1063,7 @@ describe("useBlockKeyboardActions", () => {
   // `ctrlKey`, not `metaKey`: the manager resolves `mod` from the platform, and
   // this environment is not macOS — so a Command press here matches nothing and
   // would report the binding as missing when it is the fixture that is wrong.
-  it("undoes, and says so", () => {
+  it("undoes, and says so", async () => {
     const editor = editorSpy(pair(), "a");
     (editor as { canUndo: boolean }).canUndo = true;
     mount(editor);
@@ -1030,7 +1071,29 @@ describe("useBlockKeyboardActions", () => {
     press("z", { ctrlKey: true });
 
     expect(editor.undo).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("status").textContent).toContain("Undone");
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Undone")
+    );
+  });
+
+  it("says nothing of an undo that did not take effect", async () => {
+    // A shared style change is undone by a write; a refused one leaves the
+    // style as it was, so announcing "Undone" would be a false report.
+    const editor = editorSpy(pair(), "a");
+    (editor as { canUndo: boolean }).canUndo = true;
+    (editor as { undo: () => Promise<boolean> }).undo = vi.fn(() =>
+      Promise.resolve(false)
+    );
+    mount(editor);
+
+    press("z", { ctrlKey: true });
+    // Let the undo's answer arrive and anything it says render.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    expect(editor.undo).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status").textContent).not.toContain("Undone");
   });
 
   it("does not undo when there is nothing to undo", () => {
@@ -1232,6 +1295,68 @@ describe("Escape belongs to the editor, not to the page behind it", () => {
 
     expect(editor.select).toHaveBeenCalledWith(null);
     expect(hostCancel).not.toHaveBeenCalled();
+  });
+
+  it("goes up a level from a block inside a container, and does NOT reach the page's cancel", () => {
+    // The bottom bar's hint says "Esc to go up": from a nested block the key
+    // selects the block holding it, walking up the trail the bar shows.
+    const nested = documentOf([
+      {
+        id: "box",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "inner", type: "acme/text", version: 1, props: {} }],
+        },
+      },
+    ]);
+    const editor = editorSpy(nested, "inner");
+    const hostCancel = mountWithHostEscape(editor);
+
+    press("Escape");
+
+    expect(editor.select).toHaveBeenCalledWith("box");
+    expect(editor.select).not.toHaveBeenCalledWith(null);
+    expect(hostCancel).not.toHaveBeenCalled();
+  });
+
+  it("with nothing selected, tells the host, which leaves a look edited on its own", () => {
+    const editor = editorSpy(pair(), null);
+    const onEscapeWithoutSelection = vi.fn();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onEscapeWithoutSelection={onEscapeWithoutSelection}
+        />
+      </ShortcutProvider>
+    );
+
+    press("Escape");
+
+    expect(onEscapeWithoutSelection).toHaveBeenCalledTimes(1);
+    expect(editor.select).not.toHaveBeenCalled();
+  });
+
+  it("with a block selected, goes up a level and leaves the host's look alone", () => {
+    const editor = editorSpy(pair(), "a");
+    const onEscapeWithoutSelection = vi.fn();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onEscapeWithoutSelection={onEscapeWithoutSelection}
+        />
+      </ShortcutProvider>
+    );
+
+    press("Escape");
+
+    expect(editor.select).toHaveBeenCalledWith(null);
+    expect(onEscapeWithoutSelection).not.toHaveBeenCalled();
   });
 
   it("holds the key even with NOTHING selected", () => {
@@ -1585,5 +1710,178 @@ describe("the save verb honours the planner before the host sees it", () => {
     verbsUnder(editor, asked).saveAsPattern();
 
     expect(asked).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sharing the verbs with a surface outside the provider", () => {
+  it("hands the same verdicts and runs the same verbs", () => {
+    // The inspector sits beside the canvas, outside the provider, so the card's
+    // menu is handed these rather than deciding for itself.
+    const editor = editorSpy(pair(), "a");
+    const shared = vi.fn();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onShareVerbs={shared}
+        />
+      </ShortcutProvider>
+    );
+
+    const latest = shared.mock.calls.at(-1)?.[0] as
+      | {
+          actions: { id: string; enabled: boolean }[];
+          run: (id: string) => void;
+        }
+      | undefined;
+    expect(latest?.actions.map(action => action.id)).toContain("duplicate");
+    latest?.run("delete");
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("withdraws them when the provider goes", () => {
+    const shared = vi.fn();
+    const { unmount } = render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editorSpy(pair(), "a")}
+          onShareVerbs={shared}
+        />
+      </ShortcutProvider>
+    );
+    unmount();
+    expect(shared).toHaveBeenLastCalledWith(undefined);
+  });
+});
+
+describe("sharing the verbs without a render loop", () => {
+  it("shares again only when what is offered changes, not on every render", () => {
+    // A host keeps what is shared in its own state, so sharing an equal value
+    // on every render re-renders the host, which re-renders this provider,
+    // which shares again: React stops it as an infinite update.
+    const shared = vi.fn();
+    const doc = pair();
+    const view = (editor: EditorState) => (
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          onShareVerbs={shared}
+        />
+      </ShortcutProvider>
+    );
+    const { rerender } = render(view(editorSpy(doc, "a")));
+    // A fresh editor object over the same document and selection, as a host
+    // re-render hands down.
+    rerender(view(editorSpy(doc, "a")));
+    rerender(view(editorSpy(doc, "a")));
+    expect(shared).toHaveBeenCalledTimes(1);
+
+    // The control: a selection whose verdicts differ is shared.
+    const locked = documentOf([
+      { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+      { id: "b", type: "acme/text", version: 1, props: {} },
+    ]);
+    rerender(view(editorSpy(locked, "a")));
+    expect(shared).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Escape in an open picker closes the picker, and only that", () => {
+  /** A block inside a container, selected, so Escape has a parent to go to. */
+  function nestedEditor(): EditorSpy {
+    return editorSpy(
+      documentOf([
+        {
+          id: "box",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "inner", type: "acme/text", version: 1, props: {} },
+            ],
+          },
+        },
+      ]),
+      "inner"
+    );
+  }
+
+  it("closes a popover's list on the first press, and goes up on the second", () => {
+    const editor = nestedEditor();
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+        />
+        <Popover defaultOpen>
+          <PopoverTrigger>Variables</PopoverTrigger>
+          <PopoverContent>
+            <ul role="listbox" aria-label="Variables" tabIndex={0} />
+          </PopoverContent>
+        </Popover>
+      </ShortcutProvider>
+    );
+    const list = screen.getByRole("listbox", { name: "Variables" });
+    act(() => list.focus());
+
+    press("Escape", {}, list);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(editor.select).not.toHaveBeenCalled();
+
+    // The picker is closed, so the next press is the editor's again.
+    press("Escape");
+    expect(editor.select).toHaveBeenCalledWith("box");
+  });
+
+  it("holds the key, without going up, inside a floating menu that closes itself", () => {
+    /*
+     * A menu that answers Escape on its own and does not mark the event as
+     * handled. Without the editor standing down while focus is in a floating
+     * layer, that one press would close the menu AND select the parent.
+     */
+    const editor = nestedEditor();
+    const hostCancel = vi.fn();
+    function HostBindings(): null {
+      useShortcuts(
+        [{ keys: "Escape", description: "Cancel", run: hostCancel }],
+        {
+          name: "test-entry-form",
+        }
+      );
+      return null;
+    }
+    const layer = window.document.createElement("div");
+    layer.setAttribute("data-radix-popper-content-wrapper", "");
+    const menu = window.document.createElement("ul");
+    menu.setAttribute("role", "menu");
+    menu.tabIndex = 0;
+    layer.append(menu);
+    window.document.body.append(layer);
+    try {
+      render(
+        <ShortcutProvider>
+          <HostBindings />
+          <BlockKeyboardActions
+            onSaveAsPattern={() => undefined}
+            editor={editor}
+          />
+        </ShortcutProvider>
+      );
+      menu.focus();
+
+      const event = press("Escape", {}, menu);
+
+      expect(editor.select).not.toHaveBeenCalled();
+      // Still consumed: released, it would reach the page's cancel.
+      expect(event.defaultPrevented).toBe(true);
+      expect(hostCancel).not.toHaveBeenCalled();
+    } finally {
+      layer.remove();
+    }
   });
 });

@@ -53,6 +53,7 @@ export function verifiedPluginModule(args: {
         `Reinstall the version that shipped it before rolling it back.`,
       statusCode: 400,
       logContext: {
+        reason: "plugin-module-not-shipped",
         filename: args.filename,
         plugin: args.pluginName,
         module: args.moduleName,

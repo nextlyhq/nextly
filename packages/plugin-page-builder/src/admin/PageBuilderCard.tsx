@@ -35,7 +35,16 @@
  * document title rendered from two sources and then disagreeing with itself.
  * The icon carries the identity; the words carry the state.
  *
- * ## One action, and only when there is one
+ * ## The page large, its sections listed, each a way in
+ *
+ * The page is drawn at the column's width and its own height, up to a cap,
+ * with its sections listed beneath by number, name and first line. Clicking a
+ * section — in the picture or in the list — opens the builder at that section,
+ * so changing the fourth part of a page no longer means opening the editor and
+ * hunting for it. Adding, reordering and styling stay in the builder; this
+ * screen reads and points, it never edits.
+ *
+ * ## One primary action
  *
  * A single primary control, which is what the empty-state guidance in Carbon
  * and NN/g both reduce to. Where the field cannot be edited there is no
@@ -48,22 +57,24 @@
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
+import type { ComponentTitleOf } from "@nextlyhq/builder";
+import {
+  useDocumentLocale,
+  useDocumentPreview,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Button, Skeleton } from "@nextlyhq/ui";
-import { LayoutGrid } from "lucide-react";
-import { useMemo, type JSX } from "react";
+import { ArrowRight, LayoutGrid } from "lucide-react";
+import { useId, useMemo, type JSX, type ReactNode } from "react";
 
 import type { ComponentLibraryState } from "./component-library-client";
+import { sectionAddress, showsAnotherLanguage } from "./editor/builder-address";
+import { entryBlockResolver } from "./entry-block-resolver";
 import type { PageRenderInputs } from "./page-render-inputs";
-import { countByType, documentNodes, totalBlocks } from "./page-summary";
-import { PageMiniature } from "./PageMiniature";
+import { pageSections, type PageSection } from "./page-sections";
+import { documentNodes } from "./page-summary";
+import { PageMiniature, type MiniatureSection } from "./PageMiniature";
+import { navigateWithin } from "./plain-click";
 
-/**
- * What the action says when the page has nothing on it yet.
- *
- * Exported because a test naming this control has to ask for the SAME string
- * the card renders. A copy in the test agrees on the day it is written and
- * then keeps passing — or keeps failing — after the wording moves.
- */
 /**
  * Whether this site's own style is available to draw the page with.
  *
@@ -77,10 +88,20 @@ import { PageMiniature } from "./PageMiniature";
  */
 export type SiteStyleState = "ready" | "pending" | "unavailable";
 
+/**
+ * What the action says when the page has nothing on it yet.
+ *
+ * Exported because a test naming this control has to ask for the SAME string
+ * the card renders. A copy in the test agrees on the day it is written and
+ * then keeps passing — or keeps failing — after the wording moves.
+ */
 export const BUILD_PAGE_LABEL = "Build this page";
 
 /** What the action says when the page already holds blocks. */
 export const OPEN_BUILDER_LABEL = "Open Page Builder";
+
+/** What opens the entry's own preview of the whole page. */
+export const PREVIEW_PAGE_LABEL = "Preview full page";
 
 /**
  * Matches the card's action in EITHER state.
@@ -124,8 +145,15 @@ export interface PageBuilderCardProps {
    * answer, which may be out of date, and the sentence says that rather than
    * "missing". And a retry, because a failed read is the state with a remedy
    * the author can reach from here.
+   *
+   * `titleOf` names a placed component's section by its component's title,
+   * as Layers names it; without it the section is a "Component".
    */
-  components: { state: ComponentLibraryState; retry: () => void };
+  components: {
+    state: ComponentLibraryState;
+    retry: () => void;
+    titleOf?: ComponentTitleOf;
+  };
   /**
    * Everything else this site's rendering depends on, as one bundle.
    *
@@ -146,20 +174,31 @@ export interface PageBuilderCardProps {
    * disabled action, or where an enabled one leads.
    */
   note?: string;
+  /**
+   * What the card holds after the page: the page's Layout picker, for a
+   * collection whose pages are drawn inside a Layout. Drawn in both the empty
+   * and the built card, so the choice is there before the first block is.
+   */
+  after?: ReactNode;
 }
 
 /**
- * Whether a click is the plain primary one this page may handle itself.
- * Anything else — a modifier, or another button — belongs to the browser,
- * which is how an author opens the builder in a new tab or window.
+ * `children`, followed by `after` when there is one. Without it the children
+ * are returned bare, so a card with nothing after it keeps its own layout.
  */
-function isPlainClick(event: React.MouseEvent): boolean {
+function WithAfter({
+  after,
+  children,
+}: {
+  after: ReactNode;
+  children: JSX.Element;
+}): JSX.Element {
+  if (after == null) return children;
   return (
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
+    <div className="flex min-w-0 flex-col gap-4">
+      {children}
+      {after}
+    </div>
   );
 }
 
@@ -168,45 +207,32 @@ const SAVE_FIRST = "Save this page to open the Page Builder.";
 
 /**
  * The way in: a real link to the builder's address, handled within the admin
- * on a plain click so the form and its unsaved work stay mounted. Disabled,
- * with the reason beside it, while the document has no address yet.
+ * on a plain click so the form and its unsaved work stay mounted. Disabled
+ * while the document has no address yet; the reason is said beneath the bar.
  */
 function OpenBuilder({
   href,
   label,
   onNavigate,
-  note,
 }: {
   href: string | undefined;
   label: string;
   onNavigate: (href: string) => void;
-  note?: string;
 }): React.JSX.Element {
-  const said = note ?? (href === undefined ? SAVE_FIRST : undefined);
+  if (href === undefined) {
+    return (
+      <Button type="button" size="sm" disabled>
+        {label}
+      </Button>
+    );
+  }
+  const { onClick } = navigateWithin(href, onNavigate);
   return (
-    <div className="flex flex-col items-end gap-1">
-      {href === undefined ? (
-        <Button type="button" disabled>
-          {label}
-        </Button>
-      ) : (
-        <Button asChild>
-          <a
-            href={href}
-            onClick={event => {
-              if (!isPlainClick(event)) return;
-              event.preventDefault();
-              onNavigate(href);
-            }}
-          >
-            {label}
-          </a>
-        </Button>
-      )}
-      {said === undefined ? null : (
-        <p className="text-xs text-muted-foreground">{said}</p>
-      )}
-    </div>
+    <Button asChild size="sm">
+      <a href={href} onClick={onClick}>
+        {label}
+      </a>
+    </Button>
   );
 }
 
@@ -227,26 +253,31 @@ function Preview({
   styleState,
   components,
   render,
+  sections,
+  onNavigate,
 }: Pick<
   PageBuilderCardProps,
   "document" | "siteStyles" | "styleState" | "components" | "render"
->): React.JSX.Element {
+> & {
+  sections: readonly MiniatureSection[] | undefined;
+  onNavigate: (href: string) => void;
+}): React.JSX.Element {
   if (styleState === "pending" || components.state === "pending") {
-    // Sized like the miniature it stands in for, so the card does not resize
+    // Sized like a short page, so the card does not collapse and then jump
     // under the author the moment the reads arrive.
-    return <Skeleton className="aspect-[16/10] w-full rounded-md" />;
+    return <Skeleton className="aspect-[16/10] w-full rounded-none" />;
   }
   if (styleState === "unavailable") {
     /*
      * A refusal, not a fallback. The page COULD be drawn from the config
      * defaults, and it would look entirely reasonable while missing this
      * site's stored classes, tokens, fonts and block defaults — a confident
-     * wrong picture, which is worse than none. Saying so also keeps the count
+     * wrong picture, which is worse than none. Saying so also keeps the list
      * and the action below, so the author is not blocked by it.
      */
     return (
       <div
-        className="flex aspect-[16/10] w-full items-center justify-center rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground"
+        className="flex aspect-[16/10] w-full items-center justify-center p-4 text-center text-sm text-muted-foreground"
         role="status"
       >
         This page cannot be previewed right now — the site&apos;s styles could
@@ -268,10 +299,11 @@ function Preview({
         document={document}
         siteStyles={siteStyles}
         render={render}
+        {...(sections === undefined ? {} : { sections, onNavigate })}
       />
       {components.state === "unavailable" || components.state === "stale" ? (
         <p
-          className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground"
+          className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2 text-sm text-muted-foreground"
           role="status"
         >
           <span>
@@ -294,8 +326,216 @@ function Preview({
 }
 
 /**
+ * What a section is called: its number, its name, and its first line when it
+ * has one. One spelling for the picture's links and the list's, so a screen
+ * reader hears the same section named the same way from either.
+ */
+function sectionName(
+  { number, label, firstLine }: PageSection,
+  lead: "Section" | "Edit section"
+): string {
+  const named = `${lead} ${number}, ${label}`;
+  return firstLine === "" ? named : `${named}: ${firstLine}`;
+}
+
+/** The sections, in page order, each a way into the builder at that section. */
+function SectionList({
+  sections,
+  hrefFor,
+  onNavigate,
+}: {
+  sections: readonly PageSection[];
+  hrefFor: ((section: PageSection) => string) | undefined;
+  onNavigate: (href: string) => void;
+}): React.JSX.Element {
+  const heading = useId();
+  return (
+    <div className="flex flex-col gap-2">
+      <p id={heading} className="text-sm font-medium text-foreground">
+        Sections
+      </p>
+      <ol
+        aria-labelledby={heading}
+        className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card"
+      >
+        {sections.map(section => {
+          const row = (
+            <>
+              <span
+                aria-hidden="true"
+                className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-xs font-semibold tabular-nums text-muted-foreground"
+              >
+                {section.number}
+              </span>
+              <span className="shrink-0 text-sm font-medium text-foreground">
+                {section.label}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                {section.firstLine}
+              </span>
+            </>
+          );
+          const href = hrefFor?.(section);
+          return (
+            <li key={section.id}>
+              {href === undefined ? (
+                <div className="flex items-center gap-3 px-3 py-2.5">{row}</div>
+              ) : (
+                <a
+                  href={href}
+                  // Starts with the visible word, so speaking "Edit" reaches it.
+                  aria-label={sectionName(section, "Edit section")}
+                  className="group flex items-center gap-3 px-3 py-2.5 outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  onClick={navigateWithin(href, onNavigate).onClick}
+                >
+                  {row}
+                  <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground group-focus-visible:text-foreground">
+                    Edit
+                    <ArrowRight className="size-3.5" aria-hidden="true" />
+                  </span>
+                </a>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      {hrefFor === undefined ? null : (
+        <p className="text-xs text-muted-foreground">
+          Add, reorder and style sections in the Page Builder.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A page with nothing on it yet: what it is, and the way to start one. */
+function EmptyPage({
+  canEdit,
+  href,
+  onNavigate,
+  said,
+}: {
+  canEdit: boolean;
+  href: string | undefined;
+  onNavigate: (href: string) => void;
+  said: string | undefined;
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm">
+          <LayoutGrid
+            className="size-4 shrink-0 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <span className="text-muted-foreground">
+            Nothing here yet — lay this page out visually.
+          </span>
+        </div>
+        {canEdit ? (
+          <OpenBuilder
+            href={href}
+            label={BUILD_PAGE_LABEL}
+            onNavigate={onNavigate}
+          />
+        ) : null}
+      </div>
+      {said === undefined ? null : (
+        <p className="text-xs text-muted-foreground">{said}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The bar under the preview: how many sections it shows, the entry's own
+ * full-page preview where the editor offers one, and the way into the builder.
+ */
+function PreviewBar({
+  count,
+  canEdit,
+  href,
+  onNavigate,
+}: {
+  count: number;
+  canEdit: boolean;
+  href: string | undefined;
+  onNavigate: (href: string) => void;
+}): React.JSX.Element {
+  // The editor's own Preview action, where it offers one; see the hook.
+  const preview = useDocumentPreview();
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
+      {/* Takes the line's room down to its own width, after which the
+          actions wrap below it rather than squeezing it to a word a line. */}
+      <span className="min-w-0 flex-1 basis-40 text-sm text-muted-foreground">
+        Live preview · {count} {count === 1 ? "section" : "sections"}
+      </span>
+      {/* Only on the editable page. A page drawn read-only inside the editor
+          — a version in history, the source language beside a translation —
+          inherits the live editor's preview, which opens the CURRENT page in
+          the language being edited, not the one this card shows. */}
+      {preview === null || !canEdit ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void preview.open()}
+        >
+          {PREVIEW_PAGE_LABEL}
+        </Button>
+      )}
+      {canEdit ? (
+        <OpenBuilder
+          href={href}
+          label={OPEN_BUILDER_LABEL}
+          onNavigate={onNavigate}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where each section opens, for an author who may edit a page that has an
+ * address; `undefined` for anyone else, who is shown the page and its parts
+ * and nothing more.
+ *
+ * None either while another language is on screen. The sections listed are
+ * that language's, and the builder opens the default language's document,
+ * whose sections need not match: a link would select an unrelated section or
+ * none. The way into the builder itself stays, saying where it leads.
+ */
+function sectionLinks(
+  sections: readonly PageSection[],
+  canEdit: boolean,
+  href: string | undefined,
+  anotherLanguage: boolean
+): {
+  hrefFor: ((section: PageSection) => string) | undefined;
+  inPicture: MiniatureSection[] | undefined;
+} {
+  if (!canEdit || href === undefined || anotherLanguage) {
+    return { hrefFor: undefined, inPicture: undefined };
+  }
+  // Opened at the section's target, which is what the editor's document holds;
+  // placed in the picture by the id it was drawn with.
+  const hrefFor = (section: PageSection) =>
+    sectionAddress(href, section.target);
+  return {
+    hrefFor,
+    inPicture: sections.map(section => ({
+      id: section.id,
+      parts: section.parts,
+      name: sectionName(section, "Section"),
+      href: hrefFor(section),
+    })),
+  };
+}
+
+/**
  * @param props - the document, the site's sheet and its readiness, and the way in
- * @returns the card the entry form draws in place of the blocks field
+ * @returns the entry screen's view of the page, in place of the blocks field
  */
 export function PageBuilderCard({
   document,
@@ -307,57 +547,78 @@ export function PageBuilderCard({
   href,
   onNavigate,
   note,
+  after,
 }: PageBuilderCardProps): JSX.Element {
-  const total = useMemo(
-    // Counted under the SITE's cap rather than an unbounded read, so the number
-    // beside the page comes from the same bound the renderer reads under.
+  const sections = useMemo(
+    // The same resolver and inputs the picture draws with, so the list names
+    // exactly the sections drawn above it.
     () =>
-      totalBlocks(
-        countByType(documentNodes(document), render.limits?.maxNodes)
-      ),
-    [document, render.limits?.maxNodes]
+      pageSections(document, entryBlockResolver(), render, components.titleOf),
+    [document, render, components.titleOf]
   );
 
-  const empty = total === 0;
+  const said = note ?? (canEdit && href === undefined ? SAVE_FIRST : undefined);
+  const anotherLanguage = showsAnotherLanguage(useDocumentLocale());
+  // Held across renders that change none of its inputs: the preview keys its
+  // whole page render on the sections it is handed, so a fresh array from
+  // every render of the form around this card would redo that render each time.
+  const { hrefFor, inPicture } = useMemo(
+    () => sectionLinks(sections, canEdit, href, anotherLanguage),
+    [sections, canEdit, href, anotherLanguage]
+  );
+
+  // Empty means nothing stored, not nothing drawn: a page whose only sections
+  // are gated by a condition still holds a page, and inviting the author to
+  // build one would be wrong.
+  if (documentNodes(document).length === 0) {
+    return (
+      <WithAfter after={after}>
+        <EmptyPage
+          canEdit={canEdit}
+          href={href}
+          onNavigate={onNavigate}
+          said={said}
+        />
+      </WithAfter>
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-      {empty ? null : (
+    // `min-w-0` because the form lays fields out as grid items, whose default
+    // minimum is their content's: without it the view grows to the widest
+    // thing inside it and runs off a phone's screen instead of wrapping.
+    <div className="flex min-w-0 flex-col gap-4" data-slot="page-entry-view">
+      <div
+        data-slot="page-entry-preview"
+        className="min-w-0 overflow-hidden rounded-lg border border-border bg-card"
+      >
         <Preview
           document={document}
           siteStyles={siteStyles}
           styleState={styleState}
           components={components}
           render={render}
+          sections={inPicture}
+          onNavigate={onNavigate}
         />
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm">
-          <LayoutGrid
-            className="size-4 shrink-0 text-muted-foreground"
-            aria-hidden="true"
-          />
-          {empty ? (
-            <span className="text-muted-foreground">
-              Nothing here yet — lay this page out visually.
-            </span>
-          ) : (
-            <span className="text-muted-foreground">
-              {total} {total === 1 ? "block" : "blocks"}
-            </span>
-          )}
-        </div>
-
-        {canEdit ? (
-          <OpenBuilder
-            href={href}
-            label={empty ? BUILD_PAGE_LABEL : OPEN_BUILDER_LABEL}
-            onNavigate={onNavigate}
-            {...(note === undefined ? {} : { note })}
-          />
-        ) : null}
+        <PreviewBar
+          count={sections.length}
+          canEdit={canEdit}
+          href={href}
+          onNavigate={onNavigate}
+        />
+        {said === undefined ? null : (
+          <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+            {said}
+          </p>
+        )}
       </div>
+      <SectionList
+        sections={sections}
+        hrefFor={hrefFor}
+        onNavigate={onNavigate}
+      />
+      {after}
     </div>
   );
 }

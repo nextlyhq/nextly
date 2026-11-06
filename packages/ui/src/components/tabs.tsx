@@ -255,12 +255,17 @@ const tabsTriggerVariants: VariantsFn<typeof TABS_TRIGGER_VARIANT_MAP> = cva(
   // every selected tab the one line a theme could not restyle, and the failure
   // read as "the theme did not apply here" rather than as an opt-out.
   //
+  // The open tab's LABEL is the foreground colour and the primary is its LINE.
+  // The primary is a fill colour: on a site whose brand primary is a mid-tone
+  // it falls short of AA as small text, which put a contrast failure on every
+  // screen with tabs. The line still marks the open tab, in the brand colour.
+  //
   // The trailing edge is the bottom when the strip is horizontal and the right
   // when it is vertical, so the indicator, the half-step pull onto the rail and
   // the active colour all switch axis together off the same `data-orientation`
   // the list reads. Switching only some of them puts the selection affordance
   // on one axis and the line it sits on the other.
-  "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:mb-0 data-[orientation=vertical]:border-r-2 data-[orientation=vertical]:-mr-0.5 data-[orientation=vertical]:data-[state=active]:border-r-primary",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary data-[state=active]:text-foreground data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-foreground hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:mb-0 data-[orientation=vertical]:border-r-2 data-[orientation=vertical]:-mr-0.5 data-[orientation=vertical]:data-[state=active]:border-r-primary",
   {
     variants: TABS_TRIGGER_VARIANT_MAP,
     defaultVariants: { size: "default" },

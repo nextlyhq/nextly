@@ -20,7 +20,6 @@ import {
   MAX_BREAKPOINTS_PER_AXIS,
   storedLimitFor,
   validateBreakpoints,
-  inCascadeOrder,
   type BreakpointIssueCode,
   type BreakpointSet,
   breakpointQueries,
@@ -300,6 +299,32 @@ describe("definitions the compiler drops", () => {
       { field: "id", code: "id-required" },
       { field: "label", code: "label-required" },
     ]);
+  });
+
+  it("refuses one name twice on an axis, but not across the two", () => {
+    // The device menu lists one axis's names, so a repeat there is two
+    // buttons nobody can tell apart. A label stays editable on a saved row,
+    // so this never disables Save without a way out.
+    const twice = validateBreakpoints(
+      set({
+        viewport: [
+          { id: "tablet", label: "Tablet", maxWidth: 991 },
+          { id: "tablet-2", label: " tablet ", maxWidth: 800 },
+        ],
+      })
+    );
+    expect(twice.map(i => ({ index: i.index, code: i.code }))).toEqual([
+      { index: 1, code: "label-duplicate" },
+    ]);
+
+    expect(
+      codes(
+        set({
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [{ id: "narrow", label: "Tablet", maxWidth: 600 }],
+        })
+      )
+    ).toEqual([]);
   });
 });
 

@@ -15,6 +15,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
 let current: TestNextly | undefined;
@@ -25,6 +26,9 @@ afterEach(async () => {
 
 async function boot() {
   current = await createTestNextly({
+    // The boot's seeding, which makes the Public role a call with no user is
+    // judged by.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: "notes",
@@ -38,6 +42,10 @@ async function boot() {
       }),
     ],
   });
+  // Public holds the update, as a site admin would grant it, so what refuses
+  // the call with no user below is the rule wanting a user, not a missing
+  // permission.
+  await grantPublic(current, ["update-notes"]);
   // Keyed by service NAME: `ServiceMap` already maps it to its type.
   const handler = current.getService("collectionsHandler");
   const entries = handler.getEntryService() as CollectionEntryService;
@@ -55,7 +63,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
 
     const result = await entries.updateEntries(
       { collectionName: "notes", overrideAccess: true },
-      [{ id, data: { title: "after" } }]
+      [{ id, data: { title: "after", _overwrite: true } }]
     );
 
     expect(result.errors).toEqual([]);
@@ -73,6 +81,9 @@ describe("bulk update honours overrideAccess (integration)", () => {
     // the transition pre-resolve, which is what must be told about the
     // elevation; a gate-only forwarding leaves it refusing.
     current = await createTestNextly({
+      // The boot's seeding, which makes the Public role a call with no user
+      // is judged by.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "posts",
@@ -87,6 +98,10 @@ describe("bulk update honours overrideAccess (integration)", () => {
         }),
       ],
     });
+    // Public holds the update, as a site admin would grant it, so the call
+    // with no user below passes the collection gate and is refused at the
+    // publish, not for a missing permission.
+    await grantPublic(current, ["update-posts"]);
     const handler = current.getService("collectionsHandler");
     const entries = handler.getEntryService() as CollectionEntryService;
     const created = await handler.createEntry(
@@ -96,14 +111,14 @@ describe("bulk update honours overrideAccess (integration)", () => {
     const id = (created.data as { id: string }).id;
 
     const refused = await entries.updateEntries({ collectionName: "posts" }, [
-      { id, data: { status: "published" } },
+      { id, data: { status: "published", _overwrite: true } },
     ]);
     expect(refused.successful).toBe(0);
     expect(refused.failed).toBe(1);
 
     const elevated = await entries.updateEntries(
       { collectionName: "posts", overrideAccess: true },
-      [{ id, data: { status: "published" } }]
+      [{ id, data: { status: "published", _overwrite: true } }]
     );
     expect(elevated.errors).toEqual([]);
     expect(elevated.successful).toBe(1);
@@ -120,6 +135,9 @@ describe("bulk update honours overrideAccess (integration)", () => {
     // judges the field rule. Without the flag reaching the worker the field
     // is dropped from the write and the row keeps its old value.
     current = await createTestNextly({
+      // The boot's seeding, which makes the Public role a call with no user
+      // is judged by.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "pages",
@@ -134,6 +152,9 @@ describe("bulk update honours overrideAccess (integration)", () => {
         }),
       ],
     });
+    // Public holds the update, as a site admin would grant it, so the row
+    // write with no user is allowed and only the field rule judges it.
+    await grantPublic(current, ["update-pages"]);
     const handler = current.getService("collectionsHandler");
     const entries = handler.getEntryService() as CollectionEntryService;
     const created = await handler.createEntry(
@@ -144,7 +165,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
 
     const unelevated = await entries.updateEntries(
       { collectionName: "pages" },
-      [{ id, data: { internalNote: "after" } }]
+      [{ id, data: { internalNote: "after", _overwrite: true } }]
     );
     // The row write is allowed and the protected field is stripped from it,
     // leaving an empty patch, which updates the row's timestamp and nothing
@@ -165,7 +186,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
 
     const elevated = await entries.updateEntries(
       { collectionName: "pages", overrideAccess: true },
-      [{ id, data: { internalNote: "after" } }]
+      [{ id, data: { internalNote: "after", _overwrite: true } }]
     );
     expect(elevated.errors).toEqual([]);
     read = await handler.getEntry({
@@ -184,7 +205,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
     const { handler, entries, id } = await boot();
 
     const result = await entries.updateEntries({ collectionName: "notes" }, [
-      { id, data: { title: "after" } },
+      { id, data: { title: "after", _overwrite: true } },
     ]);
 
     expect(result.successful).toBe(0);

@@ -3,65 +3,190 @@
  *
  * Implements `nextly prune` — explicitly drop orphaned plugin/code schema
  * (collections in the registry that are no longer in the config). Orphans are
- * RETAINED by default (never auto-dropped, D14); `--force` drops them.
+ * never dropped without the data-loss consent: with none, a terminal is asked
+ * and a run that cannot ask lists them, drops nothing and exits 1.
  *
  * **Runtime restriction:** CLI-only. Do NOT import from runtime code.
  *
  * @module cli/commands/prune
  * @example
  * ```bash
- * nextly prune           # dry-run: list orphaned collections
- * nextly prune --force   # drop the orphaned tables + metadata
+ * nextly prune                          # list them, and ask at a terminal
+ * nextly prune --accept-data-loss       # drop every orphan, listing each
+ * nextly prune --accept-data-loss=dc_a  # drop only what is named
  * ```
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
+import { and, count, eq } from "drizzle-orm";
 
-import { getDialectTables } from "../../database/index";
-import { SchemaRegistry } from "../../database/schema-registry";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
 } from "../../domains/i18n/migration/teardown-entity-i18n";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import {
+  countDeletions,
+  judgeDataLoss,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
+import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-changed-after-consent";
+import type { ExtensionSchemaRecord } from "../../domains/schema/ownership/dependent-elements";
+import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
-import { describeError } from "../../errors/index";
+import { NextlyError } from "../../errors/nextly-error";
+import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
+import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
+import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
+import { reportDryRun } from "../dry-run";
+import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+  openOrConnect,
+  requireDatabaseEnv,
+} from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  askToDeleteInTerminal,
+  deletionChanges,
+  readDataLossConsent,
+  requireConsented,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
+import { installRegistryResolver } from "../utils/registry-resolver";
+
+export { registerPruneCommand } from "./prune.command";
 
 export interface PruneResult {
   /** Slugs detected as orphaned (in the registry, not in the config). */
   orphans: string[];
-  /** Slugs actually dropped (empty unless `force`). */
+  /** Slugs actually dropped (empty unless the drop was approved). */
   dropped: string[];
   /**
    * Companion `_locales` tables whose main table no longer exists. No registry entry points
    * at them, so only a catalog sweep can find them.
    */
   orphanedCompanions: string[];
-  /** Companion tables actually dropped (empty unless `force`). */
+  /** Companion tables actually dropped (empty unless the drop was approved). */
   droppedCompanions: string[];
+  /** Every table the prune drops, and what goes with each, as the consent lists them. */
+  planned: Deletion[];
+  /** Under `--dry-run`, why a real prune would refuse before its first drop. */
+  refusal?: string;
 }
 
 interface RunPruneArgs {
   registry: Pick<
     CollectionRegistryService,
-    "findOrphanedCollections" | "deleteCollection"
+    "findOrphanedCollections" | "deleteCollection" | "assertNothingDependsOn"
   >;
   adapter: TeardownI18nAdapter & {
     getCapabilities(): { dialect: string };
     listTables(): Promise<string[]>;
   };
   currentSlugs: string[];
-  force: boolean;
+  /**
+   * Whether the tables listed may be dropped: the data-loss consent's
+   * judgement (`pruneApproval`). False drops nothing; a throw stops the run
+   * before anything changes, as `pruneApproval` does for every outcome but
+   * consent.
+   */
+  approve: (deletions: Deletion[]) => Promise<boolean>;
+  /**
+   * How many archived translations an orphaned collection has, which its
+   * teardown removes from the archive every entity shares; undefined when
+   * that cannot be read. Absent, the listing says the collection's archived
+   * translations go with it, uncounted.
+   */
+  countArchived?: (slug: string) => Promise<number | undefined>;
+  /**
+   * The extension schema the configuration declares, compiled with the
+   * orphans' tables in it: their entities are no longer configured, so a
+   * plugin hook still extending one would otherwise not compile, and what it
+   * adds to the table could not be named. Without it, the schema this
+   * process published is read, as every other delete reads it.
+   */
+  extensionSchema?: (
+    orphans: readonly DynamicCollectionRecord[]
+  ) => Promise<ExtensionSchemaRecord | null>;
+  /**
+   * Holds the schema lock for the drop (`pruneUnderSchemaLock`), taken after
+   * `approve` has answered so no lock is held while a person is asked.
+   */
+  lock: PruneLock;
+  /**
+   * `--dry-run`: plan the drops and check what depends on the orphans, as a
+   * real prune does before its first drop, then drop nothing, ask nothing and
+   * take no lock.
+   */
+  dryRun?: boolean;
+}
+
+/** Runs `work` while holding the schema lock, and returns what it returned. */
+export type PruneLock = <T>(work: () => Promise<T>) => Promise<T>;
+
+/** What a prune's claim on the schema lock names as its holder. */
+const PRUNE_LOCK_COMMAND = "nextly prune";
+
+/**
+ * The lock `nextly prune` drops under: the one schema lock, waited for as
+ * every command waits for it (about a minute, or `waitMs`), and then refused
+ * naming its holder.
+ */
+export function pruneUnderSchemaLock(
+  adapter: DrizzleAdapter,
+  options: {
+    waitMs?: number;
+    ttlSeconds?: number;
+    logger?: { warn?: (m: string) => void; info?: (m: string) => void };
+  } = {}
+): PruneLock {
+  return async work => {
+    const outcome = await withMigrateLock(
+      adapter,
+      adapter.getCapabilities().dialect,
+      work,
+      {
+        command: PRUNE_LOCK_COMMAND,
+        mode: "wait",
+        waitMs: options.waitMs,
+        ttlSeconds: options.ttlSeconds,
+        releaseOnInterrupt: true,
+        logger: options.logger,
+      }
+    );
+    // Only a wait given `isSettled` ends without running, and this one is not.
+    if (!outcome.ran) {
+      throw NextlyError.internal({
+        logContext: { reason: "the prune ended without running" },
+      });
+    }
+    return outcome.value;
+  };
+}
+
+/**
+ * What goes with an orphan's table: the collection's archived translations,
+ * which its teardown deletes from the shared archive. Listed with the table,
+ * and covered by naming it: they are the collection's data, and naming the
+ * shared archive instead would cover every other entity's too. Left out when
+ * the archive holds none for it, or when the caller has no way to count.
+ */
+async function archivedAlongside(
+  slug: string,
+  countArchived: RunPruneArgs["countArchived"]
+): Promise<string | undefined> {
+  if (countArchived === undefined) return undefined;
+  const count = await countArchived(slug);
+  if (count === 0) return undefined;
+  return count === undefined
+    ? "the collection's archived translations, if any"
+    : `the collection's ${String(count)} archived ${count === 1 ? "translation" : "translations"}`;
 }
 
 /** The main table a companion belongs to (`dc_pages_locales` -> `dc_pages`). */
@@ -69,16 +194,22 @@ function companionMainTable(companionTable: string): string {
   return companionTable.replace(/_locales$/, "");
 }
 
+/** What a prune would drop, read from the database as it stands. */
+interface PrunePlan {
+  orphans: DynamicCollectionRecord[];
+  orphanedCompanions: string[];
+  /** Every table the drop would take, as the consent is asked about them. */
+  deletions: Deletion[];
+}
+
 /**
- * Core prune logic (D14): detect orphaned pipeline collections, then either
- * list them (dry-run) or drop their physical table + metadata (`force`). Kept
- * free of CLI/IO concerns for unit/integration testing.
+ * Detect the orphaned pipeline collections and the companion tables whose main
+ * table is gone, and list every table dropping them would take.
  */
-export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
+async function planPrune(args: RunPruneArgs): Promise<PrunePlan> {
   const orphans = await args.registry.findOrphanedCollections(
     args.currentSlugs
   );
-  const slugs = orphans.map(o => o.slug);
 
   // Catalog sweep for companions whose main table is already gone. With no registry row
   // pointing at them they are invisible to `findOrphanedCollections`; only a table listing
@@ -89,14 +220,141 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     .filter(isCompanionTable)
     .filter(t => !liveTables.has(t.replace(/_locales$/, "")));
 
-  if (!args.force) {
-    return {
-      orphans: slugs,
-      dropped: [],
-      orphanedCompanions,
-      droppedCompanions: [],
-    };
+  // Every table the drop would take, each orphan's companion with it, judged
+  // as one: a consent that leaves one out drops none of them.
+  const deletions: Deletion[] = [];
+  for (const orphan of orphans) {
+    deletions.push({
+      kind: "table",
+      table: orphan.tableName,
+      alongside: await archivedAlongside(orphan.slug, args.countArchived),
+    });
+    if (liveTables.has(`${orphan.tableName}_locales`)) {
+      deletions.push({ kind: "table", table: `${orphan.tableName}_locales` });
+    }
   }
+  deletions.push(
+    ...orphanedCompanions.map(table => ({ kind: "table" as const, table }))
+  );
+  return { orphans, orphanedCompanions, deletions };
+}
+
+/**
+ * A plan as one comparable value: each orphan by slug and table, and each
+ * deletion as the consent listed it, in a fixed order so two reads of an
+ * unchanged database compare equal whatever order the database returned.
+ */
+function planKey(plan: PrunePlan): string {
+  return JSON.stringify({
+    orphans: plan.orphans.map(o => `${o.slug}:${o.tableName}`).sort(),
+    deletions: plan.deletions
+      .map(d =>
+        d.kind === "table"
+          ? JSON.stringify([d.table, d.alongside ?? ""])
+          : JSON.stringify(d)
+      )
+      .sort(),
+  });
+}
+
+/**
+ * A plan's deletions as the consent listed them (`dc_a`, or `dc_a, with the
+ * collection's 3 archived translations`), for a refusal to show what changed.
+ */
+function plannedTables(plan: PrunePlan): string[] {
+  return plan.deletions
+    .flatMap(d =>
+      d.kind === "table"
+        ? [
+            d.alongside === undefined
+              ? d.table
+              : `${d.table}, with ${d.alongside}`,
+          ]
+        : []
+    )
+    .sort();
+}
+
+/**
+ * Core prune logic (D14): detect orphaned pipeline collections, then drop
+ * their physical table + metadata once `approve` allows every table it would
+ * drop, or drop nothing. A prune that drops refuses, before its first drop
+ * and for the whole set, while anything outside the orphans depends on one
+ * of them (`assertNothingDependsOn`). Kept free of CLI/IO concerns for
+ * unit/integration testing.
+ *
+ * The drop runs inside `lock`, taken only once `approve` has answered so no
+ * lock is held while a person is asked. Inside it the plan is read again, and
+ * a plan that differs from the one approved is refused with nothing dropped:
+ * the consent was given for that list and no other.
+ */
+export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
+  const consented = await planPrune(args);
+  const slugs = consented.orphans.map(o => o.slug);
+  const nothingDropped: PruneResult = {
+    orphans: slugs,
+    dropped: [],
+    orphanedCompanions: consented.orphanedCompanions,
+    droppedCompanions: [],
+    planned: consented.deletions,
+  };
+  // A dry run asks the question a real prune asks before its first drop,
+  // without asking for consent first: its refusal is the real run's.
+  if (args.dryRun === true) {
+    if (consented.deletions.length === 0) return nothingDropped;
+    const compile = args.extensionSchema;
+    try {
+      await args.registry.assertNothingDependsOn(
+        slugs,
+        compile === undefined
+          ? {}
+          : { extensionSchema: () => compile(consented.orphans) }
+      );
+    } catch (error) {
+      // Something still depends on an orphan: the real prune's refusal.
+      if (!NextlyError.is(error) || error.code !== "CONFLICT") throw error;
+      return { ...nothingDropped, refusal: error.publicMessage };
+    }
+    return nothingDropped;
+  }
+  if (
+    consented.deletions.length === 0 ||
+    !(await args.approve(consented.deletions))
+  ) {
+    return nothingDropped;
+  }
+  return args.lock(async () => {
+    const current = await planPrune(args);
+    if (planKey(current) !== planKey(consented)) {
+      throw planChangedAfterConsent({
+        command: PRUNE_LOCK_COMMAND,
+        message:
+          "What `nextly prune` would drop changed after it was agreed to, so nothing was dropped. " +
+          "Run `nextly prune` again to see what it would drop now.",
+        agreed: plannedTables(consented),
+        current: plannedTables(current),
+      });
+    }
+    return dropPlanned(args, consented);
+  });
+}
+
+/** Drop what `plan` lists: the orphans' tables and metadata, then the stray companions. */
+async function dropPlanned(
+  args: RunPruneArgs,
+  plan: PrunePlan
+): Promise<PruneResult> {
+  const { orphans, orphanedCompanions } = plan;
+  const slugs = orphans.map(o => o.slug);
+
+  // Before the first drop and for the whole set: a refusal part way through
+  // would leave some orphans dropped and the rest not, and orphans that point
+  // only at each other go together.
+  const compile = args.extensionSchema;
+  await args.registry.assertNothingDependsOn(
+    slugs,
+    compile === undefined ? {} : { extensionSchema: () => compile(orphans) }
+  );
 
   // Dialect-safe identifier quoting + FK-safe drop, mirroring the sibling drop
   // sites (collection-sync-service.ts): MySQL uses backticks; Postgres needs
@@ -140,13 +398,119 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     droppedCompanions.push(companion);
   }
 
-  return { orphans: slugs, dropped, orphanedCompanions, droppedCompanions };
+  return {
+    orphans: slugs,
+    dropped,
+    orphanedCompanions,
+    droppedCompanions,
+    planned: plan.deletions,
+  };
+}
+
+/** The select surface of a Drizzle handle the archive count reads through. */
+interface ArchiveCountDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): Promise<Array<{ n: number | string }>>;
+    };
+  };
+}
+
+/**
+ * How many archived translations a collection's teardown removes: its rows in
+ * the shared archive, by slug and kind, as the teardown scopes its delete. 0
+ * when there is no archive. Undefined when that cannot be told: the count
+ * failed, or the archive holds rows for the slug whose kind is not yet known,
+ * which the teardown labels and may then remove.
+ */
+export async function countArchivedTranslations(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  slug: string
+): Promise<number | undefined> {
+  try {
+    if (!(await adapter.tableExists("nextly_i18n_archive"))) return 0;
+    const db = adapter.getDrizzle<ArchiveCountDb>();
+    const { nextlyI18nArchive } = nextlyI18nArchiveTables(dialect);
+    const rowsOfKind = async (kind: string) => {
+      const [row] = await db
+        .select({ n: count() })
+        .from(nextlyI18nArchive)
+        .where(
+          and(
+            eq(nextlyI18nArchive.collection, slug),
+            eq(nextlyI18nArchive.entityKind, kind)
+          )
+        );
+      return Number(row?.n ?? 0);
+    };
+    if ((await rowsOfKind(UNKNOWN_ARCHIVE_KIND)) > 0) return undefined;
+    return await rowsOfKind("collection");
+  } catch {
+    return undefined;
+  }
 }
 
 interface PruneCommandOptions {
+  acceptDataLoss?: AcceptDataLossOption;
+  /** The earlier spelling of the consent, honoured with a deprecation notice. */
   force?: boolean;
+  /** `--dry-run`: name what would be dropped, drop and ask nothing. */
+  dryRun?: boolean;
   config?: string;
   cwd?: string;
+  /**
+   * How long a held schema lock is waited for, in milliseconds, before the
+   * run stops naming its holder. Absent, the lock's own wait.
+   */
+  lockWaitMs?: number;
+}
+
+/**
+ * `prune`'s data-loss consent: `--accept-data-loss` or
+ * `NEXTLY_ACCEPT_DATA_LOSS`, with `--force` honoured as the earlier spelling
+ * and named deprecated.
+ */
+export function pruneConsent(
+  options: Pick<PruneCommandOptions, "acceptDataLoss" | "force">,
+  warn: (message: string) => void
+): DataLossConsent {
+  return readDataLossConsent({
+    flag: options.acceptDataLoss,
+    honours: ["prune --force"],
+    earlierFlags: options.force ? ["prune --force"] : [],
+    warn,
+  });
+}
+
+/**
+ * The `approve` a prune runs with: the tables counted where the database
+ * answers, then judged by the consent. Covered, or agreed to at a terminal,
+ * they are dropped. Otherwise the run stops before anything is dropped, and
+ * exits 1: a no at the terminal names the consent that drops without asking;
+ * with no consent and nobody to ask, the refusal lists what it would drop and
+ * that consent; and a consent naming tables that leaves one out is refused
+ * outright: the operator named what may go, and this is not it.
+ */
+export function pruneApproval(args: {
+  consent: DataLossConsent;
+  interactive: boolean;
+  ask: (question: string) => Promise<boolean>;
+  print: (line: string) => void;
+  db: unknown;
+  dialect: SupportedDialect;
+}): (deletions: Deletion[]) => Promise<boolean> {
+  return async deletions => {
+    const verdict = await judgeDataLoss({
+      deletions: await countDeletions(deletions, args.db, args.dialect),
+      consent: args.consent,
+      interactive: args.interactive,
+      ask: args.ask,
+      print: args.print,
+    });
+    requireConsented(verdict);
+    return true;
+  };
 }
 
 /** Execute the `nextly prune` command. */
@@ -156,12 +520,10 @@ export async function runPruneCommand(
 ): Promise<void> {
   const { logger } = context;
   logger.header("Prune");
+  // Read, and a malformed one refused, before anything connects.
+  const consent = pruneConsent(options, m => logger.warn(m));
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) logger.error(error);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
 
   const configResult = await loadConfig({
     configPath: options.config,
@@ -169,16 +531,12 @@ export async function runPruneCommand(
   });
   const currentSlugs = (configResult.config.collections ?? []).map(c => c.slug);
 
-  let adapter: CLIDatabaseAdapter;
-  try {
-    adapter = await createCliAdapter({
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-    });
-  } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
-  }
+  const adapter = await openOrConnect(
+    { dialect: dbValidation.dialect, databaseUrl: dbValidation.databaseUrl },
+    options.dryRun === true,
+    logger
+  );
+  if (adapter === undefined) return;
 
   try {
     // The ORM resolves tables through a SchemaRegistry, and this command creates none of
@@ -186,14 +544,7 @@ export async function runPruneCommand(
     // tables first, then every component's `comp_` table, which the sweep deletes rows from.
     const drizzleAdapter = adapter as unknown as DrizzleAdapter;
     const { dialect } = drizzleAdapter.getCapabilities();
-    const schemaRegistry = new SchemaRegistry(dialect);
-    // Both spellings of the field-group registry: a database whose storage
-    // migration has run has no handle for its registry otherwise.
-    schemaRegistry.registerStaticSchemas({
-      ...getDialectTables(dialect),
-      ...getFieldGroupRegistryAliases(dialect),
-    });
-    drizzleAdapter.setTableResolver(schemaRegistry);
+    const schemaRegistry = installRegistryResolver(drizzleAdapter);
     await registerComponentSchemas({
       adapter: drizzleAdapter,
       registry: schemaRegistry,
@@ -206,18 +557,60 @@ export async function runPruneCommand(
       logger
     );
     const result = await runPrune({
+      dryRun: options.dryRun === true,
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
       currentSlugs,
-      force: options.force ?? false,
+      countArchived: slug =>
+        countArchivedTranslations(drizzleAdapter, dialect, slug),
+      approve: pruneApproval({
+        consent,
+        interactive: canPrompt(),
+        ask: askToDeleteInTerminal,
+        print: line => logger.info(line),
+        db: drizzleAdapter.getDrizzle(),
+        dialect,
+      }),
+      // Taken once the consent has answered, never while a prompt waits.
+      lock: pruneUnderSchemaLock(drizzleAdapter, {
+        waitMs: options.lockWaitMs,
+        ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
+        logger: {
+          warn: message => logger.warn(message),
+          info: message => logger.info(message),
+        },
+      }),
+      // Compiled here, not published: this command serves nothing, and only
+      // reads what the configured plugins and the app declare.
+      extensionSchema: async orphans => {
+        // Loaded when a prune that drops asks, not with every command.
+        const { compileExtensionSchemaWith } = await import(
+          "../../domains/collections/services/collection-dependents-schema"
+        );
+        return compileExtensionSchemaWith({
+          config: configResult.config,
+          dialect,
+          removedCollections: orphans,
+          logger: { warn: message => logger.warn(message) },
+        });
+      },
     });
 
+    // A dry run names what the real prune drops, in the consent's words.
+    if (options.dryRun === true) {
+      reportDryRun(logger, {
+        changes: result.refusal ? [] : deletionChanges(result.planned),
+        refusals: result.refusal ? [result.refusal] : [],
+      });
+      return;
+    }
+
+    // The listing and the consent that drops it were printed by the
+    // judgement; what remains is what was done.
     if (result.orphans.length === 0) {
       logger.info("No orphaned plugin/code collections found.");
-    } else if (!options.force) {
-      logger.info(
-        `Orphaned (retained — re-run with --force to drop): ${result.orphans.join(", ")}`
-      );
+    } else if (result.dropped.length === 0) {
+      logger.info(`Orphaned (retained): ${result.orphans.join(", ")}`);
     } else {
       logger.info(
         `Dropped ${result.dropped.length} orphaned collection(s): ${result.dropped.join(", ")}`
@@ -227,9 +620,9 @@ export async function runPruneCommand(
     // Reported separately: these have no registry row, so they are not "collections" from
     // the operator's point of view and would be confusing to fold into the counts above.
     if (result.orphanedCompanions.length > 0) {
-      if (!options.force) {
+      if (result.droppedCompanions.length === 0) {
         logger.info(
-          `Orphaned localization tables (retained — re-run with --force to drop): ${result.orphanedCompanions.join(", ")}`
+          `Orphaned localization tables (retained): ${result.orphanedCompanions.join(", ")}`
         );
       } else {
         logger.info(
@@ -242,29 +635,23 @@ export async function runPruneCommand(
   }
 }
 
-/** Register the `nextly prune` command. */
-export function registerPruneCommand(program: Command): void {
-  program
-    .command("prune")
-    .description(
-      "Drop orphaned plugin/code schema (retained by default — never auto-dropped)"
-    )
-    .option(
-      "--force",
-      "Actually drop the orphaned tables + metadata (default lists them only)",
-      false
-    )
-    .action(async (cmdOptions: { force?: boolean }, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runPruneCommand(
-          { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
-    });
+/** The action of `nextly prune`, loaded when it runs. */
+export async function pruneAction(
+  cmdOptions: {
+    acceptDataLoss?: AcceptDataLossOption;
+    force?: boolean;
+    dryRun?: boolean;
+  },
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runPruneCommand(
+      { ...cmdOptions, config: globalOpts.config, cwd: globalOpts.cwd },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

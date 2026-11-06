@@ -1,6 +1,8 @@
 /**
  * Work shared within a widget batch stays inside it: per batch, per caller, per
- * source, through the real endpoint and the real plugin boot.
+ * source, through the real endpoint after a real boot. The sources are
+ * registered in the resolver registry after the boot, through the call the boot
+ * itself registers every resolver-answered source with.
  *
  * The scope is the one place two callers' reads could meet, so its isolation is
  * an access property, not a performance detail.
@@ -18,7 +20,6 @@ process.env.NEXTLY_SECRET =
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
-import type { PluginContext } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -27,7 +28,13 @@ import {
 import { createDynamicHandlers } from "../../../routeHandler";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import type { WidgetQuery } from "../query";
-import type { ResolverOptions } from "../resolved-sources";
+import {
+  clearResolvers,
+  registerResolvedSource,
+  type ResolvedWidgetSource,
+  type ResolverOptions,
+  type SourceResolver,
+} from "../resolved-sources";
 import { clearSources } from "../sources";
 
 // Prefixed for this file: on PostgreSQL and MySQL the table outlives a run on a reused database.
@@ -47,23 +54,31 @@ const calls = { plain: 0 };
 const hanging = { aborted: false };
 
 /** A source whose answer is whatever its scope computes for `key`, after a pause so batches overlap. */
+/** A source and the function that answers it, as the registry takes them. */
+interface Answered {
+  source: ResolvedWidgetSource;
+  resolve: SourceResolver;
+}
+
+/** A `plugin:` count source named `id`. */
+const countSource = (id: string, label: string): ResolvedWidgetSource => ({
+  id,
+  label,
+  kind: "plugin",
+  supports: ["count"],
+  fields: [{ name: "total", type: "number" }],
+});
+
 function scopedSource(
   id: string,
   key: string,
   value: (caller: ReadCaller) => number
-) {
+): Answered {
   return {
-    source: {
-      id,
-      label: id,
-      kind: "plugin",
-      supports: ["count"],
-      fields: [{ name: "total", type: "number" }],
-    },
+    source: countSource(id, id),
     resolve: async (
       _query: WidgetQuery,
       caller: ReadCaller,
-      _ctx: PluginContext,
       opts?: ResolverOptions
     ) => {
       const compute = async () => {
@@ -82,63 +97,31 @@ function scopedSource(
 const grantsHeld = (caller: ReadCaller) =>
   caller.authenticatedScope?.permissions.length ?? -1;
 
-const plugins = [
+/** Every source the cases below ask, two of them sharing a key, one never answering. */
+const sources: Answered[] = [
+  scopedSource("plugin:acme/who", "who", grantsHeld),
+  scopedSource("plugin:acme/a", "rows", () => 1),
+  scopedSource("plugin:acme/b", "rows", () => 2),
   {
-    name: "@acme/one",
-    version: "1.0.0",
-    nextly: ">=0.0.0",
-    contributes: {
-      widgetSources: [
-        scopedSource("plugin:acme/who", "who", grantsHeld),
-        scopedSource("plugin:acme/a", "rows", () => 1),
-        scopedSource("plugin:acme/b", "rows", () => 2),
-        {
-          source: {
-            id: "plugin:acme/plain",
-            label: "Plain",
-            kind: "plugin",
-            supports: ["count"],
-            fields: [{ name: "total", type: "number" }],
-          },
-          resolve: async () => {
-            calls.plain += 1;
-            return { op: "count" as const, total: 7 };
-          },
-        },
-        {
-          // Never answers, but honours its signal, as a resolver with a dead outbound call that
-          // was handed the signal would.
-          source: {
-            id: "plugin:acme/hang",
-            label: "Hang",
-            kind: "plugin",
-            supports: ["count"],
-            fields: [{ name: "total", type: "number" }],
-          },
-          resolve: (
-            _query: WidgetQuery,
-            _caller: ReadCaller,
-            _ctx: PluginContext,
-            opts?: ResolverOptions
-          ) =>
-            new Promise<never>((_resolve, reject) => {
-              opts?.signal?.addEventListener("abort", () => {
-                hanging.aborted = true;
-                reject(new Error("aborted"));
-              });
-            }),
-        },
-      ],
+    source: countSource("plugin:acme/plain", "Plain"),
+    resolve: async () => {
+      calls.plain += 1;
+      return { op: "count" as const, total: 7 };
     },
   },
   {
-    name: "@other/two",
-    version: "1.0.0",
-    nextly: ">=0.0.0",
-    contributes: {
-      widgetSources: [scopedSource("plugin:other/c", "rows", () => 3)],
-    },
+    // Never answers, but honours its signal, as a resolver with a dead outbound call that
+    // was handed the signal would.
+    source: countSource("plugin:acme/hang", "Hang"),
+    resolve: (_query, _caller, opts) =>
+      new Promise<never>((_resolve, reject) => {
+        opts?.signal?.addEventListener("abort", () => {
+          hanging.aborted = true;
+          reject(new Error("aborted"));
+        });
+      }),
   },
+  scopedSource("plugin:other/c", "rows", () => 3),
 ];
 
 describe.each(getConfiguredTestDialects())("on %s", dialect => {
@@ -153,12 +136,15 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       collections: [
         defineCollection({ slug: NOTES, fields: [text({ name: "title" })] }),
       ],
-      plugins: plugins as never,
     });
+    for (const { source, resolve } of sources) {
+      registerResolvedSource(source, resolve);
+    }
   });
 
   afterEach(async () => {
     clearSources();
+    clearResolvers();
     await handle?.destroy();
     handle = undefined;
     ownerId = undefined;
@@ -295,7 +281,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       expect(firstTotals[0]).not.toBe(secondTotals[0]);
     });
 
-    it("never reaches another source: the same key chosen by two sources of one plugin and by another plugin", async () => {
+    it("never reaches another source: the same key chosen by three sources", async () => {
       const key = await keyHolding([`read-${NOTES}`]);
 
       const slots = await query(key, [

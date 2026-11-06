@@ -3,7 +3,7 @@
  *
  * Uses Sharp for high-performance image processing:
  * - Extract metadata (width, height, format)
- * - Generate thumbnails (300x300, cropped to center)
+ * - Generate the admin thumbnail (the whole image fitted inside 480x480)
  * - Optimize images (compression, WebP conversion)
  *
  * Sharp is 4-5x faster than ImageMagick/GraphicsMagick
@@ -50,6 +50,9 @@ export interface ImageProcessorDeps {
   loader?: () => Promise<SharpModule | null>;
 }
 
+/** The square, in pixels, the admin thumbnail is fitted inside. */
+const THUMBNAIL_BOX = 480;
+
 export class ImageProcessor {
   constructor(private readonly deps: ImageProcessorDeps = {}) {}
 
@@ -93,13 +96,18 @@ export class ImageProcessor {
   }
 
   /**
-   * Generate thumbnail (300x300 by default, cropped to center)
+   * Generate the admin thumbnail: the whole image fitted inside a square of
+   * `size` pixels (480 by default), keeping its proportions and never
+   * enlarging it.
    *
-   * Uses "cover" fit to fill the entire 300x300 area while maintaining aspect ratio
+   * Fitted rather than cropped, so a wide or tall picture keeps the edges a
+   * person recognises it by. 480 stays sharp at twice the density of the
+   * largest tile the admin draws (about 220 CSS pixels) and is still a small
+   * file.
    */
   async generateThumbnail(
     buffer: Buffer,
-    size: number = 300
+    size: number = THUMBNAIL_BOX
   ): Promise<ProcessedImage | null> {
     const sharp = await this.sharp();
     // No processing available on this install: the file is still stored, it
@@ -108,8 +116,8 @@ export class ImageProcessor {
     if (!sharp) return null;
     const processed = await sharp(buffer)
       .resize(size, size, {
-        fit: "cover", // Crop to fill entire area
-        position: "center", // Crop from center
+        fit: "inside",
+        withoutEnlargement: true,
       })
       .jpeg({ quality: 80, progressive: true })
       .toBuffer({ resolveWithObject: true });
@@ -203,159 +211,6 @@ export class ImageProcessor {
         format: processed.info.format,
         size: processed.data.length,
       },
-    };
-  }
-
-  /**
-   * Resize an image with focal point awareness and format conversion.
-   *
-   * When fit is 'cover' and a focal point is set, the crop anchors at that
-   * point instead of center. Supports format conversion ('auto' outputs webp
-   * for jpeg/png/tiff sources, keeps original for gif).
-   */
-  async resizeWithFocalPoint(
-    buffer: Buffer,
-    options: {
-      width?: number;
-      height?: number;
-      fit: "cover" | "inside" | "contain" | "fill";
-      quality?: number;
-      format?: "auto" | "webp" | "jpeg" | "png" | "avif";
-      focalX?: number; // 0-100, percentage from left
-      focalY?: number; // 0-100, percentage from top
-    }
-  ): Promise<{
-    buffer: Buffer;
-    width: number;
-    height: number;
-    format: string;
-    size: number;
-  } | null> {
-    const sharp = await this.sharp();
-    // No processing available on this install: the file is still stored, it
-    // simply has no derived data. Callers read null as "not generated", never
-    // as a failure, so an upload proceeds without it.
-    if (!sharp) return null;
-    const quality = options.quality ?? 80;
-
-    // Get original metadata to determine output format
-    const metadata = await sharp(buffer).metadata();
-    const originalFormat = metadata.format || "jpeg";
-
-    // Determine output format
-    // 'auto' converts to webp for jpeg/png/tiff, keeps gif (to preserve animation)
-    let outputFormat: string = originalFormat;
-    if (options.format && options.format !== "auto") {
-      outputFormat = options.format;
-    } else if (options.format === "auto") {
-      const convertibleFormats = ["jpeg", "png", "tiff", "jpg"];
-      if (convertibleFormats.includes(originalFormat)) {
-        outputFormat = "webp";
-      }
-    }
-
-    // Build the Sharp pipeline
-    let pipeline = sharp(buffer);
-
-    // For 'cover' fit with a focal point, use extract() to crop around
-    // the focal point at the target aspect ratio, then resize to exact dimensions.
-    // Sharp's resize({ position }) only accepts gravity strings (e.g. "center", "north"),
-    // not arbitrary percentage values.
-    // Read into locals BEFORE the condition. Narrowing through an aliased
-    // condition only carries to `const` references, so testing the properties
-    // inline leaves them optional inside the block — which is what forced the
-    // non-null assertions this replaces.
-    const srcW = metadata.width;
-    const srcH = metadata.height;
-    const tgtW = options.width;
-    const tgtH = options.height;
-
-    // Positive, not merely present. A zero width or height used to fall out of
-    // this branch through the old truthiness test, and it has to keep doing so:
-    // a zero target makes the crop region zero-sized and Sharp's `extract`
-    // rejects it, where the normal branch reads the zero as an omitted
-    // dimension. `generateImageSizes` accepts any number, so this is reachable.
-    const hasFocalPoint =
-      options.fit === "cover" &&
-      (options.focalX !== undefined || options.focalY !== undefined) &&
-      tgtW !== undefined &&
-      tgtH !== undefined &&
-      srcW !== undefined &&
-      srcH !== undefined &&
-      tgtW > 0 &&
-      tgtH > 0 &&
-      srcW > 0 &&
-      srcH > 0;
-
-    if (hasFocalPoint) {
-      const fx = (options.focalX ?? 50) / 100; // 0-1
-      const fy = (options.focalY ?? 50) / 100; // 0-1
-
-      // Calculate the largest crop region at the target aspect ratio
-      const tgtAspect = tgtW / tgtH;
-      let cropW: number;
-      let cropH: number;
-      if (srcW / srcH > tgtAspect) {
-        // Source is wider: constrain by height
-        cropH = srcH;
-        cropW = Math.round(srcH * tgtAspect);
-      } else {
-        // Source is taller: constrain by width
-        cropW = srcW;
-        cropH = Math.round(srcW / tgtAspect);
-      }
-
-      // Center the crop region on the focal point, clamped to image bounds
-      let left = Math.round(fx * srcW - cropW / 2);
-      let top = Math.round(fy * srcH - cropH / 2);
-      left = Math.max(0, Math.min(srcW - cropW, left));
-      top = Math.max(0, Math.min(srcH - cropH, top));
-
-      pipeline = pipeline
-        .extract({ left, top, width: cropW, height: cropH })
-        .resize(tgtW, tgtH, { fit: "fill" });
-    } else {
-      // Standard resize without focal-point-aware cropping
-      pipeline = pipeline.resize(
-        options.width || undefined,
-        options.height || undefined,
-        {
-          fit: options.fit,
-          position: "center",
-          withoutEnlargement: true,
-        }
-      );
-    }
-
-    // Apply format conversion with quality
-    switch (outputFormat) {
-      case "webp":
-        pipeline = pipeline.webp({ quality, effort: 4 });
-        break;
-      case "jpeg":
-      case "jpg":
-        pipeline = pipeline.jpeg({ quality, progressive: true });
-        outputFormat = "jpeg";
-        break;
-      case "png":
-        pipeline = pipeline.png({ quality });
-        break;
-      case "avif":
-        pipeline = pipeline.avif({ quality });
-        break;
-      default:
-        // Keep original format
-        break;
-    }
-
-    const result = await pipeline.toBuffer({ resolveWithObject: true });
-
-    return {
-      buffer: result.data,
-      width: result.info.width,
-      height: result.info.height,
-      format: outputFormat,
-      size: result.data.length,
     };
   }
 

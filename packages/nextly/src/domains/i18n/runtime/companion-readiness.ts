@@ -52,6 +52,11 @@
  * @module domains/i18n/runtime/companion-readiness
  */
 
+import {
+  isMissingTable,
+  type MigrationDialect,
+} from "../../field-groups/migration/session";
+
 import type { CompanionIntrospectAdapter } from "./companion-io";
 
 export type CompanionReadiness = "ready" | "pre-migration" | "broken";
@@ -276,6 +281,66 @@ export function forgetCompanionReadiness(
   // companion inherit the shape of the one it replaced, which is the exact claim this whole
   // module exists to stop being made from memory.
   columnVerdicts(scope).delete(companionTableName);
+}
+
+/**
+ * Whether `error` is a statement finding this companion table missing, after a remembered
+ * `ready` verdict sent a write to it: the table was dropped while the verdict was still fresh.
+ * Forgets that verdict when it is, so the next write resolves readiness again and meets the
+ * refusal an unready companion gets.
+ *
+ * Narrow on purpose: a missing table by the dialect's own error code (`isMissingTable`), named
+ * as this companion by the very error that carries that code. A query wrapper's message names
+ * every table its statement reads, so a trigger's missing table, or the main table's, would
+ * otherwise pass for the companion's. Any other failure is not this companion's to explain and
+ * is left to propagate.
+ */
+export function companionFoundMissing(
+  scope: ReadinessScope,
+  dialect: MigrationDialect,
+  companionTableName: string,
+  error: unknown
+): boolean {
+  const missing = missingTableLink(error, dialect);
+  if (!(missing instanceof Error)) return false;
+  if (missingTableName(missing.message) !== companionTableName) return false;
+  forgetCompanionReadiness(scope, companionTableName);
+  return true;
+}
+
+/**
+ * The table a missing-table message names, without the schema or database it is qualified
+ * by, in each dialect's own wording: PostgreSQL `relation "x" does not exist`, MySQL
+ * `Table 'db.x' doesn't exist`, SQLite `no such table: x`. Read whole, so a table whose name
+ * merely starts or ends with another's is never taken for it. `undefined` for any other words.
+ */
+function missingTableName(message: string): string | undefined {
+  const named =
+    /relation "([^"]+)" does not exist/.exec(message)?.[1] ??
+    /Table '([^']+)' doesn't exist/.exec(message)?.[1] ??
+    /no such table: ([^\s]+)/.exec(message)?.[1];
+  return named?.split(".").pop();
+}
+
+/**
+ * The error in `error`'s cause chain that says a table is missing: the deepest one
+ * `isMissingTable` still holds for, since it looks down the chain, and a wrapper above the
+ * driver's error holds only through it. `undefined` where none does. Bounded, as
+ * `isMissingTable` is, because a cyclic `cause` is a hang.
+ */
+function missingTableLink(error: unknown, dialect: MigrationDialect): unknown {
+  let found: unknown;
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && link !== null && link !== undefined;
+    depth++
+  ) {
+    if (!isMissingTable(link, dialect)) break;
+    found = link;
+    link = (link as { cause?: unknown }).cause;
+  }
+  return found;
 }
 
 /** Test seam: drop every verdict for this connection and re-verify on the next resolve. */

@@ -3,7 +3,7 @@
  * The intent → payload mapping is the core behavioural change in PR-3:
  * each named intent (Save Draft / Publish / Save changes / Unpublish)
  * maps to a deterministic wire payload. This locks the contract so the
- * EntrySystemHeader buttons keep emitting the right shape.
+ * DocumentBar buttons keep emitting the right shape.
  */
 import { describe, it, expect } from "vitest";
 

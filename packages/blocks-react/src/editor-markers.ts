@@ -18,6 +18,14 @@
  * @module editor-markers
  */
 
+/**
+ * The attribute naming the action a collection list's note to its author
+ * offers on the editor's canvas: `choose-sort-field` on a note saying its
+ * sort fell back. The renderer writes it and the editor's canvas acts on it,
+ * so one string decides it.
+ */
+export const LIST_ACTION_ATTRIBUTE = "data-nx-list-action";
+
 /** The attribute an editor addresses a node by. Named, so one string decides it. */
 export const NODE_ID_ATTRIBUTE = "data-nx-node";
 

@@ -1,0 +1,420 @@
+/**
+ * The page builder's own tables: the usage indexes' bookkeeping, the fence a
+ * Layout's removal puts up, the runs that turn every copy of a component into
+ * plain blocks before it is deleted, the site-wide options only this plugin
+ * writes, and the runs that strip a removed breakpoint's values from the site.
+ *
+ * Kept in tables this plugin declares, reached only through its own `ctx.db`,
+ * rather than in collections. A collection has an admin screen, a REST route
+ * and a Direct API path, and a super-admin passes every access rule on all
+ * three, so a progress row written by hand there claimed a scope was walked
+ * and the documents in it were never indexed. A table declared here has none
+ * of those paths: core offers no route to it, and `ctx.db` lets only this
+ * plugin, and a plugin that declares a dependency on it, reach it.
+ *
+ * Created as `page_builder__<name>` on every dialect. The prefix is declared
+ * rather than left to default, because a table's name is permanent once a
+ * migration ships it.
+ *
+ * @module schema/tables
+ */
+import {
+  col,
+  type ColumnBuilder,
+  defineTable,
+  type TableDefinition,
+} from "@nextlyhq/plugin-sdk/schema";
+
+/** The prefix every table of this plugin is created under. */
+export const SCHEMA_PREFIX = "page_builder";
+
+/**
+ * The schema version the database must have applied before the plugin starts.
+ * It moves with every migration module.
+ */
+export const SCHEMA_VERSION = 6;
+
+/** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
+type UsageRunsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly generation: ColumnBuilder<string, false, false>;
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly dirty: ColumnBuilder<boolean, false, true>;
+};
+
+/**
+ * The run the usage indexes are being built under: one row, named `usage`.
+ *
+ * `generation` is the derivation the run walks under (the bounds, the index
+ * slugs and the derivation's revision), and `token` names the run itself. A
+ * new run, with a new token, starts when the generation changes or when a
+ * maintenance write fails. Every write a backfill pass makes checks, in its
+ * own transaction, that its token is still this row's, so a pass a newer run
+ * has replaced writes nothing.
+ *
+ * `dirty` says a maintenance write failed since the last run that walked every
+ * scope. It is set with the token it rotates, and cleared only by that newer
+ * run once it has walked the whole site, never by a later save.
+ */
+export const usageRuns: TableDefinition<"usage_runs", UsageRunsColumns> =
+  defineTable<"usage_runs", UsageRunsColumns>(
+    "usage_runs",
+    {
+      id: col.id(),
+      name: col.varchar(64),
+      generation: col.varchar(512),
+      token: col.char(36),
+      dirty: col.boolean({ default: false }),
+    },
+    // One row per name, so two instances starting the first run at once
+    // cannot both insert one.
+    { indexes: [{ columns: ["name"], unique: true }] }
+  );
+
+/** The columns of {@link usageProgress}, as `defineTable` checks and publishes them. */
+type UsageProgressColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly scopeKey: ColumnBuilder<string, false, false>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+  readonly done: ColumnBuilder<boolean, false, true>;
+};
+
+/**
+ * How far one run has walked one scope.
+ *
+ * `cursor` is the id of the last document the walk finished, so a scope larger
+ * than one job's budget resumes after it on the next tick instead of starting
+ * again. `done` says the whole scope was walked and its orphan rows swept.
+ * Rows of any token but the run's are left over from a replaced run, and are
+ * removed when the run is replaced.
+ */
+export const usageProgress: TableDefinition<
+  "usage_progress",
+  UsageProgressColumns
+> = defineTable<"usage_progress", UsageProgressColumns>(
+  "usage_progress",
+  {
+    id: col.id(),
+    token: col.char(36),
+    scopeKey: col.varchar(512),
+    cursor: col.varchar(255, { nullable: true }),
+    done: col.boolean({ default: false }),
+  },
+  // One row per scope of a run; a pass reads its run's rows by token.
+  { indexes: [{ columns: ["token", "scopeKey"], unique: true }] }
+);
+
+/** The columns of {@link layoutRemovals}, as `defineTable` checks and publishes them. */
+type LayoutRemovalsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly layoutId: ColumnBuilder<string, false, false>;
+  readonly action: ColumnBuilder<string, false, false>;
+  readonly step: ColumnBuilder<string, false, false>;
+  readonly token: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, true, false>;
+  readonly pagesLeft: ColumnBuilder<number, true, false>;
+  readonly copy: ColumnBuilder<unknown, true, false>;
+  readonly copyVersion: ColumnBuilder<string, true, false>;
+  readonly settledAt: ColumnBuilder<Date, true, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per Layout being removed: inserting it is the fence.
+ *
+ * While a row exists, the Layout cannot be made the site default, and the
+ * Layout's own delete or unpublish is refused unless the write carries this
+ * row's `token` and the row is at its `final` step. A table rather than a
+ * collection, for the reason the module docblock gives: a super-admin can
+ * write any collection row, and a fence an author could forge or delete would
+ * let a plain delete through.
+ *
+ * - `step` moves `marked` → `checked` → `final` → `removed`, each move a
+ *   compare-and-set on `token` and the step it leaves, so a request another
+ *   one replaced changes nothing.
+ * - `copy` is the Layout as it stood at the final step, its live row and its
+ *   working draft, so a delete that a promotion raced can be restored. Cleared
+ *   once the check after the write passed (`settledAt`).
+ * - `copyVersion` is the two rows' `updatedAt`, and the delete or unpublish
+ *   goes ahead only while the Layout still has it.
+ * - `updatedAt` is the lease: a row left at an earlier step by a request that
+ *   stopped is taken over by a later one, and cleared by the sweep, once it is
+ *   older than the lease.
+ *
+ * A `removed` row stays. For an unpublish it keeps the fence until the Layout
+ * is published again; for a delete it records that the Layout was removed.
+ */
+export const layoutRemovals: TableDefinition<
+  "layout_removals",
+  LayoutRemovalsColumns
+> = defineTable<"layout_removals", LayoutRemovalsColumns>(
+  "layout_removals",
+  {
+    id: col.id(),
+    layoutId: col.varchar(255),
+    action: col.varchar(16),
+    step: col.varchar(16),
+    token: col.char(36),
+    startedBy: col.varchar(255, { nullable: true }),
+    pagesLeft: col.integer({ nullable: true }),
+    copy: col.json({ nullable: true }),
+    copyVersion: col.varchar(128, { nullable: true }),
+    settledAt: col.timestamp({ nullable: true }),
+    ...col.timestamps(),
+  },
+  // One row per Layout, so two removals of one Layout cannot both insert the
+  // fence: the second meets the unique index and is told the first is running.
+  { indexes: [{ columns: ["layoutId"], unique: true }] }
+);
+
+/** The columns of {@link componentDeletions}. */
+type ComponentDeletionsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly componentId: ColumnBuilder<string, false, false>;
+  readonly purpose: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, false, false>;
+  readonly phase: ColumnBuilder<string, false, true>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * One run rewriting every host of a component, one row per component and
+ * purpose: `delete` turns its copies into plain blocks before it is deleted,
+ * `strip-retired` removes the values of fields it no longer exposes. The two
+ * may run at once, each with its own progress.
+ *
+ * Inserting a `delete` row IS the fence: while it exists, a write that would
+ * add a reference to the component is refused. A `strip-retired` run fences
+ * nothing. The unique (`componentId`, `purpose`) means two people starting one
+ * run at once start it once.
+ *
+ * `startedBy` names who the run's writes are made as, as `user:<id>` for a
+ * signed-in person or `api-key:<id>` for a key, so a later call can be
+ * matched against it.
+ *
+ * `phase` says which walk the run is on: `converting` (every host, skipping
+ * the ones its progress says are done), `final` (every host again, trusting
+ * no progress row) or `done`. `cursor` is where the final walk stopped, so a
+ * walk larger than one tick resumes rather than starting over.
+ */
+export const componentDeletions: TableDefinition<
+  "component_deletions",
+  ComponentDeletionsColumns
+> = defineTable<"component_deletions", ComponentDeletionsColumns>(
+  "component_deletions",
+  {
+    id: col.id(),
+    componentId: col.varchar(255),
+    purpose: col.varchar(32),
+    startedBy: col.varchar(255),
+    phase: col.varchar(16, { default: "converting" }),
+    cursor: col.varchar(1024, { nullable: true }),
+  },
+  { indexes: [{ columns: ["componentId", "purpose"], unique: true }] }
+);
+
+/** The columns of {@link componentDeletionHosts}. */
+type ComponentDeletionHostsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly deletionId: ColumnBuilder<string, false, false>;
+  readonly hostKey: ColumnBuilder<string, false, false>;
+  readonly state: ColumnBuilder<string, false, false>;
+  readonly reason: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * What a run has done to one host document: `rewritten`, `unchanged`, `left`
+ * (with the reason) or `pending` (re-queued by a write made while fenced).
+ * Hosts outside every walk that block the run (a Layout naming the component)
+ * are recorded here too, as `left`, before the run is marked done.
+ *
+ * An ordering hint for the converting walk only. The final walk reads every
+ * host again whatever these rows say, so a row claiming a host is done skips
+ * nothing that still needs converting.
+ */
+export const componentDeletionHosts: TableDefinition<
+  "component_deletion_hosts",
+  ComponentDeletionHostsColumns
+> = defineTable<"component_deletion_hosts", ComponentDeletionHostsColumns>(
+  "component_deletion_hosts",
+  {
+    id: col.id(),
+    deletionId: col.char(36),
+    hostKey: col.varchar(512),
+    state: col.varchar(16),
+    reason: col.varchar(64, { nullable: true }),
+  },
+  { indexes: [{ columns: ["deletionId", "hostKey"], unique: true }] }
+);
+
+/** The columns of {@link siteOptions}, as `defineTable` checks and publishes them. */
+type SiteOptionsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly value: ColumnBuilder<string, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per site-wide option this plugin keeps outside the Site Style
+ * document: `name` says which, `value` holds it.
+ *
+ * A table rather than a field on a Single, because a row can be written only
+ * if absent: one conflict-safe insert both records a choice and refuses to
+ * replace one already made, which a Single's read-merge-write cannot promise.
+ * See `spacing-mode-store` for the one option it holds today.
+ */
+export const siteOptions: TableDefinition<"site_options", SiteOptionsColumns> =
+  defineTable<"site_options", SiteOptionsColumns>(
+    "site_options",
+    {
+      id: col.id(),
+      name: col.varchar(64),
+      value: col.varchar(255),
+      ...col.timestamps(),
+    },
+    // One row per option, so two writers inserting the same option at once
+    // cannot both succeed.
+    { indexes: [{ columns: ["name"], unique: true }] }
+  );
+
+/** The columns of {@link breakpointRemovals}. */
+type BreakpointRemovalsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly removedIds: ColumnBuilder<string, false, false>;
+  readonly before: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, false, false>;
+  readonly phase: ColumnBuilder<string, false, true>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+  readonly openKey: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * One run stripping every value stored under breakpoints the site removed:
+ * the styles and own per-device hides of every document holding blocks, walked
+ * the way a component's hosts are (`host-rewrite/rewrite`), its progress kept
+ * in {@link componentDeletionHosts} under this row's id.
+ *
+ * - `removedIds` is the JSON list of the breakpoint ids removed.
+ * - `before` is the JSON record `{ stored, emitted }`: the breakpoint set the
+ *   site stored before the removal (`null` where it stored none and the
+ *   configured set applied), so the removal can be undone later, and the set
+ *   the stylesheet was emitted under then, so a run carried on after the
+ *   configured defaults changed carries hides under the cascade it began with.
+ * - `startedBy` names who saved the removal, as `user:<id>` or `api-key:<id>`.
+ *   The writes themselves are made as the system: every value under a removed
+ *   breakpoint goes, whoever may open the document holding it.
+ * - `phase` and `cursor` are the walk's, as for a component's run.
+ * - `openKey` is `site` while the run is open and `null` once it is done. Its
+ *   unique index lets one removal be open at a time: a second insert meets it
+ *   and is refused, and every finished run (all `null`) stays as a record.
+ */
+export const breakpointRemovals: TableDefinition<
+  "breakpoint_removals",
+  BreakpointRemovalsColumns
+> = defineTable<"breakpoint_removals", BreakpointRemovalsColumns>(
+  "breakpoint_removals",
+  {
+    id: col.id(),
+    removedIds: col.longText(),
+    before: col.longText(),
+    startedBy: col.varchar(255),
+    phase: col.varchar(16, { default: "converting" }),
+    cursor: col.varchar(1024, { nullable: true }),
+    openKey: col.varchar(16, { nullable: true }),
+  },
+  { indexes: [{ columns: ["openKey"], unique: true }] }
+);
+
+/** The columns of {@link breakpointRemovalFragments}. */
+type BreakpointRemovalFragmentsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly runId: ColumnBuilder<string, false, false>;
+  readonly documentKey: ColumnBuilder<string, false, false>;
+  readonly host: ColumnBuilder<unknown, true, false>;
+  readonly form: ColumnBuilder<string, false, false>;
+  readonly fragment: ColumnBuilder<unknown, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * What each breakpoint removal took out of the site, kept so it can be put
+ * back: one row per stored value it stripped, written before the strip itself,
+ * so a value that was stripped always has its row.
+ *
+ * - `runId` is the removal ({@link breakpointRemovals}) that stripped it.
+ * - `documentKey` names the document (`host-rewrite/contract`'s
+ *   `documentKeyOf`), or the site style for the shared styles' fragment.
+ * - `host` is the address of the blocks value within it (its field path and
+ *   language), `null` for the shared styles, and `form` which stored form was
+ *   stripped: `published`, `draft`, or `site` for the shared styles.
+ * - `fragment` is what was taken out (`breakpoint-removal/strip`). JSON
+ *   columns, not text: a large page's fragment outgrows MySQL's `TEXT`.
+ * - A value stripped twice (a write brought values back) has a row for each;
+ *   the newest is the latest strip.
+ *
+ * Rows older than the window a removal can be undone in are deleted by the
+ * removal job.
+ */
+export const breakpointRemovalFragments: TableDefinition<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+> = defineTable<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+>(
+  "breakpoint_removal_fragments",
+  {
+    id: col.id(),
+    runId: col.char(36),
+    documentKey: col.varchar(512),
+    host: col.json({ nullable: true }),
+    form: col.varchar(16),
+    fragment: col.json(),
+    ...col.timestamps(),
+  },
+  // Read and purged by run; the purge also reads by age.
+  { indexes: [{ columns: ["runId"] }, { columns: ["createdAt"] }] }
+);
+
+/** Every table this plugin declares, in creation order. */
+export const PAGE_BUILDER_TABLES: readonly [
+  typeof usageRuns,
+  typeof usageProgress,
+  typeof layoutRemovals,
+  typeof componentDeletions,
+  typeof componentDeletionHosts,
+  typeof siteOptions,
+  typeof breakpointRemovals,
+  typeof breakpointRemovalFragments,
+] = [
+  usageRuns,
+  usageProgress,
+  layoutRemovals,
+  componentDeletions,
+  componentDeletionHosts,
+  siteOptions,
+  breakpointRemovals,
+  breakpointRemovalFragments,
+];

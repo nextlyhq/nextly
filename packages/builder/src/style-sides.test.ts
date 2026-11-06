@@ -2,7 +2,11 @@ import { STYLE_CATALOG } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { styleControlsFor } from "./style-controls";
-import { logicalSideGroup, LOGICAL_SIDES } from "./style-sides";
+import {
+  logicalSideGroup,
+  LOGICAL_SIDES,
+  physicalSideName,
+} from "./style-sides";
 
 /** One catalog entry, as the array actually stores them. */
 interface CatalogEntry {
@@ -96,5 +100,40 @@ describe("logicalSideGroup", () => {
     expect(logicalSideGroup(scrambled)?.map(c => c.path[0])).toEqual([
       ...LOGICAL_SIDES,
     ]);
+  });
+});
+
+describe("physicalSideName", () => {
+  const LTR = { writingMode: "horizontal-tb", direction: "ltr" };
+  const RTL = { writingMode: "horizontal-tb", direction: "rtl" };
+
+  it("names the sides of a left-to-right element by their edges", () => {
+    expect(LOGICAL_SIDES.map(side => physicalSideName(side, LTR))).toEqual(
+      LOGICAL_SIDES.map(
+        side =>
+          ({
+            blockStart: "top",
+            blockEnd: "bottom",
+            inlineStart: "left",
+            inlineEnd: "right",
+          })[side]
+      )
+    );
+  });
+
+  it("mirrors the inline sides of a right-to-left element", () => {
+    expect(physicalSideName("inlineStart", RTL)).toBe("right");
+    expect(physicalSideName("inlineEnd", RTL)).toBe("left");
+    expect(physicalSideName("blockStart", RTL)).toBe("top");
+  });
+
+  it("has no plain name in a vertical writing mode", () => {
+    // Which edge is which there depends on more than this pair reads.
+    expect(
+      physicalSideName("blockStart", {
+        writingMode: "vertical-rl",
+        direction: "ltr",
+      })
+    ).toBeUndefined();
   });
 });

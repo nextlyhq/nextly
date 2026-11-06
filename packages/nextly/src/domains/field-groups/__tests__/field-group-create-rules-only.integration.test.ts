@@ -34,6 +34,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 
 type Doc = Record<string, unknown>;
 
@@ -62,6 +63,9 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The boot's seeding, which makes the Public role the checked direct
+        // update below, made with no user, is judged by.
+        seedPublic: true,
         fieldGroups: [
           defineFieldGroup({
             slug: "cnote",
@@ -100,6 +104,10 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       } as never);
+      // The collection's rule only narrows the update permission, so Public
+      // holds it, as a site admin would grant it: the direct door's visitor
+      // then reaches the field group's create rule.
+      await grantPublic(t, ["update-cpages"]);
       trusted = new Nextly();
       const writer = (
         await trusted.users.create({
@@ -149,7 +157,7 @@ describe.each(getConfiguredTestDialects())(
         await new Nextly({ overrideAccess: false }).update({
           collection: "cpages",
           id,
-          data,
+          data: { ...data, _overwrite: true },
         } as never);
         return;
       }
@@ -162,7 +170,7 @@ describe.each(getConfiguredTestDialects())(
         new Request(`http://localhost/api/${path.join("/")}`, {
           method: "PATCH",
           headers: { cookie: writerCookie, "content-type": "application/json" },
-          body: JSON.stringify(data),
+          body: JSON.stringify({ ...data, _overwrite: true }),
         }),
         { params: Promise.resolve({ params: path }) }
       );
@@ -188,7 +196,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted.update({
         collection: "cpages",
         id,
-        data: { deck: [first, wrap("t-new")] },
+        data: { deck: [first, wrap("t-new")], _overwrite: true },
       } as never);
 
       expect(secrets((await read(id)).deck)).toEqual(["s-t-0", "s-t-new"]);

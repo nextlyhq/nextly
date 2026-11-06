@@ -3,14 +3,15 @@
 /**
  * The dashboard's widget grid.
  *
- * Twelve columns, one cell per visible widget, and ONE request for all of them.
+ * Twelve columns, rows of one fixed height, one cell per visible widget, and
+ * ONE request for all of them.
  * The grid is where the three cross-cutting decisions live, because none of
  * them can be made correctly by a widget on its own:
  *
- * - **Batching.** Every visible widget's query goes out together, so a
- *   dashboard costs one round trip rather than one per card.
- * - **Gating.** A widget the user may not see is dropped before its query is
- *   collected, so a denied card causes no request on their behalf.
+ * - **Batching.** Every visible card is asked for together, so a dashboard
+ *   costs one round trip rather than one per card.
+ * - **Gating.** A widget the user may not see is dropped before its card is
+ *   asked for, so a denied card causes no request on their behalf.
  * - **Announcement.** ONE live region for the whole grid, following
  *   `EntryForm/DocumentStatusLive`. Ten widgets each announcing their own
  *   refresh would interrupt each other, and a reader could not tell which
@@ -24,10 +25,10 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { PublishedContentSource } from "nextly/config";
 import {
   useMemo,
   useRef,
+  useState,
   type ComponentProps,
   type ReactNode,
   type JSX,
@@ -40,8 +41,13 @@ import {
 } from "@admin/context/providers/BrandingProvider";
 import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import type {
+  DashboardLayoutRead,
+  DashboardLayoutResponse,
+} from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
+import { DrawFailureContext, useDrawFailures } from "./draw-failures";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
 import { AtRestSettingsWriteProvider } from "./edit/at-rest-settings-write";
 import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
@@ -49,6 +55,10 @@ import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
 import { useCardDrag } from "./edit/drag/useCardDrag";
 import { RemovalNotice } from "./edit/RemovalNotice";
+import {
+  bringRefusedPanelForward,
+  useSettingsPanelHoldsChanges,
+} from "./edit/settings-panel-registry";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
 import { useCardRemoval } from "./edit/useCardRemoval";
 import { useCardSettingsWrite } from "./edit/useCardSettingsWrite";
@@ -60,12 +70,18 @@ import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
+import { usePublishGridChrome } from "./grid-chrome";
+import {
+  HiddenWhileEmptyContext,
+  useHiddenWhileEmptyAtFirstPaint,
+  type CardAnswers,
+} from "./hidden-while-empty";
+import { WidenLonePairContext, widensLonePair } from "./lone-pair";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { bandForWidth, drawnWidth } from "./sizes";
-import { useDashboardWidth } from "./useDashboardWidth";
+import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
+import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
-import { widgetAsAsked } from "./widget-as-asked";
 
 // At module scope, before any render. `PluginSlot` resolves a path DURING
 // render, so registering from an effect would land after the first paint and
@@ -116,14 +132,15 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
-        className="grid grid-cols-12 gap-[24px]"
+        // The grid the cards will be drawn on, so the placeholders take the rows a card would.
+        className={GRID_CLASS}
       >
         {[0, 1, 2].map(row => (
           <div
             key={row}
             aria-hidden
-            className="col-span-12 mb-6 h-32 animate-pulse rounded-lg bg-muted"
+            style={cardRowStyle(2)}
+            className="col-span-12 animate-pulse rounded-lg bg-muted"
           />
         ))}
       </section>
@@ -134,65 +151,77 @@ function NothingToDraw({
 }
 
 /**
- * The cards the batch asks for, with each reader's own settings applied.
+ * The cards the batch asks for, each with the size it is drawn at.
  *
- * Applied HERE rather than inside the batch, because the stored config belongs
- * to the placement and the batch has no reason to read a layout. The ROW is
- * carried through rather than the widget alone, so the answer comes back keyed
- * to the placement that asked: the same widget placed twice with different
- * settings asks two different questions, and keying those by widget filed both
- * under one entry.
- *
- * Through `widgetAsAsked`, the rule the card is also drawn from, which returns the
- * widget it was given when nothing applies, so a card with no settings keeps its
- * identity through this map and the batch's memoisation does not see a new
- * object every render.
+ * The ROW is carried through rather than the widget alone, so the answer comes
+ * back keyed to the placement that asked: the same widget placed twice with
+ * different settings asks two different questions, and keying those by widget
+ * filed both under one entry. A row the dashboard has no width for is passed
+ * through as it is, so a card with nothing to size keeps its identity through
+ * this map and the batch's memoisation does not see a new object every render.
  */
 function askedWith(
   rows: ArrangedWidget[],
   dashboardWidth: number | undefined,
-  editing: boolean,
-  sources: readonly PublishedContentSource[] | undefined
-): Array<ArrangedWidget & { tier?: SizeTier; editing?: true }> {
+  editing: boolean
+): Array<
+  ArrangedWidget & { tier?: SizeTier; h?: number; w?: number; editing?: true }
+> {
   return rows.map(row => {
-    // A card core answers on the server is asked by its id at rest, and with
-    // the settings it is drawn with while customising, when they may not be
-    // saved yet (see `questionsFor`).
-    if (row.widget.serverData === true) {
-      return editing ? { ...row, editing: true as const } : row;
-    }
     // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
-    // the query is asked before the card can measure itself, and sized for that tier.
-    const tier = predictedTier(
-      drawnWidth(row.width, row.allowedWidths),
-      dashboardWidth
-    );
-    const sized = tier ? { ...row, tier } : row;
-    const widget = widgetAsAsked(row.widget, row.config, sources);
-    // The declared query, or cells, travel with the asked ones, so the batch keys the card by
-    // what it declares and a change of its settings asks this card again alone.
-    return widget === row.widget
-      ? sized
-      : {
-          ...sized,
-          widget,
-          declaredQuery: row.widget.query,
-          declaredCells: row.widget.cells,
-        };
+    // the card is asked before it can measure itself. A card is asked by its id at rest, and
+    // with the settings it is drawn with while customising, when they may not be saved yet;
+    // with the size it is drawn at, which its widget's `load` is handed (`cardAskFor`).
+    const size = drawnSize(row.size, row.widget.size);
+    const tier = predictedTier(size.w, dashboardWidth);
+    const drawn = tier ? { ...row, tier, w: size.w, h: size.h } : row;
+    return editing ? { ...drawn, editing: true as const } : drawn;
   });
+}
+
+/** A layout answer's verdict on the cards hidden while empty, as one comparable value. */
+function verdictOf(layout: DashboardLayoutResponse | undefined): string {
+  const hidden = layout?.hiddenWhileEmpty;
+  // Absent is no verdict at all, which is not the verdict that hides nothing.
+  return hidden === undefined ? "none" : JSON.stringify([...hidden].sort());
+}
+
+/**
+ * The token the batch is asked under: the layout answer's, taken from a fresh answer only when
+ * that answer's verdict on the cards hidden while empty differs from the one the batch was asked
+ * under. Every layout read has a token of its own, and the layout is read again after each of
+ * the reader's own writes, so taking every new token asked every card again for one card's
+ * change. A fresh answer with the same verdict hides and reveals nothing, so the cards' answers
+ * under the token held are as good as any it read ahead; one that reveals or hides a card is a
+ * new load, whose cards the batch is asked for again, once, under its token. A held token whose
+ * read-ahead has closed is answered fresh by the server, so holding it is always safe.
+ */
+function useBatchToken(
+  layout: DashboardLayoutResponse | undefined
+): string | undefined {
+  const token = layout?.readAheadToken;
+  const verdict = verdictOf(layout);
+  const [held, setHeld] = useState({ token, verdict });
+  // React's pattern for state that follows a prop, so no render asks under a token it drops.
+  const adopt =
+    token !== undefined &&
+    token !== held.token &&
+    (held.token === undefined || verdict !== held.verdict);
+  if (adopt) setHeld({ token, verdict });
+  return adopt ? token : (held.token ?? token);
 }
 
 /** Nothing to ask yet: the batch's input while the dashboard has no width. */
 const NO_CARDS: [] = [];
 
 /**
- * The element the dashboard's width is measured from, the one batch of the cards' queries, and
- * dragging the cards.
+ * The element the dashboard's width is measured from, the one batch of the cards, and dragging
+ * the cards.
  *
- * Each query is sized for the tier it will be drawn at. The width is measured before the first
- * paint, and no card is asked before it is known, so every first query is sized for its card's
- * tier. Dragging is decided from the same width's band: on wherever more than one column is
- * drawn.
+ * Each card is asked for at the size it will be drawn at. The width is measured before the first
+ * paint, and no card is asked before it is known, so every first ask carries its card's size.
+ * Dragging is decided from the same width: on wherever more than one column is drawn.
+ * The batch is asked under the token of `layout`, the layout answer the cards are drawn from.
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
@@ -200,27 +229,75 @@ function useCardsAtDashboardWidth(
   carry: Pick<
     Parameters<typeof useCardDrag>[0],
     "gridRef" | "say" | "drop" | "requestFocus"
-  >
+  >,
+  layout: DashboardLayoutResponse | undefined
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
-  // The collections the reader may read, with their fields: what a card's content settings are
-  // asked against.
-  const sources = useBranding().widgetSources;
   const cards = useMemo(
     () =>
       dashboardWidth === undefined
         ? NO_CARDS
-        : askedWith(visible, dashboardWidth, editing, sources),
-    [visible, dashboardWidth, editing, sources]
+        : askedWith(visible, dashboardWidth, editing),
+    [visible, dashboardWidth, editing]
   );
-  const band =
-    dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
+  // Cards whose own component threw drawing a fine answer, counted as failed.
+  const draws = useDrawFailures();
   return {
     dashboardRef,
-    drag: useCardDrag({ rows: visible, band, width: dashboardWidth, ...carry }),
-    ...useWidgetBatch(cards),
+    dashboardWidth,
+    drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
+    // Asked under the token of the layout answer the cards are drawn from, and again under a new
+    // one that hides or reveals a card: a layout read that lands after the batch started is then
+    // the load the cards are drawn from, and the server answers a card that load read ahead only
+    // under its token (`useBatchToken`).
+    ...useWidgetBatch(cards, draws.failed, useBatchToken(layout)),
+    reportDraw: draws.report,
   };
+}
+
+/**
+ * Whether leaving the dashboard asks first: while customising, when the draft or a card's open
+ * settings panel holds a change, since the panel leaves the asking to this prompt then.
+ */
+function leaveAsks(
+  editor: { hasUnsavedChanges: boolean; isEditing: boolean },
+  panelHoldsChanges: boolean
+): boolean {
+  return editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges);
+}
+
+/**
+ * The admin's own unsaved-changes prompt, over the dashboard: Save, Discard and Keep editing
+ * before the reader leaves with changes in customise mode.
+ */
+function DashboardLeaveGuard({
+  editor,
+  saveRequest,
+  children,
+}: {
+  editor: LayoutEditor;
+  saveRequest: ReturnType<typeof useSaveRequest>;
+  children: ReactNode;
+}): JSX.Element {
+  // Whether a card's settings panel holds a change Done has not kept.
+  const panelHoldsChanges = useSettingsPanelHoldsChanges();
+  return (
+    <UnsavedChangesGuard
+      // A card's settings panel holding a change counts while customising, where the panel
+      // leaves the asking to this prompt: one leave, one question.
+      isDirty={leaveAsks(editor, panelHoldsChanges)}
+      onDiscard={editor.cancel}
+      // The bar's Save and this prompt's are one request, which keeps an open settings
+      // panel's change with the draft (`useSaveRequest`).
+      onSave={saveRequest.request}
+      // A Save the prompt could not make, because a settings panel refused its change, leaves
+      // the reader in that panel, on what it refused.
+      onCancel={bringRefusedPanelForward}
+    >
+      {children}
+    </UnsavedChangesGuard>
+  );
 }
 
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
@@ -244,7 +321,7 @@ function cardActions(
 ): ComponentProps<typeof ArrangedGrid>["on"] {
   return {
     move: arrangement.moveCard,
-    setWidth: arrangement.setCardWidth,
+    setSize: arrangement.setCardSize,
     // A removal is the next change, so the card ringed for the last one is no longer news.
     remove: placementId => {
       arrangement.ring.highlight(null);
@@ -283,7 +360,8 @@ function useStandingCardWrites(
 }
 
 /**
- * A card's settings saved at once, outside customise mode: its quick setting and its sheet.
+ * A card's settings and size saved at once, outside customise mode: its quick setting, its quick
+ * popover, its menu's Size and its sheet.
  * Offered only at rest, where there is no draft to hold a change, and once an arrangement has
  * been read, for the reason the standing dismiss waits for one.
  */
@@ -295,8 +373,25 @@ function useSettingsWriteAtRest(
   const cardSettingsWrite = useCardSettingsWrite(layout);
   if (!layout.layout || editor.isEditing) return undefined;
   return {
-    write: (placementId, title, config, callbacks) =>
-      cardSettingsWrite.write({ placementId, title, config }, callbacks),
+    write: (placementId, title, config, callbacks, ownTitle) =>
+      cardSettingsWrite.write(
+        {
+          placementId,
+          title,
+          change: {
+            kind: "settings",
+            config,
+            ...(ownTitle === undefined ? {} : { ownTitle }),
+          },
+        },
+        callbacks
+      ),
+    // The same write, of the card's size: the request customise mode's Save sends for it.
+    resize: (placementId, title, size, bounds, callbacks) =>
+      cardSettingsWrite.write(
+        { placementId, title, change: { kind: "size", size, bounds } },
+        callbacks
+      ),
     isWriting: editor.isWriting,
     ...(cardSettingsWrite.unavailable === undefined
       ? {}
@@ -326,6 +421,50 @@ function ArrangementLoading() {
 }
 
 /**
+ * What every card under the grid reads beside its props: where a card that fails to draw reports
+ * it, and which cards the dashboard is drawn without while empty: those the first layout answer
+ * found empty, less any a later layout answer, or the card's own batch answer (`answers`), finds
+ * with something waiting (`hidden-while-empty`).
+ * Mounted with the grid, which waits for that answer, and taken at the dashboard's width, which
+ * is measured before the first paint, so the verdict is in place before any card is painted.
+ */
+function CardContexts({
+  reportDraw,
+  layout,
+  dashboardWidth,
+  answers,
+  children,
+}: {
+  reportDraw: ComponentProps<typeof DrawFailureContext.Provider>["value"];
+  layout: DashboardLayoutRead | undefined;
+  /** The dashboard's width, which the verdict is taken at once it has one. */
+  dashboardWidth: number | undefined;
+  answers: CardAnswers;
+  children: ReactNode;
+}): JSX.Element {
+  const hiddenWhileEmpty = useHiddenWhileEmptyAtFirstPaint(
+    layout,
+    dashboardWidth,
+    answers
+  );
+  return (
+    <DrawFailureContext.Provider value={reportDraw}>
+      <HiddenWhileEmptyContext.Provider value={hiddenWhileEmpty}>
+        {/* The width a card's settings panel previews it at (`cardOuterWidth`). */}
+        <DashboardWidthProvider value={dashboardWidth}>
+          {/* The lone card of the pair is drawn across its row where the default gives the pair
+              a row of their own and the reader follows it: a reader's own arrangement, and a
+              site's default that places them otherwise, keep their sizes. */}
+          <WidenLonePairContext.Provider value={widensLonePair(layout)}>
+            {children}
+          </WidenLonePairContext.Provider>
+        </DashboardWidthProvider>
+      </HiddenWhileEmptyContext.Provider>
+    </DrawFailureContext.Provider>
+  );
+}
+
+/**
  * What the dashboard's container holds while there are no cards to draw, or `null` once there
  * are. Drawn inside the measured container either way, by the one return that draws it.
  *
@@ -334,7 +473,7 @@ function ArrangementLoading() {
  * - **The arrangement still on its way:** no card, no card's data, and one status where the grid
  *   will be. Nothing sits below the grid, so the cards arriving in its place move nothing that
  *   was already drawn. Inside the measured container all the same: the dashboard's width is
- *   observed from the element mounted first, and a card's first query waits for that width, so
+ *   observed from the element mounted first, and a card's first ask waits for that width, so
  *   a container drawn only once the arrangement lands would never be measured and no card would
  *   ever be asked for.
  */
@@ -357,21 +496,34 @@ function holdingBody({
   return awaitingArrangement ? <ArrangementLoading /> : null;
 }
 
+/**
+ * The reader's stored layout and the arrangement drawn from it, read together:
+ * the arrangement is the layout's, and the card writes outside customise mode
+ * need the layout itself.
+ */
+function useLayoutArrangement(
+  declared: Parameters<typeof useDashboardArrangement>[0],
+  announce: Parameters<typeof useDashboardArrangement>[2],
+  focus: Parameters<typeof useDashboardArrangement>[3]
+) {
+  const layout = useDashboardLayout();
+  const arrangement = useDashboardArrangement(
+    declared,
+    layout,
+    announce,
+    focus
+  );
+  return { layout, arrangement };
+}
+
 export function WidgetGrid(): JSX.Element {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
 
-  // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
-  // and the registry `registerWidget` writes to. Reading only the first made the
-  // registry invisible to the renderer built around it.
+  // The widgets the registry publishes: core's, the plugins' and the site's.
   const declared = useMemo(
-    () =>
-      resolveDashboardWidgets(
-        branding?.plugins,
-        branding?.widgets,
-        hasPermission
-      ),
+    () => resolveDashboardWidgets(branding?.widgets, hasPermission),
     [branding, hasPermission]
   );
 
@@ -382,10 +534,8 @@ export function WidgetGrid(): JSX.Element {
   // Where focus goes when a gesture moves or removes the element holding it.
   const focus = useDashboardFocus();
 
-  const layout = useDashboardLayout();
-  const arrangement = useDashboardArrangement(
+  const { layout, arrangement } = useLayoutArrangement(
     declared,
-    layout,
     announce,
     focus
   );
@@ -414,22 +564,39 @@ export function WidgetGrid(): JSX.Element {
   // The dashboard's own width, the cards asked at it, and dragging them by their handles.
   const {
     dashboardRef,
+    dashboardWidth,
     drag,
     slots,
-    cellSlots,
     fetchingPlacementIds,
     updatedAtFor,
-    fetchedTierFor,
+    answeredAtFor,
+    fetchedAskFor,
     requested,
     counted,
     failed,
     settling,
     retry,
-  } = useCardsAtDashboardWidth(visible, editor.isEditing, {
-    gridRef: focus.gridRef,
-    say: announce.drag,
-    drop: arrangement.dropCard,
-    requestFocus: focus.request,
+    refresh,
+    reportDraw,
+  } = useCardsAtDashboardWidth(
+    visible,
+    editor.isEditing,
+    {
+      gridRef: focus.gridRef,
+      say: announce.drag,
+      drop: arrangement.dropCard,
+      requestFocus: focus.request,
+    },
+    layout.layout
+  );
+
+  // What the page's header draws from the grid.
+  usePublishGridChrome({
+    arrangement,
+    requested,
+    updatedAtFor,
+    refresh,
+    customizeRef: focus.customizeRef,
   });
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
@@ -491,11 +658,7 @@ export function WidgetGrid(): JSX.Element {
           was pending lost them when it failed. Discarding says nothing, because
           the page is leaving and the next one speaks for itself; reload and
           close get the browser's own prompt. */}
-      <UnsavedChangesGuard
-        isDirty={editor.hasUnsavedChanges}
-        onDiscard={editor.cancel}
-        onSave={saveRequest.request}
-      >
+      <DashboardLeaveGuard editor={editor} saveRequest={saveRequest}>
         <div className="space-y-4">
           <DashboardEditChrome
             editor={editor}
@@ -507,7 +670,6 @@ export function WidgetGrid(): JSX.Element {
             isUnreadable={layout.isUnreadable}
             onStageReset={arrangement.stageReset}
             on={{
-              begin: arrangement.begin,
               cancel: arrangement.cancel,
               addWidget: () => addPanel.setOpen(true),
             }}
@@ -517,32 +679,41 @@ export function WidgetGrid(): JSX.Element {
 
           <CardDragContext drag={drag}>
             <AtRestSettingsWriteProvider value={settingsWrite}>
-              <ArrangedGrid
-                rows={visible}
-                placements={editor.placements}
-                isDrawn={arrangement.isDrawn}
-                isEditing={editor.isEditing}
-                writes={{
-                  isWriting: editor.isWriting,
-                  singleCardWriteBlocked: singleCardWriteBlocked(
-                    layout.isUnreadable
-                  ),
-                  settings: settingsWrite,
-                }}
-                slots={slots}
-                cellSlots={cellSlots}
-                requested={requested}
-                updatedAtFor={updatedAtFor}
-                fetchedTierFor={fetchedTierFor}
-                fetchingPlacementIds={fetchingPlacementIds}
-                retry={retry}
-                announcement={announcement}
-                focus={focus}
-                gridRef={focus.gridRef}
-                highlightedId={ring.highlightedId}
-                drag={drag}
-                on={cardActions(arrangement, removal, editor)}
-              />
+              <CardContexts
+                reportDraw={reportDraw}
+                layout={layout.layout}
+                answers={{ slots, fetching: fetchingPlacementIds }}
+                dashboardWidth={dashboardWidth}
+              >
+                <ArrangedGrid
+                  rows={visible}
+                  placements={editor.placements}
+                  isDrawn={arrangement.isDrawn}
+                  isEditing={editor.isEditing}
+                  writes={{
+                    isWriting: editor.isWriting,
+                    sources: branding?.widgetSources,
+                    singleCardWriteBlocked: singleCardWriteBlocked(
+                      layout.isUnreadable
+                    ),
+                    settings: settingsWrite,
+                  }}
+                  slots={slots}
+                  requested={requested}
+                  updatedAtFor={updatedAtFor}
+                  answeredAtFor={answeredAtFor}
+                  // Each card's held answer is drawn by the size and density it was fetched at.
+                  fetchedAskFor={fetchedAskFor}
+                  fetchingPlacementIds={fetchingPlacementIds}
+                  retry={retry}
+                  announcement={announcement}
+                  focus={focus}
+                  gridRef={focus.gridRef}
+                  highlightedId={ring.highlightedId}
+                  drag={drag}
+                  on={cardActions(arrangement, removal, editor)}
+                />
+              </CardContexts>
             </AtRestSettingsWriteProvider>
           </CardDragContext>
 
@@ -550,9 +721,7 @@ export function WidgetGrid(): JSX.Element {
             open={addPanel.open}
             onOpenChange={addPanel.setOpen}
             editor={editor}
-            layout={layout}
             byId={byId}
-            isDrawn={arrangement.isDrawn}
             restore={removal.restore}
             highlight={ring.highlight}
             focus={focus}
@@ -566,7 +735,7 @@ export function WidgetGrid(): JSX.Element {
             onClose={removal.close}
           />
         </div>
-      </UnsavedChangesGuard>
+      </DashboardLeaveGuard>
     </div>
   );
 }

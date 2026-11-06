@@ -34,11 +34,16 @@
  * @module capability-route
  */
 
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
+
+import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { isHostStore } from "./composition-route-kit";
 import {
   CAPABILITY_ROUTE_PATH,
   type PatternCapabilityResponse,
 } from "./library-contract";
+import type { ComponentStore } from "./library-route";
 import { SAVED_PATTERN_STATUS } from "./save-pattern-route";
 
 /**
@@ -68,6 +73,37 @@ export async function readPatternCapability(
   ctx: CapabilityRouteContext
 ): Promise<PatternCapabilityResponse> {
   if (ctx.caller === null) return { mayCreate: false };
+  return { mayCreate: await mayCreatePattern(ctx, ctx.caller) };
+}
+
+/**
+ * Answer what this caller may do from the editor: create a pattern, and open
+ * a component in its own view. A `null` caller may do neither.
+ */
+export async function readEditorCapability(
+  ctx: CapabilityRouteContext,
+  store: ComponentEditingStore = {}
+): Promise<PatternCapabilityResponse> {
+  if (ctx.caller === null) return { mayCreate: false, componentEditing: null };
+  const [pattern, componentEditing] = await Promise.all([
+    readPatternCapability(ctx),
+    componentEditingFor(ctx, ctx.caller, store),
+  ]);
+  return { ...pattern, componentEditing };
+}
+
+/** Where component definitions live, as far as the editor's offer needs. */
+type ComponentEditingStore = Partial<
+  Pick<ComponentStore, "collection" | "field">
+>;
+
+type Caller = NonNullable<CapabilityRouteContext["caller"]>;
+
+/** Whether this caller may create a pattern in the resolved collection. */
+async function mayCreatePattern(
+  ctx: CapabilityRouteContext,
+  caller: Caller
+): Promise<boolean> {
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
   // EVERY permission the save requires, not just the obvious one. The route
   // creates the row already published, and core resolves the publish grant
@@ -83,9 +119,68 @@ export async function readPatternCapability(
   for (const action of needed) {
     // Sequential, and it short-circuits: the second question costs a permission
     // read, and an author refused the first has already been answered.
-    if (!(await ctx.caller.can(action, slug))) return { mayCreate: false };
+    if (!(await caller.can(action, slug))) return false;
   }
-  return { mayCreate: true };
+  return true;
+}
+
+/**
+ * Where this caller may open a component in its own view: the store the
+ * definitions are read from (a configured one literally, the plugin's own
+ * under the host's name for it) and the field they live in, when they may
+ * read and update it; `null` otherwise. Both, because the view reads the
+ * entry before it lets anyone edit it: an author who may update but not read
+ * would be offered a screen that refuses them.
+ */
+async function componentEditingFor(
+  ctx: CapabilityRouteContext,
+  caller: Caller,
+  store: ComponentEditingStore
+): Promise<{ readonly collection: string; readonly field: string } | null> {
+  const collection =
+    store.collection ??
+    ctx.self.collections[COMPONENTS_SLUG] ??
+    COMPONENTS_SLUG;
+  for (const action of ["read", "update"]) {
+    if (!(await caller.can(action, collection))) return null;
+  }
+  return { collection, field: store.field ?? COMPONENT_DOCUMENT_FIELD };
+}
+
+/**
+ * Whether this caller may make a component from a selection: `create` and
+ * `publish` on the plugin's own components (under the host's name for them),
+ * since the component is created published. Never where the host keeps its
+ * components in a store of its own, which the route refuses.
+ */
+export async function mayCreateComponent(
+  ctx: CapabilityRouteContext,
+  store: Pick<ComponentStore, "collection"> = {}
+): Promise<boolean> {
+  // A host's own store is not one this plugin makes components in.
+  if (ctx.caller === null || isHostStore(ctx, store)) return false;
+  const slug = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+  return (
+    (await ctx.caller.can("create", slug)) &&
+    (await ctx.caller.can("publish", slug))
+  );
+}
+
+/**
+ * Whether this caller may replace a pattern's content from a selection:
+ * `read` (to choose the pattern and for the route's own read of it),
+ * `update` and `publish` on the collection the host resolved.
+ */
+export async function mayUpdatePattern(
+  ctx: CapabilityRouteContext
+): Promise<boolean> {
+  if (ctx.caller === null) return false;
+  const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
+  return (
+    (await ctx.caller.can("read", slug)) &&
+    (await ctx.caller.can("update", slug)) &&
+    (await ctx.caller.can("publish", slug))
+  );
 }
 
 /**
@@ -97,7 +192,7 @@ export async function readPatternCapability(
  * question on the answer would return 403 to exactly the authors this exists to
  * tell "no" gracefully.
  */
-export function patternCapabilityRoute(): {
+export function patternCapabilityRoute(store: ComponentEditingStore = {}): {
   method: "GET";
   path: string;
   handler: (req: Request, ctx: CapabilityRouteContext) => Promise<Response>;
@@ -106,6 +201,10 @@ export function patternCapabilityRoute(): {
     method: "GET",
     path: CAPABILITY_ROUTE_PATH,
     handler: async (_req, ctx) =>
-      Response.json(await readPatternCapability(ctx)),
+      Response.json({
+        ...(await readEditorCapability(ctx, store)),
+        mayCreateComponent: await mayCreateComponent(ctx, store),
+        mayUpdatePattern: await mayUpdatePattern(ctx),
+      } satisfies PatternCapabilityResponse),
   };
 }

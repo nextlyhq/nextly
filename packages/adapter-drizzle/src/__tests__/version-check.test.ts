@@ -53,6 +53,7 @@ describe("checkDialectVersion - PostgreSQL", () => {
     );
     await expect(checkDialectVersion(client, "postgresql")).resolves.toEqual({
       variant: null,
+      functionalIndexes: true,
     });
   });
 
@@ -62,6 +63,7 @@ describe("checkDialectVersion - PostgreSQL", () => {
     );
     await expect(checkDialectVersion(client, "postgresql")).resolves.toEqual({
       variant: null,
+      functionalIndexes: true,
     });
   });
 });
@@ -82,8 +84,20 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toEqual({ variant: null });
+    ).resolves.toEqual({ variant: null, functionalIndexes: true });
     expect(onWarning).not.toHaveBeenCalled();
+  });
+
+  it("reports functional key parts from MySQL 8.0.13, and not before", async () => {
+    await expect(
+      checkDialectVersion(mysqlClient("8.0.12"), "mysql")
+    ).resolves.toEqual({ variant: null, functionalIndexes: false });
+    await expect(
+      checkDialectVersion(mysqlClient("8.0.13"), "mysql")
+    ).resolves.toEqual({ variant: null, functionalIndexes: true });
+    await expect(
+      checkDialectVersion(mysqlClient("8.4.2"), "mysql")
+    ).resolves.toEqual({ variant: null, functionalIndexes: true });
   });
 
   it("warns and proceeds on MariaDB 10.11.5", async () => {
@@ -91,7 +105,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toEqual({ variant: "mariadb" });
+    ).resolves.toEqual({ variant: "mariadb", functionalIndexes: false });
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/mariadb/i);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(
@@ -104,7 +118,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toEqual({ variant: "tidb" });
+    ).resolves.toEqual({ variant: "tidb", functionalIndexes: false });
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/tidb/i);
   });
@@ -114,7 +128,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toEqual({ variant: "aurora" });
+    ).resolves.toEqual({ variant: "aurora", functionalIndexes: false });
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/aurora/i);
   });
@@ -124,7 +138,7 @@ describe("checkDialectVersion - MySQL", () => {
     const onWarning = vi.fn();
     await expect(
       checkDialectVersion(client, "mysql", { onWarning })
-    ).resolves.toEqual({ variant: "planetscale" });
+    ).resolves.toEqual({ variant: "planetscale", functionalIndexes: false });
     expect(onWarning).toHaveBeenCalledTimes(1);
     // Why: first matching token wins; `planetscale` is checked before `vitess`.
     expect(onWarning.mock.calls[0]?.[0]).toMatch(/planetscale/i);
@@ -135,6 +149,7 @@ describe("checkDialectVersion - MySQL", () => {
     // Why: callback is optional; skipping it should NOT throw.
     await expect(checkDialectVersion(client, "mysql")).resolves.toEqual({
       variant: "mariadb",
+      functionalIndexes: false,
     });
   });
 });
@@ -154,6 +169,7 @@ describe("checkDialectVersion - SQLite", () => {
     const client = sqliteClient("3.38.0");
     await expect(checkDialectVersion(client, "sqlite")).resolves.toEqual({
       variant: null,
+      functionalIndexes: true,
     });
   });
 
@@ -161,6 +177,7 @@ describe("checkDialectVersion - SQLite", () => {
     const client = sqliteClient("3.45.0");
     await expect(checkDialectVersion(client, "sqlite")).resolves.toEqual({
       variant: null,
+      functionalIndexes: true,
     });
   });
 });

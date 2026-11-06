@@ -55,6 +55,7 @@ export type {
 
 export type {
   FindSingleArgs,
+  FoundSingle,
   UpdateSingleArgs,
   SingleDefinition,
   FindSinglesArgs,

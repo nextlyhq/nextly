@@ -17,10 +17,17 @@
  * Asserted through the readers rather than through the resolver, because the
  * resolver being right is not the property that matters.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, beforeAll } from "vitest";
 
 import { _resetEnvCache, env } from "../../shared/lib/env";
 import { getDialectTables } from "../index";
+import { loadDialectTables } from "../dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const original = { ...process.env };
 

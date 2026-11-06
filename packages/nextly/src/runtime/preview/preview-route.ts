@@ -89,13 +89,9 @@ export interface PreviewRouteConfig {
   /**
    * Reads and enables Next's draft mode. Injected so the route is testable.
    *
-   * Accepts a synchronous return as well: `draftMode()` is sync on Next 14 and
-   * async from 15, and the peer range covers both, so requiring a promise would
-   * make the natural import fail to typecheck on the older one.
-   *
    * Defaults to `draftMode` from `next/headers`.
    */
-  draftMode?: () => { enable: () => void } | Promise<{ enable: () => void }>;
+  draftMode?: () => Promise<{ enable: () => void }>;
   /**
    * What the link's own record says, asked once its token has verified.
    *
@@ -367,14 +363,13 @@ export interface PreviewScopeReaderConfig {
   secret?: string;
   generation?: number | (() => number | Promise<number>);
   /**
-   * Reads the request's cookies. Injected so the reader is testable, and
-   * accepting a synchronous return for the same reason `draftMode` does.
+   * Reads the request's cookies. Injected so the reader is testable.
    *
    * Defaults to `cookies` from `next/headers`.
    */
-  cookies?: () =>
-    | { get: (name: string) => { value: string } | undefined }
-    | Promise<{ get: (name: string) => { value: string } | undefined }>;
+  cookies?: () => Promise<{
+    get: (name: string) => { value: string } | undefined;
+  }>;
   /**
    * What the link's own record says; see {@link PreviewRouteConfig.links}.
    * Defaults to the recorded-links store.

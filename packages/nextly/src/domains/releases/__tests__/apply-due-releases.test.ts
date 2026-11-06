@@ -8,8 +8,13 @@
  *
  * @module domains/releases/__tests__/apply-due-releases.test
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  getNextlyLogger,
+  setNextlyLogger,
+  type NextlyLogger,
+} from "../../../observability/logger";
 import { applyDueReleases, settleableComponents } from "../apply-due-releases";
 import type {
   ApplyDueReleasesDeps,
@@ -394,6 +399,107 @@ describe("applyDueReleases", () => {
     expect(result.failed).toBe(1);
     // NEITHER is discharged: r1 failed, and r2 shares a document with it.
     expect(marked).toEqual([]);
+  });
+
+  describe("a component whose transition cannot be written", () => {
+    const saved = getNextlyLogger();
+    afterEach(() => setNextlyLogger(saved));
+
+    /** The runtime's log, with its warnings kept. */
+    function warnings() {
+      const warn = vi.fn();
+      const logger: NextlyLogger = {
+        error: () => {},
+        warn,
+        info: () => {},
+        debug: () => {},
+      };
+      setNextlyLogger(logger);
+      return warn;
+    }
+
+    it("stays to itself when it cannot be settled, and the others still settle", async () => {
+      // Settling writes the owner's notice and its email job with the move,
+      // so a failure there (or any write of the move) rolls back that
+      // component alone. It stays scheduled for the next pass; the rest of
+      // this pass must not stop with it.
+      const warn = warnings();
+      const d = deps({
+        releases: [
+          release({ id: "r1", scheduledAt: PAST }),
+          release({ id: "r2", scheduledAt: PAST }),
+        ],
+        members: [
+          member({ releaseId: "r1", entryId: "a" }),
+          member({ releaseId: "r2", entryId: "b" }),
+        ],
+      });
+      const settled: string[] = [];
+      const result = await applyDueReleases({
+        ...d,
+        repository: {
+          ...d.repository,
+          markReleasesPublished: async entries => {
+            if (entries.some(entry => entry.id === "r1")) {
+              throw new Error("the notice's email job could not be written");
+            }
+            settled.push(...entries.map(entry => entry.id));
+            return entries.map(entry => entry.id);
+          },
+        },
+      });
+
+      expect(settled).toEqual(["r2"]);
+      expect(result.published).toBe(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "release-component-transition-failed",
+          releaseIds: ["r1"],
+        })
+      );
+    });
+
+    it("stays to itself when it cannot be stopped, and the pass still stops and settles the rest", async () => {
+      const warn = warnings();
+      const d = deps({
+        releases: [
+          release({ id: "r1", scheduledAt: PAST }),
+          release({ id: "r2", scheduledAt: PAST }),
+          release({ id: "r3", scheduledAt: PAST }),
+        ],
+        members: [
+          // Two releases that can never run, each on its own document, and
+          // one that can.
+          member({ releaseId: "r1", entryId: "a", createdBy: null }),
+          member({ releaseId: "r3", entryId: "c", createdBy: null }),
+          member({ releaseId: "r2", entryId: "b" }),
+        ],
+      });
+      const stopped: string[] = [];
+      const result = await applyDueReleases({
+        ...d,
+        repository: {
+          ...d.repository,
+          blockReleases: async entries => {
+            if (entries.some(entry => entry.id === "r1")) {
+              throw new Error("the stop's notice could not be written");
+            }
+            stopped.push(...entries.map(entry => entry.id));
+            return entries.map(entry => entry.id);
+          },
+        },
+      });
+
+      expect(stopped).toEqual(["r3"]);
+      expect(result.blocked).toBe(1);
+      expect(result.published).toBe(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "release-component-transition-failed",
+          releaseIds: ["r1"],
+        })
+      );
+    });
   });
 
   it("discharges releases that share NO document independently", async () => {

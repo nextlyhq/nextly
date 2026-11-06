@@ -14,6 +14,7 @@
 import { NextlyError } from "../../errors";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 
+import { PUBLISH_WITHOUT_REVIEW } from "./permissions";
 import {
   WORKFLOW_STEP_KINDS,
   type ResolvedWorkflowStep,
@@ -30,6 +31,9 @@ import {
  * @experimental
  */
 export const MAX_WORKFLOW_NAME_LENGTH = 64;
+
+/** The longest action a permission stores (`permissions.action`). */
+const MAX_PERMISSION_ACTION_LENGTH = 50;
 
 /** A stage or step name: a letter, then letters, digits, `_` or `-`. */
 const NAME = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -240,6 +244,26 @@ function checkCommentAndPermission(
       `${at}.permission`,
       "workflow_permission_invalid",
       `\`${step.permission}\` is not an action name: use kebab-case, such as \`approve\`.`
+    );
+  }
+  // Held as a permission's action, which is stored in at most this many characters.
+  if (
+    step.permission !== undefined &&
+    step.permission.length > MAX_PERMISSION_ACTION_LENGTH
+  ) {
+    problems.add(
+      `${at}.permission`,
+      "workflow_permission_too_long",
+      `\`${step.permission}\` is too long to store as a permission: use at most ${String(MAX_PERMISSION_ACTION_LENGTH)} characters.`
+    );
+  }
+  // Publishing past the workflow is its own permission, which no API key may hold. A step may be
+  // taken by a key, so none may ask for it.
+  if (step.permission === PUBLISH_WITHOUT_REVIEW) {
+    problems.add(
+      `${at}.permission`,
+      "workflow_permission_reserved",
+      `\`${PUBLISH_WITHOUT_REVIEW}\` is reserved for publishing without review; name the step's own action, such as \`approve\`.`
     );
   }
 }

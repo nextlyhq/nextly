@@ -9,6 +9,13 @@
  * supplied context (breakpoints, mode, and an optional block-type lookup); it
  * never touches storage or a framework.
  */
+import { BINDING_ISSUE_CODES, type BindingIssueCode } from "./binding-issues";
+import {
+  checkBinding,
+  isBindPath,
+  type BindingSchemaRef,
+  type BindingSchemaSource,
+} from "./binding-rules";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
   BINDING_SOURCES,
@@ -28,12 +35,24 @@ import {
   DEFAULT_LIMITS,
   LIMIT_WARNING_RATIO,
   MAX_ENVELOPE_ENTRIES,
+  MAX_NODES,
 } from "./limits";
 import type { DocumentLimits } from "./limits";
+import {
+  LIST_ISSUE_CODES,
+  listQueryIssues,
+  type ListFieldSource,
+} from "./list-query";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
+import {
+  placementTracker,
+  type PlacementSources,
+  type TrackedPlacement,
+} from "./placement";
+import { blockLabelFrom, placementRefusalMessage } from "./placement-wording";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
 import { slotLockBreaks, slotLockOf, typeOfChild } from "./slot-lock";
@@ -61,6 +80,7 @@ import {
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
 import { walkNodes } from "./tree";
 import type { SlotDefaultSource } from "./tree";
+import { variantLabelIssues } from "./variant-labels";
 import { isConditionGated } from "./visibility";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
@@ -80,6 +100,11 @@ export interface ValidationIssue {
   message: string;
   severity: IssueSeverity;
   suggestion?: string;
+}
+
+/** Whether an issue refuses a strict save, as opposed to warning about it. */
+export function isErrorIssue(issue: ValidationIssue): boolean {
+  return issue.severity === "error";
 }
 
 /**
@@ -206,14 +231,33 @@ export interface ValidationContext {
    * every locked slot is then measured against its starting children alone.
    */
   stored?: readonly BlockDocument[];
+  /**
+   * The field shapes of the sources a binding may read, for checking each
+   * binding's path, field and format against them: one relation at most, no
+   * list on the way, a field the source has, a type and a format that fit the
+   * prop.
+   *
+   * Absent means bindings are checked for their shape only, on the same terms
+   * as nesting: a caller that cannot answer for the schema gets no schema
+   * issues. Whether a binding fits its PROP is judged only when
+   * {@link definitions} is given too, since that is where a block's props are.
+   */
+  bindingSchema?: BindingSchemaSource;
+  /** Which source an `entry` binding reads, for {@link bindingSchema}. */
+  bindingEntry?: BindingSchemaRef;
+  /**
+   * The fields each collection declares and the public may read, for judging
+   * what a collection list filters and sorts by (`list-query`).
+   *
+   * Absent means a list is judged by its shape and nesting only, on the same
+   * terms as {@link bindingSchema}. A list related to the page's entry looks
+   * its relation up in the collection {@link bindingEntry} names.
+   */
+  listFields?: ListFieldSource;
 }
 
-/**
- * The stable issue-code vocabulary, each with a one-line description. Tests
- * assert that every code emitted appears here and vice versa, so the emitted
- * vocabulary cannot drift silently.
- */
-export const ISSUE_CODES = {
+/** The validator's own codes, before the binding codes are added. */
+const DOCUMENT_ISSUE_CODES = {
   "invalid-format-version":
     "The document formatVersion is not the supported version.",
   "invalid-kind": "The document kind is not one of the known kinds.",
@@ -233,6 +277,10 @@ export const ISSUE_CODES = {
     "An exposed slot names a slot the node it points at does not declare.",
   "variant-unknown-target":
     "A variant names an exposed property or slot the definition does not expose.",
+  "variant-empty":
+    "A variant presets no value, so choosing it shows the component's defaults.",
+  "variant-label-clash":
+    "Two of a component's variants share one name, ignoring case and spaces.",
   "invalid-document": "The document is not an object.",
   "nodes-not-array": "The document nodes field is not an array.",
   "invalid-node": "A node is not an object.",
@@ -283,6 +331,8 @@ export const ISSUE_CODES = {
   "token-kind-mismatch":
     "A design token is not the kind of value its property accepts.",
   "unknown-class": "A node lists a class id the site does not define.",
+  "look-for-another-block":
+    "A node lists a look that belongs to another block type.",
   "invalid-class-name":
     "A named class in the site library has a name that cannot be written to CSS.",
   "invalid-class":
@@ -293,6 +343,8 @@ export const ISSUE_CODES = {
     "More than one named class in the site library carries the same name.",
   "duplicate-class-id":
     "More than one named class in the site library carries the same id, which is what documents reference.",
+  "duplicate-own-look":
+    "More than one class in the site library is the same block type's own look; only the first is read.",
   "invalid-style-value":
     "A style value does not match the shape its property declares.",
   "token-not-allowed":
@@ -314,6 +366,16 @@ export const ISSUE_CODES = {
     "A container's slot declares the block types it holds, and this node is not one of them.",
   "restricted-at-root":
     "A node declares the block types it may sit under, and it sits at the top level, which is inside none of them.",
+  // The placement rule's own refusals, spelled as its `PlacementRefusal`
+  // members for the reason the three above are.
+  "undeclared-slot":
+    "A node sits in a slot its container does not declare, so the container never renders it.",
+  "holds-no-blocks":
+    "A node sits inside a block that holds no blocks, so that block never renders it.",
+  "phrasing-only":
+    "A node sits in a container that takes only text-level blocks, and it is not one.",
+  "content-model":
+    "A node is a kind of HTML content an ancestor refuses beneath it, such as something clickable inside a link.",
   "locked-slot-altered":
     "A container's slot is locked, and it does not hold exactly the blocks it starts with.",
   "locked-slot-content-only":
@@ -321,7 +383,27 @@ export const ISSUE_CODES = {
 } as const;
 
 /** A stable validation issue code. */
-export type IssueCode = keyof typeof ISSUE_CODES;
+export type IssueCode =
+  | keyof typeof DOCUMENT_ISSUE_CODES
+  | BindingIssueCode
+  | keyof typeof LIST_ISSUE_CODES;
+
+/**
+ * The stable issue-code vocabulary, each with a one-line description. Tests
+ * assert that every code emitted appears here and vice versa, so the emitted
+ * vocabulary cannot drift silently.
+ *
+ * The binding codes are the ones the renderer reports for the same breaks,
+ * spread in from their own table, so an author sees one name for one problem
+ * wherever it was found.
+ */
+export const ISSUE_CODES: { readonly [Code in IssueCode]: string } = {
+  ...DOCUMENT_ISSUE_CODES,
+  ...BINDING_ISSUE_CODES,
+  // A collection list's query codes, from the module that reads the query, so
+  // the editor, the API and the renderer name a list's problem alike.
+  ...LIST_ISSUE_CODES,
+};
 
 /**
  * Whether a value is a well-formed node type, independent of any registry.
@@ -540,6 +622,10 @@ export function validateDocument(
       survey.limits.maxNodes,
       issues
     );
+    // Here rather than in the envelope check a planner's dry run asks: whether
+    // a clash is refused depends on the stored definition, which only a save
+    // brings, and no exposure edit can create one.
+    issues.push(...variantLabelIssues(envelope.doc.variants, ctx.stored));
   }
 
   const state = nodeCheckState(ctx, issues, knownBreakpoints, unknownSeverity, {
@@ -554,6 +640,31 @@ export function validateDocument(
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
+
+  // Each collection list's query: its bounds, filter rows, sort and related
+  // source, and the fields it names when the caller can answer for them.
+  // Under the survey's node cap, and skipped past the limits as the per-value
+  // work above is. A problem a stored form already held stays a warning, so a
+  // list a schema change broke does not make its page unsavable.
+  if (!overLimits) {
+    const entry = ctx.bindingEntry;
+    issues.push(
+      // As validation issues: the path names the list, so the block's id the
+      // judgement also carries is left to the editor that asks for it.
+      ...listQueryIssues(envelope.nodes, {
+        ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
+        // A Single's page is no collection's entry: its renderer has no
+        // entry to read a relation of.
+        ...(entry === undefined
+          ? {}
+          : {
+              entryCollection: "collection" in entry ? entry.collection : null,
+            }),
+        ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+        maxNodes: survey.limits.maxNodes,
+      }).map(({ nodeId: _nodeId, ...issue }) => issue)
+    );
+  }
 
   return { issues, survey };
 }
@@ -747,11 +858,31 @@ function validateNodeForest(
   state: NodeCheckState,
   maxNodes: number
 ): void {
+  // The placement rule needs the definitions as well as the nesting source:
+  // declared slots and content models live there. A caller with only a
+  // nesting source keeps the name rules it always had.
+  const sources = placementSourcesOf(state.ctx);
+  const placement =
+    sources === undefined
+      ? undefined
+      : {
+          tracker: placementTracker(sources),
+          old: storedBreakSignatures(state.ctx.stored, sources, maxNodes),
+        };
   walkNodeForest(
     nodes,
     maxNodes,
     { definitions: state.ctx.definitions, stored: state.ctx.stored },
-    ({ node, path, placement, hidden, lock, counterparts }) => {
+    ({
+      node,
+      path,
+      placement: at,
+      hidden,
+      lock,
+      counterparts,
+      parent,
+      slot,
+    }) => {
       // Asked HERE rather than in a pass of its own, so the read is inside the
       // budget and happens on a node this loop has reached. Gating is
       // inherited, because the renderer prunes a gated node's whole subtree.
@@ -761,7 +892,18 @@ function validateNodeForest(
       // than an exception — the same guard the slot walk applies.
       const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
       validateNode(node, path, state, gated);
-      checkNesting(node, path, placement, state);
+      if (placement === undefined) {
+        checkNesting(node, path, at, state);
+      } else {
+        checkPlacement(
+          node,
+          path,
+          at,
+          placement.tracker.visit(node, parent, slot),
+          placement.old,
+          state
+        );
+      }
       checkLockedSlots(node, path, { lock, counterparts }, state);
       return gated;
     }
@@ -970,31 +1112,100 @@ function checkNesting(
     path,
     code: verdict.reason,
     severity: "error",
-    message: messageForRefusal(raw.type, placement, verdict.permitted),
+    // The one wording the editor uses too. Without definitions there is no
+    // label to read, so a type reads as its name made readable.
+    message: placementRefusalMessage(
+      {
+        allowed: false,
+        reason: verdict.reason,
+        blockType: raw.type,
+        permitted: verdict.permitted,
+      },
+      {
+        labelOf: type => blockLabelFrom(type, undefined),
+        ...(placement.at === "container" ? { regionType: placement.type } : {}),
+      }
+    ),
   });
 }
 
+/** The placement rule's sources, when the context carries both halves. */
+function placementSourcesOf(
+  ctx: ValidationContext
+): PlacementSources | undefined {
+  if (ctx.nesting === undefined || ctx.definitions === undefined) {
+    return undefined;
+  }
+  return { nesting: ctx.nesting, definitions: ctx.definitions };
+}
+
 /**
- * Names the containers the block WILL go in, because that is the author's next
- * action. A sentence saying only that the placement is wrong leaves them to find
- * the permitted set by trying positions.
+ * The signatures of every placement break the stored forms already hold.
  *
- * Takes the restriction the REFUSAL carried, never the source. Asking the source
- * again would be a second answer to the question the verdict already settled,
- * and nothing requires a caller-supplied lookup to be idempotent — so a stateful
- * or lazily-resolved one could name a set other than the one that refused this
- * placement. Both inputs now come from the verdict, so the sentence cannot
- * describe a position or a permitted set other than the ones that were judged.
+ * Judged by the same tracker over the same bounded walk as the document, so a
+ * break the stored page held reads as the same break here, and a break is old
+ * exactly when its block sits under the same chain of ancestors, unchanged
+ * (`TrackedPlacement.signature`). Empty without stored forms: a document never
+ * stored has no old breaks.
  */
-function messageForRefusal(
-  childType: string,
+export function storedBreakSignatures(
+  stored: readonly unknown[] | undefined,
+  sources: PlacementSources,
+  maxNodes: number = MAX_NODES
+): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const form of stored ?? []) {
+    const nodes = isPlainRecord(form) ? form.nodes : undefined;
+    if (!Array.isArray(nodes)) continue;
+    const tracker = placementTracker(sources);
+    walkNodeForest(
+      nodes as BlockNode[],
+      maxNodes,
+      { definitions: undefined, stored: undefined },
+      ({ node, parent, slot }) => {
+        const tracked = tracker.visit(node, parent, slot);
+        if (tracked !== undefined && !tracked.verdict.allowed) {
+          found.add(tracked.signature);
+        }
+        return false;
+      }
+    );
+  }
+  return found;
+}
+
+/**
+ * Report a node the placement rule refuses where it sits.
+ *
+ * An ERROR when the break is new, and a WARNING when a stored form already
+ * held it: a page saved before the rule must still save its other changes
+ * without losing or refusing those blocks, and the editor offers a repair.
+ * Worded by the one wording the editor uses, so an author reads the same
+ * sentence from the canvas and from a save.
+ */
+function checkPlacement(
+  node: BlockNode,
+  path: string,
   placement: Placement,
-  permitted: readonly string[]
-): string {
-  const where = permitted.map(name => describeValue(name)).join(" or ");
-  return placement.at === "container"
-    ? `A "${describeValue(childType)}" may only sit inside ${where}, not inside "${describeValue(placement.type)}".`
-    : `A "${describeValue(childType)}" may only sit inside ${where}, and a top-level node sits inside nothing.`;
+  tracked: TrackedPlacement | undefined,
+  old: ReadonlySet<string>,
+  state: NodeCheckState
+): void {
+  // As `checkNesting`: a container this walk cannot name cannot be judged.
+  if (placement.at === "unnameable-container") return;
+  const raw: unknown = node;
+  if (!isPlainRecord(raw) || !isNodeType(raw.type)) return;
+  if (tracked === undefined || tracked.verdict.allowed) return;
+  const definitions = state.ctx.definitions;
+  state.issues.push({
+    path,
+    code: tracked.verdict.reason,
+    severity: old.has(tracked.signature) ? "warning" : "error",
+    message: placementRefusalMessage(tracked.verdict, {
+      labelOf: type => blockLabelFrom(type, definitions?.get(type)),
+      ...(placement.at === "container" ? { regionType: placement.type } : {}),
+    }),
+  });
 }
 
 /**
@@ -1604,7 +1815,7 @@ function validateNode(
   validateAttributes(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
-  validateBindings(node, path, issues);
+  validateBindings(node, path, issues, state.ctx);
   validateComponentInstance(node, path, issues);
   validateDomIds(node, path, state, hidden);
 }
@@ -2337,8 +2548,9 @@ function validateComponentEnvelope(
  *
  * Every issue it can return is an `error` in both modes — a dangling pointer
  * is a broken reference to this document's own tree rather than a value a
- * future build understands — so a caller may read a non-empty result as a
- * refusal without inspecting severities.
+ * future build understands — except `variant-empty`, a `warning`: a variant a
+ * field's removal emptied is kept and renders the defaults. A caller deciding
+ * whether to refuse reads the errors.
  *
  * Empty for a document that is not a component, matching where the per-kind
  * rules run: a pattern has no envelope to be wrong about, and answering
@@ -2558,7 +2770,7 @@ function checkExposedPointer(
   // exposure of any prop whose value comes from the block's default, since a
   // defaulted prop is absent from the stored node.
   const propPath = raw.propPath;
-  if (typeof propPath !== "string" || !BIND_PATH_RE.test(propPath)) {
+  if (!isBindPath(propPath)) {
     issues.push({
       path: pointer(path, "propPath"),
       code: "exposed-path-invalid",
@@ -2826,7 +3038,8 @@ function checkVariants(
       path: "/variants",
       code: "component-envelope-invalid",
       severity: "error",
-      message: "A component's variants field must be an object keyed by name.",
+      message:
+        "A component's variants field must be an object keyed by variant id.",
     });
     return;
   }
@@ -2890,15 +3103,19 @@ function checkVariant(
     );
     if (overrideKeys === null) return;
 
+    // A warning, not a refusal. Removing an exposed field prunes it from every
+    // variant in the same save, so a variant whose only value that was is left
+    // empty by a legitimate edit; refusing it would refuse the removal itself.
+    // It renders the component's defaults, and the picker can say so. The
+    // checks after this one still run: a warning ends nothing.
     if (overrideKeys.length === 0) {
       issues.push({
         path: pointer(at, "overrides"),
-        code: "component-envelope-invalid",
-        severity: "error",
-        message: `Variant "${name}" presets nothing, so selecting it would change nothing.`,
-        suggestion: "Give it at least one override, or remove the variant.",
+        code: "variant-empty",
+        severity: "warning",
+        message: `Variant "${name}" presets nothing, so selecting it shows the component's defaults.`,
+        suggestion: "Give it at least one value, or remove the variant.",
       });
-      return;
     }
 
     checkVariantTargets(
@@ -2955,17 +3172,17 @@ function checkVariantTargets(
   }
 }
 /**
- * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
- * "author.name". This rejects expression-like or otherwise malformed strings so
- * nothing evaluable is ever stored. The one-hop RELATION limit is semantic and
- * needs the schema, so it is enforced where bindings are resolved, not here.
+ * A binding's shape: an object keyed by prop, each a dot-joined path of field
+ * identifiers (`isBindPath`, so nothing evaluable is stored) with a known
+ * source and the key a Single needs. The rules that need the schema, the one
+ * relation a path may follow among them, are checked here only when the
+ * context carries one, and always where bindings are resolved.
  */
-const BIND_PATH_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
-
 function validateBindings(
   node: BlockNode,
   path: string,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  ctx: ValidationContext
 ): void {
   if (node.bindings === undefined) return;
   if (!isPlainRecord(node.bindings)) {
@@ -3001,7 +3218,7 @@ function validateBindings(
       });
       continue;
     }
-    if (!BIND_PATH_RE.test(bindPath)) {
+    if (!isBindPath(bindPath)) {
       issues.push({
         path: pointer(bPath, "$bind"),
         code: "invalid-binding",
@@ -3043,6 +3260,49 @@ function validateBindings(
         message: 'sourceKey is only allowed when source is "single".',
       });
     }
+    validateBindingAgainstSchema(node, prop, binding, bPath, issues, ctx);
+  }
+}
+
+/**
+ * The schema-aware checks for one binding, when the context carries a schema.
+ *
+ * The same `checkBinding` the renderer runs, so what a save refuses and what a
+ * page falls back on are one rule. A binding whose shape is malformed was
+ * reported above, and is not reported twice.
+ */
+function validateBindingAgainstSchema(
+  node: BlockNode,
+  prop: string,
+  binding: unknown,
+  bPath: string,
+  issues: ValidationIssue[],
+  ctx: ValidationContext
+): void {
+  const schema = ctx.bindingSchema;
+  if (schema === undefined) return;
+  // A definition found with no `props` declares none, so every binding on it
+  // names a prop it lacks; only a definition not found leaves props unjudged.
+  const definition = ctx.definitions?.get(node.type);
+  const props = definition === undefined ? undefined : (definition.props ?? {});
+  const check = checkBinding({
+    nodeId: node.id,
+    prop,
+    binding,
+    ...(props === undefined ? {} : { props }),
+    schema,
+    ...(ctx.bindingEntry === undefined
+      ? {}
+      : { refs: { entry: ctx.bindingEntry } }),
+  });
+  for (const issue of check.issues) {
+    if (issue.code === "binding-malformed") continue;
+    issues.push({
+      path: bPath,
+      code: issue.code,
+      severity: "error",
+      message: issue.message,
+    });
   }
 }
 

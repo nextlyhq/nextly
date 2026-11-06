@@ -1,7 +1,10 @@
 import type {
+  BindingFieldShape,
+  BindingIssue,
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
   RemotePatternInput,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
@@ -23,15 +26,48 @@ import type { ReactNode } from "react";
  * @module context
  */
 
-/** A query the renderer asks its host to answer. Shapes stay deliberately
- * narrow: this is the subset dynamic blocks need today, and widening it is a
- * deliberate act rather than a side effect of a new block. */
+/** The operators a list's filter row may use, each meaning the same on every database. */
+export type BlocksFilterOp =
+  | "equals"
+  | "not_equals"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "contains"
+  | "in"
+  | "not_in"
+  | "exists";
+
+/** One filter row: a field, an operator and a typed value. Never a raw query. */
+export interface BlocksFilter {
+  field: string;
+  op: BlocksFilterOp;
+  value: string | number | boolean | readonly (string | number | boolean)[];
+}
+
+/**
+ * A query the renderer asks its host to answer.
+ *
+ * Data, not a database query: typed filter rows, sort keys and a window. It is
+ * the shape `nextly/runtime`'s public reader takes, written out here because
+ * this entry must not import `nextly`; a type test keeps the two the same.
+ * Who may see what is not in it, on purpose: that is the reader's to fix.
+ */
 export interface BlocksQuery {
   collection: string;
+  filters?: readonly BlocksFilter[];
+  /** One key or several in order, `-field` descending; ties break by id. */
+  sort?: string | readonly string[];
+  /** 1 to 100. */
   limit?: number;
+  /** Rows to skip, from 0. */
   offset?: number;
-  sort?: string;
+  /** A page of `limit` rows after the offset, from 1. */
+  page?: number;
   locale?: string;
+  /** The fields each row carries, besides its id; a relationship as its id. */
+  select?: readonly string[];
 }
 
 /** What a host returns for a {@link BlocksQuery}. */
@@ -49,6 +85,85 @@ export interface BlocksResult {
  */
 export interface BlocksDataProvider {
   find(query: BlocksQuery): Promise<BlocksResult>;
+}
+
+/**
+ * The reads a route hands a page's data provider: published entries and
+ * public fields only, as an anonymous visitor reads them, in the route's
+ * language.
+ *
+ * The shape of `nextly/runtime`'s `PublicReader`, written out for the same
+ * reason as {@link BlocksQuery}. A query that tries to widen the read is
+ * refused by the reader, not by the provider, so no provider can forget to.
+ *
+ * @experimental
+ */
+export interface BlocksPublicReader {
+  /** Nextly's list envelope: the rows, and their pagination with the total. */
+  find(query: BlocksQuery): Promise<{
+    items: Record<string, unknown>[];
+    meta: { total: number };
+  }>;
+  count(
+    query: Pick<BlocksQuery, "collection" | "filters" | "locale">
+  ): Promise<number>;
+  /**
+   * One Single, published, with the fields the public may read, or `null`
+   * when there is nothing a visitor may see. Absent from a reader made over a
+   * source that cannot read Singles.
+   */
+  findSingle?(query: {
+    slug: string;
+    locale?: string;
+    select?: readonly string[];
+  }): Promise<Record<string, unknown> | null>;
+}
+
+/**
+ * How a route builds its data provider: from the public reader it binds to
+ * each render.
+ *
+ * A function rather than a provider, so a route never holds a reader of its
+ * own: the one it is given is the one that decides who sees what.
+ *
+ * @experimental
+ */
+export type BlocksDataProviderFactory = (
+  reader: BlocksPublicReader
+) => BlocksDataProvider;
+
+/** Options for {@link createDefaultDataProvider}. */
+export interface DefaultDataProviderOptions {
+  /**
+   * The collections a page's lists may read. A list naming another reads
+   * nothing. Absent means every collection the public may read.
+   */
+  collections?: readonly string[];
+}
+
+/**
+ * The provider a route uses when it is given none: every list reads through
+ * the public reader, optionally limited to some collections.
+ *
+ * @experimental
+ */
+export function createDefaultDataProvider(
+  reader: BlocksPublicReader,
+  options: DefaultDataProviderOptions = {}
+): BlocksDataProvider {
+  const allowed =
+    options.collections === undefined
+      ? undefined
+      : new Set<string>(options.collections);
+  return {
+    find: async query => {
+      if (allowed !== undefined && !allowed.has(query.collection)) {
+        return { items: [], total: 0 };
+      }
+      const { items, meta } = await reader.find(query);
+      return { items, total: meta.total };
+    },
+  };
 }
 
 /**
@@ -194,6 +309,26 @@ export interface BlockHostPolicy {
 }
 
 /**
+ * An icon a host resolved: what it is now and the SVG it draws.
+ *
+ * @experimental
+ */
+export interface ResolvedIcon {
+  /** The id it resolved as, which names the current icon after a rename. */
+  readonly id: string;
+  /** Its name within the set (`star`), for an accessible name when none is given. */
+  readonly name: string;
+  /** The SVG's inner markup, trusted: it comes from the host's own set. */
+  readonly body: string;
+  readonly viewBox: string;
+  /**
+   * Drawn by its stroke in the text colour (`stroke="currentColor"`), as
+   * Lucide's are, rather than by its fill.
+   */
+  readonly stroked: boolean;
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -206,6 +341,16 @@ export interface PageContext {
    * where a document is rendered with no surrounding record.
    */
   entry: Record<string, unknown> | null;
+  /**
+   * The collection {@link entry} is an entry of, so a list of the entry's
+   * related entries can read the relation as the public reads the entry,
+   * through {@link data}, rather than take it from `entry`, which a route may
+   * have read with more access than a visitor has. Absent for a Single's page
+   * and in standalone use; such a list then shows its empty state.
+   *
+   * @experimental
+   */
+  entryCollection?: string;
   /** The locale being rendered, when the host is localized. */
   locale?: string;
   /**
@@ -235,6 +380,19 @@ export interface PageContext {
    */
   resolveMedia(id: string): Promise<ResolvedMedia | null>;
   /**
+   * Resolve an icon id (`lucide:star`) to the SVG it draws, or `null` when
+   * this host does not draw that icon.
+   *
+   * Async, so a set too large to load on every render is loaded only when a
+   * page draws one of its icons. Optional, so a host that draws no icons is
+   * not made to answer: a block asking an absent resolver draws nothing. A
+   * published page is given the Lucide set by its route; a standalone render
+   * passes `resolveLucideIcon` from `@nextlyhq/blocks-react/icons/lucide`.
+   *
+   * @experimental
+   */
+  resolveIcon?: (id: string) => Promise<ResolvedIcon | null>;
+  /**
    * Resolve an entry reference to a path, or `null` when it has none.
    *
    * Async for the same reason: the path depends on the referenced entry's slug
@@ -256,6 +414,14 @@ export interface PageContext {
    */
   item?: Record<string, unknown>;
   /**
+   * The collection {@link item} comes from, set by the repeater beside it, so
+   * a binding to the item is checked against that collection's fields.
+   *
+   * Absent outside a repeater, and in a repeater whose items have no
+   * collection; their bindings are then judged by the values' own shapes.
+   */
+  itemSource?: string;
+  /**
    * What is left of this render's query allowance.
    *
    * Absent means nothing is counting, which is the editor drawing one block in
@@ -264,7 +430,76 @@ export interface PageContext {
    * hanging.
    */
   queries?: QueryBudget;
+  /**
+   * Whether an author is looking: the editor's canvas, or a preview of a
+   * working draft. A block may then draw what it could not do as stored,
+   * such as a list whose read failed or whose sort fell back to id order,
+   * with a note only that author sees. Absent on a published page, which
+   * shows visitors only what they may see.
+   *
+   * @experimental
+   */
+  diagnostics?: boolean;
+  /**
+   * The site's IANA time zone, in which a list's date filter compares whole
+   * days for a field holding an instant. UTC when absent.
+   *
+   * @experimental
+   */
+  timeZone?: string;
+  /**
+   * The fields of the collections the page's lists read, as the public sees
+   * them, so a list's date filter can tell a field holding a calendar day
+   * (compared as that day) from one holding an instant (compared in
+   * {@link timeZone}). Absent, every date compares as an instant.
+   *
+   * @experimental
+   */
+  fieldShapes?: BlocksFieldShapes;
+  /**
+   * The collection lists, by node id, an author has asked to see in their
+   * empty state: the editor's "Canvas shows: When empty". Such a list draws
+   * its empty slot in place of its entries. Honoured only where
+   * {@link diagnostics} says an author is looking, so no page a visitor is
+   * served can be made to hide its entries.
+   *
+   * @experimental
+   */
+  listsShowingEmpty?: ReadonlySet<string>;
+  /**
+   * The editor's canvas, which can act on a list note's action: a list whose
+   * sort fell back offers "Choose a field" there, which the canvas answers by
+   * taking the author to the list's sort. Honoured only where
+   * {@link diagnostics} says an author is looking; absent in a preview, which
+   * has nothing to act with, so its notes are words alone.
+   *
+   * @experimental
+   */
+  listNoteActions?: boolean;
+  /**
+   * How the sections of the accordion being rendered draw their titles: as
+   * text, or as the heading level the accordion names.
+   *
+   * Widened deliberately, as the one setting a section takes from its group
+   * rather than from its own props: a heading level is a fact about the set
+   * (every question in an FAQ sits at one level under the page's headings),
+   * so the accordion sets it once and its sections read it. An accordion
+   * sets it for its own subtree, so one nested inside a section sets its own.
+   *
+   * Absent outside an accordion, where a section draws its title as text.
+   *
+   * @experimental
+   */
+  accordionTitles?: AccordionTitleLevel;
 }
+
+/**
+ * What an accordion's section titles are drawn as: text, or a heading from
+ * level 2 to 6. Not level 1, which names the page itself.
+ *
+ * @experimental
+ */
+export type AccordionTitleLevel = "text" | "h2" | "h3" | "h4" | "h5" | "h6";
 
 /**
  * What one of this package's blocks receives.
@@ -276,11 +511,10 @@ export interface PageContext {
  *
  * `ReactNode` rather than `ReactNode | Promise<ReactNode>`, which is what
  * `render` may RETURN, and the asymmetry is deliberate. This value is one a
- * block places into its own JSX, and that union is not a legal child under
- * either supported peer: React 18 admits no promise at all, and React 19 admits
- * only `Promise<AwaitedReactNode>` — a promise of a settled node — so a promise
- * that may itself yield a promise is refused there too. Widening here would
- * move the error onto every block that draws a slot.
+ * block places into its own JSX, and that union is not a legal child: React
+ * admits only `Promise<AwaitedReactNode>` — a promise of a settled node — so a
+ * promise that may itself yield a promise is refused. Widening here would move
+ * the error onto every block that draws a slot.
  */
 export interface BlockRenderArgs<P>
   extends Omit<EngineBlockRenderArgs<P, PageContext>, "renderSlot"> {
@@ -296,6 +530,138 @@ export interface BlockRenderArgs<P>
    * context it built itself.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * The site's spacing model, for a block whose markup differs by it. Absent
+   * is the engine's default, `gaps`. An argument for the reason `hostPolicy`
+   * is one.
+   */
+  spacingMode?: SpacingMode;
+}
+
+/**
+ * The site settings a page may bind, under the names the settings use, each
+ * `null` while the site has not set it.
+ *
+ * Only these: the settings also hold values no visitor may see, such as the
+ * administrator's address, so a page is handed this allowlist and nothing
+ * else. The shape of what `nextly/runtime` reads for a page, written out here
+ * because this entry must not import `nextly`.
+ *
+ * @experimental
+ */
+export interface BlocksSiteSettings {
+  readonly applicationName: string | null;
+  readonly siteUrl: string | null;
+  readonly logoUrl: string | null;
+  /** An IANA time zone such as `Europe/Paris`. */
+  readonly timezone: string | null;
+}
+
+/**
+ * Whose field shapes: a collection's entries, or one Single.
+ *
+ * @experimental
+ */
+export type BlocksFieldShapeRef =
+  | { readonly collection: string }
+  | { readonly single: string };
+
+/**
+ * The fields a page's bindings are checked against, as the public sees them.
+ *
+ * `undefined` for a source whose shapes are not known; its bindings are then
+ * judged by the values they read.
+ *
+ * @experimental
+ */
+export interface BlocksFieldShapes {
+  fieldsOf(ref: BlocksFieldShapeRef): readonly BindingFieldShape[] | undefined;
+}
+
+/**
+ * What a page's bindings read, already read, and how their values are shown.
+ *
+ * Every source here is the PUBLIC's: the entry re-read as an anonymous visitor
+ * reads it, the Singles and site settings likewise. The renderer takes values
+ * only from here, never from the context's `entry`, which a route may have
+ * read with more access than a visitor has. A source left out is one this
+ * page did not read: its bindings render their fallbacks and are reported.
+ *
+ * @experimental
+ */
+export interface PageBindings {
+  /** The entry the page shows, as the public reads it; `null` when it may see none. */
+  readonly entry?: Readonly<Record<string, unknown>> | null;
+  /** Where the entry's field shapes are found. */
+  readonly entryRef?: BlocksFieldShapeRef;
+  /** Each Single the page binds, by slug; `null` for one the public may not see. */
+  readonly singles?: ReadonlyMap<
+    string,
+    Readonly<Record<string, unknown>> | null
+  >;
+  /** The site settings a page may show; `null` when there are none. */
+  readonly site?: BlocksSiteSettings | null;
+  readonly fieldShapes?: BlocksFieldShapes;
+  /**
+   * The time zone a date-time is shown in. UTC when absent, and when it is
+   * not a zone the runtime knows. A calendar date is always shown as its own
+   * day, whatever the zone.
+   */
+  readonly timeZone?: string;
+}
+
+/**
+ * Told about the bindings a render could not use as stored.
+ *
+ * Called once with what the page's own pass found, and again for each new
+ * problem a list item's binding meets while the list draws. Nothing is
+ * written during a render; a route logs these, an editor shows them.
+ *
+ * @experimental
+ */
+export type BindingIssuesHandler = (issues: readonly BindingIssue[]) => void;
+
+/**
+ * Reads one page render may perform when the route was given no number.
+ *
+ * Generous for a page and small against a database: a document would have to
+ * nest loops to approach it, which is the shape the budget exists to bound. A
+ * page that exceeds it renders what it could reach rather than failing, so the
+ * cost of the default being low is visible content, while the cost of having no
+ * default at all is an unbounded read amplification reachable by URL.
+ *
+ * @experimental
+ */
+export const DEFAULT_MAX_QUERIES = 500;
+
+/**
+ * A budget for ONE page render: `max` reads, then none.
+ *
+ * Here rather than beside the route, so every surface that draws a page
+ * bounds its reads the same way: the published route and the editor's
+ * canvas alike.
+ *
+ * Created per render rather than per route: the counter is spent, so a single
+ * budget shared across requests would exhaust on the first few pages and serve
+ * every later request truncated — a fault that grows with uptime and disappears
+ * on restart, which is the hardest kind to attribute.
+ */
+export function createQueryBudget(
+  max: number = DEFAULT_MAX_QUERIES
+): QueryBudget {
+  // `NaN` is what `Number(process.env.MAX_QUERIES)` produces for an unset or
+  // malformed variable, and every comparison against it is false — so
+  // `remaining <= 0` never fires and the budget silently becomes unlimited.
+  // That is the failure this exists to prevent, reached by a configuration
+  // mistake rather than by a document.
+  let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
+  return {
+    take: () => {
+      if (remaining <= 0) return false;
+      remaining -= 1;
+      return true;
+    },
+  };
 }
 
 /** A context with nothing wired up: the standalone default. */

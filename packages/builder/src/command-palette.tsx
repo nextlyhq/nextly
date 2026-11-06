@@ -23,7 +23,6 @@
  */
 import {
   CommandDialog,
-  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -34,11 +33,13 @@ import {
   DialogTitle,
   commandDefaultFilter,
   ShortcutScope,
+  useCommandHighlight,
   useShortcuts,
 } from "@nextlyhq/ui";
 import * as React from "react";
 import { flushSync } from "react-dom";
 
+import { deepActiveElement } from "./dom-kind";
 import { useModalKeyboardHold } from "./modal-keyboard-hold";
 import { useShellIsActive } from "./shell-active";
 
@@ -88,8 +89,44 @@ export interface BuilderCommand {
   shortcut?: string;
   /** Checked whenever the list is built; a command that returns false is not offered. */
   when?: () => boolean;
+  /** A small glyph before the label. Decorative: the label alone names the row. */
+  icon?: React.ReactNode;
+  /**
+   * Said after the label, more quietly: where a block will go, what a row is, the shortcut's
+   * neighbour. Not searched — what the search matches is the label and `keywords`.
+   */
+  detail?: React.ReactNode;
+  /**
+   * The footer's word for choosing this row while it is highlighted: "Add", "Select", "Open".
+   * "Run" when absent, which is what a command does.
+   */
+  verb?: string;
   /** Runs when the command is chosen. The palette closes first. */
   run: () => void;
+}
+
+/**
+ * How one named group behaves while the author searches.
+ *
+ * @experimental
+ */
+export interface CommandGroupOptions {
+  /** The group's heading, as the commands name it in `group`. */
+  name: string;
+  /** At most this many matches, best first. Every match when absent. */
+  limit?: number;
+  /**
+   * The host has matched these already — a search made on the server — so each is shown as
+   * given, in the host's order. Scoring them again here could drop a row the server matched on
+   * something the label does not show.
+   */
+  matched?: boolean;
+  /**
+   * Said in the group's place while its results are on their way, or could not be had
+   * ("Searching pages…"). Shown even when the group has no rows yet, so the author can tell a
+   * search still running from one that found nothing.
+   */
+  status?: string;
 }
 
 /**
@@ -103,12 +140,12 @@ export interface CommandPaletteProps {
    *
    * Order within a group is preserved WHILE THE SEARCH IS EMPTY.
    *
-   * Once the user types, the groups are dropped and every match is offered as one list, ordered
-   * by cmdk across all of them. Deliberately not promised: that an exact match outranks a partial
-   * one. cmdk keys SELECTION on an item's value, so the value here has to be the `id` alone —
-   * anything richer is a concatenation of free-form fields and two commands can collide, which
-   * makes the wrong one run. The label and synonyms are still what the search matches on, through
-   * cmdk's separate keywords input, but scoring over them is cmdk's and is not specified here.
+   * Once the user types, the groups STAY, each under its heading and in the same order, and the
+   * matches inside each are ranked best first by cmdk's scorer over the label and synonyms. The
+   * groups are kinds of thing (blocks to add, blocks on the page, pages, commands), and an author
+   * reads a result by its kind before its rank. cmdk keys SELECTION on an item's value, so the
+   * value here is the `id` alone — anything richer is a concatenation of free-form fields and two
+   * commands can collide, which makes the wrong one run.
    */
   commands: readonly BuilderCommand[];
   /**
@@ -117,10 +154,20 @@ export interface CommandPaletteProps {
    */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Named groups' order and their behaviour while searching. A group listed here comes in this
+   * order; one that is not follows, in the order its commands first appear.
+   */
+  groups?: readonly CommandGroupOptions[];
+  /**
+   * Told the search as the author types it, trimmed, for a host that searches elsewhere too (the
+   * site's pages, on the server). Its answers come back as commands in a `matched` group.
+   */
+  onSearchChange?: (query: string) => void;
   /** Placeholder for the search field. */
   placeholder?: string;
-  /** Shown when nothing matches what was typed. */
-  emptyMessage?: string;
+  /** Shown when nothing matches what was typed. Given the search, so it can quote it. */
+  emptyMessage?: React.ReactNode | ((query: string) => React.ReactNode);
   /**
    * Whether the palette may be opened at all.
    *
@@ -154,10 +201,15 @@ export interface CommandPaletteProps {
  * groups, where they read as belonging to the group above them.
  */
 function groupAvailable(
-  commands: readonly BuilderCommand[]
+  commands: readonly BuilderCommand[],
+  declared: readonly CommandGroupOptions[] = []
 ): { group?: string; commands: BuilderCommand[] }[] {
-  const namedOrder: string[] = [];
-  const byGroup = new Map<string | undefined, BuilderCommand[]>();
+  // Declared groups first, in their order, so a group the host has not filled yet (a search still
+  // on its way) already holds its place.
+  const namedOrder: string[] = declared.map(options => options.name);
+  const byGroup = new Map<string | undefined, BuilderCommand[]>(
+    namedOrder.map(name => [name, []])
+  );
 
   for (const command of commands) {
     if (command.when && !command.when()) continue;
@@ -211,10 +263,340 @@ function ModalKeyboardHold({ active }: { active: boolean }): null {
   return null;
 }
 
+/** One group as the list draws it: its rows, and what it says in their place. */
+interface ShownGroup {
+  group?: string;
+  commands: BuilderCommand[];
+  status?: string;
+}
+
+/**
+ * What a search shows of each group: its matches, best first, up to its limit.
+ *
+ * Ranked by the same scorer the palette has always used, over the label and synonyms, so a
+ * group's order is cmdk's answer rather than a second one. A group the host matched already
+ * keeps every row in the host's order. A group with neither rows nor a status is left out, so
+ * no heading stands over nothing.
+ */
+function searchGroups(
+  available: readonly { group?: string; commands: BuilderCommand[] }[],
+  query: string,
+  declared: readonly CommandGroupOptions[]
+): ShownGroup[] {
+  return available.flatMap(({ group, commands }) => {
+    const options = declared.find(entry => entry.name === group);
+    const ranked =
+      options?.matched === true
+        ? commands
+        : commands
+            .map((command, index) => ({
+              command,
+              index,
+              score: commandDefaultFilter(searchText(command), query),
+            }))
+            .filter(entry => entry.score > 0)
+            // Ties keep the host's order, so equal matches do not shuffle between keystrokes.
+            .sort((a, b) => b.score - a.score || a.index - b.index)
+            .map(entry => entry.command);
+    const shown =
+      options?.limit === undefined ? ranked : ranked.slice(0, options.limit);
+    if (shown.length === 0 && options?.status === undefined) return [];
+    return [{ group, commands: shown, status: options?.status }];
+  });
+}
+
+/** The words a command is found by: its label and its synonyms. */
+function searchText(command: BuilderCommand): string {
+  return [command.label, ...(command.keywords ?? [])].join(" ");
+}
+
+/**
+ * The label, with the typed text in bold where it begins a word.
+ *
+ * Only there. The scorer also finds letters scattered through a word, and bolding "he" inside
+ * "the" marks a match nobody was looking for; such a row is still offered and ranked, just shown
+ * plain. A label whose lower-case form changes length is shown plain too, since the positions
+ * found in one would not be positions in the other.
+ */
+function emphasised(label: string, query: string): React.ReactNode {
+  const lower = label.toLowerCase();
+  const wanted = query.toLowerCase();
+  if (wanted === "" || lower.length !== label.length) return label;
+  let at = lower.indexOf(wanted);
+  // Bounded by the label's length: each step moves past the last place found.
+  while (at > 0 && /[\p{L}\p{N}]/u.test(label.charAt(at - 1))) {
+    at = lower.indexOf(wanted, at + 1);
+  }
+  if (at === -1) return label;
+  const end = at + wanted.length;
+  return (
+    <>
+      {label.slice(0, at)}
+      <mark className="bg-transparent font-semibold text-inherit">
+        {label.slice(at, end)}
+      </mark>
+      {label.slice(end)}
+    </>
+  );
+}
+
+/** A key, as the footer names it. */
+function Key({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px] text-muted-foreground">
+      {children}
+    </kbd>
+  );
+}
+
+/**
+ * The keys that work here, with the highlighted row's own verb for Enter.
+ *
+ * Reads the highlight from the palette rather than keeping a copy: the palette moves it for
+ * reasons this never sees (a pointer, a filter), and a copy would name the wrong row.
+ */
+function PaletteFooter({
+  verbs,
+}: {
+  verbs: ReadonlyMap<string, string>;
+}): React.JSX.Element {
+  const highlighted = useCommandHighlight();
+  const verb = verbs.get(highlighted);
+  return (
+    <div className="flex items-center gap-4 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+      {verb === undefined ? null : (
+        <>
+          <span>
+            <Key>↑</Key> <Key>↓</Key> Move
+          </span>
+          <span>
+            <Key>↵</Key> {verb}
+          </span>
+        </>
+      )}
+      <span>
+        <Key>Esc</Key> Close
+      </span>
+    </div>
+  );
+}
+
+/**
+ * One group's heading and rows, or what it says in their place.
+ *
+ * A status shows beside the rows rather than instead of them only when there are none: a search
+ * still running says so, and one that failed says that, without hiding what is already there.
+ */
+function PaletteGroup({
+  shown,
+  query,
+  choose,
+}: {
+  shown: ShownGroup;
+  query: string;
+  choose: (command: BuilderCommand) => void;
+}): React.JSX.Element {
+  return (
+    <CommandGroup heading={shown.group}>
+      {shown.status === undefined || shown.commands.length > 0 ? null : (
+        <div role="status" className="px-3 py-2 text-sm text-muted-foreground">
+          {shown.status}
+        </div>
+      )}
+      {shown.commands.map(command => (
+        <CommandItem
+          // The searchable metadata is part of the key, so renaming a command REMOUNTS
+          // its row. cmdk stores an item's keywords when its value is registered and
+          // refreshes them only when that value changes — and the value is the id,
+          // stable by contract. Without this the row shows its new label while cmdk
+          // keeps filtering on the old one, so searching for what is on screen hides it.
+          //
+          // A JSON TUPLE rather than the fields joined by a delimiter, for the reason
+          // the cmdk value has the same shape: joining free-form strings is not
+          // injective. `keywords: ["open\u0000settings"]` and `["open", "settings"]`
+          // produce the same delimited string, so that rename would not remount and
+          // cmdk would keep the old metadata — the defect this key exists to prevent.
+          key={JSON.stringify([
+            command.id,
+            command.label,
+            command.keywords ?? [],
+          ])}
+          // The id ALONE, because cmdk keys selection on this value and a concatenation
+          // of free-form fields is not injective: `keywords: ["page"], id: "settings x"`
+          // and `keywords: ["page", "settings"], id: "x"` produce the same string, and
+          // cmdk then highlights both rows and activates the first whichever is chosen.
+          // What the search should MATCH goes to `keywords`, which cmdk reads separately.
+          //
+          // ENCODED because cmdk trims the value before using it as the identity, so
+          // `"save"` and `"save "` — distinct ids by the type's contract — would collide
+          // again through normalisation rather than through concatenation. The quotes
+          // `JSON.stringify` adds sit at both ends, so there is no edge whitespace for the
+          // trim to reach.
+          //
+          // `JSON.stringify` rather than `encodeURIComponent`, which is not TOTAL over the
+          // strings `id: string` admits: a lone UTF-16 surrogate — `"\ud800"`, which
+          // survives a JSON round trip — raises `URIError` and takes the whole palette
+          // down during render. Well-formed stringify escapes it instead.
+          value={JSON.stringify(command.id)}
+          keywords={[command.label, ...(command.keywords ?? [])]}
+          onSelect={() => choose(command)}
+        >
+          {command.icon === undefined ? null : (
+            <span
+              aria-hidden="true"
+              className="flex shrink-0 items-center text-muted-foreground"
+            >
+              {command.icon}
+            </span>
+          )}
+          <span className="min-w-0 flex-1 truncate">
+            {emphasised(command.label, query)}
+          </span>
+          {command.detail === undefined ? null : (
+            <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground">
+              {command.detail}
+            </span>
+          )}
+          {command.shortcut && (
+            <CommandShortcut>{command.shortcut}</CommandShortcut>
+          )}
+        </CommandItem>
+      ))}
+    </CommandGroup>
+  );
+}
+
+/**
+ * What the list shows for this search, and the footer's verb for each row.
+ *
+ * Every available command, grouped, and refused when two share an id. While
+ * searching, each group's matches (see {@link searchGroups}); otherwise every
+ * group that has a row.
+ */
+function shownGroups(
+  commands: readonly BuilderCommand[],
+  declared: readonly CommandGroupOptions[],
+  query: string
+): { groups: ShownGroup[]; verbs: ReadonlyMap<string, string> } {
+  const searching = query.length > 0;
+  // Grouped FIRST, then flattened. Filtering `commands` again along a second path would be a
+  // second answer to "is this command available", and the two would agree only until someone
+  // changed one — silently offering a different set while the user is searching, which is the
+  // half nobody looks at.
+  const available = groupAvailable(commands, declared);
+
+  // Refused rather than rendered. A duplicate id makes cmdk run the WRONG command, silently and
+  // only through the keyboard — the failure a caller is least able to see and least likely to
+  // attribute to their registry. Throwing is the same choice `useShortcuts` makes outside a
+  // provider, and for the same reason: a palette that looks mounted and misfires is worse than
+  // one that refuses to mount.
+  //
+  // Over the AVAILABLE list, so a `when` that hides one of a colliding pair is a resolution
+  // rather than a latent fault.
+  const seen = new Set<string>();
+  for (const { commands: groupCommands } of available) {
+    for (const command of groupCommands) {
+      if (seen.has(command.id)) {
+        throw new Error(
+          `CommandPalette received two available commands with the id "${command.id}". ` +
+            "Ids are the selection identity, so a duplicate runs the wrong command."
+        );
+      }
+      seen.add(command.id);
+    }
+  }
+  const groups: ShownGroup[] = searching
+    ? searchGroups(available, query, declared)
+    : available.filter(group => group.commands.length > 0);
+  // The footer's verb for each row, by the value cmdk highlights it under.
+  const verbs = new Map(
+    groups.flatMap(group =>
+      group.commands.map(
+        command => [JSON.stringify(command.id), command.verb ?? "Run"] as const
+      )
+    )
+  );
+
+  return { groups, verbs };
+}
+
+/**
+ * The search text, and a setter that tells a host the trimmed search in the
+ * SAME update as the keystroke.
+ *
+ * Not after the render that shows it: a host's own results (a group marked
+ * `matched`, which this palette shows unfiltered) are answers to the search
+ * they came from, and told only afterwards the host would leave them on screen
+ * under the new search for a render, where Enter could choose one. Told here,
+ * the host's change and the new text render together. Read through a ref, so a
+ * host passing a fresh function each render changes nothing.
+ */
+function useSearchText(
+  onSearchChange: ((query: string) => void) | undefined
+): [string, (next: string) => void] {
+  const [search, setSearch] = React.useState("");
+  const listener = React.useRef(onSearchChange);
+  listener.current = onSearchChange;
+  // What the host was last told, so a keystroke that changes only the edge
+  // spaces tells it nothing.
+  const told = React.useRef("");
+  const change = React.useCallback((next: string) => {
+    setSearch(next);
+    const query = next.trim();
+    if (query === told.current) return;
+    told.current = query;
+    listener.current?.(query);
+  }, []);
+  return [search, change];
+}
+
+/** The groups, or the empty message, and the keys that work on them. */
+function PaletteList({
+  groups,
+  verbs,
+  query,
+  emptyMessage,
+  choose,
+}: {
+  groups: readonly ShownGroup[];
+  verbs: ReadonlyMap<string, string>;
+  query: string;
+  emptyMessage: CommandPaletteProps["emptyMessage"];
+  choose: (command: BuilderCommand) => void;
+}): React.JSX.Element {
+  const nothing = groups.length === 0;
+  return (
+    <>
+      <CommandList>
+        {nothing ? (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            {typeof emptyMessage === "function"
+              ? emptyMessage(query)
+              : emptyMessage}
+          </div>
+        ) : null}
+        {groups.map((shown, index) => (
+          <React.Fragment
+            key={
+              shown.group === undefined ? "ungrouped" : `group:${shown.group}`
+            }
+          >
+            {index > 0 && <CommandSeparator alwaysRender />}
+            <PaletteGroup shown={shown} query={query} choose={choose} />
+          </React.Fragment>
+        ))}
+      </CommandList>
+      {nothing ? null : <PaletteFooter verbs={verbs} />}
+    </>
+  );
+}
+
 function PaletteSurface({
   commands,
   open: controlledOpen,
   onOpenChange,
+  groups: declaredGroups = [],
+  onSearchChange,
   placeholder = "Search commands…",
   emptyMessage = "No matching commands.",
   enabled: enabledProp,
@@ -227,7 +609,7 @@ function PaletteSurface({
   // condition held, including on a viewport where the shell has hidden everything else, which is
   // the case this prop exists to cover.
   const enabled = (enabledProp ?? true) && shellIsActive;
-  const [search, setSearch] = React.useState("");
+  const [search, setSearch] = useSearchText(onSearchChange);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const isControlled = controlledOpen !== undefined;
   // One expression decides whether the palette is showing, so `enabled` cannot be honoured by the
@@ -276,8 +658,11 @@ function PaletteSurface({
     // palette's OWN search input — and by the final close that element is gone, so there is
     // nothing to restore and focus lands on `<body>`. A completed close clears this, so an
     // ordinary second opening still records a fresh origin.
+    //
+    // Read through any focused frame, so an origin inside the canvas frame is the control itself
+    // rather than the iframe, whose inner focus the browser restores as it chooses.
     if (openedFrom.current === null)
-      openedFrom.current = document.activeElement;
+      openedFrom.current = deepActiveElement(document);
   }, [open]);
 
   // Radix fires this when it is actually returning focus, which is AFTER the exit animation. A
@@ -295,6 +680,8 @@ function PaletteSurface({
     const refocus = (target as Partial<HTMLOrSVGElement>).focus;
     if (typeof refocus !== "function") return;
     // Only once nothing else has claimed focus — a command that moved it deliberately wins.
+    // This document's own reading: focus a command put inside a frame shows here as the iframe,
+    // which is not `<body>`, so the command still wins.
     const active = document.activeElement;
     if (active && active !== document.body && active.isConnected) return;
     event.preventDefault();
@@ -304,7 +691,7 @@ function PaletteSurface({
   // Cleared when the palette shuts, so a stale search never greets the next opening.
   React.useEffect(() => {
     if (!open) setSearch("");
-  }, [open]);
+  }, [open, setSearch]);
 
   // Read through a ref so the binding's `run` never goes stale, without re-registering the layer
   // on every render — re-registering would move it to the top of its depth and change precedence
@@ -339,45 +726,12 @@ function PaletteSurface({
     }
   );
 
-  // While a search is active every match goes into ONE headingless list. cmdk ranks items inside
-  // a group and leaves the groups in their own order, so a better match in a later group would
-  // otherwise sit below a weaker one. Headings are what the groups are for, and they say nothing
-  // useful about a set of search results.
   // ONE normalised query decides the mode AND is what the matcher scores against. What it must
   // NOT do is reach the input: a controlled value that trims rewrites the user's text as they
   // type, so pressing Space after `open` gives back `open`, the next key produces `opens`, and
   // `open settings` is unreachable. The raw string stays editable; the normalised one is derived.
   const query = search.trim();
-  const searching = query.length > 0;
-  // Grouped FIRST, then flattened. Filtering `commands` again along a second path would be a
-  // second answer to "is this command available", and the two would agree only until someone
-  // changed one — silently offering a different set while the user is searching, which is the
-  // half nobody looks at.
-  const available = groupAvailable(commands);
-
-  // Refused rather than rendered. A duplicate id makes cmdk run the WRONG command, silently and
-  // only through the keyboard — the failure a caller is least able to see and least likely to
-  // attribute to their registry. Throwing is the same choice `useShortcuts` makes outside a
-  // provider, and for the same reason: a palette that looks mounted and misfires is worse than
-  // one that refuses to mount.
-  //
-  // Over the AVAILABLE list, so a `when` that hides one of a colliding pair is a resolution
-  // rather than a latent fault.
-  const seen = new Set<string>();
-  for (const { commands: groupCommands } of available) {
-    for (const command of groupCommands) {
-      if (seen.has(command.id)) {
-        throw new Error(
-          `CommandPalette received two available commands with the id "${command.id}". ` +
-            "Ids are the selection identity, so a duplicate runs the wrong command."
-        );
-      }
-      seen.add(command.id);
-    }
-  }
-  const groups = searching
-    ? [{ group: undefined, commands: available.flatMap(g => g.commands) }]
-    : available;
+  const { groups, verbs } = shownGroups(commands, declaredGroups, query);
 
   const choose = React.useCallback(
     (command: BuilderCommand) => {
@@ -417,16 +771,13 @@ function PaletteSurface({
         // screen-reader users on an unlabelled search control.
         commandProps={{
           label: "Command palette",
-          // Scores the LABEL and synonyms only. cmdk's default scores an item's value too, and the
-          // value here is an encoded id — opaque fragments would surface unrelated commands, and
-          // every encoded id begins and ends with a quote, so a query containing one matched
-          // everything. The default scorer still does the ranking; it is just given the words a
-          // user is actually typing towards.
-          // Scored against the NORMALISED query rather than cmdk's raw one, so the mode decision
-          // and the matching agree: a whitespace-only input is no search to either, and leading or
-          // trailing space does not quietly change anyone's ranking.
-          filter: (_value, _search, keywords) =>
-            commandDefaultFilter(keywords?.join(" ") ?? "", query),
+          // The list is filtered and ranked HERE (`searchGroups`), not by cmdk: a group's limit
+          // and a host's own matches are things cmdk cannot express, and two filters over one
+          // list would disagree about what is offered. The scorer is still cmdk's, given the
+          // label and synonyms only (an item's value is an encoded id, and opaque fragments of it
+          // would surface unrelated commands) and the NORMALISED query, so a whitespace-only
+          // input is no search to anyone.
+          shouldFilter: false,
         }}
         contentProps={{ onCloseAutoFocus: handleCloseAutoFocus }}
       >
@@ -445,68 +796,13 @@ function PaletteSurface({
           value={search}
           onValueChange={setSearch}
         />
-        <CommandList>
-          <CommandEmpty>{emptyMessage}</CommandEmpty>
-          {groups.map(({ group, commands: groupCommands }, index) => (
-            <React.Fragment
-              key={group === undefined ? "ungrouped" : `group:${group}`}
-            >
-              {index > 0 && (
-                // cmdk's separator reads its own RAW search state and unmounts while that is
-                // nonempty. A whitespace-only query is nonempty to cmdk and no search to this
-                // component, so without this the separators vanish from a list that is still
-                // grouped and still showing every command.
-                <CommandSeparator alwaysRender={!searching} />
-              )}
-              <CommandGroup heading={group}>
-                {groupCommands.map(command => (
-                  <CommandItem
-                    // The searchable metadata is part of the key, so renaming a command REMOUNTS
-                    // its row. cmdk stores an item's keywords when its value is registered and
-                    // refreshes them only when that value changes — and the value is the id,
-                    // stable by contract. Without this the row shows its new label while cmdk
-                    // keeps filtering on the old one, so searching for what is on screen hides it.
-                    //
-                    // A JSON TUPLE rather than the fields joined by a delimiter, for the reason
-                    // the cmdk value has the same shape: joining free-form strings is not
-                    // injective. `keywords: ["open\u0000settings"]` and `["open", "settings"]`
-                    // produce the same delimited string, so that rename would not remount and
-                    // cmdk would keep the old metadata — the defect this key exists to prevent.
-                    key={JSON.stringify([
-                      command.id,
-                      command.label,
-                      command.keywords ?? [],
-                    ])}
-                    // The id ALONE, because cmdk keys selection on this value and a concatenation
-                    // of free-form fields is not injective: `keywords: ["page"], id: "settings x"`
-                    // and `keywords: ["page", "settings"], id: "x"` produce the same string, and
-                    // cmdk then highlights both rows and activates the first whichever is chosen.
-                    // What the search should MATCH goes to `keywords`, which cmdk reads separately.
-                    //
-                    // ENCODED because cmdk trims the value before using it as the identity, so
-                    // `"save"` and `"save "` — distinct ids by the type's contract — would collide
-                    // again through normalisation rather than through concatenation. The quotes
-                    // `JSON.stringify` adds sit at both ends, so there is no edge whitespace for the
-                    // trim to reach.
-                    //
-                    // `JSON.stringify` rather than `encodeURIComponent`, which is not TOTAL over the
-                    // strings `id: string` admits: a lone UTF-16 surrogate — `"\ud800"`, which
-                    // survives a JSON round trip — raises `URIError` and takes the whole palette
-                    // down during render. Well-formed stringify escapes it instead.
-                    value={JSON.stringify(command.id)}
-                    keywords={[command.label, ...(command.keywords ?? [])]}
-                    onSelect={() => choose(command)}
-                  >
-                    {command.label}
-                    {command.shortcut && (
-                      <CommandShortcut>{command.shortcut}</CommandShortcut>
-                    )}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </React.Fragment>
-          ))}
-        </CommandList>
+        <PaletteList
+          groups={groups}
+          verbs={verbs}
+          query={query}
+          emptyMessage={emptyMessage}
+          choose={choose}
+        />
       </CommandDialog>
     </>
   );

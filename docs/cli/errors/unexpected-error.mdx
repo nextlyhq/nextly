@@ -1,0 +1,24 @@
+---
+title: UNEXPECTED_ERROR
+description: "The command stopped on an error that no other code describes."
+---
+
+## Cause
+
+The command stopped on an error that no other code describes.
+
+Every error a command ends with has a code. This one is for an error none of the others describes, so it is likely a bug in Nextly or in a plugin. The Why line is the error's own message.
+
+## Fix
+
+- Run the command again with `--verbose` to see the context and the stack.
+- If it keeps happening, [open an issue](https://github.com/nextlyhq/nextly/issues) with that output, the command you ran and your database.
+
+## Example
+
+```text
+✗ The command stopped on an error Nextly did not expect.
+  Why:  Failed query: no such column: localized
+  Next: Run it again with `--verbose` to see the details, and report it at https://github.com/nextlyhq/nextly/issues if it keeps happening.
+  Docs: https://nextlyhq.com/docs/cli/errors/unexpected-error  (UNEXPECTED_ERROR)
+```

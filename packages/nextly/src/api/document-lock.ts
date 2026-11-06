@@ -21,9 +21,10 @@
  * @module api/document-lock
  */
 
+import type { ReadAccessCaller } from "../auth/code-access";
 import {
   callerHoldsPermission,
-  canReadEntity,
+  entityReadFor,
   readAccessCaller,
 } from "../auth/entity-read-access";
 import {
@@ -33,6 +34,7 @@ import {
   type AuthContext,
 } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di/container";
 import {
   documentLockKey,
@@ -40,13 +42,62 @@ import {
   type DocumentRef,
   type DocumentScopeKind,
 } from "../domains/document-lock";
+import {
+  changeSinceHeldVersion,
+  heldVersionOf,
+} from "../domains/document-lock/held-version";
+import { peopleById } from "../domains/versions/author-hydration";
+import type { DecodedVersion } from "../domains/versions/stale-version";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import { getNextlyLogger } from "../observability/logger";
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { respondData, respondMutation } from "./response-shapes";
-import { assertDocumentUpdatable } from "./versions-access";
+import {
+  assertDocumentUpdatable,
+  assertVersionDocumentReadable,
+} from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
+
+/**
+ * What the next editor is told holds the document: a person by their name,
+ * else their email; an API key as one, by its maker's name where they have
+ * one; and, when nothing names the caller, "Someone". Never empty, so no lock
+ * message can read "null is editing this document".
+ *
+ * A key is named as a key rather than as its maker, because a script holding
+ * a document is not its maker sitting at it, and the person asked to let go
+ * should know which of the two they are waiting on. The maker's name is read
+ * through `peopleById`, the one lookup that names a person, and only for a
+ * key: a session already carries it.
+ *
+ * 🔴 A key's label is cut to fit the lock row's label column. The column is as
+ * wide as the widest name, and the suffix makes a long name's label wider, so
+ * uncut it failed the claim on PostgreSQL and MySQL while SQLite stored it.
+ * Cut by code point, so no character is split in half.
+ *
+ * Names are trimmed first: a name of spaces is no name, and would otherwise
+ * read "'s API key" or a blank where the holder belongs.
+ */
+async function holderLabel(auth: AuthContext): Promise<string> {
+  if (auth.authMethod === "api-key") {
+    const maker = (await peopleById([auth.userId]))
+      .get(auth.userId)
+      ?.name?.trim();
+    if (!maker) return "An API key";
+    const suffix = "'s API key";
+    const room = OWNER_LABEL_LENGTH - suffix.length;
+    return `${Array.from(maker).slice(0, room).join("")}${suffix}`;
+  }
+  return auth.userName?.trim() || auth.userEmail?.trim() || "Someone";
+}
+
+/**
+ * The lock row's `owner_label` column width on PostgreSQL and MySQL
+ * (`schemas/document-lock`), which a stored label must fit.
+ */
+const OWNER_LABEL_LENGTH = 255;
 
 async function getDocumentLockService(): Promise<DocumentLockService> {
   await getCachedNextly();
@@ -132,12 +183,15 @@ function readRef(source: {
  * alike, so a Single needs no branch here, and both delegate to the canonical
  * machinery rather than reproducing the API-key and super-admin rules that
  * `canReadEntity` documents at length.
+ *
+ * Answers the caller as the gates read it, so what a claim is told about the
+ * document afterwards is judged for the same caller.
  */
 async function authorize(
   auth: AuthContext,
   ref: DocumentRef,
   intent: "read" | "claim" | "release"
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof readCaller>>> {
   const authenticated = await readCaller(auth);
   const caller = readAccessCaller(authenticated);
   if (intent === "claim") {
@@ -154,7 +208,7 @@ async function authorize(
   }
   const allowed =
     intent === "read"
-      ? await canReadEntity(ref.slug, caller)
+      ? await mayReadDocument(ref, caller, authenticated)
       : intent === "claim" ||
         (await callerHoldsPermission(`update-${ref.slug}`, caller));
 
@@ -176,6 +230,76 @@ async function authorize(
       authenticated.user,
       authenticated.authenticatedScope
     );
+  }
+  return authenticated;
+}
+
+/**
+ * What a claim or renewal that named the version its copy started from is told
+ * changed since: added to an answer that holds the document, and only then. A
+ * refused or lost claim holds nothing to save from, and a caller that named no
+ * version is answered as before, with no read of the document.
+ *
+ * Who and when are told only to a caller who may read the document, asked of
+ * this caller by the read gate a refused save asks.
+ */
+async function withChange<T extends { status: string }>(
+  outcome: T,
+  holds: T["status"],
+  ref: DocumentRef,
+  held: DecodedVersion | undefined,
+  authenticated: Awaited<ReturnType<typeof readCaller>>
+): Promise<T> {
+  if (held === undefined || outcome.status !== holds) return outcome;
+  try {
+    const changed = await changeSinceHeldVersion(ref, held, {
+      user: authenticated.user,
+      trusted: false,
+      authenticatedScope: authenticated.authenticatedScope,
+    });
+    return changed === undefined ? outcome : { ...outcome, changed };
+  } catch (error) {
+    // 🔴 The claim or renewal has already committed: answered without the
+    // change rather than as an error, so its token still reaches the editor,
+    // which can renew and release it. An answer it never saw would leave a
+    // lease it cannot see renewing, held against its colleagues.
+    getNextlyLogger().warn({
+      op: "document-lock-change-read-failed",
+      message: "Could not tell a holder what changed; answered without it.",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return outcome;
+  }
+}
+
+/**
+ * Whether the caller may read the document the lock names. A caller whose
+ * read rule allows only the entries a filter matches may read this lock only
+ * where the document is one of them, asked of the document by id; every
+ * other caller is judged by the collection, as before.
+ */
+async function mayReadDocument(
+  ref: DocumentRef,
+  caller: ReadAccessCaller,
+  authenticated: Awaited<ReturnType<typeof readCaller>>
+): Promise<boolean> {
+  const read = await entityReadFor(ref.slug, caller);
+  if (read.allowed) return true;
+  if (read.filter === undefined) return false;
+  try {
+    // The document read the entity reader's answer lets run, which applies
+    // the filter it kept for the request.
+    await assertVersionDocumentReadable(
+      ref.scopeKind,
+      ref.slug,
+      ref.entryId,
+      authenticated.user,
+      authenticated.authenticatedScope
+    );
+    return true;
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return false;
+    throw error;
   }
 }
 
@@ -223,6 +347,25 @@ async function readBody(req: Request): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>;
 }
 
+/**
+ * What a claim and a renewal both read before they act: the caller, the body,
+ * the document, the version the caller's copy started from, and the caller as
+ * the gates judged them.
+ *
+ * The version is read before anything is claimed or renewed, so a malformed
+ * one is refused without displacing anybody.
+ */
+async function claimRequest(req: Request) {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+
+  const body = await readBody(req);
+  const ref = readRef(body);
+  const held = heldVersionOf(body);
+  const authenticated = await authorize(auth, ref, "claim");
+  return { auth, body, ref, held, authenticated };
+}
+
 /** Who holds this document, if anyone still does. */
 export const readLock = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -254,23 +397,23 @@ export const readLock = withErrorHandler(async (req: Request) => {
  * `takeover` is the second editor deciding to edit anyway. It is accepted from
  * any authenticated caller because the lock is advisory: refusing the takeover
  * would not stop them editing, it would only stop them saying so, and the
- * displaced holder is told either way.
+ * displaced holder is told either way. A takeover that displaces somebody is
+ * recorded in the document's history, and refused if it cannot be.
  */
 export const acquireLock = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+  const { auth, body, ref, held, authenticated } = await claimRequest(req);
 
-  const body = await readBody(req);
-  const ref = readRef(body);
-  await authorize(auth, ref, "claim");
-
-  const outcome = await (
+  const acquired = await (
     await getDocumentLockService()
   ).acquire(
     ref,
     {
       ownerId: auth.userId,
-      ownerLabel: auth.userName ?? auth.userEmail ?? null,
+      ownerLabel: await holderLabel(auth),
+      // What a takeover's history event credits: the key itself for an API
+      // key, and the person by name only, never by the email above.
+      actor: actorFromAuthContext(auth),
+      personName: auth.userName ?? null,
     },
     {
       takeover: body.takeover === true,
@@ -278,6 +421,13 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
       // other than the boolean is not a person asking for anything.
       requestAccess: body.requestAccess === true,
     }
+  );
+  const outcome = await withChange(
+    acquired,
+    "acquired",
+    ref,
+    held,
+    authenticated
   );
 
   // The canonical mutation envelope, so a client reads this with the same
@@ -293,16 +443,15 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
 
 /** Extend a claim this caller still believes it holds. */
 export const renewLock = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+  const { body, ref, held, authenticated } = await claimRequest(req);
 
-  const body = await readBody(req);
-  const ref = readRef(body);
-  await authorize(auth, ref, "claim");
-
-  const outcome = await (
-    await getDocumentLockService()
-  ).renew(ref, readClaimToken(body));
+  const outcome = await withChange(
+    await (await getDocumentLockService()).renew(ref, readClaimToken(body)),
+    "renewed",
+    ref,
+    held,
+    authenticated
+  );
 
   return respondMutation(
     outcome.status === "renewed" ? "Claim extended." : "Claim lost.",

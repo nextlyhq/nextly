@@ -34,6 +34,7 @@ import {
   createMockRelationshipService,
   createMockSchema,
   silentLogger,
+  revisionReadingSelect,
 } from "./collection-test-helpers";
 
 vi.mock("../../../di/container", () => ({
@@ -135,6 +136,7 @@ describe("a create", () => {
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
+          select: revisionReadingSelect(),
           insert: txInsert,
           update: vi.fn().mockResolvedValue([]),
           delete: vi.fn().mockResolvedValue(undefined),

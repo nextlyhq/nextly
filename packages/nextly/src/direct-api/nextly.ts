@@ -149,6 +149,7 @@ import type {
   FindArgs,
   FindByIDArgs,
   FindSingleArgs,
+  FoundSingle,
   FindSinglesArgs,
   ForgotPasswordArgs,
   ListResult,
@@ -642,10 +643,17 @@ export class Nextly implements NextlyContext {
     );
   }
 
-  /** Get a Single (global) document by slug. */
-  findSingle<TSlug extends SingleSlug>(
-    args: FindSingleArgs<TSlug>
-  ): Promise<RowFromSingleSlug<TSlug>> {
+  /**
+   * Get a Single (global) document by slug. With `createIfMissing: false`, a
+   * Single that has no stored document answers `null` and nothing is created;
+   * `FoundSingle` adds `null` to the type only for such a call.
+   */
+  findSingle<
+    TSlug extends SingleSlug,
+    TCreate extends boolean | undefined = undefined,
+  >(
+    args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
+  ): Promise<FoundSingle<TSlug, TCreate>> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       singlesNs.findSingle(this, callArgs)
     );
@@ -691,7 +699,12 @@ export class Nextly implements NextlyContext {
   /** Update the current user's profile (name/image only). */
   updateMe(args: {
     user: UserContext;
-    data: { name?: string; image?: string };
+    data: {
+      name?: string;
+      image?: string;
+      /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
+      interfaceLanguage?: string | null;
+    };
   }): Promise<AuthResult> {
     return authNs.updateMe(this, args);
   }
@@ -898,8 +911,18 @@ export const nextly = {
   duplicate: <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
     requireNextly().duplicate(args),
 
-  findSingle: <TSlug extends SingleSlug>(args: FindSingleArgs<TSlug>) =>
-    requireNextly().findSingle(args),
+  // Generic in `TCreate` as the method is, so this delegate answers the same
+  // type for the same call. The answer type and the inner call's type
+  // arguments are stated rather than inferred: inferred, a call that left
+  // `createIfMissing` out resolved the inner `TCreate` to nothing and answered
+  // `never`.
+  findSingle: <
+    TSlug extends SingleSlug,
+    TCreate extends boolean | undefined = undefined,
+  >(
+    args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
+  ): Promise<FoundSingle<TSlug, TCreate>> =>
+    requireNextly().findSingle<TSlug, TCreate>(args),
   updateSingle: <TSlug extends SingleSlug>(args: UpdateSingleArgs<TSlug>) =>
     requireNextly().updateSingle(args),
   findSingles: (args?: FindSinglesArgs) =>
@@ -910,7 +933,12 @@ export const nextly = {
   me: (args: { user: UserContext }) => requireNextly().me(args),
   updateMe: (args: {
     user: UserContext;
-    data: { name?: string; image?: string };
+    data: {
+      name?: string;
+      image?: string;
+      /** A language tag (`fr`, `pt-BR`), or null to follow the browser. */
+      interfaceLanguage?: string | null;
+    };
   }) => requireNextly().updateMe(args),
   register: (args: RegisterArgs) => requireNextly().register(args),
   changePassword: (args: ChangePasswordArgs & { user: UserContext }) =>
@@ -963,6 +991,8 @@ export const nextly = {
     readinessOf: args => requireNextly().releases.readinessOf(args),
     memberCounts: args => requireNextly().releases.memberCounts(args),
     addMember: args => requireNextly().releases.addMember(args),
+    addMembers: args => requireNextly().releases.addMembers(args),
+    scheduleDocument: args => requireNextly().releases.scheduleDocument(args),
     removeMember: args => requireNextly().releases.removeMember(args),
     changeMemberAction: args =>
       requireNextly().releases.changeMemberAction(args),

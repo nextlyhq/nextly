@@ -16,10 +16,10 @@ import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 import { TRUSTS_EVERY_COLLECTION } from "../../services/collections/trust-grant";
 import { cachedFind } from "../cache/cached-find";
-import { nextlyTags } from "../cache/nextly-tags";
+import { nextlyTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
-import { markDynamic } from "./mark-dynamic";
+import { deferToRequest } from "./defer-to-request";
 
 /** A resolved content entry (loose by design — shape is the app's collection). */
 export type ContentEntry = Record<string, unknown>;
@@ -451,8 +451,9 @@ export async function resolveContent(
         // published-only from here, which is what makes the fall-through safe
         // to take without a second identity check downstream: a named grant
         // authorizes exactly one entry, and the widened lifecycle scope exists
-        // solely to reach it.
-        return publishedOnly();
+        // solely to reach it. Awaited, so a refusal of that read reaches the
+        // catch below and answers as absent rather than escaping as an error.
+        return await publishedOnly();
       }
 
       const result = await nextly.find({
@@ -534,12 +535,18 @@ export async function resolveContent(
       );
       return overlaid ?? found;
     } catch (error) {
-      // An access denial (403) means the read policy hides this entry from the
+      // An access denial (403), or a visitor asked to sign in
+      // (`AUTH_REQUIRED`), means the read policy hides this entry from the
       // caller — treat it as absent (→ notFound), never as a transient error.
-      // Any other error still rethrows (retryable, not a permanently-cached 404).
-      // `NextlyError.is` matches across bundled package copies where a plain
-      // `instanceof` would miss a differently-realmed error class.
-      if (NextlyError.is(error) && error.statusCode === 403) {
+      // Any other error still rethrows (retryable, not a permanently-cached
+      // 404), other 401s included: an invalid or expired credential is the
+      // caller's to fix, not a missing page. `NextlyError.is` matches across
+      // bundled package copies where a plain `instanceof` would miss a
+      // differently-realmed error class.
+      if (
+        (NextlyError.is(error) && error.statusCode === 403) ||
+        NextlyError.isCode(error, "AUTH_REQUIRED")
+      ) {
         return null;
       }
       throw error;
@@ -590,17 +597,17 @@ export async function resolveContent(
   // option names the related collections a populated read depends on.
   //
   // Per-request rendering is not available as an alternative here anyway. The
-  // only escape from caching in this module is `markDynamic()`, and the one
-  // factory that reaches this path, `createPublicContentRoute`, exports
-  // `generateStaticParams` — so marking its render dynamic would contradict
-  // what the route has already told Next, exactly as `draft` would.
+  // only escape from caching in this module is `deferToRequest()`, and the
+  // one factory that reaches this path, `createPublicContentRoute`, exports
+  // `generateStaticParams` — so deferring its render to the request would
+  // contradict what the route has already told Next, exactly as `draft` would.
   const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
     // Cache, so a page rendered while a policy was public could stay statically
-    // cached after it tightens. Mark the render dynamic so an enforced read
-    // genuinely runs fresh per request.
-    markDynamic();
+    // cached after it tightens. Wait for the request, so an enforced read
+    // genuinely runs fresh per request and takes its clock after it.
+    await deferToRequest();
     return read();
   }
 
@@ -612,7 +619,7 @@ export async function resolveContent(
   return cachedFind(read, {
     // Tag by the collection so any write to it makes this read fresh, plus any
     // caller-supplied tags (related collections a populated read depends on).
-    tags: [...nextlyTags(collection), ...(options.tags ?? [])],
+    tags: readTags(nextlyTags(collection), options.tags),
     keyParts: [
       "nextly",
       "resolve-content",

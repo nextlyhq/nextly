@@ -18,6 +18,7 @@ import type {
   EmailFieldConfig,
   PasswordFieldConfig,
   CodeFieldConfig,
+  IconFieldConfig,
   // Numeric field types
   NumberFieldConfig,
   // Selection field types
@@ -148,6 +149,18 @@ export const isPasswordField = createTypeGuard<PasswordFieldConfig>("password");
  * ```
  */
 export const isCodeField = createTypeGuard<CodeFieldConfig>("code");
+
+/**
+ * Type guard for icon field config.
+ *
+ * @example
+ * ```typescript
+ * if (isIconField(field)) {
+ *   console.log(field.defaultValue); // e.g. "lucide:star"
+ * }
+ * ```
+ */
+export const isIconField = createTypeGuard<IconFieldConfig>("icon");
 
 // ============================================================
 // Individual Type Guards - Numeric Fields

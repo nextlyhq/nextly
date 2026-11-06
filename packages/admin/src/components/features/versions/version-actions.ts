@@ -1,9 +1,9 @@
 /**
  * What a past version on screen offers, for every surface that draws it.
  *
- * The title bar and the phone's bottom bar both offer Back to current and
- * Restore…; they read the one answer here, so neither offers restoring on a
- * different rule.
+ * The document bar and the phone's bottom bar both offer Back to current and
+ * Restore this version; they read the one answer here, so neither offers
+ * restoring on a different rule.
  *
  * @module components/features/versions/version-actions
  */

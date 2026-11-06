@@ -744,7 +744,8 @@ export type MimeTypeCategory =
   | "custom";
 
 /**
- * MIME type category options for the selector
+ * MIME type category options for the selector. Labels are in sentence case,
+ * as every Builder button is.
  */
 export const MIME_TYPE_CATEGORIES: Array<{
   value: MimeTypeCategory;
@@ -752,7 +753,7 @@ export const MIME_TYPE_CATEGORIES: Array<{
   pattern?: string;
   description?: string;
 }> = [
-  { value: "all", label: "All Files", description: "No restriction" },
+  { value: "all", label: "All files", description: "No restriction" },
   {
     value: "images",
     label: "Images",

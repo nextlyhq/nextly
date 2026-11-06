@@ -5,6 +5,9 @@ import path from "path";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { configDefaults, defineConfig } from "vitest/config";
 
+import { nextlyForTemplates } from "./src/__tests__/template-imports";
+import { UNIT_FILE } from "./src/__tests__/unit-files";
+
 // Mirror the tsdown `define` so `getCoreVersion()` resolves under test (D6).
 const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json") as {
@@ -42,8 +45,6 @@ const LEAVES_STATE = new RegExp(
     String.raw`better-sqlite3|createTestNextly|:memory:`,
   ].join("|")
 );
-
-const UNIT_FILE = /\.(?:test|spec)\.ts$/;
 
 /** The unit files that keep a module graph of their own, relative to this folder. */
 function filesThatLeaveState(): string[] {
@@ -138,7 +139,8 @@ const isolatedFiles = [
 ];
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  // A template's `nextly` imports resolve to this package's source.
+  plugins: [tsconfigPaths(), nextlyForTemplates()],
   define: {
     __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
   },

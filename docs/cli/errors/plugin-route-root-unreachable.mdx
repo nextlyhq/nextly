@@ -1,0 +1,24 @@
+---
+title: PLUGIN_ROUTE_ROOT_UNREACHABLE
+description: "A plugin declares a root-mounted route at a path a request never reaches it on."
+---
+
+## Cause
+
+A plugin declares a root-mounted route at a path a request never reaches it on.
+
+A route with `mount: "root"` is answered only after Nextly's own handlers have had the request. Some first path segments, such as `admin-meta` or `plugins`, are claimed by a built-in handler before that, so a root route there could never answer. The Why line names the handler that takes the request.
+
+## Fix
+
+- Leave the route under the plugin's namespace with `mount: "plugin"`, the default.
+- Or move the root route to a path whose first segment no built-in handler claims.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares a root-mounted route at "/admin-meta/reviews", which cannot answer.
+  Why:  The admin metadata endpoints answer from the verb wrappers, and the GET branch claims the whole subtree, so the fallback this route waits for is never reached.
+  Next: Leave the route under the plugin's namespace (`mount: "plugin"`), or move it to a path whose first segment no built-in handler claims.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-root-unreachable  (PLUGIN_ROUTE_ROOT_UNREACHABLE)
+```

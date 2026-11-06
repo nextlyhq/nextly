@@ -101,7 +101,8 @@ function optionLabel(field: FieldConfig, value: unknown): string {
 // ============================================================
 
 defineValueDisplay(
-  ["text", "textarea", "email", "slug", "id", "url", "phone"],
+  // `icon` holds an id such as `lucide:star`, shown as the text it is.
+  ["text", "textarea", "email", "slug", "id", "url", "phone", "icon"],
   ({ value }) => {
     // A `hasMany` text field stores a list; the generic path would collapse it
     // into comma-joined text and lose the item boundaries.

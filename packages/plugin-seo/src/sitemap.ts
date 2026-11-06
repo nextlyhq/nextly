@@ -34,11 +34,11 @@ import type { CollectionReads } from "./collection-reads";
 /**
  * What the sitemap builder reads, as system.
  *
- * The shape is shared with the SEO issues source through
- * `CollectionReads` -- both ask the same two questions of the same service, and
- * two declarations of one contract agree on the day they are written and drift
- * afterwards. Only the identity differs: the sitemap is a public document, so
- * it reads published rows as `system`.
+ * The shape is `CollectionReads`, the slice of the managed collection service
+ * named once in its own module, with the identity it is read under as `system`:
+ * the sitemap is a public document, so it reads published rows as the system.
+ * The dashboard card and its Needs attention line read through the services
+ * core hands a widget instead, bound to the person asking.
  */
 export type SitemapServices = CollectionReads<{ as: "system" }>;
 

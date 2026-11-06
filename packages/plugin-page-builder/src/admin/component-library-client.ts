@@ -45,7 +45,11 @@
  * @module admin/component-library-client
  */
 import type { BlockDocument, DefinitionsById } from "@nextlyhq/blocks-engine";
-import type { SavedComponent } from "@nextlyhq/builder";
+import {
+  componentTitles,
+  type ComponentTitleOf,
+  type SavedComponent,
+} from "@nextlyhq/builder";
 import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
@@ -82,6 +86,12 @@ export interface ComponentLibraryRead {
   readonly definitions: DefinitionsById;
   /** The definitions as the insert panel offers them, empty until the read arrives. */
   readonly components: readonly SavedComponent[];
+  /**
+   * A placed component's title by id, from the same rows: what Layers, the
+   * bottom bar, the search and a page's list of sections name a placement by.
+   * Derived with the list, so the two cannot come to disagree.
+   */
+  readonly titleOf: ComponentTitleOf;
   /**
    * Whether the ceiling cut the read short.
    *
@@ -159,6 +169,7 @@ export function useComponentLibrary({
     return {
       definitions,
       components: data.items,
+      titleOf: componentTitles(data.items),
       truncated: data.meta.truncated,
     };
   }, [data]);
@@ -191,9 +202,10 @@ export function useComponentLibrary({
  */
 const NOTHING_YET: Pick<
   ComponentLibraryRead,
-  "definitions" | "components" | "truncated"
+  "definitions" | "components" | "titleOf" | "truncated"
 > = {
   definitions: new Map(),
   components: [],
+  titleOf: componentTitles([]),
   truncated: false,
 };

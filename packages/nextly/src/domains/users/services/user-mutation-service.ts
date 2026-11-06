@@ -96,6 +96,7 @@ import {
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
+import { refuseLinkingPublicRole } from "../../auth/services/public-role";
 import {
   refuseGrantingSuperAdmin,
   rolesConferSuperAdmin,
@@ -117,6 +118,7 @@ import { stopReleasesHolding } from "../../releases/early-stop";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
+import { assertNoInterfaceLanguage } from "../interface-language";
 
 import { emailVerificationColumns } from "./email-verification-write";
 import {
@@ -1046,6 +1048,14 @@ export class UserMutationService extends BaseService {
       namedRoles.map(r => r.id),
       { reason: "external-user-super-admin-refused", email }
     );
+    // The Public role is what visitors hold, never anyone's role.
+    await refuseLinkingPublicRole(
+      this.db as LastSuperAdminTx,
+      this.dialect,
+      namedRoles.map(r => r.id),
+      "assign",
+      { email }
+    );
 
     const now = new Date();
     const newUserId = randomUUID();
@@ -1339,6 +1349,14 @@ export class UserMutationService extends BaseService {
         }
         // Before the insert: the roles are assigned after the account is
         // committed, so a refusal there would leave the account behind.
+        // The Public role is what visitors hold, never anyone's role.
+        await refuseLinkingPublicRole(
+          this.db as LastSuperAdminTx,
+          this.dialect,
+          uniqueRoleIds,
+          "assign",
+          { email }
+        );
         if (caller === "plugin") {
           await this.refuseSuperAdminRoles(uniqueRoleIds, {
             reason: "plugin-user-super-admin-refused",
@@ -1786,6 +1804,9 @@ export class UserMutationService extends BaseService {
     options: UpdateUserOptions = {}
   ): Promise<UserMutationResponse> {
     try {
+      // The person's own to set, through their profile: refused here, first,
+      // for every door this edit is reached through.
+      assertNoInterfaceLanguage(changes, { entity: "user", userId });
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getUpdateSchema().safeParse(changes);
       if (!validation.success) {
@@ -1820,6 +1841,14 @@ export class UserMutationService extends BaseService {
 
       // Before any write: the fields below are written before the roles, so a
       // refusal at the role step would leave the rest of the update applied.
+      // The Public role is what visitors hold, never anyone's role.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        changes.roles ?? [],
+        "assign",
+        { userId: currentUser.id }
+      );
       if (caller === "plugin" && changes.roles && changes.roles.length > 0) {
         await this.refuseSuperAdminRoles(Array.from(new Set(changes.roles)), {
           reason: "plugin-user-super-admin-refused",

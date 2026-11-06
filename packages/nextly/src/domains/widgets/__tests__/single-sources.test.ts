@@ -125,6 +125,8 @@ describe("what a single executes", () => {
     expect(result).toEqual({
       op: "list",
       items: [{ siteName: "Acme", updatedAt: DOCUMENT.updatedAt }],
+      // A Single is its one document, so its total is the one row it shows.
+      total: 1,
       fields: [
         { name: "siteName", label: "Site name", type: "string" },
         // A system column is labelled by the source, as a person reads it.
@@ -193,6 +195,7 @@ describe("what a single executes", () => {
     expect(await executeWidgetQuery(q, caller)).toEqual({
       op: "list",
       items: [],
+      total: 0,
     });
   });
 

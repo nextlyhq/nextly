@@ -19,12 +19,16 @@
  * @module components/features/widgets/layout-editor
  */
 
-import { MAX_PLACEMENTS, layoutSizeProblem } from "nextly/config";
+import {
+  MAX_PLACEMENTS,
+  isGridSize,
+  layoutSizeProblem,
+  sizeWithinBounds,
+  type GridSize,
+  type WidgetSizeBounds,
+} from "nextly/config";
 
-import type {
-  WidgetPlacement,
-  WidgetWidth,
-} from "@admin/types/dashboard/widgets";
+import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 /** The four ways a card moves from its menu. */
 export type MoveDirection = "start" | "earlier" | "later" | "end";
@@ -217,30 +221,38 @@ export function movePlacementToPosition(
 }
 
 /**
- * Sets one card's width, if its widget allows that width.
+ * Sets one card's size, if it lies within its widget's bounds.
  *
- * 🔴 Refused here rather than only by the menu offering the allowed widths: the
- * server refuses a CHANGED width its widget does not allow, so a draft holding
- * one could never be saved, and the reader would meet a failure naming nothing
- * they did. Without the widget's allowed widths there is nothing to check
- * against, so nothing is set.
+ * 🔴 Refused here rather than only by the menu offering sizes within the
+ * bounds: a card can never be resized past them, and the server holds a
+ * CHANGED size to the same bounds, so a draft holding one could never be
+ * saved and the reader would meet a failure naming nothing they did. Without
+ * the widget's bounds there is nothing to check against, so nothing is set.
  */
-export function setPlacementWidth(
+export function setPlacementSize(
   placements: readonly WidgetPlacement[],
   placementId: string,
-  width: WidgetWidth,
-  allowed: readonly WidgetWidth[] | undefined
+  size: GridSize,
+  bounds: WidgetSizeBounds | undefined
 ): WidgetPlacement[] {
-  if (!allowed?.includes(width)) return [...placements];
+  if (
+    bounds === undefined ||
+    !isGridSize(size) ||
+    !sizeWithinBounds(size, bounds)
+  ) {
+    return [...placements];
+  }
   return placements.map(placement =>
-    placement.id === placementId ? { ...placement, width } : placement
+    placement.id === placementId
+      ? { ...placement, w: size.w, h: size.h }
+      : placement
   );
 }
 
 /**
  * Takes one card off the dashboard, KEEPING it in the list.
  *
- * Its place, width and settings stay, so restoring it puts back the card the
+ * Its place, size and settings stay, so restoring it puts back the card the
  * reader removed rather than a fresh one at the end.
  */
 export function removePlacement(
@@ -275,20 +287,34 @@ export function restorePlacement(
  * a missing config and an empty one identically, so keeping `{}` would be a
  * difference the layout carries and nothing can observe — and it would make
  * `hasChanges` report a card as edited for having been opened.
+ *
+ * `ownTitle` is the title the reader gave the card, when the change sets it:
+ * trimmed, as the layout write stores it. Emptied, a title the card had is kept
+ * as an empty one, the reader's clearing, so the card is titled automatically
+ * again and a title the site's default gives it does not come back; a card that
+ * had none takes none. Left out, the card keeps the title it has: a quick
+ * setting changes settings alone.
  */
 export function setPlacementConfig(
   placements: readonly WidgetPlacement[],
   placementId: string,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  ownTitle?: string
 ): WidgetPlacement[] {
   const empty = Object.keys(config).length === 0;
   return placements.map(placement => {
     if (placement.id !== placementId) return placement;
-    if (empty) {
-      const { config: _dropped, ...rest } = placement;
-      return rest;
-    }
-    return { ...placement, config };
+    const { config: _config, title: _title, ...rest } = placement;
+    const title = ownTitle === undefined ? placement.title : ownTitle.trim();
+    // Cleared: kept empty where the card had a title, so the clearing is stored; nothing where
+    // it had none, so opening a card's settings and keeping them changes nothing.
+    const kept =
+      title === "" && placement.title === undefined ? undefined : title;
+    return {
+      ...rest,
+      ...(empty ? {} : { config }),
+      ...(kept === undefined ? {} : { title: kept }),
+    };
   });
 }
 
@@ -333,7 +359,7 @@ export function addedPlacementId(
 }
 
 /**
- * Adds a widget at the end of the arrangement, at its default width.
+ * Adds a widget at the end of the arrangement, at its default size.
  *
  * At the END, deliberately, rather than at a declared position. A reader who
  * adds a card has just chosen it, and putting it where the plugin thinks it
@@ -343,7 +369,7 @@ export function addedPlacementId(
 export function addPlacement(
   placements: readonly WidgetPlacement[],
   widgetId: string,
-  defaultWidth: WidgetWidth,
+  startSize: GridSize,
   /**
    * The new card's id, when the caller has to know it before the list changes (to highlight
    * the card, or to move focus to it). Decided by {@link addedPlacementId} otherwise.
@@ -368,7 +394,8 @@ export function addPlacement(
     {
       id,
       widgetId,
-      width: defaultWidth,
+      w: startSize.w,
+      h: startSize.h,
       removed: false,
       ...(config === undefined ? {} : { config }),
     },
@@ -428,9 +455,11 @@ function comparable(
   return {
     id: placement.id,
     widgetId: placement.widgetId,
-    width: placement.width,
+    w: placement.w,
+    h: placement.h,
     removed: placement.removed,
     config: placement.config ?? {},
+    title: placement.title ?? "",
   };
 }
 
@@ -440,7 +469,7 @@ function comparable(
  *
  * A stored arrangement can hold more than one save may carry: cards kept
  * while a reader could not see them come back when access returns. Remove
- * keeps a card (its width and settings, for Undo and for adding it back), so
+ * keeps a card (its size and settings, for Undo and for adding it back), so
  * without this such a reader could never save again. "Fits" is the endpoint's
  * own `layoutSizeProblem`, by count and by bytes, not a copy of it. Only
  * cards the reader has taken off the dashboard are shed, so nothing they can

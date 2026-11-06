@@ -1,0 +1,27 @@
+---
+title: BUILDER_MIGRATION_SNAPSHOT_MISSING
+description: "A migration file the Schema Builder wrote has no snapshot beside it, so `nextly migrate` does not apply it."
+---
+
+## Cause
+
+A migration file the Schema Builder wrote has no snapshot beside it, so `nextly migrate` does not apply it.
+
+A Schema Builder save writes a migration file with no snapshot beside it. Without the snapshot nothing says what the database should look like once the file has run, so `nextly migrate` refuses it, and `nextly migrate:check` reports it before a deploy does.
+
+## Fix
+
+- Delete the file the Why line names.
+- Run `nextly migrate:create --name=<name>`, which writes the same change as a migration with its snapshot.
+- Commit the `.sql` file and its snapshot from `meta/`, then run `nextly migrate`.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ nextly migrate does not apply a Schema Builder migration file with no snapshot.
+  Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
+  Next: Replace it with the migration `nextly migrate:create` writes for that change: delete 1761732000000_update_posts.sql, run `nextly migrate:create --name=<name>`, and commit the .sql file and its snapshot.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-migration-snapshot-missing  (BUILDER_MIGRATION_SNAPSHOT_MISSING)
+```

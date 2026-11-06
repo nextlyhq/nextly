@@ -1,0 +1,23 @@
+---
+title: PLUGIN_SCHEMA_VERSION_NOT_ADVANCED
+description: "A plugin's declared `schemaVersion` does not move past the one on its last migration."
+---
+
+## Cause
+
+A plugin's declared `schemaVersion` does not move past the one on its last migration.
+
+The runner takes a plugin's schema version from its last migration. A new migration that changes the schema must declare a higher `schemaVersion` than the one before it, and a blank one may not fall behind it.
+
+## Fix
+
+- Raise `schemaVersion` in the plugin's definition as the Next line says, then generate the migration again.
+
+## Example
+
+```text
+✗ The plugin's schemaVersion must move past 3 before new migrations can be generated (it is 3).
+  Why:  The runner takes a plugin's schema version from its last migration, so a new migration that changes the schema must declare a higher one.
+  Next: Raise `schemaVersion` in `@acme/seo` above 3, then generate the migration again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-version-not-advanced  (PLUGIN_SCHEMA_VERSION_NOT_ADVANCED)
+```

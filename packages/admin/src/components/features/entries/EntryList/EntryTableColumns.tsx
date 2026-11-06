@@ -53,10 +53,17 @@ export interface CollectionForColumns {
    */
   status?: boolean;
   /**
-   * Whether this collection has multilingual content (i18n). When true, the table can render a
-   * per-row translation-completeness column from each row's `_translations` map.
+   * Whether the table shows each row's translation state: a collection with multilingual content
+   * (i18n), listed for a user who may read every language's state. When true, the table renders
+   * a per-row translation-completeness column from each row's `_translations` map, and a
+   * language filter.
    */
   localized?: boolean;
+  /**
+   * Whether the collection is removed from code: its entries are listed and
+   * nothing that writes to them is offered.
+   */
+  removedFromCode?: boolean;
   /** Admin UI configuration */
   admin?: {
     /** Default columns to display in list view */
@@ -97,12 +104,45 @@ const SORTABLE_FIELD_TYPES: readonly string[] = [
   "select",
   "email",
   "checkbox",
+  // An id sorts as text, which groups icons by set and then by name.
+  "icon",
 ];
 
 /**
  * Default number of data columns to show when defaultColumns is not specified.
  */
 const DEFAULT_COLUMN_COUNT = 4;
+
+/** Field types never shown as a column: they hold nested or related data. */
+const NON_COLUMN_TYPES: readonly string[] = [
+  "group",
+  "relationship",
+  "repeater",
+  "component",
+];
+
+/**
+ * Whether the list picks a field as a default column by itself: a named data
+ * field the form shows. A field the form hides (`admin.hidden`) is set by some
+ * other control, so it is left out here; it stays on offer as a column, and a
+ * collection's own `defaultColumns` may still name it.
+ */
+export function isDefaultColumnField(field: {
+  name?: unknown;
+  type?: unknown;
+  admin?: unknown;
+}): field is { name: string; type: string } {
+  if (typeof field.name !== "string" || field.name.length === 0) return false;
+  if (typeof field.type !== "string" || NON_COLUMN_TYPES.includes(field.type)) {
+    return false;
+  }
+  const admin = field.admin;
+  return !(
+    typeof admin === "object" &&
+    admin !== null &&
+    (admin as { hidden?: unknown }).hidden === true
+  );
+}
 
 // ============================================================================
 // Helper Functions
@@ -136,11 +176,10 @@ function isDataField(field: FieldConfig): field is NamedDataFieldConfig {
  */
 function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
   const dataFields: NamedDataFieldConfig[] = [];
-  const excludedTypes = ["group", "relationship", "repeater", "component"];
 
   for (const field of fields) {
     // Only include direct data fields that are not complex/layout types
-    if (isDataField(field) && !excludedTypes.includes(field.type)) {
+    if (isDataField(field) && !NON_COLUMN_TYPES.includes(field.type)) {
       dataFields.push(field);
     }
   }
@@ -156,10 +195,10 @@ function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
  * @returns Array of field names to display as columns
  */
 function getDefaultColumns(fields: FieldConfig[]): string[] {
-  // Filter to data fields only (exclude layout fields)
-  const dataFields = getAllDataFields(fields)
-    .slice(0, DEFAULT_COLUMN_COUNT)
-    .map(f => f.name);
+  // Data fields the form shows, never a hidden one or a layout field.
+  const dataFields = fields
+    .flatMap(field => (isDefaultColumnField(field) ? [field.name] : []))
+    .slice(0, DEFAULT_COLUMN_COUNT);
 
   // Always include title, slug, id, createdAt and updatedAt.
   // 07-admin-bugs-feedback, the user expects both timestamps visible

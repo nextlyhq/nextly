@@ -6,6 +6,8 @@
  * @module types/dashboard/activity
  */
 
+import type { ActivityEvent } from "nextly/widget-result";
+
 /**
  * Activity type indicating the nature of the action
  */
@@ -55,6 +57,12 @@ export interface Activity {
   type: ActivityType;
   /** Human-readable action description (e.g., "created", "updated") */
   action: string;
+  /**
+   * What happened, as the server names it: one of a closed set, so a reader can switch on it.
+   * Absent from a server that names none, and from an update of a document that no longer
+   * exists, whose row says only its `action`.
+   */
+  event?: ActivityEvent;
   /** Target of the action (e.g., "User: John Doe", "Role: Admin") */
   target: string;
   /** Entry title (if available) for styled rendering */

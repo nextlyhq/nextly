@@ -197,6 +197,7 @@ export async function assertShellReady(
   page: Page,
   { timeout = SHELL_READY_TIMEOUT_MS }: { timeout?: number } = {}
 ): Promise<void> {
+  const until = Date.now() + timeout;
   try {
     await page
       .getByRole("navigation", { name: REGION_NAMES.rail })
@@ -211,7 +212,42 @@ export async function assertShellReady(
     await diagnoseUnrenderedPage(page);
   }
 
-  assertPainted(await measureShellRender(page));
+  assertPainted(await paintedBy(page, until));
+}
+
+/** How often a shell not yet painted is measured again. */
+const PAINT_POLL_MS = 100;
+
+/**
+ * The shell measured until `paintProblem` finds nothing wrong, or until
+ * `until`: the LAST measurement either way, for `assertPainted` to judge.
+ *
+ * A visible rail does not mean the shell's root has its box yet. On a loaded
+ * machine the root was measured in the instant between the two and read as
+ * "rendered without usable styles", failing whichever test happened to land
+ * there. Waiting is bounded by the same allowance as the rail, and a shell
+ * that never paints still reaches `assertPainted` unpainted, so it fails with
+ * the same diagnosis rather than passing on a timeout.
+ *
+ * An ABSENT root is returned at once: a box or a colour settles, but a root
+ * missing after the rail has rendered is a markup change that waiting cannot
+ * fix, and every `goto` would otherwise spend the whole allowance on it.
+ */
+async function paintedBy(
+  page: Page,
+  until: number
+): Promise<ShellRenderMeasurement> {
+  for (;;) {
+    const measurement = await measureShellRender(page);
+    if (
+      !measurement.present ||
+      paintProblem(measurement) === null ||
+      Date.now() >= until
+    ) {
+      return measurement;
+    }
+    await page.waitForTimeout(PAINT_POLL_MS);
+  }
 }
 
 /** Report a page with no shell in it, without naming a cause it cannot see. */
@@ -234,8 +270,12 @@ async function diagnoseUnrenderedPage(page: Page): Promise<never> {
   );
 }
 
-/** Turn one measurement into the readiness verdict. */
-function assertPainted(measurement: ShellRenderMeasurement): void {
+/**
+ * What is wrong with how the shell looks, as the diagnosis to report, or
+ * `null` when it is painted: present, with a box, and with a colour. The one
+ * readiness verdict, which the wait polls on and `assertPainted` reports.
+ */
+function paintProblem(measurement: ShellRenderMeasurement): string | null {
   const { present, box } = measurement;
   // Absence FIRST. The rail can render while the chrome root is removed or
   // renamed, and then `box` is null for a reason that has nothing to do with
@@ -243,33 +283,40 @@ function assertPainted(measurement: ShellRenderMeasurement): void {
   // down the CSS investigation path, which is the failure this file exists to
   // stop rather than commit.
   if (!present) {
-    throw new Error(
+    return (
       `The rail rendered but no element matches "${CHROME_SELECTOR}", so the ` +
-        `shell's ROOT is missing or renamed — a markup change, not a styling ` +
-        `one. Every geometric check here is addressed from that element.`
+      `shell's ROOT is missing or renamed — a markup change, not a styling ` +
+      `one. Every geometric check here is addressed from that element.`
     );
   }
   if (box === null || box.width === 0 || box.height === 0) {
-    throw new Error(
+    return (
       `The editor shell is in the DOM but has no layout box, so the page ` +
-        `rendered without usable styles rather than the shell laying out ` +
-        `wrongly. Check that the document loaded both stylesheets before ` +
-        `reading this as a shell defect.`
+      `rendered without usable styles rather than the shell laying out ` +
+      `wrongly. Check that the document loaded both stylesheets before ` +
+      `reading this as a shell defect.`
     );
   }
   if (isUnpainted(measurement)) {
     // Deliberately NEUTRAL about which sheet is at fault: an unresolvable
     // `var()` chain and a chrome rule that lost its `background-color` compute
     // to the same value, so naming one states a cause this cannot separate.
-    throw new Error(
+    return (
       `The editor shell rendered but its chrome resolved to no colour, so the ` +
-        `style chain is broken between the design system's tokens and this ` +
-        `package's rules. Either a required stylesheet is absent ` +
-        `("@nextlyhq/ui/styles.css" alongside "@nextlyhq/builder/styles.css") ` +
-        `or the chrome's own declaration regressed. The "both stylesheets ` +
-        `actually loaded" test separates those two.`
+      `style chain is broken between the design system's tokens and this ` +
+      `package's rules. Either a required stylesheet is absent ` +
+      `("@nextlyhq/ui/styles.css" alongside "@nextlyhq/builder/styles.css") ` +
+      `or the chrome's own declaration regressed. The "both stylesheets ` +
+      `actually loaded" test separates those two.`
     );
   }
+  return null;
+}
+
+/** Turn one measurement into the readiness verdict. */
+function assertPainted(measurement: ShellRenderMeasurement): void {
+  const problem = paintProblem(measurement);
+  if (problem !== null) throw new Error(problem);
 }
 
 export function createShellDriver(page: Page): ShellDriver {

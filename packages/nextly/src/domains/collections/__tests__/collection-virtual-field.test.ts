@@ -9,7 +9,7 @@
  * must reach the row, so the virtual field's absence is the rule rather than
  * an empty payload.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
@@ -25,7 +25,15 @@ import {
   createMockRelationshipService,
   createMockSchema,
   silentLogger,
+  revisionReadingSelect,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -109,6 +117,7 @@ describe("a virtual field in a collection write", () => {
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
+          select: revisionReadingSelect(),
           insert: txInsert,
           update: txUpdate,
           delete: vi.fn().mockResolvedValue(undefined),
@@ -179,6 +188,7 @@ describe("a virtual field in a collection write", () => {
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
+          select: revisionReadingSelect(),
           insert: txInsert,
           update: txUpdate,
           delete: vi.fn().mockResolvedValue(undefined),

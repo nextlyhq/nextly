@@ -23,6 +23,15 @@ export {
 export type { BlockRegistrationService } from "./registration-service";
 
 /**
+ * The shape of a plugin's declaration for the page builder, and of the
+ * `editorEntry` module it names, so a contributor can type both.
+ */
+export type {
+  PageBuilderDeclaration,
+  PageBuilderEditorEntry,
+} from "./declared-blocks";
+
+/**
  * What a page render provides to every block.
  *
  * An app names this as its block render context in one line of its own source,

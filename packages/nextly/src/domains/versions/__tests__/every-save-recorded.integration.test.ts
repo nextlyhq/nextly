@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import {
@@ -30,6 +31,18 @@ afterEach(async () => {
 const ana = { id: "ana", roles: ["super-admin"] };
 const ben = { id: "ben", roles: ["super-admin"] };
 const superAdmin = { id: "tester", roles: ["super-admin"] };
+
+/**
+ * The super-admin a restore is made as, stored in `t` so the update gate the
+ * restore asks finds its role: role names a caller hands in grant nothing.
+ */
+async function storedSuperAdmin(
+  t: TestNextly | undefined
+): Promise<typeof superAdmin> {
+  if (!t) throw new Error("the harness is not booted");
+  await superAdminUser(t, superAdmin.id);
+  return superAdmin;
+}
 
 type VersionRow = {
   scopeSlug: string;
@@ -99,7 +112,7 @@ describe.each(getConfiguredTestDialects())(
       ] as const) {
         await handler.updateEntry(
           { collectionName: "posts", entryId: id, overrideAccess: true, user },
-          { title }
+          { title, _overwrite: true }
         );
       }
 
@@ -139,26 +152,26 @@ describe.each(getConfiguredTestDialects())(
       const singles = current.getService("singleEntryService");
       await singles.update(
         "branding",
-        { heading: "Live", status: "published" },
+        { heading: "Live", status: "published", _overwrite: true },
         { overrideAccess: true, user: ana }
       );
       const before = (await versionsFor(current, "branding")).length;
 
       await singles.update(
         "branding",
-        { heading: "Ana's" },
+        { heading: "Ana's", _overwrite: true },
         { overrideAccess: true, user: ana }
       );
       await singles.update(
         "branding",
-        { heading: "Ben's" },
+        { heading: "Ben's", _overwrite: true },
         { overrideAccess: true, user: ben }
       );
 
       // Saving the same heading again changes nothing, so records nothing.
       await singles.update(
         "branding",
-        { heading: "Ben's" },
+        { heading: "Ben's", _overwrite: true },
         { overrideAccess: true, user: ben }
       );
 
@@ -189,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Hallo", status: "published" }
+        { title: "Hallo", status: "published", _overwrite: true }
       );
       const before = (await versionsFor(current, "posts")).length;
 
@@ -201,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
           locale: "de",
           user: ana,
         },
-        { title: "Hallo, Welt" }
+        { title: "Hallo, Welt", _overwrite: true }
       );
 
       const saves = (await versionsFor(current, "posts")).slice(before);
@@ -229,7 +242,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             user: ana,
           },
-          { title }
+          { title, _overwrite: true }
         );
 
       // The same as what is live: nothing to record.
@@ -291,7 +304,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (title: string) =>
         handler.updateEntry(
           { collectionName: "posts", entryId: id, overrideAccess: true },
-          { title }
+          { title, _overwrite: true }
         );
       await save("Pending");
       await save("Later");
@@ -306,7 +319,8 @@ describe.each(getConfiguredTestDialects())(
         slug: "posts",
         entryId: id,
         versionNo: pending!.versionNo!,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       });
 
       const [live] = (
@@ -336,7 +350,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (title: string) =>
         handler.updateEntry(
           { collectionName: "posts", entryId: id, overrideAccess: true },
-          { title }
+          { title, _overwrite: true }
         );
       await save("Pending A");
       await save("Pending B");
@@ -349,7 +363,8 @@ describe.each(getConfiguredTestDialects())(
         slug: "posts",
         entryId: id,
         versionNo: pendingA!.versionNo!,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       });
 
       const undo = (await rowsFor(current, "posts")).filter(
@@ -377,17 +392,17 @@ describe.each(getConfiguredTestDialects())(
       const singles = current.getService("singleEntryService");
       await singles.update(
         "branding",
-        { heading: "Live", status: "published" },
+        { heading: "Live", status: "published", _overwrite: true },
         { overrideAccess: true }
       );
       await singles.update(
         "branding",
-        { heading: "Pending A" },
+        { heading: "Pending A", _overwrite: true },
         { overrideAccess: true }
       );
       await singles.update(
         "branding",
-        { heading: "Pending B" },
+        { heading: "Pending B", _overwrite: true },
         { overrideAccess: true }
       );
       const versions = await versionsFor(current, "branding");
@@ -400,7 +415,8 @@ describe.each(getConfiguredTestDialects())(
         slug: "branding",
         entryId: pendingA!.entryId,
         versionNo: pendingA!.versionNo!,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       });
 
       const undo = (await rowsFor(current, "branding")).filter(
@@ -450,7 +466,8 @@ describe.each(getConfiguredTestDialects())(
         slug: "notes",
         entryId: id,
         versionNo: before.length + 1,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       }).then(
         () => undefined,
         (err: unknown) => err
@@ -478,7 +495,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await handler.updateEntry(
         { collectionName: "posts", entryId: id, overrideAccess: true },
-        { title: "Pending" }
+        { title: "Pending", _overwrite: true }
       );
       const versions = await versionsFor(current, "posts");
       const published = versions.find(v => v.status === "published")!;

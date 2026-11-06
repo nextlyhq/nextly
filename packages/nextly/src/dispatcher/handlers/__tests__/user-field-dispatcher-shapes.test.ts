@@ -15,6 +15,9 @@ vi.mock("../../helpers/di", () => ({
   getUserFieldDefinitionServiceFromDI: vi.fn(),
   getUserExtSchemaServiceFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
+  // The mutating handlers take the schema lock, which logs through the DI logger when one is
+  // registered; with no adapter registered the lock is not taken and nothing is logged.
+  getLoggerFromDI: vi.fn(),
 }));
 
 import {

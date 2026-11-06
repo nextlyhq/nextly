@@ -32,7 +32,8 @@ export const EDITOR_PROPERTIES: readonly AcceptanceProperty[] = [
   },
   {
     n: 3,
-    property: "Escape clears the selection",
+    property:
+      "Escape goes up to the block holding the selection, and clears it at the top",
     greenIn: "selection",
     status: "covered",
   },
@@ -77,7 +78,8 @@ export const EDITOR_PROPERTIES: readonly AcceptanceProperty[] = [
   },
   {
     n: 10,
-    property: "Escape cancels a plain-text edit and restores the text",
+    property:
+      "Escape keeps a plain-text edit, and a second Escape selects the parent",
     greenIn: "inline text",
     status: "covered",
   },
@@ -97,17 +99,16 @@ export const EDITOR_PROPERTIES: readonly AcceptanceProperty[] = [
   },
   {
     n: 13,
-    property: "Escape cancels a rich-text edit and restores the passage",
+    property: "Escape keeps a rich-text edit, as one undo step",
     greenIn: "inline rich text",
     status: "covered",
   },
   {
     n: 14,
-    property: "A Layers drag reorders a block",
+    property:
+      "Dragging in Layers reorders a block, and dragging right nests it, each one undo step",
     greenIn: "layers drag",
-    status: "deferred",
-    reason:
-      "the Layers panel has no drag yet: layers-panel.tsx renders the shared TreeView, which offers click and keyboard selection only, so there is nothing to drag. Covered here the day rows become draggable.",
+    status: "covered",
   },
 ];
 

@@ -22,21 +22,21 @@ inside `packages/nextly`.
   `.item`. There is no `docs`/`totalDocs` shape anywhere.
 - `overrideAccess` defaults to `true` (trusted server context) and returns
   before any check. Under `overrideAccess: false` there is ONE decision, the
-  RBAC gate (`checkCollectionAccess` → `rbacAccessControlService.checkAccess`,
-  or `apiKeyWriteAllowed` for a scoped key): super-admin bypass, then DB
+  RBAC gate (`checkCollectionAccess` → the access decision, `decide()`, through
+  `auth/access/gate-adapters`, or `apiKeyWriteAllowed` for a scoped key):
+  super-admin bypass, then DB
   permissions, then the code-defined `access` from
   `defineCollection`/`defineSingle` when it names the operation (only
   `true` allows). There is no stored rule layer; the
   `access_rules` registry column is retired, nothing reads it, and a database
   that still carries values in it is named at boot and by `nextly migrate`.
-- Only the DB-permission half of the gate needs a `user`. An anonymous
-  caller under `overrideAccess: false` is still judged by the collection's
-  code-defined rule (`checkAnonymousCodeAccess`, handed `user: null`, no
-  roles, no permissions); with no rule for the operation a read falls
-  through to the public default and a write is refused. The Single gate
-  (`checkSingleAccess`) and relationship expansion (`relatedRowReads`) ask
-  that same question, so one rule gives one answer on every door. With no
-  user, `publish`/`unpublish` and `routeAuthorized` fail closed regardless.
+- An anonymous caller under `overrideAccess: false` is a visitor, judged by
+  the Public role: its permission first (boot grants the read where the read
+  rule answers `true`, and `read-media`), then a rule naming the operation
+  must answer `true`. Rules and field rules see Public's permissions; no rule
+  means Public's permission alone. It reads published content only, never
+  publishes; `routeAuthorized` fails closed. The Single gate and
+  `relatedRowReads` ask the same question, so one rule gives one answer.
 - A permission is spelled `read-posts` everywhere, rules included; their
   context comes from `buildRuleContext`, and the earlier `posts:read` is not
   in it, so a rule checking that spelling does not allow. `ReadAccessCaller`
@@ -44,7 +44,7 @@ inside `packages/nextly`.
   `readAccessCaller`; a hand-assembled literal is how two doors came to answer
   one key differently.
 - A collection whose code-defined `access` says nothing about an operation
-  falls through to DB permissions (a visitor's read: the default above); a
+  falls through to DB permissions (a visitor's: the Public role's, above); a
   caller with no matching grant is refused.
   A rule that throws denies. Relationship expansion (`relatedRowReads`) asks
   a populated TARGET the same: a person needs a grant, a key
@@ -58,7 +58,7 @@ inside `packages/nextly`.
   write set fields every authenticated user was forbidden from setting. An
   internal writer that needs a protected field says so with
   `overrideAccess: true`.
-- The canonical `FieldType` union has 19 members and the structured-array
+- The canonical `FieldType` union has 20 members and the structured-array
   type is `repeater`; the `array()` factory is a backward-compat alias, use
   `repeater()` in new code. Surface-only types (`url`, `phone` for users;
   plus `file`, `time`, `hidden` for forms) are intentionally NOT in the

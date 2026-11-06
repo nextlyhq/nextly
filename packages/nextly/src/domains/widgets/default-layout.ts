@@ -1,0 +1,169 @@
+/**
+ * The one default dashboard: what everyone with no saved layout is given,
+ * built from ONE `defaultLayout` whoever wrote it.
+ *
+ * The base is the site config's `admin.dashboard.defaultLayout`, or else core's
+ * own (`CORE_DEFAULT_LAYOUT`), written the same way, so the two cannot be
+ * built by different rules. It is the whole default: nothing follows it. No
+ * widget is placed on its own, a plugin's included; the add panel offers it,
+ * and a site that wants it on its default names it in `defaultLayout`. A
+ * plugin's `contributes.dashboard.suggest`, and the site's `suggestions`, are
+ * still accepted and checked at startup, and place nothing.
+ *
+ * The same default for everyone: what varies per person is only which of its
+ * cards they may see, decided where it is read (`api/widget-layout`). A saved
+ * layout is never built from here.
+ *
+ * @module domains/widgets/default-layout
+ */
+
+import { sizeFacts, type CanonicalWidget } from "./canonical";
+import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_ID } from "./core-widgets/ids";
+import type { DefaultLayoutCard } from "./declaration/dashboard";
+import { clampSize, GRID_COLUMNS } from "./grid-size";
+import type { WidgetPlacement } from "./layout";
+
+/** What startup read from the site config, for the default. */
+export interface DefaultLayoutPlan {
+  /** The default: the site's `defaultLayout`, or core's own when it gives none. */
+  readonly cards: readonly DefaultLayoutCard[];
+}
+
+/** Core's default: what a boot that read no config builds. */
+const CORE_PLAN: DefaultLayoutPlan = { cards: CORE_DEFAULT_LAYOUT };
+
+/**
+ * Pinned where every boot-time widget store is pinned, so a hot reload replaces
+ * the plan with the one its own config gives rather than keeping the last.
+ */
+const globalForPlan = globalThis as unknown as {
+  __nextly_defaultLayoutPlan?: DefaultLayoutPlan;
+};
+
+/** Replace the plan. Called once per boot, beside the widget registries. */
+export function setDefaultLayoutPlan(plan: DefaultLayoutPlan): void {
+  globalForPlan.__nextly_defaultLayoutPlan = plan;
+}
+
+/** The plan this boot set, or core's own where none was. */
+export function defaultLayoutPlan(): DefaultLayoutPlan {
+  return globalForPlan.__nextly_defaultLayoutPlan ?? CORE_PLAN;
+}
+
+/**
+ * The default's cards, in order, over `widgets`: the install's widgets as
+ * the layout reads them. An entry whose widget the install does not have is
+ * left out: startup refused one not marked `optional`, so what is left out
+ * here is an optional plugin widget, or a card core generates for content
+ * since deleted.
+ *
+ * Each card's placement id is the one its entry names, or else its widget's,
+ * so repeated reads of an unsaved dashboard return identical ids. A widget the
+ * base places more than once names an id for each further card (startup
+ * refuses a repeat that does not), so a card's id never depends on another
+ * card, or on which cards a reader may see.
+ *
+ * 🔴 NOT capped here. The submission limit belongs to what a CALLER may send,
+ * and this materialization is caller-independent; capping it would let cards a
+ * caller cannot see consume the allowance. The cap is applied to the visible
+ * partition instead.
+ */
+export function defaultLayoutPlacements(
+  widgets: readonly CanonicalWidget[],
+  plan: DefaultLayoutPlan = defaultLayoutPlan()
+): WidgetPlacement[] {
+  const byId = new Map(widgets.map(widget => [widget.id, widget]));
+  return plan.cards.flatMap(card => {
+    const widget = byId.get(card.widget);
+    return widget === undefined ? [] : [placementOf(widget, card)];
+  });
+}
+
+/**
+ * One default card: at the size its entry states, each direction left out
+ * being the widget's starting size, with its entry's starting settings.
+ */
+function placementOf(
+  widget: CanonicalWidget,
+  card: Pick<DefaultLayoutCard, "id" | "w" | "h" | "settings">
+): WidgetPlacement {
+  const bounds = sizeFacts(widget).size;
+  // Within the widget's bounds: an entry startup checked already is, and a
+  // replaced built-in's size is held to its alternative's.
+  const size = clampSize(
+    { w: card.w ?? bounds.default.w, h: card.h ?? bounds.default.h },
+    bounds
+  );
+  return {
+    id: card.id ?? widget.id,
+    widgetId: widget.id,
+    // The size travels WITH the placement: the first save stores it, so a
+    // later change to the widget's default does not resize a saved card.
+    w: size.w,
+    h: size.h,
+    removed: false,
+    ...(card.settings === undefined ? {} : { config: { ...card.settings } }),
+  };
+}
+
+/**
+ * The two cards core's default puts side by side as one row, the near future in one band:
+ * Needs attention and Upcoming releases.
+ */
+const SHARED_ROW_PAIR: ReadonlySet<string> = new Set([
+  CORE_WIDGET_ID.needsAttention,
+  CORE_WIDGET_ID.upcomingReleases,
+]);
+
+/**
+ * Whether `placements`, a default as configured, gives the pair a row of their own: the two
+ * next to each other, in either order, the first starting a row as the grid lays cards out (in
+ * order, twelve columns to a row, a card that does not fit starting the next one), and the two
+ * filling it.
+ *
+ * 🔴 Deliberately conservative: yes only where every row up to and including the pair's is
+ * evenly tiled, all of its cards one height. Rows of one height are where the grid's own
+ * placement (in order, never backfilling) and this width-wrapping reading agree; past a row of
+ * mixed heights the grid may place a card beside a taller one's lower part, a row this reading
+ * cannot see, so it answers no and the dashboard is drawn as configured. Widening never moves a
+ * card the grid would have placed elsewhere.
+ *
+ * Asked of the default BEFORE any reader's cards are left out, so a reader who may not see one
+ * of the two is told the same as one who may: the admin draws the other across the row only
+ * where the configured row is the pair's alone, and a site's default that places them
+ * otherwise is drawn as it is written.
+ */
+export function pairHasItsOwnRow(
+  placements: readonly Pick<WidgetPlacement, "widgetId" | "w" | "h">[]
+): boolean {
+  let used = 0;
+  let rowHeight: number | undefined;
+  for (const [index, card] of placements.entries()) {
+    if (used + card.w > GRID_COLUMNS) {
+      used = 0;
+      rowHeight = undefined;
+    }
+    // A row of mixed heights before the pair's, or in it: no answer this reading can stand by.
+    if (rowHeight !== undefined && card.h !== rowHeight) return false;
+    rowHeight = card.h;
+    const next = placements[index + 1];
+    if (used === 0 && next !== undefined && startsThePair(card, next)) {
+      return next.h === card.h;
+    }
+    used += card.w;
+  }
+  return false;
+}
+
+/** Whether `card` and `next` are the pair, side by side, filling a row between them. */
+function startsThePair(
+  card: Pick<WidgetPlacement, "widgetId" | "w">,
+  next: Pick<WidgetPlacement, "widgetId" | "w">
+): boolean {
+  return (
+    next.widgetId !== card.widgetId &&
+    SHARED_ROW_PAIR.has(card.widgetId) &&
+    SHARED_ROW_PAIR.has(next.widgetId) &&
+    card.w + next.w === GRID_COLUMNS
+  );
+}

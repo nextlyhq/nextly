@@ -11,7 +11,15 @@
  * - deleteEntry: 404, hooks, access control, success response.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+} from "vitest";
 
 // A field rule is handed the caller's roles and grants; with no database
 // behind this suite the real lookups refuse, so they answer here.
@@ -50,6 +58,13 @@ import {
   fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 
@@ -61,6 +76,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     const fake = await import("./collection-test-helpers");
     return {
       actorForUser: fake.fakeActorForUser,
+      actorForVisitor: fake.fakeActorForVisitor,
       userHoldsPermission: fake.fakeUserHoldsPermission,
       userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
@@ -525,7 +541,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should execute beforeOperation hooks", async () => {
@@ -631,7 +647,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("runs no hook for a caller it refuses", async () => {
@@ -793,7 +809,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should execute beforeOperation hooks", async () => {

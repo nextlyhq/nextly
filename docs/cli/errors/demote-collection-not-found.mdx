@@ -1,0 +1,24 @@
+---
+title: DEMOTE_COLLECTION_NOT_FOUND
+description: "`db:sync --demote` names a collection that `nextly.config.ts` does not define."
+---
+
+## Cause
+
+`db:sync --demote` names a collection that `nextly.config.ts` does not define.
+
+`nextly db:sync --demote <slug>` hands a collection defined in `nextly.config.ts` to the Schema Builder. The configuration's `collections` array has no collection with this slug.
+
+## Fix
+
+- Check the slug against the `collections` array in `nextly.config.ts`.
+- A collection built in the Schema Builder is already there and needs no demotion.
+
+## Example
+
+```text
+✗ Collection 'posts' not found in nextly.config.ts collections.
+  Why:  `--demote` moves a collection defined in `nextly.config.ts` to the Schema Builder, and its `collections` array has none with this slug.
+  Next: Check the slug against the `collections` array in `nextly.config.ts`. A collection built in the Schema Builder is already there and needs no demotion.
+  Docs: https://nextlyhq.com/docs/cli/errors/demote-collection-not-found  (DEMOTE_COLLECTION_NOT_FOUND)
+```

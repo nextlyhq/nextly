@@ -20,6 +20,8 @@ import {
   clearActiveExtensionSchema,
 } from "../domains/schema/extension/active-schema";
 
+import { failingSingletons } from "./shared-module-guards-policy";
+
 afterAll(() => {
   if (activeExtensionSchema() === null) return;
   clearActiveExtensionSchema();
@@ -185,7 +187,7 @@ afterAll(() => {
   );
   for (const kept of changed) restore(kept);
   for (const name of created) delete GLOBALS[name];
-  const names = [...new Set(changed.map(kept => kept.label))];
+  const names = failingSingletons(changed);
   if (names.length === 0) return;
   expect.fail(
     `This file changed global singletons and did not put them back: ${names.join(", ")}. Restore them after the tests that change them.`

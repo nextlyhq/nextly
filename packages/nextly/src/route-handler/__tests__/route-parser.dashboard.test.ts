@@ -79,7 +79,39 @@ describe("dashboard routes", () => {
     ).not.toBe("getWidgetLayout");
   });
 
-  it("rejects a DELETE to an id other than layout", () => {
+  it("resolves the pins route under each of its verbs, and nothing under it", () => {
+    expect(parseRestRoute(["dashboard", "pins"], "GET")).toMatchObject({
+      method: "getDashboardPins",
+    });
+    expect(parseRestRoute(["dashboard", "pins"], "POST")).toMatchObject({
+      method: "postDashboardPin",
+    });
+    expect(parseRestRoute(["dashboard", "pins"], "DELETE")).toMatchObject({
+      method: "deleteDashboardPin",
+    });
+    // A pin is named in the body, never the path.
+    expect(
+      parseRestRoute(["dashboard", "pins", "posts"], "DELETE").method
+    ).toBeUndefined();
+    expect(parseRestRoute(["dashboard", "pins"], "PUT")).toEqual({});
+  });
+
+  it("resolves the setup route under GET and PUT, and no longer the onboarding read", () => {
+    expect(parseRestRoute(["dashboard", "setup"], "GET")).toMatchObject({
+      method: "getDashboardSetup",
+    });
+    expect(parseRestRoute(["dashboard", "setup"], "PUT")).toMatchObject({
+      method: "putDashboardSetup",
+    });
+    expect(parseRestRoute(["dashboard", "setup"], "DELETE")).toEqual({});
+    expect(
+      parseRestRoute(["dashboard", "setup", "collapsed"], "PUT").method
+    ).toBeUndefined();
+    // The checklist's deprecated read is gone, with no alias.
+    expect(parseRestRoute(["dashboard", "onboarding"], "GET")).toEqual({});
+  });
+
+  it("rejects a DELETE to an id other than layout or pins", () => {
     expect(parseRestRoute(["dashboard", "stats"], "DELETE")).toEqual({});
     expect(parseRestRoute(["dashboard", "query"], "DELETE")).toEqual({});
   });

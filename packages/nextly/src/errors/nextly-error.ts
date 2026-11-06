@@ -10,11 +10,15 @@ import {
   type NextlyErrorCode,
 } from "./error-codes";
 import type {
+  NotMigratedPublicData,
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
   SharedFieldsConflictPublicData,
+  StaleVersionPublicData,
+  VersionRequiredPublicData,
   ValidationPublicData,
+  WorkflowRefusalPublicData,
 } from "./public-data";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
 
@@ -320,10 +324,16 @@ export class NextlyError extends Error {
   static forbidden(opts?: {
     cause?: Error;
     logContext?: Record<string, unknown>;
+    /**
+     * What the caller needs to act on the refusal, where saying it leaks nothing they may not
+     * know: for a workflow step, the permission it needs. Absent, the refusal carries no data.
+     */
+    publicData?: PublicData;
   }): NextlyError {
     return new NextlyError({
       code: "FORBIDDEN",
       publicMessage: "You don't have permission to perform this action.",
+      publicData: opts?.publicData,
       cause: opts?.cause,
       logContext: opts?.logContext,
     });
@@ -353,14 +363,18 @@ export class NextlyError extends Error {
    */
   static builtIn(opts: {
     thing: "role" | "permission";
-    change: "change" | "delete";
+    change: "change" | "delete" | "assign" | "inherit";
     logContext?: Record<string, unknown>;
   }): NextlyError {
+    const done = {
+      change: "changed",
+      delete: "deleted",
+      assign: "assigned",
+      inherit: "inherited",
+    }[opts.change];
     return new NextlyError({
       code: "FORBIDDEN",
-      publicMessage: `This ${opts.thing} is built in, so it can't be ${
-        opts.change === "change" ? "changed" : "deleted"
-      }.`,
+      publicMessage: `This ${opts.thing} is built in, so it can't be ${done}.`,
       logContext: opts.logContext,
     });
   }
@@ -414,6 +428,73 @@ export class NextlyError extends Error {
         opts.change === "change" ? "changed" : "deleted"
       } here.`,
       logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * A write to an entry of a collection or Single removed from code: its
+   * registry row says the app's code defines it, and the running configuration
+   * no longer declares it. Its entries are read-only until it is retired or
+   * declared again, so the message names the entity, says what happened and
+   * gives both ways out. `publicData` carries the kind and the slug, which the
+   * caller named, so a client can mark the entity without parsing the sentence.
+   */
+  static removedFromCode(opts: {
+    kind: "collection" | "single";
+    slug: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    const thing = opts.kind === "single" ? "Single" : "collection";
+    const its = opts.kind === "single" ? "it" : "its entries";
+    return new NextlyError({
+      code: "ENTITY_REMOVED_FROM_CODE",
+      publicMessage:
+        `The ${thing} "${opts.slug}" was removed from code, so ${its} ` +
+        `can't be changed. To retire it, run \`nextly migrate:create\` and ` +
+        `then \`nextly migrate\`. To keep it, declare it again in ` +
+        `nextly.config.ts.`,
+      publicData: { kind: opts.kind, slug: opts.slug },
+      logContext: { kind: opts.kind, slug: opts.slug, ...opts.logContext },
+    });
+  }
+
+  /**
+   * A read or write of a collection or Single the database has not been
+   * migrated for: the column of one of its declared fields is missing, its
+   * table is missing, or this running instance never registered it (an
+   * entity a migration added after the instance started). The message names
+   * the entity, the field or the table, and `nextly migrate`; the driver's
+   * error stays on `cause`, for the log, so no SQL reaches the answer.
+   */
+  static notMigrated(
+    opts: NotMigratedPublicData & {
+      cause?: Error;
+      logContext?: Record<string, unknown>;
+    }
+  ): NextlyError {
+    const { cause, logContext, ...publicData } = opts;
+    const entity = `${publicData.kind === "single" ? "Single" : "collection"} "${publicData.slug}"`;
+    // A field or table is named only when the caller passed it in, that is,
+    // only to a caller who may know it; the log always has both.
+    const field =
+      publicData.field === undefined
+        ? "a field"
+        : `the field "${publicData.field}"`;
+    const table =
+      publicData.table === undefined ? "" : ` "${publicData.table}"`;
+    const publicMessage =
+      publicData.reason === "column"
+        ? `The database has not been migrated for ${field} of the ${entity}. Run \`nextly migrate\`.`
+        : publicData.reason === "table"
+          ? `The database has not been migrated for the ${entity}: its table${table} does not exist. Run \`nextly migrate\`.`
+          : `The ${entity}${publicData.table === undefined ? "" : ` (table "${publicData.table}")`} is not registered in this running instance. Run \`nextly migrate\`, then restart the server.`;
+    return new NextlyError({
+      code: "ENTITY_NOT_MIGRATED",
+      publicMessage,
+      publicData,
+      logMessage: "The database has not been migrated for this entity",
+      logContext: { ...publicData, ...logContext },
+      cause,
     });
   }
 
@@ -515,12 +596,14 @@ export class NextlyError extends Error {
      * What a caller needs to act on the conflict: for a release refused over
      * its documents, the problems by code and member; for a release that
      * cannot be deleted, the reason; for a pending change refused over the
-     * fields every language shares, why and which fields.
+     * fields every language shares, why and which fields; for a workflow
+     * step, the parts it could not move and why.
      */
     data?:
       | ReleaseProblemsPublicData
       | ReleaseNotDeletablePublicData
-      | SharedFieldsConflictPublicData;
+      | SharedFieldsConflictPublicData
+      | WorkflowRefusalPublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
@@ -532,6 +615,58 @@ export class NextlyError extends Error {
       publicData: opts?.data,
       cause: opts?.cause,
       logContext: { reason: opts?.reason, ...opts?.logContext },
+    });
+  }
+
+  /**
+   * An update made from a version of the document that is no longer its
+   * current one. Never retried: the same version stays out of date, so the
+   * caller must read the document again and decide.
+   *
+   * @experimental
+   */
+  /**
+   * An update that said neither which version of a document it was made from
+   * nor that it overwrites whatever is stored. `bulk` names an update that
+   * writes the same values to many documents, which can carry no one
+   * document's version: by its ids, which can be given a version each
+   * (`keys.revs`), or by a query, which cannot. The keys are the write path's
+   * to name, so the message spells them as the request does.
+   *
+   * @experimental
+   */
+  static versionRequired(opts: {
+    bulk: "ids" | "query";
+    keys: { version: string; overwrite: string; revs: string };
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    const { version, overwrite, revs } = opts.keys;
+    const byIds = opts.bulk === "ids";
+    const data: VersionRequiredPublicData = {
+      versionKey: version,
+      overwriteKey: overwrite,
+      ...(byIds ? { revsKey: revs } : {}),
+    };
+    const message = `An update that writes the same values to many documents must set \`${overwrite}: true\`: it can't carry each document's version. Or update each document with its own \`${version}\`.`;
+    return new NextlyError({
+      code: "VERSION_REQUIRED",
+      publicMessage: byIds
+        ? `${message} Or give each document's \`${version}\` in \`${revs}\`.`
+        : message,
+      publicData: data,
+      logContext: opts.logContext,
+    });
+  }
+
+  static staleVersion(opts: {
+    data: StaleVersionPublicData;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "STALE_VERSION",
+      publicMessage: `This document changed since the version you gave. Its current version is ${opts.data.currentVersion}.`,
+      publicData: opts.data,
+      logContext: opts.logContext,
     });
   }
 
@@ -625,6 +760,23 @@ export class NextlyError extends Error {
       publicMessage: "An unexpected error occurred.",
       cause: opts?.cause,
       logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * The app is set up so nextly cannot work: a missing `config`, or a Next.js
+   * or React outside the supported ranges. The public message stays generic;
+   * what to change goes in `logMessage`, for the operator.
+   */
+  static configuration(opts: {
+    logMessage: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      publicMessage: "Server configuration error.",
+      logMessage: opts.logMessage,
+      logContext: opts.logContext,
     });
   }
 

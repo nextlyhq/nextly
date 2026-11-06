@@ -30,6 +30,7 @@ import {
   builderRowIndex,
   builderRows,
 } from "@admin/lib/builder/builder-rows";
+import { copyWithNewIds } from "@admin/lib/builder/copy-field";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import type { FieldDefinition } from "@admin/types/collection";
 
@@ -102,9 +103,10 @@ export function useBuilderFieldActions(
         ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
         : builder.fields;
       const takenNames = siblings.map(f => f.name);
+      // A new field all the way down: the copy and every field inside it get
+      // new ids, so editing inside the copy never reaches the original.
       const duplicate: BuilderField = {
-        ...source,
-        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        ...copyWithNewIds(source),
         name: nextDuplicateName(source.name, takenNames),
       };
       if (parent) {

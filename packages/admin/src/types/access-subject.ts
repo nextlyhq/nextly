@@ -16,5 +16,9 @@ export type AccessSubject = "collection" | "single";
  */
 export interface EntityAccess {
   slug: string;
-  action: "read" | "create" | "update";
+  /**
+   * The action, or `readHistory` for a document's version history, which the
+   * server judges in every language.
+   */
+  action: "read" | "create" | "update" | "readHistory";
 }

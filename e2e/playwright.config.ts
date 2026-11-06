@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { e2eDatabase } from "./support/e2e-database.mjs";
+import { FONT_CATALOGUE_ORIGIN } from "./support/font-catalogue-server.mjs";
+import { EVERY_DIALECT } from "./tests/support/every-dialect";
 import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -28,11 +31,21 @@ const BASE_URL = `http://localhost:${PORT}`;
  * The suite's own database, never the one `pnpm dev:app` uses.
  *
  * A shell `DATABASE_URL` wins over the playground's `.env`, so the server can
- * be pointed at a throwaway file. That is what makes a test allowed to delete
- * things: there is nothing here anyone wanted. Relative because the playground
- * resolves it from its own directory.
+ * be pointed at a throwaway database. That is what makes a test allowed to
+ * delete things: there is nothing here anyone wanted. A file on SQLite, the
+ * default; on PostgreSQL or MySQL (`E2E_DB_DIALECT`), a database the run drops
+ * and creates on the server `E2E_DB_SERVER_URL` names
+ * (`support/e2e-database.mjs`).
  */
-const E2E_DB_RELATIVE = "file:./data/e2e.db";
+const E2E_DATABASE = e2eDatabase({ port: PORT });
+
+/**
+ * On PostgreSQL and MySQL the suite runs only the specs tagged
+ * `EVERY_DIALECT`: the document-lock specs, whose answers come from the
+ * database's lease rows. The rest runs on SQLite alone. A spec tagged later
+ * runs on every dialect with nothing else to change.
+ */
+const EVERY_DIALECT_ONLY = E2E_DATABASE.dialect !== "sqlite";
 
 /**
  * Which server the suite runs against. `dev` (the default) is `pnpm dev:app`:
@@ -51,16 +64,33 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `setup-*`: first-run setup's origin rules for loopback names hold in
  *   development only, and `next dev` is what serves those names a page.
  * - `component-map-dev`: a development server refusing a stale component map.
- * - The Schema Builder specs: a production build turns the builder off unless
- *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
+ * - The Schema Builder specs (`schema-builder*`, so a new one joins them): a
+ *   production build turns the builder off unless the app opts in, and
+ *   refuses its writes with `BUILDER_DISABLED`. The production refusal itself
+ *   is `tests/production/builder-guard.spec.ts`, which runs there.
+ * - `widget-preview`: the widget preview page exists only while the server
+ *   runs in development; a production build answers its address as not found
+ *   (`tests/production/widget-preview.spec.ts`).
+ * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
+ *   Builder's, which a production build turns off.
+ * - `builder-field-gates`, `builder-runtime-collection`, `builder-nested-field`:
+ *   each makes its collection through the Schema Builder's own calls.
+ * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
+ *   which only a development server may reach; a production server rightly
+ *   refuses it.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
   "**/component-map-dev.spec.ts",
-  "**/schema-builder.spec.ts",
+  "**/widget-preview.spec.ts",
+  "**/schema-builder*.spec.ts",
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
+  "**/builder-nested-field.spec.ts",
+  "**/builder-canvas-embed.spec.ts",
+  "**/removed-from-code-singles-list.spec.ts",
+  "**/builder-fonts.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
@@ -70,9 +100,14 @@ const DEV_SPECS_ONLY =
 /**
  * Where a run writes its results and report. The dev specs' run has its own,
  * since Playwright empties its results folder as it starts, and a shared one
- * would lose the production run's traces and screenshots beside it.
+ * would lose the production run's traces and screenshots beside it. A run on
+ * PostgreSQL or MySQL has its own as well, named by its dialect.
  */
-const RUN_OUTPUT = DEV_SPECS_ONLY ? "dev-specs" : "suite";
+const RUN_OUTPUT = DEV_SPECS_ONLY
+  ? "dev-specs"
+  : EVERY_DIALECT_ONLY
+    ? E2E_DATABASE.dialect
+    : "suite";
 
 /**
  * The commands that start each server, after the database is emptied.
@@ -115,6 +150,7 @@ export default defineConfig({
     ...(SERVER === "production" ? DEV_SPECS : []),
   ],
   ...(DEV_SPECS_ONLY ? { testMatch: DEV_SPECS } : {}),
+  ...(EVERY_DIALECT_ONLY ? { grep: new RegExp(EVERY_DIALECT) } : {}),
   outputDir: `./.playwright/results/${RUN_OUTPUT}`,
 
   // A failing assertion in a shared admin is usually a real failure, so the
@@ -211,8 +247,8 @@ export default defineConfig({
       // A known signing secret, so share-preview-links.spec.ts can sign a link
       // as an earlier version minted it. It wins over the playground's `.env`.
       NEXTLY_SECRET: E2E_NEXTLY_SECRET,
-      DB_DIALECT: "sqlite",
-      DATABASE_URL: E2E_DB_RELATIVE,
+      DB_DIALECT: E2E_DATABASE.dialect,
+      DATABASE_URL: E2E_DATABASE.url,
       // Its own build directory. A separate port is not enough on its own:
       // two `next dev` processes on one app fight over `.next`, and the
       // second dies before it serves anything. With this, the suite runs
@@ -222,11 +258,25 @@ export default defineConfig({
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
       NEXTLY_E2E_BRANDING: "1",
+      // Turns off Next.js's development indicator, whose button a development
+      // server injects into the canvas's frame too: a tab stop inside the
+      // canvas that a production build never draws, which the keyboard specs
+      // walking in and out of the frame would otherwise meet.
+      NEXTLY_E2E_DEV_INDICATORS: "0",
       // Registers the style fixture, which plugin-admin-styling.spec.ts and
       // plugin-page-routing.spec.ts both depend on. Off by default so a test
       // double does not appear in a contributor's plugins list or inject a
       // showcase section into the Posts collection.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
+      // Leaves the query devtools out of the dev server's admin: their floating icon sits over
+      // the bottom-right corner, where a toast's Undo is drawn, and takes the click a phone-width
+      // spec makes there. A production build never draws them.
+      NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS: "off",
+      // The first-party plugins the playground registers only when named
+      // (`apps/playground/nextly.config.ts`): the SEO plugin, as it ships, for
+      // dashboard-seo-issues.spec.ts. It extends a collection of its own there,
+      // so no other spec meets its fields.
+      NEXTLY_PLAYGROUND_PLUGINS: "seo",
       // Registers the slow-card fixture, which dashboard-slow-card.spec.ts
       // delays. Its card answers at once until that spec asks otherwise, so the
       // other dashboard specs see an ordinary card.
@@ -239,6 +289,13 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
+      // The render-retry harness route, gated the same way: its render fails on
+      // an id's first load, for the test of an error boundary's retry().
+      NEXTLY_E2E_RETRY_HARNESS: "1",
+      // The site page that links to the admin, gated the same way: it stands
+      // in for a site's own header link, for the test of what a hidden admin
+      // leaves behind.
+      NEXTLY_E2E_SITE_HARNESS: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout
@@ -247,6 +304,9 @@ export default defineConfig({
       // `next start` refuses to boot without the app's own address, which the
       // dev server never needed.
       NEXT_PUBLIC_APP_URL: BASE_URL,
+      // Points the page builder's font catalogue at the stand-in global setup
+      // starts, so adding a font never reaches the real catalogue.
+      NEXTLY_E2E_FONT_CATALOGUE: FONT_CATALOGUE_ORIGIN,
     },
   },
 

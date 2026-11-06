@@ -15,6 +15,7 @@ import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
 
 import { toSnakeName } from "@admin/lib/builder";
+import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 
 import type { BuilderField } from "../types";
 
@@ -69,6 +70,8 @@ export function GeneralTab({
 }: Props): JSX.Element {
   const isSystem = field.isSystem === true;
   const nameDisabled = readOnly || isSystem;
+  // The options header names the type by its plain name, never its id.
+  const typeLabel = useFieldTypeLabel()(field.type);
 
   const set = <K extends keyof BuilderField>(key: K, value: BuilderField[K]) =>
     onChange({ ...field, [key]: value });
@@ -209,7 +212,7 @@ export function GeneralTab({
       {hasTypeSpecificEditor(field.type) && (
         <div className="border-t border-border pt-3 space-y-2">
           <div className="text-xs uppercase tracking-wider text-muted-foreground">
-            {field.type} options
+            {typeLabel} options
           </div>
           <TypeSpecificEditor
             field={field}

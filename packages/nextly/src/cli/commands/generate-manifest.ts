@@ -35,11 +35,11 @@
  */
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, relative, sep } from "node:path";
 
 import type { Command } from "commander";
 
-import { describeError, NextlyError } from "../../errors/index";
+import { NextlyError } from "../../errors/index";
 import {
   assertManifestPathIsFree,
   BLOCK_MANIFEST_FILENAME,
@@ -47,8 +47,12 @@ import {
 } from "../../plugins/codegen/block-manifest";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { reportDryRun, type DryRunChange } from "../dry-run";
+import { exitWithError } from "../errors";
+import { blockManifestStale } from "../errors/areas/commands";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig } from "../utils/config-loader";
+import type { Logger } from "../utils/logger";
 
 /**
  * What generation would leave on disk, next to what is there now.
@@ -87,6 +91,25 @@ export async function readBlockManifestState(
   return { path, expected: artifact?.code ?? null, actual: await read(path) };
 }
 
+/** What making disk agree with `expected` does to the manifest. */
+type BlockManifestChange =
+  | { action: "write"; code: string }
+  | { action: "remove" };
+
+/**
+ * The change that makes disk agree with `expected`: write it, remove it, or
+ * `undefined` when it already agrees. The one decision both the apply step and
+ * a dry run's report are made from, so the two cannot disagree.
+ */
+function blockManifestChange(
+  state: BlockManifestState
+): BlockManifestChange | undefined {
+  if (state.expected === state.actual) return undefined;
+  return state.expected === null
+    ? { action: "remove" }
+    : { action: "write", code: state.expected };
+}
+
 /**
  * Make disk agree with `expected`. Returns whether anything changed, so a
  * caller can report "already current" rather than implying it rewrote a file.
@@ -94,14 +117,29 @@ export async function readBlockManifestState(
 export async function applyBlockManifestState(
   state: BlockManifestState
 ): Promise<boolean> {
-  if (state.expected === state.actual) return false;
-  if (state.expected === null) {
+  const change = blockManifestChange(state);
+  if (change === undefined) return false;
+  if (change.action === "remove") {
     await rm(state.path, { force: true });
     return true;
   }
   await mkdir(dirname(state.path), { recursive: true });
-  await writeFile(state.path, state.expected, "utf-8");
+  await writeFile(state.path, change.code, "utf-8");
   return true;
+}
+
+/**
+ * The change a dry run names for the manifest: the one the apply step would
+ * make, or none when the file already agrees.
+ */
+export function blockManifestDryRunChanges(
+  state: BlockManifestState,
+  cwd: string
+): DryRunChange[] {
+  const change = blockManifestChange(state);
+  return change === undefined
+    ? []
+    : [{ action: change.action, target: shownPath(cwd, state.path) }];
 }
 
 /** A one-line account of a mismatch, for a CI log read without the diff. */
@@ -129,10 +167,21 @@ async function read(path: string): Promise<string | null> {
     return await readFile(path, "utf-8");
   } catch (error) {
     if (isMissingFile(error)) return null;
+    const detail = error instanceof Error ? error.message : String(error);
+    // The reason and the parts apart, so a command's error can say what and why separately.
     throw NextlyError.invalidInput({
-      message: `The block manifest at ${path} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      message: `The block manifest at ${path} could not be read: ${detail}`,
+      logContext: { reason: "block-manifest-unreadable", path, detail },
     });
   }
+}
+
+/**
+ * A path as a dry run names it: relative to the project, "/"-separated, as
+ * the developer would type it there.
+ */
+export function shownPath(cwd: string, path: string): string {
+  return relative(cwd, path).split(sep).join("/");
 }
 
 /** A filesystem error meaning the path holds nothing, rather than something unreadable. */
@@ -147,6 +196,8 @@ function isMissingFile(error: unknown): boolean {
 interface GenerateManifestOptions {
   output?: string;
   check?: boolean;
+  /** Report the write or removal the run would make, and make none. */
+  dryRun?: boolean;
   config?: string;
   verbose?: boolean;
   quiet?: boolean;
@@ -179,19 +230,36 @@ export async function runGenerateManifest(
   );
 
   if (options.check) {
-    if (state.expected === state.actual) {
-      logger.success(
-        state.expected === null
-          ? "No blocks are declared, and no manifest is committed."
-          : `Block manifest is current: ${state.path}`
-      );
-      return;
-    }
-    logger.error(describeManifestDrift(state));
-    logger.info("Run `nextly generate:manifest` and commit the result.");
-    process.exit(1);
+    checkBlockManifest(state, logger);
+    return;
   }
 
+  if (options.dryRun) {
+    reportDryRun(logger, { changes: blockManifestDryRunChanges(state, cwd) });
+    return;
+  }
+
+  await settleBlockManifest(state, logger);
+}
+
+/** `--check`: say the manifest is current, or end the run naming the drift. */
+function checkBlockManifest(state: BlockManifestState, logger: Logger): void {
+  if (blockManifestChange(state) === undefined) {
+    logger.success(
+      state.expected === null
+        ? "No blocks are declared, and no manifest is committed."
+        : `Block manifest is current: ${state.path}`
+    );
+    return;
+  }
+  exitWithError(logger, blockManifestStale(describeManifestDrift(state)));
+}
+
+/** Make disk agree with the config, and say what that did. */
+async function settleBlockManifest(
+  state: BlockManifestState,
+  logger: Logger
+): Promise<void> {
   const changed = await applyBlockManifestState(state);
   if (state.expected === null) {
     logger.success(
@@ -208,43 +276,26 @@ export async function runGenerateManifest(
   );
 }
 
-/**
- * Register the generate:manifest command with the program
- *
- * @param program - Commander program instance
- */
-export function registerGenerateManifestCommand(program: Command): void {
-  program
-    .command("generate:manifest")
-    .description(
-      "Generate the block manifest from plugin declarations, or check it is current"
-    )
-    .option(
-      "-o, --output <path>",
-      "Types output path the manifest is written beside"
-    )
-    .option(
-      "--check",
-      "Write nothing; exit non-zero if the committed manifest is stale"
-    )
-    .action(async (cmdOptions: GenerateManifestOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/** The action of `nextly generate:manifest`, loaded when it runs. */
+export async function generateManifestAction(
+  cmdOptions: GenerateManifestOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      try {
-        await runGenerateManifest(
-          {
-            ...cmdOptions,
-            config: globalOpts.config,
-            verbose: globalOpts.verbose,
-            quiet: globalOpts.quiet,
-            cwd: globalOpts.cwd,
-          },
-          context
-        );
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
-    });
+  try {
+    await runGenerateManifest(
+      {
+        ...cmdOptions,
+        config: globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

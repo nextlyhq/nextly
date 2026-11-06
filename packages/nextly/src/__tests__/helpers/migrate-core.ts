@@ -57,8 +57,7 @@ export async function migrateFresh(
     extensionSchema: undefined,
     dialect: fresh.dialect,
     db: fresh.db,
-    // The shape the dev boot path hands over: a wrapper carrying the one
-    // raw-statement method the core needs.
+    // A wrapper carrying the one raw-statement method the core phase needs.
     adapter: {
       dialect: fresh.dialect,
       connect: () => Promise.resolve(),
@@ -66,10 +65,21 @@ export async function migrateFresh(
       isConnected: () => true,
       getCapabilities: () => ({ dialect: fresh.dialect }),
       executeQuery: (statement: string) => fresh.exec(statement),
+      // Asked before the run's first write, whether the ledger is there to
+      // read the app's migration history from. A table with no columns is a
+      // table that is not there.
+      tableExists: async (table: string) =>
+        (await fresh.columnsOf(table)).length > 0,
     } as unknown as Parameters<typeof migrateCore>[0]["adapter"],
     migrationsDir,
     logger: silent,
     lockMode: "fail-fast",
+    // The schema lock needs a whole adapter, which this raw-statement wrapper is not, and it is
+    // exercised against real databases in its own suites; here it runs the work as given.
+    withLock: async (_adapter, _dialect, fn) => ({
+      ran: true,
+      value: await fn(),
+    }),
     // How the CLI bootstraps the ledger: only when it is absent.
     ensureLedger: async () => {
       if ((await fresh.columnsOf("nextly_schema_events")).length > 0) return;

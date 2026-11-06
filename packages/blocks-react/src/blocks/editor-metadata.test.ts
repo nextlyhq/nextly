@@ -75,6 +75,22 @@ describe("core block editor metadata", () => {
     }
   );
 
+  it("describes every block in one plain line an author reads", () => {
+    // Shown in the Add panel's popover and the block card: one sentence in an
+    // author's words. How a block works belongs in its code comments, not
+    // here, and an internal name ("core/column") never reaches an author.
+    const problems = coreBlocks.flatMap(block => {
+      const text = block.description;
+      const wrong: string[] = [];
+      if (text.length > 70) wrong.push("over 70 characters");
+      if (!text.endsWith(".")) wrong.push("does not end a sentence");
+      if (/\.\s+\S/.test(text)) wrong.push("more than one sentence");
+      if (/core\//.test(text)) wrong.push("names an internal block");
+      return wrong.map(reason => `${block.name}: ${reason}`);
+    });
+    expect(problems).toEqual([]);
+  });
+
   it("gives every block a distinct label", () => {
     // Two blocks reading the same in the palette is indistinguishable to an
     // author, and a per-block check cannot see it: each label is individually
@@ -91,5 +107,61 @@ describe("core block editor metadata", () => {
     for (const category of CORE_CATEGORIES) {
       expect(claimed).toContain(category);
     }
+  });
+});
+
+describe("where a link opens, as its choices read", () => {
+  it("says This tab and New tab, short enough to share one line", () => {
+    // "A new tab" wrapped onto two lines in the inspector's segmented control.
+    for (const name of ["core/button", "core/heading"]) {
+      const block = coreBlocks.find(each => each.name === name);
+      const target = (
+        block?.props as Record<string, { optionLabels?: unknown }>
+      ).target;
+      expect(target?.optionLabels).toEqual({
+        _self: "This tab",
+        _blank: "New tab",
+      });
+    }
+  });
+});
+
+describe("a container's HTML tag", () => {
+  it("is named HTML tag, each tag in words with the tag itself shown", () => {
+    // "Element type" over raw tags read as code.
+    const containers = coreBlocks.filter(block => {
+      const as = (block.props as Record<string, { type?: string } | undefined>)
+        .as;
+      return as?.type === "select";
+    });
+    expect(containers.length).toBeGreaterThanOrEqual(7);
+    for (const block of containers) {
+      const as = (
+        block.props as Record<
+          string,
+          {
+            label?: string;
+            options?: string[];
+            optionLabels?: Record<string, string>;
+            showOptionValue?: boolean;
+          }
+        >
+      ).as;
+      expect(as?.label).toBe("HTML tag");
+      expect(as?.showOptionValue).toBe(true);
+      for (const tag of as?.options ?? []) {
+        expect(as?.optionLabels?.[tag], `${block.name}: ${tag}`).toBeDefined();
+      }
+    }
+  });
+});
+
+describe("a button's Acts as", () => {
+  it("is offered only without a link, to a URL or to an entry", () => {
+    const button = coreBlocks.find(block => block.name === "core/button");
+    const type = (button?.props as Record<string, Record<string, unknown>>)
+      .type;
+    expect(type?.label).toBe("Acts as");
+    expect(type?.onlyWithout).toEqual(["href", ["entryCollection", "entryId"]]);
   });
 });

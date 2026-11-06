@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/blocks-react",
-  "version": "0.0.2-alpha.71",
+  "version": "0.0.2-alpha.73",
   "description": "The React Server Component renderer for Nextly block documents, usable with or without the CMS.",
   "license": "MIT",
   "repository": {
@@ -31,10 +31,21 @@
       "types": "./dist/blocks/index.d.ts",
       "import": "./dist/blocks/index.mjs",
       "default": "./dist/blocks/index.mjs"
+    },
+    "./environment": {
+      "types": "./dist/environment.d.ts",
+      "import": "./dist/environment.mjs",
+      "default": "./dist/environment.mjs"
+    },
+    "./icons/lucide": {
+      "types": "./dist/icons/lucide.d.ts",
+      "import": "./dist/icons/lucide.mjs",
+      "default": "./dist/icons/lucide.mjs"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "third-party"
   ],
   "scripts": {
     "build": "tsdown",
@@ -42,7 +53,8 @@
     "check-types": "node ../../scripts/tsc.mjs --noEmit && node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "icons:update-lucide": "node scripts/update-lucide.mjs"
   },
   "engines": {
     "node": "^22.12.0 || >=24.0.0"
@@ -51,9 +63,9 @@
     "@nextlyhq/blocks-engine": "workspace:*"
   },
   "peerDependencies": {
-    "next": "^15.5.28 || ^16.4.1",
+    "next": "^16.4.1",
     "nextly": "workspace:*",
-    "react": "^19.0.0"
+    "react": "^19.3.0"
   },
   "peerDependenciesMeta": {
     "next": {

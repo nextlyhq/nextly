@@ -1,10 +1,9 @@
 // One overlay is open at a time, chosen by a single ActiveOverlay value. These
-// tests lock the transitions the three builder pages used to spell out
-// identically: picking a type opens the editor against a draft rather than
-// adding a field, a scoped add commits into its parent, and an edit resolves
-// its field anywhere in the tree.
+// tests lock the transitions the three builder pages share: an add lands where
+// the picker was opened and opens the new field, add-and-add-another stays in
+// the picker, and an edit resolves its field anywhere in the tree.
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
@@ -12,6 +11,56 @@ import { BuilderOverlays, type ActiveOverlay } from "../BuilderOverlays";
 import type { BuilderConfig } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 import type { BuilderField, BuilderFieldsApi } from "../types";
+
+import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
+import type { ApiFieldGroup } from "@admin/types/entities";
+
+import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
+
+let fieldGroups: ApiFieldGroup[] = [];
+vi.mock("@admin/hooks/queries", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
+  useFieldGroups: () => ({
+    data: { items: fieldGroups, meta: {} },
+    isLoading: false,
+  }),
+}));
+
+const toastError = vi.fn();
+vi.mock("@admin/components/ui", async importOriginal => {
+  const actual = await importOriginal<typeof import("@admin/components/ui")>();
+  return {
+    ...actual,
+    toast: {
+      ...actual.toast,
+      error: (...args: unknown[]) => toastError(...args),
+    },
+  };
+});
+
+afterEach(() => {
+  fieldGroups = [];
+  toastError.mockReset();
+});
+
+function fieldGroup(slug: string, label: string): ApiFieldGroup {
+  return {
+    id: `fg_${slug}`,
+    slug,
+    label,
+    tableName: `fg_${slug}`,
+    fields: [],
+    createdAt: "2026-10-30T00:00:00Z",
+    updatedAt: "2026-10-30T00:00:00Z",
+  };
+}
+
+/** The fields the overlay handed the builder, from its one setFields call. */
+function setFieldsArg(builder: BuilderFieldsApi): BuilderField[] {
+  const calls = (builder.setFields as ReturnType<typeof vi.fn>).mock.calls;
+  expect(calls).toHaveLength(1);
+  return calls[0][0] as BuilderField[];
+}
 
 const config: BuilderConfig = {
   kind: "collection",
@@ -112,83 +161,190 @@ describe("BuilderOverlays", () => {
     expect(onSettingsChange).not.toHaveBeenCalled();
   });
 
-  // The picker adds nothing by itself. Choosing a type opens the editor sheet
-  // against a draft, so a cancelled create leaves no placeholder behind.
-  it("turns a picked type into a create draft rather than a field", async () => {
+  // Picking a type and giving it a label adds the field where the picker was
+  // opened, then opens it in the editor. The add is a pending change like any
+  // other edit: nothing is saved until the page saves.
+  it("adds the field where the picker was opened, then opens it", async () => {
     const user = userEvent.setup();
-    const { onActiveChange, builder } = renderOverlays({
+    const { builder, onActiveChange } = renderOverlays({
       kind: "picker",
-      insertAt: 0,
+      position: { beforeFieldId: "field_items" },
     });
 
-    await user.click(screen.getByText("Text"));
+    await user.click(screen.getByRole("option", { name: /^Text/ }));
+    await user.type(screen.getByRole("textbox", { name: "Label" }), "Summary");
+    await user.click(screen.getByRole("button", { name: "Add field" }));
 
-    expect(builder.setFields).not.toHaveBeenCalled();
-    expect(onActiveChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "create",
-        parentFieldId: undefined,
-        draft: expect.objectContaining({ type: "text", name: "" }),
-      })
-    );
+    const next = setFieldsArg(builder);
+    expect(next.map(f => f.name)).toEqual(["body", "summary", "items"]);
+    expect(next[1]).toMatchObject({
+      label: "Summary",
+      type: "text",
+      validation: {},
+    });
+    expect(onActiveChange).toHaveBeenLastCalledWith({
+      kind: "edit",
+      fieldId: next[1].id,
+    });
   });
 
-  it("keeps the picker scoped to its parent through to the draft", async () => {
+  it("adds inside a container at any depth, and names the container", async () => {
     const user = userEvent.setup();
-    const { onActiveChange } = renderOverlays({
+    const { builder } = renderOverlays({
       kind: "picker",
-      insertAt: 0,
-      parentFieldId: "field_items",
+      position: { parentFieldId: "field_items" },
     });
 
-    // The title names the parent, which means the id was resolved against the
-    // whole tree rather than only the top level.
-    expect(screen.getByText(/add field to items/i)).toBeInTheDocument();
+    // The container was found anywhere in the tree, not only at the top.
+    expect(screen.getByText(/to items/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: /^Text/ }));
+    await user.type(screen.getByRole("textbox", { name: "Label" }), "Alt");
+    await user.click(screen.getByRole("button", { name: "Add field" }));
 
-    await user.click(screen.getByText("Text"));
-    expect(onActiveChange).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "create", parentFieldId: "field_items" })
+    const items = setFieldsArg(builder).find(f => f.name === "items");
+    expect(items?.fields?.map(f => f.name)).toEqual(["caption", "alt"]);
+  });
+
+  it("add and add another stays in the picker", async () => {
+    const user = userEvent.setup();
+    const { builder, onActiveChange } = renderOverlays({
+      kind: "picker",
+      position: {},
+    });
+
+    await user.click(screen.getByRole("option", { name: /^Text/ }));
+    await user.type(screen.getByRole("textbox", { name: "Label" }), "Summary");
+    await user.click(
+      screen.getByRole("button", { name: "Add and add another" })
     );
+
+    expect(setFieldsArg(builder).map(f => f.name)).toEqual([
+      "body",
+      "items",
+      "summary",
+    ]);
+    expect(onActiveChange).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("combobox", { name: "Search field types" })
+    ).toHaveFocus();
+  });
+
+  it("derives a name its siblings do not already use", async () => {
+    const user = userEvent.setup();
+    const { builder } = renderOverlays({ kind: "picker", position: {} });
+
+    await user.click(screen.getByRole("option", { name: /^Text/ }));
+    await user.type(screen.getByRole("textbox", { name: "Label" }), "Body");
+    expect(screen.getByText("body_2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+
+    expect(setFieldsArg(builder).map(f => f.name)).toEqual([
+      "body",
+      "items",
+      "body_2",
+    ]);
+  });
+
+  it("adds nothing when the container it was opened for is gone", async () => {
+    const user = userEvent.setup();
+    const { builder, onActiveChange } = renderOverlays({
+      kind: "picker",
+      position: { parentFieldId: "field_gone" },
+    });
+
+    await user.click(screen.getByRole("option", { name: /^Text/ }));
+    await user.type(screen.getByRole("textbox", { name: "Label" }), "Lost");
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+
+    expect(builder.setFields).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith(
+      "The field was not added: the place it was meant for no longer exists."
+    );
+    expect(onActiveChange).toHaveBeenCalledWith({ kind: "none" });
   });
 
   it("hides the types the config excludes", () => {
     renderOverlays(
-      { kind: "picker", insertAt: 0 },
+      { kind: "picker", position: {} },
       { config: { ...config, picker: { excludedTypes: ["relationship"] } } }
     );
-    expect(screen.queryByText("Relationship")).not.toBeInTheDocument();
-  });
-
-  it("commits an unscoped create to the top level", async () => {
-    const user = userEvent.setup();
-    const { builder, onActiveChange } = renderOverlays({
-      kind: "create",
-      draft: field("new_field"),
-    });
-
-    await user.click(screen.getByRole("button", { name: /add field/i }));
-
-    expect(builder.setFields).toHaveBeenCalledTimes(1);
-    expect(builder.handleNestedFieldAdd).not.toHaveBeenCalled();
-    expect(onActiveChange).toHaveBeenCalledWith({ kind: "none" });
-  });
-
-  it("commits a scoped create into its parent", async () => {
-    const user = userEvent.setup();
-    const { builder } = renderOverlays({
-      kind: "create",
-      draft: field("new_field"),
-      parentFieldId: "field_items",
-    });
-
-    await user.click(screen.getByRole("button", { name: /add field/i }));
-
-    expect(builder.handleNestedFieldAdd).toHaveBeenCalledTimes(1);
     expect(
-      (builder.handleNestedFieldAdd as ReturnType<typeof vi.fn>).mock
-        .calls[0][0]
-    ).toBe("field_items");
-    expect(builder.setFields).not.toHaveBeenCalled();
+      screen.queryByRole("option", { name: /Link to entries/ })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /^Text/ })).toBeInTheDocument();
+  });
+
+  it("offers exactly the catalog's types a ui-schema can store", () => {
+    // Today every catalog type is storable, so the Builder's ui-schema filter
+    // removes nothing; this pins that, so a catalog type added without
+    // ui-schema support fails here and its place in the Builder is decided.
+    const storableToday = new Set<string>(UI_SCHEMA_FIELD_TYPES);
+    expect(
+      FIELD_TYPES_CATALOG.map(e => e.type).filter(t => !storableToday.has(t))
+    ).toEqual([]);
+    renderOverlays({ kind: "picker", position: {} });
+    const offered = screen
+      .getAllByRole("option")
+      .map(o => o.getAttribute("data-type"));
+    const storable = new Set<string>(UI_SCHEMA_FIELD_TYPES);
+    expect([...offered].sort()).toEqual(
+      FIELD_TYPES_CATALOG.map(e => e.type)
+        .filter(type => storable.has(type))
+        .sort()
+    );
+    // Surface-only types are in no Builder catalog row at all.
+    expect(offered).not.toContain("url");
+  });
+
+  it("gives a label with nothing the name rule keeps a name it can save", async () => {
+    const user = userEvent.setup();
+    const { builder } = renderOverlays({ kind: "picker", position: {} });
+
+    await user.click(screen.getByRole("option", { name: /^Text/ }));
+    await user.type(screen.getByRole("textbox", { name: "Label" }), "标题");
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+
+    expect(setFieldsArg(builder).at(-1)).toMatchObject({
+      label: "标题",
+      name: "field",
+    });
+  });
+
+  it("chooses a field group by its address and stores the choice", async () => {
+    const user = userEvent.setup();
+    fieldGroups = [fieldGroup("seo", "SEO"), fieldGroup("seo_v2", "SEO")];
+    const { builder } = renderOverlays({ kind: "picker", position: {} });
+
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
+      "SEO (Field group, slug: seo)",
+      "SEO (Field group, slug: seo_v2)",
+    ]);
+    await user.click(
+      screen.getByRole("option", { name: "SEO (Field group, slug: seo_v2)" })
+    );
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+
+    expect(setFieldsArg(builder).at(-1)).toMatchObject({
+      type: "component",
+      label: "SEO",
+      name: "seo",
+      component: "seo_v2",
+    });
+  });
+
+  it("never offers a field group inside itself", async () => {
+    const user = userEvent.setup();
+    fieldGroups = [fieldGroup("posts", "Posts"), fieldGroup("seo", "SEO")];
+    renderOverlays(
+      { kind: "picker", position: { parentFieldId: "field_items" } },
+      { config: { ...config, kind: "field-group" } }
+    );
+
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
+      "SEO (Field group, slug: seo)",
+    ]);
   });
 
   // A nested row is clickable in the field list, so the edit overlay has to
@@ -244,22 +400,28 @@ describe("BuilderOverlays", () => {
     const component: BuilderConfig = { ...config, kind: "field-group" };
 
     const top = renderOverlays(
-      { kind: "picker", insertAt: 0 },
+      { kind: "picker", position: {} },
       { config: component }
     );
-    expect(screen.getByText("Text")).toBeInTheDocument();
-    expect(screen.queryByText("Field Group")).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /^Text/ })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /Field group/ })
+    ).not.toBeInTheDocument();
     top.unmount();
 
     renderOverlays(
-      { kind: "picker", insertAt: 0, parentFieldId: "field_items" },
+      { kind: "picker", position: { parentFieldId: "field_items" } },
       { config: component }
     );
-    expect(screen.getByText("Field Group")).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: /Field group/ })
+    ).toBeInTheDocument();
   });
 
   it("still offers a field group at a collection's top level", () => {
-    renderOverlays({ kind: "picker", insertAt: 0 });
-    expect(screen.getByText("Field Group")).toBeInTheDocument();
+    renderOverlays({ kind: "picker", position: {} });
+    expect(
+      screen.getByRole("option", { name: /Field group/ })
+    ).toBeInTheDocument();
   });
 });

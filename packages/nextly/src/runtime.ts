@@ -47,12 +47,20 @@ export {
   registerNextCacheRevalidator,
   nextlyTags,
   nextlySingleTags,
+  nextlySiteSettingsTags,
   entryIdTag,
   cachedFind,
+  registerCachedRead,
+  runRegisteredRead,
+  type CachedRead,
   releaseBoundedRevalidate,
   type NextCacheModule,
   type CachedFindOptions,
 } from "./runtime/cache";
+// Whether a value says Cache Components is on, for code an app bundles: it
+// reads `process.env.__NEXT_CACHE_COMPONENTS`, which Next.js inlines there,
+// and asks this the question nextly itself asks of that value.
+export { cacheComponentsEnabled } from "./cache-components";
 
 // SEO bridge — map the plugin's `seo` field group to a Next `Metadata` object.
 // The `next` import is type-only, so this never forces `next` at load.
@@ -113,6 +121,47 @@ export type {
 // singleton and not that reader. Pass the reader for those.
 export { requireNextly } from "./direct-api/nextly";
 
+// The reader a published page's lists read through: published entries and
+// public fields only, whatever the list asks. `@experimental` until the page
+// builder's data lists ship on it.
+export {
+  createPublicReader,
+  toPublicFind,
+  toPublicFindSingle,
+  PUBLIC_FILTER_OPS,
+} from "./runtime/routing/public-reader";
+export type {
+  PublicCountQuery,
+  PublicFilter,
+  PublicFilterOp,
+  PublicReader,
+  PublicReaderBinding,
+  PublicReaderDeclarations,
+  PublicReaderSource,
+  PublicReadQuery,
+  PublicReadResult,
+  PublicSingleQuery,
+  PublicSingleResult,
+  PublicSource,
+  PublicSourceReader,
+} from "./runtime/routing/public-reader";
+
+// What a binding on a published page reads besides a list, `@experimental`
+// with the reader: the site settings through their public allowlist (a write
+// to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
+// is checked against, as the anonymous visitor may read them. Both load the
+// service container inside the call, so importing this entry loads neither.
+export {
+  readPublicSiteSettings,
+  type PublicSiteSettings,
+} from "./runtime/site-settings-read";
+export {
+  bindingFieldShapes,
+  type BindingFieldShape,
+  type BindingFieldShapesOptions,
+  type BindingSourceRef,
+} from "./runtime/routing/binding-field-shapes";
+
 export {
   resolveContent,
   isReservedPath,
@@ -143,8 +192,8 @@ export {
   type NextlyRobotsOptions,
 } from "./runtime/routing";
 
-// @experimental Checks the app's generated component map before the admin is
-// served. Call it from the admin's server layout, with the list the map's
+// @experimental Keeps the app's generated component map up to date in
+// development. Call it from the admin's server layout, with the list the map's
 // strings-only companion exports:
 //
 //   import { checkAdminComponents } from "nextly/runtime";
@@ -156,9 +205,11 @@ export {
 //     return children;
 //   }
 //
-// In development a map that is out of date is written again; in production the
-// admin is refused while a dashboard widget's component is missing from it,
-// naming each widget and the command that fixes it. Here rather than on
+// In development a map that is out of date is written again, or warned about
+// where it cannot be; in production it does nothing. It never refuses the
+// admin: a widget whose component is missing draws its card's error state, and
+// `nextly generate:types --check` holds the committed map to the config in CI.
+// Here rather than on
 // `nextly/next`: that entry is client-safe, and the check reads the boot's
 // plugins and writes files, which only a request on the server may do.
 export {

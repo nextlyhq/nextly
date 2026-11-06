@@ -1,16 +1,20 @@
 /**
- * Signed-in callers who hold the permissions a test names, and nothing else.
+ * Signed-in callers who hold the permissions a test names, and nothing else,
+ * or who hold the super-admin role.
  *
  * A code rule only narrows a permission, so a test that wants a rule to admit
  * a signed-in user gives them the permission first. The user and its roles are
  * written directly, as a test seeds a caller, and each permission is created
- * only where the boot did not seed it already.
+ * only where the boot did not seed it already. A gate looks a caller up, so a
+ * test that needs a super-admin seeds one here rather than naming the role on
+ * the user it hands in.
  */
 import { createHash, randomUUID } from "node:crypto";
 
 import { getDialectTables } from "../../database/index";
 import type { TestNextly } from "../../plugins/test-nextly";
 import { permissionSlug } from "../../schemas/_zod/rbac";
+import { ServiceContainer } from "../../services/index";
 
 interface PermissionsApi {
   permissions: {
@@ -90,6 +94,20 @@ export async function grantTo(
   });
 }
 
+/** Writes an active user with the fixed id `id` and no roles. */
+async function insertUser(t: TestNextly, id: string): Promise<void> {
+  const db = t.adapter.getDrizzle() as unknown as Inserts;
+  const now = new Date();
+  await db.insert(tablesOf(t).users).values({
+    id,
+    email: `${id}@example.test`,
+    name: id,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 /**
  * A new signed-in user, with the fixed id `id`, who holds `action` on each of
  * `resources`. The id is fixed because a test's rules often name the caller
@@ -101,16 +119,30 @@ export async function userWhoMay(
   action: string,
   resources: readonly string[]
 ): Promise<string> {
-  const db = t.adapter.getDrizzle() as unknown as Inserts;
-  const now = new Date();
-  await db.insert(tablesOf(t).users).values({
-    id,
-    email: `${id}@example.test`,
-    name: id,
-    isActive: true,
-    createdAt: now,
-    updatedAt: now,
-  });
+  await insertUser(t, id);
   await grantTo(t, id, action, resources);
+  return id;
+}
+
+/**
+ * A new signed-in user, with the fixed id `id`, who holds the super-admin
+ * role, for a test whose reader must be allowed everything. The role is the
+ * one the install keeps, created where the boot did not seed it.
+ */
+export async function superAdminUser(
+  t: TestNextly,
+  id: string
+): Promise<string> {
+  await insertUser(t, id);
+  const role = await new ServiceContainer(
+    t.adapter
+  ).roles.ensureSuperAdminRole();
+  const db = t.adapter.getDrizzle() as unknown as Inserts;
+  await db.insert(tablesOf(t).userRoles).values({
+    id: randomUUID(),
+    userId: id,
+    roleId: role.id,
+    createdAt: new Date(),
+  });
   return id;
 }

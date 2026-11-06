@@ -66,7 +66,11 @@ import {
 } from "./class-usage-runtime";
 import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
 import { componentUsageIndex } from "./component-usage";
-import { requestContextFor, writeTargetOf } from "./write-target";
+import {
+  requestContextFor,
+  writeTargetOf,
+  type WriteTarget,
+} from "./write-target";
 
 /**
  * The phases maintenance runs on.
@@ -156,7 +160,13 @@ export function registerClassUsageMaintenance(args: {
   locales: () => readonly string[];
   /** The bounds rows are derived under, read per call. */
   limits: () => DocumentLimits;
-}): void {
+  /**
+   * Record that a maintenance write failed, so health reports the index as
+   * not whole until a backfill run started after the failure has walked every
+   * document again. Absent, a failure is only raised and logged.
+   */
+  markDirty?: () => Promise<void>;
+}): CommittedWriteReconciler {
   const handler = (context: UnknownRecord) => maintain(args, context);
   for (const phase of MAINTAINED_PHASES) {
     args.ctx.hooks.on(phase, "*", handler);
@@ -166,7 +176,36 @@ export function registerClassUsageMaintenance(args: {
   for (const phase of FORGOTTEN_PHASES) {
     args.ctx.hooks.on(phase, "*", forgetHandler);
   }
+  return async target => {
+    // Logged and the index marked dirty, never raised: the write has
+    // committed, and failing here would report it as not made.
+    try {
+      const work = await maintenanceOf(args, target, {});
+      if (work === null) return;
+      const report = await reconcileWrittenDocument(work);
+      if (report.failures.length === 0) return;
+      reportFailures(args.ctx.logger, report);
+      await markIndexDirty(args, report.failures[0]?.failure);
+    } catch (error) {
+      args.ctx.logger?.error?.(
+        "[page-builder] usage indexes could not be brought up to date after a committed write; a rebuild repairs them",
+        { collection: target.slug, documentId: target.documentId, error }
+      );
+      await markIndexDirty(args, error);
+    }
+  };
 }
+
+/**
+ * Bring the usage indexes in line with a document written inside a
+ * transaction the caller owned, once it has committed. The write hooks skip
+ * such a write, since what they would read is not yet visible to the pool.
+ * A failure is logged rather than raised: the write has committed, and a
+ * rebuild repairs the index.
+ */
+export type CommittedWriteReconciler = (
+  target: WriteTarget<ClassUsageDirectApi>
+) => Promise<void>;
 
 /**
  * One write's maintenance, with every failure captured.
@@ -177,6 +216,43 @@ export function registerClassUsageMaintenance(args: {
  * fails, which is exactly when they would want it.
  */
 async function maintain(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  context: UnknownRecord
+): Promise<void> {
+  try {
+    await maintainOrRaise(args, context);
+  } catch (failure) {
+    await markIndexDirty(args, failure);
+    throw failure;
+  }
+}
+
+/**
+ * Mark the index dirty after a failed maintenance write, then let the caller
+ * raise the failure as before.
+ *
+ * A failed write leaves this document's rows stale, and nothing about a later
+ * save of another document repairs them, so until a full rebuild has walked it
+ * again no count may read as exact. A mark that cannot be written is logged:
+ * the failure itself is still raised, and the caller still told.
+ */
+async function markIndexDirty(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  failure: unknown
+): Promise<void> {
+  if (args.markDirty === undefined) return;
+  try {
+    await args.markDirty();
+  } catch (markFailure) {
+    args.ctx.logger?.error?.(
+      "[page-builder] a usage index write failed and the index could not be marked dirty; counts may read as exact until the next full rebuild",
+      { error: markFailure, cause: failure }
+    );
+  }
+}
+
+/** One write's maintenance, raising when any subject could not be reconciled. */
+async function maintainOrRaise(
   args: Parameters<typeof registerClassUsageMaintenance>[0],
   context: UnknownRecord
 ): Promise<void> {
@@ -276,6 +352,7 @@ async function forget(
         "they count towards their classes until a rebuild runs",
       { collection: target.slug, documentId: target.documentId, error: failure }
     );
+    await markIndexDirty(args, failure);
     throw new Error(
       `[page-builder] class-usage could not forget "${target.slug}" ` +
         `${target.documentId}. Its rows still count towards their classes ` +
@@ -304,10 +381,22 @@ async function planMaintenance(
     excluded: [args.indexCollection, args.componentIndexCollection],
   });
   if (target === null) return null;
+  return maintenanceOf(args, target, requestContextFor(context));
+}
 
+/**
+ * The reconciliation of one written document, or `null` when its collection
+ * holds no blocks field. Shared by the hook and by a write made in a
+ * transaction the caller owns, which the hook skips.
+ */
+async function maintenanceOf(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  target: WriteTarget<ClassUsageDirectApi>,
+  requestContext: unknown
+): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
   const collection = (await args.ctx.services.collections.getCollection(
     target.slug,
-    requestContextFor(context)
+    requestContext
   )) as { fields?: unknown; localized?: unknown };
 
   if (blocksFieldsOf(collection).length === 0) return null;

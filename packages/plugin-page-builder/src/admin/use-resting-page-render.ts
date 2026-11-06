@@ -25,6 +25,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
+import type { ComponentTitleOf } from "@nextlyhq/builder";
 import { usePluginClientConfig } from "@nextlyhq/plugin-sdk/admin";
 import { useId, useMemo } from "react";
 
@@ -73,8 +74,15 @@ export interface RestingPageRender {
   siteStyles: PageRendererProps["siteStyles"];
   /** Whether that sheet is usable yet, and why not when it is not. */
   styleState: SiteStyleState;
-  /** Whether the component definitions are usable yet, and the way to ask again. */
-  components: { state: ComponentLibraryState; retry: () => void };
+  /**
+   * Whether the component definitions are usable yet, the way to ask again,
+   * and a placed component's title by id, from the same read.
+   */
+  components: {
+    state: ComponentLibraryState;
+    retry: () => void;
+    titleOf: ComponentTitleOf;
+  };
   /** The rest of this site's rendering, from the derivation the canvas asks. */
   render: PageRenderInputs;
 }
@@ -164,7 +172,11 @@ export function useRestingPageRender(
      */
     styleState: pending ? "pending" : error !== null ? "unavailable" : "ready",
     // The same three states the read already names, and the retry it holds.
-    components: { state: library.state, retry: library.retry },
+    components: {
+      state: library.state,
+      retry: library.retry,
+      titleOf: library.titleOf,
+    },
     render,
   };
 }

@@ -630,16 +630,87 @@ function settleBehaviour(
   }));
 }
 
-/** The fields after a transform: kept ones keep their declarer, new are its. */
+/**
+ * A field's identity apart from where it sits: its whole definition but its
+ * name and the fields it holds, which have identities of their own. Two
+ * fields with the same one are the same field moved or renamed.
+ */
+function identityOf(field: Record<string, unknown>): Record<string, unknown> {
+  const { name: _name, fields: _held, ...identity } = field;
+  return identity;
+}
+
+/**
+ * The fields after a transform: a field that stayed keeps its declarer, and
+ * any other is the transform's only when it is an addition.
+ *
+ * A path is the identity the ledgers know a field by, and a path is not a
+ * field. A field the transform moved (the app's `note` into the app's
+ * `settings` group) comes back at a path nobody declared, and a different
+ * field may take the path it left. Read by path, the moved one was the
+ * transform's, and would leave with the plugin on an uninstall though it is
+ * still the app's. So a field stays only where the same path holds a field
+ * of the same definition (`identityOf`) before and after. Every other field
+ * after the transform is judged against those it took away: one of the same
+ * definition was moved there, and keeps that field's declarer; failing that,
+ * one of the same name was changed or moved, and keeps it too; failing that,
+ * while it took away a field someone else declared, the new field cannot be
+ * told from that one changed, and is not counted the transform's either.
+ * Only a field with none of these is an addition. Where several fields
+ * match, another's declarer is taken over the transform's own: counting a
+ * field the transform's when it may not be is the costly mistake.
+ */
 function settleFields(
   ledger: OwnershipLedger,
+  before: Record<string, unknown>,
   after: Record<string, unknown>,
   plugin: TransformingPlugin
 ): Map<string, Contributor> {
+  const previous = fieldsByPath(before);
+  const placed = placedFields(after.fields);
+  const stayed = (path: string, field: Record<string, unknown>): boolean => {
+    const was = previous.get(path);
+    return (
+      ledger.fields.has(path) &&
+      was !== undefined &&
+      isDeepStrictEqual(identityOf(was.field), identityOf(field))
+    );
+  };
+  const kept = new Set(
+    placed.filter(({ path, field }) => stayed(path, field)).map(p => p.path)
+  );
+  const taken = [...ledger.fields].filter(([path]) => !kept.has(path));
+  const othersTaken = taken.filter(([, by]) => by !== plugin.name);
+  const leafOf = (path: string): string => path.split(".").at(-1) ?? path;
+  const notItsFirst = (
+    entries: ReadonlyArray<[string, Contributor]>
+  ): [string, Contributor] | undefined =>
+    entries.find(([, by]) => by !== plugin.name) ?? entries.at(0);
+  const declarerOfNew = (
+    path: string,
+    field: Record<string, unknown>
+  ): Contributor => {
+    const sameField = notItsFirst(
+      taken.filter(([from]) => {
+        const was = previous.get(from);
+        return (
+          was !== undefined &&
+          isDeepStrictEqual(identityOf(was.field), identityOf(field))
+        );
+      })
+    );
+    if (sameField !== undefined) return sameField[1];
+    const sameName = notItsFirst(
+      taken.filter(([from]) => leafOf(from) === leafOf(path))
+    );
+    if (sameName !== undefined) return sameName[1];
+    const other = othersTaken.at(0);
+    return other === undefined ? plugin.name : other[1];
+  };
   return new Map(
-    placedFields(after.fields).map(({ path }) => [
+    placed.map(({ path, field }) => [
       path,
-      ledger.fields.has(path) ? ledger.fields.get(path) : plugin.name,
+      kept.has(path) ? ledger.fields.get(path) : declarerOfNew(path, field),
     ])
   );
 }
@@ -747,7 +818,7 @@ export function settleTransform(
   assertStillValid(slug, kind, before, after, plugin);
   return {
     owner: ledger.owner,
-    fields: settleFields(ledger, after, plugin),
+    fields: settleFields(ledger, before, after, plugin),
     behaviour,
   };
 }

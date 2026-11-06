@@ -224,6 +224,15 @@
   },
 
   "duplicates": {
+    // Generated plugin migration modules. `nextly migrate:create --plugin`
+    // writes each with the whole schema snapshotted per dialect, so every
+    // new module repeats the tables the earlier ones created, by design: the
+    // next generation diffs against the latest snapshot. They are never edited
+    // by hand (a hand edit fails the module's own checksum), so there is no
+    // shared code to extract, and a clone key would change with every module
+    // generated. A glob is the honest form here, scoped to exactly these
+    // generated directories.
+    "ignore": ["packages/*/src/schema/migrations/*.ts"],
     "ignoredClones": [
       // collections/services/collection-mutation-service.ts — 17 lines shared
       // by `createEntryWrite` and `updateEntryWrite`: the closing lines of the

@@ -17,14 +17,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   registerBlocks,
+  resolveComponentInstances,
   RICH_TEXT_PROP_TYPE,
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
 import { useInlineEditing } from "./use-inline-editing";
+import { createOpenPassages } from "./open-passages";
 import { useInlineRichText } from "./use-inline-rich-text";
 
 afterEach(() => {
@@ -1170,12 +1174,11 @@ describe("a write the op layer refuses", () => {
     expect(attach.mock.calls.length).toBeGreaterThan(attachesWhileOpen);
   });
 
-  it("reports a discarded edit when the passage stopped being editable", async () => {
+  it("holds a passage whose block was locked while it was typed", async () => {
     /*
      * The node is LOCKED while the caret is in it. There is nowhere left to
-     * write, so holding the editor open would trap the author in a value they
-     * cannot leave rather than save anything — it lets go, and says that the
-     * typing was lost so a host can tell them.
+     * write, but the passage is still on the page, so it stays open with the
+     * words in it: the author can copy them, and a second Escape lets them go.
      */
     const { attach, detach, load } = typingEditor("STORED", "TYPED");
     registerArticle();
@@ -1197,6 +1200,47 @@ describe("a write the op layer refuses", () => {
 
     nodes[0]!.locked = true;
     rerender();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = result.current.commit();
+    });
+
+    expect(outcome).toEqual({
+      status: "refused",
+      reason: "no-longer-editable",
+    });
+    expect(detach).not.toHaveBeenCalled();
+    expect(result.current.editingRich).not.toBeNull();
+  });
+
+  it("reports a discarded edit when the passage stopped being editable and left the page", async () => {
+    /*
+     * Locked, and its element gone from the page: there is nothing left to
+     * keep the words in, so it lets go, and says that the typing was lost so
+     * a host can tell them.
+     */
+    const { attach, detach, load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const nodes = articleWith("STORED");
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(state, load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    expect(attach).toHaveBeenCalled();
+
+    nodes[0]!.locked = true;
+    rerender();
+    document.querySelector('[data-nx-prop="content"]')?.remove();
 
     let outcome: unknown;
     await act(async () => {
@@ -1421,11 +1465,11 @@ describe("how a host hears about an edit it did not finish itself", () => {
     return { attach, detach, load: vi.fn(() => Promise.resolve({ attach })) };
   }
 
-  it("reports a passage discarded by LEAVING it, not only by exiting", async () => {
+  it("reports a passage refused by LEAVING it, not only by exiting", async () => {
     /*
      * The node is locked while the caret is in it, and the author clicks away.
-     * Blur is the ordinary way to finish an edit; the text is gone, and if this
-     * outcome does not reach the host then nothing on screen ever says so.
+     * Blur is the ordinary way to finish an edit; the text is not written, and
+     * if this outcome does not reach the host then nothing on screen says so.
      */
     const finished = vi.fn();
     const { load } = typingEditor("STORED", "TYPED");
@@ -1456,7 +1500,10 @@ describe("how a host hears about an edit it did not finish itself", () => {
       element?.dispatchEvent(new Event("blur"));
     });
 
-    expect(finished).toHaveBeenCalledWith({ status: "discarded" });
+    expect(finished).toHaveBeenCalledWith({
+      status: "refused",
+      reason: "no-longer-editable",
+    });
   });
 
   it("reports an ordinary blur as nothing worth saying", async () => {
@@ -1923,5 +1970,309 @@ describe("the element the gesture measured", () => {
     });
 
     expect(attach).toHaveBeenCalled();
+  });
+});
+
+describe("a passage an inspector field holds open", () => {
+  it("is finished by commit, which answers the document it wrote", () => {
+    registerArticle();
+    const passages = createOpenPassages();
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), undefined, undefined, undefined, passages)
+    );
+    expect(result.current.inspecting).toBe(false);
+
+    const written = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [],
+    } as unknown as BlockDocument;
+    const finish = vi.fn(() => written);
+    act(() => {
+      passages.hold(finish);
+    });
+    // Open in an inspector field is unsaved work, as on the canvas.
+    expect(result.current.inspecting).toBe(true);
+
+    let outcome: unknown;
+    act(() => {
+      outcome = result.current.commit();
+    });
+    expect(finish).toHaveBeenCalledTimes(1);
+    // The document the field's commit wrote, not the one the caller held.
+    expect(outcome).toEqual({ status: "written", document: written });
+  });
+});
+
+/** A header whose heading exposes `text` and not `kicker`. */
+const HEADER_DEF: ComponentDocument = {
+  formatVersion: 1,
+  kind: "component",
+  nodes: [
+    {
+      id: "h",
+      type: "acme/heading",
+      version: 1,
+      props: { text: "Site name", kicker: "Hello" },
+    },
+  ],
+  exposed: [
+    {
+      id: "title",
+      label: "Title",
+      nodeId: "h",
+      propPath: "text",
+      type: "text",
+    },
+  ],
+};
+
+describe("a double-click on a component's text", () => {
+  /** A header placed once, its heading exposing `text` and not `kicker`. */
+  function placedHeader(header: ComponentDocument = HEADER_DEF) {
+    registerBlocks(
+      [
+        {
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: () => null,
+          name: "acme/heading",
+          props: {
+            text: { type: "text", inline: true },
+            kicker: { type: "text", inline: true },
+          },
+        },
+      ] as never,
+      { source: "use-inline-editing-test" }
+    );
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "p1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    } as BlockDocument;
+    const composed = resolveComponentInstances(
+      page,
+      new Map([["header", header as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    const heading = composed.nodes[0];
+    document.body.innerHTML = `
+      <h2 data-nx-node="${heading?.id ?? ""}" data-nx-instance="p1">
+        <small data-nx-prop="kicker">Hello</small>
+        <span data-nx-prop="text">Site name</span>
+      </h2>`;
+    const editor = {
+      document: page,
+      selectedId: null,
+      apply: vi.fn(() => page),
+      select: vi.fn(),
+      composed: () => composed,
+    } as unknown as EditorState & {
+      apply: ReturnType<typeof vi.fn>;
+      select: ReturnType<typeof vi.fn>;
+    };
+    const onPartOf = vi.fn();
+    const hook = renderHook(() =>
+      useInlineEditing(editor, undefined, undefined, onPartOf)
+    );
+    return { ...hook, editor, onPartOf };
+  }
+
+  it("writes nothing when the text stopped being a text field while the caret was in it", () => {
+    const { result, editor } = placedHeader();
+    act(() => result.current.onDoubleClick(doubleClickOn("text")));
+    expect(result.current.editing?.exposure?.exposureId).toBe("title");
+
+    // The library refreshed: the component no longer exposes the headline.
+    const bare = resolveComponentInstances(
+      editor.document,
+      new Map([["header", { ...HEADER_DEF, exposed: [] } as BlockDocument]]),
+      { exposures: true }
+    ).document;
+    (editor as { composed: () => BlockDocument }).composed = () => bare;
+
+    const element = document.querySelector('[data-nx-prop="text"]');
+    if (element === null) throw new Error("no element");
+    element.textContent = "Acme";
+    act(() => {
+      result.current.commit();
+    });
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("on text it does not expose, selects the placement and says whose it is", () => {
+    const { result, editor, onPartOf } = placedHeader();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("kicker")));
+
+    expect(editor.select).toHaveBeenCalledWith("p1");
+    expect(onPartOf).toHaveBeenCalledWith("p1");
+    expect(result.current.editing).toBeNull();
+  });
+
+  it("on exposed text of a block the component locks, says whose it is by the held field", () => {
+    // The panel holds that field; the canvas does not open it either, and
+    // the host is told which field, so it says the field's reason.
+    const { result, editor, onPartOf } = placedHeader({
+      ...HEADER_DEF,
+      nodes: [{ ...HEADER_DEF.nodes[0]!, locked: true }],
+    });
+
+    act(() => result.current.onDoubleClick(doubleClickOn("text")));
+
+    expect(editor.select).toHaveBeenCalledWith("p1");
+    expect(onPartOf).toHaveBeenCalledWith("p1", "title");
+    expect(result.current.editing).toBeNull();
+  });
+
+  it("on exposed text, edits it in place and stores it on the placement", () => {
+    const { result, editor, onPartOf } = placedHeader();
+
+    act(() => result.current.onDoubleClick(doubleClickOn("text")));
+    expect(result.current.editing?.exposure?.exposureId).toBe("title");
+    expect(onPartOf).not.toHaveBeenCalled();
+
+    const element = document.querySelector('[data-nx-prop="text"]');
+    if (element === null) throw new Error("no element");
+    element.textContent = "Acme";
+    act(() => {
+      result.current.commit();
+    });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "p1",
+      patch: { props: { componentId: "header", overrides: { title: "Acme" } } },
+    });
+  });
+});
+
+describe("a double-click on a component's exposed passage", () => {
+  /** A passage of one paragraph. */
+  const passage = (text: string) => ({
+    root: {
+      type: "root",
+      children: [
+        { type: "paragraph", children: [{ type: "text", text, format: 0 }] },
+      ],
+    },
+  });
+  const CARD_DEF = {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [
+      {
+        id: "c",
+        type: "acme/card",
+        version: 1,
+        props: { body: passage("From the component") },
+      },
+    ],
+    exposed: [
+      {
+        id: "intro",
+        label: "Intro",
+        nodeId: "c",
+        propPath: "body",
+        type: "richText",
+      },
+    ],
+  } as unknown as BlockDocument;
+
+  /** A card placed once, selected, as a click on it leaves the canvas. */
+  function placedCard(read: ReturnType<typeof vi.fn>) {
+    registerBlocks(
+      [
+        {
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: () => null,
+          name: "acme/card",
+          props: { body: { type: "richText", inline: true } },
+        },
+      ] as never,
+      { source: "use-inline-editing-test" }
+    );
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "p1",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "card" },
+        },
+      ],
+    } as BlockDocument;
+    const composed = resolveComponentInstances(
+      page,
+      new Map([["card", CARD_DEF]]),
+      { exposures: true }
+    ).document;
+    const card = composed.nodes[0];
+    document.body.innerHTML = `
+      <div data-nx-node="${card?.id ?? ""}" data-nx-instance="p1">
+        <div data-nx-prop="body"><p>From the component</p></div>
+      </div>`;
+    const editor = {
+      document: page,
+      selectedId: "p1",
+      apply: vi.fn(() => page),
+      select: vi.fn(),
+      composed: () => composed,
+    } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
+    const session = {
+      focus: vi.fn(),
+      read: read as () => unknown,
+      detach: vi.fn(),
+      hold: vi.fn(),
+    };
+    const load = vi.fn(() =>
+      Promise.resolve({ attach: vi.fn(() => attachment(session)) })
+    );
+    const onPartOf = vi.fn();
+    const hook = renderHook(() =>
+      useInlineEditing(editor, load, undefined, onPartOf)
+    );
+    return { ...hook, editor, onPartOf, session };
+  }
+
+  it("edits it in place and stores it on the placement, as one op", async () => {
+    const read = vi
+      .fn()
+      .mockReturnValueOnce(passage("From the component"))
+      .mockReturnValue(passage("Ours"));
+    const { result, editor, onPartOf, session } = placedCard(read);
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("body"));
+    });
+    expect(onPartOf).not.toHaveBeenCalled();
+    expect(result.current.editingRich?.exposure?.exposureId).toBe("intro");
+    expect(session.focus).toHaveBeenCalled();
+
+    act(() => {
+      result.current.commit();
+    });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "p1",
+      patch: {
+        props: { componentId: "card", overrides: { intro: passage("Ours") } },
+      },
+    });
   });
 });

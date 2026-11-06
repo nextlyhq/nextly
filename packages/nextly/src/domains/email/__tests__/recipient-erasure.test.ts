@@ -59,18 +59,27 @@ function makeAdapter(db: ReturnType<typeof drizzle>): DrizzleAdapter {
   } as unknown as DrizzleAdapter;
 }
 
-/** Rendered from the shipped core schema, never hand-copied DDL. */
+/**
+ * Rendered from the shipped core schema, never hand-copied DDL: the delivery
+ * log, and the queue's two tables, which erasing an address also reads.
+ */
 function createDeliveriesTable(sqlite: Database.Database): void {
   const { tables } = getCoreSchema("sqlite");
-  const spec = tables.find(table => table.name === "email_deliveries");
-  if (!spec) {
-    expect.fail(
-      "email_deliveries is absent from the core schema — the table is not registered, which no unit test would otherwise catch."
+  for (const name of [
+    "email_deliveries",
+    "email_queue",
+    "email_queue_recipients",
+  ]) {
+    const spec = tables.find(table => table.name === name);
+    if (!spec) {
+      expect.fail(
+        `${name} is absent from the core schema — the table is not registered, which no unit test would otherwise catch.`
+      );
+    }
+    sqlite.exec(
+      `CREATE TABLE "${name}" (\n${createTableBody(spec, (id: string) => `"${id}"`)}\n)`
     );
   }
-  sqlite.exec(
-    `CREATE TABLE "email_deliveries" (\n${createTableBody(spec, (id: string) => `"${id}"`)}\n)`
-  );
 }
 
 describe("erasing a recipient from the delivery log", () => {

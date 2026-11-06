@@ -14,6 +14,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { canvasFrame } from "./support/canvas-frame";
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const ENTRIES = "/admin/api/collections/translated-pages/entries";
@@ -62,7 +63,7 @@ async function layoutIn(page: Page, id: string, locale: string) {
 }
 
 function heading(page: Page, id: string) {
-  return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
+  return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
 test("opens, reloads and saves the default language only", async ({ page }) => {
@@ -85,6 +86,9 @@ test("opens, reloads and saves the default language only", async ({ page }) => {
   );
   await expect(heading(page, "en-heading")).toBeVisible({ timeout: 30_000 });
   await expect(heading(page, "es-heading")).toHaveCount(0);
+  // The frame's document states the language being edited, which it does not
+  // inherit from the admin around it.
+  await expect(canvasFrame(page).locator("html")).toHaveAttribute("lang", "en");
 
   await page.reload();
   await expect(heading(page, "en-heading")).toBeVisible({ timeout: 30_000 });

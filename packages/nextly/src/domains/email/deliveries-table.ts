@@ -11,10 +11,11 @@
  * @module domains/email/deliveries-table
  */
 
+import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
-import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
-import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
-import { emailDeliveriesSqlite } from "../../schemas/email-deliveries/sqlite";
+import type { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
+import type { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
+import type { emailDeliveriesSqlite } from "../../schemas/email-deliveries/sqlite";
 
 /** The delivery table, as one of the three dialect bundles defines it. */
 export type EmailDeliveriesTable =
@@ -33,11 +34,11 @@ export type EmailDeliveriesTable =
 export function deliveriesTableFor(dialect: string): EmailDeliveriesTable {
   switch (dialect) {
     case "postgresql":
-      return emailDeliveriesPg;
     case "mysql":
-      return emailDeliveriesMysql;
     case "sqlite":
-      return emailDeliveriesSqlite;
+      // The loaded dialect's own table, so only that dialect's file is
+      // imported; `createAdapter` loads it.
+      return loadedDialect(dialect).tables.emailDeliveries;
     default:
       throw NextlyError.internal({
         logContext: {

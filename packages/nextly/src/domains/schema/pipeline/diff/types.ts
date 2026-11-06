@@ -15,6 +15,8 @@
 // ensure pushSchema never sees a rename ambiguity, so its prompt never
 // for the full Option E rationale.
 
+import type { LocalizedColumnKind } from "../../../i18n/migration/types";
+
 // Lightweight column representation - just what we need for diff + SQL gen.
 // Not a full Drizzle column descriptor; we don't track every Drizzle attribute.
 export interface ColumnSpec {
@@ -179,6 +181,18 @@ export interface TableSpec {
   // translatable field ADDED in the same edit would be restored from a companion that never
   // held it (emitting SQL that fails on apply). Present only when `localized` is true.
   localizedColumns?: string[];
+  // Which of those columns are unique within each language, and so carry a per-language unique
+  // index on the companion. `migrate:create` compares it with the next config to add or drop
+  // those indexes, which nothing else in the snapshot records. Present only when some are.
+  //
+  // Each entry carries what its column stores, because the next migration may be the one that
+  // removes or renames it: that file's DOWN recreates the index, and the config it is generated
+  // from no longer describes the column to say whether it holds text. An older snapshot names
+  // the column alone, and is read as text, which is what every such snapshot assumed.
+  uniqueLocalizedColumns?: (
+    | string
+    | { column: string; kind: LocalizedColumnKind }
+  )[];
 }
 
 /**

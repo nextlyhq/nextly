@@ -30,6 +30,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
+import { blocks } from "../fields/blocksHelper";
 import { pageBuilder } from "../plugin";
 
 const base = {
@@ -162,7 +163,21 @@ describe.each(getConfiguredTestDialects())(
     });
 
     async function boot(): Promise<TestNextly> {
-      current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
+      // The site defines the class a case applies, so a refusal there is the
+      // lock's alone: a page save naming a class the site lacks is refused
+      // for that reason too.
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          pageBuilder({
+            siteStyle: {
+              classes: [
+                { id: "promo", slug: "promo", orderIndex: 0, styles: {} },
+              ],
+            },
+          }),
+        ],
+      });
       registerLockedBlocks();
       return current;
     }
@@ -250,7 +265,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "pages",
           id,
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         });
 
@@ -275,6 +290,147 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("keeps what a language's own stored page holds, not another language's", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder()],
+        collections: [
+          {
+            slug: "articles",
+            localized: true,
+            fields: [
+              { name: "title", type: "text" },
+              blocks({ name: "content", localized: true }),
+            ],
+          } as never,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      registerLockedBlocks();
+      const t = current;
+      // One card, edited in place as an editor edits it: a stored part is
+      // matched through the block that holds it.
+      const card = placed("acme/drifting-card");
+      const withAlign = (align: string) => {
+        const next = structuredClone(card);
+        next.slots!.body![0]!.props.align = align;
+        return pageOf([next]);
+      };
+      const inGerman = (content: unknown) =>
+        t.nextly.update({
+          collection: "articles",
+          id,
+          locale: "de",
+          data: { content, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+
+      // English stores "left" and German "center", each its default when
+      // saved; then a release moves the default to "right".
+      const saved = await t.nextly.create({
+        collection: "articles",
+        data: { title: "Home", content: withAlign("left") },
+        overrideAccess: true,
+      });
+      const id = String(saved.item.id);
+      DRIFTING_DEFAULTS.align = "center";
+      try {
+        await expect(inGerman(withAlign("center"))).resolves.toBeDefined();
+        DRIFTING_DEFAULTS.align = "right";
+
+        // German keeps what German stores.
+        await expect(inGerman(withAlign("center"))).resolves.toBeDefined();
+        // English's stored value is no reason German may hold it.
+        expect(
+          issuesOf(await refusalOf(inGerman(withAlign("left")))).map(
+            issue => issue.code
+          )
+        ).toEqual(["locked-slot-content-only"]);
+      } finally {
+        DRIFTING_DEFAULTS.align = "left";
+      }
+    });
+
+    it("keeps what a Single's stored page holds", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder()],
+        singles: [
+          { slug: "home", fields: [blocks({ name: "content" })] } as never,
+        ],
+      });
+      registerLockedBlocks();
+      const t = current;
+      const card = placed("acme/drifting-card");
+      const save = (content: unknown) =>
+        t.nextly.updateSingle({
+          slug: "home",
+          data: { content, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+      await save(pageOf([card]));
+
+      DRIFTING_DEFAULTS.align = "center";
+      try {
+        // CONTROL: the stored value is what makes this save acceptable. A
+        // new value other than the starting one is still refused.
+        await expect(save(pageOf([card]))).resolves.toBeDefined();
+        const moved = structuredClone(card);
+        moved.slots!.body![0]!.props.align = "right";
+        expect(
+          issuesOf(await refusalOf(save(pageOf([moved])))).map(i => i.code)
+        ).toEqual(["locked-slot-content-only"]);
+      } finally {
+        DRIFTING_DEFAULTS.align = "left";
+      }
+    });
+
+    it("keeps what a localized Single stores in the language saved, not another's", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder()],
+        singles: [
+          {
+            slug: "home",
+            localized: true,
+            fields: [blocks({ name: "content", localized: true })],
+          } as never,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      registerLockedBlocks();
+      const t = current;
+      const card = placed("acme/drifting-card");
+      const withAlign = (align: string) => {
+        const next = structuredClone(card);
+        next.slots!.body![0]!.props.align = align;
+        return pageOf([next]);
+      };
+      const save = (content: unknown, locale?: string) =>
+        t.nextly.updateSingle({
+          slug: "home",
+          data: { content, _overwrite: true },
+          ...(locale === undefined ? {} : { locale }),
+          overrideAccess: true,
+        } as never);
+
+      await save(withAlign("left"));
+      DRIFTING_DEFAULTS.align = "center";
+      try {
+        await expect(save(withAlign("center"), "de")).resolves.toBeDefined();
+        DRIFTING_DEFAULTS.align = "right";
+
+        await expect(save(withAlign("center"), "de")).resolves.toBeDefined();
+        expect(
+          issuesOf(await refusalOf(save(withAlign("left"), "de"))).map(
+            issue => issue.code
+          )
+        ).toEqual(["locked-slot-content-only"]);
+      } finally {
+        DRIFTING_DEFAULTS.align = "left";
+      }
+    });
+
     it("refuses an import that skips hooks and breaks a lock", async () => {
       const t = await boot();
       const saved = await savePage(t, [placed("acme/sealed-card")]);
@@ -294,7 +450,12 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await entries.updateEntries(
         { collectionName: "pages", overrideAccess: true },
-        [{ id: String(saved.item.id), data: { content: pageOf([card]) } }],
+        [
+          {
+            id: String(saved.item.id),
+            data: { content: pageOf([card]), _overwrite: true },
+          },
+        ],
         { skipHooks: true }
       );
 

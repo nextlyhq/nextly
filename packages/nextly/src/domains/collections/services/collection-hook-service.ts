@@ -11,6 +11,8 @@
  * - Extract stored hook configurations from collection metadata
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import {
   buildContext,
   type BuildContextOptions,
@@ -24,6 +26,7 @@ import type { StoredHookConfig } from "@nextly/schemas/dynamic-collections/types
 
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
+import { afterCommit } from "../../../shared/lib/run-adapter-transaction";
 
 import type { UserContext } from "./collection-types";
 
@@ -107,11 +110,34 @@ export class CollectionHookService {
   ): HookContext<T> {
     return buildContext({
       ...options,
+      afterCommit: effect => this.afterWriteCommits(effect),
       req: {
         ...options.req,
         nextly: this.resolveNextlyForHooks() as NextlyDirectAPI | undefined,
       },
     });
+  }
+
+  /**
+   * Hold `effect` until the write a hook belongs to is durable, through the
+   * adapter's own `afterCommit`: held until the outermost transaction the
+   * calling flow is inside commits, dropped on its rollback, and run at once
+   * outside any transaction. The adapter answers from the flow's transaction
+   * frame, so an after-hook run inline inside a caller's transaction waits
+   * for that transaction, and one run after a write's own commit runs now.
+   *
+   * Without an adapter registered (a hook test with no database) there is no
+   * transaction to wait for, so `effect` runs at once.
+   */
+  private afterWriteCommits(effect: () => unknown): Promise<void> {
+    const adapter = container.has("adapter")
+      ? container.get<DrizzleAdapter>("adapter")
+      : undefined;
+    if (!adapter)
+      return Promise.resolve()
+        .then(effect)
+        .then(() => undefined);
+    return afterCommit(adapter, effect);
   }
 
   /**
@@ -148,6 +174,7 @@ export class CollectionHookService {
       user: user ? { id: user.id, email: user.email } : undefined,
       context: sharedContext,
       executor,
+      afterCommit: effect => this.afterWriteCommits(effect),
       req: {
         ...options.req,
         nextly: this.resolveNextlyForHooks() as NextlyDirectAPI | undefined,

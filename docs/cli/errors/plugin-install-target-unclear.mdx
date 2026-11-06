@@ -1,0 +1,24 @@
+---
+title: PLUGIN_INSTALL_TARGET_UNCLEAR
+description: "`nextly plugins install` was given both a plugin name and `--all`, or neither."
+---
+
+## Cause
+
+`nextly plugins install` was given both a plugin name and `--all`, or neither.
+
+`nextly plugins install` installs one named plugin, or with `--all` every configured plugin, dependencies first. Given both, which was meant is unclear; given neither, there is nothing to install.
+
+## Fix
+
+- Install one plugin: `nextly plugins install <name>`.
+- Install every configured plugin: `nextly plugins install --all`.
+
+## Example
+
+```text
+✗ `nextly plugins install` was not told which plugin to install.
+  Why:  It installs one named plugin, or every configured plugin with `--all`, never both.
+  Next: Name one plugin to install, or pass --all to install every configured plugin: "nextly plugins install <name>" or "nextly plugins install --all".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-install-target-unclear  (PLUGIN_INSTALL_TARGET_UNCLEAR)
+```

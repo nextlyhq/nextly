@@ -29,7 +29,6 @@ export type ServiceType =
   | "pluginSettings"
   | "previewLinks"
   | "previewUrl"
-  | "imageSizes"
   | "dashboard"
   | "documentLock"
   | "translations"

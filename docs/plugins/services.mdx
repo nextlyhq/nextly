@@ -22,12 +22,12 @@ init(ctx) {
 Every access method takes a trailing `ServiceOpts` (`{ as, user }`) that decides whose
 permissions apply:
 
-| `opts` | Behaviour |
-|---|---|
-| `{ as: "user", user }` | Runs as that caller — **RBAC enforced**. In a plugin route the caller's API-key scope is carried automatically, so a key is judged on its own grants rather than its owner's; pass `authenticatedScope` explicitly only to narrow it. |
-| `{ as: "public" }` | Runs as an anonymous visitor — the collection's `access` rules apply with no user. A read with no rule for it is allowed (the public default); a create, update or delete is **refused unless the collection's rule for it answers `true`**, such as `access: { create: () => true }` on a form's submissions. |
-| `{ as: "system" }` | Elevates — **bypasses the access check** for trusted, non-user work (jobs, derived data, lookups). Visible and greppable by design. |
-| `{}` / omitted | No user → defaults to **system** (jobs, CLI, migrations). |
+| `opts`                 | Behaviour                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{ as: "user", user }` | Runs as that caller — **RBAC enforced**. In a plugin route the caller's API-key scope is carried automatically, so a key is judged on its own grants rather than its owner's; pass `authenticatedScope` explicitly only to narrow it.                                                                          |
+| `{ as: "public" }`     | Runs as an anonymous visitor — the collection's `access` rules apply with no user. A read with no rule for it is allowed (the public default); a create, update or delete is **refused unless the collection's rule for it answers `true`**, such as `access: { create: () => true }` on a form's submissions. |
+| `{ as: "system" }`     | Elevates — **bypasses the access check** for trusted, non-user work (jobs, derived data, lookups). Visible and greppable by design.                                                                                                                                                                            |
+| `{}` / omitted         | No user → defaults to **system** (jobs, CLI, migrations).                                                                                                                                                                                                                                                      |
 
 Validation, hooks, and events **always run**, even under `{ as: "system" }` — only the
 access check is skipped. So a `system` write still fires `afterCreate` hooks and emits
@@ -64,8 +64,8 @@ await ctx.services.collections.updateEntry(
 ```
 
 A missing translation is answered by the site's fallback chain, which is right when the
-page has to show *something*. Pass `fallbackLocale: false` when the question is whether
-the translation *exists* — a sitemap deciding whether to list a language, say — and the
+page has to show _something_. Pass `fallbackLocale: false` when the question is whether
+the translation _exists_ — a sitemap deciding whether to list a language, say — and the
 default's value standing in would mislead you.
 
 What an unconfigured code means depends on the verb, and deliberately so. A **read**
@@ -101,16 +101,16 @@ read and is refused on a write, and a selector is refused on both.
 
 `ctx.services.collections` exposes:
 
-| Method | Purpose |
-|---|---|
-| `createEntry(slug, data, opts?)` | Create one entry. Returns `{ message, item, warnings? }`. |
-| `listEntries(slug, query?, opts?)` | List with filter/sort/pagination → `PaginatedResult`. |
-| `findEntryById(slug, id, opts?)` | Fetch one by id. |
-| `updateEntry(slug, id, data, opts?)` | Update one. Returns `{ message, item, warnings? }`. |
-| `deleteEntry(slug, id, opts?)` | Delete one. Returns `{ message, item: { id }, warnings? }`. |
-| `count(slug, where?, opts?)` | Count matching rows. |
-| `createMany(slug, rows, opts?)` | Bulk insert → `BatchOperationResult`. |
-| `updateMany(slug, entries, opts?)` | Bulk update, one `{ id, data }` per row → `BatchOperationResult`. |
+| Method                               | Purpose                                                           |
+| ------------------------------------ | ----------------------------------------------------------------- |
+| `createEntry(slug, data, opts?)`     | Create one entry. Returns `{ message, item, warnings? }`.         |
+| `listEntries(slug, query?, opts?)`   | List with filter/sort/pagination → `PaginatedResult`.             |
+| `findEntryById(slug, id, opts?)`     | Fetch one by id.                                                  |
+| `updateEntry(slug, id, data, opts?)` | Update one. Returns `{ message, item, warnings? }`.               |
+| `deleteEntry(slug, id, opts?)`       | Delete one. Returns `{ message, item: { id }, warnings? }`.       |
+| `count(slug, where?, opts?)`         | Count matching rows.                                              |
+| `createMany(slug, rows, opts?)`      | Bulk insert → `BatchOperationResult`.                             |
+| `updateMany(slug, entries, opts?)`   | Bulk update, one `{ id, data }` per row → `BatchOperationResult`. |
 
 It also has `createCollection`, `listCollections`, `getCollection`,
 `updateCollection`, `deleteCollection`, `warmLocalizedReadiness`, and the
@@ -124,13 +124,13 @@ service's database adapter, Drizzle handle, sub-services and logger are not on
 it, so a plugin cannot reach the database through a service except by calling
 its methods.
 
-| Service | Type | Methods |
-|---|---|---|
-| `collections` | `PluginCollectionService` | the methods above |
-| `users` | `PluginUserService` | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile` |
-| `media` | `PluginMediaService` | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions` |
-| `email` | `PluginEmailService` | `send`, `sendWithTemplate`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate` |
-| `versions` | `PluginVersionsService` | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows` |
+| Service       | Type                      | Methods                                                                                                                                                                                                                                                                                                         |
+| ------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collections` | `PluginCollectionService` | the methods above                                                                                                                                                                                                                                                                                               |
+| `users`       | `PluginUserService`       | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile`                                                                                                                                                        |
+| `media`       | `PluginMediaService`      | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions` |
+| `email`       | `PluginEmailService`      | `send`, `sendWithTemplate`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate`                                                                                                                                                                       |
+| `versions`    | `PluginVersionsService`   | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows`, and `pins` (version pins on the plugin's own transaction; see [Pinning a version](/docs/versions#from-a-plugin))                                                                                                 |
 
 `ctx.services` also has `singles` (the declared Singles), `jobs` (queue
 background work) and `plugins` (services other plugins contribute). The
@@ -145,15 +145,15 @@ const result = await ctx.services.collections.listEntries(
   slug,
   {
     where: { status: "published", authorId: someId }, // filter (key/value)
-    sort: { field: "createdAt", direction: "desc" },  // single-field sort
-    pagination: { limit: 20, page: 1 },               // page through results
-    depth: 1,            // 0–5: how deep to populate relations (0 = ids only)
+    sort: { field: "createdAt", direction: "desc" }, // single-field sort
+    pagination: { limit: 20, page: 1 }, // page through results
+    depth: 1, // 0–5: how deep to populate relations (0 = ids only)
     select: { title: true, slug: true }, // projection: return only these fields
   },
   { as: "system" }
 );
 
-result.data;       // the rows for this page
+result.data; // the rows for this page
 result.pagination; // { total, limit, offset, hasMore }
 ```
 
@@ -166,7 +166,9 @@ populating relations and is cheaper.
 tells you exactly which rows failed and leaves the rest committed:
 
 ```ts
-const res = await ctx.services.collections.createMany(slug, rows, { as: "system" });
+const res = await ctx.services.collections.createMany(slug, rows, {
+  as: "system",
+});
 // { successful, failed, ids: string[], errors: [{ index, error }] }
 ```
 
@@ -324,6 +326,59 @@ core made to another address unless the same write gives it a password. An activ
 with no password that is not verified, such as an imported account whose owner sets a
 password by reset, stays allowed.
 
+## Reading your own collections without site hooks
+
+A plugin's bookkeeping, such as a usage index or a backfill cursor, is read to decide
+something. A site hook that scopes every read to a tenant, retargets a read by id, or
+rewrites the document would make that answer wrong while it still looks exact. `{ as:
+"system" }` doesn't help, because it skips only the access check.
+
+`ctx.services.ownCollections` reads **only the collections your plugin declared**, with no
+configured read hook shaping the read. It is `@experimental`.
+
+```ts
+const inUse = await ctx.services.ownCollections.count(
+  ctx.self.collections.usageIndex,
+  { where: { component: { equals: componentId } } }
+);
+```
+
+**What it skips:**
+
+- the collection's `beforeOperation`, `beforeRead` and `afterRead` hooks, including `*`
+  global hooks and every plugin's own, yours too;
+- stored hooks configured in the admin;
+- field hooks set in config;
+- the `collections.listQuery` filter.
+
+**What it keeps** (what a field's type does to make a stored value readable, none of which
+is a hook):
+
+- JSON decoding;
+- timestamp fields in their API form (`createdAt`);
+- the redaction of server-only values, such as password hashes and the owner column;
+- the rich-text output format and `select`;
+- decryption, where a field type decrypts its value (no core field type does today).
+
+**The rules:**
+
+- It offers `listEntries`, `findEntryById`, `count` and `group`, and runs **as the system
+  only**, never as a person, even inside a person's request. Its options carry only
+  `context`, `locale` and `fallbackLocale`.
+- Any other collection is refused before anything is read. That includes another plugin's,
+  the app's, and the collections of a plugin you depend on (`dependsOn`). Contrast `ctx.db`,
+  which lets a dependent plugin read the owner's tables.
+- It only reads. Writes keep every hook.
+- A related document expanded into the result (`depth` 1 or more) keeps its own
+  collection's hooks, so the waiver never travels to a row your plugin didn't declare.
+
+<Callout type="warn">
+  Never return what `ownCollections` reads to a person, in a route response or
+  anywhere else. A site's read hooks may be what keeps one tenant's rows from
+  another, and this read skips them. Use it to decide something in your plugin's
+  own code; read through `ctx.services.collections` for anything a person sees.
+</Callout>
+
 ## When to drop to `ctx.db`
 
 `ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses
@@ -400,24 +455,24 @@ statement and let the transaction go on, except that MySQL undoes the whole
 transaction on a deadlock. A statement that may fail, and that
 the rest of the work should not depend on, belongs outside the transaction.
 
-Another service or `ctx.settings` called inside a transaction runs on its own
-connection on PostgreSQL and MySQL, outside the transaction, and commits on its
-own.
+Another service called inside a transaction runs on its own connection on
+PostgreSQL and MySQL, outside the transaction, and commits on its own.
+
+`ctx.settings.set` is refused inside a transaction, on every dialect, with an
+error that says so: write the setting after the transaction has finished.
 
 On SQLite the transaction holds the database's only connection until it ends. A
-service or `ctx.settings` called inside joins it as a savepoint, and its rows
-roll back with it. What a service does after its own write waits until your
-transaction commits: collection hooks (`afterCreate`, `afterUpdate`,
-`afterDelete`), field `afterChange` hooks, events such as `user.created`,
-`media.uploaded` or `plugin.settings.changed`, cache revalidation and webhook
-delivery run once, before `ctx.db.transaction` resolves, and never run if it
+service called inside joins it as a savepoint, and its rows roll back with it.
+What a service does after its own write waits until your transaction commits:
+collection hooks (`afterCreate`, `afterUpdate`, `afterDelete`), field
+`afterChange` hooks, events such as `user.created` or `media.uploaded`, cache
+revalidation and webhook delivery run once, before `ctx.db.transaction` resolves, and never run if it
 rolls back. Inside such a transaction an after-hook's error is logged rather
 than failing the call, and a value a field `afterChange` hook or a Single's
 `afterUpdate` hook returns does not reshape the service's response. A media
 delete (`ctx.services.media.delete` or `bulkDelete`) called inside it is refused
 with `409 CONFLICT`, so stored files are never removed for a delete that rolls
-back: delete media after the transaction. A focal-point change made inside it
-keeps the superseded image variants rather than deleting them.
+back: delete media after the transaction.
 
 Statements from other requests wait for the transaction or run inside it. Core's
 security writes — sign-out, the refresh-token theft response, failed-attempt and

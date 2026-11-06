@@ -218,3 +218,29 @@ describe("names with letters outside ASCII", () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe("uniquenessCanBeAnIndex on MySQL's TEXT and BLOB sizes", () => {
+  // MySQL keys none of these whole, so a unique field's index cannot stand on any of them; every
+  // size is asked by the same rule the index renderer keys a column's prefix by.
+  it.each([
+    "text",
+    "TEXT",
+    "tinytext",
+    "mediumtext",
+    "longtext",
+    "blob",
+    "tinyblob",
+    "mediumblob",
+    "longblob",
+  ])("refuses %s", type => {
+    expect(uniquenessCanBeAnIndex(type, "mysql")).toBe(false);
+  });
+
+  it.each(["varchar(255)", "char(36)", "int"])("allows %s", type => {
+    expect(uniquenessCanBeAnIndex(type, "mysql")).toBe(true);
+  });
+
+  it.each(["postgresql", "sqlite"])("allows text on %s", dialect => {
+    expect(uniquenessCanBeAnIndex("text", dialect)).toBe(true);
+  });
+});

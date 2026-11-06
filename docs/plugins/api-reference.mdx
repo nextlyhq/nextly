@@ -7,15 +7,15 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 
 ## Entry points
 
-| Import                         | Surface                                                                                                                        | React?              |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
-| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                          | no                  |
-| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                             | no                  |
-| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                              | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult`               | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                            | no                  |
-| `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them                                                   | no                  |
-| `@nextlyhq/plugin-sdk/widgets` | `WidgetComponentProps`, `WidgetSlot`, `WidgetResult`, `WidgetResultField`, `WidgetQueryBatchResponse` — types only, no runtime | no                  |
+| Import                         | Surface                                                                                                          | React?              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`            | no                  |
+| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                               | no                  |
+| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult` | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                              | no                  |
+| `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them — a declaration a reviewer reads, not a boundary, since a plugin can bundle its own | no                  |
+| `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime    | no                  |
 
 ## `definePlugin(def): PluginDefinition`
 
@@ -34,7 +34,7 @@ interface PluginDefinition {
   schemaVersion?: number;
   setup?: (config: NextlyServiceConfig) => NextlyServiceConfig; // all setups before any init; receives copies, no live handles
   init?: (ctx: PluginContext) => void | Promise<void>;
-  onReady?: (ctx: PluginContext) => void | Promise<void>; // after every init and route registration
+  onReady?: (ctx: PluginContext) => void | Promise<void>; // after every init and route registration; @experimental
   onInstall?: (ctx: PluginContext) => void | Promise<void>; // `nextly plugins install`, after its migrations; @experimental
   onUninstall?: (
     ctx: PluginContext,
@@ -59,21 +59,57 @@ interface PluginContributions {
   routes?: PluginRoute[]; // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore?, formatTimestamps?, mount? }
   auth?: PluginAuthContributions; // hooks, challenges, ui — see Auth extensibility
   settings?: ZodObject; // gives ctx.settings
-  settingsPermission?: PermissionSlug; // one of your own permissions; replaces manage-settings for writes and the settings page
+  settingsPermission?: PermissionSlug; // one of your own permissions; replaces update-settings for writes and the settings page
   audit?: PluginAuditDeclaration; // gives ctx.audit
   hookPoints?: PluginHookPointDeclaration[]; // your slug and a dot, never core's prefixes, or boot fails
+  dashboard?: DashboardContribution; // @experimental: { widgets?, suggest?, alternatives?, attention? } — see Dashboard widgets below
   admin?: {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, by collection slug
-    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a top-level field of one of this plugin's field types
-    widgets?: PluginAdminWidget[]; // rendered on the dashboard; @experimental
+    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level or inside named groups
+    places?: PluginAdminPlaceDeclaration[]; // @experimental: { name, description? }, places on your own pages; your slug and a dot, or boot fails
+    filters?: PluginListFilterDeclaration[]; // @experimental: { name, label, collections?, options: [{ value, label, where }] }, in the entry list's toolbar
   };
 }
 ```
 
 Component references are string paths: `"<package>/<path>#<Export>"`, e.g. `"@acme/x/admin#ReportsPage"`.
+
+### Dashboard widgets
+
+A plugin adds dashboard widgets one way: `defineWidget` declarations under
+`contributes.dashboard.widgets`. Startup refuses the older `admin.widgets` and `widgetSources`
+keys, naming this one.
+
+```ts
+import { definePlugin, defineWidget } from "@nextlyhq/plugin-sdk";
+
+const ordersThisMonth = defineWidget({
+  id: "acme/orders-this-month",
+  title: "Orders this month",
+  description: "How many orders came in over the last 30 days.",
+  size: { default: { w: 3, h: 2 } },
+  view: "figure",
+  load: async ({ services }) => ({
+    total: await services.count("orders", { window: { range: "30d" } }),
+  }),
+});
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-orders",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  contributes: {
+    dashboard: { widgets: [ordersThisMonth] },
+  },
+});
+```
+
+`suggest` asks for a place on the default dashboard, `alternatives` offers a widget in place of a
+built-in one, and `attention` adds lines to Needs your attention. [Dashboard widgets](/docs/widgets)
+covers the views, what each `load` returns, and drawing your own component.
 
 ## `PluginContext` (`ctx`)
 
@@ -176,9 +212,11 @@ is still frozen and still typed readonly.
 ### Transactions
 
 ```ts
-ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>): Promise<T>;
+ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>, options?: { isolation?: "snapshot" }): Promise<T>;
 // PluginTransaction = PluginDatabase without `transaction`; calling one rejects (INVALID_INPUT, nested-plugin-transaction)
 // insert / insertReturning take PluginInsert<T>: InferInsert<T> with the col.id() key optional; ctx.db fills a UUIDv7
+// options.isolation "snapshot": read-only, every read sees one moment (REPEATABLE READ on PostgreSQL and MySQL;
+// SQLite's transactions are serial already); a write through tx rejects (INVALID_INPUT, write-in-snapshot-transaction)
 
 ctx.db.raw.transaction(work: (tx: DatabaseInstance) => Promise<T>): Promise<T>;
 // PluginRawDatabase: the fluent builder; the live Drizzle instance with rawSql granted
@@ -218,7 +256,10 @@ ctx.events.on(eventName, handler); // observe-only; e.g. `collection.${slug}.cre
 ctx.events.emit(eventName, payload); // your own `<slug>.…` names, declared in contributes.events
 ```
 
-Event-name constants are exported: `DocumentEvents`, `AuthEvents`, `MediaEvents`.
+Event-name constants are exported: `DocumentEvents`, `AuthEvents`, `MediaEvents`,
+and `UserEvents` (`@experimental`). Core emits `user.created` and `user.deleted`
+with `{ userId }` once the change has committed, so a hook or a plugin write that
+rolls back sends nothing. A plugin subscribes to them and cannot emit either.
 
 A plugin emits and declares only names beginning with its own slug and a dot, the slug
 being `pluginAdminSlug(name)`: `@acme/billing` emits `acme-billing.charged`.
@@ -246,7 +287,7 @@ registerKnownPlugin(packagePrefix, async () => {
 });
 ```
 
-When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you, with a `plugin-admin-components.generated.ts` listing its paths. The app's admin page imports the first, and its server layout checks the second with `checkAdminComponents` from `nextly/runtime`, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
+When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you, with a `plugin-admin-components.generated.ts` listing its paths. The app's admin page imports the first, and its server layout hands the second to `checkAdminComponents` from `nextly/runtime`, which writes the pair again in development when it falls behind, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. `nextly generate:types --check` holds the committed pair to the config in CI. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
 
 ## Testing (`/testing`)
 
@@ -257,7 +298,8 @@ createTestNextly(opts: {
   dialect?: "sqlite" | "postgresql" | "mysql";  // default sqlite (in-memory)
   serverUrl?: string;                           // else TEST_POSTGRES_URL / TEST_MYSQL_URL
   pluginConsent?: { rawSql: readonly string[] }; // @experimental; the test's db.rawSqlPlugins
-}): Promise<{ nextly; getService; hooks; events; adapter; destroy }>;
+  basePath?: string;                            // where generated files go; else a temporary folder
+}): Promise<{ nextly; getService; hooks; events; adapter; basePath; destroy }>;
 
 getConfiguredTestDialects(): TestDialect[];  // sqlite, plus any whose server URL is set
 ```
@@ -280,6 +322,7 @@ interface PluginFieldType {
   surfaces?: FieldSurface[];       // where it may be offered; defaults to entries/singles only
   layout?: "takeover";
   validate?: (value, args) => true | string | PluginFieldIssue[] | Promise<…>;  // see below
+  validateEmpty?: boolean;         // experimental: hand `validate` an emptied value too
   validateOptions?: (field) => true | string | PluginFieldIssue[];              // see below
 }
 ```
@@ -345,6 +388,10 @@ For `json` that check is representability — a cycle or a `BigInt` is rejected
 before you see it — and nothing more, so the shape of the document is yours to
 define.
 
+_Experimental:_ a type that sets `validateEmpty: true` is also handed a value a write
+empties (`null` or `""`), for content a write must not drop unasked, such as the
+blocks an author locked. Its `required` issue is still reported as before.
+
 #### Judging a value against stored rows: `write.readStored`
 
 Some rules are about the rows around a value rather than the value alone — a
@@ -379,9 +426,11 @@ async validate(value, { write }) {
 - **As the system.** No read hooks and no access rules shape the answer: a
   value a hook hides from a reader is still what that reader's page is built
   from.
-- **Your type only.** A top-level field of your own type, in any collection.
-  Another field, a field of another type, or a localized field is refused with
-  an error naming it.
+- **Your type only.** A field of your own type, in any collection: a top-level
+  one, or one inside named groups, named by its path (`field: "hero.body"`).
+  Another field, a field of another type, a field in a repeater's rows or a
+  field-group instance, or a localized field is refused with an error naming
+  it.
 - **`form`.** `"published"` is the live row. `"draft"` is what an editor's
   preview reads: the pending working draft where one is shown, otherwise the
   live row.
@@ -623,6 +672,8 @@ return ctx.auth.completeLogin(user.id, {
 
 Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`. `currentUser` answers `null` to a POST, PUT, PATCH or DELETE whose `Origin` (or, without one, `Referer`) is neither your site nor an allowed origin, or that names no origin, as it does to a request with no session; when that request carried the session cookie, the route records a `csrf-failed` audit event. `verifyCsrf` accepts the token in the `x-csrf-token` header or as `csrfToken` in a JSON body; it reads at most 64 KB of a body looking for it, and refuses a larger one with `reason: "body-too-large"`, so a large request sends the token in the header.
 
+A plugin that computes the `next` destination from something a caller sent reduces it with `sanitizeAdminPath` (`@experimental`, exported from the SDK): anything that is not a same-origin path under `/admin` answers `DEFAULT_ADMIN_PATH` (`/admin`) rather than raising, so a login route cannot be turned into an open redirect.
+
 ### `ctx.filters.decide`
 
 For a seam where handlers VETO rather than transform.
@@ -669,6 +720,114 @@ and never with a prefix core's seams use (`email.`, `admin.` and
 prefixes (`hook-point-reserved`), outside the plugin's slug
 (`hook-point-outside-prefix`), or declared by two plugins
 (`hook-point-collision`, naming both).
+
+### Admin places
+
+Admin pages have named places a plugin can add to (`@experimental`). Core names
+one per page, and the entry form within the edit pages: `dashboard`, `collection.list`, `collection.edit`, `single.edit`,
+`entry.form`, `settings`, `user.detail`, `account` and `login`, exported as
+`CORE_ADMIN_PLACES`. A place id is typed `AdminPlaceId`, a closed set, so a
+misspelled place does not compile.
+
+A plugin declares places on its own pages in `contributes.admin.places`, each
+named with its slug and a dot, and types them by augmenting `AdminPlaces`:
+
+```ts
+definePlugin({
+  name: "@acme/billing",
+  // …
+  contributes: {
+    admin: { places: [{ name: "acme-billing.invoice" }] },
+  },
+});
+
+declare module "@nextlyhq/plugin-sdk" {
+  interface AdminPlaces {
+    "acme-billing.invoice": { context: { invoiceId: string } };
+  }
+}
+```
+
+Boot fails, naming the plugin and the place, on a place that is malformed
+(`admin-place-malformed`), declared by a plugin whose slug is a segment core
+reserves (`admin-place-reserved-slug`), under one of core's segments
+(`admin-place-reserved`), outside the plugin's slug
+(`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
+Nothing renders at a place yet.
+
+### Entry-list filters
+
+A plugin can add filters to the entry list's toolbar (`@experimental`). Each
+option narrows the list by a `where`:
+
+```ts
+contributes: {
+  admin: {
+    filters: [
+      {
+        name: "acme-support.state",
+        label: "Ticket state",
+        collections: ["tickets"], // every collection's list when absent
+        options: [
+          { value: "open", label: "Open", where: { state: { equals: "open" } } },
+          { value: "closed", label: "Closed", where: { state: { equals: "closed" } } },
+        ],
+      },
+    ],
+  },
+},
+```
+
+Choosing an option adds its `where` to the list's own request, which the
+server answers with the reader's access, so a filter only ever narrows what
+they can already list. The choice is kept in the page's URL as
+`?pf=acme-support.state:open`; one naming an undeclared filter or option is
+ignored. A collection is named by the slug it was declared with: one a plugin
+contributes follows that plugin's renames, so a filter still reaches it after
+the host renames it.
+
+Boot fails, naming the plugin and the filter, on a name outside the plugin's
+slug (`list-filter-outside-namespace`), one declared twice
+(`list-filter-duplicate`), or one with a key it does not take (a misspelled
+`collection`, say), no label, no options, a collection slug no collection can
+have, an option value a URL can't carry, two options with one value, or a
+`where` the list could not read, malformed or nested too deep once joined to
+the list's own filters (`list-filter-invalid`).
+
+### Reading what other plugins declared
+
+A plugin publishes static data for another to read with `contributes.declarations`,
+keyed by the CONSUMING plugin's package name. Core stores what it is given and
+reads inside none of it, with one exception: declarations addressed to
+`@nextlyhq/plugin-page-builder` are parsed and validated by core itself, which
+assembles them into the page builder's block manifest and component map. Read
+what was addressed to you with `collectDeclarations` from
+`@nextlyhq/plugin-sdk`, passing `ctx.config.plugins`, which lists every
+configured plugin (name, version, enabled, capabilities, declarations):
+
+```ts
+// `ctx` is the plugin context, in init or a route handler.
+const declared = collectDeclarations(
+  ctx.config.plugins ?? [],
+  "@acme/nextly-plugin-blocks"
+);
+// → [{ source: "@acme/pricing", value: { blocks: [...] } }, …]
+```
+
+`collectDeclarations` only pairs and appends. Each entry names the plugin that
+wrote the declaration, in plugin order, and it reports nothing itself, so
+detecting and reporting two plugins whose declarations do not agree is the
+CONSUMER's job — the page builder's block manifest names both and refuses. A
+plugin configured `enabled: false` contributes nothing, and one that declared
+nothing for you contributes no entry, so an empty answer means nobody declared.
+It reads the plugin list alone, so it answers the same at boot and at
+generation time.
+
+Like leaving `sql` out of the query operators and the `rawSql` grant, this is a
+reviewed channel, not an enforced boundary: plugins run as trusted code, and
+nothing stops one reading `ctx.config.plugins` itself. `collectDeclarations` is
+the one helper that pairs each declaration with its author, so a reviewer sees
+who declared what rather than holding a value whose author it cannot name.
 
 ### Lifecycle
 

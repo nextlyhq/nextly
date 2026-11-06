@@ -3,6 +3,13 @@
 -- Dialect: mysql
 -- Template: blog
 -- Version: 1.0
+--
+-- Every table takes the database's character set and collation, as nextly's
+-- own tables do: a foreign key to `users` or `media` needs both sides in one
+-- collation. A column that references a row is a varchar, since MySQL keys no
+-- TEXT column and indexes every foreign key: varchar(191) for a user, the
+-- width nextly gives users.id (an auth adapter's ids can be longer than a
+-- UUID), and varchar(36), nextly's id type, for any other row.
 
 -- ============================================
 -- UP: Create all blog schema
@@ -15,14 +22,15 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` varchar(255) NOT NULL,
   `slug` varchar(255) NOT NULL,
-  `content` json,
+  `content` text,
   `excerpt` text,
-  `featured_image` text,
-  `author` text,
+  `featured_image` varchar(36),
+  `author` varchar(191),
   `categories` json,
   `tags` json,
   `published_at` timestamp NULL DEFAULT NULL,
-  `status` varchar(20) DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  `status` varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  `first_published_at` timestamp NULL DEFAULT NULL,
   `featured` tinyint(1) DEFAULT 0,
   `seo` json,
   `reading_time` integer,
@@ -31,7 +39,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_posts_slug` (`slug`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Categories collection
 CREATE TABLE IF NOT EXISTS `dc_categories` (
@@ -41,12 +49,13 @@ CREATE TABLE IF NOT EXISTS `dc_categories` (
   `slug` varchar(255) NOT NULL,
   `icon` text,
   `description` text,
-  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `first_published_at` timestamp NULL DEFAULT NULL,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_categories_slug` (`slug`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Tags collection
 CREATE TABLE IF NOT EXISTS `dc_tags` (
@@ -55,12 +64,13 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
   `name` varchar(255) NOT NULL,
   `slug` varchar(255) NOT NULL,
   `description` text,
-  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `first_published_at` timestamp NULL DEFAULT NULL,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_tags_slug` (`slug`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ USER EXTENSION TABLE ============
 
@@ -69,19 +79,23 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
 -- at runtime so the migration and the runtime schema stay in lockstep.
 -- Column names are snake_case of the camelCase field names defined in
 -- codefirst.config.ts: bio → bio, avatarUrl → avatar_url, slug → slug.
+-- One exception: `slug` is unique here, as in the other dialects' files,
+-- because /authors/[slug] finds an author by it. MySQL keys a varchar, not a
+-- TEXT column, so it is varchar(255): the length nextly gives a unique text
+-- field on MySQL.
 CREATE TABLE IF NOT EXISTS `user_ext` (
-  `id` text PRIMARY KEY NOT NULL,
-  `user_id` text NOT NULL,
+  `id` varchar(36) PRIMARY KEY NOT NULL,
+  `user_id` varchar(191) NOT NULL,
   `bio` text,
   `avatar_url` text,
-  `slug` text,
+  `slug` varchar(255),
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_user_ext_user_id` (`user_id`),
   UNIQUE KEY `uq_user_ext_slug` (`slug`),
   CONSTRAINT `fk_user_ext_user_id` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ JUNCTION TABLES ============
 
@@ -92,7 +106,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts_categories` (
   PRIMARY KEY (`post_id`, `category_id`),
   CONSTRAINT `fk_posts_categories_post` FOREIGN KEY (`post_id`) REFERENCES `dc_posts`(`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_posts_categories_category` FOREIGN KEY (`category_id`) REFERENCES `dc_categories`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Posts <-> Tags (many-to-many)
 CREATE TABLE IF NOT EXISTS `dc_posts_tags` (
@@ -101,7 +115,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts_tags` (
   PRIMARY KEY (`post_id`, `tag_id`),
   CONSTRAINT `fk_posts_tags_post` FOREIGN KEY (`post_id`) REFERENCES `dc_posts`(`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_posts_tags_tag` FOREIGN KEY (`tag_id`) REFERENCES `dc_tags`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ SINGLES ============
 -- Note: All single tables include system columns (id, title, slug, created_at, updated_at)
@@ -112,23 +126,25 @@ CREATE TABLE IF NOT EXISTS `single_site_settings` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` varchar(255) NOT NULL DEFAULT 'Site Settings',
   `slug` varchar(255) NOT NULL DEFAULT 'site-settings',
-  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `first_published_at` timestamp NULL DEFAULT NULL,
   `site_name` varchar(255) NOT NULL DEFAULT 'My Blog',
   `tagline` varchar(500) DEFAULT 'Thoughts on web development',
   `site_description` text,
-  `logo` text,
+  `logo` varchar(36),
   `social` json,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Navigation single
 CREATE TABLE IF NOT EXISTS `single_navigation` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` varchar(255) NOT NULL DEFAULT 'Navigation',
   `slug` varchar(255) NOT NULL DEFAULT 'navigation',
-  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `first_published_at` timestamp NULL DEFAULT NULL,
   `header_links` json,
   `footer_read_links` json,
   `show_theme_toggle` tinyint(1) DEFAULT 1,
@@ -136,14 +152,15 @@ CREATE TABLE IF NOT EXISTS `single_navigation` (
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Homepage single
 CREATE TABLE IF NOT EXISTS `single_homepage` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
   `title` varchar(255) NOT NULL DEFAULT 'Homepage',
   `slug` varchar(255) NOT NULL DEFAULT 'homepage',
-  `status` varchar(20) DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `first_published_at` timestamp NULL DEFAULT NULL,
   `hero_title` varchar(500) NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
   `hero_subtitle` varchar(500) DEFAULT 'Essays and notes from our engineering team.',
   `show_featured_post` tinyint(1) DEFAULT 1,
@@ -158,30 +175,30 @@ CREATE TABLE IF NOT EXISTS `single_homepage` (
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ INDEXES ============
 
 -- Posts indexes
-CREATE INDEX IF NOT EXISTS `idx_posts_status` ON `dc_posts`(`status`);
-CREATE INDEX IF NOT EXISTS `idx_posts_published` ON `dc_posts`(`published_at` DESC);
-CREATE INDEX IF NOT EXISTS `idx_posts_featured` ON `dc_posts`(`featured`) WHERE `featured` = 1;
-CREATE INDEX IF NOT EXISTS `idx_posts_author` ON `dc_posts`(`author`(255));
+CREATE INDEX `idx_posts_status` ON `dc_posts`(`status`);
+CREATE INDEX `idx_posts_published` ON `dc_posts`(`published_at` DESC);
+CREATE INDEX `idx_posts_featured` ON `dc_posts`(`featured`);
+CREATE INDEX `idx_posts_author` ON `dc_posts`(`author`);
 
 -- Categories indexes
-CREATE INDEX IF NOT EXISTS `idx_categories_slug` ON `dc_categories`(`slug`);
+CREATE INDEX `idx_categories_slug` ON `dc_categories`(`slug`);
 
 -- Tags indexes
-CREATE INDEX IF NOT EXISTS `idx_tags_slug` ON `dc_tags`(`slug`);
+CREATE INDEX `idx_tags_slug` ON `dc_tags`(`slug`);
 
 -- Junction table indexes (FK columns not covered by composite PK)
-CREATE INDEX IF NOT EXISTS `idx_posts_categories_category` ON `dc_posts_categories`(`category_id`);
-CREATE INDEX IF NOT EXISTS `idx_posts_tags_tag` ON `dc_posts_tags`(`tag_id`);
+CREATE INDEX `idx_posts_categories_category` ON `dc_posts_categories`(`category_id`);
+CREATE INDEX `idx_posts_tags_tag` ON `dc_posts_tags`(`tag_id`);
 
 -- Singles indexes (slug columns)
-CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_site_settings_slug` ON `single_site_settings`(`slug`);
-CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_navigation_slug` ON `single_navigation`(`slug`);
-CREATE UNIQUE INDEX IF NOT EXISTS `uq_single_homepage_slug` ON `single_homepage`(`slug`);
+CREATE UNIQUE INDEX `uq_single_site_settings_slug` ON `single_site_settings`(`slug`);
+CREATE UNIQUE INDEX `uq_single_navigation_slug` ON `single_navigation`(`slug`);
+CREATE UNIQUE INDEX `uq_single_homepage_slug` ON `single_homepage`(`slug`);
 
 -- ============ FOREIGN KEY RELATIONSHIPS ============
 
@@ -190,7 +207,7 @@ ALTER TABLE `dc_posts`
 ADD CONSTRAINT `fk_posts_featured_image`
 FOREIGN KEY (`featured_image`) REFERENCES `media`(`id`) ON DELETE SET NULL;
 
--- Posts author -> users (text FK — users.id is text in the core schema)
+-- Posts author -> users (varchar(191), as users.id in the core schema)
 ALTER TABLE `dc_posts`
 ADD CONSTRAINT `fk_posts_author`
 FOREIGN KEY (`author`) REFERENCES `users`(`id`) ON DELETE SET NULL;

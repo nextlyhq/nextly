@@ -13,7 +13,9 @@ import {
 } from "../gate";
 
 /** The Team card's gate: a reader who may read people AND may add or change them. */
-const TEAM = { allOf: ["read-users", ["create-users", "update-users"]] };
+const TEAM = {
+  allOf: ["read-users", { anyOf: ["create-users", "update-users"] }],
+};
 
 /** Each reader's grants, and whether the Team gate admits them. */
 const TABLE: Array<[string, string[], boolean]> = [
@@ -51,35 +53,67 @@ describe("an allOf gate", () => {
   });
 });
 
-describe("the forms that came before allOf", () => {
-  it("keeps a slug and an array meaning what they meant: one, and any of", () => {
+describe("an anyOf gate", () => {
+  /** The Upcoming releases card's gate: any one of three permissions opens it. */
+  const RELEASES = {
+    anyOf: [
+      "read-content-releases",
+      "create-content-releases",
+      "publish-content-releases",
+    ],
+  };
+
+  it.each(RELEASES.anyOf)(
+    "opens the card for a holder of %s alone, on the server and in the browser",
+    slug => {
+      expect(widgetGateHolds(RELEASES, held => held === slug)).toBe(true);
+      const verdicts = new Map(
+        (requiredPermissionSlugs(RELEASES) ?? []).map(each => [
+          each,
+          each === slug,
+        ])
+      );
+      expect(holdsWidgetPermission(RELEASES, verdicts)).toBe(true);
+    }
+  );
+
+  it("opens it for no one holding none of them", () => {
+    expect(widgetGateHolds(RELEASES, held => held === "read-posts")).toBe(
+      false
+    );
+    expect(widgetGateHolds(RELEASES, () => false)).toBe(false);
+  });
+
+  it.each([
+    ["an empty anyOf", { anyOf: [] }],
+    ["an entry that is not a slug", { anyOf: ["read-posts", 7] }],
+    ["a key beside anyOf", { anyOf: ["read-posts"], allOf: ["x"] }],
+  ])("refuses %s, for everyone", (_case, gate) => {
+    expect(requiredPermissionGroups(gate)).toBeUndefined();
+    expect(widgetGateHolds(gate, () => true)).toBe(false);
+  });
+});
+
+describe("a slug, and a list", () => {
+  it("keeps a slug meaning one permission", () => {
     const held =
       (...slugs: string[]) =>
       (slug: string) =>
         slugs.includes(slug);
     expect(widgetGateHolds("read-users", held("read-users"))).toBe(true);
-    expect(widgetGateHolds(["a", "b"], held("b"))).toBe(true);
-    expect(widgetGateHolds(["a", "b"], held())).toBe(false);
-    expect(requiredPermissionGroups(["a", "b"])).toEqual([["a", "b"]]);
+    expect(widgetGateHolds("read-users", held())).toBe(false);
+  });
+
+  it("refuses a bare list, for everyone, as no gate a declaration may write", () => {
+    // A list would read as "any" to one author and "all" to the next, so it is
+    // refused rather than given either meaning; `{ anyOf }` says the one.
+    expect(requiredPermissionGroups(["a", "b"])).toBeUndefined();
+    expect(widgetGateHolds(["a", "b"], () => true)).toBe(false);
+    // The same list inside allOf is refused too: an entry is a slug or `{ anyOf }`.
+    expect(widgetGateHolds({ allOf: ["a", ["b"]] }, () => true)).toBe(false);
   });
 
   it("admits everyone when no gate is declared", () => {
     expect(widgetGateHolds(undefined, () => false)).toBe(true);
-  });
-});
-
-describe("an allOf gate that cannot be used", () => {
-  it.each([
-    ["an empty allOf", { allOf: [] }],
-    ["an empty entry", { allOf: ["read-users", []] }],
-    ["an entry that is not a slug", { allOf: ["read-users", 7] }],
-    ["an entry nested a level deeper", { allOf: [{ allOf: ["read-users"] }] }],
-    ["a key beside allOf", { allOf: ["read-users"], anyOf: ["x"] }],
-    ["an object with no allOf", { anyOf: ["read-users"] }],
-  ])("refuses %s, for everyone", (_case, gate) => {
-    expect(requiredPermissionGroups(gate)).toBeUndefined();
-    expect(requiredPermissionSlugs(gate)).toBeUndefined();
-    // Refused, never read as no gate at all.
-    expect(widgetGateHolds(gate, () => true)).toBe(false);
   });
 });

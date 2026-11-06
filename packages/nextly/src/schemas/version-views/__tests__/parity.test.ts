@@ -10,10 +10,19 @@ import { Column, is, type Table } from "drizzle-orm";
 import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
 import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
-import { my, pg, sl } from "../index";
+import * as my from "../mysql";
+import * as pg from "../postgres";
+import * as sl from "../sqlite";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /** Property and column names, by asking Drizzle what each property is. */
 const columnNames = (table: Table): string[] =>

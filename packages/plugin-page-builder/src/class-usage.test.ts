@@ -587,3 +587,56 @@ describe("whether the whole document was read", () => {
     }
   });
 });
+
+describe("how many blocks carry each class", () => {
+  const text = (id: string, classes: string[], extra: object = {}) => ({
+    id,
+    type: "core/text",
+    version: 1,
+    props: {},
+    classes,
+    ...extra,
+  });
+
+  it("counts every block carrying it, gated and device-hidden ones included", () => {
+    const usage = classUsageOf({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        text("a", ["card", "hero"]),
+        {
+          id: "box",
+          type: "core/box",
+          version: 1,
+          props: {},
+          // Shown only to some visitors: still a use of the class.
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+          slots: {
+            default: [
+              text("b", ["card"]),
+              text("c", ["card"], { visibility: { hideOn: ["mobile"] } }),
+            ],
+          },
+        },
+      ],
+    });
+    expect(usage.blocks.get("card")).toBe(3);
+    expect(usage.blocks.get("hero")).toBe(1);
+    // The ids are the classes counted, one view of one walk.
+    expect(usage.ids).toEqual([...usage.blocks.keys()].sort());
+  });
+
+  it("counts a block once however often its list repeats a class", () => {
+    expect(classUsageOf(withClasses(["card", "card"])).blocks.get("card")).toBe(
+      1
+    );
+  });
+
+  it("keeps a class named like a prototype key as a class", () => {
+    expect(
+      classUsageOf(withClasses(["__proto__"])).blocks.get("__proto__")
+    ).toBe(1);
+  });
+});

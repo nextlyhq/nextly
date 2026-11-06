@@ -8,10 +8,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderHook } from "@admin/__tests__/utils";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
+import { parseApiError } from "@admin/lib/api/parseApiError";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
-import { useSchemaSave, type SchemaApplyOutcome } from "../useSchemaSave";
+import {
+  mirrorSchemaFile,
+  useSchemaSave,
+  type SchemaApplyOutcome,
+} from "../useSchemaSave";
 
 const { toastError, toastWarning, startRestart, stopRestart } = vi.hoisted(
   () => ({
@@ -116,6 +121,33 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * A refusal as the API sends it: the envelope's own message is only "Validation failed.", and the
+ * reason is the field's.
+ */
+const REASON =
+  'The translations table already has a column "code" (integer) that cannot hold every value code allows (text).';
+const refusal = () =>
+  parseApiError(
+    {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Validation failed.",
+        requestId: "req-1",
+        data: {
+          errors: [
+            {
+              path: "fields.code",
+              code: "COLUMN_ALREADY_EXISTS",
+              message: REASON,
+            },
+          ],
+        },
+      },
+    },
+    400
+  );
+
 describe("handleSave", () => {
   it("refuses without a slug and previews nothing", async () => {
     const { result, previewFn } = setup({ slug: undefined });
@@ -159,6 +191,55 @@ describe("handleSave", () => {
     await act(async () => result.current.handleSave());
     expect(toastError).toHaveBeenCalledWith("server exploded");
     expect(confirmation.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("a refusal's reasons", () => {
+  it("shows a refused preview's field reasons, not its summary", async () => {
+    const { result } = setup({
+      previewFn: vi.fn(() => Promise.reject(refusal())),
+    });
+    await act(async () => result.current.handleSave());
+    expect(toastError).toHaveBeenCalledWith(REASON);
+  });
+
+  it("shows a refused apply's field reasons, not its summary", async () => {
+    const confirmation = confirmationStub(preview());
+    const { result } = setup({
+      confirmation,
+      applyFn: vi.fn(() => Promise.reject(refusal())),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(confirmation.endApply).toHaveBeenCalledTimes(1));
+    expect(stopRestart).toHaveBeenCalledWith(false, REASON);
+  });
+
+  it("names the reason ui-schema.json could not be written", async () => {
+    await mirrorSchemaFile(
+      () => Promise.reject(refusal()),
+      "Collection updated"
+    );
+    expect(toastWarning).toHaveBeenCalledWith(
+      `Collection updated, but ui-schema.json could not be updated: ${REASON}.`
+    );
+  });
+
+  it("names the reason a follow-up step was refused", async () => {
+    const confirmation = confirmationStub(preview());
+    const { result } = setup({
+      confirmation,
+      onApplied: vi.fn(() => Promise.reject(refusal())),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() =>
+      expect(toastWarning).toHaveBeenCalledWith(
+        `Posts schema updated, but a follow-up step did not complete: ${REASON}.`
+      )
+    );
   });
 });
 

@@ -28,6 +28,10 @@
  */
 export { pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
+export type {
+  FontAddLimits,
+  PageBuilderFontOptions,
+} from "./site-fonts/options";
 
 // The blocks field type and the document it stores. `BlockDocument` is
 // re-exported here because generated types name it: an app depends on this
@@ -83,12 +87,28 @@ export { pagesCollection } from "./collections/pages";
  */
 export { resolveSiteStyle, siteBreakpoints, siteSheet } from "./site-style";
 export type { SiteStyleData } from "./site-style";
-export { SITE_STYLE_SLUG, loadSiteStyle } from "./site-style-storage";
+export { SITE_STYLE_SLUG } from "./site-style-storage";
+export { loadSiteStyle } from "./site-style-load";
 export {
   previewViewportsFromSiteStyle,
   siteStyleViewports,
 } from "./preview-viewports";
 export type { SiteStyleReader } from "./site-style-storage";
+
+// The Layout a stored page is drawn inside, read from the site: its own
+// published Layout, else the site's default, else none. A published route
+// calls it per request; the rule itself is the engine's `resolvePageLayout`.
+export { effectiveLayoutFor } from "./default-layout/effective-layout";
+export type { EffectiveLayoutDeps } from "./default-layout/effective-layout";
+// Where the site's default Layout is recorded.
+export { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
+// The provider a blocks page route takes as `layouts`, so the route draws each
+// page inside its Layout without importing this plugin.
+export { pageBuilderLayouts } from "./page-layouts";
+export type {
+  PageBuilderLayoutsOptions,
+  PageBuilderLayoutsProvider,
+} from "./page-layouts";
 
 // The class-usage index, the derivation behind it, and the walk that repairs
 // it.
@@ -166,6 +186,7 @@ export {
   componentUsageIndex as componentUsageIndexDescriptor,
 } from "./component-usage";
 export { usageCountReader } from "./class-usage-runtime";
+export { COMPONENT_RETIRED_SLUG } from "./collections/component-retired-exposures";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
 export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
 // The service key and its shape, so a host can reach the reader that is
@@ -213,3 +234,53 @@ export type { BlockRegistrationService } from "./blocks/registration-service";
 // Block authors take both from `@nextlyhq/plugin-sdk/blocks`, where the export
 // is covered by the SDK's stability ledger.
 export type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
+
+// The composition API's requests and answers, for a script or an agent that
+// calls the routes rather than the editor. Experimental, as the routes are.
+export {
+  DEFINITION_ACTIONS_ROUTE_PATH,
+  definitionActionPath,
+  PAGE_ACTIONS_ROUTE_PATH,
+} from "./composition-actions-contract";
+export type {
+  ActionPosition,
+  DefinitionAction,
+  DefinitionActionRequest,
+  DefinitionActionResult,
+  ExposureTargetInput,
+  ListQueryChange,
+  PageAction,
+  PageActionRequest,
+  PageActionResult,
+} from "./composition-actions-contract";
+export type { ActionBy } from "./component-actions-contract";
+export type { ActionAnswer } from "./composition-route-kit";
+// What a client reads before composing: the site's patterns, components and
+// Layouts by the ids the actions take, and the actions with their schemas.
+export {
+  compositionManifestSchema,
+  MANIFEST_FORMAT_VERSION,
+  MANIFEST_LOCALE_PARAM,
+  MANIFEST_ROUTE_PATH,
+} from "./composition-manifest";
+export type {
+  CompositionManifest,
+  ManifestAction,
+  ManifestComponent,
+  ManifestLayout,
+  ManifestPattern,
+  ManifestRequest,
+  ManifestTier,
+} from "./composition-manifest";
+// The same actions and manifest for code serving a request of its own, as
+// `nextly.plugins["@nextlyhq/plugin-page-builder"].composition`.
+export { COMPOSITION_SERVICE } from "./composition-service";
+export type {
+  CompositionCaller,
+  CompositionService,
+} from "./composition-service";
+export type {
+  SavePatternDryRun,
+  SavePatternDryRunResponse,
+  StoredPageAddress,
+} from "./library-contract";

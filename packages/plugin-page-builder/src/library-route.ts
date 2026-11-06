@@ -3,6 +3,7 @@ import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   NextlyError,
   type PluginRouteContext,
+  type PluginRouteIdentity,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { requireNextly } from "nextly/runtime";
@@ -238,6 +239,8 @@ interface LibraryCaller {
 
 /** The capabilities the pattern route uses, named rather than imported whole. */
 export interface PatternLibraryContext extends LibraryCaller {
+  /** An API key's own grants, which its read is judged on rather than its owner's. */
+  authenticatedScope?: unknown;
   services: {
     collections: {
       listEntries(
@@ -363,25 +366,67 @@ export const DEFAULT_COMPONENT_STORE: ComponentStore = {
  * `?locale=` is everywhere in the admin — and an unknown code resolves to the
  * default in the Direct API, so nothing here has to know the site's languages.
  */
-function directComponentReads(
+/**
+ * The Direct API options that make one read run AS THE CALLER of a plugin
+ * route: `overrideAccess: false`, and the identity the dispatcher resolved.
+ *
+ * ONE statement of it for every route in this package that reads as the user.
+ * Spelled at each call site, the routes would agree on the day they were
+ * written and drift the first time one of them learned something — and the
+ * direction a copy drifts in is the one that reads with more than the caller
+ * may see. See {@link directComponentReads} for why each half is needed.
+ *
+ * A public route has no caller; the routes using this are gated, so the
+ * anonymous branch is the honest answer for a context nothing authenticated.
+ */
+export async function readingAsUser(
+  ctx: Pick<PluginRouteContext, "caller">
+): Promise<{
+  overrideAccess: false;
+  user: PluginRouteIdentity["user"] | undefined;
+  actor?: NonNullable<PluginRouteIdentity["authenticatedScope"]>;
+}> {
+  const identity = await ctx.caller?.identity();
+  return {
+    overrideAccess: false as const,
+    user: identity?.user,
+    ...(identity?.authenticatedScope === undefined
+      ? {}
+      : { actor: identity.authenticatedScope }),
+  };
+}
+
+/**
+ * The caller as a call to the plugin's collection service takes them: as the
+ * signed-in user, with an API key's own scope, so the key is judged on its
+ * grants rather than its owner's whether or not the request pinned it. The
+ * one place a route builds those options, for its reads and its writes alike.
+ */
+export function asServiceCaller<TUser, TScope>(ctx: {
+  readonly user: TUser | null;
+  readonly authenticatedScope?: TScope | undefined;
+}): {
+  as: "user";
+  user: TUser | undefined;
+  authenticatedScope?: TScope;
+} {
+  return {
+    as: "user",
+    user: ctx.user ?? undefined,
+    ...(ctx.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: ctx.authenticatedScope }),
+  };
+}
+
+export function directComponentReads(
   ctx: Pick<PluginRouteContext, "caller">,
   locale?: string
 ): ComponentReads {
   const inLocale = locale === undefined ? {} : { locale };
-  // Resolved once for both reads, and lazily: the caller resolves its own
-  // identity once per request, and a route with nothing to read never asks.
-  // A public route has no caller; this one is gated, so the anonymous branch
-  // is the honest answer for a context nothing authenticated.
-  const asUser = async () => {
-    const identity = await ctx.caller?.identity();
-    return {
-      overrideAccess: false as const,
-      user: identity?.user,
-      ...(identity?.authenticatedScope === undefined
-        ? {}
-        : { actor: identity.authenticatedScope }),
-    };
-  };
+  // Resolved per read, and lazily: the caller resolves its own identity once
+  // per request, and a route with nothing to read never asks.
+  const asUser = () => readingAsUser(ctx);
   return {
     list: async (slug, at) => {
       const result = await requireNextly().find({
@@ -435,7 +480,7 @@ export async function readPatternLibrary(
   // every caller with every row, whatever the collection's permissions say.
   // NO status predicate, deliberately — see the module docblock. And the same
   // deterministic order the component listing asks for, for the same reason.
-  const asUser = { as: "user" as const, user: ctx.user ?? undefined };
+  const asUser = asServiceCaller(ctx);
   return envelope(
     await readTier(
       async at => {
@@ -1064,17 +1109,9 @@ export function componentLibraryRoute(
   return {
     method: "GET",
     path: COMPONENT_LIBRARY_ROUTE_PATH,
-    // The scope helper for the plugin's OWN collection, which follows the
-    // host's rename; the configured slug LITERALLY for a store the plugin was
-    // told about, because that is what the handler reads. Through the helper a
-    // configured slug that collides with a contributed name resolves to the
-    // renamed collection, so the gate and the read name two different
-    // collections — and a caller holding read on the one being read is
-    // refused while one holding read on the other is let in.
-    requiredPermission: ({ collection }) =>
-      store.collection === undefined
-        ? collection(COMPONENTS_SLUG, "read")
-        : readPermissionFor(store.collection),
+    // Gated on the store the handler reads, and no other: a caller holding
+    // read on a differently named collection must not be let in.
+    requiredPermission: componentReadPermission(store),
     handler: async (req: Request, ctx: PluginRouteContext) =>
       Response.json(
         await readComponentLibrary({
@@ -1084,6 +1121,23 @@ export function componentLibraryRoute(
         })
       ),
   };
+}
+
+/**
+ * The permission reading a component store needs, for every route that reads
+ * one: the plugin's OWN collection through the scope helper, which follows
+ * the host's rename; a configured store's slug LITERALLY, because that is what
+ * the handler reads. Through the helper a configured slug that collides with a
+ * contributed name resolves to the renamed collection, so the gate and the
+ * read would name two different collections.
+ */
+export function componentReadPermission(
+  store: ComponentStore
+): (scope: PluginRoutePermissionScope) => string {
+  return ({ collection }) =>
+    store.collection === undefined
+      ? collection(COMPONENTS_SLUG, "read")
+      : readPermissionFor(store.collection);
 }
 
 /**

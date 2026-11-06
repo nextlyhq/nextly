@@ -51,6 +51,9 @@ export async function builderSchemaPreviewBody(args: {
     newFields,
     db,
     dialect,
+    // A translated field's values live in the companion table; without this
+    // its removal was counted on the main table, failed, and read as empty.
+    localized: args.entity.localized === true,
   });
   // Detected by the same pipeline run, so they describe the same diff; a translated field's
   // rename, which the pipeline cannot see on the main table, is offered on its companion.

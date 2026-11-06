@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DOCUMENT_VIEW_INVALID
+description: "A plugin declares a document view with no component, a label that is not text, or a path the admin cannot route."
+---
+
+## Cause
+
+A plugin declares a document view with no component, a label that is not text, or a path the admin cannot route.
+
+A document view needs a component to draw, a label of text if it has one, and a path of one address segment, of lowercase letters, digits and single dashes, that the document does not already use. The message names the view and what is wrong with it.
+
+## Fix
+
+- Correct the view the message names in the plugin's `contributes.admin`.
+- If the plugin is not yours, update it to a release that declares the view correctly.
+
+## Example
+
+```text
+✗ Plugin "seo" contributes a document view that on "posts" has the path "Insights", which is not one address segment of lowercase letters, digits and single dashes.
+  Why:  A document view needs a component to draw, a label of text if it has one, and a path of one address segment, of lowercase letters, digits and single dashes, that the document does not already use.
+  Next: Correct the view the message names in the plugin's `contributes.admin`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-view-invalid  (PLUGIN_DOCUMENT_VIEW_INVALID)
+```

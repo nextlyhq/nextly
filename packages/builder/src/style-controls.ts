@@ -26,6 +26,13 @@
  * composite arms that share a field name, and a record naming no known field at
  * all. Nothing here holds any of them.
  *
+ * **The Baseline gate applies here, once.** A control carries its catalog leaf
+ * with every keyword the gate withholds taken out (`style-baseline.ts`), so the
+ * menu, the toggle and the field's hint offer only widely available CSS without
+ * any of them asking. A withheld property draws no control at all until a
+ * value is stored there; a stored withheld value is kept and marked, so the
+ * panel shows it clear-only rather than hiding styling that is on the page.
+ *
  * **What this module does NOT do.** It does not decide which properties a block
  * offers (that is `supports`, read through the catalog's own group helpers), it
  * does not hold the active state or breakpoint, and it does not validate. A
@@ -45,6 +52,8 @@ import {
   type StyleUnionVariantOptions,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
+
+import { keywordWithheld, propertyWithheld } from "./style-baseline";
 
 /**
  * The editor kind a leaf resolves to.
@@ -133,6 +142,12 @@ export interface StyleControl {
   readonly kind: StyleControlKind | undefined;
   /** Whether {@link kind} is present. */
   readonly supported: boolean;
+  /**
+   * Whether the value stored here is one the Baseline gate withholds: a value
+   * of a withheld property, or a withheld keyword. Such a value is still on
+   * the page, so it is shown and may be cleared, and nothing new is offered.
+   */
+  readonly withheld: boolean;
 }
 
 /**
@@ -165,6 +180,13 @@ export interface StyleControlVariants {
    * most specific thing the catalog actually says about them.
    */
   readonly kinds: readonly StyleShape["kind"][];
+  /**
+   * Each arm in plain words, in the catalog's order: what the toggle offering
+   * the choice says. Derived from the arms here, once, so nothing else names
+   * a form its own way. Optional, so a variant built to the earlier shape
+   * stays valid; read it through {@link formNamesOf}.
+   */
+  readonly names?: readonly string[];
 }
 
 /**
@@ -237,14 +259,66 @@ function isCompositeValue(value: StyleValue): value is CompositeValue {
 function controlForLeaf(
   property: string,
   path: readonly string[],
-  leaf: StyleLeaf
+  leaf: StyleLeaf,
+  value: StyleValue | undefined
 ): StyleControl {
   // Read through the runtime set rather than off the mapping directly. A
   // catalog from a newer engine can carry a kind absent from both, and indexing
   // a mapped type with it returns `undefined` while the type says otherwise.
   const known = SUPPORTED_LEAF_KINDS.includes(leaf.kind);
   const kind = known ? CONTROL_KIND_BY_LEAF[leaf.kind] : undefined;
-  return { property, path, leaf, kind, supported: kind !== undefined };
+  return {
+    property,
+    path,
+    leaf: offeredLeaf(leaf),
+    kind,
+    supported: kind !== undefined,
+    withheld: storedValueWithheld(leaf.cssProperty, value),
+  };
+}
+
+/**
+ * The leaf as the gate offers it: the catalog's own object where the gate
+ * withholds none of its keywords, and a copy without them where it does.
+ *
+ * The same object when nothing is taken out, so a control still reads the
+ * catalog's leaf itself in the common case.
+ */
+function offeredLeaf(leaf: StyleLeaf): StyleLeaf {
+  const offered = (keywords: readonly string[]) =>
+    keywords.filter(keyword => !keywordWithheld(leaf.cssProperty, keyword));
+  if (leaf.kind === "keyword") {
+    const values = offered(leaf.values);
+    return values.length === leaf.values.length ? leaf : { ...leaf, values };
+  }
+  if (
+    (leaf.kind === "dimension" || leaf.kind === "url") &&
+    leaf.keywords !== undefined
+  ) {
+    const keywords = offered(leaf.keywords);
+    return keywords.length === leaf.keywords.length
+      ? leaf
+      : { ...leaf, keywords };
+  }
+  return leaf;
+}
+
+/**
+ * Whether a stored value is one the gate withholds.
+ *
+ * A string is judged as a keyword in the case and spacing the validator
+ * accepts, so a stored `Contents` reads as `contents`. Anything stored under a
+ * withheld property is withheld, whatever it is.
+ */
+function storedValueWithheld(
+  cssProperty: string,
+  value: StyleValue | undefined
+): boolean {
+  if (value === undefined) return false;
+  if (propertyWithheld(cssProperty)) return true;
+  if (typeof value !== "string") return false;
+  const keyword = value.trim().toLowerCase().replace(/\s+/g, " ");
+  return keyword !== "" && keywordWithheld(cssProperty, keyword);
 }
 
 /**
@@ -274,7 +348,12 @@ function walk(
       options,
       variants
     );
-  if (isStyleLeaf(shape)) return [controlForLeaf(property, path, shape)];
+  if (isStyleLeaf(shape)) {
+    // A withheld property is not offered: no control, until a value is stored
+    // there that the author needs to see and be able to clear.
+    if (value === undefined && propertyWithheld(shape.cssProperty)) return [];
+    return [controlForLeaf(property, path, shape, value)];
+  }
   switch (shape.kind) {
     case "logicalSides":
       return entriesOf(shape.sides).flatMap(([side, leaf]) => down(side, leaf));
@@ -302,6 +381,7 @@ function walk(
         active,
         count: shape.of.length,
         kinds: shape.of.map(arm => arm.kind),
+        names: shape.of.map(arm => formName(arm, shape.of)),
       });
       return walk(property, path, shape.of[active], value, options, variants);
     }
@@ -389,4 +469,64 @@ export function styleControlsFor(
     variants
   );
   return { property: property.property, controls, variants };
+}
+
+/**
+ * What each form is called, from the arm's own shape kind.
+ *
+ * The catalog gives arms no names, so their shape kind is the most specific
+ * thing it says about them, and "Form 1 / Form 2" tells an author nothing.
+ * Partial so a kind this build has not learned about gets the kind itself.
+ */
+const FORM_NAME: Partial<Record<StyleShape["kind"], string>> = {
+  dimension: "Length",
+  number: "Number",
+  keyword: "Keyword",
+  color: "Colour",
+  cssValue: "Custom",
+  url: "URL",
+  logicalSides: "Sides",
+  logicalCorners: "Corners",
+  object: "Fields",
+  union: "Mixed",
+};
+
+/**
+ * One arm's name beside the others. A keyword arm of one word is that word
+ * ("Auto"), and a length beside a per-corner or per-side arm is the value for
+ * all of them ("All | Corners").
+ */
+function formName(arm: StyleShape, arms: readonly StyleShape[]): string {
+  if (arm.kind === "keyword" && arm.values.length === 1) {
+    const word = arm.values[0] ?? "";
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }
+  return kindName(
+    arm.kind,
+    arms.map(other => other.kind)
+  );
+}
+
+/** A form's name from its kind and its siblings' kinds alone. */
+function kindName(
+  kind: StyleShape["kind"],
+  kinds: readonly StyleShape["kind"][]
+): string {
+  if (
+    kind === "dimension" &&
+    kinds.some(other => other === "logicalCorners" || other === "logicalSides")
+  ) {
+    return "All";
+  }
+  return FORM_NAME[kind] ?? kind;
+}
+
+/**
+ * Each form of a variant in plain words: its own names, or, for a variant
+ * built without them, names read from the forms' kinds.
+ */
+export function formNamesOf(variant: StyleControlVariants): readonly string[] {
+  return (
+    variant.names ?? variant.kinds.map(kind => kindName(kind, variant.kinds))
+  );
 }

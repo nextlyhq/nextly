@@ -245,6 +245,26 @@ describe("computeFieldsBeside", () => {
     // and the collection's own field is the whole of what is offered.
     expect(offered(codeFirstFields, "content")).toEqual(["summary"]);
   });
+
+  it("withholds the top-level group holding a field asked for by its path", () => {
+    // The panel draws whole top-level fields, so offering `hero` would draw
+    // `hero.body` — the editor asking — inside its own panel.
+    const grouped = [
+      { name: "title", type: "text" },
+      { name: "heroMode", type: "select" },
+      {
+        name: "hero",
+        type: "group",
+        admin: { condition: { field: "heroMode", equals: "on" } },
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "body", type: "blocks" },
+        ],
+      },
+      { name: "summary", type: "textarea" },
+    ];
+    expect(offered(grouped, "hero.body")).toEqual(["title", "summary"]);
+  });
 });
 
 describe("fields nested inside a group", () => {

@@ -4,6 +4,7 @@ export default defineConfig({
   entry: [
     "src/index.ts",
     "src/testing.ts",
+    "src/testing/admin.ts",
     "src/client.ts",
     "src/admin.ts",
     "src/blocks.ts",

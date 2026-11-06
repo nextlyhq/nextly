@@ -17,7 +17,16 @@
  * Only comment lines are read, so a string literal or an identifier that
  * happens to contain one of these words is not a violation.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -207,11 +216,25 @@ const META_REFERENCES: Array<[RegExp, string]> = [
   [/\b(first|second|third) half of (a|the) fix\b/i, "an edit sequence"],
 ];
 
+/**
+ * A folder of installed or built code, which holds every package's comments
+ * bundled: not the source this rule is about. Next.js builds into `.next`, or
+ * into the folder `NEXT_DIST_DIR` names, and the browser suite names
+ * `.next-e2e` and `.next-e2e-start`; `.gitignore` leaves out `.next` and
+ * `.next-*` the same way.
+ */
+function isBuildOutput(entry: string): boolean {
+  return (
+    entry === "node_modules" ||
+    entry === "dist" ||
+    entry === ".next" ||
+    entry.startsWith(".next-")
+  );
+}
+
 function walk(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry === "dist" || entry === ".next") {
-      continue;
-    }
+    if (isBuildOutput(entry)) continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, found);
     else if (EXTENSIONS.has(extname(full))) found.push(full);
@@ -365,6 +388,31 @@ describe("comments describe the code, not the process", () => {
   it("finds the sources to read", () => {
     // An empty scan satisfies the rule below without checking anything.
     expect(sources.length).toBeGreaterThan(100);
+  });
+
+  it("reads no Next.js build, whatever its folder is named", () => {
+    // A browser run leaves a playground build in `.next-e2e`, whose bundled
+    // comments are every package's; a folder merely named like one is read.
+    const root = mkdtempSync(join(tmpdir(), "comments-walk-"));
+    try {
+      for (const file of [
+        ".next/server/a.js",
+        ".next-e2e/dev/server/b.js",
+        ".next-e2e-start/server/c.js",
+        "next-steps/d.ts",
+        "src/e.ts",
+      ]) {
+        mkdirSync(dirname(join(root, file)), { recursive: true });
+        writeFileSync(join(root, file), "// a comment\n");
+      }
+      expect(
+        walk(root)
+          .map(path => relative(root, path))
+          .sort()
+      ).toEqual([join("next-steps", "d.ts"), join("src", "e.ts")]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("reads comments and not code", () => {

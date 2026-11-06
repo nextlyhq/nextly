@@ -3,51 +3,9 @@
 // two stay equal. Used by the boot-time mismatch guard: a user app that
 // installs a different drizzle-orm gets a plain-English error instead of
 // opaque cross-instance `is()` failures deep inside Drizzle.
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { installedPackageVersion } from "../shared/lib/installed-package-version";
 
 export const REQUIRED_DRIZZLE_VERSION = "1.0.0-rc.4";
-
-/**
- * Resolve the version of the drizzle-orm the consumer app would import, WITHOUT
- * going through the `drizzle-orm/package.json` subpath. Older lines (e.g.
- * 0.45.2) don't list `./package.json` in their `exports` map, so
- * `require("drizzle-orm/package.json")` throws ERR_PACKAGE_PATH_NOT_EXPORTED —
- * which is exactly the mismatched-version case this guard exists to catch.
- * Instead resolve the package's main entry (always exported) and walk up to the
- * nearest package.json on disk, reading it with fs so the exports map can't
- * hide it.
- *
- * Returns the version string, or null when drizzle-orm is not installed at the
- * app root (only Nextly's pinned transitive copy exists — the safe default).
- */
-function resolveConsumerDrizzleVersion(appRoot: string): string | null {
-  const appRequire = createRequire(`${appRoot}/package.json`);
-  let entry: string;
-  try {
-    entry = appRequire.resolve("drizzle-orm");
-  } catch {
-    // Not resolvable from the app root — no own copy.
-    return null;
-  }
-  // Walk up from the resolved entry file to the package's own package.json.
-  let dir = dirname(entry);
-  for (let i = 0; i < 20; i++) {
-    try {
-      const pkg = JSON.parse(
-        readFileSync(join(dir, "package.json"), "utf8")
-      ) as { name?: string; version?: string };
-      if (pkg.name === "drizzle-orm") return pkg.version ?? null;
-    } catch {
-      // No package.json here (or unreadable) — keep climbing.
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
 
 /**
  * Compare the drizzle-orm version resolvable from the consumer app's root
@@ -59,7 +17,9 @@ function resolveConsumerDrizzleVersion(appRoot: string): string | null {
 export function checkConsumerDrizzleVersion(appRoot: string): string | null {
   // Resolve from the APP's dependency graph, not Nextly's — that is exactly
   // the copy a user's custom queries would import.
-  const version = resolveConsumerDrizzleVersion(appRoot);
+  // The main-entry read, not the package.json subpath: older drizzle-orm
+  // lines do not export it, and they are the mismatch this guard catches.
+  const version = installedPackageVersion(appRoot, "drizzle-orm");
   if (version && version !== REQUIRED_DRIZZLE_VERSION) {
     return (
       `drizzle-orm version mismatch: your app resolves drizzle-orm@` +

@@ -109,6 +109,19 @@ export interface RevalidateConfig {
  * error.
  */
 export interface CacheRevalidator {
-  /** Flush the given intents to the underlying cache. Best-effort, never throws. */
-  flush(intents: RevalidationIntent[]): void | Promise<void>;
+  /**
+   * Flush the given intents to the underlying cache. Best-effort, never throws.
+   * May say which tags it could not expire in this request: those were handed
+   * to the out-of-request path, and the write's response says the change may
+   * take a moment to appear. Returning nothing means every tag was expired.
+   */
+  flush(
+    intents: RevalidationIntent[]
+  ): void | FlushOutcome | Promise<void | FlushOutcome>;
+}
+
+/** What a flush could not finish in the request that made the write. */
+export interface FlushOutcome {
+  /** Tags handed to the out-of-request path after a failed retry. */
+  deferredTags: string[];
 }

@@ -57,6 +57,10 @@ import {
 } from "../domains/versions/version-views";
 import type { VersionRef } from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
+import {
+  errorFromServiceEnvelope,
+  type ServiceErrorEnvelope,
+} from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -68,7 +72,6 @@ import {
   applyFieldReadAccess,
   callerAccessGrants,
 } from "../shared/lib/field-level-registry";
-import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
 
@@ -91,7 +94,13 @@ export async function requireRouteVersionReadAccess(
 ): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
   await getCachedNextly();
 
-  const auth = await requireRouteCollectionAccess(request, "read", slug);
+  // A history names one document: a caller who may not read it is answered
+  // as if it were missing, as the dispatcher's history routes answer.
+  const auth = await requireRouteCollectionAccess(request, "read", slug, {
+    method: "readDocumentHistory",
+    params: {},
+    namesOne: true,
+  });
 
   // Resolved role slugs so field-level `access.read` evaluates against the
   // caller's roles (session auth carries role ids; API-key auth carries slugs).
@@ -423,7 +432,10 @@ export async function assertDocumentUpdatable(
   // The caller's authenticated scope. A version-label edit is a route-authorized
   // `update`, so a scoped API key is judged on its OWN update grant here and a
   // super-admin-owned key does not skip stored owner/role update rules.
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  // The language the write acts in, which a collection rule's filter is
+  // matched in; the default where it names none.
+  locale?: string
 ): Promise<void> {
   const allowed =
     scopeKind === "single"
@@ -437,6 +449,7 @@ export async function assertDocumentUpdatable(
           // this gate exists for still run.
           routeAuthorized: true,
           authenticatedScope,
+          locale,
         });
 
   if (!allowed) {
@@ -487,9 +500,11 @@ async function canUpdateLiveSingle(
  * normal read path uses so the collection's own gate applies identically.
  *
  * A denial (403) and a missing document (404) both mean "no history for you".
- * Any other failure is a real server-side fault — a component/relationship load
- * error, a throwing afterRead hook — and is re-thrown so the route reports it
- * as a 5xx instead of disguising an outage as missing content.
+ * Any other failure is the read failing rather than refusing — a database not
+ * migrated for the collection, a component/relationship load error, a throwing
+ * afterRead hook — and is re-thrown with the read's own error, so the route
+ * answers what the document read would instead of disguising it as missing
+ * content.
  */
 async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
@@ -535,7 +550,7 @@ async function canReadLiveDocument(
     // The read rules and hooks are handed this language's values.
     ...(locale === undefined ? {} : { locale }),
   });
-  if (!interpretReadResult(result.success, result.statusCode)) return false;
+  if (!interpretReadResult(result)) return false;
   // The read must be of the document asked about. A `beforeOperation` hook may
   // rewrite the id a read resolves, and a read that passed on another document
   // would authorize this one's history by that document's rules. The id is the
@@ -596,15 +611,21 @@ export { resolveSingleDocumentId };
 /**
  * Collapse a live-read result into "may the caller see this document".
  * Only 403/404 mean no; anything else non-successful is a genuine fault.
+ *
+ * The fault keeps the code and status the read gave it, rebuilt through the
+ * shared converter: a database not migrated for the collection answers
+ * ENTITY_NOT_MIGRATED, as the caller's own read of the document does, rather
+ * than an opaque 500. The read ran as the caller, so its answer names only
+ * what the caller may be told.
  */
-function interpretReadResult(success: boolean, statusCode: number): boolean {
-  if (success) return true;
-  if (statusCode === 403 || statusCode === 404) return false;
-  throw NextlyError.internal({
-    logContext: {
-      reason: "version-live-read-failed",
-      statusCode,
-    },
+function interpretReadResult(
+  read: ServiceErrorEnvelope & { success: boolean; statusCode: number }
+): boolean {
+  if (read.success) return true;
+  if (read.statusCode === 403 || read.statusCode === 404) return false;
+  throw errorFromServiceEnvelope(read, {
+    reason: "version-live-read-failed",
+    statusCode: read.statusCode,
   });
 }
 
@@ -623,8 +644,9 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * read judges it.
  *
  * Returns what the read rules removed: top-level keys, and dotted paths below
- * them (`banner.secret`), so a comparison can say a field is hidden from this
- * reader rather than leave it out unexplained. Password values are stripped
+ * them (`banner.secret`), with a list row named by its index in this version
+ * (`items.1.secret`), so a comparison can say a field is hidden from this
+ * reader, in the row it was hidden in, rather than leave it out unexplained. Password values are stripped
  * too, but are not reported: a comparison never shows a password field at all.
  *
  * Fails closed: if the rules cannot be evaluated, every field carrying a read
@@ -670,12 +692,7 @@ export async function redactSnapshotForUser(
   // field is declared. The same map takes the read rules into components.
   const componentFields = await currentComponentFields(fields);
   if (fields.length > 0) {
-    stripPasswordsThroughComponents(
-      entry,
-      fields,
-      componentFields,
-      stripPasswordFieldValues
-    );
+    stripPasswordsThroughComponents(entry, fields, componentFields);
   }
 
   const before = structuredClone(entry);
@@ -851,8 +868,7 @@ export async function stripAutosavePasswords(
   stripPasswordsThroughComponents(
     snapshot,
     fields,
-    await autosaveComponentFields(fields, scopeKind, slug),
-    stripPasswordFieldValues
+    await autosaveComponentFields(fields, scopeKind, slug)
   );
 }
 
@@ -1445,7 +1461,10 @@ export async function diffDocumentVersions(args: {
     fields,
     {
       modifiedOnly: args.modifiedOnly,
-      withheld: new Set([...withheldFrom, ...withheldTo]),
+      // Each version's own: a list row is named by its index in that
+      // version, so merging the two would hide a field in the wrong row.
+      withheldFrom,
+      withheldTo,
       // `redactSnapshotForUser` ran each component's own read rules.
       componentRulesApplied: true,
       entity: lookupKind,

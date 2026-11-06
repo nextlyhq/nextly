@@ -56,6 +56,8 @@ import {
   type SavePatternFields,
 } from "../library-contract";
 
+import { focusAfterClose } from "./library-dialog";
+
 /**
  * What each granularity means, in the author's terms.
  *
@@ -320,12 +322,7 @@ export function SavePatternDialog({
           view while the fields move. */}
       <DialogContent
         className="flex max-h-[85vh] flex-col"
-        onCloseAutoFocus={event => {
-          const target = returnFocusTo?.() ?? null;
-          if (target === null) return;
-          event.preventDefault();
-          target.focus();
-        }}
+        onCloseAutoFocus={focusAfterClose(returnFocusTo)}
       >
         <form
           onSubmit={event => void submit(event)}

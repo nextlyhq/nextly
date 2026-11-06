@@ -16,11 +16,12 @@ import type {
   DropIndexOp,
   DropTableOp,
   Operation,
+  TableSpec,
 } from "../diff/types";
 import { referenceConversionStatements } from "../reference-list-conversion";
 
 import { commonStatementSql, dropConstraintSql } from "./common-statements";
-import { createIndexSql } from "./create-index";
+import { createIndexSql, tableColumnTypes } from "./create-index";
 import {
   changeForeignKeyActionSql,
   unsupportedOperation,
@@ -29,7 +30,15 @@ import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "mysql");
 
-export function generateMysqlSQL(op: Operation): string {
+/**
+ * `tables` is the schema the statement leads to, where the caller has it. An `add_index` names only
+ * columns, and MySQL keys a TEXT/BLOB column only by prefix, so the index reads its columns' types
+ * from the table there; without it every column is keyed whole.
+ */
+export function generateMysqlSQL(
+  op: Operation,
+  tables: readonly TableSpec[] = []
+): string {
   // The three dialect dispatchers are switches over the SAME `Operation`
   // union, so their arms line up one for one and their tails are identical
   // text. That parallelism is the safety property, not an accident: each
@@ -69,7 +78,11 @@ export function generateMysqlSQL(op: Operation): string {
         q
       );
     case "add_index":
-      return createIndexSql(op.tableName, op.index, "mysql", q);
+      return createIndexSql(op.tableName, op.index, "mysql", q, {
+        columnTypes: tableColumnTypes(
+          tables.find(table => table.name === op.tableName)
+        ),
+      });
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":
@@ -120,11 +133,11 @@ function generateChangeColumnType(op: ChangeColumnTypeOp): string {
 // operator commits the file, then prod CI fails with a confusing error
 // pointing at a comment.
 //
-// Fix: throw at template-generation time (parallel to SQLite). F12 may
-// extend ChangeColumnNullableOp with `columnType: string` (the diff
-// engine has access to it; see RenameColumnOp.fromType for precedent).
-// Until then, MySQL operators must use migrate:create --blank and
-// hand-write the MODIFY COLUMN with the explicit type.
+// Fix: throw at template-generation time (parallel to SQLite). A migration
+// file does not come here: `generateStatements` writes the change as a
+// MODIFY built from the live catalog when the file runs
+// (`mysql-live-restate.ts`), which needs several statements on one
+// connection and so has no single-string form for this renderer.
 function generateChangeColumnNullable(op: ChangeColumnNullableOp): string {
   throw new MysqlUnsupportedOperationError(
     "change_column_nullable",

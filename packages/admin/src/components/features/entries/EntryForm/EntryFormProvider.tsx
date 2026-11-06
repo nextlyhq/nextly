@@ -26,6 +26,12 @@ export interface EntryFormProviderProps {
   className?: string;
   /** Form ID for accessibility and submit button association */
   formId?: string;
+  /**
+   * Whether a refused publish's recovery is taking the live values: the form
+   * is marked busy for assistive technology until it finishes. The recovery's
+   * own toast says so to everyone.
+   */
+  recovering?: boolean;
 }
 
 // ============================================================================
@@ -57,6 +63,7 @@ export function EntryFormProvider({
   onSubmit,
   className,
   formId = "entry-form",
+  recovering = false,
 }: EntryFormProviderProps): JSX.Element {
   return (
     <FormProvider {...form}>
@@ -67,6 +74,7 @@ export function EntryFormProvider({
         }}
         className={className}
         noValidate // Use Zod validation instead of browser validation
+        aria-busy={recovering || undefined}
       >
         {children}
       </form>

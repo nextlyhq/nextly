@@ -26,6 +26,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type JSX,
 } from "react";
 import {
   useFormState,
@@ -35,6 +36,9 @@ import {
   type Path,
 } from "react-hook-form";
 
+import { usePageLayoutAsk } from "../page-layout";
+import { usePublishOffer } from "../publish-offer";
+import { useRemovalHold } from "../removal-hold-client";
 import { withValueAtPath } from "../snapshot-merge";
 
 /**
@@ -101,14 +105,17 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  */
 export function hasUnsavedWork(
   editor: { undoDepth: number },
-  inline: { editing: unknown; editingRich: unknown },
+  inline: { editing: unknown; editingRich: unknown; inspecting?: boolean },
   savedAt: SavedAt = 0
 ): boolean {
   return (
     savedAt === "unreachable" ||
     editor.undoDepth !== savedAt ||
     inline.editing !== null ||
-    inline.editingRich !== null
+    inline.editingRich !== null ||
+    // A passage open in an inspector field, whose words are in the shared
+    // editor alone until it is finished.
+    inline.inspecting === true
   );
 }
 
@@ -297,6 +304,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onCommit,
   onClose,
   savePoint,
+  removalReach,
 }: {
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
@@ -310,7 +318,24 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onClose: () => void;
   /** Where the history stood at the last store; see `useSavePoint`. */
   savePoint: ReturnType<typeof useSavePoint>;
-}): { done: () => void } {
+  /**
+   * For a component, how many documents placing it the removal dialog says
+   * now. The hold keeps the number as it stood when each field was removed:
+   * the count a publish removing fields confirms (see `useRemovalHold`).
+   */
+  removalReach?: () =>
+    | { readonly count: number; readonly complete: boolean }
+    | undefined;
+}): {
+  done: () => void;
+  /**
+   * The question asked before every publish (see `usePublishOffer`), to be
+   * rendered anywhere inside the editor.
+   */
+  publishOffer: JSX.Element;
+  /** The question asked again when a removal's count grew, rendered likewise. */
+  removalHold: JSX.Element;
+} {
   useCheckpoints({ name, control, document: editor.document });
 
   /*
@@ -344,10 +369,43 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * a paragraph that is not going anywhere: it stays in the editor, on screen,
    * and the message is what tells them it is still there.
    */
+  // What the latest commit before a store handed the form, for a later
+  // handler in the same action that asks what is being stored.
+  const lastCommitted = useRef<BlockDocument | null>(null);
   useBeforeDocumentAction(() => {
     const committing = finishInlineEdit(inline, editor.document).document;
     savePoint.committing(committing);
     onCommit(committing);
+    lastCommitted.current = committing;
+  });
+  const latestDocument = useRef(editor.document);
+  useEffect(() => {
+    latestDocument.current = editor.document;
+  });
+  const storing = useCallback(
+    () => lastCommitted.current ?? latestDocument.current,
+    []
+  );
+
+  /*
+   * Asked before every publish: the components and Layout the document needs
+   * that are not live, with the offer to publish them too. Registered after
+   * the commit above, so it runs after it and judges the document it stored.
+   */
+  const publishOffer = usePublishOffer({
+    documents: () => [storing()],
+    ...usePageLayoutAsk(control),
+    subject: editor.document.kind === "component" ? "component" : "page",
+  });
+  /*
+   * A publish removing a component's fields, held at the count the designer
+   * confirmed. Registered last, so it runs after the questions above: a
+   * publish they call off takes no hold.
+   */
+  const removalHold = useRemovalHold({
+    document: storing,
+    editing: editor.document,
+    reach: () => removalReach?.(),
   });
 
   /*
@@ -411,5 +469,5 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     canExit: true,
   });
 
-  return { done };
+  return { done, publishOffer, removalHold };
 }

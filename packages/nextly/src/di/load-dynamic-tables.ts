@@ -16,12 +16,14 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../collections/fields/types";
+import { isRemovedFromCode } from "../domains/dynamic-collections/services/removed-from-code";
 import {
   isFieldGroupRegistry,
   resolveFieldGroupRegistryName,
   type FieldGroupRegistryName,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
@@ -88,6 +90,60 @@ export interface DynamicTableLoadResult {
   failures: DynamicTableLoadFailure[];
 }
 
+/** What a caller tells the loader about the configuration it runs under. */
+export interface DynamicTableLoadOptions {
+  /**
+   * The slugs the running configuration declares for this registry's kind.
+   *
+   * Given, a row removed from code (its source is the app's code and its slug
+   * is not declared) is registered only while every table it owns exists: its
+   * main table and, where it has translatable columns, its translation table. Registering a
+   * localized entity creates a missing translation table, so registering one
+   * whose tables a migration dropped would bring part of it back, empty. One
+   * whose tables are all there is registered as before, so its rows can still
+   * be read. Left out, every row registers, as for field groups.
+   */
+  declaredSlugs?: ReadonlySet<string>;
+}
+
+/**
+ * Whether every table a registry row owns exists: its main table, and its
+ * translation table when it owns one.
+ *
+ * Whether it owns one is asked of the same specification that creates it. A
+ * localized entity whose every field is shared has no translatable column, so
+ * nothing ever creates its translation table, and requiring one would leave
+ * its standing main table unregistered.
+ */
+async function ownedTablesExist(
+  adapter: DrizzleAdapter,
+  row: { slug: string; tableName: string },
+  fields: unknown[],
+  localized: boolean
+): Promise<boolean> {
+  if (!(await adapter.tableExists(row.tableName))) return false;
+  // Imported here, on the one path that needs it: only a removed entity whose
+  // main table stands ever reaches this question.
+  const { deriveCompanionSpec } = await import(
+    "../domains/i18n/migration/derive-companion-spec"
+  );
+  const companion = deriveCompanionSpec({
+    slug: row.slug,
+    dbName: row.tableName,
+    fields: fields as Parameters<typeof deriveCompanionSpec>[0]["fields"],
+    dialect: adapter.getCapabilities().dialect,
+    // Read only to seed existing rows; deciding whether a table exists reads
+    // neither this nor the builder, which shape its columns.
+    defaultLocale: "en",
+    collectionLocalized: localized,
+    builtBy: "codeFirst",
+  });
+  if (companion === null) return true;
+  return await adapter.tableExists(
+    `${row.tableName}${STORAGE_FORMAT.companionSuffix}`
+  );
+}
+
 export async function loadDynamicTables(
   adapter: DrizzleAdapter,
   sourceTable:
@@ -105,7 +161,8 @@ export async function loadDynamicTables(
      * tables hold both kinds. `undefined` where the registry is too old to say.
      */
     builderOwned: boolean | undefined
-  ) => Promise<void>
+  ) => Promise<void>,
+  options: DynamicTableLoadOptions = {}
 ): Promise<DynamicTableLoadResult> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
   // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
@@ -189,6 +246,20 @@ export async function loadDynamicTables(
         // 0/1 as numbers — same dance as the registry deserializer.
         const hasStatus = row.status === 1 || row.status === true;
         const localized = row.localized === 1 || row.localized === true;
+        // A removed entity whose tables are gone, wholly or in part, is left
+        // unregistered: see `DynamicTableLoadOptions.declaredSlugs`.
+        if (
+          options.declaredSlugs !== undefined &&
+          isRemovedFromCode(row, options.declaredSlugs) &&
+          !(await ownedTablesExist(
+            adapter,
+            { slug: row.slug, tableName: row.table_name },
+            fields,
+            localized
+          ))
+        ) {
+          continue;
+        }
         // `undefined` when the registry could not report ownership at all, which is different from
         // reporting "not the Builder": the caller treats the unknown case as the pipeline's, the
         // same reading every code-first table already gets.

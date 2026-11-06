@@ -19,7 +19,12 @@ import { describe, expect, it } from "vitest";
 
 import { classUsageIndex } from "./class-usage-reconcile";
 import { componentUsageIndex } from "./component-usage";
-import { countDocumentsUsing } from "./usage-count";
+import {
+  countDocumentsUsing,
+  listDocumentsUsingEach,
+  USAGE_ROW_PAGES_MAX,
+  type UsageRowReader,
+} from "./usage-count";
 import type { GroupedUsageReader } from "./usage-index";
 import type { UsageIndexHealth } from "./usage-index-health";
 
@@ -291,5 +296,139 @@ describe("counting the documents that use something", () => {
       }),
       asked: asked.length,
     }).toEqual({ count: { documents: 0, complete: true }, asked: 0 });
+  });
+});
+
+/** A class index row, as the Direct API answers one. */
+const classRow = (
+  classId: string,
+  entity: string | null,
+  entityKey: string
+) => ({
+  scope: "collection",
+  entity,
+  entityKey,
+  field: "content",
+  locale: "",
+  variant: "published",
+  classId,
+});
+
+/**
+ * A row reader answering `rows` a page of `size` at a time, recording every
+ * read it was asked for.
+ */
+function rowReader(rows: readonly Record<string, unknown>[], size = 500) {
+  const asked: Parameters<UsageRowReader>[0][] = [];
+  const read: UsageRowReader = async args => {
+    asked.push(args);
+    const start = (args.page - 1) * size;
+    return {
+      items: rows.slice(start, start + size),
+      hasNext: rows.length > start + size,
+    };
+  };
+  return { read, asked };
+}
+
+describe("listDocumentsUsingEach", () => {
+  const ids = Array.from({ length: 50 }, (_, n) => `c-${n}`);
+  const rows = ids.flatMap(id => [
+    classRow(id, "pages", "p1"),
+    // The same page again, in another language: one document, not two.
+    { ...classRow(id, "pages", "p1"), locale: "fr" },
+    classRow(id, "components", "k1"),
+  ]);
+
+  it("reads every id asked for in the same number of queries as one", async () => {
+    const one = rowReader(rows);
+    const fifty = rowReader(rows);
+    await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: one.read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: fifty.read,
+      referenceIds: ids,
+      health: WHOLE,
+    });
+    expect({ one: one.asked.length, fifty: fifty.asked.length }).toEqual({
+      one: 1,
+      fifty: 1,
+    });
+    expect(fifty.asked[0]?.where).toEqual({ classId: { in: ids } });
+  });
+
+  it("lists each id's distinct documents by collection", async () => {
+    const { read } = rowReader(rows);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-1", "c-unused"],
+      health: WHOLE,
+    });
+    expect(found.get("c-1")).toEqual({
+      collections: [
+        { collection: "pages", documents: ["p1"] },
+        { collection: "components", documents: ["k1"] },
+      ],
+      complete: true,
+    });
+    expect(found.get("c-unused")).toEqual({ collections: [], complete: true });
+  });
+
+  it("is a floor for every id once the reads reach their cap", async () => {
+    // Stops after a bounded number of pages, however many rows remain.
+    const many = Array.from({ length: 30 }, (_, n) =>
+      classRow("c-0", "pages", `p${n}`)
+    );
+    const { read, asked } = rowReader(many, 2);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    expect(asked).toHaveLength(USAGE_ROW_PAGES_MAX);
+    expect(found.get("c-0")?.complete).toBe(false);
+  });
+
+  it("is a floor for an id one of whose rows names no collection", async () => {
+    const { read } = rowReader([classRow("c-0", null, "p1")]);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-0"],
+      health: WHOLE,
+    });
+    expect(found.get("c-0")).toEqual({ collections: [], complete: false });
+  });
+
+  it("agrees with the single count, which derives from the same listing", async () => {
+    const { read } = rowReader(rows);
+    const found = await listDocumentsUsingEach({
+      index: classUsageIndex,
+      rows: read,
+      referenceIds: ["c-2"],
+      health: WHOLE,
+    });
+    const counted = await countDocumentsUsing({
+      index: classUsageIndex,
+      read: async args =>
+        args.groupBy === "entity"
+          ? { buckets: ["pages", "components"], truncated: false }
+          : {
+              buckets: [args.where.entity?.equals === "pages" ? "p1" : "k1"],
+              truncated: false,
+            },
+      referenceId: "c-2",
+      health: WHOLE,
+    });
+    expect(counted.documents).toBe(
+      found.get("c-2")?.collections.reduce((n, c) => n + c.documents.length, 0)
+    );
   });
 });

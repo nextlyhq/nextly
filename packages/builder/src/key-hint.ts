@@ -85,6 +85,8 @@ function modifierLabels(chord: KeyChord, apple: boolean): string[] {
  * does something, and a spec this cannot parse is one whose keystroke it does
  * not know. Showing a wrong one is worse than showing none, which is the same
  * judgement the toolbar made when it showed none at all.
+ *
+ * @experimental
  */
 export function keyHint(
   spec: string,

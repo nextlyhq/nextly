@@ -1,0 +1,23 @@
+---
+title: PLUGIN_UNINSTALL_UNCONFIRMED
+description: "A full plugin uninstall would delete data, and the deletion was not confirmed or consented to, so nothing changed."
+---
+
+## Cause
+
+A full plugin uninstall would delete data, and the deletion was not confirmed or consented to, so nothing changed.
+
+A full uninstall runs the plugin's DOWN migrations, which drop its tables, or columns it added. It asks before deleting anything. With no terminal to ask, it needs the data-loss consent instead, and a consent that names targets must cover every table it would drop. Answered no, given no consent, or given one that leaves something out, the uninstall changes nothing.
+
+## Fix
+
+Run the uninstall again and confirm the deletion, or pass `--accept-data-loss` (with the targets the Next line lists, if you name them). Or use `--keep-data` to remove the plugin and leave its tables in place.
+
+## Example
+
+```text
+✗ Nothing was changed: the deletion was not confirmed.
+  Why:  A full uninstall drops the plugin's tables, and the prompt that listed them was not answered yes.
+  Next: Run the uninstall again and confirm the deletion, or use --keep-data to leave the tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-unconfirmed  (PLUGIN_UNINSTALL_UNCONFIRMED)
+```

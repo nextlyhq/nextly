@@ -52,6 +52,8 @@ export interface RoleWithPermissions extends EntityBase {
   description?: string;
   priority?: number;
   isSystemRole?: boolean;
+  /** Which built-in role this is, as the server marks it. */
+  builtIn?: "public" | "super-admin";
   permissions?: { id: string }[];
   users?: { id: string; name?: string }[];
 }
@@ -61,6 +63,8 @@ export interface PermissionMatrixProps {
   value: string[];
   onChange: (value: string[]) => void;
   disabled?: boolean;
+  /** Shown but not changed: its search still narrows it. */
+  readOnly?: boolean;
   lockedIds?: string[];
 }
 

@@ -223,6 +223,12 @@ describe("an element the app contributes to a plugin's table", () => {
       .spyOn(process, "exit")
       .mockImplementation((() => undefined) as never);
     const errors: string[] = [];
+    // A failure prints in the CLI's error shape on standard error; read it with the log.
+    const printed = vi
+      .spyOn(console, "error")
+      .mockImplementation((...parts: unknown[]) => {
+        errors.push(parts.map(String).join(" "));
+      });
     try {
       await runChecks({
         migrationsDir,
@@ -242,6 +248,7 @@ describe("an element the app contributes to a plugin's table", () => {
       });
     } finally {
       exit.mockRestore();
+      printed.mockRestore();
     }
     expect(errors).toEqual([]);
   });
@@ -286,6 +293,12 @@ describe("a table the app declares itself", () => {
       .spyOn(process, "exit")
       .mockImplementation((() => undefined) as never);
     const errors: string[] = [];
+    // A failure prints in the CLI's error shape on standard error; read it with the log.
+    const printed = vi
+      .spyOn(console, "error")
+      .mockImplementation((...parts: unknown[]) => {
+        errors.push(parts.map(String).join(" "));
+      });
     try {
       await runChecks({
         migrationsDir,
@@ -305,6 +318,7 @@ describe("a table the app declares itself", () => {
       });
     } finally {
       exit.mockRestore();
+      printed.mockRestore();
     }
     expect(errors).toEqual([]);
   });
@@ -360,6 +374,12 @@ describe("a table an afterDrizzle hook introduces", () => {
       .spyOn(process, "exit")
       .mockImplementation((() => undefined) as never);
     const errors: string[] = [];
+    // A failure prints in the CLI's error shape on standard error; read it with the log.
+    const printed = vi
+      .spyOn(console, "error")
+      .mockImplementation((...parts: unknown[]) => {
+        errors.push(parts.map(String).join(" "));
+      });
     try {
       await runChecks({
         migrationsDir,
@@ -379,8 +399,9 @@ describe("a table an afterDrizzle hook introduces", () => {
       });
     } finally {
       exit.mockRestore();
+      printed.mockRestore();
     }
-    expect(errors.join("\n")).toMatch(/SCHEMA_DRIFT/);
+    expect(errors.join("\n")).toMatch(/\(SCHEMA_DRIFT\)/);
     expect(errors.join("\n")).toContain("app_hook_log");
   });
 });

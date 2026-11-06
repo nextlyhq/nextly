@@ -161,6 +161,23 @@ runs committed migration files, of which a fresh app has none yet. You should
 see it connect and finish successfully. (With SQLite this creates a local
 database file — nothing else to set up.)
 
+**Upgrading an app that already has the plugin?** Newer versions add schema
+your database does not have yet: for example each page's **Layout** and **No
+header or footer** columns, and the `page-builder-settings` Single that records
+the site's default Layout. They reach an existing database only through a
+migration:
+
+```bash
+npx nextly migrate:create add_page_layouts
+npx nextly migrate
+```
+
+(`npx nextly db:sync` also applies them in development.) Until then, saving a
+page fails on the missing columns. After the upgrade the plugin creates a
+published Layout called **Site layout** and makes it the default. Layouts are
+experimental; a page route draws them once it passes
+`layouts: pageBuilderLayouts()` (section 7.8 and `docs/page-builder/layouts.mdx`).
+
 ---
 
 ## Step 5 — Start the app
@@ -212,7 +229,7 @@ The builder has three areas:
 
 | Area                 | What it's for                                                                                                                                                                                                                                            |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Left — Blocks**    | The nineteen building blocks: Heading, Text, Button, Section, Box, Columns, Column, Card, Image, Gallery, Embed, List, Quote, Accordion, Accordion item, Divider, Spacer, Form and Collection loop. Click **Insert** (or drag) to add one to the canvas. |
+| **Left — Blocks**    | The nineteen building blocks: Heading, Text, Button, Section, Box, Columns, Column, Card, Image, Gallery, Embed, List, Quote, Accordion, Accordion item, Divider, Spacer, Form and Collection list. Click **Insert** (or drag) to add one to the canvas. |
 | **Middle — Canvas**  | A live preview of your page. Click any block to select it. Use the **Desktop / Tablet / Mobile** buttons on top to preview different screen sizes.                                                                                                       |
 | **Right — Settings** | When a block is selected, its options appear here (e.g. a Heading's text and level H1–H6), organized into **Content**, **Style**, and **Advanced** tabs.                                                                                                 |
 
@@ -387,6 +404,33 @@ public — so do not point it at a collection that is not. And it reads your dat
 during `next build`, which means your build environment needs one.
 
 The posture is the factory you call. There is no option to flip.
+
+### 7.8 Draw pages inside their Layout
+
+**Experimental:** the `layouts` option and `pageBuilderLayouts()` may change
+before they are marked stable.
+
+A Layout names the header and footer components that wrap a page (see
+`docs/page-builder/layouts.mdx`). The route draws them only when you turn the
+option on, with the provider this plugin exports:
+
+```tsx
+import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  /* the same options as above, plus: */
+  layouts: pageBuilderLayouts(),
+});
+```
+
+Each page is then served as its header, the page, then its footer: the Layout the
+page names while that is published, otherwise the site's default Layout, or nothing
+when the page has **No header or footer** switched on. The header and footer are
+drawn on the server like the rest of the page, so they add no JavaScript, and the
+page's title and description still come from the page alone.
+
+Publishing a Layout, or a component one uses, refreshes only the pages drawn inside
+it, and changing the default refreshes only the pages that use the default.
 
 ---
 

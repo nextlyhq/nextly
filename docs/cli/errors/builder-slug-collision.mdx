@@ -1,0 +1,24 @@
+---
+title: BUILDER_SLUG_COLLISION
+description: "An entity in `ui-schema.json` has the slug of a collection in `nextly.config.ts`."
+---
+
+## Cause
+
+An entity in `ui-schema.json` has the slug of a collection in `nextly.config.ts`.
+
+`nextly migrate:check` reads the entities the Schema Builder saved in `ui-schema.json` beside those in `nextly.config.ts`, and a slug may be declared in only one of them. The Why line lists each slug both files declare.
+
+## Fix
+
+- Remove each slug listed from one of the two files, or rename it in one of them.
+- Run `nextly migrate:check` again.
+
+## Example
+
+```text
+✗ An entity is defined in both `nextly.config.ts` and `ui-schema.json`.
+  Why:  slug 'posts' is defined in both nextly.config.ts and ui-schema.json
+  Next: Remove each slug listed from one of the two files, or rename it in one of them, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-slug-collision  (BUILDER_SLUG_COLLISION)
+```

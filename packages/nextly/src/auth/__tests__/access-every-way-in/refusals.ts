@@ -24,6 +24,11 @@ export type Shape =
   | "bare"
   /** A thrown error, at a door that calls rather than requests. */
   | "thrown"
+  /**
+   * One entry's failure in a bulk route's `errors[]`, `{ id, code, message }`,
+   * answered beside a 200 for the request.
+   */
+  | "item"
   /** No body at all. */
   | "empty"
   | "other";

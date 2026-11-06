@@ -65,7 +65,12 @@ async function bootSingle(dialect: TestDialect) {
   const singles = current.getService("singleEntryService");
   const first = (await singles.update(
     "home",
-    { title: "T", hero: { heading: "Live" }, status: "published" },
+    {
+      title: "T",
+      hero: { heading: "Live" },
+      status: "published",
+      _overwrite: true,
+    },
     { overrideAccess: true }
   )) as Result;
   expect(first.success, JSON.stringify(first)).not.toBe(false);
@@ -87,14 +92,14 @@ describe.each(getConfiguredTestDialects())(
       const singles = await bootSingle(dialect);
       const held = (await singles.update(
         "home",
-        { title: "Held" },
+        { title: "Held", _overwrite: true },
         { overrideAccess: true }
       )) as Result;
       expect(held.success, JSON.stringify(held)).not.toBe(false);
 
       const published = (await singles.update(
         "home",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true }
       )) as Result;
 
@@ -106,13 +111,13 @@ describe.each(getConfiguredTestDialects())(
       const singles = await bootSingle(dialect);
       await singles.update(
         "home",
-        { hero: { heading: "Held" } },
+        { hero: { heading: "Held" }, _overwrite: true },
         { overrideAccess: true }
       );
 
       const published = (await singles.update(
         "home",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true }
       )) as Result;
 
@@ -121,9 +126,16 @@ describe.each(getConfiguredTestDialects())(
 
     it("publishes every language's held change the same way", async () => {
       const singles = await bootSingle(dialect);
-      await singles.update("home", { title: "Held" }, { overrideAccess: true });
+      await singles.update(
+        "home",
+        { title: "Held", _overwrite: true },
+        { overrideAccess: true }
+      );
 
-      await singles.publishAllLocales("home", { overrideAccess: true });
+      await singles.publishAllLocales("home", {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
 
       expect(await liveTitle(current!)).toBe("Held");
     });
@@ -133,7 +145,7 @@ describe.each(getConfiguredTestDialects())(
 
       const published = (await singles.update(
         "home",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true }
       )) as Result;
 
@@ -167,14 +179,14 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages" as never,
         id,
-        data: { title: "Held" } as never,
+        data: { title: "Held", _overwrite: true } as never,
       });
 
       await expect(
         t.nextly.update({
           collection: "pages" as never,
           id,
-          data: { status: "published" } as never,
+          data: { status: "published", _overwrite: true } as never,
         })
       ).resolves.toBeDefined();
     });

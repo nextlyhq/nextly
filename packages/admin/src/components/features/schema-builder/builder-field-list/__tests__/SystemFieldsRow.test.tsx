@@ -42,14 +42,14 @@ describe("SystemFieldsRow", () => {
     expect(screen.getByText("updatedAt")).toBeInTheDocument();
   });
 
-  it("renders the 'System Fields' label above the box", () => {
+  it("renders the 'System fields' label above the box", () => {
     render(
       <SystemFieldsRow
         systemFields={[titleField, slugField]}
         onSetVisible={vi.fn()}
       />
     );
-    expect(screen.getByText(/^System Fields$/)).toBeInTheDocument();
+    expect(screen.getByText(/^System fields$/)).toBeInTheDocument();
   });
 
   it("renders a Hide button (PR G alert-style)", () => {

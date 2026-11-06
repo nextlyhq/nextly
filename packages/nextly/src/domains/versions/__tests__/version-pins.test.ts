@@ -5,18 +5,35 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import type {
+  VersionsDbApi,
+  VersionsSelectOptions,
+  VersionsWhere,
+} from "../db-api";
 import {
+  registerNamespacedVersionPinHolder,
   registerVersionPinHolder,
   resetVersionPinHolders,
   versionPinHolderNames,
   versionPinKey,
   versionPins,
+  type VersionPinHolder,
 } from "../version-pins";
 
 beforeEach(() => {
   resetVersionPinHolders();
   registerVersionPinHolder({ name: "workflows", label: "Workflows" });
 });
+
+// Checked by the tests' type check, not at run time: a holder written to the
+// interface before registration's read of its own slots existed, such as a
+// stand-in a test hands to code that takes a holder, still compiles as one.
+// A required `list` on `VersionPinHolder` fails it.
+export const holderWithoutTheRead: VersionPinHolder = {
+  pin: () => Promise.resolve(),
+  release: () => Promise.resolve(),
+  releaseAll: () => Promise.resolve(),
+};
 
 const ref = {
   scopeKind: "collection" as const,
@@ -101,6 +118,120 @@ describe("version pin holders", () => {
   });
 });
 
+type PinRow = {
+  scopeKind: string;
+  scopeSlug: string;
+  entryId: string;
+  holder: string;
+  slot: string;
+  versionNo: number;
+};
+
+const columnOf = (row: PinRow, column: string): unknown =>
+  (row as unknown as Record<string, unknown>)[column];
+
+/** Answer a read as a database does: by its where clause and its columns. */
+function databaseOf(rows: PinRow[]): {
+  db: VersionsDbApi;
+  rowsRead: () => PinRow[];
+} {
+  const answered: PinRow[] = [];
+  const matches = (row: PinRow, where: VersionsWhere | undefined): boolean =>
+    (where?.and ?? []).every(part =>
+      "column" in part
+        ? columnOf(row, part.column) === part.value
+        : matches(row, part)
+    );
+  // Only `select`: a read is all a holder's listing does, and a write through
+  // this handle would be a test passing for the wrong reason.
+  const db = {
+    select<T>(_table: string, options?: VersionsSelectOptions): Promise<T[]> {
+      const found = rows.filter(row => matches(row, options?.where));
+      answered.push(...found);
+      return Promise.resolve(
+        found.map(row =>
+          Object.fromEntries(
+            (options?.columns ?? Object.keys(row)).map(column => [
+              column,
+              columnOf(row, column),
+            ])
+          )
+        ) as T[]
+      );
+    },
+  } as unknown as VersionsDbApi;
+  return { db, rowsRead: () => answered };
+}
+
+describe("a holder's slots on a document", () => {
+  const rows: PinRow[] = [
+    { ...ref, holder: "workflows", slot: "approved", versionNo: 9 },
+    { ...ref, holder: "release-review", slot: "approved", versionNo: 3 },
+    { ...ref, holder: "release-review", slot: "in-review", versionNo: 4 },
+    {
+      ...ref,
+      holder: "acme-billing.approvals",
+      slot: "approved",
+      versionNo: 7,
+    },
+    {
+      ...ref,
+      entryId: "other",
+      holder: "release-review",
+      slot: "approved",
+      versionNo: 5,
+    },
+  ];
+
+  it("reads the holder's own rows, and no other holder's", async () => {
+    const handle = registerVersionPinHolder({
+      name: "release-review",
+      label: "Releases",
+    });
+    const { db, rowsRead } = databaseOf(rows);
+
+    expect(await handle.list(db, ref)).toEqual([
+      { slot: "approved", versionNo: 3 },
+      { slot: "in-review", versionNo: 4 },
+    ]);
+    // The holder is a predicate of the query, not a filter on its answer, so
+    // what another holder pins never leaves the database however much it is.
+    expect(rowsRead().map(row => row.holder)).toEqual([
+      "release-review",
+      "release-review",
+    ]);
+  });
+
+  it("reads only this document's rows", async () => {
+    const handle = registerVersionPinHolder({
+      name: "release-review",
+      label: "Releases",
+    });
+    const { db, rowsRead } = databaseOf(rows);
+
+    await handle.list(db, { ...ref, entryId: "other" });
+
+    expect(rowsRead()).toEqual([
+      {
+        ...ref,
+        entryId: "other",
+        holder: "release-review",
+        slot: "approved",
+        versionNo: 5,
+      },
+    ]);
+  });
+
+  it("is the one way to read a holder's slots: there is no lookup by name", () => {
+    const handle = registerVersionPinHolder({
+      name: "release-review",
+      label: "Releases",
+    });
+    expect(typeof handle.list).toBe("function");
+    expect(Object.keys(versionPins)).toEqual(["list"]);
+  });
+});
+
 describe("versionPinKey", () => {
   it("is one key per document, holder and slot", () => {
     const key = versionPinKey(ref, "workflows", "approved:en");
@@ -118,5 +249,57 @@ describe("versionPinKey", () => {
     expect(versionPinKey(ref, "a", "b:c")).not.toBe(
       versionPinKey({ ...ref, entryId: "e1:a" }, "b", "c")
     );
+  });
+});
+
+describe("a holder in a plugin's namespace", () => {
+  it("is recorded as the plugin's slug, a dot, and its name", () => {
+    const { recorded } = registerNamespacedVersionPinHolder("acme-billing", {
+      name: "approvals",
+      label: "Approvals",
+    });
+    expect(recorded).toBe("acme-billing.approvals");
+    expect(versionPinHolderNames()).toContain("acme-billing.approvals");
+  });
+
+  it("holds apart from another plugin's holder, and from core's, of one name", () => {
+    const a = registerNamespacedVersionPinHolder("acme-a", {
+      name: "workflows",
+      label: "A",
+    });
+    const b = registerNamespacedVersionPinHolder("acme-b", {
+      name: "workflows",
+      label: "B",
+    });
+    expect([a.recorded, b.recorded]).toEqual([
+      "acme-a.workflows",
+      "acme-b.workflows",
+    ]);
+    expect(a.handle).not.toBe(b.handle);
+    expect(versionPinHolderNames()).toContain("workflows");
+  });
+
+  it("is a name core's own registration refuses, so core cannot take it", () => {
+    expect(() =>
+      registerVersionPinHolder({ name: "acme-billing.approvals", label: "X" })
+    ).toThrow(/kebab-case/);
+  });
+
+  it("refuses a name that is not kebab-case, and one too long with the slug", () => {
+    expect(() =>
+      registerNamespacedVersionPinHolder("acme", {
+        name: "Approvals",
+        label: "A",
+      })
+    ).toThrow(/kebab-case/);
+    expect(() =>
+      registerNamespacedVersionPinHolder("acme", { name: "a.b", label: "A" })
+    ).toThrow(/kebab-case/);
+    expect(() =>
+      registerNamespacedVersionPinHolder("a".repeat(40), {
+        name: "b".repeat(30),
+        label: "A",
+      })
+    ).toThrow(/at most 64 characters/);
   });
 });

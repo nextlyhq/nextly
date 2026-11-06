@@ -1,0 +1,32 @@
+---
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/ui": patch
+"create-nextly-app": patch
+"nextly": patch
+---
+
+Taking the live shared values into a pending change now applies to the document the caller was checked against: a Single replaced since is refused as not found, and its pending change is left alone. The same holds for discarding a Single's pending change. Both now read the Single's row and take its lock in one step, so a row replaced while the request waits for that lock is seen as it is rather than as it was read, and neither writes into the document that has gone. A field rule judging whether a value may be taken now sees the whole pending change as taking would leave it, so a rule that reads another field, such as a price writable only while a lock is open, answers for the real document rather than for the taken fields alone. The judgement is repeated whenever a field is left behind, since the document the remaining fields were judged beside changes with it: where the only field that allowed another is itself one the caller may not write, neither is taken, rather than saving the combination the rule refuses.

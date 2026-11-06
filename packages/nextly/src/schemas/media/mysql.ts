@@ -1,7 +1,7 @@
 /**
  * Media tables — MySQL.
  *
- * Tables: media, mediaFolders, imageSizes.
+ * Tables: media, mediaFolders.
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -22,9 +22,7 @@ import {
   datetime,
   json,
   index,
-  uniqueIndex,
   text,
-  boolean,
   type AnyMySqlColumn,
 } from "drizzle-orm/mysql-core";
 
@@ -56,9 +54,6 @@ export function mediaColumns() {
     // Crop point for smart image cropping (percentage from top-left, 0-100)
     focalX: int("focal_x"),
     focalY: int("focal_y"),
-
-    // Generated image size variants (JSON with size name → metadata)
-    sizes: json("sizes"),
 
     // Metadata
     altText: text("alt_text"),
@@ -151,33 +146,4 @@ export const mediaFolders = mysqlTable(
     index("media_folders_created_by_idx").on(t.createdBy),
     index("media_folders_created_at_idx").on(t.createdAt),
   ]
-);
-
-/**
- * Image Sizes table for named image size configurations (MySQL).
- * See postgres.ts for detailed documentation.
- */
-export const imageSizes = mysqlTable(
-  "image_sizes",
-  {
-    id: varchar("id", { length: 36 })
-      .primaryKey()
-      .$defaultFn(() => crypto.randomUUID()),
-
-    name: varchar("name", { length: 50 }).notNull(),
-    width: int("width"),
-    height: int("height"),
-    fit: varchar("fit", { length: 20 }).notNull().default("inside"),
-    quality: int("quality").notNull().default(80),
-    format: varchar("format", { length: 10 }).notNull().default("auto"),
-    isDefault: boolean("is_default").notNull().default(true),
-    sortOrder: int("sort_order").notNull().default(0),
-    createdAt: datetime("created_at")
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: datetime("updated_at")
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );

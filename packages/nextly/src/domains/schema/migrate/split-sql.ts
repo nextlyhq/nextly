@@ -170,8 +170,25 @@ export function leadingWords(
  * statement's tokens: one unit, never a keyword. `name` is a quoted name's
  * text, upper-cased; a string or a body has none.
  */
-interface QuotedToken {
+export interface QuotedToken {
   name: string | undefined;
+  /**
+   * PostgreSQL's `U&"..."`, whose escapes the scan does not decode: `name` is
+   * then the text as written, not the name the server reads.
+   */
+  escaped?: boolean;
+}
+
+/**
+ * A statement's tokens as the server reads them (`serverTokens`), as a list,
+ * for a reader that needs to look ahead or back. The one tokenizer: a reader
+ * of a statement's shape reads through this rather than a second one.
+ */
+export function statementTokens(
+  statement: string,
+  dialect: SupportedDialect | undefined
+): Array<string | QuotedToken> {
+  return [...serverTokens(statement, dialect)];
 }
 
 /**
@@ -202,7 +219,10 @@ function* serverTokens(
         }
         break;
       case "quoted-name":
-        yield { name: segment.content.toUpperCase() };
+        yield {
+          name: segment.content.toUpperCase(),
+          ...(segment.unicodeEscaped ? { escaped: true } : {}),
+        };
         break;
       default:
         yield { name: undefined };

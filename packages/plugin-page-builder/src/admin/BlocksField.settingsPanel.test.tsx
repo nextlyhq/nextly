@@ -35,8 +35,17 @@ let entryFields: React.ReactNode | null;
 /** Every path the hook was asked about, so the exclusion can be asserted. */
 const askedFor: string[] = [];
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
+  // Every panel the shell knows, so the renderer can be asked about each.
+  const { LEFT_PANELS } = await import("@nextlyhq/builder");
+  const view = { current: null, choose: () => {} };
   const nothing = (): null => null;
   const passthrough = ({
     children,
@@ -55,15 +64,44 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       renderPanel,
       availablePanels,
       topBar,
+      topBarCenter,
+      topBarEnd,
+      renderSettings,
     }: {
-      renderPanel?: (panel: string) => React.ReactNode;
+      renderPanel?: (
+        panel: string,
+        view: { current: string | null; choose: (view: string) => void }
+      ) => React.ReactNode;
       availablePanels?: readonly string[];
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
+      renderSettings?: (dialog: {
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        returnFocus: () => HTMLElement | null;
+      }) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
-        <div data-testid="panel">{renderPanel?.("settings")}</div>
-        <div data-testid="topbar">{topBar}</div>
+        <div data-testid="filled">
+          {LEFT_PANELS.filter(
+            panel => (renderPanel?.(panel, view) ?? null) !== null
+          ).join(",")}
+        </div>
+        <div data-testid="panel">{renderPanel?.("settings", view)}</div>
+        <div data-testid="settings">
+          {renderSettings?.({
+            open: true,
+            onOpenChange: () => {},
+            returnFocus: () => null,
+          })}
+        </div>
+        <div data-testid="topbar">
+          {topBar}
+          {topBarCenter}
+          {topBarEnd}
+        </div>
       </div>
     ),
     BlockKeyboardActions: passthrough,
@@ -78,7 +116,44 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+// The dialog stands in as what it is handed: the entry's own fields.
+vi.mock("./editor/settings-dialog", () => ({
+  SettingsDialog: ({ pageFields }: { pageFields: React.ReactNode }) => (
+    <div>{pageFields}</div>
+  ),
+}));
+
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => ({}),
   // No document around the field: the state every case here was written
@@ -108,11 +183,21 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   validationIssues: () => [],
-  useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -197,61 +282,55 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-describe("offering the Settings panel", () => {
-  it("withholds it, and renders nothing into it, when there are no fields", () => {
-    /*
-     * The state a document reaches when the builder field is all it has beside
-     * its identity — and the state of every surface outside an entry form.
-     * Both halves are asserted because the defect was that they disagreed:
-     * withholding the rail slot while still rendering a body would be just as
-     * wrong, and no test that read one of them could tell.
-     */
-    entryFields = null;
-    openEditor();
-
-    expect(rail()).not.toContain("settings");
-    const panel = screen.getByTestId("panel");
-    // Both, because they fail differently: a body that rendered an empty
-    // wrapper has no text and is not empty, and it is the wrapper that would
-    // reserve the region.
-    expect(panel.textContent).toBe("");
-    expect(panel.childElementCount).toBe(0);
+describe("Settings, as a dialog rather than a panel", () => {
+  it("is never a left panel, with fields to show or without", () => {
+    for (const fields of [null, <p key="f">the entry&apos;s other fields</p>]) {
+      entryFields = fields;
+      openEditor();
+      expect(rail()).not.toContain("settings");
+      // Nothing is drawn into a Settings panel either.
+      expect(screen.getByTestId("panel").childElementCount).toBe(0);
+      cleanup();
+    }
   });
 
-  it("offers it AND fills it when the form has fields to give back", () => {
-    // The branch nothing covered. A panel that is offered must have a body, and
-    // this is the pairing that says so from one render.
+  it("hands the dialog the entry's own fields to show", () => {
     entryFields = <p>the entry&apos;s other fields</p>;
     openEditor();
-
-    expect(rail()).toContain("settings");
-    expect(screen.getByTestId("panel").textContent).toContain(
+    expect(screen.getByTestId("settings").textContent).toContain(
       "the entry's other fields"
     );
   });
 
-  it("leaves the OTHER panels alone in both states", () => {
-    /*
-     * The control. `settings` is the only slot this decision governs, so a
-     * change that withheld the whole rail — or that offered every panel
-     * unconditionally — would satisfy the two cases above and be caught only
-     * here.
-     */
+  it("offers the same panels whether or not there are fields", () => {
     entryFields = null;
     openEditor();
-    const withoutSettings = rail();
+    const withoutFields = rail();
     cleanup();
 
     entryFields = <p>fields</p>;
     openEditor();
-    const withSettings = rail();
-
-    for (const panel of ["insert", "layers", "tokens", "fonts", "classes"]) {
-      expect(withoutSettings).toContain(panel);
-      expect(withSettings).toContain(panel);
+    expect(rail()).toBe(withoutFields);
+    for (const panel of ["add", "layers", "components", "design"]) {
+      expect(withoutFields).toContain(panel);
     }
-    // And the two differ by exactly the one slot under test.
-    expect(withSettings).not.toBe(withoutSettings);
+  });
+
+  it("offers exactly the panels it fills, in both states", () => {
+    // The rail leaves out what the host does not offer, so a panel the
+    // renderer fills but the list forgets is unreachable, and one the list
+    // offers but the renderer leaves empty opens blank. Asked of every panel
+    // the shell knows, rather than of the ones this file expects.
+    const filled = (): string => screen.getByTestId("filled").textContent ?? "";
+    entryFields = null;
+    openEditor();
+    expect(filled()).toBe(rail());
+    expect(rail()).not.toBe("");
+    cleanup();
+
+    entryFields = <p>fields</p>;
+    openEditor();
+    expect(filled()).toBe(rail());
   });
 
   it("asks about the builder field's OWN path, so it is never offered itself", () => {

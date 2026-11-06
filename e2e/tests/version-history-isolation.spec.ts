@@ -152,7 +152,9 @@ test.describe("reading history does not write", () => {
     // the panel publishes the trigger and the title bar consumes it, so a
     // component test of either half passes while the two are not connected.
     await expect(
-      page.locator("main").getByRole("button", { name: "Restore…" }),
+      page
+        .locator("main")
+        .getByRole("button", { name: "Restore this version" }),
       "an authorised reader must be offered restore from the title bar"
     ).toBeVisible({ timeout: 15_000 });
 

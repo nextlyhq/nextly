@@ -12,6 +12,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
@@ -41,7 +42,8 @@ async function placeCount(page: Page): Promise<void> {
           {
             id: "e2e-count",
             widgetId: CARD,
-            width: "half",
+            // At its largest: the parts it links show only above the small tier.
+            ...(await sizeBoundsOf(page, CARD)).max,
             removed: false,
             config: { collection: "posts" },
           },

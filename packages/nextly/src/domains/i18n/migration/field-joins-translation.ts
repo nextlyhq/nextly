@@ -444,6 +444,31 @@ async function planEntityMove(
   const companionColumns = columnsOf(companionTable);
   const onCompanion = new Set(companionColumns ?? []);
   const names = new Set(joining.map(j => j.field));
+  // The move takes a companion column already there as the field's and copies into it, so one
+  // that cannot hold the field's values is refused first, before the push drops the main column.
+  const { companionColumnsThatCannotHold } = await import(
+    "./companion-column-holds"
+  );
+  const cannotHold = companionColumnsThatCannotHold({
+    fields: e.fields.filter(f => names.has(f.name)),
+    live: snapshot.tables.find(t => t.name === companionTable)?.columns ?? [],
+    dialect: args.dialect,
+    builtBy,
+    surface: builtBy === "codeFirst" ? "code" : "builder",
+  });
+  if (cannotHold.length > 0) {
+    const { NextlyError } = await import("../../../errors/nextly-error");
+    throw NextlyError.validation({
+      errors: cannotHold.map(c => c.refusal),
+      logContext: {
+        entity: e.slug,
+        companionTable,
+        columns: cannotHold.map(c => c.columns),
+        // A command line prints the context, not the per-field errors, so the way on goes here too.
+        reasons: cannotHold.map(c => c.refusal.message),
+      },
+    });
+  }
   return buildFieldsJoiningTranslationStatements({
     slug: e.slug,
     tableName: e.tableName,

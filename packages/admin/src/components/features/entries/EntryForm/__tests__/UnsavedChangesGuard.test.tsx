@@ -396,6 +396,18 @@ describe("moving between a document and its own views", () => {
       "/admin/collections/pages/1/builder?field=hero",
       "/admin/collections/pages/1/builder?field=body",
     ],
+    // The entry screen links each of a page's sections to the view, opened at
+    // that section: the same form answers, whichever part it opens at.
+    [
+      "an entry into its view at one section",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/builder?field=body&section=hero-1",
+    ],
+    [
+      "a view at one section back to its entry",
+      "/admin/collections/pages/1/builder?field=body&section=hero-1",
+      "/admin/collections/pages/1",
+    ],
     // History opens beside the document, with the form still mounted.
     [
       "an entry into its history beside it",

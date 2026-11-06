@@ -6,9 +6,13 @@ import { UI } from "@admin/constants/ui";
  * Copy a piece of text, and say for a moment that it was copied.
  *
  * `navigator.clipboard` is undefined in non-secure or policy-restricted contexts, and a write
- * can be rejected; either way nothing happens and the text stays on screen to select by hand.
+ * can be rejected; either way `onRefused` is called, and without one nothing happens and the
+ * text stays on screen to select by hand. A caller showing less than the whole text says so.
  */
-export function useCopyToClipboard(text: string): {
+export function useCopyToClipboard(
+  text: string,
+  onRefused?: () => void
+): {
   copied: boolean;
   copy: () => void;
 } {
@@ -18,7 +22,10 @@ export function useCopyToClipboard(text: string): {
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const copy = useCallback(() => {
-    if (!navigator.clipboard?.writeText) return;
+    if (!navigator.clipboard?.writeText) {
+      onRefused?.();
+      return;
+    }
     navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);
@@ -29,10 +36,11 @@ export function useCopyToClipboard(text: string): {
         );
       },
       () => {
-        // Rejected (permissions): the text is still there to select.
+        // Rejected (permissions).
+        onRefused?.();
       }
     );
-  }, [text]);
+  }, [text, onRefused]);
 
   return { copied, copy };
 }

@@ -1,0 +1,26 @@
+---
+title: MIGRATION_IRREVERSIBLE
+description: "A migration to roll back has no `-- DOWN` section."
+---
+
+## Cause
+
+A migration to roll back has no `-- DOWN` section.
+
+`nextly migrate:down` runs the `-- DOWN` section of each migration it rolls back. This file's is empty, so there is no way to undo it.
+
+## Fix
+
+- Hand-write a `-- DOWN` section that undoes the file's `-- UP` statements, then run the command again.
+- Or, on a development database, use `nextly migrate:fresh`.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ 20261020_120000_add_posts.sql has no down SQL — it is irreversible.
+  Why:  `nextly migrate:down` runs a migration's `-- DOWN` section, and this file's is empty.
+  Next: Hand-write a -- DOWN section or use 'nextly migrate:fresh'.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-irreversible  (MIGRATION_IRREVERSIBLE)
+```

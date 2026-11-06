@@ -140,7 +140,7 @@ describe("a field group's validators and the parent write's request", () => {
     const updated = await current.nextly.update({
       collection: "pages",
       id: (created.item as { id: string }).id,
-      data: { badge: { badge: "silver" } },
+      data: { badge: { badge: "silver" }, _overwrite: true },
       user: USER,
       overrideAccess: true,
     });
@@ -155,7 +155,7 @@ describe("a field group's validators and the parent write's request", () => {
 
     const updated = await current.nextly.updateSingle({
       slug: "landing",
-      data: { headline: "Hello", badge: { badge: "gold" } },
+      data: { headline: "Hello", badge: { badge: "gold" }, _overwrite: true },
       user: USER,
       overrideAccess: true,
     });
@@ -170,7 +170,7 @@ describe("a field group's validators and the parent write's request", () => {
     const error = await current.nextly
       .updateSingle({
         slug: "landing",
-        data: { headline: "Hello", badge: { badge: "gold" } },
+        data: { headline: "Hello", badge: { badge: "gold" }, _overwrite: true },
         overrideAccess: true,
       })
       .catch((e: unknown) => e);

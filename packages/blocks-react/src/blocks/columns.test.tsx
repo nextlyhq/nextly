@@ -147,7 +147,7 @@ describe("the columns pair", () => {
       // The REFERENCE reaching the compiled sheet. That it resolves to a real
       // length is the next case, which reads a rendered page — a compiled `var()`
       // proves the property survived the catalog, not that anything defines it.
-      expect(css).toContain("gap: var(--site-space-4)");
+      expect(css).toContain("gap: var(--site-space-columns)");
       // Must-differ: the row is still a grid, so this is about the gutter and
       // not about the layout having been replaced by something simpler.
       expect(css).toContain("display: grid");
@@ -185,14 +185,14 @@ describe("the columns pair", () => {
       );
 
       // The reference the page CSS carries.
-      expect(markup).toContain("gap: var(--site-space-4)");
+      expect(markup).toContain("gap: var(--site-space-columns)");
       // And the declaration it resolves against, on the same page. Without this
       // the assertion above passes on exactly the broken state.
-      expect(markup).toContain("--site-space-4:");
-      // The VALUE, so the migration is behaviour-preserving rather than merely
-      // resolvable: matched up to `;` or `}`, since the token block runs
+      expect(markup).toContain("--site-space-columns:");
+      // The VALUE, so the reference resolves to a length rather than merely to
+      // something: matched up to `;` or `}`, since the token block runs
       // straight into the theme block after it.
-      expect(markup).toMatch(/--site-space-4:\s*1rem\s*[;}]/);
+      expect(markup).toMatch(/--site-space-columns:\s*clamp\([^;}]+\)\s*[;}]/);
     });
 
     it("emits the column's min-width so a long child cannot force overflow", () => {

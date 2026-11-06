@@ -89,7 +89,7 @@ export function DisplayTab({
           show "+ Add Condition" button. When set, render the
           ConditionBuilder inline. */}
       <div className="space-y-2">
-        <Label>Conditional Visibility</Label>
+        <Label>Conditional visibility</Label>
         {hasCondition ? (
           <ConditionBuilder
             condition={field.admin?.condition}
@@ -107,7 +107,7 @@ export function DisplayTab({
             disabled={readOnly}
             onClick={handleAddCondition}
           >
-            + Add Condition
+            + Add condition
           </Button>
         )}
       </div>

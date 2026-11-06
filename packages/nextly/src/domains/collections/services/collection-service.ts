@@ -150,6 +150,14 @@ export interface CollectionEntry {
   [key: string]: unknown;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * The entry's version: changed by every save and by no read, and naming each
+   * language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
+   */
+  _rev?: string;
 }
 
 /**
@@ -509,7 +517,9 @@ export class CollectionService extends BaseService {
     // callers (and future ACL/multitenant logic) can pass request context.
     _context: RequestContext
   ): Promise<PaginatedResult<Collection>> {
-    this.logger.debug("Listing collections", { options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing collections");
 
     const result = await this.metadataService.listCollections(options);
 
@@ -796,7 +806,9 @@ export class CollectionService extends BaseService {
     options: QueryOptions = {},
     context: RequestContext
   ): Promise<PaginatedResult<CollectionEntry>> {
-    this.logger.debug("Listing entries", { collectionName, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing entries", { collectionName });
 
     const limit = options.pagination?.limit ?? 10;
     const page = options.pagination?.page ?? 1;
@@ -865,6 +877,53 @@ export class CollectionService extends BaseService {
     }
 
     return result.data.totalDocs;
+  }
+
+  /**
+   * How many entries carry each distinct value of one field, over the rows a
+   * `count` with the same filter would count.
+   *
+   * Not on `ctx.services.collections`: a plugin reaches it only through
+   * `ctx.services.ownCollections`, whose safe-delete bookkeeping needs it.
+   *
+   * @param collectionName - Name of the collection
+   * @param options - The field to group by, an optional `where`, and a bucket cap
+   * @param context - Request context
+   * @returns The buckets, largest first, and whether the cap left any out
+   * @throws NextlyError if grouping fails
+   */
+  async group(
+    collectionName: string,
+    options: {
+      groupBy: string;
+      where?: Record<string, unknown>;
+      bucketLimit?: number;
+    },
+    context: RequestContext
+  ): Promise<{
+    buckets: { value: string | null; count: number }[];
+    truncated: boolean;
+  }> {
+    this.logger.debug("Grouping entries", { collectionName });
+
+    const result = await this.entryService.groupEntries({
+      collectionName,
+      ...forwardedFromContext(context),
+      groupBy: options.groupBy,
+      where: options.where as WhereFilter | undefined,
+      ...(options.bucketLimit === undefined
+        ? {}
+        : { bucketLimit: options.bucketLimit }),
+    });
+
+    if (!result.success || !result.data) {
+      throw this.mapLegacyErrorToNextlyError(result);
+    }
+
+    return {
+      buckets: result.data.buckets,
+      truncated: result.data.truncated,
+    };
   }
 
   /**
@@ -1029,6 +1088,15 @@ export class CollectionService extends BaseService {
   async warmLocalizedReadiness(collectionName: string): Promise<void> {
     await this.entryService.warmLocalizedReadiness(collectionName);
   }
+  /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * for `nextly media reindex-usage`. Returns how many entries it read.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    return this.entryService.rebuildMediaUsage(collectionName);
+  }
 
   /**
    * Create an entry within an existing transaction
@@ -1166,8 +1234,9 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.deleteEntryInTransaction(tx, {
       collectionName,
       entryId,
-      actor,
       ...forwardedFromContext(context),
+      // The actor passed beside the context wins over one the context names.
+      ...(actor === undefined ? {} : { actor }),
     });
 
     this.settleTxWrite<unknown>(tx, result, {

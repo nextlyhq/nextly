@@ -31,6 +31,11 @@ Always `await t.destroy()` in teardown — it exercises your `destroy()` (catchi
 leaked subscriptions) and resets the global registries so tests don't bleed into each
 other.
 
+Files the instance generates, such as the migration a Builder save writes, go into a
+temporary folder of its own (`t.basePath`), which `destroy()` removes, so a test run
+leaves nothing in your package. Pass `basePath` to choose the folder instead; the
+instance then writes there and leaves it in place.
+
 ## A plugin that declares raw SQL
 
 An app lists the plugins it allows raw SQL in `db.rawSqlPlugins`, and the boot

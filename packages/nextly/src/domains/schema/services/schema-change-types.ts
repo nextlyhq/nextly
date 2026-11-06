@@ -32,6 +32,12 @@ export interface RemovedField {
   name: string;
   type: string;
   rowCount: number; // COUNT(*) WHERE field IS NOT NULL
+  /**
+   * Present when the values could not be counted. `rowCount` is then 0 but
+   * does not mean the field is empty, and the removal is classed as deleting
+   * data.
+   */
+  rowCountUnknown?: true;
   classification: ChangeClassification;
 }
 

@@ -112,7 +112,9 @@ export function RepeaterFieldEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.Layers className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Repeater Configuration</Label>
+        {/* "Settings": the options header above already names the type in
+            its plain words, and every Builder label is in sentence case. */}
+        <Label className="text-xs font-medium">Settings</Label>
       </div>
 
       {/* Row Labels Section */}
@@ -253,7 +255,7 @@ export function RepeaterFieldEditor({
       {/* Admin Options Section */}
       <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
-          Admin Options
+          Admin options
         </Label>
 
         {/* Init Collapsed Toggle */}
@@ -261,7 +263,7 @@ export function RepeaterFieldEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Collapsed by Default"
+              label="Collapsed by default"
               description="Start with rows collapsed"
             />
           </div>
@@ -276,7 +278,7 @@ export function RepeaterFieldEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Reordering"
+              label="Allow reordering"
               description="Drag to reorder rows"
             />
           </div>

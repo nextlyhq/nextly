@@ -1,11 +1,11 @@
 /**
- * The slice of the managed collection service this plugin reads through.
+ * The slice of the managed collection service the sitemap reads through.
  *
- * Two callers need the same shape and must not each declare it: the sitemap
- * builder enumerates published entries as `system`, and the SEO issues source
- * scans them as the caller. They ask the same two questions of the same
- * service; only the identity they ask under differs, which is what the type
- * parameter carries.
+ * The sitemap builder enumerates published entries as `system`, because the
+ * sitemap is a public document. The identity a read is asked under is the type
+ * parameter, so the shape says nothing about who reads. The dashboard card and
+ * its Needs attention line do not read through this: they read through the
+ * services core hands a widget, bound to the person asking (`widget-source`).
  *
  * Declared structurally rather than as `Pick<PluginCollectionService, ...>` so
  * a test can satisfy it with a plain object, while the real, richer service
@@ -48,9 +48,8 @@ export interface EntriesQuery {
 /**
  * Reading entries under one identity.
  *
- * `Opts` is whatever that caller passes as the trailing `ServiceOpts`: a fixed
- * `{ as: "system" }` for a public document, or `callerReadOptions(caller)` for
- * a read that must be scoped to whoever asked.
+ * `Opts` is whatever that caller passes as the trailing `ServiceOpts`, such as
+ * the fixed `{ as: "system" }` the sitemap reads a public document with.
  */
 export interface CollectionReads<Opts> {
   collections: {

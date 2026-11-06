@@ -56,7 +56,7 @@
  * @module shared-style-inputs
  */
 import {
-  MAX_NAMED_CLASSES,
+  namedClassesRead,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
   MAX_VALUE_LENGTH,
@@ -91,7 +91,7 @@ export type SharedStyleInputs = Pick<
   // compile. A host replacing it changes what every heading and paragraph
   // renders as, and a stored sheet compiled against the old one is wrong in a
   // way nothing downstream can detect — so it has to move the stamp, exactly as
-  // a changed `blockBases` does. `ENCODING` is at `v3` for the neighbouring
+  // a changed `blockBases` does. `ENCODING` moved to `v3` for the neighbouring
   // reason: a sheet stored before this field existed was compiled without the
   // baseline at all, and is refused rather than served.
   | "elementBases"
@@ -107,6 +107,14 @@ export type SharedStyleInputs = Pick<
   // for the contexts that produced it; only a caller that turns it ON computes
   // a different identity, which is the point.
   | "previewStates"
+  // The space a container type puts between its children. A block changing
+  // its `childGap` changes the rules `compilePageCss` writes for every page
+  // holding one, so it has to move the stamp as `blockBases` does.
+  | "childGaps"
+  // The spacing model decides which element and block defaults compile and
+  // whether any gap is written, so a sheet compiled under one model must not
+  // be served under the other.
+  | "spacingMode"
 >;
 
 /**
@@ -142,8 +150,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * compiler emits for inputs it already accepted, not only when this file
  * changes. It costs one recompile per artifact, which is the safe direction —
  * the unbumped alternative is a stale stylesheet served indefinitely, silently.
+ *
+ * `v5`: a part may take properties from a wrapping root, and the compiler
+ * writes those declarations on the part, off the wrapper. A sheet stored
+ * before wrote a wrapped image's corners and proportion on its root, which the
+ * renderer now gives the image's look as well, so it is refused, not served.
  */
-const ENCODING = "v3";
+const ENCODING = "v5";
+
+/**
+ * Whether a stored stamp was written under the current {@link ENCODING}.
+ *
+ * Answerable from the stamp alone, so a read with no compile context, which
+ * cannot rebuild a stamp to compare against, can still refuse a sheet the
+ * compiler before this encoding wrote. Absent and unidentified stamps carry no
+ * encoding and answer `true`: they are judged where a context exists, as
+ * before.
+ */
+export function stampedUnderCurrentEncoding(
+  stamp: string | undefined
+): boolean {
+  if (stamp === undefined || stamp === UNIDENTIFIED_SHARED_INPUTS) return true;
+  return stamp.startsWith(`${ENCODING}:`);
+}
 
 /**
  * The identity of shared inputs that decline to identify themselves.
@@ -511,6 +540,17 @@ function classParts(entry: unknown, reading: Reading): unknown {
     boundedName(entry.slug, reading),
     structural(entry.orderIndex, reading),
     styleEnvelope(entry.styles, reading),
+    // The block type a look is bound to decides its cascade tier and which
+    // nodes take its class, so it is part of the identity. Spread, so a
+    // class with no binding stamps exactly as before.
+    ...(entry.blockType === undefined
+      ? []
+      : [["look", boundedName(entry.blockType, reading)]]),
+    // A block's own look edits its type's base instead of being a class, so
+    // the mark moves the stamp. Spread, so every other class stamps as before.
+    ...(entry.isDefault === undefined
+      ? []
+      : [["own-look", structural(entry.isDefault, reading)]]),
   ] as unknown;
 }
 
@@ -597,7 +637,8 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // Imported rather than restated: a comparator copied here would drift from
     // the one that decides the output, and the drift would be silent in both
     // directions.
-    orderedNamedClasses(library.slice(0, MAX_NAMED_CLASSES)).map(entry =>
+    // The slice the compiler reads, looks under their own cap included.
+    orderedNamedClasses(namedClassesRead(library)).map(entry =>
       classParts(entry, reading)
     ),
     // The block-type defaults, which the renderer resolves beside the other
@@ -627,6 +668,10 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     ...(blockPartsPresent(inputs.blockParts)
       ? [blockPartsParts(inputs.blockParts, reading)]
       : []),
+    // Each container type's child gap, sorted by type for the reason the block
+    // tier is. A fixed slot, which moves every stamp, and that is intended:
+    // `v4` is the compiler that writes these gaps at all.
+    childGapParts(inputs.childGaps, reading),
     // A preview sheet gives every interaction state a forceable form, so its
     // selectors are not the published ones and the two must not share a stored
     // artifact. Without this, `resolvePageStyles` — exported, and returning a
@@ -639,6 +684,13 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // A fixed slot would have invalidated every page on the site to record a
     // field that is unset on all of them.
     ...(inputs.previewStates === true ? ["preview-states"] : []),
+    // The classic spacing model, SPREAD for the same reason: absent and `gaps`
+    // compile exactly as before the model existed, so every artifact stored
+    // under them keeps its stamp, and only a classic compile moves it. The
+    // defaults the model swaps in are in the block and element tiers above
+    // already; this slot is what tells apart two compiles those tiers agree
+    // on, since the classic model also drops every child gap.
+    ...(inputs.spacingMode === "classic" ? ["spacing-classic"] : []),
   ]);
 }
 
@@ -676,12 +728,43 @@ function blockPartsParts(
         structural(type, reading),
         Object.keys(parts)
           .sort()
-          .map(name => [
-            structural(name, reading),
-            styleEnvelope(parts[name]?.baseStyles, reading),
-          ]),
+          .map(name => partEntry(name, parts[name], reading)),
       ];
     });
+}
+
+/**
+ * One part as the stamp reads it: its name, its defaults, and what it takes
+ * from a wrapping root, which decides the element its routed declarations land
+ * on. The route is read only when declared, so a part declaring none stamps as
+ * it did before routing existed.
+ */
+function partEntry(
+  name: string,
+  part: SharedStyleInputs["blockParts"] extends
+    | Readonly<Record<string, Readonly<Record<string, infer P>>>>
+    | undefined
+    ? P | undefined
+    : never,
+  reading: Reading
+): unknown[] {
+  const takes: unknown = part?.takesFromRoot;
+  return [
+    structural(name, reading),
+    styleEnvelope(part?.baseStyles, reading),
+    ...(takes === undefined ? [] : [structural(takes, reading)]),
+  ];
+}
+
+/** Each container type's child gap, in a fixed key order, read structurally. */
+function childGapParts(
+  childGaps: SharedStyleInputs["childGaps"],
+  reading: Reading
+): unknown[] {
+  const gaps = childGaps ?? {};
+  return Object.keys(gaps)
+    .sort()
+    .map(type => [structural(type, reading), structural(gaps[type], reading)]);
 }
 
 /** Each block type's defaults, in a fixed key order, reduced as classes are. */

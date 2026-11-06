@@ -16,10 +16,17 @@
  * proposes adding it again on every run.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { getDialectTables } from "../../database/index";
 import { getCoreSchema, getCoreTableNames } from "../index";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /**
  * The dialect identifiers all three registries take.

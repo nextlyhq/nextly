@@ -40,6 +40,9 @@ beforeEach(() => {
         // Readable, so offered to filter and sort, but its values live per
         // language, so the read will not group by it.
         { name: "headline", type: "text", localized: true },
+        // Values a row cannot print: many strings, and a boolean.
+        { name: "tags", type: "text", hasMany: true },
+        { name: "done", type: "checkbox" },
       ],
       timestamps: false,
     },
@@ -52,7 +55,7 @@ afterEach(() => {
 });
 
 const offeredFor = (collection: string) =>
-  publishableContentSources([{ generated: true, collection }]);
+  publishableContentSources([collection]);
 
 describe("the content sources a card's settings may offer", () => {
   it("offers a plain field with its label, type and choices", () => {
@@ -77,6 +80,16 @@ describe("the content sources a card's settings may offer", () => {
     expect(byName.get("headline")).toMatchObject({ groupable: false });
     // The control: a plain field carries no mark, so it stays groupable.
     expect(byName.get("title")).not.toHaveProperty("groupable");
+  });
+
+  it("marks a field no row can print, and only those", () => {
+    // 🔴 Unmarked, a Fields setting offered them, and the row drew an empty place.
+    const [posts] = offeredFor("posts");
+    const byName = new Map(posts?.fields.map(field => [field.name, field]));
+    expect(byName.get("tags")).toMatchObject({ presentable: false });
+    expect(byName.get("done")).toMatchObject({ presentable: false });
+    // The control: a plain text field carries no mark.
+    expect(byName.get("title")).not.toHaveProperty("presentable");
   });
 
   it("never offers a field a read rule could refuse", () => {
@@ -120,15 +133,11 @@ describe("the content sources a card's settings may offer", () => {
     expect(notes).not.toHaveProperty("titleField");
   });
 
-  it("offers only collections whose own card the reader may see", () => {
-    // Derived from the visible cards: a declared card and a collection with no
-    // card here are not collections this reader was found able to read.
-    expect(
-      publishableContentSources([
-        { generated: false, collection: "posts" },
-        { generated: true, collection: "absent" },
-      ])
-    ).toEqual([]);
+  it("offers only the readable collections that have a source", () => {
+    // From the audience's readable collections: a slug with no source here is
+    // offered nothing, and only the collections passed are offered.
+    expect(publishableContentSources(["absent"])).toEqual([]);
+    expect(publishableContentSources([])).toEqual([]);
     expect(offeredFor("posts")).toHaveLength(1);
   });
 });

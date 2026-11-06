@@ -67,6 +67,7 @@ import {
   isAuthorableTokenName,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  tokenLabelIssue,
   tokenNamingProblem,
   tokenValueFetches,
 } from "./site-tokens";
@@ -95,6 +96,11 @@ interface NextlyExtension {
    * field a reader has to interpret to arrive at the token that was written.
    */
   id?: string;
+  /**
+   * The token's plain label, when it has one. The format has no field for a
+   * display name beside the path, so it rides here with the identity.
+   */
+  label?: string;
 }
 
 /** A DTCG group or token; the format is a tree of plain JSON. */
@@ -181,23 +187,13 @@ function exportableValue(
   token: SiteToken,
   issues: ValidationIssue[]
 ): { type: string; value: unknown } | undefined {
-  const naming = tokenNamingProblem(token);
+  const naming = exportNamingRefusal(token, "it was not exported");
   if (naming !== undefined) {
     // One rule, phrased for this gate. The identity carries the cap and the
     // display name carries only the grammar, so a renamed token with a long
     // label exports normally — refusing it here would drop a working token from
     // the file while Nextly went on rendering it.
-    issues.push(
-      issue(
-        naming.reason === "depth"
-          ? `"${String(token.name)}" is nested too deeply, so it was not exported. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`
-          : naming.reason === "length"
-            ? `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so it was not exported. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`
-            : naming.field === "name"
-              ? `"${token.name}" is not a token name, so it was not exported.`
-              : `"${token.name}" has an id that is not a token name, so it was not exported. Its value is still here in Nextly.`
-      )
-    );
+    issues.push(issue(naming));
     return undefined;
   }
   // The id is covered by the same answer above, and refused rather than
@@ -219,6 +215,28 @@ function exportableValue(
   return { type, value };
 }
 
+/**
+ * Why a token's name or id keeps it out of an exported file, in words, or
+ * nothing when both can be written. `outcome` says what happened to it ("it
+ * was not exported"), so every exporter phrases the one verdict alike.
+ */
+export function exportNamingRefusal(
+  token: SiteToken,
+  outcome: string
+): string | undefined {
+  const naming = tokenNamingProblem(token);
+  if (naming === undefined) return undefined;
+  if (naming.reason === "depth") {
+    return `"${String(token.name)}" is nested too deeply, so ${outcome}. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`;
+  }
+  if (naming.reason === "length") {
+    return `"${String(token.name)}" is written under more than ${MAX_TOKEN_NAME_LENGTH} characters, so ${outcome}. The ${naming.field} a token is written under is at most ${MAX_TOKEN_NAME_LENGTH} characters.`;
+  }
+  return naming.field === "name"
+    ? `"${String(token.name)}" is not a token name, so ${outcome}.`
+    : `"${String(token.name)}" has an id that is not a token name, so ${outcome}. Its value is still here in Nextly.`;
+}
+
 /** The node for a token already established as writable. */
 function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
   const extension: NextlyExtension = {
@@ -231,6 +249,7 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
     // token that never moved would make the field say nothing about identity
     // and everything about which version of this exporter ran.
     ...(token.id === undefined ? {} : { id: token.id }),
+    ...(token.label === undefined ? {} : { label: token.label }),
   };
   const entry: DtcgNode = {
     $type: type,
@@ -537,13 +556,14 @@ function trimCssWhitespace(text: string): string {
 }
 
 /**
- * The CSS generic families, plus the `ui-*` system aliases.
+ * The CSS generic families, plus the `ui-*` system aliases. Exported so a
+ * picker offers exactly the keywords the engine accepts.
  *
  * Unquoted, these are KEYWORDS rather than names: `font-family: serif` asks for
  * the browser's serif default, and no `@font-face` can claim it — the engine
  * emits every face family quoted, so only a quoted value can name one.
  */
-const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
+export const GENERIC_FONT_FAMILIES: readonly string[] = [
   "serif",
   "sans-serif",
   "monospace",
@@ -557,7 +577,9 @@ const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
   "math",
   "emoji",
   "fangsong",
-]);
+];
+
+const GENERIC_FAMILIES: ReadonlySet<string> = new Set(GENERIC_FONT_FAMILIES);
 
 /**
  * How CSS reads ONE item of a family list.
@@ -907,8 +929,181 @@ export function dtcgToTokens(input: unknown): {
       issues: [issue("The file is not a design-token document.")],
     };
   }
-  read(input, [], undefined, tokens, issues);
+  const resolved = resolveAliases(input);
+  issues.push(...resolved.issues);
+  read(resolved.document, [], undefined, tokens, issues);
   return { tokens, issues };
+}
+
+/* ----------------------------------------------------------------- aliases */
+
+/** One token found by the alias pass: its node and the type it is read as. */
+interface FoundToken {
+  node: DtcgNode;
+  type: string | undefined;
+}
+
+/**
+ * The document with every alias replaced by the value it points at.
+ *
+ * DTCG lets a token's `$value` be another token: `"{color.blue}"`, or
+ * `{ "$ref": "#/color/blue/$value" }` in the JSON-pointer form. This system
+ * stores values, not references, so an alias is resolved once on import. A
+ * chain is followed to its end, and an alias with no `$type` of its own takes
+ * its target's.
+ *
+ * An alias that cannot be resolved (a loop, a missing target, or a stated type
+ * that disagrees with the target's) is left out of the returned document and
+ * named, so the rest of the file still imports.
+ *
+ * Returns a copy: the document handed in is not changed.
+ */
+export function resolveAliases(document: DtcgNode): {
+  document: DtcgNode;
+  issues: ValidationIssue[];
+} {
+  const found = new Map<string, FoundToken>();
+  collectTokens(document, [], undefined, found);
+  const issues: ValidationIssue[] = [];
+  const settled = new Map<string, FoundToken | string>();
+  for (const [path, entry] of found) {
+    if (aliasTarget(entry.node.$value) === undefined) continue;
+    const outcome = followAlias(path, found, settled, []);
+    if (typeof outcome === "string") issues.push(issue(outcome));
+  }
+  return { document: substituted(document, [], settled), issues };
+}
+
+/**
+ * The path an alias value points at, or `undefined` when it is a value.
+ *
+ * A whole-token reference only: `"{a.b}"` exactly, or a `$ref` pointer into
+ * the same document. A `$ref` ending in `/$value` names the token by its
+ * value, which is the same token.
+ */
+function aliasTarget(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    if (!value.startsWith("{") || !value.endsWith("}")) return undefined;
+    const path = value.slice(1, -1).split(".");
+    return path.every(isDtcgName) ? path.join(".") : undefined;
+  }
+  if (!isPlainObject(value) || typeof value.$ref !== "string") return undefined;
+  const ref = value.$ref;
+  if (!ref.startsWith("#/")) return undefined;
+  const parts = ref
+    .slice(2)
+    .split("/")
+    .map(part => part.replaceAll("~1", "/").replaceAll("~0", "~"));
+  if (parts.at(-1) === "$value") parts.pop();
+  return parts.length > 0 && parts.every(isDtcgName)
+    ? parts.join(".")
+    : undefined;
+}
+
+/**
+ * Every token in the document by dot path, with the type it inherits.
+ *
+ * Bounded at the same depth the reader stops at, so a file nested deeply
+ * enough to exhaust the stack is left for the reader to refuse and report.
+ */
+function collectTokens(
+  node: DtcgNode,
+  path: string[],
+  inherited: string | undefined,
+  found: Map<string, FoundToken>
+): void {
+  const groupType = statedType(node) ?? inherited;
+  for (const [key, child] of Object.entries(node)) {
+    if (isReservedKey(key) || !isPlainObject(child)) continue;
+    const here = [...path, key];
+    if (isTokenNode(child)) {
+      found.set(here.join("."), {
+        node: child,
+        type: statedType(child) ?? groupType,
+      });
+    } else if (here.length <= MAX_TOKEN_NAME_SEGMENTS) {
+      collectTokens(child, here, groupType, found);
+    }
+  }
+}
+
+/**
+ * The concrete token an alias ends at, or why it cannot be resolved.
+ *
+ * Memoised in `settled`, so a long chain shared by many aliases is walked
+ * once; `trail` is the chain so far, which is how a loop is recognised.
+ */
+function followAlias(
+  path: string,
+  found: ReadonlyMap<string, FoundToken>,
+  settled: Map<string, FoundToken | string>,
+  trail: readonly string[]
+): FoundToken | string {
+  const known = settled.get(path);
+  if (known !== undefined) return known;
+  const entry = found.get(path);
+  const head = trail[0] ?? path;
+  if (entry === undefined) {
+    return `"${head}" points at "${path}", which is no token in this file, so it was skipped.`;
+  }
+  const target = aliasTarget(entry.node.$value);
+  if (target === undefined) return entry;
+  if (trail.includes(path) || target === path) {
+    const loop = `"${path}" is part of a loop of aliases that never reaches a value, so it was skipped.`;
+    settled.set(path, loop);
+    return loop;
+  }
+  const end = followAlias(target, found, settled, [...trail, path]);
+  let outcome: FoundToken | string = end;
+  if (typeof end !== "string") {
+    if (entry.type !== undefined && end.type !== entry.type) {
+      outcome = `"${path}" is a ${entry.type} but points at "${target}", a ${end.type ?? "token with no type"}, so it was skipped.`;
+    } else if (end.type === undefined) {
+      outcome = `"${path}" points at "${target}", which has no type, so it was skipped.`;
+    }
+  } else if (trail.length === 0 && !end.startsWith(`"${path}"`)) {
+    // A failure further down the chain is said once, about the token the
+    // author would look for: the first alias in it.
+    outcome = end.replace(/^"[^"]*"/, `"${path}"`);
+  }
+  settled.set(path, outcome);
+  return outcome;
+}
+
+/**
+ * A copy of the document with each settled alias written as its value, and
+ * each unresolvable one left out.
+ *
+ * Built with `Object.fromEntries` rather than by assignment: the keys come from
+ * a file, and assigning `__proto__` would set the copy's prototype instead of
+ * keeping the key for the reader to report.
+ */
+function substituted(
+  node: DtcgNode,
+  path: string[],
+  settled: ReadonlyMap<string, FoundToken | string>
+): DtcgNode {
+  const entries: [string, unknown][] = [];
+  for (const [key, child] of Object.entries(node)) {
+    const here = [...path, key];
+    const outcome = settled.get(here.join("."));
+    if (isReservedKey(key) || !isPlainObject(child)) {
+      entries.push([key, child]);
+    } else if (outcome === undefined) {
+      entries.push([
+        key,
+        isTokenNode(child) || here.length > MAX_TOKEN_NAME_SEGMENTS
+          ? child
+          : substituted(child, here, settled),
+      ]);
+    } else if (typeof outcome !== "string") {
+      entries.push([
+        key,
+        { ...child, $type: outcome.type, $value: outcome.node.$value },
+      ]);
+    }
+  }
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -1323,6 +1518,8 @@ function readToken(
   // the model rather than two spellings of it.
   const id = stated === name ? undefined : stated;
 
+  const label = statedLabelOf(own, name, issues);
+
   // The cap, now that the identity is settled. Held here rather than on either
   // field alone because the identity is what a stylesheet is written under: a
   // token whose stated id is short imports normally however long its label, and
@@ -1364,6 +1561,7 @@ function readToken(
     return {
       ...(id !== undefined ? { id } : {}),
       name,
+      ...(label !== undefined ? { label } : {}),
       kind,
       values,
       ...(description !== undefined ? { description } : {}),
@@ -1397,12 +1595,9 @@ function readToken(
 
   const type = statedType(node) ?? inherited;
   const kind = type === undefined ? undefined : KIND_BY_TYPE.get(type);
-  if (kind === undefined) {
-    return refuse(
-      issue(
-        `"${name}" has the type "${type ?? "none"}", which this site has no token kind for, so it was skipped.`
-      )
-    );
+  const unkind = kindRefusal(type, kind, extensions, name);
+  if (unkind !== undefined || kind === undefined) {
+    return refuse(issue(unkind ?? ""));
   }
 
   const light = fromDtcgValue(node.$value, kind);
@@ -1413,6 +1608,50 @@ function readToken(
   }
 
   return assemble(kind, { light }, inherited, [storedValuesUnread(own, name)]);
+}
+
+/**
+ * The plain label this system's extension states, when it can be shown.
+ *
+ * A label is display text, so one that cannot be shown costs the label and not
+ * the token: the derived label stands in, and the report says so.
+ */
+function statedLabelOf(
+  own: unknown,
+  name: string,
+  issues: ValidationIssue[]
+): string | undefined {
+  const stated = isPlainObject(own) ? own.label : undefined;
+  const problem = tokenLabelIssue(stated);
+  if (problem !== undefined) {
+    issues.push(
+      issue(`"${name}" carries a label that was not kept: ${problem}`)
+    );
+    return undefined;
+  }
+  return typeof stated === "string" ? stated : undefined;
+}
+
+/**
+ * Why a token's type gives this site no kind to read it as, or nothing.
+ *
+ * Figma writes a true/false variable as a `number` marked by its own
+ * extension. Read as a number it would import as 0 or 1, a value nothing on a
+ * page can use, so it is refused and named like a type with no kind.
+ */
+function kindRefusal(
+  type: string | undefined,
+  kind: TokenKind | undefined,
+  extensions: DtcgNode,
+  name: string
+): string | undefined {
+  if (kind === undefined) {
+    return `"${name}" has the type "${type ?? "none"}", which this site has no token kind for, so it was skipped.`;
+  }
+  if (kind === "number" && extensions["com.figma.type"] === "boolean") {
+    return `"${name}" is a true/false variable, which this site has no kind of variable for, so it was skipped.`;
+  }
+  return undefined;
 }
 
 /**
@@ -1431,7 +1670,7 @@ function readToken(
  * to be named here, so adding a field to the emitter without adding it here
  * fails.
  */
-const NEXTLY_FIELDS = new Set(["id", "css", "kind"]);
+const NEXTLY_FIELDS = new Set(["id", "css", "kind", "label"]);
 
 /**
  * The half of this system's OWN extension key that the model does not state.

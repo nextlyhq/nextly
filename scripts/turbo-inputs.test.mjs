@@ -23,10 +23,21 @@
  * @module turbo-inputs.test
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, globSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, normalize, relative, resolve } from "node:path";
+import {
+  existsSync,
+  globSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, normalize, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { literalText, parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -250,10 +261,12 @@ function projectConfigs(command) {
  * has no script for, such as `pnpm exec`, is left as written.
  */
 function expandedCommand(scripts, command, depth = 0) {
-  return String(command).replace(/\bpnpm\s+(?:run\s+)?([\w:-]+)/g, (step, name) =>
-    depth < 5 && Object.hasOwn(scripts, name)
-      ? expandedCommand(scripts, scripts[name], depth + 1)
-      : step
+  return String(command).replace(
+    /\bpnpm\s+(?:run\s+)?([\w:-]+)/g,
+    (step, name) =>
+      depth < 5 && Object.hasOwn(scripts, name)
+        ? expandedCommand(scripts, scripts[name], depth + 1)
+        : step
   );
 }
 
@@ -291,7 +304,11 @@ function tsdownBuilds(directory, config) {
   const output = execFileSync(
     process.execPath,
     ["--import", "tsx", "--input-type=module", "-e", ENTRY_READER, config],
-    { cwd: join(REPO_ROOT, directory), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+    {
+      cwd: join(REPO_ROOT, directory),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }
   );
   return JSON.parse(output.trim().split("\n").at(-1));
 }
@@ -310,13 +327,19 @@ function tsdownProgram(directory, configs) {
     .flatMap(config => tsdownBuilds(directory, config))
     .flatMap(({ entries, tsconfig }) => {
       const files = entries.flatMap(entry =>
-        entry.includes("*") ? globSync(entry, { cwd: join(REPO_ROOT, directory) }) : [entry]
+        entry.includes("*")
+          ? globSync(entry, { cwd: join(REPO_ROOT, directory) })
+          : [entry]
       );
       const probe = `tsconfig.turbo-inputs-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
       const path = join(REPO_ROOT, directory, probe);
       writeFileSync(
         path,
-        JSON.stringify({ extends: `./${tsconfig}`, include: [], files: files.map(file => `./${file}`) }),
+        JSON.stringify({
+          extends: `./${tsconfig}`,
+          include: [],
+          files: files.map(file => `./${file}`),
+        }),
         { flag: "wx" }
       );
       try {
@@ -333,7 +356,9 @@ function tsdownProgram(directory, configs) {
  * `next build`, is taken to read the package's whole tsconfig.
  */
 function taskProgram(task) {
-  const manifest = JSON.parse(readFileSync(join(REPO_ROOT, task.directory, "package.json"), "utf8"));
+  const manifest = JSON.parse(
+    readFileSync(join(REPO_ROOT, task.directory, "package.json"), "utf8")
+  );
   const command = expandedCommand(manifest.scripts ?? {}, task.command);
   const projects = projectConfigs(command);
   const builds = tsdownConfigs(command);
@@ -414,7 +439,14 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
   it.each(runnable.map(task => [task.package, task]))(
     "%s: every tracked file its compiler reads moves its hash",
     (_name, task) => {
-      const own = new Set(Object.keys(task.inputs));
+      // Each input as a repository path. A package's `$TURBO_ROOT$/…` input
+      // reaches the plan relative to the package (`../apps/…`), and turbo
+      // hashes it like any file of the package's own.
+      const own = new Set(
+        Object.keys(task.inputs).map(key =>
+          posix.normalize(`${task.directory}/${key}`)
+        )
+      );
       // A dependency's files are covered transitively: `^check-types` folds its
       // hash in, and that hash is computed from those files.
       const dependencyDirs = (task.dependencies ?? [])
@@ -436,12 +468,7 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
         // files that ARE tracked, and those are what a hash must follow.
         if (!tracked.has(file)) return false;
         if (globalFiles.has(file)) return false;
-        if (
-          file.startsWith(`${task.directory}/`) &&
-          own.has(file.slice(task.directory.length + 1))
-        ) {
-          return false;
-        }
+        if (own.has(file)) return false;
         return !dependencyDirs.some(dir => file.startsWith(`${dir}/`));
       });
 
@@ -506,7 +533,11 @@ describe("every file a Tailwind build scans is in some build hash", () => {
   it("finds the packages that compile Tailwind", () => {
     // The control: a reader that found no sheet would assert nothing.
     expect(withSheets.map(([task]) => task.package).sort()).toEqual(
-      expect.arrayContaining(["@nextlyhq/admin", "@nextlyhq/builder", "@nextlyhq/ui"])
+      expect.arrayContaining([
+        "@nextlyhq/admin",
+        "@nextlyhq/builder",
+        "@nextlyhq/ui",
+      ])
     );
   });
 
@@ -526,9 +557,13 @@ describe("every file a Tailwind build scans is in some build hash", () => {
           !file.endsWith(".css") &&
           scans.some(dir => file.startsWith(`${dir}/`))
       );
-      expect(scanned.length, `no tracked file under ${scans.join(", ")}`).toBeGreaterThan(0);
+      expect(
+        scanned.length,
+        `no tracked file under ${scans.join(", ")}`
+      ).toBeGreaterThan(0);
       const unhashed = scanned.filter(
-        file => !own.has(file) && !dependencyBuilds.some(inputs => inputs.has(file))
+        file =>
+          !own.has(file) && !dependencyBuilds.some(inputs => inputs.has(file))
       );
       expect(
         unhashed,
@@ -541,14 +576,24 @@ describe("every file a Tailwind build scans is in some build hash", () => {
 
 describe("what a build's compiler reads", () => {
   it("follows a delegated script to the steps it runs", () => {
-    const scripts = { "build:js": "tsdown && tsdown --config tsdown.server-safe.config.ts" };
-    const command = expandedCommand(scripts, "pnpm build:js && node scripts/build-css.mjs");
+    const scripts = {
+      "build:js": "tsdown && tsdown --config tsdown.server-safe.config.ts",
+    };
+    const command = expandedCommand(
+      scripts,
+      "pnpm build:js && node scripts/build-css.mjs"
+    );
     expect(command).toBe(
       "tsdown && tsdown --config tsdown.server-safe.config.ts && node scripts/build-css.mjs"
     );
-    expect(tsdownConfigs(command)).toEqual(["tsdown.config.ts", "tsdown.server-safe.config.ts"]);
+    expect(tsdownConfigs(command)).toEqual([
+      "tsdown.config.ts",
+      "tsdown.server-safe.config.ts",
+    ]);
     // `pnpm exec` names no script, and a tsc step is no tsdown build.
-    expect(expandedCommand(scripts, "pnpm exec tsc --noEmit")).toBe("pnpm exec tsc --noEmit");
+    expect(expandedCommand(scripts, "pnpm exec tsc --noEmit")).toBe(
+      "pnpm exec tsc --noEmit"
+    );
     expect(tsdownConfigs("tsc --noEmit -p tsconfig.tests.json")).toEqual([]);
   });
 
@@ -626,15 +671,22 @@ describe("a package's hash covers the program it actually compiles", () => {
     const withCommand = resolvedTasks().filter(
       task => !String(task.command).includes("NONEXISTENT")
     );
-    const exempt = withCommand.filter(task => writesNoBuildInfo(String(task.command)));
+    const exempt = withCommand.filter(task =>
+      writesNoBuildInfo(String(task.command))
+    );
     expect(exempt.map(task => task.package)).toEqual(["playground"]);
     // And the exemption is used: an exempt task that still waited for its own
     // build would keep that build (for the playground, `next build`) in every
     // type-check's graph.
     for (const task of exempt) {
-      expect(task.resolvedTaskDefinition.dependsOn, `${task.package} writes no build-info yet still waits for its own build`).not.toContain("build");
+      expect(
+        task.resolvedTaskDefinition.dependsOn,
+        `${task.package} writes no build-info yet still waits for its own build`
+      ).not.toContain("build");
     }
-    for (const task of withCommand.filter(candidate => !exempt.includes(candidate))) {
+    for (const task of withCommand.filter(
+      candidate => !exempt.includes(candidate)
+    )) {
       expect(
         task.resolvedTaskDefinition.dependsOn,
         `${task.package} may typecheck while its own build writes the same .tsbuildinfo`
@@ -643,13 +695,25 @@ describe("a package's hash covers the program it actually compiles", () => {
   });
 
   it("counts a type-check as writing no build-info only when every tsc in it says so", () => {
-    expect(writesNoBuildInfo("next typegen && tsc --noEmit --incremental false")).toBe(true);
+    expect(
+      writesNoBuildInfo("next typegen && tsc --noEmit --incremental false")
+    ).toBe(true);
     expect(writesNoBuildInfo("tsc --noEmit")).toBe(false);
-    expect(writesNoBuildInfo("tsc --noEmit --incremental false && tsc --noEmit -p tsconfig.tests.json")).toBe(false);
+    expect(
+      writesNoBuildInfo(
+        "tsc --noEmit --incremental false && tsc --noEmit -p tsconfig.tests.json"
+      )
+    ).toBe(false);
     expect(writesNoBuildInfo("next typegen")).toBe(false);
-    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental")).toBe(false);
-    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental true")).toBe(false);
-    expect(writesNoBuildInfo("tsc --incremental --noEmit --incremental false")).toBe(true);
+    expect(
+      writesNoBuildInfo("tsc --noEmit --incremental false --incremental")
+    ).toBe(false);
+    expect(
+      writesNoBuildInfo("tsc --noEmit --incremental false --incremental true")
+    ).toBe(false);
+    expect(
+      writesNoBuildInfo("tsc --incremental --noEmit --incremental false")
+    ).toBe(true);
   });
 });
 
@@ -660,7 +724,8 @@ describe("the runner's platform is hashed", () => {
   it("gives the same task a different hash on another operating system or architecture", () => {
     const hashOf = (os, arch) => {
       const plan = dryRun({ ...process.env, RUNNER_OS: os, RUNNER_ARCH: arch });
-      return plan.tasks.find(task => task.taskId === "nextly#check-types")?.hash;
+      return plan.tasks.find(task => task.taskId === "nextly#check-types")
+        ?.hash;
     };
     const linux = hashOf("Linux", "X64");
     expect(linux).toBeTruthy();
@@ -714,23 +779,36 @@ describe("a root script in the global inputs brings its imports with it", () => 
    */
   function stringLiterals(file) {
     const texts = [];
-    walk(parseSource(readFileSync(join(REPO_ROOT, file), "utf8"), file).program, node => {
-      const text = literalText(node);
-      if (text !== null) texts.push(text);
-    });
+    walk(
+      parseSource(readFileSync(join(REPO_ROOT, file), "utf8"), file).program,
+      node => {
+        const text = literalText(node);
+        if (text !== null) texts.push(text);
+      }
+    );
     return texts;
   }
 
   function rootScriptImports(file) {
     const targets = stringLiterals(file).map(text => namedFile(file, text));
-    return [...new Set(targets.filter(target => target?.startsWith("scripts/") && target !== file))];
+    return [
+      ...new Set(
+        targets.filter(
+          target => target?.startsWith("scripts/") && target !== file
+        )
+      ),
+    ];
   }
 
   it("follows a script loaded through a path built at run time, and ignores one named in a comment", () => {
     // `dev-doctor.mjs` builds the path to `cli-entry.mjs`, and
     // `pnpm-invocation.mjs` names `verify-merge.mjs` only in its comments.
-    expect(rootScriptImports("scripts/dev-doctor.mjs")).toContain("scripts/cli-entry.mjs");
-    expect(rootScriptImports("scripts/pnpm-invocation.mjs")).not.toContain("scripts/verify-merge.mjs");
+    expect(rootScriptImports("scripts/dev-doctor.mjs")).toContain(
+      "scripts/cli-entry.mjs"
+    );
+    expect(rootScriptImports("scripts/pnpm-invocation.mjs")).not.toContain(
+      "scripts/verify-merge.mjs"
+    );
   });
 
   it("lists every root script a listed one imports", () => {

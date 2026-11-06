@@ -41,6 +41,18 @@ const MIN_EDITOR_PERCENT = 35;
 const MAX_EDITOR_PERCENT = 75;
 const DEFAULT_EDITOR_PERCENT = 55;
 
+/**
+ * On a phone's width the preview takes the whole screen while it is open.
+ *
+ * Two panes side by side there leave neither readable: the editor's fields
+ * and its bar crush into a third of a phone, and the preview is a column of a
+ * few words. So the editor and the divider step aside, still mounted, and the
+ * preview's own close button brings them back. Asked of the page's content
+ * area (`@container/content` on the dashboard's main), the width the split
+ * shares; 37.5rem is 600px, the width below which the editor is a phone's.
+ */
+const PHONE_HIDES_EDITOR = "@max-[37.5rem]/content:hidden";
+
 /** How far one arrow-key press moves the divider. */
 const KEYBOARD_STEP_PERCENT = 2;
 
@@ -70,6 +82,27 @@ export interface PreviewSplitProps {
    * wide enough window removes it entirely.
    */
   preferPreviewWidth?: number | null;
+  /**
+   * Closed, pass the container's height on to what the split holds.
+   *
+   * For a full-height screen inside it, such as a plugin's document view. The
+   * closed split is otherwise no box at all, so the page scrolls as an edit
+   * form does; a screen that fills its box then had no height to fill, and
+   * sized itself to the window instead, a header's height taller than the
+   * area it sat in.
+   */
+  fill?: boolean;
+}
+
+/**
+ * The split's own box. Open, the panel group's definite height. Closed and
+ * asked to fill, the container's height, passed on to a full-height screen
+ * inside. Closed otherwise, no class at all, so the page scrolls as it would
+ * around an edit form.
+ */
+function splitRootClass(open: boolean, fill: boolean): string | undefined {
+  if (open) return "flex h-full min-h-0 flex-1";
+  return fill ? "h-full min-h-0" : undefined;
 }
 
 export function PreviewSplit({
@@ -78,6 +111,7 @@ export function PreviewSplit({
   preview,
   label,
   preferPreviewWidth = null,
+  fill = false,
 }: PreviewSplitProps): JSX.Element {
   /*
    * Generated rather than fixed: the id is what `aria-controls` points at, and
@@ -217,14 +251,14 @@ export function PreviewSplit({
      */
     <div
       ref={container}
-      className={cn(open && "flex h-full min-h-0 flex-1")}
+      className={splitRootClass(open, fill)}
       data-preview-split={open ? "open" : "closed"}
     >
       <div
         id={editorPaneId}
         className={cn(
           open
-            ? "@container/content min-w-0 overflow-y-auto"
+            ? ["@container/content min-w-0 overflow-y-auto", PHONE_HIDES_EDITOR]
             : // Same reason as the parent: no box, no effect on the page.
               "contents"
         )}
@@ -288,7 +322,8 @@ export function PreviewSplit({
               // `pointercancel` before the split has moved.
               "relative flex w-px shrink-0 touch-none cursor-col-resize items-center justify-center bg-border",
               "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-              "after:absolute after:inset-0 after:-inset-x-1"
+              "after:absolute after:inset-0 after:-inset-x-1",
+              PHONE_HIDES_EDITOR
             )}
           >
             <div className="z-10 flex h-4 w-3 items-center justify-center rounded-sm border border-border bg-border">

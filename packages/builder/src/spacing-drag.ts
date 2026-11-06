@@ -38,23 +38,12 @@
 
 import type { StyleValue } from "@nextlyhq/blocks-engine";
 
-import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
 import type { Scale } from "./geometry";
 import type { SideOrientation } from "./side-orientation";
 import type { SpacingBox, SpacingSide } from "./spacing-bands";
 import { measurementOf } from "./style-numeric";
 import type { LogicalSide } from "./style-sides";
 import type { StyleAddress } from "./style-values";
-
-/**
- * How far the pointer travels before a press on a handle becomes a drag.
- *
- * The canvas's own figure, imported rather than restated. Two thresholds in one
- * editor is two answers to "did the hand mean to move", and an author who has
- * learned one of them on the canvas would meet a different one an inch away.
- */
-export const SPACING_ACTIVATION_PX: typeof DEFAULT_ACTIVATION_PX =
-  DEFAULT_ACTIVATION_PX;
 
 /** How much one arrow key moves a value, in CSS pixels. */
 export const SPACING_STEP_PX = 1;

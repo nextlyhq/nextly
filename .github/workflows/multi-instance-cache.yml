@@ -1,0 +1,180 @@
+name: Multi-instance cache
+
+# Two production instances of one site on one Postgres database, sharing
+# Nextly's cache handlers: a write through either, or made outside any request,
+# must be served by both within the bound. Its own workflow rather than a job in
+# ci.yml, so its trigger stays as narrow as what it tests.
+#
+# It runs when a change can reach what it tests: the cache, the revalidation
+# path, nextly's package manifest and build config (where the handler subpaths
+# are declared), the fixture's dependencies and the lockfile that pins the
+# Next.js it runs on, the e2e support module the driver starts servers with,
+# and the suite itself. A pull
+# request is filtered by `paths`. A push to main and a merge-queue entry run the
+# `changes` job first, which reads the files the commit changed and skips the
+# suite when none of them is one of those (`merge_group` takes no `paths`), so
+# a skipped run reports `skipped` rather than never reporting. The nightly run
+# tests everything, so a change anywhere else that breaks it is caught within a
+# day.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/nextly/src/runtime/cache/**"
+      - "packages/nextly/src/revalidation/**"
+      - "packages/nextly/package.json"
+      - "packages/nextly/tsdown.config.ts"
+      - "e2e/multi-instance/**"
+      - "e2e/playwright.multi-instance.config.ts"
+      - "e2e/package.json"
+      - "e2e/support/playground-dev-server.ts"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/multi-instance-cache.yml"
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A pull request's newer push supersedes its last run. Every other run keeps a
+# group of its own commit, so a merge-queue entry or a commit on main is never
+# cancelled by the one after it.
+concurrency:
+  group: multi-instance-cache-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    name: Decide whether this commit can affect the shared cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      inert: ${{ steps.decide.outputs.inert }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # On a push to main, the commit this workflow last tested, so a push after
+      # one it skipped is compared with what was actually tested.
+      - name: Ask whether a newer push already covers this one
+        id: newer
+        uses: ./.github/actions/superseded-on-main
+        with:
+          workflow: multi-instance-cache.yml
+          substantive-job: Two instances share the cache
+          token: ${{ github.token }}
+
+      # Everything is inert but the paths the pull-request filter names. The
+      # nightly and manual runs have no diff rule, so they are never inert.
+      - name: Decide
+        id: decide
+        env:
+          SUPERSEDED: ${{ steps.newer.outputs.superseded }}
+          LAST_TESTED_SHA: ${{ steps.newer.outputs.last-tested-sha }}
+          SCOPE_TITLE: Multi-instance cache scope
+          INERT_PATHS: "."
+          ALWAYS_RUN_PATHS: '^(packages/nextly/src/runtime/cache/|packages/nextly/src/revalidation/|packages/nextly/package\.json$|packages/nextly/tsdown\.config\.ts$|e2e/multi-instance/|e2e/playwright\.multi-instance\.config\.ts$|e2e/package\.json$|e2e/support/playground-dev-server\.ts$|pnpm-lock\.yaml$|\.github/workflows/multi-instance-cache\.yml$)'
+        run: node scripts/change-scope.mjs
+
+  two-instances:
+    name: Two instances share the cache
+    needs: [changes]
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    # Two production builds (Cache Components off and on) and their checks.
+    timeout-minutes: 35
+    # Every turbo here reads the cache the restore step put in `.turbo`.
+    env:
+      TURBO_CACHE_DIR: .turbo
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: nextly
+          POSTGRES_PASSWORD: nextly
+          POSTGRES_DB: nextly_multi_instance
+        ports:
+          - 5432:5432
+        # Health-gated so the suite never races a database still starting, and
+        # in memory, as the integration legs keep theirs: the job throws it away.
+        options: >-
+          --health-cmd "pg_isready -U nextly"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --tmpfs /var/lib/postgresql/data
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      # Scoped to this job, as every job's `.turbo` is: a key shared across jobs
+      # hands one job another's build of a different filter set.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The fixture loads nextly and its adapters from their built output.
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      # Each leg builds the fixture, serves it twice and checks both instances;
+      # a failed check attaches both instances' logs to the report.
+      - name: Run the two-instance suite
+        env:
+          MULTI_INSTANCE_DATABASE_URL: postgres://nextly:nextly@localhost:5432/nextly_multi_instance
+        run: pnpm --filter @nextlyhq/e2e test:e2e:multi-instance
+
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-multi-instance
+          path: e2e/.playwright/report-multi-instance
+          retention-days: 7
+
+      - name: Save Turbo cache
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}

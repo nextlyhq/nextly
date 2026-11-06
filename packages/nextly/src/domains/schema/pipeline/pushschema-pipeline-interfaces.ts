@@ -77,6 +77,11 @@ export interface Classifier {
       column: string,
       length: number
     ) => Promise<number>;
+    /**
+     * Whether a column is unique in the schema being applied. "Fill with one value" is not offered
+     * for one. A caller that cannot say leaves it out, and every column is read as not unique.
+     */
+    isUnique?: (table: string, column: string) => boolean;
     dialect: SupportedDialect;
   }): Promise<ClassificationResult>;
 }
@@ -118,13 +123,28 @@ export interface PreRenameExecutor {
 // The fields argument carries field-type metadata (name + type) so
 // provide_default values can be Zod-validated against the column's type
 // before the UPDATE fires.
+/**
+ * A declared field as pre-cleanup judges a fill for it: found by its entity's table and its
+ * column (a same-named field elsewhere is another field), with the type the value must have.
+ */
+export interface PreCleanupField {
+  tableName: string;
+  name: string;
+  type: string;
+}
+
 export interface PreCleanupExecutor {
   execute(args: {
     tx: unknown;
     desiredSnapshot: NextlySchemaSnapshot;
     resolutions: Resolution[];
     events: ClassifierEvent[];
-    fields: Array<{ name: string; type: string }>;
+    /**
+     * The apply's operations as the renames answered them: a column a confirmed rename brings is
+     * renamed into place before pre-cleanup, so pre-cleanup fills it rather than adding it.
+     */
+    operations: readonly Operation[];
+    fields: PreCleanupField[];
     dialect: SupportedDialect;
   }): Promise<NextlySchemaSnapshot>;
 }

@@ -18,6 +18,13 @@ import {
 } from "../index";
 import type { PostgresAdapterConfig } from "../index";
 
+/**
+ * A resolver holding every table under a model that declares no columns, so
+ * these cases assert how the raw statement binds its values, and the insert is
+ * not refused as one to a table the resolver does not hold.
+ */
+const holdsEveryTable = { getTable: () => ({}) };
+
 type PgErrorLike = Error & {
   code?: string;
   constraint?: string;
@@ -694,6 +701,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should provide insert method with RETURNING", async () => {
+      adapter.setTableResolver(holdsEveryTable);
       mockClient.query
         .mockResolvedValueOnce({ rows: [] }) // BEGIN
         .mockResolvedValueOnce({ rows: [{ id: 1, name: "test" }] })
@@ -798,6 +806,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should use multi-row INSERT for multiple records", async () => {
+      adapter.setTableResolver(holdsEveryTable);
       mockPool.query.mockResolvedValueOnce({
         rows: [
           { id: 1, name: "a" },
@@ -820,6 +829,7 @@ describe("PostgresAdapter", () => {
     });
 
     it("should include RETURNING clause", async () => {
+      adapter.setTableResolver(holdsEveryTable);
       mockPool.query.mockResolvedValueOnce({
         rows: [{ id: 1 }, { id: 2 }],
       });

@@ -30,7 +30,7 @@ import { AlertCircle, Loader2, ExternalLink } from "@admin/components/icons";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
-import { useLocalization } from "@admin/hooks/useLocalization";
+import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { entryKeys } from "@admin/services/entryApi";
 
 import { EntryForm } from "../../EntryForm/EntryForm";
@@ -120,8 +120,10 @@ function ModalContent({
   // editable slug the full editor does, and whether that slug is already a public address depends
   // on whether ANY language is published — a question only this map can answer. Without it the
   // form has to assume the address may be live, which costs auto-slug convenience on entries that
-  // are still drafts.
-  const { enabled: localizationEnabled } = useLocalization();
+  // are still drafts. Asked only of a user the server lets read every
+  // language's state, in the default language this modal reads in.
+  const asksTranslationStatus =
+    useDefaultLanguageAsksTranslationStatus(collectionSlug);
 
   // Read the pending working draft in place of the live row when the related
   // collection has the draft/published split, exactly as the full-page editor
@@ -141,7 +143,7 @@ function ModalContent({
     collectionSlug,
     entryId,
     enabled: !!collectionSlug && !!entryId,
-    translationStatus: localizationEnabled,
+    translationStatus: asksTranslationStatus,
     draft: draftsEnabled,
   });
 

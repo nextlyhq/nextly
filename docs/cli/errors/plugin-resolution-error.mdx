@@ -1,0 +1,23 @@
+---
+title: PLUGIN_RESOLUTION_ERROR
+description: "A plugin's declaration could not be resolved: a dependency, a version range, a capability, a name or a setting it declares is missing, in conflict or not valid."
+---
+
+## Cause
+
+A plugin's declaration could not be resolved: a dependency, a version range, a capability, a name or a setting it declares is missing, in conflict or not valid.
+
+Before anything runs, the configuration's plugins are resolved: their dependencies and the order to set them up in, the Nextly versions they support, the capabilities they declare and provide, and the names, settings and secrets they declare. A failure in any of these stops every command that loads the configuration, and the boot. The What and Why lines name the plugin and what failed, and `--verbose` shows `logContext.reason`.
+
+## Fix
+
+Fix what the Why line names: add or update the plugin a `dependsOn` names, install a release whose `nextly` range includes the installed Nextly, list a capability the plugin declares (such as `db.rawSqlPlugins`), or correct the declaration. See [Plugin error reference](/docs/plugins/error-reference).
+
+## Example
+
+```text
+✗ Plugin "reviews" route GET /summary declares an option that cannot apply.
+  Why:  rawBody is only meaningful on a method with a body, not GET.
+  Next: Correct the option named in the route's declaration in the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-resolution-error  (PLUGIN_RESOLUTION_ERROR)
+```

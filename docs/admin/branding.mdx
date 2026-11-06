@@ -104,13 +104,13 @@ If your `nextly.config.ts` is imported by your app's `layout.tsx`, you can rende
 
 ## Schema Builder visibility
 
-`showBuilder` toggles the Builders top-level icon (Collections Builder, Singles Builder, Field Groups Builder) in the admin sidebar.
+`showBuilder` turns the Visual Schema Builder (Collections Builder, Singles Builder, Field Groups Builder) on or off. Off, the builder is unavailable to everyone, super-admins included: its sidebar entry is hidden, a direct visit to a builder page returns to the dashboard, and the server refuses every schema change made through the admin API with a `BUILDER_DISABLED` error.
 
 | Value | Behavior |
 |---|---|
-| `true` | Builders icon is always visible. |
-| `false` | Builders icon is always hidden. |
-| Not set (default) | Visible when `process.env.NODE_ENV !== "production"`, hidden in production. |
+| `true` | The builder is on, in every environment. |
+| `false` | The builder is off, in every environment. |
+| Not set (default) | On when `process.env.NODE_ENV !== "production"`, off in production. |
 
 ```typescript title="nextly.config.ts"
 // Force visible, even in production
@@ -130,7 +130,7 @@ admin: {
 },
 ```
 
-The toggle is evaluated server-side and shipped via the `/admin/api/admin-meta` response, so changes take effect on the next admin reload. Hiding the Builder entry does not lock down the underlying routes — direct visits to `/admin/builder/collections` etc. still work for users with permission. Treat `showBuilder: false` as "hide from the sidebar in production", not as an authorization control.
+The toggle is evaluated on the server and sent to the admin in the `/admin/api/admin-meta` response, so a change takes effect on the next admin reload. With the builder off, define your schema in code (`nextly.config.ts`). Who may use the builder when it is on is still decided by roles and permissions.
 
 ## Branding options reference
 
@@ -143,7 +143,7 @@ The toggle is evaluated server-side and shipped via the `/admin/api/admin-meta` 
 | `favicon` | `string` | — | Custom favicon URL |
 | `colors.primary` | `string` (hex) | — | Primary brand color |
 | `colors.accent` | `string` (hex) | — | Accent brand color |
-| `showBuilder` | `boolean` | per `NODE_ENV` | Toggle the Builders sidebar entry |
+| `showBuilder` | `boolean` | per `NODE_ENV` | Turn the Visual Schema Builder on or off |
 
 ## Next steps
 

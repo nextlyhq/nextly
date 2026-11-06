@@ -64,6 +64,12 @@ export interface PluginRouteRead<T extends object | null> {
   error: Error | null;
   /** Ask again, ignoring anything cached. */
   refetch: () => void;
+  /**
+   * Whether a fetch is in flight, the first or a refresh. `data` can be a
+   * cached answer while this is true, so a surface that must act on a FRESH
+   * answer (seeding a draft it will later write back) waits for it.
+   */
+  fetching: boolean;
 }
 
 /** What to read. */
@@ -160,6 +166,7 @@ export function usePluginRoute<T extends object | null>({
     pending: enabled && query.isPending,
     error: query.error,
     refetch: () => void query.refetch(),
+    fetching: enabled && query.isFetching,
   };
 }
 
@@ -184,4 +191,27 @@ function bodyOf<T extends object | null>(
   cached: T | typeof NO_BODY | undefined
 ): T | undefined {
   return cached === NO_BODY ? undefined : cached;
+}
+
+/**
+ * Read a plugin route once, outside React: a search an author is typing, which
+ * cancels the read a newer one replaces. Through `protectedApi`, as
+ * `usePluginRoute` is, so an expired session is renewed and the read retried
+ * rather than failing, and a refusal arrives as the admin's parsed error.
+ * Not cached: each call is one request.
+ *
+ * Answers `undefined` for a route that answered with nothing.
+ */
+export function readPluginRoute<T extends object | null>({
+  plugin,
+  path,
+  mount,
+  signal,
+}: Pick<PluginRouteRequest, "plugin" | "path" | "mount"> & {
+  signal?: AbortSignal;
+}): Promise<T | undefined> {
+  return protectedApi.get<T | undefined>(
+    pluginRouteFullPath(plugin, path, mount),
+    signal === undefined ? {} : { signal }
+  );
 }

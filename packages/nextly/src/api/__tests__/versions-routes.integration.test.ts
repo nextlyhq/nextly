@@ -53,4 +53,23 @@ describe("version routes (integration)", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("answers privately on the detail route, refusals included, as on the list", async () => {
+    // A version the caller may not read is answered as missing, which depends
+    // on who asked: no shared cache may keep it. The list route is the control.
+    for (const res of [
+      await getDetail(
+        new Request("http://localhost/api/versions/collection/posts/abc/nope"),
+        ctx({ kind: "collection", slug: "posts", id: "abc", versionNo: "nope" })
+      ),
+      await getList(
+        new Request(
+          "http://localhost/api/versions/collection/posts/abc?limit=nope"
+        ),
+        ctx({ kind: "collection", slug: "posts", id: "abc" })
+      ),
+    ]) {
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+    }
+  });
 });

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The shell's decisions, asserted where they can be measured.
  *
@@ -6,13 +7,14 @@
  * zero-sized, so an assertion about a panel's width passes whatever the CSS
  * does — and is verified in a real browser instead.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   CANVAS_GUTTER,
   DEFAULT_PREFERENCES,
   fitsFullShell,
   isLeftPanel,
+  RAIL_GROUPS,
   LEFT_PANELS,
   MIN_CANVAS_PANEL_WIDTH,
   MIN_CANVAS_WIDTH,
@@ -21,6 +23,8 @@ import {
   PANEL_BOUNDS,
   RAIL_WIDTH,
   readPreferences,
+  SHELL_PREFERENCES_KEY,
+  userPreferenceStore,
   writePreferences,
 } from "./shell-state";
 import type { PreferenceStore, ShellPreferences } from "./shell-state";
@@ -56,20 +60,18 @@ describe("which panel the rail selects", () => {
     // shrinks by one, and everything remaining passes. A vanishing test reads
     // exactly like a passing one.
     expect([...LEFT_PANELS].sort()).toEqual([
-      "classes",
+      "add",
       "components",
-      "fonts",
-      "insert",
+      "design",
       "layers",
       "pages",
       "settings",
-      "tokens",
     ]);
   });
 
   it("opens the panel that was clicked", () => {
     expect(panelAfterRailClick(null, "layers")).toBe("layers");
-    expect(panelAfterRailClick("insert", "layers")).toBe("layers");
+    expect(panelAfterRailClick("add", "layers")).toBe("layers");
   });
 
   it("closes the open panel when its own rail item is clicked again", () => {
@@ -120,12 +122,14 @@ describe("the bounds the library is handed", () => {
     // This is the number that decided the design, kept as an assertion so the
     // reasoning cannot quietly stop being true. Both panels at their individual
     // maximums on the minimum supported viewport leave the canvas at 232px —
-    // narrower than either panel — with no per-panel bound violated.
+    // narrower than either panel — with no per-panel bound violated. Pinned,
+    // so the figure stated here moves with the widths it is made of.
     const canvasIfPanelsMaxed =
       MIN_SHELL_WIDTH -
       RAIL_WIDTH -
       PANEL_BOUNDS.left.max -
       PANEL_BOUNDS.inspector.max;
+    expect(canvasIfPanelsMaxed).toBe(232);
     expect(canvasIfPanelsMaxed).toBeLessThan(MIN_CANVAS_WIDTH);
 
     // So the floor is declared on the canvas itself, and the supported viewport
@@ -160,26 +164,59 @@ describe("the bounds the library is handed", () => {
 
 describe("preferences round-trip", () => {
   const stored: ShellPreferences = {
-    leftPanel: "tokens",
+    leftPanel: "design",
+    // Non-default, so the round trip carries the open panel's tab rather
+    // than passing on a default that a read which drops it also produces.
+    leftPanelView: "fonts",
     leftPinned: false,
+    // Both non-default, so the round trip carries a hidden side.
+    leftPanelHidden: true,
+    inspectorHidden: true,
     layouts: {
       "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
     },
-    // Non-default like its neighbours above, so the round trip below actually
-    // exercises this field rather than passing on the strength of a default
-    // that both the write and a no-op read would agree on.
-    showEmptyElements: false,
     // Non-default for the same reason, and FIXED rather than fit: fit is the
     // default, and it is also what a read falls back to when it cannot make
     // sense of what was stored — so a round trip carrying fit would pass
     // whether the value survived or was discarded.
     zoom: { kind: "fixed", scale: 1.5 },
+    // Non-default as well: null, the base breakpoint, is the default.
+    editingBreakpoint: "tablet",
+    // Off, the non-default: a read that dropped it would answer on.
+    panelKeys: false,
   };
 
   it("restores what was written", () => {
     const store = memoryStore();
     writePreferences(store, stored);
     expect(readPreferences(store)).toEqual(stored);
+  });
+
+  it("loads a record carrying the removed showEmptyElements whole, without it", () => {
+    // Every other field is non-default (the round-trip record above), so a
+    // read that refused the record, or fell back to the defaults on meeting an
+    // unknown key, cannot also produce this answer. Compared with `toEqual`
+    // against the exact record, so a read that carried the old field through
+    // fails as well.
+    // Built from what the editor writes, so every field is in its stored
+    // spelling, with the old field added the way an earlier release wrote it.
+    const written = memoryStore();
+    writePreferences(written, stored);
+    const record: unknown = JSON.parse(written.value ?? "null");
+    if (typeof record !== "object" || record === null) {
+      throw new Error("the editor wrote no record");
+    }
+    const store = memoryStore(
+      JSON.stringify({ ...record, showEmptyElements: false })
+    );
+    const read = readPreferences(store);
+    expect(read).toEqual(stored);
+
+    // Writing what was read drops the old field for good.
+    const rewritten = memoryStore();
+    writePreferences(rewritten, read);
+    const after: unknown = JSON.parse(rewritten.value ?? "null");
+    expect(after).not.toHaveProperty("showEmptyElements");
   });
 
   it("falls back to fitting when the stored zoom is not one", () => {
@@ -192,6 +229,17 @@ describe("preferences round-trip", () => {
     for (const bad of [undefined, "1.5", 0, 99, null]) {
       const store = memoryStore(JSON.stringify({ ...stored, zoom: bad }));
       expect(readPreferences(store).zoom).toEqual(DEFAULT_PREFERENCES.zoom);
+    }
+  });
+
+  it("starts on the base breakpoint when the stored device is not a name", () => {
+    // Preferences from before there was a device have no such field; an empty
+    // or non-string value names no breakpoint either.
+    for (const bad of [undefined, "", 3, null]) {
+      const store = memoryStore(
+        JSON.stringify({ ...stored, editingBreakpoint: bad })
+      );
+      expect(readPreferences(store).editingBreakpoint).toBeNull();
     }
   });
 
@@ -234,12 +282,16 @@ describe("preferences round-trip", () => {
     // takes the author's panel choice with it.
     expect(readPreferences(store)).toEqual({
       leftPanel: "layers",
+      leftPanelView: null,
       leftPinned: DEFAULT_PREFERENCES.leftPinned,
+      leftPanelHidden: false,
+      inspectorHidden: false,
       layouts: { "canvas,inspector": { canvas: 70, inspector: 30 } },
-      // Absent from the stored JSON above, so it falls back the same way
-      // `leftPinned` does here rather than surfacing as `undefined`.
-      showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
       zoom: DEFAULT_PREFERENCES.zoom,
+      editingBreakpoint: DEFAULT_PREFERENCES.editingBreakpoint,
+      // Absent as well, as in every record written before the keys could be
+      // turned off: on.
+      panelKeys: true,
     });
   });
 
@@ -265,42 +317,145 @@ describe("preferences round-trip", () => {
   });
 });
 
-describe("the show-empty-elements preference", () => {
-  it("defaults to showing them", () => {
-    const store = { read: () => null, write: () => undefined };
-    expect(readPreferences(store).showEmptyElements).toBe(true);
+describe("the rail's items, in the order an author meets them", () => {
+  it("puts the daily tools at the top and Settings at the bottom", () => {
+    expect(RAIL_GROUPS.top).toEqual([
+      "add",
+      "layers",
+      "pages",
+      "components",
+      "design",
+    ]);
+    expect(RAIL_GROUPS.bottom).toEqual(["settings"]);
   });
 
-  it("reads a stored false", () => {
-    const store = {
-      read: () => JSON.stringify({ showEmptyElements: false }),
-      write: () => undefined,
-    };
-    expect(readPreferences(store).showEmptyElements).toBe(false);
+  it("covers every panel exactly once between the two groups", () => {
+    expect([...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom].sort()).toEqual(
+      [...LEFT_PANELS].sort()
+    );
   });
+});
 
-  it("falls back to the default for a non-boolean", () => {
-    // A stored value can arrive from a hand-edited localStorage entry or an
-    // older shape. Anything that is not a boolean says nothing about intent.
-    const store = {
-      read: () => JSON.stringify({ showEmptyElements: "no" }),
-      write: () => undefined,
-    };
-    expect(readPreferences(store).showEmptyElements).toBe(true);
-  });
-
-  it("round-trips through a write", () => {
-    let written = "";
-    const store = {
-      read: () => written,
-      write: (v: string) => {
-        written = v;
+/*
+ * Panels stored by an earlier release, under the ids the rail used before it
+ * was relabelled. Each is mapped to where its contents live now, explicitly —
+ * not dropped as unknown, which would close the panel an author left open.
+ */
+describe("preferences saved before panels had parts", () => {
+  it("load whole, with no part chosen and Desktop as the device", () => {
+    // Written by the editor before the Design panel's tabs and the stored
+    // device existed: no leftPanelView, no editingBreakpoint. Every other
+    // preference must survive.
+    const yesterday = {
+      leftPanel: "layers",
+      leftPinned: false,
+      zoom: 1.5,
+      layouts: {
+        "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
       },
-    };
-    writePreferences(store, {
-      ...DEFAULT_PREFERENCES,
       showEmptyElements: false,
+    };
+    expect(readPreferences(memoryStore(JSON.stringify(yesterday)))).toEqual({
+      leftPanel: "layers",
+      leftPanelView: null,
+      leftPinned: false,
+      leftPanelHidden: false,
+      inspectorHidden: false,
+      zoom: { kind: "fixed", scale: 1.5 },
+      editingBreakpoint: null,
+      layouts: {
+        "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
+      },
+      panelKeys: true,
     });
-    expect(readPreferences(store).showEmptyElements).toBe(false);
+  });
+});
+
+describe("a panel stored under an id from before the rail was relabelled", () => {
+  it.each([
+    ["insert", "add", null],
+    ["tokens", "design", "variables"],
+    ["classes", "design", "classes"],
+    ["fonts", "design", "fonts"],
+  ] as const)("opens %s as %s, on %s", (stored, panel, view) => {
+    const read = readPreferences(
+      memoryStore(JSON.stringify({ leftPanel: stored }))
+    );
+    expect(read.leftPanel).toBe(panel);
+    expect(read.leftPanelView).toBe(view);
+  });
+
+  it("keeps the view stored with a current id", () => {
+    const read = readPreferences(
+      memoryStore(
+        JSON.stringify({ leftPanel: "design", leftPanelView: "classes" })
+      )
+    );
+    expect(read).toMatchObject({
+      leftPanel: "design",
+      leftPanelView: "classes",
+    });
+  });
+
+  it("ignores a view that is not a string", () => {
+    const read = readPreferences(
+      memoryStore(JSON.stringify({ leftPanel: "design", leftPanelView: 4 }))
+    );
+    expect(read.leftPanelView).toBeNull();
+  });
+});
+
+describe("preferences kept per signed-in user", () => {
+  // The shell's preferences as a browser stored them before they were kept
+  // per user, under the one key every author on the browser shared.
+  const LEGACY = JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 });
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("keeps two users of one browser apart", () => {
+    userPreferenceStore("ada").write("ada's");
+    userPreferenceStore("grace").write("grace's");
+    expect(userPreferenceStore("ada").read()).toBe("ada's");
+    expect(userPreferenceStore("grace").read()).toBe("grace's");
+  });
+
+  it("stores each user's under the shell's key with their id", () => {
+    userPreferenceStore("ada").write("ada's");
+    expect(window.localStorage.getItem(`${SHELL_PREFERENCES_KEY}:ada`)).toBe(
+      "ada's"
+    );
+  });
+
+  it("moves the record from before, once, to the first user who loads it", () => {
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    expect(userPreferenceStore("ada").read()).toBe(LEGACY);
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBeNull();
+    // The next author starts from the defaults rather than inheriting it.
+    expect(userPreferenceStore("grace").read()).toBeNull();
+    expect(userPreferenceStore("ada").read()).toBe(LEGACY);
+  });
+
+  it("keeps a user's own record over the one from before", () => {
+    window.localStorage.setItem(`${SHELL_PREFERENCES_KEY}:ada`, "ada's");
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    expect(userPreferenceStore("ada").read()).toBe("ada's");
+    // Left for an author who has no record of their own yet.
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBe(LEGACY);
+  });
+
+  it("is the same store for the same user, so a host may call it on every render", () => {
+    // A new store each time reads as a store swap, and the shell reloads.
+    expect(userPreferenceStore("ada")).toBe(userPreferenceStore("ada"));
+    expect(userPreferenceStore("ada")).not.toBe(userPreferenceStore("grace"));
+    expect(userPreferenceStore(null)).toBe(userPreferenceStore(null));
+  });
+
+  it("remembers nothing for no one", () => {
+    // Unknown, signed out or unread: nothing is kept for a guess.
+    window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);
+    const store = userPreferenceStore(null);
+    store.write("whose?");
+    expect(store.read()).toBeNull();
+    expect(window.localStorage.getItem(SHELL_PREFERENCES_KEY)).toBe(LEGACY);
   });
 });

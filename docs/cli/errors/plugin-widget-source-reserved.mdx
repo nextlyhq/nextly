@@ -1,0 +1,23 @@
+---
+title: PLUGIN_WIDGET_SOURCE_RESERVED
+description: "A plugin contributes a widget source in a namespace Nextly reserves."
+---
+
+## Cause
+
+A plugin contributes a widget source in a namespace Nextly reserves.
+
+Nextly's own widget sources live in a reserved namespace, so a plugin's source there would shadow one of them.
+
+## Fix
+
+Give the source an id in the plugin's own namespace, or update the plugin.
+
+## Example
+
+```text
+✗ "@acme/stats" contributes widget source "nextly/visits", but the "nextly" namespace is reserved for Nextly's own sources.
+  Why:  Nextly's own widget sources live in that namespace, so a plugin's would shadow one.
+  Next: Give the source an id in the plugin's own namespace, or update the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-widget-source-reserved  (PLUGIN_WIDGET_SOURCE_RESERVED)
+```

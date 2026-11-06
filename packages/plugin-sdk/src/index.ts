@@ -17,6 +17,119 @@
 export { definePlugin } from "nextly";
 
 /**
+ * @experimental `defineWidget` — declares a dashboard widget once: its
+ * settings, its data, its size and how it draws. A widget drawn by its own
+ * component is handed `WidgetProps<typeof widget>`; the types are here and in
+ * `./widgets`. Its `size` is a `WidgetSizeDeclaration` of `GridSize`s, `{ w, h }`
+ * on a grid twelve columns wide, the one way a card's size is stated. The
+ * types its other fields are written in (`view`, `access` and its
+ * `WidgetAccessGate`, `preview`, `summary`) come from here too, and so do
+ * `WidgetInterval` and `WidgetRange`, a series read's interval and range, so
+ * an author annotating one imports it from where `defineWidget` came from.
+ * `WidgetLoadSize` is the `size` a `load` is handed: the card's `{ w, h }` and
+ * its tier, the shape `WidgetRenderSize` hands its component.
+ * `WidgetSummaryCount` is what a `summary.count` answers: a number, or
+ * `{ count, atLeast }` for a floor the header shows as "N+".
+ */
+export { defineWidget } from "nextly";
+/**
+ * @experimental `setting` and `option` — a widget's settings, written with the
+ * collections' field builders: `setting.select({ label, options: [option("US
+ * dollar", "usd")], defaultValue: "usd" })` takes the config `select()` takes
+ * in a collection, less the `name` the setting's key gives, with a `label`
+ * required. Beside them, the dashboard's pickers: `setting.collection`,
+ * `setting.fieldOf`, `setting.dateRange` and the list card's `filter`,
+ * `sort`, `groupBy` and `fields`. `option` is the collections' own.
+ */
+export { option, setting } from "nextly";
+/**
+ * @experimental `SettingEditorProps`: what a setting's own editor is handed,
+ * the component its `editor: { component }` names, drawn in the card's
+ * settings sheet in place of the setting's own field.
+ */
+export type {
+  CoreView,
+  GridSize,
+  SettingEditorProps,
+  WidgetAccess,
+  WidgetAccessGate,
+  WidgetData,
+  WidgetInterval,
+  WidgetLoadSize,
+  WidgetPreviewCase,
+  WidgetProps,
+  WidgetRange,
+  WidgetRenderSize,
+  WidgetSizeDeclaration,
+  WidgetSummary,
+  WidgetSummaryCount,
+  WidgetView,
+} from "nextly";
+/**
+ * The types a plugin's widget code is written in, intended to stay as they
+ * are: `AnyWidget`, any widget `defineWidget` made, for a function that
+ * returns one or a list that holds several; `WidgetReadServices`, the reads a
+ * widget's `load`, `shows` and `summary.count` are handed, already bound to
+ * the person asking, for a helper those functions share. Types only, core's
+ * own, so a plugin names them from here rather than from `nextly`.
+ */
+export type { AnyWidget, WidgetReadServices } from "nextly";
+
+/**
+ * @experimental The number and change formatters a dashboard card's figures are
+ * written with, and the colour a chart slot is drawn in, for a widget's own view
+ * and for server code alike:
+ *
+ * - `formatWidgetNumber`: a count, total or chart value, as drawn ("1.2k" at a
+ *   small tier, "2,000+" for a floor) and as heard ("2,000 or more").
+ * - `formatWidgetChange`: a change against an earlier period, with its arrow
+ *   and sign, never its colour alone.
+ * - `widgetChartColour`: the token a chart slot is drawn in
+ *   (`var(--nx-chart-N)`), the five colours core's charts use in light and dark.
+ *
+ * Here, at the server-safe root, rather than beside the kit's components in
+ * `./admin`: every module of the admin is a client module, which a Server
+ * Component cannot call. Each is `@nextlyhq/ui`'s own, from its server-safe
+ * entries, so a figure reads the same wherever it is written. The locale is
+ * the `locale` option's, `en-US` when none is given.
+ */
+export {
+  chartColour as widgetChartColour,
+  formatChange as formatWidgetChange,
+  formatCount as formatWidgetNumber,
+  type ChartSlot as WidgetChartSlot,
+} from "@nextlyhq/ui/format";
+
+/**
+ * @experimental `rowsThatFit(size, { density })` — how many list rows a card of
+ * `size` draws at a density (`"default"` or `"compact"`): its body's height
+ * over one row's, in whole rows, at most ten. A widget's `load` reads it from
+ * the `size` it is handed, to ask for no more rows than its card shows. Core's
+ * own, the formula its list cards are drawn by, and at this server-safe root
+ * beside the formatters for the reason they are: a `load` runs on the server.
+ */
+export { rowsThatFit } from "nextly";
+
+/**
+ * @experimental `defineAttentionItem` — declares one line of the Needs
+ * attention card, which a plugin lists under `contributes.dashboard.attention`:
+ * a label, optionally a one-line reason, a count taken as the person asking,
+ * and where it leads. Who sees it
+ * is a permission, or the collections it counts. `AttentionItem` and
+ * `AttentionCount` are the types it is written in.
+ */
+export { defineAttentionItem } from "nextly";
+export type { AttentionCount, AttentionItem } from "nextly";
+/**
+ * `MAX_ATTENTION_ITEMS_PER_PLUGIN` — the most Needs attention items one plugin
+ * may declare; startup refuses a plugin that declares more. Published so a
+ * plugin with a line per something it reads builds no more than this, rather
+ * than restating the number. Intended to be stable: core's own bound, which
+ * changes only with a release that says so.
+ */
+export { MAX_ATTENTION_ITEMS_PER_PLUGIN } from "nextly";
+
+/**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
  *   draft beside its published row.
  *
@@ -121,7 +234,9 @@ export { isLocaleSelector } from "nextly";
  * @experimental `PluginHookRegistry` — the `ctx.hooks` registration surface is
  *   not yet exercised by a first-party plugin (see STABILITY.md). Phase-2
  *   contribution types — `PluginRole` (D67), `PluginEmailProvider` /
- *   `PluginEmailTemplate` (D65), `ScheduledTask` (D61, reserved) — are also
+ *   `PluginEmailTemplate` (D65), `PluginSchedule` and the earlier
+ *   `ScheduledTask` (deprecated: mapped to a `PluginSchedule` and run, with
+ *   a warning, or not run, with a warning saying why) — are also
  *   `@experimental`, as are `PluginFieldCodegen` / `PluginFieldCodegenImport`:
  *   the codegen callbacks are new and unexercised by a first-party plugin.
  */
@@ -146,7 +261,10 @@ export type {
   PluginFieldValidationResult,
   PluginFieldCodegen,
   PluginFieldCodegenImport,
+  PluginSchedule,
   ScheduledTask,
+  PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
   ServiceOpts,
   AuthUser,
@@ -389,8 +507,13 @@ export type {
  *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
  *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
  *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
- *   `email` and `versions` expose) and `PluginCollectionTransaction` (what
- *   `ctx.services.collections.withTransaction` hands its work). `FrozenCopy`
+ *   `email` and `versions` expose), `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work), and the
+ *   version pins of `ctx.services.versions.pins`: `PluginVersionPins`,
+ *   `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`,
+ *   `PluginPinTransaction`, `VersionPinHolderDefinition` (what
+ *   `registerHolder` takes) and `VersionRef` (the document a pin is on).
+ *   `FrozenCopy`
  *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
  *   `FrozenValue` the type of each of its properties, both exported so a
  *   plugin's declaration files can name them. See STABILITY.md.
@@ -406,6 +529,13 @@ export type {
   PluginEmailService,
   PluginVersionsService,
   PluginCollectionTransaction,
+  PluginVersionPins,
+  PluginVersionPinHolder,
+  PluginVersionPin,
+  PluginPinOptions,
+  PluginPinTransaction,
+  VersionPinHolderDefinition,
+  VersionRef,
 } from "nextly";
 
 /**
@@ -481,10 +611,16 @@ export {
   trustedClientIp,
 } from "nextly";
 
+/**
+ * The plugin route types. `PluginRouteCanOptions` is intended to be stable: it
+ * is how a route asks `ctx.caller.can` the type-level question (`anyEntry`),
+ * answered by the same access decision as plain `can`.
+ */
 export type {
   PaginationMeta,
   PluginRoute,
   PluginRouteCaller,
+  PluginRouteCanOptions,
   PluginRouteIdentity,
   PluginRouteContext,
   PluginRouteHandler,
@@ -526,14 +662,41 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental A document's stored field values read with no read hook, and
+ *   a write of a field made only if the stored value is still the one read.
+ *   Graduates once `@nextlyhq/plugin-page-builder`'s component delete has
+ *   rewritten site content through it in a release.
+ *
+ * A plugin that rewrites content it did not author has two problems the
+ *   ordinary Direct API cannot solve: a site's `afterRead` hook can hide or
+ *   reshape the value it reads, and a check made before the write's
+ *   transaction leaves a gap in which an author's save is overwritten.
+ *   `readStoredFields` reads the stored form (live row, working draft, one
+ *   language) of fields of a plugin field type stored as JSON, judged by the
+ *   person's read access. `updateIfUnchanged` makes the ordinary update as
+ *   that person, refused with a `CONFLICT` error when the field no longer
+ *   hashes, under the write's own row lock, to what was read.
+ *   `storedValueHash` is the one hash both sides compare.
+ */
+export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
+export type {
+  PluginConditionalUpdate,
+  PluginStoredDocument,
+  PluginStoredFields,
+  PluginStoredFieldsRequest,
+  PluginWriteExpectation,
+} from "nextly";
+
+/**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.
  *
  * @public `PluginAdminContributions`, `PluginAdminPage`, `PluginCollectionView`,
  *   `PluginMenuItem`, `ComponentPath` — exercised by `plugin-form-builder`.
- * @experimental `PluginAdminWidget` — dashboard widgets render (D22); the
- *   contribution shape is still settling, so it graduates once a first-party
- *   plugin ships one.
+ *
+ * A plugin's widgets are declared with `defineWidget` under
+ * `contributes.dashboard`, and startup refuses a plugin that still carries
+ * `contributes.admin.widgets`.
  */
 export type {
   ComponentPath,
@@ -542,15 +705,34 @@ export type {
   PluginAdminContributions,
   PluginAdminPage,
   PluginNavSection,
-  PluginAdminWidget,
-  PluginAdminCustomWidget,
-  PluginAdminDataWidget,
-  PluginAdminStatsWidget,
-  PluginAdminDeclarativeWidget,
-  PluginAdminQuerylessWidget,
-  DeclarativeWidgetArchetype,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * Admin places: the named places on admin pages a plugin adds to, and the
+ * places a plugin declares on its own pages (`contributes.admin.places`).
+ * A plugin types its own places by augmenting `AdminPlaces` from this module.
+ * @experimental No first-party plugin declares or adds to a place yet (see
+ *   STABILITY.md).
+ */
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+  type PluginAdminPlaceDeclaration,
+} from "nextly";
+
+/**
+ * Entry-list filters a plugin declares (`contributes.admin.filters`): each
+ * option narrows the list by a `where` the list read applies with the
+ * caller's access, and the choice is kept in the page's URL.
+ * @experimental No first-party plugin declares a filter yet (see STABILITY.md).
+ */
+export type {
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
 } from "nextly";
 
 /**
@@ -687,7 +869,9 @@ export type {
  * @experimental Background jobs.
  *
  * A plugin declares a job type with `defineJob` and asks for one to happen with
- * `nextly.jobs.queue`. Held experimental per D55 until a first-party plugin
+ * `nextly.jobs.queue`. `ctx.services.jobs.runSweepNow(slug)` runs one of the
+ * plugin's OWN sweeps from a request, for a site no scheduler drains
+ * (`PluginJobsNamespace`). Held experimental per D55 until a first-party plugin
  * ships one — the release drain is core's, not a plugin's, so nothing has yet
  * exercised this from the outside.
  */
@@ -700,45 +884,34 @@ export type {
   JobInputFor,
   JobRetryPolicy,
   JobSlug,
+  PluginJobsNamespace,
   QueueJobArgs,
   QueueJobResult,
 } from "nextly";
 
 /**
- * @experimental Dashboard widgets (D22/C9) — the registry a widget declares
- * itself to, the source registry a query names, and the declarative query
- * contract itself.
+ * @experimental Dashboard widgets (D22/C9) — the vocabularies a source and its
+ * query are checked against, and the query contract itself.
+ *
+ * Nothing here adds, changes or removes a widget or a data source: a plugin's
+ * widgets reach the dashboard only through `contributes.dashboard`, each
+ * declared with `defineWidget`, whose `load` reads data as the person asking.
  *
  * Forwarded here for the reason the Singles surface above is: a plugin imports
- * only from `@nextlyhq/plugin-sdk` and `@nextlyhq/ui`, never from core, so a
- * registry exported from the `nextly` root alone is one an author following the
- * documented surface cannot reach at all. There is no `nextly/widgets` subpath,
- * so this is the only supported spelling.
+ * only from `@nextlyhq/plugin-sdk` and `@nextlyhq/ui`, never from core. There
+ * is no `nextly/widgets` subpath, so this is the only supported spelling.
  *
  * Every contract a published shape NAMES travels with it, the way core's own
- * root export does: `WidgetDefinition.defaultHeight` is a `WidgetHeight`, and a
- * `WidgetSource` is built out of `WidgetSourceField`, `WidgetSourceKind` and
- * `WidgetOp` — a public property whose type has no public name can be inferred
- * but never annotated.
+ * root export does: a `WidgetSource` is built out of `WidgetSourceField`,
+ * `WidgetSourceKind` and `WidgetOp` — a public property whose type has no
+ * public name can be inferred but never annotated.
  *
- * Held `@experimental` alongside `PluginAdminWidget`, which is the same feature
- * seen from the contributions side: the widget contract graduates per D55 once a
- * first-party plugin ships one. See STABILITY.md.
+ * Held `@experimental` with `defineWidget`: the widget contract graduates per
+ * D55. See STABILITY.md.
  *
- * `PluginSourceResolver`, `PluginWidgetSource` and `ReadCaller` are the data
- * SOURCE contract, which `contributes.widgetSources` names. Inference covers a
- * resolver written inline inside `definePlugin`; these are what let an author
- * declare one as a named function instead, which is how a plugin publishing
- * more than one source ends up written.
- *
- * Type a contributed resolver as `PluginSourceResolver`, not
- * `WidgetSourceResolver`: the latter is core's own shape and rejects the
- * `PluginContext` parameter a plugin needs to read any data. `ResolverOptions`
- * is what the host passes beside the question -- a cancellation signal, and the
- * batch's shared work as a `WidgetScope` -- and is published so a standalone
- * resolver can annotate that parameter. `PluginManySourceResolver` types the
- * optional `resolveMany`, which answers several of a source's queries in one
- * call; it and `WidgetScope` are `@experimental`.
+ * `WidgetSourceResolver`, `ResolverOptions`, `WidgetScope` and `ReadCaller`
+ * are core's own source contract: what a source's resolver is handed and
+ * answers with.
  *
  * `callerReadOptions(caller)` turns the caller a resolver is handed into the
  * `ServiceOpts` a managed read takes. Use it rather than assembling them: the
@@ -747,10 +920,6 @@ export type {
  * grants instead of the roles of whoever minted it.
  */
 export {
-  WIDGET_SIZES,
-  WIDGET_CHROME,
-  WIDGET_HEIGHTS,
-  WIDGET_ARCHETYPES,
   WIDGET_OPS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
@@ -758,20 +927,10 @@ export {
   WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
-  registerWidget,
-  registerSource,
-  type WidgetDefinition,
   type WidgetLifecycle,
   type WidgetCondition,
-  type WidgetAction,
   type WidgetSetting,
   type WidgetQuery,
-  type WidgetSize,
-  type WidgetChrome,
-  type WidgetHeight,
-  type WidgetArchetype,
-  type DataWidgetArchetype,
-  type QuerylessWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
   type WidgetFieldChoice,
@@ -781,11 +940,8 @@ export {
   type TimeseriesInterval,
   callerReadOptions,
   type WidgetSourceResolver,
-  type PluginSourceResolver,
-  type PluginManySourceResolver,
   type ResolverOptions,
   type WidgetScope,
-  type PluginWidgetSource,
   type ReadCaller,
 } from "nextly";
 

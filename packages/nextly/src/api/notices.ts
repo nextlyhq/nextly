@@ -15,9 +15,6 @@
  */
 import { z } from "zod";
 
-import type { AuthContext } from "../auth/middleware";
-import { isErrorResponse, requireAuthentication } from "../auth/middleware";
-import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import type { NoticesService } from "../domains/notices/notices-service";
 import { NextlyError } from "../errors/nextly-error";
@@ -25,6 +22,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
 import { readBoundedJsonBody } from "./read-json-body";
 import { respondAction, respondCount, respondList } from "./response-shapes";
+import { signedInPerson } from "./signed-in-person";
 import { withErrorHandler } from "./with-error-handler";
 
 /** A mark-read body is a list of ids at most; nothing larger is a real one. */
@@ -35,24 +33,6 @@ const markReadBody = z.union([
   z.object({ ids: z.array(z.string().min(1)).max(500) }).strict(),
   z.object({ all: z.literal(true) }).strict(),
 ]);
-
-/**
- * The signed-in person, refusing an API key.
- *
- * Refused before anything is read, for every method: reading someone's inbox
- * is as personal as changing it.
- */
-async function signedInPerson(req: Request): Promise<AuthContext> {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
-  if (auth.authMethod === "api-key") {
-    throw NextlyError.personOnly({
-      doing: "have notices",
-      logContext: { reason: "an api key has no notices" },
-    });
-  }
-  return auth;
-}
 
 function service(): NoticesService {
   return container.get<NoticesService>("noticesService");
@@ -83,7 +63,7 @@ function wholeParam(params: URLSearchParams, key: string): number | undefined {
 }
 
 export const getNotices = withErrorHandler(async (req: Request) => {
-  const auth = await signedInPerson(req);
+  const auth = await signedInPerson(req, "have notices");
   const params = new URL(req.url).searchParams;
   const page = await service().find({
     userId: auth.userId,
@@ -107,7 +87,7 @@ export const getNotices = withErrorHandler(async (req: Request) => {
 });
 
 export const getNoticeCount = withErrorHandler(async (req: Request) => {
-  const auth = await signedInPerson(req);
+  const auth = await signedInPerson(req, "have notices");
   const params = new URL(req.url).searchParams;
   const total = await service().count({
     userId: auth.userId,
@@ -117,7 +97,7 @@ export const getNoticeCount = withErrorHandler(async (req: Request) => {
 });
 
 export const markNoticesRead = withErrorHandler(async (req: Request) => {
-  const auth = await signedInPerson(req);
+  const auth = await signedInPerson(req, "have notices");
   const parsed = markReadBody.safeParse(
     await readBoundedJsonBody(req, MAX_MARK_READ_BYTES, { route: "notices" })
   );

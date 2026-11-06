@@ -42,7 +42,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB, which is the part that matters. Six jobs across four
       # workflows cache `.turbo`, they run concurrently on the same commit, and

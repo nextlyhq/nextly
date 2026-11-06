@@ -2,91 +2,106 @@
 
 /**
  * The editor's left panels: which are offered, what fills each, the requests
- * that open one from elsewhere on the surface, and the library the insert
- * panel may offer.
+ * that open one from elsewhere on the surface, and the library the Add panel
+ * may offer.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
-import { CORE_CATEGORIES } from "@nextlyhq/blocks-react/blocks";
+import { spacingModeOf } from "@nextlyhq/blocks-engine";
 import {
-  DEFAULT_PREFERENCES,
+  CORE_CATEGORIES,
+  CORE_PALETTE_ORDER,
+} from "@nextlyhq/blocks-react/blocks";
+import {
+  browserStore,
   type LeftPanel,
+  type PreferenceStore,
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
-  ClassManagerPanel,
+  CHECKLIST_STORAGE_KEY,
+  ComponentsPanel,
   InsertPanel,
   LayersPanel,
   useBuilderChecklist,
   type BuilderShell,
+  type CanvasRegion,
+  type LayersRegionRow,
   type LibraryTierState,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  useCallback,
-  useMemo,
-  useState,
-  type SetStateAction,
-  type ReactNode,
-  type Dispatch,
-} from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
+import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
 } from "../pattern-library-client";
 
+import { DesignPanel } from "./design-panel";
+import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
   withoutSelfPatterns,
   type ComponentGraph,
 } from "./offered-library";
+import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
 import {
   FontsPanelWithUpload,
   offerableFaces,
   offerableTokens,
   renderedTokens,
+  SharedStylesStudio,
   TokensStudio,
+  VariablesTab,
 } from "./site-style-studios";
+import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
 
-/**
- * Every left panel the editor can fill today.
- *
- * The inserter, the layers tree and the tokens studio; the rest are not built.
- * The shell draws all seven regardless and disables the ones nothing fills, so
- * the rail describes the editor's shape while never opening a region with
- * nothing in it. Listing a panel here that renders nothing would reserve space
- * and shrink the canvas to show it, which is why this grows one entry at a time
- * rather than being declared ahead of the panels.
- */
-const AVAILABLE_PANELS = [
-  "insert",
-  "layers",
-  "tokens",
-  "fonts",
-  "classes",
-] as const;
+/** A key for the document the editor has open, from its identity. */
+function identityKey(
+  identity: ReturnType<typeof useDocumentIdentity>
+): string | undefined {
+  if (identity === null) return undefined;
+  return identity.kind === "collection"
+    ? `collection:${identity.slug}:${identity.documentId ?? "new"}`
+    : `${identity.kind}:${identity.slug}`;
+}
 
 /**
- * With an entry-fields panel to fill, `settings` joins them.
- *
- * Derived rather than declared twice: the shell draws a panel outside
- * `availablePanels` as disabled and "coming soon", and warns against OPENING
- * one nothing renders into — reserving width to display nothing reads as a
- * broken control rather than an absent feature. So the list and the renderer
- * move together by construction, and the rail cannot disagree with the body.
+ * Where the getting-started card's dismissal is kept: under the author's own
+ * key, so dismissing it is one author's choice in a browser two people share.
+ * With no author known, the card's own browser-wide default.
  */
-const AVAILABLE_PANELS_WITH_SETTINGS: readonly [
-  ...typeof AVAILABLE_PANELS,
-  "settings",
-] = [...AVAILABLE_PANELS, "settings"] as const;
+function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : browserStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
+}
+
+/**
+ * Every left panel the editor can fill today: Add, Layers, Pages, the site's
+ * Components, and Design with the site's variables, shared styles and fonts.
+ *
+ * The shell offers only what is listed, so the rail never holds an item that
+ * opens a region with nothing in it. Listing a panel here that renders nothing
+ * would reserve space and shrink the canvas to show it, which is why this
+ * grows one entry at a time rather than being declared ahead of the panels.
+ */
+const AVAILABLE_PANELS = [
+  "add",
+  "layers",
+  "pages",
+  "components",
+  "design",
+] as const;
 
 /**
  * The insert panel, with this site's saved patterns.
@@ -114,7 +129,10 @@ function InsertPanelWithLibrary({
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
   categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
+  blockOrder: React.ComponentProps<typeof InsertPanel>["blockOrder"];
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
+  /** The container to add inside, when its "+" asked for it. */
+  inside?: string;
   /**
    * The component tier, read by the EDITOR rather than here.
    *
@@ -249,15 +267,21 @@ function useOfferedLibrary({
 
 /** What `usePanelRequests` returns. */
 type PanelRequests = {
-  openPanelRequest: { panel: LeftPanel; count: number } | undefined;
-  requestPanel: (panel: LeftPanel) => void;
-  openInsertPanel: () => void;
-  showEmptyElements: boolean;
-  setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
+  openPanelRequest:
+    | { panel: LeftPanel; view?: string; count: number }
+    | undefined;
+  requestPanel: (panel: LeftPanel, view?: string) => void;
+  /**
+   * Open Add; given a container, add inside it (its empty-container "+"),
+   * which is never implied by selecting it.
+   */
+  openInsertPanel: (inside?: string) => void;
+  /** The container the last "+" chose to add inside, if any. */
+  insertInside: string | undefined;
 };
 
-/** Requests to open a panel from the canvas, and the empty-chrome switch. */
-function usePanelRequests(): PanelRequests {
+/** Requests to open a panel from the canvas. */
+function usePanelRequests(selectedId: string | null): PanelRequests {
   /*
    * Opens the insert panel from the canvas itself, for the empty-container
    * appender: pressing its "+" must select the container AND show the panel
@@ -272,43 +296,44 @@ function usePanelRequests(): PanelRequests {
   /*
    * A request to open one panel, carrying its own count so the shell can tell a
    * second press from the first. One piece of state for every panel that asks:
-   * the appender opens `insert`, and the fonts panel sends an author to
-   * `tokens` to fix a typeface the site does not provide.
+   * the appender opens Add, and the fonts tab sends an author to Design's
+   * variables to fix a typeface the site does not provide.
    */
   const [openPanelRequest, setOpenPanelRequest] = useState<
-    { panel: LeftPanel; count: number } | undefined
+    { panel: LeftPanel; view?: string; count: number } | undefined
   >(undefined);
-  const requestPanel = useCallback((panel: LeftPanel): void => {
+  const requestPanel = useCallback((panel: LeftPanel, view?: string): void => {
     setOpenPanelRequest(current => ({
       panel,
+      ...(view === undefined ? {} : { view }),
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const openInsertPanel = useCallback((): void => {
-    requestPanel("insert");
-  }, [requestPanel]);
-
-  /*
-   * Whether the author wants empty-container chrome showing at all, mirrored
-   * from the shell so the appender mounted below can answer the same question
-   * the dashed placeholder box's own CSS rule already answers.
-   *
-   * Starts at the preference's own default rather than an assumed `true`: the
-   * shell reports the real value once it has read it, but that report lands
-   * one render after this component's first — an assumed value would be a
-   * SECOND declaration of the default that goes stale the day the shell's own
-   * changes and this one does not.
-   */
-  const [showEmptyElements, setShowEmptyElements] = useState(
-    DEFAULT_PREFERENCES.showEmptyElements
+  const [insideRequest, setInsideRequest] = useState<string | undefined>(
+    undefined
   );
+  const openInsertPanel = useCallback(
+    (inside?: string): void => {
+      setInsideRequest(inside);
+      requestPanel("add");
+    },
+    [requestPanel]
+  );
+  /*
+   * A "+"'s choice lasts while its container stays selected. Selecting
+   * anything else, the block just added included, ends it, so selecting the
+   * container again later adds after it, as any selection does.
+   */
+  if (insideRequest !== undefined && selectedId !== insideRequest) {
+    setInsideRequest(undefined);
+  }
+  const insertInside = insideRequest === selectedId ? insideRequest : undefined;
 
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
-    showEmptyElements,
-    setShowEmptyElements,
+    insertInside,
   };
 }
 
@@ -316,11 +341,25 @@ function usePanelRequests(): PanelRequests {
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
-export function useEditorPanels(
+export function useEditorPanels<TFieldValues extends FieldValues>(
   mount: EditorMount,
-  name: string
+  name: string,
+  /**
+   * The entry's form, and the canvas the Layout's regions are scrolled to.
+   * The page's Layout regions are rows in Layers, drawn on the canvas beside
+   * them; its section is handed to the Settings dialog.
+   */
+  page: {
+    control: Control<TFieldValues>;
+    canvasRoot: HTMLElement | null;
+  }
 ): EditorPanels {
   const { editor, clientConfig } = mount;
+  // The Layout section for the Settings dialog's "This page" tab, or null for
+  // a form that is not a page's.
+  const pageLayout = usePageLayoutSettings(page.control);
+  // From the form's unsaved values, so a change of Layout redraws at once.
+  const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -330,7 +369,9 @@ export function useEditorPanels(
    * form has a renderer, so a gate on the renderer's existence is true even for
    * a collection whose only fields are its title, its slug and this one.
    */
-  const entryFields = useEntryFieldsPanel(name);
+  // Flat, for the Settings dialog that frames them: no section cards, the
+  // slug read as the page's address.
+  const entryFields = useEntryFieldsPanel(name, { presentation: "dialog" });
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -339,20 +380,43 @@ export function useEditorPanels(
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
+  const checklistStore = useMemo(
+    () => checklistStoreFor(mount.userId),
+    [mount.userId]
+  );
+  const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
-    enabled: clientConfig?.checklist !== false,
+    documentKey: identityKey(identity),
+    // Not until the author is known: their own dismissal is the one to read,
+    // and a card drawn before it arrives would flash for an author who
+    // dismissed it.
+    enabled: clientConfig?.checklist !== false && checklistStore !== undefined,
+    ...(checklistStore === undefined ? {} : { store: checklistStore }),
   });
 
   const library = useOfferedLibrary(mount);
-  const requests = usePanelRequests();
+  const requests = usePanelRequests(editor.selectedId);
+  // Whether the editor's search is open: ⌘K opens it, and so does the top
+  // bar's button, so the state sits above both.
+  const [searchOpen, setSearchOpen] = useState(false);
+  // The Pages panel, and the request its rows send to open Settings.
+  const pages = usePagesPanel(mount.initialDocument.kind === "page");
+  // Which look the inspector edits on its own: chosen in the Design panel,
+  // left by selecting a block, by the bar's Back, or by Esc.
+  const lookEditing = useLookEditing(editor);
   return {
     entryFields,
+    lookEditing,
+    search: { open: searchOpen, setOpen: setSearchOpen },
+    pages,
     checklist,
-    // The rail and the body read the same value, so a Settings panel is never
-    // offered that renders nothing.
-    availablePanels:
-      entryFields === null ? AVAILABLE_PANELS : AVAILABLE_PANELS_WITH_SETTINGS,
+    // Settings is a dialog, not a panel: the entry's fields are drawn in its
+    // "This page" tab.
+    availablePanels: AVAILABLE_PANELS,
+    pageLayout,
+    canvasRegions: layoutRegions.canvas,
+    layersRegions: layoutRegions.layers,
     ...library,
     ...requests,
   };
@@ -368,9 +432,17 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
-    availablePanels:
-      | typeof AVAILABLE_PANELS
-      | typeof AVAILABLE_PANELS_WITH_SETTINGS;
+    /** The page's Layout section for Settings, or null for another form. */
+    pageLayout: ReactNode | null;
+    /** The regions of the page's Layout, drawn locked around the page. */
+    canvasRegions: readonly CanvasRegion[];
+    /** The same regions, as read-only rows in Layers. */
+    layersRegions: readonly LayersRegionRow[];
+    availablePanels: typeof AVAILABLE_PANELS;
+    search: { open: boolean; setOpen: (open: boolean) => void };
+    pages: PagesPanelMount;
+    /** The look edited on its own from the Design panel, with no block. */
+    lookEditing: LookEditingState;
   };
 
 /**
@@ -382,6 +454,10 @@ export type EditorPanels = OfferedLibrary &
  */
 export function editorPanelRenderer({
   editor,
+  componentLibrary,
+  componentVerbs,
+  componentView,
+  layersRegions,
   drag,
   offered,
   offerablePatterns,
@@ -392,12 +468,33 @@ export function editorPanelRenderer({
   storedSiteStyle,
   unreadableStoredFonts,
   classes,
-  documentClasses,
+  pageClassBlocks,
   classSummaryContext,
   requestPanel,
-  entryFields,
-}: Pick<EditorMount, "editor"> &
-  Pick<
+  insertInside,
+  pages,
+  canvasRender,
+  editedBreakpoint,
+  canvasElement,
+  layerVerbs,
+  documentDirty,
+  lookEditing,
+}: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
+  /** The look edited on its own, which the Design panel's Block looks choose. */
+  lookEditing?: LookEditingState;
+  /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
+  documentDirty: boolean;
+  /** The regions of the page's Layout, as read-only rows in Layers. */
+  layersRegions?: readonly LayersRegionRow[];
+  /**
+   * The block verbs the verbs provider shares, for the Layers row menu: drawn
+   * in the shell's panel region, outside the provider, so they are handed
+   * across as the inspector's card menu has them.
+   */
+  layerVerbs?: React.ComponentProps<typeof LayersPanel>["verbs"];
+  /** "Edit component", which the Components panel offers on each row. */
+  componentView: Pick<ComponentView, "onEditComponent">;
+} & Pick<
     SiteStyleInputs,
     | "canvasSiteStyle"
     | "siteStylePending"
@@ -407,28 +504,71 @@ export function editorPanelRenderer({
     | "unreadableStoredFonts"
     | "classes"
   > &
-  Pick<CanvasInputs, "drag" | "documentClasses" | "classSummaryContext"> &
+  Pick<
+    CanvasInputs,
+    | "drag"
+    | "pageClassBlocks"
+    | "classSummaryContext"
+    | "canvasRender"
+    | "editedBreakpoint"
+    | "canvasElement"
+  > &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "entryFields"
+    "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
-  return panel => {
+  return (panel, view) => {
     /*
             A lookup rather than a chain of comparisons, so the arrow answers
             in one step and adding a panel is one entry rather than one more
             branch. It also states the pairing the shell needs: every key here
             is a panel this file can fill, and `AVAILABLE_PANELS` is what the
-            rail offers — reading them side by side is how a panel that is
-            offered and renders nothing gets noticed.
+            rail offers — a test holds the two to each other, so a panel that
+            is offered and renders nothing cannot ship.
           */
-    const panels: Partial<Record<string, () => React.ReactNode>> = {
-      insert: () => (
+    const panels: Partial<Record<LeftPanel, () => React.ReactNode>> = {
+      add: () => (
         <InsertPanelWithLibrary
           editor={editor}
           categoryOrder={CORE_CATEGORIES}
+          blockOrder={CORE_PALETTE_ORDER}
           beginInsertDrag={drag.beginInsertDrag}
           components={offered}
           offerablePatterns={offerablePatterns}
+          // Inside the container a "+" chose, while it is the selection.
+          {...(insertInside === undefined ? {} : { inside: insertInside })}
+        />
+      ),
+      /*
+              The site's components, from the SAME offered read Add's
+              "Your components" group and the editor's search are handed, so
+              a component this author may not read is offered nowhere, and
+              placed through Add's own path, so the two panels cannot place
+              differently. The rows the read holds and the panel does not
+              offer are the ones this document cannot contain: the
+              component being edited, and those that place it.
+            */
+      components: () => (
+        <ComponentsPanel
+          editor={editor}
+          components={offered.components}
+          componentDefinitions={offered.definitions}
+          loading={offered.state === "pending"}
+          library={{
+            components: tierStateOf(offered),
+            retry: offered.retry,
+          }}
+          withheld={
+            componentLibrary.components.length - offered.components.length
+          }
+          beginInsertDrag={drag.beginInsertDrag}
+          {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // From the panel there is no placement, so Back returns to the
+          // editor as the author left it.
+          {...(componentView.onEditComponent === undefined
+            ? {}
+            : { onEditComponent: componentView.onEditComponent })}
+          mayCreate={componentVerbs.mayCreate}
         />
       ),
       /*
@@ -437,83 +577,124 @@ export function editorPanelRenderer({
               the shell's CHILDREN — sibling subtrees, so nothing the panel can
               read from where it sits reports what this file knows by writing
               both. Passed as a fact rather than inferred.
-            */
-      layers: () => <LayersPanel editor={editor} moveHints />,
-      tokens: () => (
-        <TokensStudio
-          merged={offerableTokens(
-            canvasSiteStyle,
-            siteStylePending,
-            siteStyleError
-          )}
-          supplied={configSiteStyle?.tokens}
-          pending={siteStylePending}
-        />
-      ),
-      classes: () => (
-        <ClassManagerPanel
-          absence={classes.absence}
-          pendingSlugs={classes.pendingSlugs}
-          documentClassIds={documentClasses.ids}
-          /*
-                  Whether that walk reached the whole document. It stops at the
-                  node ceiling, and a class applied past it is missing from the
-                  list — which the panel must not read as "not on this page".
-                */
-          documentScan={documentClasses.complete ? "complete" : "partial"}
-          library={classes.library}
-          styleContext={classSummaryContext}
-          onRename={classes.rename}
-          currentRenameAttempt={classes.currentRenameAttempt}
-          /*
-                  No `usage`, and no `onDelete`. The usage index is a
-                  collection and this surface has no read for one, so the panel
-                  reports that nothing was read rather than reporting an empty
-                  index — which would say every class is unused. Deleting needs
-                  that same reach plus a write stripping the class from every
-                  document holding it, so it is withheld entirely rather than
-                  offered as a control that cannot keep its promise.
-                */
-          suppliedClassIds={configSiteStyle?.classes?.map(entry => entry.id)}
-        />
-      ),
-      fonts: () => (
-        <FontsPanelWithUpload
-          faces={offerableFaces(
-            canvasSiteStyle,
-            siteStylePending,
-            siteStyleError
-          )}
-          tokens={renderedTokens(
-            canvasSiteStyle,
-            siteStylePending,
-            siteStyleError
-          )}
-          absence={siteStyleError !== null ? "failed" : "pending"}
-          /*
-                  The fix for a token naming a family this site does not provide
-                  is to edit that token, and editing belongs to the studio. This
-                  shell offers one, so the jump is wired: without the callback
-                  the panel suppresses the action and an author is left to find
-                  the right panel and the right row themselves.
-                */
-          onOpenTokens={() => requestPanel("tokens")}
-          storedFaces={storedSiteStyle?.fonts}
-          storedPending={siteStylePending}
-          unreadableFonts={unreadableStoredFonts}
-        />
-      ),
-      /*
-              The document's title and slug, and the entry's own fields — SEO,
-              relations, whatever this collection declares — which this editor
-              covered when it took the window. Drawn by the ADMIN, not
-              reconstructed here: how a field is drawn is the entry form's
-              contract, and a second renderer would drift from it.
 
-              The same value the rail was derived from, so a panel is never
-              offered that this returns nothing for.
+              The component definitions go with it so a dragged instance is
+              judged by what it draws, as its drop on the canvas is.
             */
-      settings: () => entryFields,
+      layers: () => (
+        <LayersPanel
+          editor={editor}
+          moveHints
+          definitions={offered.definitions}
+          regions={layersRegions}
+          // Its titles come with the read, so a placement of a component
+          // the panel does not offer (the one being edited) is still named.
+          componentTitle={offered.titleOf}
+          // The device the eye hides on: the one being edited, against the
+          // breakpoints the canvas is compiled with. Withheld until the
+          // site's stored breakpoints have been read: until then the set in
+          // hand is the config's defaults, and a hide written against it
+          // could resolve differently against the site's own.
+          {...(siteStylePending || siteStyleError !== null
+            ? {}
+            : {
+                device: {
+                  breakpoints: canvasRender.styleContext.breakpoints,
+                  id: editedBreakpoint,
+                },
+              })}
+          // Inside the shell's shortcut provider, so the row keys register
+          // with it and Help lists them.
+          shortcuts
+          // A row chosen there scrolls its block into view here.
+          canvasRoot={canvasElement}
+          {...(layerVerbs === undefined ? {} : { verbs: layerVerbs })}
+        />
+      ),
+      // Read when the panel is drawn, as every other entry reads its inputs,
+      // so drawing another panel never needs the Pages panel's mount.
+      pages: () => pages.renderPagesPanel({ unsavedWork: documentDirty }),
+      design: () => (
+        <DesignPanel
+          view={view}
+          // The studio surrounds every tab, so the header it draws stays the
+          // same whichever is open.
+          frame={designTabs => (
+            <TokensStudio
+              merged={offerableTokens(
+                canvasSiteStyle,
+                siteStylePending,
+                siteStyleError
+              )}
+              supplied={configSiteStyle?.tokens}
+              pending={siteStylePending}
+              // Offered once the stored style is read, so the choice shows
+              // the model the canvas is compiled under and nothing earlier.
+              {...(siteStylePending || siteStyleError !== null
+                ? {}
+                : {
+                    spacingMode: spacingModeOf(canvasSiteStyle?.spacingMode),
+                  })}
+            >
+              {designTabs}
+            </TokensStudio>
+          )}
+          tabs={{
+            variables: () => <VariablesTab />,
+            classes: () => (
+              <SharedStylesStudio
+                {...(lookEditing === undefined
+                  ? {}
+                  : {
+                      looks: {
+                        onEdit: lookEditing.edit,
+                        editing: lookEditing.look,
+                      },
+                    })}
+                classes={classes}
+                pageBlocks={pageClassBlocks}
+                styleContext={classSummaryContext}
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+                // The same variables the Fonts tab reads, as the canvas draws.
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+              />
+            ),
+            fonts: () => (
+              <FontsPanelWithUpload
+                faces={offerableFaces(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                codeFaces={configSiteStyle?.fonts}
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                absence={siteStyleError !== null ? "failed" : "pending"}
+                /*
+                      The fix for a token naming a family this site does not provide
+                      is to edit that token, and editing belongs to the studio. This
+                      shell offers one, so the jump is wired: without the callback
+                      the panel suppresses the action and an author is left to find
+                      the right panel and the right row themselves.
+                    */
+                onOpenTokens={() => requestPanel("design", "variables")}
+                storedFaces={storedSiteStyle?.fonts}
+                storedPending={siteStylePending}
+                unreadableFonts={unreadableStoredFonts}
+              />
+            ),
+          }}
+        />
+      ),
     };
     return panels[panel]?.() ?? null;
   };

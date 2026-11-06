@@ -41,8 +41,10 @@ import type {
   ExposedPropertyType,
   ExposedSlot,
 } from "./document";
+import { lockedAncestorOf } from "./layers-lock";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { insertKeepingLocks } from "./locked-insert";
 import {
   boundedLimit,
   surveyDocument,
@@ -76,6 +78,7 @@ import {
   type ComponentLookup,
   type ComponentUnresolvedReason,
   type DefinitionsById,
+  type ResolvedBlockNode,
 } from "./resolve-instances";
 import { boundedOwnKeys, defineEntry, ownKeys } from "./safe-record";
 import { contiguousRun, type RunProblem } from "./sibling-run";
@@ -90,7 +93,7 @@ import {
   walkNodes,
 } from "./tree";
 import type { DomIdPolicy } from "./tree";
-import { componentEnvelopeIssues } from "./validation";
+import { componentEnvelopeIssues, isErrorIssue } from "./validation";
 import type { ValidationIssue } from "./validation";
 import { isConditionGated } from "./visibility";
 
@@ -332,7 +335,16 @@ export type PlanProblem =
    * draws, and the two sets of conditions cannot be combined into one without
    * rewriting rules nobody asked to change.
    */
-  | "condition-gated";
+  | "condition-gated"
+  /**
+   * The placement left on the page would nest components, or blocks, deeper
+   * than the page may compose.
+   *
+   * Its own cause because the selection is valid as a component of its own:
+   * what breaks is the page once the run becomes one more level of nesting,
+   * so the author's remedy is a smaller or shallower selection.
+   */
+  | "composed-depth";
 
 /** A refusal, with whatever the surface needs to phrase it. */
 export interface PlanRefusal {
@@ -1117,7 +1129,13 @@ export function planConvertToComponent<TFields>(
   componentId: string,
   exposure: ComponentExposure,
   nesting: NestingSource,
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  /**
+   * The component definitions the page and the run place, to judge the
+   * composed depth of the page the plan leaves. Absent, that depth is not
+   * judged here and is left to the write's own validation.
+   */
+  components?: ComponentLookup
 ): PlanResult<TFields> {
   // Before anything is built on it, at runtime as well as in the type, for the
   // reason the save-over checks its target id: this is a published entry point
@@ -1199,6 +1217,23 @@ export function planConvertToComponent<TFields>(
 
   const replaced = replaceOps(document, saved, componentId, nesting, bounds);
   if (replaced.problem !== undefined) return replaced;
+
+  // The composed depth, which nothing above measures: the run's own nodes are
+  // within the cap where they stand, and become one more level of component
+  // nesting once they are drawn through a placement. Judged only when the
+  // caller supplies the definitions the page places, since a page composed
+  // without them reads every placement as missing and so as no depth at all.
+  if (components !== undefined) {
+    const deeper = composedDepthRefusal({
+      document,
+      ops: replaced.ops,
+      componentId,
+      definition: definition.document,
+      components,
+      limits: bounds,
+    });
+    if (deeper !== undefined) return deeper;
+  }
 
   return {
     create: {
@@ -1313,7 +1348,9 @@ export function planDuplicateComponent<TFields>(
   if (overIndexBound(survey)) return { problem: "exceeds-limits" };
 
   const issues = componentEnvelopeIssues(duplicate, limits);
-  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+  if (issues.some(isErrorIssue)) {
+    return { problem: "invalid-exposure", issues: issues.filter(isErrorIssue) };
+  }
 
   // Two nodes rendering ONE id. The copy keeps DOM ids, so a source that
   // already spelled one twice hands the duplicate the same fault — and nothing
@@ -1451,7 +1488,9 @@ function componentDocument(
   // is given the host's limits; a dry run using its own would refuse a
   // component the apply would publish, which is the direction nobody can debug.
   const issues = componentEnvelopeIssues(definition, limits);
-  if (issues.length > 0) return { problem: "invalid-exposure", issues };
+  if (issues.some(isErrorIssue)) {
+    return { problem: "invalid-exposure", issues: issues.filter(isErrorIssue) };
+  }
 
   // The stored-document rule, asked of the definition WITH its envelope on.
   // `savedPatternDocument` asks it of the tree, before there is an envelope —
@@ -1829,6 +1868,68 @@ function storedId(
   return nodeIds.get(sourceId) ?? sourceId;
 }
 
+/** The resolver's refusals that are judgements about depth. */
+const DEPTH_REFUSALS: ReadonlySet<ComponentUnresolvedReason> = new Set([
+  "composed-depth",
+  "node-depth",
+]);
+
+/** The placeholders a composition leaves where depth stopped it. */
+function depthBreaks(
+  document: BlockDocument,
+  components: ComponentLookup,
+  limits: DocumentLimits
+): ResolvedBlockNode[] {
+  const found: ResolvedBlockNode[] = [];
+  const nodes = resolveComponentInstances(document, components, { limits })
+    .document.nodes as readonly ResolvedBlockNode[];
+  walkNodes([...nodes], node => {
+    const reason = (node as ResolvedBlockNode).unresolvedComponent;
+    if (reason !== undefined && DEPTH_REFUSALS.has(reason)) {
+      found.push(node);
+    }
+  });
+  return found;
+}
+
+/**
+ * Refuse a convert whose placement composes past a depth limit, or that
+ * leaves the rest of the page composing worse than it did.
+ *
+ * A break is the new placement's when the placeholder is that placement or
+ * was drawn through it (`instanceOf` names the host instance at every depth).
+ * Any such break refuses, including one the run already held: wrapped in a
+ * component it stops one level further out and hides more of the run. The
+ * rest of the page is held to the count it had, so a page already holding a
+ * placement too deep elsewhere can still be converted somewhere else.
+ */
+function composedDepthRefusal(args: {
+  document: BlockDocument;
+  ops: readonly BuilderOp[];
+  componentId: string;
+  definition: BlockDocument;
+  components: ComponentLookup;
+  limits: DocumentLimits;
+}): PlanRefusal | undefined {
+  const { componentId, definition, components, limits } = args;
+  const converted = applyOps(args.document, args.ops, limits).document;
+  const withCreated: ComponentLookup = {
+    has: id => id === componentId || components.has(id),
+    get: id => (id === componentId ? definition : components.get(id)),
+  };
+  const inserted = args.ops.find(op => op.kind === "insert");
+  const placementId = inserted?.kind === "insert" ? inserted.node.id : "";
+  const after = depthBreaks(converted, withCreated, limits);
+  const throughPlacement = after.filter(
+    node => node.id === placementId || node.instanceOf === placementId
+  );
+  if (throughPlacement.length > 0) return { problem: "composed-depth" };
+  const before = depthBreaks(args.document, components, limits);
+  return after.length > before.length
+    ? { problem: "composed-depth" }
+    : undefined;
+}
+
 /**
  * Take the run off the page and put one instance where it stood.
  *
@@ -1857,7 +1958,8 @@ function replaceOps(
   }
 
   const refusal =
-    lockRefusal(saved.selected) ?? removableRefusal(document, saved.selected);
+    lockRefusal(document.nodes, saved.selected) ??
+    removableRefusal(document, saved.selected);
   if (refusal !== undefined) return refusal;
 
   const position = replacementPosition(saved.at);
@@ -2142,7 +2244,8 @@ export function planInsertPattern(
     // a locked subtree and a malformed node for the same reasons an insert
     // does. Only that target deletes anything; a positional insert adds.
     (target === "document"
-      ? (lockRefusal(document.nodes) ?? shapeRefusal(document.nodes))
+      ? (lockRefusal(document.nodes, document.nodes) ??
+        shapeRefusal(document.nodes))
       : undefined);
   if (refusal !== undefined) return refusal;
 
@@ -2403,12 +2506,24 @@ function destinationOf(
 
   const parent = findNode(document.nodes, target.parentId);
   if (parent === undefined) return { problem: "unknown" };
+  // A run put into a locked block, or into a block inside one, changes what
+  // that lock protects, and the op layer refuses the insert.
+  if (holdsLayersLock(document.nodes, parent)) {
+    return { problem: "destination-locked" };
+  }
   return {
     place: {
       at: target,
       where: { kind: "slot", parentType: parent.type, slot: target.slot },
     },
   };
+}
+
+/** Whether a block is locked in Layers, itself or by a block around it. */
+function holdsLayersLock(nodes: BlockNode[], block: BlockNode): boolean {
+  return (
+    block.locked === true || lockedAncestorOf(nodes, block.id) !== undefined
+  );
 }
 
 /** The first id this document holds twice, or `undefined`. */
@@ -2478,9 +2593,18 @@ function duplicateDomIdRefusal(
  * {@link insertOps} — but a lock on the page is content an author protected,
  * and a remove refuses it for a reason no re-ordering of the group can satisfy.
  */
-function lockRefusal(roots: readonly BlockNode[]): PlanRefusal | undefined {
+function lockRefusal(
+  nodes: BlockNode[],
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
   for (const root of roots) {
-    if (lockedWithin(root) !== undefined) {
+    // Inside the run, and around it: taking a block out of a locked one
+    // changes what that lock protects as surely as deleting a locked block,
+    // and the op layer refuses both.
+    if (
+      lockedWithin(root) !== undefined ||
+      lockedAncestorOf(nodes, root.id) !== undefined
+    ) {
       return { problem: "destination-locked" };
     }
   }
@@ -2777,6 +2901,39 @@ export function planDetach(
   nesting: NestingSource,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): PlanResult<never> {
+  const detached = detachedPage(
+    document,
+    instanceId,
+    definitions,
+    nesting,
+    limits
+  );
+  return detached.problem === undefined ? detached.plan : detached;
+}
+
+/** A detach plan, with the page applying it produces. */
+export interface DetachedPage {
+  readonly plan: CompositionPlan<never>;
+  /** The page with the plan's ops applied, under the limits it was judged by. */
+  readonly document: BlockDocument;
+  readonly problem?: undefined;
+}
+
+/**
+ * {@link planDetach}, keeping the page its limit check already applied.
+ *
+ * The check applies the whole op group to learn whether the page stays within
+ * its limits, and that apply measures the page once per op. A caller that
+ * applies the plan next takes this page instead of paying for the same apply
+ * a second time; it is the document `applyOps` returns for the plan's ops.
+ */
+export function detachedPage(
+  document: BlockDocument,
+  instanceId: string,
+  definitions: DefinitionsById,
+  nesting: NestingSource,
+  limits: DocumentLimits
+): DetachedPage | PlanRefusal {
   // Everything `applyOp` asks before it looks at an op, asked exactly as the
   // other planners ask it: the envelope, then the whole forest, because a
   // malformed node the author never touched refuses the first op of a group.
@@ -2799,7 +2956,8 @@ export function planDetach(
   // own subtree is not among them — that content is moving, not being copied
   // beside itself, and treating it as taken renames the author's own anchors.
   const locked =
-    lockRefusal([located.node]) ?? removableRefusal(document, [located.node]);
+    lockRefusal(document.nodes, [located.node]) ??
+    removableRefusal(document, [located.node]);
   if (locked !== undefined) return locked;
 
   const removal: BuilderOp = { kind: "remove", id: located.node.id };
@@ -2844,13 +3002,14 @@ export function planDetach(
   // The byte cap, asked of the apply because the apply is the only thing that
   // can answer it: a definition larger than the instance it replaces can push a
   // page over a ceiling it was inside. Run on a copy, since `applyOps` is pure.
+  let detached: BlockDocument;
   try {
-    applyOps(document, ops, limits);
+    detached = applyOps(document, ops, limits).document;
   } catch {
     return { problem: "exceeds-limits" };
   }
 
-  return { pageOps: ops, warnings: [] };
+  return { plan: { pageOps: ops, warnings: [] }, document: detached };
 }
 
 /**
@@ -3366,19 +3525,8 @@ function withoutResolverMarkers(nodes: readonly BlockNode[]): BlockNode[] {
  *
  * ## A locked block arrives unlocked and is locked once it has landed
  *
- * `applyOp` refuses an insert whose subtree arrives locked, because the inverse
- * of an insert is a remove and a remove refuses a locked subtree — so such an
- * insert could never be undone. That rule is right, and taken literally it made
- * a whole supported flow impossible: saving a selection containing a locked
- * block succeeds, the stored pattern keeps the lock, and the pattern was then
- * insertable nowhere. A library row nothing can place is worse than either
- * refusing the save or dropping the lock without saying so.
- *
- * So the lock is neither carried on the insert nor discarded: the nodes arrive
- * unlocked and an update locks them where they landed. The group ends in the
- * state the pattern described, and it stays undoable because inverses are
- * recorded in undo order — the unlock runs before the remove, so the remove
- * never meets a locked node.
+ * Through `insertKeepingLocks`, the one sequence every copy into a document
+ * uses: a pattern's locked block is placeable, and its undo still works.
  */
 function insertOps(
   roots: readonly BlockNode[],
@@ -3390,9 +3538,8 @@ function insertOps(
     target === "document"
       ? document.nodes.map(node => ({ kind: "remove", id: node.id }))
       : [];
-  const { nodes, lockedIds } = withoutLocks(roots);
   const start = place.at === null ? 0 : place.at.index;
-  nodes.forEach((node, offset) => {
+  const placed = roots.map((node, offset) => {
     const at: OpPosition =
       place.at === null || place.at.parentId === undefined
         ? { index: start + offset }
@@ -3401,39 +3548,9 @@ function insertOps(
             slot: place.at.slot,
             index: start + offset,
           };
-    ops.push({ kind: "insert", node, at });
+    return { node, at };
   });
-  for (const id of lockedIds) {
-    ops.push({ kind: "update", id, patch: { locked: true } });
-  }
-  return ops;
-}
-
-/** A forest with every lock removed, and the ids that carried one. */
-interface UnlockedForest {
-  readonly nodes: BlockNode[];
-  readonly lockedIds: readonly string[];
-}
-
-/**
- * Take the locks off, remembering where they were.
- *
- * Through the shared forest rewrite rather than a walk of its own: a
- * hand-rolled traversal has to re-learn what that one already knows about a
- * cycle entry, a malformed entry and a malformed slot value, and a planner
- * editing one field has no business deciding any of them.
- *
- * Only `locked` moves; every other field is carried across untouched.
- */
-function withoutLocks(roots: readonly BlockNode[]): UnlockedForest {
-  const lockedIds: string[] = [];
-  const nodes = mapForest([...roots], node => {
-    if (node.locked !== true) return node;
-    lockedIds.push(node.id);
-    const { locked: _locked, ...rest } = node;
-    return rest;
-  });
-  return { nodes, lockedIds };
+  return [...ops, ...insertKeepingLocks(placed)];
 }
 
 /**

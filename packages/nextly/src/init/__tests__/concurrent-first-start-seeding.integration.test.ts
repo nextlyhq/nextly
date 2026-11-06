@@ -7,15 +7,18 @@
  * Each worker runs the seeders a first start runs, in the order it runs them,
  * on services of its own and, on PostgreSQL and MySQL, a connection of its
  * own, as a separate process would: one process seeds once, so it is several
- * processes that race. SQLite's workers share the one in-memory connection.
- * Its driver is synchronous, so in-process workers on separate connections to
- * one file cannot interleave: one waiting on another's lock blocks the very
- * thread the holder needs to commit.
+ * processes that race. Each connection resolves tables by name, as the boot
+ * before the seeders leaves every process's adapter able to. SQLite's workers
+ * share the one in-memory connection. Its driver is synchronous, so
+ * in-process workers on separate connections to one file cannot interleave:
+ * one waiting on another's lock blocks the very thread the holder needs to
+ * commit.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROLE_PRESETS } from "../../auth/role-presets";
+import { installRegistryResolver } from "../../cli/utils/registry-resolver";
 import { defineCollection, defineSingle, text } from "../../config";
 import { createAdapter } from "../../database/factory";
 import { seedRolePresets } from "../../database/seeders/role-presets";
@@ -117,6 +120,9 @@ describe.each(getConfiguredTestDialects())(
       const adapters = await Promise.all(
         loggers.map(() => createAdapter({ type: dialect, url: databaseUrl }))
       );
+      // A booted process resolves tables by name through its schema registry,
+      // installed before the seeders run: a role's permissions are read so.
+      for (const adapter of adapters) installRegistryResolver(adapter);
       try {
         return await Promise.all(
           adapters.map((adapter, i) => seedOn(adapter, loggers[i]))

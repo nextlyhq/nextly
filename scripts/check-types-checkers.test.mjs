@@ -7,8 +7,10 @@
 // 5.5 GB on nextly alone, so the number follows the machine. Measured on the
 // whole repository, uncached and with no build info, `check-types` took 149 s
 // at 1, 83 s at 2 and 55 s at 4, and nextly's own run peaked at 4.3, 4.7 and
-// 5.5 GB. `local-limits.mjs` holds the rule and `scripts/tsc.mjs` applies it,
-// so every `check-types` runs the compiler through `scripts/tsc.mjs`.
+// 5.5 GB. On a machine reporting 7.75 GiB two checkers were killed for memory
+// and one passed, so an 8 GB machine takes one. `local-limits.mjs` holds the
+// rule and `scripts/tsc.mjs` applies it, so every `check-types` runs the
+// compiler through `scripts/tsc.mjs`.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -80,8 +82,12 @@ describe("the number of checkers a tsc run uses", () => {
   const checkersAt = (gib, env = {}) =>
     deriveLimits({ totalBytes: gib * GIB, cpus: 8, env }).checkers;
 
-  it("is 4 on a 16 GB machine, 2 below that, and 1 when workers are held to one", () => {
-    expect(checkersAt(8)).toBe(2);
+  it("is 4 on a 16 GB machine, 2 on a 12 GB one, 1 on an 8 GB one, and 1 when workers are held to one", () => {
+    // The machine two checkers were killed on and one passed: 7.75 GiB.
+    expect(checkersAt(7.75)).toBe(1);
+    expect(checkersAt(8)).toBe(1);
+    expect(checkersAt(9.9)).toBe(1);
+    expect(checkersAt(10)).toBe(2);
     expect(checkersAt(12)).toBe(2);
     // What GitHub's 16 GB runners report once the VM has taken its share.
     expect(checkersAt(15.2)).toBe(4);
@@ -89,8 +95,17 @@ describe("the number of checkers a tsc run uses", () => {
     expect(checkersAt(48)).toBe(4);
     expect(checkersAt(48, { NEXTLY_LOCAL_MAX_WORKERS: "1" })).toBe(1);
     expect(checkersAt(8, { NEXTLY_LOCAL_MAX_WORKERS: "1" })).toBe(1);
-    // Only one worker means one checker: two workers are no such request.
+    // Only one worker means one checker: two workers are no such request,
+    // and leave the memory rule to decide.
     expect(checkersAt(48, { NEXTLY_LOCAL_MAX_WORKERS: "2" })).toBe(4);
+    expect(checkersAt(8, { NEXTLY_LOCAL_MAX_WORKERS: "2" })).toBe(1);
+  });
+
+  it("keeps an 8 GB machine's test workers at two while its checkers drop to one", () => {
+    // The checkers are what did not fit; the workers fitted at two.
+    const limits = deriveLimits({ totalBytes: 7.75 * GIB, cpus: 4, env: {} });
+    expect(limits.checkers).toBe(1);
+    expect(limits.maxWorkers).toBe(2);
   });
 });
 

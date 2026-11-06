@@ -26,9 +26,11 @@
  */
 import { expect, type APIResponse } from "@playwright/test";
 
+import { LOCK } from "./support/locks";
 import { fileAccount, test } from "./support/test";
 
-test.describe.configure({ mode: "serial" });
+// Stores the site's tokens and reads them back from a published page.
+test.describe.configure({ mode: "serial", lock: [LOCK.siteStyle] });
 
 const SITE_STYLE = "/admin/api/singles/site-style";
 const ENTRIES = "/admin/api/collections/block-pages/entries";
@@ -51,18 +53,17 @@ const TOKEN_DARK = "#8fe3c0";
 /**
  * The dark block this app must emit, and the only one that can work here.
  *
- * The engine supports two `darkMode` strategies. `attribute` writes
- * `[data-nx-theme="dark"]`, which a host activates by setting that attribute;
- * `media` writes an at-rule the operating system activates. **This app has no
- * theme toggle and sets `data-nx-theme` nowhere**, so the attribute form would
- * emit dark values that can never apply — which is not hypothetical: the
- * docblock on `SITE_STYLE_RESOLVED` in `apps/playground/src/lib/site-content.ts`
- * records routes that omitted the token set, fell back to the attribute
- * default, and silently served dark values no visitor could ever see.
+ * The engine writes every dark value twice: under
+ * `@media (prefers-color-scheme:dark)`, which the visitor's device activates,
+ * and under `[data-nx-theme="dark"]`, which a host activates with its own
+ * toggle. **This app has no theme toggle and sets `data-nx-theme` nowhere**, so
+ * only the media block can apply here — and a sheet carrying only the
+ * attribute form would serve dark values no visitor could ever see, which is
+ * what a default site did while the engine let a `darkMode` setting pick one
+ * form and defaulted to the attribute.
  *
- * So accepting either form here would leave the suite green across exactly
- * that regression. The configured strategy decides which form is correct, and
- * for this app it is settled: `media`.
+ * So this asserts the media block specifically. Accepting either form would
+ * leave the suite green across exactly that regression.
  *
  * Spelled out rather than imported from the engine, deliberately. This string
  * is published contract — a host wires its own toggle to `data-nx-theme` in
@@ -234,6 +235,16 @@ test.beforeAll(async ({ playwright }, testInfo) => {
     if (created.status() !== 409) {
       await expectOk(created, `seeding ${PAGE_SLUG}`);
     }
+
+    // `/blocks` is public, so its pages are cached. This app installs no
+    // Nextly cache handlers, and Next's default cache serves a page its
+    // previous render once after a write expires its tags. So the tests below
+    // start once the page shows the stored style, within a bound.
+    await expect
+      .poll(async () => await (await api.get(`/blocks/${PAGE_SLUG}`)).text(), {
+        timeout: 30_000,
+      })
+      .toContain(`${TOKEN_PROPERTY}:${TOKEN_LIGHT}`);
   } finally {
     await api.dispose();
   }

@@ -48,6 +48,7 @@ import {
   type RowProblem,
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
+import { designReadOnlyReason, lockViewOf } from "./inspector";
 
 /**
  * What a refused write says, wherever it is refused.
@@ -206,6 +207,20 @@ export function AdvancedPanel({
     (wanted: HtmlFields, update: { patch: object; unset: string[] }) => boolean
   >(() => false);
   store.current = (wanted, update): boolean => {
+    /*
+     * Asked of the live document, as every write path in the inspector asks:
+     * the fields are read-only while the design is locked, but a lock set in
+     * Layers after this panel drew must stop the next write too.
+     */
+    const locked = designReadOnlyReason(
+      editor.document,
+      nodeId,
+      lockViewOf(editor)
+    );
+    if (locked !== undefined) {
+      setRefusal(locked);
+      return false;
+    }
     const applied = editor.apply({
       kind: "update",
       id: nodeId,

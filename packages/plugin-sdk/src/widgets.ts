@@ -22,13 +22,16 @@
  */
 
 /**
- * @experimental The widget component contract and the shapes its data arrives
- * in. No compatibility guarantee until `contributes.admin.widgets` graduates.
+ * @experimental The shapes a core view's data arrives in: an answer, and the
+ * fields a list or table describes. No compatibility guarantee until the
+ * widget contract graduates.
  */
-export type {
-  WidgetComponentProps,
-  WidgetQueryBatchResponse,
-  WidgetResult,
-  WidgetResultField,
-  WidgetSlot,
-} from "nextly/widget-result";
+export type { WidgetResult, WidgetResultField } from "nextly/widget-result";
+
+/**
+ * @experimental What a widget declared with `defineWidget` and drawn by its own
+ * component is handed (`WidgetProps<typeof widget>`), its card's size, and its
+ * data's type. Types only: re-exported from core, which declares them.
+ */
+export type { WidgetData, WidgetProps } from "nextly";
+export type { WidgetRenderSize } from "nextly/widget-result";

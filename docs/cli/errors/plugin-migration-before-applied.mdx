@@ -1,0 +1,24 @@
+---
+title: PLUGIN_MIGRATION_BEFORE_APPLIED
+description: "A plugin lists a migration that has not run ahead of one that has."
+---
+
+## Cause
+
+A plugin lists a migration that has not run ahead of one that has.
+
+A plugin's migrations run in the order of their names. One that has not run is ordered before one that has, so running it now would put it after migrations written to come after it. Nothing was applied.
+
+## Fix
+
+- Rename the migration so its name sorts after the last applied one, as the generator's timestamps do.
+- If it was rolled back by hand, roll back the migrations after it first, or once its changes are in place record it with `nextly migrate:resolve --applied <key>`.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" lists a migration "20261019_090000_add_index" that has not run, ordered before "20261020_120000_add_redirects", which has.
+  Why:  A new migration may only follow the ones already applied: run now, it would run after migrations written to come after it. Nothing was applied.
+  Next: Rename it so its name sorts after "20261020_120000_add_redirects", as the generator's timestamps do. If it was rolled back by hand, roll back the migrations after it first, or once its changes are in place record it with `nextly migrate:resolve --applied plugin:@acme/seo/20261019_090000_add_index`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-before-applied  (PLUGIN_MIGRATION_BEFORE_APPLIED)
+```

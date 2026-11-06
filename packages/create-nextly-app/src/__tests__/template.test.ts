@@ -75,7 +75,8 @@ const sqliteDatabase: DatabaseConfig = {
 // ============================================================
 
 describe("generatePackageJson", () => {
-  // First call warms the npm registry cache (fetches latest Next.js + @nextlyhq versions)
+  // The first call loads the template module cold; the default release
+  // source and the reviewed Next.js and React make no registry request.
   it("should include correct project name", async () => {
     const result = JSON.parse(await generatePackageJson("my-app", pgDatabase));
     expect(result.name).toBe("my-app");

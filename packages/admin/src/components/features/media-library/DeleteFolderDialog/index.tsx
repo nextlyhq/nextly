@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  Alert,
+  AlertDescription,
   AlertDialog,
   AlertDialogCancel,
   AlertDialogContent,
@@ -8,6 +10,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertTitle,
   Button,
 } from "@nextlyhq/ui";
 import * as React from "react";
@@ -17,6 +20,7 @@ import {
   useDeleteFolder,
   useFolderContents,
 } from "@admin/hooks/queries/useMedia";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
 export interface DeleteFolderDialogProps {
   open: boolean;
@@ -33,12 +37,30 @@ export function DeleteFolderDialog({
   folderName,
   onSuccess,
 }: DeleteFolderDialogProps): React.JSX.Element {
-  const { data: folderContents, isLoading: isLoadingContents } =
-    useFolderContents(folderId);
+  const {
+    data: folderContents,
+    isFetching: isLoadingContents,
+    refetch: refetchContents,
+  } = useFolderContents(folderId);
+  // The count is read again whenever the dialog opens. A cached answer can
+  // predate an upload or a delete in this folder, and confirming deletes what
+  // the folder holds now, not what it held when it was last read.
+  React.useEffect(() => {
+    if (open && folderId !== null) void refetchContents();
+  }, [open, folderId, refetchContents]);
   const { mutate: deleteFolderMutation, isPending } = useDeleteFolder();
+  // Why the server refused the delete, said in the dialog, which stays open
+  // so the person can see it: a folder holding items still inside their
+  // Undo window, say. Cleared each time the dialog opens.
+  const [refusal, setRefusal] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (open) setRefusal(null);
+  }, [open, folderId]);
 
   const subfolderCount = folderContents?.subfolders?.length ?? 0;
-  const mediaCount = folderContents?.mediaFiles?.length ?? 0;
+  // Every file the folder holds, which the server counts: `files` is one
+  // page of them.
+  const mediaCount = folderContents?.meta?.total ?? 0;
   const hasContents = subfolderCount > 0 || mediaCount > 0;
   const displayName =
     folderName ?? folderContents?.folder?.name ?? "this folder";
@@ -46,12 +68,18 @@ export function DeleteFolderDialog({
   const handleDelete = React.useCallback(() => {
     if (!folderId) return;
 
+    setRefusal(null);
     deleteFolderMutation(
       { folderId, deleteContents: true },
       {
         onSuccess: () => {
           onOpenChange(false);
           onSuccess?.();
+        },
+        onError: error => {
+          setRefusal(
+            apiErrorMessage(error, "The folder could not be deleted.")
+          );
         },
       }
     );
@@ -106,6 +134,16 @@ export function DeleteFolderDialog({
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {refusal && (
+          <Alert variant="destructive" role="alert">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {/* The title above the reason, beside the icon. */}
+            <div className="flex min-w-0 flex-col gap-1">
+              <AlertTitle>Couldn&apos;t delete the folder</AlertTitle>
+              <AlertDescription>{refusal}</AlertDescription>
+            </div>
+          </Alert>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <Button

@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test";
 
+import { canvasFrame } from "../support/canvas-frame";
 import { test } from "../support/test";
 
 /**
@@ -50,9 +51,9 @@ test.describe("the canvas harness route", () => {
     await page.goto(ROUTE);
 
     // The population, before any claim about behaviour.
-    await expect(page.locator(NODE)).toHaveCount(SEEDED.length);
+    await expect(canvasFrame(page).locator(NODE)).toHaveCount(SEEDED.length);
 
-    const ids = await page
+    const ids = await canvasFrame(page)
       .locator(NODE)
       .evaluateAll(nodes =>
         nodes.map(node => node.getAttribute("data-nx-node"))
@@ -64,13 +65,15 @@ test.describe("the canvas harness route", () => {
     page,
   }) => {
     await page.goto(ROUTE);
-    await expect(page.locator(NODE)).toHaveCount(SEEDED.length);
+    await expect(canvasFrame(page).locator(NODE)).toHaveCount(SEEDED.length);
 
-    const heading = page.locator('[data-nx-node="hx-heading"]');
+    const heading = canvasFrame(page).locator('[data-nx-node="hx-heading"]');
     // Nothing is selected before the click — the positive control for the
     // assertion below, which would otherwise pass against a canvas that marks
     // everything selected.
-    await expect(page.locator("[data-nx-selected]")).toHaveCount(0);
+    await expect(canvasFrame(page).locator("[data-nx-selected]")).toHaveCount(
+      0
+    );
 
     await heading.click();
 
@@ -82,9 +85,9 @@ test.describe("the canvas harness route", () => {
   }) => {
     await page.goto(ROUTE);
     const harness = page.locator('[data-testid="canvas-harness"]');
-    await expect(page.locator(NODE)).toHaveCount(SEEDED.length);
+    await expect(canvasFrame(page).locator(NODE)).toHaveCount(SEEDED.length);
 
-    const box = await page
+    const box = await canvasFrame(page)
       .locator('[data-nx-node="hx-text-short"]')
       .boundingBox();
     if (box === null) throw new Error("the seeded block has no box to press");
@@ -102,7 +105,7 @@ test.describe("the canvas harness route", () => {
     await page.mouse.up();
 
     // The document did not reorder.
-    const ids = await page
+    const ids = await canvasFrame(page)
       .locator(NODE)
       .evaluateAll(nodes =>
         nodes.map(node => node.getAttribute("data-nx-node"))
@@ -115,9 +118,9 @@ test.describe("the canvas harness route", () => {
   }) => {
     await page.goto(ROUTE);
     const harness = page.locator('[data-testid="canvas-harness"]');
-    await expect(page.locator(NODE)).toHaveCount(SEEDED.length);
+    await expect(canvasFrame(page).locator(NODE)).toHaveCount(SEEDED.length);
 
-    const box = await page
+    const box = await canvasFrame(page)
       .locator('[data-nx-node="hx-text-short"]')
       .boundingBox();
     if (box === null) throw new Error("the seeded block has no box to press");
@@ -141,26 +144,31 @@ test.describe("the canvas harness route", () => {
     page,
   }) => {
     await page.goto(ROUTE);
-    await expect(page.locator(NODE)).toHaveCount(SEEDED.length);
+    await expect(canvasFrame(page).locator(NODE)).toHaveCount(SEEDED.length);
 
     // The POSITIVE CONTROL for everything below: the fixture has to carry
     // styles at all. A seed that lost them would make every assertion here
     // pass against a canvas that renders nothing — which is exactly how this
     // regression was introduced and then re-discovered.
-    const authored = await page.locator(NODE).evaluateAll(nodes =>
-      nodes.map(node => {
-        const cls = [...node.classList].find(c => c.startsWith("nx-pb-"));
-        return cls ?? null;
-      })
-    );
+    const authored = await canvasFrame(page)
+      .locator(NODE)
+      .evaluateAll(nodes =>
+        nodes.map(node => {
+          const cls = [...node.classList].find(c => c.startsWith("nx-pb-"));
+          return cls ?? null;
+        })
+      );
     expect(authored.every(c => c !== null)).toBe(true);
 
     // The class alone proves nothing: `resolvePageStyles` keeps class names
     // even when it withholds the sheet, so a canvas given no style context
     // emits every class and defines none of them. Assert the RULES exist.
-    const scopedRules = await page.evaluate(() => {
+    // The FRAME's sheets: the page, and the site's sheet with it, is drawn in
+    // the canvas's own document.
+    const frameRoot = canvasFrame(page).locator("html");
+    const scopedRules = await frameRoot.evaluate(root => {
       let count = 0;
-      for (const sheet of Array.from(document.styleSheets)) {
+      for (const sheet of Array.from(root.ownerDocument.styleSheets)) {
         let rules: CSSRuleList;
         try {
           rules = sheet.cssRules;
@@ -181,14 +189,14 @@ test.describe("the canvas harness route", () => {
     // a rule can exist and lose the cascade: the authored 24px gaps are what
     // the drop indicator needs somewhere to draw, and the spacer's authored
     // height is what makes it hittable at all.
-    const { gaps, spacerHeight } = await page.evaluate(() => {
+    const { gaps, spacerHeight } = await frameRoot.evaluate(root => {
       // ROOT siblings only. A nested node starts INSIDE its parent, so a gap
       // computed across a parent-child pair is zero or negative and says
       // nothing about spacing — the fixture nests deliberately, and measuring
       // every consecutive node would fail on the tree's shape rather than on
       // whether the author's margins rendered.
       const nodes = Array.from(
-        document.querySelectorAll("[data-nx-node]")
+        root.ownerDocument.querySelectorAll("[data-nx-node]")
       ).filter(
         node =>
           node.parentElement?.closest("[data-nx-node]") === null ||

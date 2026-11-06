@@ -50,6 +50,12 @@ import { siteBreakpoints, type SiteStyleData } from "../site-style";
  */
 export interface PageRenderInputs {
   styleContext: NonNullable<PageRendererProps["styleContext"]>;
+  /**
+   * The page context blocks read what they draw through, where the surface
+   * has one of its own: the editor's canvas resolves images through the
+   * admin. Absent, the renderer's stand-in.
+   */
+  context?: PageRendererProps["context"];
   hostPolicy?: PageRendererProps["hostPolicy"];
   limits?: PageRendererProps["limits"];
   /**

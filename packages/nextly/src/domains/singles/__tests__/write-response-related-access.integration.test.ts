@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import {
   checkbox,
   defineCollection,
@@ -85,7 +86,7 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: authorId },
+      { siteName: "Acme", author: authorId, _overwrite: true },
       { user: { id: "writer-1" }, routeAuthorized: true }
     );
 
@@ -148,7 +149,11 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: (author.data as { id: string }).id },
+      {
+        siteName: "Acme",
+        author: (author.data as { id: string }).id,
+        _overwrite: true,
+      },
       { user: { id: "writer-1" }, routeAuthorized: true }
     );
 
@@ -166,9 +171,16 @@ describe("single write response — related-row field access (integration)", () 
     // response cannot be the one place it survives. Absence of a user is not
     // trust; `overrideAccess` is.
     current = await createTestNextly({
+      // The boot's seeding, which makes the Public role the caller with no
+      // identity is judged by.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "authors",
+          // Any visitor may read the row, so boot grants Public its read and
+          // what the response withholds is the protected FIELD alone. With no
+          // rule a visitor is refused the whole row, leaving no field to redact.
+          access: { read: () => true },
           fields: [
             text({ name: "name" }),
             checkbox({ name: "suspended", access: { read: () => false } }),
@@ -186,6 +198,9 @@ describe("single write response — related-row field access (integration)", () 
         }),
       ],
     });
+    // The Single's rule only narrows the update permission, so Public holds
+    // it, as a site admin would grant it, and the write is allowed.
+    await grantPublic(current, ["update-branding"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const author = await handler.createEntry(
@@ -196,7 +211,11 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: (author.data as { id: string }).id },
+      {
+        siteName: "Acme",
+        author: (author.data as { id: string }).id,
+        _overwrite: true,
+      },
       { routeAuthorized: true }
     );
 
@@ -215,7 +234,7 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: authorId },
+      { siteName: "Acme", author: authorId, _overwrite: true },
       { overrideAccess: true }
     );
 

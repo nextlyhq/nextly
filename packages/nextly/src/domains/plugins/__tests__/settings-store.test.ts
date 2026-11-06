@@ -3,10 +3,17 @@
  * and writes, the row lock that makes the read safe, and the upsert spelling
  * the dialect accepts.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import type { PluginSettingRow } from "../settings-service";
 import { createPluginSettingsStore, OWNER_LOCK_KEY } from "../settings-store";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /** A fake Drizzle handle that records what was issued, and against what. */
 function recordingDb(options: { failOnRow?: number } = {}) {

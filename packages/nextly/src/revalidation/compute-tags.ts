@@ -27,7 +27,7 @@ const NAMESPACE = "nextly";
  * from an over-long slug would never match and its read could never be
  * invalidated. Bound the slug tag below this and fall back to a hash.
  */
-const MAX_TAG_LENGTH = 256;
+export const MAX_TAG_LENGTH = 256;
 
 /**
  * FNV-1a (32-bit), a small deterministic, dependency-free hash that runs the
@@ -164,6 +164,22 @@ export function computeEntryRevalidation(
 
   tags.push(...normalizeExtraTags(extraTags));
 
+  return { tags: unique(tags) };
+}
+
+/**
+ * The tags every read of a collection carries in common: its collection tag plus any configured
+ * extra tags. What a change that touches every entry at once (the site's languages, say)
+ * invalidates, since no single entry's id or slug narrows it.
+ */
+export function computeCollectionRevalidation(input: {
+  collection: string;
+  extraTags?: string[];
+}): RevalidationIntent {
+  const tags = [
+    collectionTag(input.collection),
+    ...normalizeExtraTags(input.extraTags),
+  ];
   return { tags: unique(tags) };
 }
 

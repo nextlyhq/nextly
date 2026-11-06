@@ -2,7 +2,8 @@
  * AlertDialog Component
  *
  * A modal dialog for important confirmations that require user acknowledgment.
- * Built on Radix UI primitives, designed for destructive actions like deletions.
+ * Built on Radix UI primitives. Its confirming action is primary; pass
+ * `variant="destructive"` only when confirming deletes data.
  *
  * @example
  * ```tsx
@@ -19,7 +20,9 @@
  *     </AlertDialogHeader>
  *     <AlertDialogFooter>
  *       <AlertDialogCancel>Cancel</AlertDialogCancel>
- *       <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
+ *       <AlertDialogAction variant="destructive" onClick={handleDelete}>
+ *         Delete
+ *       </AlertDialogAction>
  *     </AlertDialogFooter>
  *   </AlertDialogContent>
  * </AlertDialog>
@@ -233,11 +236,18 @@ AlertDialogDescription.displayName =
 /** @experimental */
 export type AlertDialogActionProps = ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Action
->;
+> & {
+  /**
+   * `"destructive"` when confirming deletes data; anything else a dialog
+   * confirms (a save, a publish, a restore) stays `"primary"`, the default.
+   */
+  variant?: "primary" | "destructive";
+};
 
 /**
- * AlertDialogAction - The primary action button (e.g., "Delete", "Confirm").
- * Styled as destructive by default.
+ * AlertDialogAction - The confirming action button (e.g., "Save", "Delete").
+ * Primary by default: red is kept for confirming a deletion, so it means one
+ * thing wherever it appears.
  * @experimental
  */
 const AlertDialogAction: ForwardRefExoticComponent<
@@ -246,10 +256,10 @@ const AlertDialogAction: ForwardRefExoticComponent<
 > = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Action>,
   AlertDialogActionProps
->(({ className, children, ...props }, ref) => (
+>(({ className, children, variant = "primary", ...props }, ref) => (
   <AlertDialogPrimitive.Action
     ref={ref}
-    className={cn(buttonVariants({ variant: "destructive" }), className)}
+    className={cn(buttonVariants({ variant }), className)}
     {...props}
   >
     {children}

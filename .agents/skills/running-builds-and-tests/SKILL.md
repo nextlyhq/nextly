@@ -71,9 +71,9 @@ held in every session.
   nextly: 0.48 s reading an earlier run's build info, 19.6 s with none.
 
   `check-types` runs TypeScript 7 through `scripts/tsc.mjs`, which passes
-  `--checkers` sized to the machine by `local-limits.mjs`: 4 on a 16 GB machine,
-  2 below that, 1 under `NEXTLY_LOCAL_MAX_WORKERS=1` (`pnpm local-limits` prints
-  it). `scripts/check-types-checkers.test.mjs` holds every package to the
+  `--checkers` sized to the machine by `local-limits.mjs`: 4 from 14 GiB of
+  memory, 2 from 10 GiB, 1 below that or under `NEXTLY_LOCAL_MAX_WORKERS=1`
+  (`pnpm local-limits` prints it). `scripts/check-types-checkers.test.mjs` holds every package to the
   wrapper. The number of parallel checkers can occasionally change which
   diagnostics appear, so a result that looks order-dependent, appearing or
   vanishing between runs or machines, is ruled in or out by rerunning that
@@ -126,9 +126,19 @@ held in every session.
   name where one already exists. A `DBS DOWN` failure followed by a start
   command that changes nothing reads like a broken environment; it is usually
   just the wrong command.
-  - Already created but stopped, which is the usual case:
-    `docker start nextly-postgres17-test nextly-mysql-test` (add
-    `nextly-postgres15-test` for the 15 leg).
+  - Already created but stopped, which is the usual case: start all three, wait
+    until each reports healthy, then provision. Their data lives in tmpfs, so a
+    stopped container comes back empty, and `pnpm worktree provision` recreates
+    each worktree's test databases. It checks every container and exits 1 while
+    one is stopped, and it treats a running container as ready, so it can race
+    a database that has not finished starting:
+
+    ```sh
+    docker start nextly-postgres17-test nextly-postgres15-test nextly-mysql-test
+    until [ "$(docker inspect -f '{{.State.Health.Status}}' nextly-postgres17-test nextly-postgres15-test nextly-mysql-test | sort -u)" = healthy ]; do sleep 2; done
+    pnpm worktree provision   # in each worktree
+    ```
+
   - Never created, on a fresh clone:
     `docker compose -f docker-compose.test.yml up -d postgres17-test postgres15-test mysql-test`.
     `postgres15-test` is the only service on 5434, so omitting it leaves the
@@ -139,6 +149,7 @@ held in every session.
     that is rarely the one you are standing in, and compose then tries to
     CREATE containers whose names are taken and fails. `docker start` addresses
     them by name and does not care which project owns them.
+
 - Integration files in `packages/nextly` run in sequence on one worker by
   default: system-table suites share fixed table names. More workers
   (`NEXTLY_INTEGRATION_WORKERS`) run only where each worker has its own

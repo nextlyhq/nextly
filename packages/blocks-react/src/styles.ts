@@ -1,6 +1,9 @@
 import {
+  blockDefaultsOf,
+  overlaidStyles,
   compilePageCss,
   declaresNoMarkup,
+  hasItemBindings,
   isFetchableUrl,
   nodeAtPointer,
   nodeClassNames,
@@ -17,9 +20,12 @@ import {
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
+  type SpacingMode,
+  type StyleValue,
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
+import { blockBaseUnder } from "./blocks/classic-spacing";
 import { withTypographyDefaults } from "./blocks/typography-defaults";
 import { prepareDocumentForRead } from "./prepare-document";
 import type {
@@ -30,6 +36,7 @@ import type { BlockResolver } from "./resolver";
 import {
   UNIDENTIFIED_SHARED_INPUTS,
   sharedStyleInputsId,
+  stampedUnderCurrentEncoding,
 } from "./shared-style-inputs";
 import { pruneNodes } from "./visibility";
 
@@ -204,14 +211,29 @@ export function toPageStyles(
 export function blockBasesFor(
   document: BlockDocument,
   blocks: BlockResolver,
-  stated?: Readonly<Record<string, NodeStyles>>
+  stated?: Readonly<Record<string, NodeStyles>>,
+  spacingMode?: SpacingMode,
+  /**
+   * The site's edits to its block types' own looks, laid over each base the
+   * model chose, so the order is: the base (frozen under Classic), then the
+   * site's edit of it, then a look, a shared style and the block's own values.
+   */
+  siteDefaults?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
-  return perUsedType(
+  // A derived default follows the spacing model; a stated record is the
+  // caller's own choice and is narrowed as it is.
+  const bases = perUsedType(
     document,
     blocks,
-    definition => definition.baseStyles,
+    definition => blockBaseUnder(definition, spacingMode),
     stated
   );
+  if (siteDefaults === undefined) return bases;
+  const edited = perUsedType(document, blocks, () => undefined, siteDefaults);
+  for (const [type, edit] of Object.entries(edited)) {
+    bases[type] = overlaidStyles(bases[type], edit);
+  }
+  return bases;
 }
 
 /**
@@ -229,6 +251,26 @@ export function blockPartsFor(
   stated?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>
 ): Record<string, Readonly<Record<string, BlockPart>>> {
   return perUsedType(document, blocks, definition => definition.parts, stated);
+}
+
+/**
+ * The space each container type this document draws puts between its
+ * children, keyed by type.
+ *
+ * Read through the same walk as {@link blockBasesFor}, so the gap of a
+ * container reaches the sheet exactly when its defaults do.
+ */
+function childGapsFor(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  stated?: Readonly<Record<string, StyleValue>>
+): Record<string, StyleValue> {
+  return perUsedType(
+    document,
+    blocks,
+    definition => definition.childGap,
+    stated
+  );
 }
 
 /**
@@ -424,13 +466,28 @@ function compileContextFor(
     blockBases: blockBasesFor(
       storedDocument ?? document,
       blocks,
-      styleContext.blockBases
+      styleContext.blockBases,
+      styleContext.spacingMode,
+      // The site's edits to its blocks' own looks, which its class library
+      // holds as default looks: read here, so every page compiled from that
+      // library, canvas or published, lays them over the same bases.
+      blockDefaultsOf(styleContext.namedClasses)
     ),
     blockParts: blockPartsFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockParts
     ),
+    // None under the classic model, so the identity carries no gap the
+    // compile would not write.
+    childGaps:
+      styleContext.spacingMode === "classic"
+        ? {}
+        : childGapsFor(
+            storedDocument ?? document,
+            blocks,
+            styleContext.childGaps
+          ),
     drawsNothing,
   });
 }
@@ -650,7 +707,12 @@ export function readableGatedRules(
 export function drawlessTestFor(
   blocks: BlockResolver
 ): (node: BlockNode) => boolean {
-  return node => declaresNoMarkup(node, type => blocks.get(type));
+  // A node bound to its list item draws, as far as the page can tell: its
+  // props are filled only when the list draws each item, so before then the
+  // tree holds its own values and its declaration would be judged on those.
+  // Its rules ship, which is the safe direction for a node that may draw.
+  return node =>
+    !hasItemBindings(node) && declaresNoMarkup(node, type => blocks.get(type));
 }
 
 /**
@@ -1050,6 +1112,15 @@ export interface ResolveStyleOptions {
    */
   fetchPolicyId?: string;
   /**
+   * The host-fetch predicate in force, as {@link effectiveCompile} derived it.
+   *
+   * Read only by a recompile with no compile context, which has nothing else to
+   * judge a URL by. When `fetchPolicyId` names a policy and this is absent, such
+   * a recompile is not made and the sheet is withheld, since compiling without
+   * the predicate would admit every URL the policy refuses.
+   */
+  mayFetchUrl?: MayFetchUrl;
+  /**
    * The tree the STORED artifact describes, when the caller narrowed the
    * document before calling this.
    *
@@ -1175,10 +1246,10 @@ export function resolvePageStylesWithTrace(
   // URLs it dropped would stay missing for good. Neither a stable stamp nor an
   // absent one separates those, so the stamp records what compiled the sheet and
   // this comparison refuses it outright.
-  const compiledUnderAnotherPolicy =
-    styles !== undefined &&
-    (styles.fetchPolicyId !== options.fetchPolicyId ||
-      styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY);
+  const compiledUnderAnotherPolicy = storedUnderAnotherPolicy(
+    styles,
+    options.fetchPolicyId
+  );
 
   // The same test for the site-level inputs, and it refuses an ABSENT stamp for
   // the same reason the policy one refuses its sentinel: absence is equally the
@@ -1243,6 +1314,17 @@ export function resolvePageStylesWithTrace(
     styles.previewContainer !== undefined;
 
   /*
+   * A sheet the compiler wrote under an earlier stamp encoding, asked of the
+   * stamp alone. With a context this is already part of the comparison above;
+   * WITHOUT one it is the only check that can see it, and a stored sheet
+   * written before blocks lost their outer margins would otherwise be served
+   * with those margins on every context-free read.
+   */
+  const compiledUnderAnotherEncoding = !stampedUnderCurrentEncoding(
+    styles?.sharedInputsId
+  );
+
+  /*
    * ONE answer to "may this stored sheet be served as it stands", used by both
    * the trust branch and the context-free refusal below.
    *
@@ -1257,7 +1339,8 @@ export function resolvePageStylesWithTrace(
     compiledFromAnotherTree ||
     compiledUnderAnotherPolicy ||
     compiledAgainstOtherInputs ||
-    compiledForPreview;
+    compiledForPreview ||
+    compiledUnderAnotherEncoding;
 
   if (styles && !untrusted) {
     const normalized = normalizeStoredStyles(styles, document);
@@ -1271,9 +1354,15 @@ export function resolvePageStylesWithTrace(
     };
   }
   if (styles && untrusted && styleContext === undefined) {
-    return {
-      styles: { ...normalizeStoredStyles(styles, document).styles, css: "" },
-    };
+    return untrustedWithoutContext(
+      document,
+      styles,
+      blocks,
+      drawsNothing,
+      options,
+      compiledUnderAnotherEncoding,
+      compiledUnderAnotherPolicy
+    );
   }
   if (compileContext) {
     // Compiled with the context built above rather than the caller's, for the
@@ -1289,6 +1378,88 @@ export function resolvePageStylesWithTrace(
       classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
     },
   };
+}
+
+/**
+ * The breakpoints a compile with no site states: none, so every rule is
+ * written at the base width.
+ */
+const NO_SITE_BREAKPOINTS = { viewport: [], container: [] };
+
+/**
+ * What a read with no compile context serves for a stored sheet it cannot
+ * trust as it stands.
+ *
+ * Withheld, keeping the classes, for every reason but one: a sheet the
+ * compiler before the current stamp encoding wrote. That one describes rules
+ * the compiler no longer writes (the outer margins blocks used to carry);
+ * serving it keeps them for good, and withholding it leaves the page
+ * unstyled. So it is compiled again from the document under the compiler's
+ * own defaults: no site breakpoints, the block defaults and child gaps from
+ * `blocks`, the typographic baseline, and the artifact's own scope so a page
+ * drawn beside another stays isolated.
+ *
+ * What only the site could supply is not there to compile with: a value an
+ * author set at a breakpoint other than the base one, and a named class's
+ * styles (the class library is site configuration). Those are left out, with
+ * the compiler's own warnings, and the base styling of every node is kept.
+ *
+ * Not recompiled when the sheet was ALSO compiled under another fetch policy,
+ * or when a policy is in force and the read was not handed its predicate: a
+ * compile without the predicate would admit URLs the policy refuses, so it
+ * withholds as before. With the predicate, the recompile judges every URL by it.
+ */
+function untrustedWithoutContext(
+  document: BlockDocument,
+  styles: PageStyles,
+  blocks: BlockResolver,
+  drawsNothing: (node: BlockNode) => boolean,
+  options: ResolveStyleOptions,
+  underAnotherEncoding: boolean,
+  underAnotherPolicy: boolean
+): ResolvedPageStyles {
+  const withheld = {
+    styles: { ...normalizeStoredStyles(styles, document).styles, css: "" },
+  };
+  if (!underAnotherEncoding || underAnotherPolicy) return withheld;
+  const { mayFetchUrl } = options;
+  if (options.fetchPolicyId !== undefined && mayFetchUrl === undefined) {
+    return withheld;
+  }
+  const context = compileContextFor(
+    {
+      breakpoints: NO_SITE_BREAKPOINTS,
+      ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+      ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
+    },
+    document,
+    blocks,
+    drawsNothing,
+    options.storedDocument
+  );
+  if (context === undefined) return withheld;
+  return compileToStyles(
+    document,
+    context,
+    options,
+    sharedStyleInputsId(context)
+  );
+}
+
+/**
+ * Whether a stored sheet was compiled under a different fetch policy than the
+ * one in force, or under an anonymous one, which is stale against every
+ * policy. See the reasoning where {@link resolvePageStylesWithTrace} asks.
+ */
+function storedUnderAnotherPolicy(
+  styles: PageStyles | undefined,
+  fetchPolicyId: string | undefined
+): boolean {
+  if (styles === undefined) return false;
+  return (
+    styles.fetchPolicyId !== fetchPolicyId ||
+    styles.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY
+  );
 }
 
 /**

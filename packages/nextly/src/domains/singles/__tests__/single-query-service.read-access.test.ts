@@ -41,6 +41,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   return {
     ...(await importOriginal<object>()),
     actorForUser: fake.fakeActorForUser,
+    actorForVisitor: fake.fakeActorForVisitor,
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };
@@ -72,7 +73,7 @@ function createService(
     fields: [textField("siteName")],
   });
 
-  const rbac = createMockRBACService(rbacAllows);
+  const rbac = createMockRBACService();
   if (readRule) rbac.getRegisteredAccess.mockReturnValue({ read: readRule });
 
   const service = new SingleQueryService(
@@ -98,7 +99,7 @@ describe("SingleQueryService.get — the read gate", () => {
     const result = await service.get("site-settings", { user: editor });
 
     expect(result.success).toBe(false);
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
   });
 
   it("allows a caller the gate admits", async () => {
@@ -187,7 +188,8 @@ describe("SingleQueryService.get — the read gate", () => {
       logger: createSilentLogger() as never,
     });
 
-    expect(denied?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(denied?.statusCode).toBe(401);
     // Refused before the rule is asked.
     expect(publishRule).not.toHaveBeenCalled();
   });

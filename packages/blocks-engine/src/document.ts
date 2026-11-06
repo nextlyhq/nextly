@@ -115,7 +115,12 @@ export interface BlockNode {
   version: number;
   /** Literal content/config values. Bound values live in `bindings`, never here. */
   props: Record<string, unknown>;
-  /** Per-prop data bindings; a bound prop's literal stays in `props` as the fallback shown on unbind. */
+  /**
+   * Per-prop data bindings. A bound prop's literal stays in `props` as its own
+   * value: shown when the binding cannot be used and has no valid fallback, and
+   * kept when the prop is unbound. Filled on a published page by
+   * `bindDocument` after each binding is checked (`binding-rules`).
+   */
   bindings?: Record<string, Binding>;
   /** Named child regions, stored in the node. Only container blocks declare slots. */
   slots?: Record<string, BlockNode[]>;
@@ -126,10 +131,21 @@ export interface BlockNode {
   /** Conditional and per-breakpoint visibility. */
   visibility?: NodeVisibility;
   /**
-   * Author lock. While true, the editor command layer must not let the author
-   * move or delete this node. It is an author-facing policy flag, not a
-   * data-layer guarantee: system transforms (migrations, overlays, restore)
-   * still operate on locked nodes, and the pure tree primitives do not read it.
+   * The Layers lock. While true, nothing changes this node or anything inside
+   * it: no update (renaming included), no move or removal of it or of a block
+   * holding it, no block moved out of it or put into it. Changing `locked`
+   * itself is the one edit it allows.
+   *
+   * Enforced at the data layer, not only in the editor: `applyOp` refuses an op
+   * that breaks it (`layers-lock`), and a blocks field's save refuses a write
+   * that changes, moves or removes a node locked in the stored document unless
+   * the same write unlocks that node (`layers-lock-stored`). A convenience that
+   * anyone who may edit the document can lift, never a permission: who may
+   * edit stays the collection's access rules' question.
+   *
+   * A system transform the site makes for a reason no author chose applies its
+   * ops with `{ layersLocks: "ignore" }`. The pure tree primitives in `tree.ts`
+   * do not read the flag; they sit below the rule.
    */
   locked?: boolean;
   /** Author-facing instance label, shown in the Layers panel. */
@@ -630,9 +646,16 @@ function renameEntry(
 
 /** Fields every binding carries, regardless of source. */
 interface BindingBase {
-  /** Dot path into the binding source, one relation traversal max. */
+  /**
+   * Dot path into the binding source, following one to-one relation at most.
+   * The limit needs the source's schema, so `binding-rules` enforces it.
+   */
   $bind: string;
-  /** Rendered when the bound value is empty or the path cannot resolve. */
+  /**
+   * Rendered when the bound value is empty or the binding cannot be used. It
+   * must be a valid value of the prop; one that is not is ignored, and the
+   * prop's own value is shown instead.
+   */
   fallback?: unknown;
   /** Locale-aware display formatting applied after resolution. */
   format?: BindingFormat;
@@ -835,6 +858,13 @@ export type BreakpointId = string;
  */
 export interface TokenRef {
   $token: string;
+  /**
+   * A factor the token's value is scaled by, for a length or a number: a
+   * button's Small padding is its padding token times 0.75. Written as
+   * `calc(var(<token>) * times)`, so it follows the site's token and its
+   * prefix wherever either changes. From 0.25 to 4.
+   */
+  times?: number;
 }
 
 /**
@@ -869,6 +899,21 @@ export type NodeStyles = Partial<
 export interface BlockPart {
   /** Shared default styles for this part on every instance of the block type. */
   baseStyles?: NodeStyles;
+  /**
+   * Style properties this part takes from the block's root when the root is
+   * one of the named wrapper parts: an image's picture takes its corners,
+   * proportion and fit from a figure or a link around it. Every tier styling
+   * the node (a look, a shared style, its own values) then writes those
+   * properties on this part, never on the wrapper's box.
+   *
+   * @experimental
+   */
+  takesFromRoot?: {
+    /** Style keys, as the catalog names them (`borderRadius`). */
+    readonly properties: readonly string[];
+    /** The wrapper parts the root may be (`frame`, `link`). */
+    readonly whenRootIs: readonly string[];
+  };
 }
 
 /** True if a style value is a design-token reference. */
@@ -1061,7 +1106,10 @@ export const COMPONENT_INSTANCE_TYPE = "nextly/component-instance";
 export interface ComponentInstanceProps {
   /** The referenced component document's id. */
   componentId: string;
-  /** The selected variant name, when the component defines variants. */
+  /**
+   * The chosen variant's id: its key in the definition's `variants`, which a
+   * rename keeps. A key the definition no longer holds renders the defaults.
+   */
   variant?: string;
   /**
    * Per-instance values for the definition's exposed properties, keyed by
@@ -1337,7 +1385,10 @@ export interface ComponentDocument extends BlockDocument {
   exposed?: ExposedProperty[];
   /** Regions an instance may fill, keyed by slot id. Absent exposes none. */
   slots?: Record<string, ExposedSlot>;
-  /** Named override presets, keyed by variant name. */
+  /**
+   * Named override presets, keyed by each variant's stable id. The id is
+   * opaque and kept across renames; the name a picker shows is its `label`.
+   */
   variants?: Record<string, Variant>;
 }
 

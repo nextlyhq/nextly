@@ -1,0 +1,23 @@
+---
+title: RESOLVE_LOCK_RELEASED
+description: "The schema lock was released before `nextly migrate:resolve` changed the migration's record, so nothing was written."
+---
+
+## Cause
+
+The schema lock was released before `nextly migrate:resolve` changed the migration's record, so nothing was written.
+
+`nextly migrate:resolve` takes the schema lock before it changes a migration's record in the ledger. The lock was released before that work ran, so nothing was recorded.
+
+## Fix
+
+- Run the same `nextly migrate:resolve` command again once no other schema operation is running.
+
+## Example
+
+```text
+✗ The migrate lock was released without resolving the migration.
+  Why:  Nothing was written.
+  Next: Retry once no other schema operation is running.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-lock-released  (RESOLVE_LOCK_RELEASED)
+```

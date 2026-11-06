@@ -24,6 +24,7 @@
  * it reads.
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
@@ -32,8 +33,10 @@ import { getTableName, type Table } from "drizzle-orm";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { getDrizzleKitForDialect } from "../../../../database/drizzle-kit-lazy";
-import { SchemaRegistry } from "../../../../database/schema-registry";
+import type { SchemaRegistry } from "../../../../database/schema-registry";
 import {
   dynamicCollectionsMysql,
   dynamicCollectionsPg,
@@ -56,6 +59,7 @@ import { versionsTables } from "../../../../schemas/versions";
 import { webhookTables } from "../../../../schemas/webhooks";
 import { diffSnapshots } from "../../../schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
+import { withMigrateLock } from "../../../schema/pipeline/locks";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../services/field-group-schema-service";
@@ -68,7 +72,6 @@ import {
 } from "../data-steps";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
-import { getFieldGroupRegistryAliases } from "../../storage/registry-schemas";
 import {
   resolveRegistryNameFromCatalog,
   resolveTypeColumns,
@@ -85,7 +88,6 @@ interface TestAdapter {
   disconnect(): Promise<void>;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   listTables(): Promise<string[]>;
-  setTableResolver(registry: SchemaRegistry): void;
   select<T = Record<string, unknown>>(
     table: string,
     options: unknown
@@ -543,25 +545,22 @@ for (const entry of DIALECTS) {
           entry.dialect
         );
       }
-      registry = new SchemaRegistry(entry.dialect);
-      // The system tables go in too, not just the field-group ones. The typed
-      // CRUD resolves every table through this registry and refuses any name it
-      // does not declare, so without them the registry service cannot read
+      // The static resolver every production adapter carries: every system
+      // table, the lock's included (the lock seeds its row through a
+      // transaction insert, which an adapter refuses for a table its resolver
+      // does not hold), and both field-group registry spellings. The typed CRUD
+      // resolves every table through it and refuses any name it does not
+      // declare, so without the system tables the registry service cannot read
       // `dynamic_components` at all — and the read path swallows that as "no
       // component data" rather than surfacing it.
       //
-      // 🔴 The aliases are added HERE and not to `systemTablesFor`, which is the
-      // same split production draws. That set also generates this fixture's DDL,
-      // and the migrated registry belongs in a schema REGISTRY but never in a
-      // schema PUSH: creating it up front would hand the migration a rename
-      // target that already exists. Every production site that builds a registry
-      // registers both spellings, so a fixture registering one would refuse a
-      // read production serves.
-      registry.registerStaticSchemas({
-        ...systemTablesFor(entry.dialect),
-        ...getFieldGroupRegistryAliases(entry.dialect),
-      });
-      adapter.setTableResolver(registry);
+      // 🔴 The aliases come from the resolver and not from `systemTablesFor`,
+      // which is the same split production draws. That set also generates this
+      // fixture's DDL, and the migrated registry belongs in a schema REGISTRY
+      // but never in a schema PUSH: creating it up front would hand the
+      // migration a rename target that already exists.
+      await loadDialectTables(entry.dialect);
+      registry = installRegistryResolver(adapter as unknown as DrizzleAdapter);
 
       await dropEverything();
       await createSystemTables();
@@ -908,6 +907,58 @@ for (const entry of DIALECTS) {
       // boot, so moving it is churn a settlement check then has to chase.
       expect(String(after.configPath)).toContain(STORAGE_FORMAT.configPathDir);
     });
+
+    /**
+     * 🔴 `nextly migrate` and the storage migration started together.
+     *
+     * `nextly migrate` reads which field-group registry the database holds and then reconciles the
+     * core schema against that name. Were the rename to land between the two, the reconcile would
+     * create an empty legacy registry beside the migrated one, and every group would read as
+     * missing. Both hold the schema lock, so one finishes before the other changes anything: the
+     * reconcile below — `nextly migrate`'s Phase 1 reads, with a pause where a rename could land —
+     * is computed either wholly before the rename or wholly after it.
+     */
+    it("lets nextly migrate and the storage migration started together leave one registry", async () => {
+      const proposed: string[][] = [];
+      const nextlyMigratePhaseOne = () =>
+        withMigrateLock(
+          adapter as never,
+          entry.dialect,
+          async () => {
+            const fieldGroupRegistryTable =
+              await resolveRegistryNameFromCatalog(adapter as never);
+            // Where a storage migration running beside it would rename the registry.
+            await new Promise(resolve => setTimeout(resolve, 300));
+            const live = await introspectLiveSnapshot(
+              drizzleOf(adapter),
+              entry.dialect,
+              getCoreTableNames({ fieldGroupRegistryTable })
+            );
+            const ops = diffSnapshots(
+              live,
+              getCoreSchema(entry.dialect, { fieldGroupRegistryTable })
+            );
+            proposed.push(namesRegistry(ops, STORAGE_FORMAT.registryTable));
+          },
+          { command: "nextly migrate", mode: "wait" }
+        );
+
+      // Each order, so the result does not rest on which one the scheduler starts first.
+      await Promise.all([nextlyMigratePhaseOne(), migrate("up")]);
+      await Promise.all([migrate("down"), nextlyMigratePhaseOne()]);
+
+      // Neither reconcile proposed creating the legacy registry beside the migrated one.
+      expect(proposed).toEqual([[], []]);
+      // And the content is readable through whichever registry the database holds now.
+      await registerRuntimeSchemas();
+      const after = await resolveEmbedded({
+        table: innerTable,
+        parentId: "outer-1",
+        parentTable: outerTable,
+        field: "inner",
+      });
+      expect(after?.body).toBe("Nested body");
+    }, 120_000);
 
     it("reports a second run as already migrated", async () => {
       await migrate("up");

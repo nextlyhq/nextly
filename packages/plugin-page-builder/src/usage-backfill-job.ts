@@ -31,8 +31,14 @@
  */
 import { defineJob, type JobDefinition } from "nextly";
 
-import { advanceBackfill, type BackfillStateStore } from "./usage-backfill";
+import { advanceBackfill } from "./usage-backfill";
+import type {
+  BackfillStateStore,
+  ScopeWalk,
+  ScopeWalkOutcome,
+} from "./usage-backfill";
 import type { BackfillScope } from "./usage-backfill-scope";
+import { isSupersededRun } from "./usage-bookkeeping";
 
 /**
  * The job type this plugin registers.
@@ -53,17 +59,16 @@ export interface UsageBackfillDeps {
    * while they stayed unwalked for ever.
    */
   scopes: () => Promise<readonly BackfillScope[]>;
-  /** Where completed scopes are recorded. */
   /**
-   * The progress store, built when a pass needs it.
+   * The progress store of the current run, built when a pass needs it.
    *
    * A PROMISE because building it resolves the Direct API, and the plugin entry
    * that supplies that must import `nextly/runtime` at call time rather than at
    * module scope — the entry is isomorphic and reachable from a browser bundle.
    */
   state: () => Promise<BackfillStateStore>;
-  /** Repairs one scope, walking every document in it. */
-  rebuild: (scope: BackfillScope) => Promise<void>;
+  /** Repairs one scope, resuming where an earlier tick's walk stopped. */
+  rebuild: (scope: BackfillScope, walk: ScopeWalk) => Promise<ScopeWalkOutcome>;
   /**
    * The live clock, injected only so a test can bound a pass deterministically.
    *
@@ -79,15 +84,15 @@ export interface UsageBackfillDeps {
  * Build the backfill sweep.
  *
  * Each pass walks scopes one at a time until the runner's deadline passes or
- * nothing is left. The deadline is checked BEFORE starting a scope and never
- * during one, mirroring how the runner treats `maxDurationMs` - it bounds how
- * many units a pass STARTS, because nothing can interrupt a walk in flight. A
- * scope that overruns is therefore possible and accepted: it is the smallest
- * unit that can be recorded, so stopping inside one could only discard work.
+ * nothing is left. The deadline is checked before starting a scope, and inside
+ * one after each document: a walk records the last document it finished and
+ * stops, so a scope larger than one tick resumes on the next one instead of
+ * starting again for ever. A walk always finishes one document before it
+ * stops, so every tick makes progress.
  *
- * Stopping discharges nothing. An unwalked scope has no row, so the next tick
- * finds it outstanding - the queue is durable and the sweep is re-queued, which
- * is what makes leaving work safe rather than losing it.
+ * Stopping discharges nothing. An unfinished scope is not recorded as walked,
+ * so the next tick finds it outstanding - the queue is durable and the sweep
+ * is re-queued, which is what makes leaving work safe rather than losing it.
  */
 export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
   const now = deps.clock ?? (() => Date.now());
@@ -98,34 +103,44 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
     handler: async (_input, context) => {
       const scopes = await deps.scopes();
       const state = await deps.state();
-      const deadline = context.deadline.getTime();
+      // Read from the context at every check rather than copied once, so the
+      // budget is always the one the runner holds for this pass.
+      const spent = () => now() >= context.deadline.getTime();
 
-      // Read ONCE for the handler and threaded through every pass. The store
-      // answers this by paging the whole progress collection, so a pass that
-      // re-read it made the drain quadratic in the number of scopes — on a site
-      // of many small ones, most of the work was re-reading rows this same
-      // invocation had already read.
+      // Read ONCE for the handler and threaded through every pass, so a pass
+      // does not re-read progress this same invocation already holds.
       let completed: ReadonlySet<string> | undefined;
 
-      for (;;) {
-        // Checked BEFORE the work, never after: afterwards would always allow
-        // one scope more than the budget, which on a slow scope is the entire
-        // overrun this exists to bound.
-        if (now() >= deadline) return;
+      try {
+        for (;;) {
+          // Checked BEFORE a scope, as well as inside it after each document.
+          // Afterwards only would always allow one scope more than the budget.
+          if (spent()) return;
 
-        const pass = await advanceBackfill({
-          scopes,
-          state,
-          rebuild: deps.rebuild,
-          ...(completed === undefined ? {} : { completed }),
-        });
-        completed = pass.completed;
+          const pass = await advanceBackfill({
+            scopes,
+            state,
+            rebuild: deps.rebuild,
+            stop: spent,
+            ...(completed === undefined ? {} : { completed }),
+          });
+          completed = pass.completed;
 
-        // Nothing outstanding, either because this pass finished the last scope
-        // or because there was none to begin with. Returning rather than
-        // looping is what lets the sweep go quiet on a finished site instead of
-        // re-reading its own progress on every tick for ever.
-        if (pass.walked === null || pass.complete) return;
+          // Every scope walked under this run: the dirty mark a failed
+          // maintenance write left can go, since this run started after it.
+          if (pass.complete) {
+            await state.finish();
+            return;
+          }
+          // Stopped inside a scope for the budget. Its cursor is recorded.
+          if (!pass.finished) return;
+        }
+      } catch (error) {
+        // A newer run replaced this one mid-pass, and every write the pass
+        // tried since was refused. Nothing is lost: the newer run walks every
+        // scope itself, so the pass ends quietly rather than failing the job.
+        if (isSupersededRun(error)) return;
+        throw error;
       }
     },
   });

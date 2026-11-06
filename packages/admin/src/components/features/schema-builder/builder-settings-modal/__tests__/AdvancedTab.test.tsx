@@ -12,11 +12,12 @@ import { createTestQueryClient, render, screen } from "@admin/__tests__/utils";
 import { BrandingProvider } from "@admin/context/providers/BrandingProvider";
 
 import type { BuilderSettingsValues } from "../../BuilderSettingsModal";
-import type { AdvancedField } from "../../builder-config";
+import type { AdvancedField, BuilderKind } from "../../builder-config";
 import { AdvancedTab } from "../AdvancedTab";
 
 function Controlled(props: {
   fields: readonly AdvancedField[];
+  kind?: BuilderKind;
   initial?: Partial<BuilderSettingsValues>;
   onChange?: (next: BuilderSettingsValues) => void;
 }) {
@@ -33,6 +34,7 @@ function Controlled(props: {
   return (
     <AdvancedTab
       fields={props.fields}
+      kind={props.kind ?? "collection"}
       values={values}
       onChange={next => {
         setValues(next);
@@ -287,6 +289,24 @@ describe("AdvancedTab -- webhook recording", () => {
     );
     const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
     expect(last.webhooks).toBe(false);
+  });
+
+  // The help sentence names the kind being configured, not "entity", and
+  // each kind is spelled as the rest of the builder spells it.
+  it("names the kind in the webhook help", () => {
+    const cases: ReadonlyArray<[BuilderKind, string]> = [
+      ["collection", "Send this collection's changes"],
+      ["single", "Send this Single's changes"],
+      ["field-group", "Send this field group's changes"],
+    ];
+    for (const [kind, start] of cases) {
+      const { unmount } = render(
+        <Controlled fields={["webhooks"]} kind={kind} />
+      );
+      expect(screen.getByText(new RegExp(`^${start}`))).toBeInTheDocument();
+      expect(screen.queryByText(/entity/i)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("renders unchecked when webhook recording was turned off", () => {

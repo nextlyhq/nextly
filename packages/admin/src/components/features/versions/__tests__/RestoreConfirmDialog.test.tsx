@@ -57,6 +57,35 @@ describe("RestoreConfirmDialog", () => {
     expect(screen.getByText(/passwords/)).toBeInTheDocument();
   });
 
+  it("says fields held back from the reader keep their values, only then", () => {
+    // A restore never writes a field its restorer may not read. Told only
+    // when the version on screen held one back, so the line is never noise.
+    const { rerender } = render(
+      <RestoreConfirmDialog
+        open
+        onOpenChange={vi.fn()}
+        versionNo={7}
+        hasWithheldFields
+        onConfirm={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText(
+        /Fields you don.t have access to in this version are not\s+restored and keep their current values/
+      )
+    ).toBeInTheDocument();
+
+    rerender(
+      <RestoreConfirmDialog
+        open
+        onOpenChange={vi.fn()}
+        versionNo={7}
+        onConfirm={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/don.t have access/)).not.toBeInTheDocument();
+  });
+
   it("says when the document is live", () => {
     render(
       <RestoreConfirmDialog

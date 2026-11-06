@@ -27,7 +27,9 @@ import {
   shapeLeaves,
   STYLE_CATALOG,
   styleOrigin,
+  BASE_BREAKPOINT,
   breakpointContexts,
+  statePropagatesToAncestors,
   outranksEntry,
   type BreakpointAxis,
   type BreakpointId,
@@ -38,7 +40,7 @@ import {
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
-import { isUsableWidth } from "./breakpoints";
+import { BASE_DEVICE_LABEL, isUsableWidth } from "./breakpoints";
 import { offeredTiers } from "./canvas-width";
 
 /** What a control's dot reports. */
@@ -392,6 +394,162 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
   return { kind: "inherited", entry: winner, from: winner.origin };
 }
 
+/**
+ * What a control would show without the node's own value at the position
+ * being edited: the same ranking, over the trace with that one declaration
+ * taken away.
+ *
+ * The question "does this value cover a shared style's?" asks, at the tier
+ * being edited and not only at its exact address: a value the node sets at
+ * a narrow breakpoint, or in an interaction state, over the style's wider or
+ * base-state value covers it all the same. Answered by `styleProvenance`
+ * rather than by looking the style's own value up, so the tier order, both
+ * breakpoint axes and the state ranking are settled in one place.
+ *
+ * Pass the breakpoints that match AT the edited tier (`liveBreakpointsFor`),
+ * since the answer is about the position the control writes, not the width
+ * the canvas happens to show.
+ */
+export function provenanceBeneath(
+  query: StyleProvenanceQuery
+): StyleProvenance {
+  return styleProvenance({
+    ...query,
+    trace: query.trace.filter(entry => !isAuthoredHere(entry, query)),
+  });
+}
+
+/**
+ * The CSS properties an element takes from its parent when nothing sets them
+ * on it — those CSS defines as inherited, whether or not the catalog writes
+ * each today, so a property added to the catalog is answered the day it lands.
+ */
+const INHERITED_PROPERTIES: ReadonlySet<string> = new Set([
+  "border-collapse",
+  "caption-side",
+  "caret-color",
+  "color",
+  "color-scheme",
+  "accent-color",
+  "cursor",
+  "direction",
+  "empty-cells",
+  "font-family",
+  "font-size",
+  "font-stretch",
+  "font-style",
+  "font-variant",
+  "font-weight",
+  "hyphens",
+  "letter-spacing",
+  "line-height",
+  "list-style-position",
+  "list-style-type",
+  "overflow-wrap",
+  "quotes",
+  "tab-size",
+  "text-align",
+  "text-indent",
+  "text-shadow",
+  "text-transform",
+  "visibility",
+  "white-space",
+  "word-break",
+  "word-spacing",
+  "writing-mode",
+]);
+
+/**
+ * {@link styleProvenance}, with CSS inheritance: an inheritable property
+ * nothing sets on this element is answered by the nearest enclosing block
+ * whose own value shows, asked through the same ranking at that block's
+ * address in its normal state.
+ *
+ * The ranking answers for rules that REACH an element, and a section's own
+ * colour reaches only the section, so without this a heading inside it read
+ * as unset while the canvas drew the section's colour on it. Asked of the
+ * trace rather than of the canvas's computed style, so the answer names where
+ * the value was written, which a computed value cannot say.
+ *
+ * Only for the element's own box: a control with a descendant selector styles
+ * something inside it, whose parent is not the enclosing block. An ambiguous
+ * answer on the way up stops the walk, since the next block's value would be
+ * named over one whose source is unknown.
+ */
+export function inheritedProvenance(
+  query: StyleProvenanceQuery
+): StyleProvenance {
+  const own = styleProvenance(query);
+  const descendant = query.descendant?.trim() ?? "";
+  if (
+    own.kind !== "unset" ||
+    descendant !== "" ||
+    !INHERITED_PROPERTIES.has(query.cssProperty)
+  ) {
+    return own;
+  }
+  // Outermost first, as the engine reads them; walked from the nearest.
+  const chain = query.subject.ancestors ?? [];
+  for (let at = chain.length - 1; at >= 0; at -= 1) {
+    const ancestor = chain[at];
+    if (ancestor === undefined) continue;
+    const found = styleProvenance({
+      ...query,
+      subject: { ...ancestor, ancestors: chain.slice(0, at) },
+      // The enclosing block in the state the canvas holds it in: a state the
+      // engine forces up the chain (hover, pressed) is the ancestor's too, and
+      // any other leaves it in its normal state.
+      ...ancestorState(query.state),
+    });
+    if (found.kind === "authored") {
+      return {
+        kind: "inherited",
+        entry: found.entry,
+        from: found.entry.origin,
+      };
+    }
+    if (found.kind !== "unset") return found;
+  }
+  return pagePassesDown(query) ?? own;
+}
+
+/**
+ * The state an enclosing block is in while this element is edited in
+ * `state`, by the engine's own decision about which states the canvas forces
+ * up the chain, so the walk and the canvas cannot disagree.
+ */
+function ancestorState(
+  state: StyleState
+): Pick<StyleProvenanceQuery, "state" | "liveStates"> {
+  return statePropagatesToAncestors(state)
+    ? { state }
+    : { state: "base", liveStates: ["base"] };
+}
+
+/**
+ * The page's own value for an inheritable property, which every block takes
+ * when nothing nearer sets it. A page declaration on the root lands on no
+ * block of its own, so the ranking above never meets it; ranked here, among
+ * the page's root declarations alone, as the last place a value comes from.
+ */
+function pagePassesDown(
+  query: StyleProvenanceQuery
+): StyleProvenance | undefined {
+  const candidates = query.trace.filter(
+    entry =>
+      entry.origin.kind === "page" &&
+      normalizeDescendant(entry.descendant) === ""
+  );
+  const entry = styleOrigin(candidates, query.subject, {
+    property: query.cssProperty,
+    state: "base",
+    breakpoints: query.liveBreakpoints,
+  });
+  return entry === undefined
+    ? undefined
+    : { kind: "inherited", entry, from: entry.origin };
+}
+
 /** Where a value a control is showing was authored, in breakpoint terms. */
 export interface BreakpointSource {
   /** The breakpoint's own id, as the trace records it. */
@@ -467,7 +625,16 @@ export type BreakpointBadge =
    * breakpoints, so what a reset reveals is whatever the next one holding a
    * value is.
    */
-  | { readonly kind: "authored"; readonly revealed?: BreakpointSource }
+  | {
+      readonly kind: "authored";
+      readonly revealed?: BreakpointSource;
+      /**
+       * Set when nothing on the block would show once this value is gone,
+       * but an enclosing block or the page passes one down: the control is
+       * not left unset, and no breakpoint names where the value comes from.
+       */
+      readonly passedDown?: true;
+    }
   /**
    * The value on screen was authored by THIS NODE at another breakpoint.
    *
@@ -518,7 +685,11 @@ export function breakpointSource(
   );
   return {
     breakpoint,
-    label: named?.label ?? breakpoint,
+    // The base viewport tier by the device switcher's name for it.
+    label:
+      context.axis === "viewport" && breakpoint === BASE_BREAKPOINT
+        ? BASE_DEVICE_LABEL
+        : (named?.label ?? breakpoint),
     axis: context.axis,
     /*
      * Unbounded is the unconditional tier and always reachable. A bounded tier
@@ -635,9 +806,15 @@ export function breakpointBadge(
       )
   );
   const revealedBy = styleProvenance({ ...query, trace: cleared });
-  if (revealedBy.kind === "unset" || revealedBy.kind === "ambiguous") {
-    return { kind: "authored" };
+  if (revealedBy.kind === "unset") {
+    // What CSS inheritance would show instead, asked the same way the
+    // control is described once the value is gone.
+    const inherited = inheritedProvenance({ ...query, trace: cleared });
+    return inherited.kind === "unset"
+      ? { kind: "authored" }
+      : { kind: "authored", passedDown: true };
   }
+  if (revealedBy.kind === "ambiguous") return { kind: "authored" };
   const source = breakpointSource(revealedBy.entry.breakpoint, breakpoints);
   return source === undefined
     ? { kind: "authored" }

@@ -64,13 +64,25 @@ describe("version diff (integration)", () => {
     // v2 changes every field.
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "Second", views: 2, featured: true, tags: ["b", "c"] }
+      {
+        title: "Second",
+        views: 2,
+        featured: true,
+        tags: ["b", "c"],
+        _overwrite: true,
+      }
     );
     // A re-save of v2's exact values reads back as v2 holds them, every field
     // kind included, so it changes nothing and records no v3.
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "Second", views: 2, featured: true, tags: ["b", "c"] }
+      {
+        title: "Second",
+        views: 2,
+        featured: true,
+        tags: ["b", "c"],
+        _overwrite: true,
+      }
     );
 
     const changed = await getVersionDiffForDocument({
@@ -128,7 +140,7 @@ describe("version diff (integration)", () => {
     const id = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "B", body: "same" }
+      { title: "B", body: "same", _overwrite: true }
     );
 
     const diff = await getVersionDiffForDocument({
@@ -172,7 +184,7 @@ describe("version diff (integration)", () => {
     const id = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "Second", codename: "osprey" }
+      { title: "Second", codename: "osprey", _overwrite: true }
     );
 
     const diff = await getVersionDiffForDocument({

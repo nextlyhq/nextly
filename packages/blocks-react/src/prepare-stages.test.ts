@@ -20,6 +20,8 @@ import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
 import {
+  pageBindingRun,
+  prepareDocumentAsDrawn,
   prepareDocumentForRead,
   prepareDocumentReadStages,
 } from "./prepare-document";
@@ -86,6 +88,54 @@ describe("read stages keep reference identity when a pass changes nothing", () =
     expect(stages.deduped).toBe(stages.gated);
     expect(stages.prepared).not.toBe(stages.deduped);
   });
+
+  it("a document with no binding keeps the stage by reference", () => {
+    // Given a binding pass, as a published page always is: the bound stage
+    // must still be the stage before it, or every page reads as repaired.
+    const document = untouchedDocument();
+    const bindings = pageBindingRun(
+      { entry: { title: "Bound" } },
+      "en",
+      resolver
+    );
+    const stages = prepareDocumentReadStages(document, { resolver, bindings });
+
+    expect(stages).not.toBeNull();
+    if (stages === null) return;
+    expect(stages.bound).toBe(stages.deduped);
+    expect(stages.prepared).toBe(stages.bound);
+    expect(stages.boundValues.size).toBe(0);
+  });
+
+  it("returns a DIFFERENT object for the bound stage when a binding filled a prop", () => {
+    // The control for the case above: a pass that returned its input
+    // unconditionally would pass it, and fill nothing.
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Own" },
+          bindings: { text: { $bind: "title" } },
+        },
+      ],
+    };
+    const bindings = pageBindingRun(
+      { entry: { title: "Bound" } },
+      "en",
+      resolver
+    );
+    const stages = prepareDocumentReadStages(document, { resolver, bindings });
+
+    expect(stages).not.toBeNull();
+    if (stages === null) return;
+    expect(stages.bound).not.toBe(stages.deduped);
+    expect(stages.bound.nodes[0]?.props.text).toBe("Bound");
+    expect(stages.deduped.nodes[0]?.props.text).toBe("Own");
+  });
 });
 
 describe("the narrow view is derived, not recomputed", () => {
@@ -134,5 +184,58 @@ describe("the narrow view is derived, not recomputed", () => {
 
     expect(prepareDocumentForRead(wrongVersion, { resolver })).toBeNull();
     expect(prepareDocumentReadStages(wrongVersion, { resolver })).toBeNull();
+  });
+});
+
+describe("prepareDocumentAsDrawn", () => {
+  /** A heading, a block nothing registers, and a condition-gated heading. */
+  function mixedDocument(): BlockDocument {
+    return {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "core/heading", version: 1, props: { text: "Real" } },
+        { id: "gone", type: "acme/removed", version: 1, props: {} },
+        {
+          id: "gated",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Members" },
+          visibility: {
+            conditions: [[{ field: "role", op: "equals", value: "x" }]],
+          },
+        } as BlockDocument["nodes"][number],
+      ],
+    };
+  }
+
+  it("keeps a node the renderer draws a placeholder for, which the reading view drops", () => {
+    // The renderer walks this tree: a block it cannot draw still takes a place
+    // on the page as a placeholder. A list of the page's parts read from the
+    // reading view would leave it out and number everything after it wrongly.
+    const drawn = prepareDocumentAsDrawn(mixedDocument(), { resolver });
+    const read = prepareDocumentForRead(mixedDocument(), { resolver });
+
+    expect(drawn?.nodes.map(node => node.id)).toEqual(["a", "gone"]);
+    expect(read?.nodes.map(node => node.id)).toEqual(["a"]);
+  });
+
+  it("is the stage the renderer walks", () => {
+    const document = mixedDocument();
+    const stages = prepareDocumentReadStages(document, { resolver });
+
+    expect(prepareDocumentAsDrawn(document, { resolver })).toEqual(
+      stages?.bound
+    );
+  });
+
+  it("answers null for an unreadable envelope, as the stages do", () => {
+    // An envelope this build does not speak, which the type rightly refuses.
+    const unreadable = {
+      ...untouchedDocument(),
+      formatVersion: -1,
+    } as unknown as BlockDocument;
+
+    expect(prepareDocumentAsDrawn(unreadable, { resolver })).toBeNull();
   });
 });

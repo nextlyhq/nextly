@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { withValueAtPath } from "./snapshot-merge";
+import { valueAtPath, withValueAtPath } from "./snapshot-merge";
 
 const DOC = { nodes: [] };
 
@@ -74,5 +74,20 @@ describe("withValueAtPath", () => {
       true
     );
     expect(result).toEqual({ sections: [{ layout: DOC }] });
+  });
+});
+
+describe("valueAtPath", () => {
+  it("reads the value withValueAtPath writes, top-level, nested and indexed", () => {
+    for (const path of ["content", "layout.content", "rows.1.content"]) {
+      const written = withValueAtPath({}, path, { nodes: [] });
+      expect(valueAtPath(written, path)).toEqual({ nodes: [] });
+    }
+  });
+
+  it("answers undefined for a path that is not there, and reads no inherited key", () => {
+    expect(valueAtPath({ a: {} }, "a.b.c")).toBeUndefined();
+    expect(valueAtPath(undefined, "content")).toBeUndefined();
+    expect(valueAtPath({}, "constructor")).toBeUndefined();
   });
 });

@@ -22,6 +22,8 @@ const TIMING =
   "known, timing-dependent: a schema probe on another connection, made only when the first check of the run happens inside a transaction; unwitnessed, since a run where it does not happen would report it fixed";
 const REGISTRY =
   "known, timing-dependent: the collection and Single registry cache is filled on another connection inside whichever write first needs it, which test order decides, so it is listed for any opener; the fix fills the cache before the transaction opens, or inside it";
+const LEDGER =
+  "known: a write's cache tag expiry, recorded through the ledger after the write itself committed on another connection (the createEntry checkout above, a CALLER escape). Recorded inside the caller's transaction, a rollback would drop the expiry and keep the content; these go when createEntry joins the caller's transaction";
 const PLUGIN =
   "known: a statement in a plugin's transaction runs on another connection";
 
@@ -116,58 +118,9 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_meta",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_meta",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
     witness:
       "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_meta",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_meta",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
   },
   {
@@ -179,56 +132,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry \u00b7 checkout",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete email_providers",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_meta",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_meta",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
     witness:
       "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
     reason: CALLER,
@@ -249,20 +153,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/limits/__tests__/database-limit-store.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_limit_store",
     witness:
       "packages/nextly/src/domains/limits/__tests__/database-limit-store.integration.test.ts",
@@ -273,13 +163,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent \u00b7 select tables",
     witness: null,
     reason: TIMING,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: PIPELINE,
   },
   {
     dialect: "mysql",
@@ -322,58 +205,9 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_meta",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_meta",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
     key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
     witness:
       "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_meta",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_meta",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
   },
   {
@@ -385,56 +219,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry \u00b7 checkout",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
     key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete email_providers",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_meta",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 insert nextly_meta",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
     witness:
       "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
     reason: CALLER,
@@ -455,20 +240,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
-    witness:
-      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
     key: "packages/nextly/src/domains/limits/__tests__/database-limit-store.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_limit_store",
     witness:
       "packages/nextly/src/domains/limits/__tests__/database-limit-store.integration.test.ts",
@@ -479,13 +250,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent \u00b7 select tables",
     witness: null,
     reason: TIMING,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: PIPELINE,
   },
   {
     dialect: "postgresql",

@@ -267,8 +267,18 @@ export function defineJob<TInput extends JobInput = JobInput>(
  */
 export class JobRegistry {
   private readonly definitions = new Map<string, JobDefinition<never>>();
+  /** The plugin that declared each job, by slug; none for core's or the app's. */
+  private readonly plugins = new Map<string, string>();
 
-  register<TInput extends JobInput>(definition: JobDefinition<TInput>): void {
+  /**
+   * Register a job type, and the plugin that declared it when one did, so
+   * what a plugin may run as its own is the registry's answer, not a second
+   * reading of its manifest.
+   */
+  register<TInput extends JobInput>(
+    definition: JobDefinition<TInput>,
+    declaredBy?: { readonly plugin: string | undefined }
+  ): void {
     // Keyed by the NORMALISED slug. `JobDefinition` is structural, so a
     // definition can arrive without having passed through `defineJob`; keying it
     // verbatim would admit `" acme:export "` under a key no enqueue — which
@@ -289,10 +299,22 @@ export class JobRegistry {
     // under that type is what lets one registry hold job types with unrelated
     // input shapes while the runner still calls them uniformly.
     this.definitions.set(definition.slug, definition);
+    if (declaredBy?.plugin !== undefined) {
+      this.plugins.set(definition.slug, declaredBy.plugin);
+    }
   }
 
   get(slug: string): JobDefinition<never> | undefined {
     return this.definitions.get(slug);
+  }
+
+  /**
+   * The plugin that declared a registered job, or `undefined` for one core
+   * or the app declared, and for a slug nothing registered. Asked by the
+   * slug as the registry keys it.
+   */
+  pluginOf(slug: string): string | undefined {
+    return this.plugins.get(normalizeJobSlug(slug));
   }
 
   /**
@@ -320,4 +342,30 @@ export class JobRegistry {
       .filter(definition => definition.sweep)
       .sort((a, b) => a.slug.localeCompare(b.slug));
   }
+
+  /**
+   * Hand over what enqueues the plugins' schedules, once per window, and
+   * prunes their old windows. Given by the registration that holds the
+   * database; a registry built without one has no schedules to run.
+   */
+  useSchedules(schedules: JobSchedules): void {
+    this.scheduled = schedules;
+  }
+
+  /** What enqueues the plugins' schedules, when the installation has any. */
+  schedules(): JobSchedules | undefined {
+    return this.scheduled;
+  }
+
+  private scheduled: JobSchedules | undefined;
+}
+
+/**
+ * The plugins' schedules, as a jobs pass asks them: enqueue each schedule's
+ * latest window that has opened, once, and prune windows past keeping.
+ */
+export interface JobSchedules {
+  /** Sweep at `now`, stopping once the wall clock reaches `deadline` (epoch ms). */
+  sweep(now: Date, deadline?: number): Promise<void>;
+  prune(before: Date, limit: number): Promise<number>;
 }

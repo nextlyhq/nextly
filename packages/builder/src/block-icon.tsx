@@ -18,6 +18,8 @@ import {
   ChevronsUpDown,
   Code,
   Columns3,
+  Component,
+  FileText,
   Frame,
   Grid3x3,
   Heading,
@@ -89,6 +91,7 @@ const ICONS: Record<string, LucideIcon> = {
   // Content
   heading: Heading,
   text: Type,
+  "rich-text": FileText,
   list: List,
   quote: Quote,
   code: Code,
@@ -111,6 +114,7 @@ const ICONS: Record<string, LucideIcon> = {
   user: User,
   cart: ShoppingCart,
   star: Star,
+  component: Component,
 };
 
 /**

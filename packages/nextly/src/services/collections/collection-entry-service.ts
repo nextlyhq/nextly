@@ -24,6 +24,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 
 import {
   everyLanguageOf,
+  queryWriteLanguagesFor,
   readLanguagesFor,
   withRuleLanguage,
   writeAsNamedLanguagesFor,
@@ -62,6 +63,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -70,7 +72,7 @@ import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
 import type { WhereFilter } from "./query-operators";
-import type { TrustBound } from "./trust-grant";
+import type { HookExemptRead, TrustBound } from "./trust-grant";
 
 export {
   type CollectionServiceResult,
@@ -140,6 +142,12 @@ type EveryLanguageLifecycleParams = {
   routeAuthorized?: boolean;
   /** API-key scope; gates the unconditional publish or unpublish check. */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   */
+  data?: Readonly<Record<string, unknown>>;
 };
 
 /**
@@ -236,7 +244,11 @@ export class CollectionEntryService extends BaseService {
       this.hookService,
       fieldGroupDataService,
       localizationSource,
-      releaseVisibility
+      releaseVisibility,
+      // The write's own judgement, asked when the read shows a pending change
+      // to a caller who may publish and not update. Read when a read asks it,
+      // after the mutation service below exists.
+      args => this.mutationService.workingDraftPromotionRefused(args)
     );
     this.mutationService = new CollectionMutationService(
       adapter,
@@ -276,38 +288,44 @@ export class CollectionEntryService extends BaseService {
     );
   }
 
-  async listEntries(params: {
-    collectionName: string;
-    user?: UserContext;
-    search?: string;
-    page?: number;
-    limit?: number;
-    depth?: number;
-    select?: Record<string, boolean>;
-    where?: WhereFilter;
-    richTextFormat?: RichTextOutputFormat;
-    sort?: string;
-    /** Draft/Published lifecycle scope; forwarded to the query service. */
-    status?: "published" | "draft" | "all";
-    overrideAccess?: boolean;
-    /**
-     * Which collections a trusted read may reach as relationships are expanded.
-     * Absent means every populated target inherits the caller's trust. Only ever
-     * narrows, and never admits a target's drafts.
-     */
-    trusted?: TrustBound;
-    /** Requested content locale (i18n M4) — forwarded to the query service. */
-    locale?: string;
-    /** Fallback control (`false`/`"none"` disables fallback). */
-    fallbackLocale?: string | false;
-    context?: Record<string, unknown>;
-    /** The HTTP request behind this operation, when one produced it. */
-    request?: Request;
-    /** Route authorization already ran the coarse RBAC gate, so it is skipped. */
-    routeAuthorized?: boolean;
-    /** Caller's authenticated scope; a scoped key is judged on its read grant. */
-    authenticatedScope?: AuthenticatedScope;
-  }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
+  async listEntries(
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      search?: string;
+      page?: number;
+      limit?: number;
+      depth?: number;
+      select?: Record<string, boolean>;
+      where?: WhereFilter;
+      richTextFormat?: RichTextOutputFormat;
+      /** Draft/Published lifecycle scope; forwarded to the query service. */
+      status?: "published" | "draft" | "all";
+      overrideAccess?: boolean;
+      /**
+       * Which collections a trusted read may reach as relationships are expanded.
+       * Absent means every populated target inherits the caller's trust. Only ever
+       * narrows, and never admits a target's drafts.
+       */
+      trusted?: TrustBound;
+      /** Requested content locale (i18n M4) — forwarded to the query service. */
+      locale?: string;
+      /** Fallback control (`false`/`"none"` disables fallback). */
+      fallbackLocale?: string | false;
+      context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
+      /** Route authorization already ran the coarse RBAC gate, so it is skipped. */
+      routeAuthorized?: boolean;
+      /** Caller's authenticated scope; a scoped key is judged on its read grant. */
+      authenticatedScope?: AuthenticatedScope;
+      /** A grant waiving the collection's read hooks, honoured by the query service. */
+      hookExemptRead?: HookExemptRead;
+    } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
+      Parameters<CollectionQueryService["listEntries"]>[0],
+      "sort" | "offset" | "unknownSort" | "hiddenFields"
+    >
+  ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
@@ -347,6 +365,10 @@ export class CollectionEntryService extends BaseService {
      * one thing nobody re-checks is an option that appears not to exist.
      */
     status?: "published" | "draft" | "all";
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
+    /** Fields the read leaves out, refused in its filter; see the query service. */
+    hiddenFields?: HiddenFieldPaths;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??
@@ -443,6 +465,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** A grant waiving the collection's read hooks, honoured by the query service. */
+    hookExemptRead?: HookExemptRead;
   }) {
     return withRuleLanguage(this.readLanguages(params), () =>
       this.queryService.getEntry(params)
@@ -704,6 +728,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** API-key scope; judges the update gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
@@ -723,6 +749,21 @@ export class CollectionEntryService extends BaseService {
   }): Promise<Map<string, ValidationIssue[]>> {
     return withRuleLanguage(everyLanguageOf(this.localization), () =>
       this.mutationService.releasePublishIssues(params)
+    );
+  }
+
+  /**
+   * Which of these entries a write of the action by this caller would find
+   * inside its rule's filter, judged as a write to every language is. See the
+   * mutation service.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(
+    params: Parameters<CollectionMutationService["entriesWithinWriteFilter"]>[0]
+  ): ReturnType<CollectionMutationService["entriesWithinWriteFilter"]> {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.entriesWithinWriteFilter(params)
     );
   }
 
@@ -842,6 +883,17 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it. Asked in every language, as the publish is,
+   * and writing nothing, so it owes none of a write's side effects.
+   */
+  previewPublishAllLocales(params: EveryLanguageLifecycleParams) {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.previewPublishAllLocales(params)
+    );
+  }
+
+  /**
    * Take every language of an entry down at once.
    *
    * The counterpart publishing has had since i18n M7 and withdrawing never did.
@@ -904,6 +956,14 @@ export class CollectionEntryService extends BaseService {
    */
   async warmLocalizedReadiness(collectionName: string): Promise<void> {
     return this.mutationService.warmLocalizedReadiness(collectionName);
+  }
+
+  /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * for `nextly media reindex-usage`. Returns how many entries it read.
+   */
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    return this.mutationService.rebuildMediaUsage(collectionName);
   }
 
   /**
@@ -1099,6 +1159,11 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
     /** API-key scope; judges each per-id transition on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Each id's own version, judged per document; see the bulk service's
+     * `bulkUpdateEntries`.
+     */
+    revs?: unknown;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, undefined),
@@ -1136,17 +1201,20 @@ export class CollectionEntryService extends BaseService {
       actor?: RequestActor;
       /** API-key scope; judges the collection gate + transitions on the key's own grant. */
       authenticatedScope?: AuthenticatedScope;
+      /** Refused: an update by query names no ids to give versions for. */
+      revs?: unknown;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
     // Thrown, as the bulk service throws any request-level refusal: there are
     // no items yet to report a partial failure on.
     assertWellFormedFilter(params.where, { allowTranslated: true });
-    // It writes the default language, but its filter may choose the rows by
-    // any language's translation state, so it is told every language: the
-    // REST gate, which cannot see the filter in the body, tells the same.
+    // It writes the default language, so its rule judges that one, while
+    // its filter may choose the rows by any language's translation state, so
+    // it is told every language as well: the REST gate, which cannot see the
+    // filter in the body, tells the same.
     const result = await withRuleLanguage(
-      everyLanguageOf(this.localization),
+      queryWriteLanguagesFor(this.localization),
       () => this.bulkService.bulkUpdateByQuery(params, options)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);

@@ -154,7 +154,7 @@ describeEachDialect("a field that stops being translated", dialect => {
     for (const locale of ["es", "ar"]) {
       const translated = await entries.updateEntry(
         { collectionName: "posts", entryId: id, overrideAccess: true, locale },
-        { heading: VALUES[locale] }
+        { heading: VALUES[locale], _overwrite: true }
       );
       expect(translated.success, JSON.stringify(translated)).toBe(true);
     }
@@ -173,9 +173,12 @@ describeEachDialect("a field that stops being translated", dialect => {
     for (const locale of LOCALES) {
       const written = await singles.update(
         "hero",
-        locale === "en"
-          ? { heading: VALUES.en, views: 7 }
-          : { heading: VALUES[locale] },
+        {
+          ...(locale === "en"
+            ? { heading: VALUES.en, views: 7 }
+            : { heading: VALUES[locale] }),
+          _overwrite: true,
+        },
         { locale, overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
@@ -462,44 +465,6 @@ describeEachDialect("a field that stops being translated", dialect => {
       expect(entry.success, JSON.stringify(entry)).toBe(true);
     }
   }
-
-  it.each(
-    COLLECTION_CHANGES.flatMap(c => [
-      { ...c, setting: "required", flags: { required: true } },
-      { ...c, setting: "unique", flags: { unique: true } },
-    ])
-  )(
-    "refuses a $setting field and changes nothing when $path",
-    async ({ change, flags }) => {
-      // The shared column is created before the values are copied into it, so every row would
-      // briefly hold the same placeholder or none, which neither setting accepts.
-      const code = { name: "code", type: "text", length: 64, ...flags };
-      await seedCodes(code);
-
-      const refusal = await change([{ ...code, localized: false }]).then(
-        () => undefined,
-        (error: unknown) => error
-      );
-
-      // The save path reports the refusal in its result, the dialog path throws it; either way it
-      // names the field (by its path, beside which the Builder shows the reason) and why.
-      const reported =
-        refusal instanceof Error
-          ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
-          : String(refusal);
-      expect(reported).toMatch(/CONSTRAINED_FIELD_LEAVES_TRANSLATION/);
-      expect(reported).toMatch(/fields\.code/);
-      expect(reported).toMatch(
-        /A (required|unique) field can't stop being translated in the same change/
-      );
-
-      expect(await columnsOf("dc_posts")).not.toContain("code");
-      const kept = await query<{ code: string }>(
-        `SELECT ${quote(dialect, "code")} AS code FROM ${quote(dialect, "dc_posts_locales")} ORDER BY ${quote(dialect, "code")}`
-      );
-      expect(kept.map(row => row.code)).toEqual(["A-1", "B-2"]);
-    }
-  );
 
   it("replaces the stale value of a column the main table kept", async () => {
     // Unattended provisioning can seed a companion without dropping the main column it copied

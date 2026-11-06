@@ -4,12 +4,16 @@ import { registryNestingSource } from "@nextlyhq/blocks-engine";
 import { registrySlotSource } from "@nextlyhq/builder";
 import {
   Canvas,
+  CanvasFrame,
+  CanvasFrameProvider,
+  CanvasMarks,
   DropIndicator,
+  DropRefusal,
   SpacingOverlay,
   useCanvasDrag,
   useEditorState,
 } from "@nextlyhq/builder/shell";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // The design system's sheet FIRST, then the editor's, which supplements it —
 // the same order and the same reason as the shell harness: the editor's sheet
@@ -23,6 +27,9 @@ import { useCoreBlocks } from "@/lib/use-core-blocks";
 import { canvasHarnessDocument } from "./seed";
 
 const HARNESS_SOURCE = "e2e-canvas-harness";
+
+/** The frame drawn at its own size, never fitted. */
+const ACTUAL_SIZE = { kind: "fixed", scale: 1 } as const;
 
 /**
  * The canvas, mounted for real, so a browser can drive it.
@@ -47,6 +54,16 @@ const HARNESS_SOURCE = "e2e-canvas-harness";
  * test. A harness that positioned its own indicator would certify itself.
  */
 export function BuilderCanvasHarness() {
+  // The frame provided ABOVE the drag, as the editor provides it: the drag
+  // listens and scrolls in the document the frame registers here.
+  return (
+    <CanvasFrameProvider>
+      <HarnessBody />
+    </CanvasFrameProvider>
+  );
+}
+
+function HarnessBody() {
   useCoreBlocks(HARNESS_SOURCE);
 
   const initialDocument = useMemo(() => canvasHarnessDocument(), []);
@@ -73,16 +90,32 @@ export function BuilderCanvasHarness() {
     []
   );
 
+  /*
+   * The frame is laid out at the window's own size and drawn at 100%, so the
+   * page fills the viewport, a pointer test can reach every edge of it, and a
+   * block's position on screen is its position in the frame. The frame's
+   * viewport scrolls the page, which is what autoscroll is tested against.
+   */
+  const host = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState<{ width: number; height: number } | null>(
+    null
+  );
+  useEffect(() => {
+    const element = host.current;
+    if (element === null) return;
+    const read = (): void =>
+      setSize({ width: element.clientWidth, height: element.clientHeight });
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div
+      ref={host}
       data-testid="canvas-harness"
-      /*
-       * A fixed, non-viewport height with its own scroll, because autoscroll is
-       * one of the properties under test and it engages on the canvas's
-       * scrollable box. A canvas sized to the window would make the test depend
-       * on the browser's own scrolling instead.
-       */
-      style={{ height: "100vh", overflow: "auto" }}
+      style={{ height: "100vh", overflow: "hidden" }}
       /*
        * Reported rather than asserted here: the drag's live state, so a test can
        * read what the ENGINE decided instead of inferring it from pixels. A
@@ -101,33 +134,49 @@ export function BuilderCanvasHarness() {
        */
       data-nx-undo-depth={editor.undoDepth}
     >
-      <Canvas
-        document={editor.document}
-        siteStyles={siteStyles}
-        // Mirrors what `BlocksField` passes. The per-node style tier compiles
-        // only when the renderer is given a style context, and without it the
-        // canvas draws every block flush and unstyled while the published page
-        // draws the author's real spacing — so a harness omitting it would
-        // certify a canvas nobody ships.
-        render={{
-          styleContext: { breakpoints: { viewport: [], container: [] } },
-        }}
-        selectedId={editor.selectedId}
-        selectedIds={editor.selection.ids}
-        onSelect={editor.select}
-        dragHandlers={drag.handlers}
-        /*
-         * Both overlays, because the spacing bands are only measurable where the
-         * canvas is laid out for real. jsdom reports every element as zero-sized,
-         * so the geometry this draws has no other place it can be certified.
-         */
-        overlay={
-          <>
-            <DropIndicator target={drag.target} />
-            <SpacingOverlay editor={editor} hidden={drag.draggingId !== null} />
-          </>
-        }
-      />
+      {size === null ? null : (
+        <CanvasFrame
+          width={size.width}
+          height={size.height}
+          zoom={ACTUAL_SIZE}
+          title="Canvas harness"
+          /*
+           * The chrome, drawn over the frame as the editor draws it. The
+           * spacing bands are measurable only where the canvas is laid out for
+           * real: jsdom reports every element as zero-sized, so the geometry
+           * this draws has no other place it can be certified.
+           */
+          overlay={
+            <>
+              <CanvasMarks />
+              <DropIndicator target={drag.target} />
+              <DropRefusal drag={drag} document={editor.document} />
+              <SpacingOverlay
+                editor={editor}
+                hidden={drag.draggingId !== null}
+              />
+            </>
+          }
+        >
+          <Canvas
+            document={editor.document}
+            siteStyles={siteStyles}
+            // Mirrors what `BlocksField` passes. The per-node style tier
+            // compiles only when the renderer is given a style context, and
+            // without it the canvas draws every block flush and unstyled while
+            // the published page draws the author's real spacing — so a
+            // harness omitting it would certify a canvas nobody ships.
+            render={{
+              styleContext: { breakpoints: { viewport: [], container: [] } },
+            }}
+            selectedId={editor.selectedId}
+            selectedIds={editor.selection.ids}
+            onSelect={editor.select}
+            dragHandlers={drag.handlers}
+            drag={drag}
+          />
+        </CanvasFrame>
+      )}
     </div>
   );
 }

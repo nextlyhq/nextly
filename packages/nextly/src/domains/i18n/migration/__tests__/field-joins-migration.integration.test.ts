@@ -23,15 +23,15 @@ import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  parseSqlSections,
-  runFileMigrations,
-} from "../../../../cli/commands/migrate";
+import { runFileMigrations } from "../../../../cli/commands/migrate";
+import { parseSqlSections } from "../../../schema/migrate/sql-sections";
 import {
   downDatabaseDeps,
   migrateDownCore,
 } from "../../../../cli/commands/migrate-down";
 import { createLogger } from "../../../../cli/utils/logger";
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { reconcileCore } from "../../../schema/migrate/core-reconcile";
 import { marksNoTransaction } from "../../../schema/migrate/split-sql";
 import {
@@ -125,6 +125,10 @@ for (const entry of DIALECTS) {
             : await createScratchDatabase(dialect, "field_joins");
         adapter = entry.make(scratch?.url ?? entry.url ?? "");
         await adapter.connect();
+        await loadDialectTables(dialect);
+        // The static resolver every production adapter carries: the lock seeds its row through a
+        // transaction insert, which an adapter refuses for a table its resolver does not hold.
+        installRegistryResolver(adapter as unknown as DrizzleAdapter);
         // What `nextly migrate` creates first: the ledger, the owner registry and the archive.
         await reconcileCore({
           db: adapter.getDrizzle(),

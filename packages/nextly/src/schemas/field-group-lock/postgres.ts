@@ -18,10 +18,34 @@
  * @module schemas/field-group-lock/postgres
  */
 
+// Every dialect's file declares its tables under the same names, by design: one is chosen by
+// dialect at runtime.
+// fallow-ignore-file duplicate-export
 import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 export const nextlyFieldGroupLock = pgTable("nextly_field_group_lock", {
   id: integer("id").primaryKey(),
   owner: text("owner"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+});
+
+/**
+ * `nextly_schema_lock` — the one schema lock, PostgreSQL.
+ *
+ * One row. Every path that changes the schema, the migration ledger or the registry holds it for
+ * the whole of its work (`domains/schema/pipeline/schema-lock.ts`), and the field-group lock above
+ * and `nextly_migrate_lock` are held beside it only so that a process of an earlier Nextly version,
+ * which knows only those, is still excluded.
+ *
+ * `command` and `acquired_at` exist for the refusal a waiting run prints: it names what holds the
+ * lock and since when, so an operator can tell a long migration from a stuck one. Declared beside
+ * the field-group lock because it is bootstrapped the same way, from these declarations, by the
+ * first run that contends for it.
+ */
+export const nextlySchemaLock = pgTable("nextly_schema_lock", {
+  id: integer("id").primaryKey(),
+  owner: text("owner"),
+  command: text("command"),
+  acquiredAt: timestamp("acquired_at", { withTimezone: true }),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
 });

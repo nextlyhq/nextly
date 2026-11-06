@@ -1332,6 +1332,18 @@ describe("a timeseries' range", () => {
     ).toThrow(reason);
   });
 
+  it("carries no limit on a ranged query, so what it returns validates again unchanged", () => {
+    // 🔴 A limit added by default would be refused the next time the query is checked.
+    const once = validateWidgetQuery({
+      source: "collection:dated",
+      op: "timeseries",
+      dateField: "createdAt",
+      range: "30d",
+    });
+    expect(once).not.toHaveProperty("limit");
+    expect(validateWidgetQuery(once)).toEqual(once);
+  });
+
   it("refuses a range on any op but a timeseries", () => {
     expect(() =>
       validateWidgetQuery({

@@ -41,6 +41,7 @@ import { CANVAS_ROOT_CLASS } from "./canvas";
 import { useEditorState, type EditorState } from "./editor-state";
 import type { SpacingBand } from "./spacing-bands";
 import {
+  placeHandles,
   SpacingHandles,
   type SpacingScrubContext,
   type SpacingSubject,
@@ -1131,7 +1132,8 @@ describe("where the handle sits on its band", () => {
     return { top: style.top, height: style.height };
   }
 
-  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  // Wider than a handle, so which edge it sits on is still a question.
+  const rect = { x: 0, y: 100, width: 50, height: 40 };
 
   it("puts a positive top margin's handle on the outer edge", () => {
     // The band spans 100..120 and grows upward, so its moving edge is y=100.
@@ -1142,8 +1144,11 @@ describe("where the handle sits on its band", () => {
       label: "20",
       negative: false,
     });
-    expect(height).toBe("9px");
-    expect(top).toBe("95.5px");
+    // A 24px hit area, the minimum target WCAG 2.2 asks of a pointer
+    // control, inside the band from the moving edge: above y=100 is the block
+    // before this one, and a press there has to select it.
+    expect(height).toBe("24px");
+    expect(top).toBe("100px");
   });
 
   /*
@@ -1160,7 +1165,7 @@ describe("where the handle sits on its band", () => {
       label: "-20",
       negative: true,
     });
-    expect(top).toBe("115.5px");
+    expect(top).toBe("116px");
   });
 
   it("puts a padding's handle on its inward edge", () => {
@@ -1171,7 +1176,8 @@ describe("where the handle sits on its band", () => {
       label: "20",
       negative: false,
     });
-    expect(top).toBe("115.5px");
+    // Inside the band, clear of the block's children below y=140: 140 - 24.
+    expect(top).toBe("116px");
   });
 });
 
@@ -1220,7 +1226,8 @@ describe("a gesture that outlives its own band", () => {
      * assistive technology for the rest of the gesture.
      */
     expect(kept?.getAttribute("aria-valuenow")).toBe("0");
-    // The band spans y=0..10 and grows downward, so collapsed it sits at y=0.
+    // The band spans y=0..10 and grows downward, so collapsed it sits at y=0,
+    // where the handle keeps its least size, centred: 0 - 9 / 2.
     expect(kept?.style.top).toBe("-4.5px");
 
     // And the gesture still finishes.
@@ -1350,6 +1357,73 @@ describe("two handles that would land on the same pixels", () => {
     expect(marginTop).not.toBe(paddingTop);
   });
 
+  it("splits two bands of different depths that start at one edge", () => {
+    // A borderless block with `margin-top: -16px` and `padding-top: 20px`:
+    // both bands start at the border edge, one deeper than the other. Each
+    // handle filling its own band would leave the padding's, drawn later,
+    // over the whole of the margin's.
+    mount([
+      {
+        box: "margin",
+        side: "top",
+        rect: { x: 0, y: 100, width: 50, height: 16 },
+        label: "-16",
+        negative: true,
+      },
+      {
+        box: "padding",
+        side: "top",
+        rect: { x: 0, y: 100, width: 50, height: 20 },
+        label: "20",
+        negative: false,
+      },
+    ]);
+    const span = (name: string) => {
+      const { top, height } = handle(name).style;
+      return {
+        from: parseFloat(top),
+        to: parseFloat(top) + parseFloat(height),
+      };
+    };
+    const margin = span("top margin");
+    const padding = span("top padding");
+    expect(margin.to <= padding.from || padding.to <= margin.from).toBe(true);
+  });
+
+  it("splits two handles that overlap only at the canvas's zoom", () => {
+    // Two 12px bands side by side clear each other at 100%. At 50% the least
+    // size is 18 of the bands' pixels, centred on each, and the two overlap:
+    // the overlap has to be found at the scale they are drawn at.
+    const bands: SpacingBand[] = [
+      {
+        box: "margin",
+        side: "top",
+        rect: { x: 0, y: 88, width: 50, height: 12 },
+        label: "12",
+        negative: false,
+      },
+      {
+        box: "padding",
+        side: "top",
+        rect: { x: 0, y: 100, width: 50, height: 12 },
+        label: "12",
+        negative: false,
+      },
+    ];
+    const [margin, padding] = placeHandles(
+      bands,
+      band => band.box === "margin",
+      0.5
+    );
+    if (margin === undefined || padding === undefined) {
+      throw new Error("a handle was not placed");
+    }
+    expect(
+      margin.y + margin.height <= padding.y ||
+        padding.y + padding.height <= margin.y
+    ).toBe(true);
+  });
+
   it("leaves handles that do not coincide where they were", () => {
     mount([
       {
@@ -1367,8 +1441,8 @@ describe("two handles that would land on the same pixels", () => {
         negative: false,
       },
     ]);
-    // The margin's own outer edge, untouched: 80 - 4.5.
-    expect(handle("top margin").style.top).toBe("75.5px");
+    // The margin's own band, whole, as a band thinner than a handle gives.
+    expect(handle("top margin").style.top).toBe("80px");
   });
 });
 
@@ -1685,7 +1759,8 @@ describe("a handle the keyboard is holding", () => {
 });
 
 describe("a padding handle on a block that grows outward", () => {
-  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  // Wider than a handle, so which edge it sits on is still a question.
+  const rect = { x: 0, y: 100, width: 50, height: 40 };
   const bottomPadding: SpacingBand = {
     box: "padding",
     side: "bottom",
@@ -1710,12 +1785,12 @@ describe("a padding handle on a block that grows outward", () => {
         },
       })
     );
-    expect(handle("bottom padding").style.top).toBe("115.5px");
+    expect(handle("bottom padding").style.top).toBe("116px");
   });
 
   it("sits on the inner edge when the content edge is the one that moves", () => {
     mount([bottomPadding], subjectWith());
-    expect(handle("bottom padding").style.top).toBe("95.5px");
+    expect(handle("bottom padding").style.top).toBe("100px");
   });
 
   /*
@@ -1761,7 +1836,8 @@ describe("a negative margin, whose band is drawn mirrored", () => {
    * edge the layout moves. So the probe reads `false` here exactly as it does
    * there.
    */
-  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  // Wider than a handle, so which edge it sits on is still a question.
+  const rect = { x: 0, y: 100, width: 50, height: 40 };
   const negativeTop: SpacingBand = {
     box: "margin",
     side: "top",
@@ -1785,7 +1861,7 @@ describe("a negative margin, whose band is drawn mirrored", () => {
    */
   it("puts the handle on the mirrored rectangle's moving edge", () => {
     mount([negativeTop], borderEdgeResponds());
-    expect(handle("top margin").style.top).toBe("95.5px");
+    expect(handle("top margin").style.top).toBe("100px");
   });
 
   /*
@@ -1819,6 +1895,22 @@ describe("what the block's author allows", () => {
     expect(
       screen.queryByRole("spinbutton", { name: "left padding" })
     ).toBeNull();
+  });
+
+  it("gives a handle its whole band when the box beside it has no handle", () => {
+    // A margin-only block's page still renders a padding band over the same
+    // edge. With no padding handle there is nothing to share with, so the
+    // margin keeps its 24px on its moving edge.
+    const rect = { x: 0, y: 100, width: 50, height: 40 };
+    mount(
+      [
+        { box: "margin", side: "top", rect, label: "-40", negative: true },
+        { box: "padding", side: "top", rect, label: "40", negative: false },
+      ],
+      subjectWith(),
+      documentWith(undefined, "acme/margin-only")
+    );
+    expect(handle("top margin").style.height).toBe("24px");
   });
 
   it("withholds every handle for a block declaring no spacing", () => {
@@ -1936,7 +2028,8 @@ describe("a drag keeps the direction it began with", () => {
    * settled width answers the opposite way. Read fresh mid-stroke, the pointer
    * goes one way and the number the other.
    */
-  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  // Wider than a handle, so which edge it sits on is still a question.
+  const rect = { x: 0, y: 100, width: 50, height: 40 };
   const topMargin: SpacingBand = {
     box: "margin",
     side: "top",
@@ -1988,7 +2081,7 @@ describe("a drag keeps the direction it began with", () => {
      * one end of its own band to the other under the hand, while the arithmetic
      * — frozen at the press — went on counting the other way.
      */
-    expect(handle("top margin").style.top).toBe("95.5px");
+    expect(handle("top margin").style.top).toBe("100px");
     act(() => {
       fireEvent.pointerMove(control, {
         pointerId: 1,
@@ -2017,7 +2110,8 @@ describe("a drag that carries a margin through zero", () => {
    * where the handle is placed. Freezing the mirrored answer instead leaves the
    * handle on the edge the old sign chose, where it stops following the pointer.
    */
-  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  // Wider than a handle, so which edge it sits on is still a question.
+  const rect = { x: 0, y: 100, width: 50, height: 40 };
   const positive: SpacingBand = {
     box: "margin",
     side: "bottom",
@@ -2041,7 +2135,7 @@ describe("a drag that carries a margin through zero", () => {
     const control = handle("bottom margin");
     // The band spans 100..120; a positive one thickening away from the block
     // carries its handle on the far edge.
-    expect(control.style.top).toBe("115.5px");
+    expect(control.style.top).toBe("116px");
 
     act(() => {
       fireEvent.pointerDown(control, {
@@ -2071,7 +2165,7 @@ describe("a drag that carries a margin through zero", () => {
      * handle on the other end of the rectangle. Keeping the answer mirrored at
      * the press would leave it at 115.5 while the pointer went on.
      */
-    expect(handle("bottom margin").style.top).toBe("95.5px");
+    expect(handle("bottom margin").style.top).toBe("100px");
 
     act(() => {
       fireEvent.pointerUp(control, { pointerId: 1, clientX: 0, clientY: 10 });

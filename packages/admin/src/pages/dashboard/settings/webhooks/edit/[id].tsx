@@ -17,8 +17,13 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useUpdateWebhook, useWebhook } from "@admin/hooks/queries/useWebhooks";
+import {
+  useUpdateWebhook,
+  useWebhook,
+  useWebhookEventTypes,
+} from "@admin/hooks/queries/useWebhooks";
 import { useCan } from "@admin/hooks/useCan";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useWebhookDeletion } from "@admin/hooks/useWebhookDeletion";
 import { useWebhookSecretActions } from "@admin/hooks/useWebhookSecretActions";
@@ -43,7 +48,10 @@ const WEBHOOK_PAGE = {
 } as const;
 const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const { data: webhook, isLoading, isError, error } = useWebhook(id);
+  // The tab names the webhook being edited once it has arrived.
+  useDocumentTitle(webhook?.name);
   const { mutate: doUpdate, isPending } = useUpdateWebhook();
+  const eventTypes = useWebhookEventTypes();
   const secretActions = useWebhookSecretActions(id);
   // `null` while the document is loading — the hook refuses to delete on it.
   const deletion = useWebhookDeletion(id, webhook?.name ?? null);
@@ -122,6 +130,8 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
         configuration={
           <WebhookForm
             defaultValues={toFormValues(webhook)}
+            eventTypes={eventTypes.data}
+            eventTypesFailed={eventTypes.isError}
             existingHeaderNames={
               webhook.headers ? Object.keys(webhook.headers) : []
             }

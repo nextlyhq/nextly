@@ -18,7 +18,10 @@ import {
   fieldGroup,
   text,
 } from "../../config";
+import { CollectionMutationService } from "../../domains/collections/services/collection-mutation-service";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import { SingleMutationService } from "../../domains/singles/services/single-mutation-service";
+import { SinglePublishAllService } from "../../domains/singles/services/single-publish-all";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -34,6 +37,8 @@ import {
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  // A case spies on a service's prototype, which outlives its boot.
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -57,7 +62,12 @@ const SHARED_PENDING_BANNER = "sharedpendingbanner";
 const SHARED_NESTED = "sharednested";
 const SHARED_NESTED_BANNER = "sharednestedbanner";
 const PENDING_BANNER = "pendingbanner";
+const FRENCH_INVOLVED_ARTICLES = "frenchinvolvedarticles";
+const UNPUBLISHABLE_ARTICLES = "unpublishablearticles";
+const FRENCH_INVOLVED_BANNER = "frenchinvolvedbanner";
 const USER = { id: "user-1", isActive: true };
+/** May read and update everything here, and publish nothing. */
+const EDITOR = { id: "editor-1", isActive: true };
 
 /** Every question the publish rule was asked, in order. */
 let asked: { locale?: string; locales: string[] }[] = [];
@@ -146,6 +156,30 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           publish: changesWhatGoesLive,
+        },
+        fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: UNPUBLISHABLE_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: () => false,
+        },
+        fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: FRENCH_INVOLVED_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: frenchInvolvedRefused,
         },
         fields: [text({ name: "heading" })],
       }),
@@ -289,6 +323,17 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "headline" })],
       }),
       defineSingle({
+        slug: FRENCH_INVOLVED_BANNER,
+        localized: true,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: frenchInvolvedRefused,
+        },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
         slug: GROWING_BANNER,
         localized: true,
         status: true,
@@ -392,6 +437,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   for (const action of ["create", "update", "publish", "unpublish"]) {
     await grantTo(current, USER.id, action, targets);
   }
+  await userWhoMay(current, EDITOR.id, "read", targets);
+  await grantTo(current, EDITOR.id, "update", targets);
   return current;
 }
 
@@ -416,7 +463,7 @@ async function draftArticle(
       collection: ARTICLES,
       id,
       locale,
-      data: { heading: locale },
+      data: { heading: locale, _overwrite: true },
     });
   }
   return id;
@@ -447,6 +494,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
 
       expect(refused.success).toBe(false);
@@ -472,6 +520,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
 
       expect(allowed.success).toBe(true);
@@ -487,7 +536,7 @@ describe.each(getConfiguredTestDialects())(
           collection: ARTICLES,
           id,
           locale: "*",
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
           overrideAccess: false,
           user: USER,
         })
@@ -501,25 +550,27 @@ describe.each(getConfiguredTestDialects())(
       for (const locale of ["en", "de"]) {
         await singlesOf(t).update(
           BANNER,
-          { headline: locale },
+          { headline: locale, _overwrite: true },
           { overrideAccess: true, locale }
         );
       }
       const allowed = await singlesOf(t).publishAllLocales(BANNER, {
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(allowed.success).toBe(true);
 
       // Then a French draft: publishing every language now refuses.
       await singlesOf(t).update(
         BANNER,
-        { headline: "fr" },
+        { headline: "fr", _overwrite: true },
         { overrideAccess: true, locale: "fr" }
       );
       const refused = await singlesOf(t).publishAllLocales(BANNER, {
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
@@ -530,13 +581,13 @@ describe.each(getConfiguredTestDialects())(
       const publishEvery = () =>
         singlesOf(t).update(
           BANNER,
-          { status: "published" },
+          { status: "published", _overwrite: true },
           { overrideAccess: false, user: USER, locale: "*" }
         );
       for (const locale of ["en", "de"]) {
         await singlesOf(t).update(
           BANNER,
-          { headline: locale },
+          { headline: locale, _overwrite: true },
           { overrideAccess: true, locale }
         );
       }
@@ -544,12 +595,88 @@ describe.each(getConfiguredTestDialects())(
 
       await singlesOf(t).update(
         BANNER,
-        { headline: "fr" },
+        { headline: "fr", _overwrite: true },
         { overrideAccess: true, locale: "fr" }
       );
       const refused = await publishEvery();
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
+    });
+
+    it("judges a write to every language that publishes an entry by the languages going live, as publishing every language does", async () => {
+      const t = await boot(dialect);
+      // English and German drafts, and no French: French does not go live, so
+      // a rule refusing anything that involves French allows the publish.
+      const created = await t.nextly.create({
+        collection: FRENCH_INVOLVED_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      await t.nextly.update({
+        collection: FRENCH_INVOLVED_ARTICLES,
+        id,
+        locale: "de",
+        data: { heading: "de", _overwrite: true },
+      });
+      const publishEntry = () =>
+        t.nextly.update({
+          collection: FRENCH_INVOLVED_ARTICLES,
+          id,
+          locale: "*",
+          data: { status: "published", _overwrite: true },
+          overrideAccess: false,
+          user: USER,
+        });
+
+      await publishEntry();
+      const entry = await handlerOf(t).getEntry({
+        collectionName: FRENCH_INVOLVED_ARTICLES,
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect((entry.data as { status?: unknown } | null)?.status).toBe(
+        "published"
+      );
+
+      // The control: with a French draft, French goes live and it refuses.
+      await t.nextly.update({
+        collection: FRENCH_INVOLVED_ARTICLES,
+        id,
+        locale: "fr",
+        data: { heading: "fr", _overwrite: true },
+      });
+      await expect(publishEntry()).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it("judges a write to every language that publishes a Single by the languages going live, as publishing every language does", async () => {
+      const t = await boot(dialect);
+      // English and German drafts, and no French, as for the entry above.
+      for (const locale of ["en", "de"]) {
+        await singlesOf(t).update(
+          FRENCH_INVOLVED_BANNER,
+          { headline: locale, _overwrite: true },
+          { overrideAccess: true, locale }
+        );
+      }
+      const publishSingle = () =>
+        singlesOf(t).update(
+          FRENCH_INVOLVED_BANNER,
+          { status: "published", _overwrite: true },
+          { overrideAccess: false, user: USER, locale: "*" }
+        );
+
+      const allowed = await publishSingle();
+      expect(allowed.success, JSON.stringify(allowed)).toBe(true);
+
+      // The control: with a French draft, French goes live and it refuses.
+      await singlesOf(t).update(
+        FRENCH_INVOLVED_BANNER,
+        { headline: "fr", _overwrite: true },
+        { overrideAccess: true, locale: "fr" }
+      );
+      expect((await publishSingle()).statusCode).toBe(403);
     });
 
     it("asks the default language when a Single's main row goes live, beside its translations", async () => {
@@ -558,12 +685,13 @@ describe.each(getConfiguredTestDialects())(
       // still puts the main row, the default language's shared content, live.
       await singlesOf(t).update(
         NO_ENGLISH,
-        { headline: "de" },
+        { headline: "de", _overwrite: true },
         { overrideAccess: true, locale: "de" }
       );
       const refused = await singlesOf(t).publishAllLocales(NO_ENGLISH, {
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
@@ -574,30 +702,30 @@ describe.each(getConfiguredTestDialects())(
       // Published in every language, then a German edit held as a draft.
       await singlesOf(t).update(
         UNPUBLISHABLE,
-        { headline: "de", status: "published" },
+        { headline: "de", status: "published", _overwrite: true },
         { overrideAccess: true, locale: "de" }
       );
       await singlesOf(t).update(
         UNPUBLISHABLE,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true, locale: "*" }
       );
       await singlesOf(t).update(
         UNPUBLISHABLE,
-        { headline: "de pending" },
+        { headline: "de pending", _overwrite: true },
         { overrideAccess: true, locale: "de" }
       );
       // The control: a trusted publish of every language meets the held draft.
       const held = await singlesOf(t).update(
         UNPUBLISHABLE,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true, locale: "*" }
       );
       expect(held.statusCode).toBe(409);
 
       const refused = await singlesOf(t).update(
         UNPUBLISHABLE,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: false, user: USER, locale: "*" }
       );
       expect(refused.success).toBe(false);
@@ -631,6 +759,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
@@ -655,6 +784,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(publishedLocales().map(question => question.locale)).toContain(
         "fr"
@@ -680,6 +810,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(publishedLocales().map(question => question.locale)).toContain(
         "fr"
@@ -688,17 +819,18 @@ describe.each(getConfiguredTestDialects())(
 
       await singlesOf(t).update(
         NESTED_BANNER,
-        { headline: "en" },
+        { headline: "en", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       const single = await singlesOf(t).publishAllLocales(NESTED_BANNER, {
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(single.statusCode).toBe(403);
       const everyLanguage = await singlesOf(t).update(
         NESTED_BANNER,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: false, user: USER, locale: "*" }
       );
       expect(everyLanguage.statusCode).toBe(403);
@@ -711,18 +843,23 @@ describe.each(getConfiguredTestDialects())(
       for (const locale of ["en", "fr", "de"]) {
         await singlesOf(t).update(
           SHARED_PENDING_BANNER,
-          { headline: locale, code: "live", status: "published" },
+          {
+            headline: locale,
+            code: "live",
+            status: "published",
+            _overwrite: true,
+          },
           { overrideAccess: true, locale }
         );
       }
       await singlesOf(t).update(
         SHARED_PENDING_BANNER,
-        { code: "pending" },
+        { code: "pending", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       const single = await singlesOf(t).update(
         SHARED_PENDING_BANNER,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: false, user: USER, locale: "*" }
       );
       expect(single.statusCode).toBe(403);
@@ -753,7 +890,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale,
           },
-          data
+          { ...data, _overwrite: true }
         );
       await write("fr", { title: "fr", status: "published" });
       await write("de", { title: "de", status: "published" });
@@ -766,7 +903,7 @@ describe.each(getConfiguredTestDialects())(
           user: USER,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(entry.statusCode).toBe(403);
     });
@@ -777,17 +914,17 @@ describe.each(getConfiguredTestDialects())(
       // shared value held as a draft: promoting it changes what French shows.
       await singlesOf(t).update(
         SHARED_PENDING_BANNER,
-        { headline: "en", code: "live", status: "published" },
+        { headline: "en", code: "live", status: "published", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       await singlesOf(t).update(
         SHARED_PENDING_BANNER,
-        { code: "pending" },
+        { code: "pending", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       const refused = await singlesOf(t).publishAllLocales(
         SHARED_PENDING_BANNER,
-        { overrideAccess: false, user: USER }
+        { overrideAccess: false, user: USER, data: { _overwrite: true } }
       );
       expect(refused.statusCode).toBe(403);
     });
@@ -806,17 +943,18 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(entry.statusCode).toBe(403);
 
       await singlesOf(t).update(
         SHARED_NESTED_BANNER,
-        { headline: "shared" },
+        { headline: "shared", _overwrite: true },
         { overrideAccess: true }
       );
       const single = await singlesOf(t).publishAllLocales(
         SHARED_NESTED_BANNER,
-        { overrideAccess: false, user: USER }
+        { overrideAccess: false, user: USER, data: { _overwrite: true } }
       );
       expect(single.statusCode).toBe(403);
     });
@@ -838,7 +976,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "de pending" }
+        { title: "de pending", _overwrite: true }
       );
       const publishEvery = (trusted: boolean) =>
         handlerOf(t).updateEntry(
@@ -849,7 +987,7 @@ describe.each(getConfiguredTestDialects())(
             ...(trusted ? {} : { user: USER }),
             locale: "*",
           },
-          { status: "published" }
+          { status: "published", _overwrite: true }
         );
       // The control: a trusted publish of every language meets the held draft.
       expect((await publishEvery(true)).statusCode).toBe(409);
@@ -869,7 +1007,7 @@ describe.each(getConfiguredTestDialects())(
         collection: ARTICLES,
         id,
         locale: "fr",
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
       expect(await mainStatus(t, id)).toBe("draft");
       asked = [];
@@ -879,6 +1017,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(publishedLocales().map(question => question.locale)).toContain(
         "fr"
@@ -896,7 +1035,7 @@ describe.each(getConfiguredTestDialects())(
       for (const locale of ["en", "de"]) {
         await singlesOf(t).update(
           BANNER,
-          { headline: locale },
+          { headline: locale, _overwrite: true },
           { overrideAccess: true, locale }
         );
       }
@@ -908,6 +1047,7 @@ describe.each(getConfiguredTestDialects())(
             entryId: id,
             overrideAccess: false,
             user: USER,
+            data: { _overwrite: true },
           }),
         () =>
           handlerOf(t).updateEntry(
@@ -918,17 +1058,18 @@ describe.each(getConfiguredTestDialects())(
               user: USER,
               locale: "*",
             },
-            { status: "published" }
+            { status: "published", _overwrite: true }
           ),
         () =>
           singlesOf(t).publishAllLocales(BANNER, {
             overrideAccess: false,
             user: USER,
+            data: { _overwrite: true },
           }),
         () =>
           singlesOf(t).update(
             BANNER,
-            { status: "published" },
+            { status: "published", _overwrite: true },
             { overrideAccess: false, user: USER, locale: "*" }
           ),
       ];
@@ -959,7 +1100,7 @@ describe.each(getConfiguredTestDialects())(
           collection: GROWING_ARTICLES,
           id,
           locale: "fr",
-          data: { heading: "fr" },
+          data: { heading: "fr", _overwrite: true },
         });
       };
 
@@ -969,6 +1110,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(publishAll.success).toBe(false);
       expect(publishAll.statusCode).toBe(409);
@@ -989,7 +1131,7 @@ describe.each(getConfiguredTestDialects())(
           collection: GROWING_ARTICLES,
           id,
           locale: "de",
-          data: { heading: "de" },
+          data: { heading: "de", _overwrite: true },
         });
       };
       const everyLanguage = await handlerOf(t).updateEntry(
@@ -1000,7 +1142,7 @@ describe.each(getConfiguredTestDialects())(
           user: USER,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(everyLanguage.success).toBe(false);
       expect(everyLanguage.statusCode).toBe(409);
@@ -1029,7 +1171,7 @@ describe.each(getConfiguredTestDialects())(
           user: USER,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(everyLanguage.success).toBe(false);
       expect(everyLanguage.statusCode).toBe(404);
@@ -1039,13 +1181,13 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         GROWING_BANNER,
-        { headline: "en" },
+        { headline: "en", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       const draftIn = (locale: string) => async () => {
         await singlesOf(t).update(
           GROWING_BANNER,
-          { headline: locale },
+          { headline: locale, _overwrite: true },
           { overrideAccess: true, locale }
         );
       };
@@ -1054,6 +1196,7 @@ describe.each(getConfiguredTestDialects())(
       const publishAll = await singlesOf(t).publishAllLocales(GROWING_BANNER, {
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(publishAll.success).toBe(false);
       expect(publishAll.statusCode).toBe(409);
@@ -1061,7 +1204,7 @@ describe.each(getConfiguredTestDialects())(
       onFirstAsk = draftIn("de");
       const everyLanguage = await singlesOf(t).update(
         GROWING_BANNER,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: false, user: USER, locale: "*" }
       );
       expect(everyLanguage.success).toBe(false);
@@ -1085,18 +1228,20 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(entry.success).toBe(false);
       expect(entry.statusCode).toBe(403);
 
       await singlesOf(t).update(
         SHARED_BANNER,
-        { headline: "shared" },
+        { headline: "shared", _overwrite: true },
         { overrideAccess: true }
       );
       const single = await singlesOf(t).publishAllLocales(SHARED_BANNER, {
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(single.success).toBe(false);
       expect(single.statusCode).toBe(403);
@@ -1113,7 +1258,7 @@ describe.each(getConfiguredTestDialects())(
       const publishEvery = (trusted: boolean) =>
         singlesOf(t).update(
           UNPUBLISHABLE,
-          { status: "published" },
+          { status: "published", _overwrite: true },
           trusted
             ? { overrideAccess: true, locale: "*" }
             : { overrideAccess: false, user: USER, locale: "*" }
@@ -1127,11 +1272,213 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.statusCode).toBe(403);
     });
 
+    it("answers an entry's publish of every language as not ready when its translations table is dropped after boot", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      // Dropped once the boot has resolved the table as ready, as a tool
+      // outside the app drops it while the app runs.
+      await t.adapter.executeQuery(
+        `DROP TABLE IF EXISTS dc_${ARTICLES}_locales`
+      );
+      const publishEvery = () =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: ARTICLES,
+            entryId: id,
+            overrideAccess: true,
+            locale: "*",
+          },
+          { status: "published", _overwrite: true }
+        );
+      const first = await publishEvery();
+      expect(first.success).toBe(false);
+      expect(first.statusCode).toBe(409);
+      // Asked again, it is still refused as not ready, never as a server
+      // error. That the verdict itself is forgotten is pinned by the readiness
+      // unit tests (`companionFoundMissing`).
+      expect((await publishEvery()).statusCode).toBe(409);
+    });
+
+    it("answers an entry's create as not ready when its translations table is dropped after boot", async () => {
+      const t = await boot(dialect);
+      await t.adapter.executeQuery(
+        `DROP TABLE IF EXISTS dc_${ARTICLES}_locales`
+      );
+      const created = await handlerOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        { heading: "en", status: "draft" }
+      );
+      expect(created.success).toBe(false);
+      expect(created.statusCode).toBe(409);
+    });
+
+    /** An entry with an English draft, and a spy on the publish-only work. */
+    async function beforePublishWork(
+      dialect: TestDialect,
+      work: [object, string]
+    ) {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      await singlesOf(t).update(
+        BANNER,
+        { headline: "en", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
+      );
+      const spy = vi.spyOn(work[0] as never, work[1] as never);
+      return { t, id, spy };
+    }
+
+    it("asks the publish grant of an entry's every-language write before the languages going live are read", async () => {
+      const { t, id, spy } = await beforePublishWork(dialect, [
+        CollectionMutationService.prototype,
+        "languagesToPublish",
+      ]);
+      const write = (user: typeof USER) =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: ARTICLES,
+            entryId: id,
+            overrideAccess: false,
+            user,
+            locale: "*",
+          },
+          { status: "published", _overwrite: true }
+        );
+
+      expect((await write(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      // The control: a caller holding the grant reaches that work.
+      await write(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("asks the publish grant of publishing every language of an entry before the languages going live are read", async () => {
+      const { t, id, spy } = await beforePublishWork(dialect, [
+        CollectionMutationService.prototype,
+        "languagesToPublish",
+      ]);
+      const publishAll = (user: typeof USER) =>
+        handlerOf(t).publishAllLocales({
+          collectionName: ARTICLES,
+          entryId: id,
+          overrideAccess: false,
+          user,
+          data: { _overwrite: true },
+        });
+
+      expect((await publishAll(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      await publishAll(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("refuses a caller with no user before the languages going live are read", async () => {
+      // No one unsigned ever publishes, so the grant fails closed for them.
+      const { t, id, spy } = await beforePublishWork(dialect, [
+        CollectionMutationService.prototype,
+        "languagesToPublish",
+      ]);
+
+      const refused = await handlerOf(t).publishAllLocales({
+        collectionName: ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+        data: { _overwrite: true },
+      });
+
+      expect(refused.success).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("asks the publish grant of a Single's every-language write before the languages going live are read", async () => {
+      const { t, spy } = await beforePublishWork(dialect, [
+        SingleMutationService.prototype,
+        "languagesToPublish",
+      ]);
+      const write = (user: typeof USER) =>
+        singlesOf(t).update(
+          BANNER,
+          { status: "published", _overwrite: true },
+          { overrideAccess: false, user, locale: "*" }
+        );
+
+      expect((await write(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      await write(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("asks the publish grant of publishing every language of a Single before its lifecycle is resolved", async () => {
+      const { t, spy } = await beforePublishWork(dialect, [
+        SinglePublishAllService.prototype,
+        "resolveLifecycle",
+      ]);
+      const publishAll = (user: typeof USER) =>
+        singlesOf(t).publishAllLocales(BANNER, {
+          overrideAccess: false,
+          user,
+          data: { _overwrite: true },
+        });
+
+      expect((await publishAll(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      await publishAll(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("refuses a caller who may not publish an entry before the work only a publish needs", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: UNPUBLISHABLE_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      // The field groups' readiness, which only a publish goes on to need,
+      // failing: a caller refused the publish never reaches it.
+      const readiness = vi
+        .spyOn(
+          t.getService("fieldGroupDataService"),
+          "assertLocalizedFieldGroupsWritable"
+        )
+        .mockRejectedValue(new Error("field groups unavailable"));
+      const publishAll = (trusted: boolean) =>
+        handlerOf(t).publishAllLocales({
+          collectionName: UNPUBLISHABLE_ARTICLES,
+          entryId: id,
+          ...(trusted
+            ? { overrideAccess: true }
+            : { overrideAccess: false, user: USER }),
+          data: { _overwrite: true },
+        });
+
+      const refused = await publishAll(false);
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+      expect(readiness).not.toHaveBeenCalled();
+      // The control: a trusted publish of every language meets the failure.
+      await publishAll(true).catch(() => undefined);
+      expect(readiness).toHaveBeenCalled();
+    });
+
     it("refuses a caller who may not publish a Single before the work only a publish needs", async () => {
       const t = await boot(dialect);
       await singlesOf(t).update(
         UNPUBLISHABLE,
-        { headline: "en" },
+        { headline: "en", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       // The field groups' readiness, which only a publish goes on to need,
@@ -1144,8 +1491,8 @@ describe.each(getConfiguredTestDialects())(
         singlesOf(t).publishAllLocales(
           UNPUBLISHABLE,
           trusted
-            ? { overrideAccess: true }
-            : { overrideAccess: false, user: USER }
+            ? { overrideAccess: true, data: { _overwrite: true } }
+            : { overrideAccess: false, user: USER, data: { _overwrite: true } }
         );
       // The control: a trusted publish of every language meets the failure.
       await expect(publishAll(true)).rejects.toMatchObject({
@@ -1164,13 +1511,13 @@ describe.each(getConfiguredTestDialects())(
       for (const locale of ["en", "fr", "de"]) {
         await singlesOf(t).update(
           PENDING_BANNER,
-          { headline: locale, status: "published" },
+          { headline: locale, status: "published", _overwrite: true },
           { overrideAccess: true, locale }
         );
       }
       await singlesOf(t).update(
         PENDING_BANNER,
-        { headline: "en pending" },
+        { headline: "en pending", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       const liveEnglish = async () =>
@@ -1186,7 +1533,7 @@ describe.each(getConfiguredTestDialects())(
 
       const everyLanguage = await singlesOf(t).update(
         PENDING_BANNER,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: false, user: USER, locale: "*" }
       );
       expect(everyLanguage.success).toBe(false);
@@ -1196,6 +1543,7 @@ describe.each(getConfiguredTestDialects())(
       const publishAll = await singlesOf(t).publishAllLocales(PENDING_BANNER, {
         overrideAccess: false,
         user: USER,
+        data: { _overwrite: true },
       });
       expect(publishAll.statusCode).toBe(403);
       expect(await liveEnglish()).toBe("en");
@@ -1203,7 +1551,7 @@ describe.each(getConfiguredTestDialects())(
       // The control: a trusted publish of every language puts the edit live.
       const trusted = await singlesOf(t).update(
         PENDING_BANNER,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true, locale: "*" }
       );
       expect(trusted.success).toBe(true);
@@ -1228,7 +1576,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale,
           },
-          data
+          { ...data, _overwrite: true }
         );
       await write("fr", { title: "fr", status: "published" });
       await write("de", { title: "de", status: "published" });
@@ -1254,7 +1602,7 @@ describe.each(getConfiguredTestDialects())(
           user: USER,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(everyLanguage.success).toBe(false);
       expect(everyLanguage.statusCode).toBe(403);

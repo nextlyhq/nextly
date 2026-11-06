@@ -1,0 +1,29 @@
+---
+title: DATABASE_URL_MISSING
+description: "`DATABASE_URL` is not set, so the command has no database to use."
+---
+
+## Cause
+
+`DATABASE_URL` is not set, so the command has no database to use.
+
+Commands that read or change the database take it from `DATABASE_URL`, in the environment or in the project's `.env` file.
+
+## Fix
+
+Set `DATABASE_URL` in `.env`, or in the environment the command runs in:
+
+```bash
+DATABASE_URL=postgres://user:password@localhost:5432/app
+```
+
+See [Database](/docs/database) for each database's form of the URL.
+
+## Example
+
+```text
+✗ `DATABASE_URL` is not set, so there is no database to use.
+  Why:  The command reads the database from `DATABASE_URL`, in the environment or the project's `.env` file.
+  Next: Set `DATABASE_URL` in `.env`, for example `DATABASE_URL=postgres://user:password@localhost:5432/app`.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-url-missing  (DATABASE_URL_MISSING)
+```

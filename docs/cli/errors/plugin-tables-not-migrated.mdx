@@ -1,0 +1,24 @@
+---
+title: PLUGIN_TABLES_NOT_MIGRATED
+description: "A plugin's tables were created by a development push, so no applied migration can undo them."
+---
+
+## Cause
+
+A plugin's tables were created by a development push, so no applied migration can undo them.
+
+In development, a push creates a plugin's tables from its declared schema without applying its migrations. The database then has the tables and no applied migration whose DOWN would drop them, and an uninstall does not invent the statements. Nothing was changed.
+
+## Fix
+
+- Drop the tables with a migration.
+- Or, in development, remove the plugin from `nextly.config.ts` and reset the development database.
+
+## Example
+
+```text
+✗ @acme/seo owns 1 table(s), listed above, but this database has no applied migration module to undo them.
+  Why:  They were created by a development push rather than by a migration. Its tables: seo_redirects. Nothing was changed.
+  Next: Drop them with a migration, or remove the plugin from config and reset the development database.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-tables-not-migrated  (PLUGIN_TABLES_NOT_MIGRATED)
+```

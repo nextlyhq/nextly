@@ -1,0 +1,24 @@
+---
+title: RESOLVE_MODE_REQUIRED
+description: "`nextly migrate:resolve` was given none, or more than one, of `--applied`, `--rolled-back` and `--failed-cleanup`."
+---
+
+## Cause
+
+`nextly migrate:resolve` was given none, or more than one, of `--applied`, `--rolled-back` and `--failed-cleanup`.
+
+`nextly migrate:resolve` records one thing about one file per run, and each of its three flags names a different thing to record.
+
+## Fix
+
+- Pass exactly one: `--applied <file>`, `--rolled-back <file>` or `--failed-cleanup <file>`.
+- `nextly migrate:resolve --help` describes each.
+
+## Example
+
+```text
+✗ `nextly migrate:resolve` needs exactly one thing to record.
+  Why:  It was given none of `--applied`, `--rolled-back` and `--failed-cleanup`.
+  Next: Provide exactly one of --applied, --rolled-back, or --failed-cleanup.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-mode-required  (RESOLVE_MODE_REQUIRED)
+```

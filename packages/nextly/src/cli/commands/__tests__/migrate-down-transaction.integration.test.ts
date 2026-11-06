@@ -11,6 +11,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
@@ -19,6 +20,7 @@ import { runMigrationStatements } from "../../../domains/schema/migrate/migratio
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
 import { createLogger } from "../../utils/logger";
+import { installRegistryResolver } from "../../utils/registry-resolver";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 
 let adapter: ReturnType<typeof createSqliteAdapter>;
@@ -33,6 +35,10 @@ const DOWN = `INSERT INTO "down_log" ("label") VALUES ('undone')`;
 beforeEach(async () => {
   adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
+  await loadDialectTables("sqlite");
+  // The static resolver every production adapter carries: the lock seeds its row through a
+  // transaction insert, which an adapter refuses for a table its resolver does not hold.
+  installRegistryResolver(adapter as unknown as DrizzleAdapter);
   sqlite = adapter.getDrizzle<{ $client: Database.Database }>().$client;
   repo = new SchemaEventsRepository(adapter.getDrizzle(), "sqlite");
   sqlite.exec(`CREATE TABLE "down_log" ("label" TEXT NOT NULL)`);
@@ -176,10 +182,12 @@ describe("a DOWN run in a transaction", () => {
   it("rolls the DOWN back when another run rolled the migration back first, recording no failure", async () => {
     await withCoreTables();
     await recordApplied(APP_FILE);
-    // The other run's rolled_back row, seen on the connection by the time
-    // this run's DOWN has run; written by the DOWN itself, the only way one
-    // connection can interleave two runs.
-    const otherRun = `INSERT INTO nextly_schema_events (id, event_type, status, source, filename, started_at) VALUES ('other-run', 'file_apply', 'rolled_back', 'cli-migrate', '${APP_FILE}', 9999999999999)`;
+    // The other run's rollback, seen on the connection by the time this run's
+    // DOWN has run; written by the DOWN itself, the only way one connection
+    // can interleave two runs. As `migrate:down` records one, it retires the
+    // applied row it undoes: a rolled_back row retiring nothing is an attempt
+    // `--failed-cleanup` cleared, not a rollback.
+    const otherRun = `UPDATE nextly_schema_events SET status = 'superseded' WHERE filename = '${APP_FILE}' AND status = 'applied';\nINSERT INTO nextly_schema_events (id, event_type, status, source, filename, started_at, superseded_event_ids) VALUES ('other-run', 'file_apply', 'rolled_back', 'cli-migrate', '${APP_FILE}', 9999999999999, '["the-applied-row"]')`;
     const lost = migrateDownCore({
       ...(await downDatabaseDeps({
         adapter: adapter as unknown as DrizzleAdapter,
@@ -204,19 +212,16 @@ describe("a DOWN run in a transaction", () => {
 });
 
 describe("an UP whose applied row loses to another run's", () => {
-  it("rolls the UP back, discards its attempt and leaves the other run's row as the record", async () => {
+  it("rolls the UP back with the attempt written in its transaction, and leaves the other run's row as the record", async () => {
     await withCoreTables();
     sqlite.exec(`CREATE TABLE "up_log" ("label" TEXT NOT NULL)`);
     const filename = "0002_seed.sql";
-    // Another run records the file applied once this run has started it:
-    // its row is committed before this run's statements begin.
-    sqlite.exec(`CREATE TRIGGER other_run_wins
-      AFTER INSERT ON nextly_schema_events
-      WHEN NEW.status = 'in_progress' AND NEW.filename = '${filename}'
-      BEGIN
-        INSERT INTO nextly_schema_events (id, event_type, status, source, filename, started_at)
-        VALUES ('winner', 'file_apply', 'applied', 'cli-migrate', NEW.filename, NEW.started_at - 1);
-      END`);
+    // Another run records the file applied after this run found it pending
+    // and before its statements begin: its row is committed on its own.
+    const otherRunWins = () =>
+      sqlite.exec(
+        `INSERT INTO nextly_schema_events (id, event_type, status, source, filename, started_at) VALUES ('winner', 'file_apply', 'applied', 'cli-migrate', '${filename}', ${String(Date.now())})`
+      );
     const empty = { tables: [] };
 
     await expect(
@@ -231,8 +236,10 @@ describe("an UP whose applied row loses to another run's", () => {
         live: empty,
         dialect: "sqlite",
         repo,
-        executeSql: (sqlText, unit, after) =>
-          runMigrationStatements(adapter, [sqlText], unit, after),
+        executeSql: (sqlText, unit, after) => {
+          otherRunWins();
+          return runMigrationStatements(adapter, [sqlText], unit, after);
+        },
       })
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_CONCURRENT_RUN" });
 

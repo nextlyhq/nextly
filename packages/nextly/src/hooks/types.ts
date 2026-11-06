@@ -345,6 +345,25 @@ export interface HookContext<T = any> {
    * the pooled connection is correct.
    */
   executor?: unknown;
+  /**
+   * @experimental Run `effect` once the write this hook belongs to is durable.
+   *
+   * Inside a transaction (a caller-owned one, or a plugin's `ctx.db.transaction`)
+   * the effect is held until the OUTERMOST transaction commits, and dropped if
+   * it rolls back; it runs after the commit, before that transaction's call
+   * resolves, and a failure then is logged rather than thrown, since the write
+   * has committed. Outside a transaction it runs at once. For what a rollback
+   * cannot take back, such as sending an email: done from an after-hook
+   * directly, it would happen for a write that never landed.
+   *
+   * Offered only to the hooks that run after the write: `afterCreate`,
+   * `afterUpdate` and `afterDelete`. A before-hook (`beforeCreate`,
+   * `beforeUpdate`, `beforeChange`, `beforeDelete`) runs before the write opens
+   * its transaction and is not given one, since an effect handed over there
+   * would run at once, for a write that may still be refused. Absent too on a
+   * context a hook test builds by hand. `cloneContext` keeps it.
+   */
+  afterCommit?: (effect: () => unknown) => Promise<void>;
 }
 
 /**

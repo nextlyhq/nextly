@@ -158,6 +158,17 @@ export interface GetSingleOptions {
    */
   includeWorkingDraft?: boolean;
 
+  /**
+   * Whether a read of a Single with no stored document creates its default
+   * document, as every read always has. `false` answers with no document
+   * instead (`success` with `data` absent) and writes nothing: no row, no
+   * version, no event and no creation hook, so a caller that must not write,
+   * such as a page render, can read without materialising the Single.
+   *
+   * @default true
+   */
+  createIfMissing?: boolean;
+
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
   /** The HTTP request behind this operation, when one produced it. */
@@ -277,6 +288,15 @@ export interface PublishAllSingleLocalesOptions {
    * by callers that own their cache strategy — a CLI, seed, or bulk import.
    */
   disableRevalidate?: boolean;
+
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   *
+   * @experimental
+   */
+  data?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -288,6 +308,15 @@ export interface SingleDocument {
 
   /** Last update timestamp */
   updatedAt: Date | string;
+
+  /**
+   * The document's version: changed by every save and by no read, and naming
+   * each language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
+   */
+  _rev?: string;
 
   /** Additional fields defined by the Single schema */
   [key: string]: unknown;

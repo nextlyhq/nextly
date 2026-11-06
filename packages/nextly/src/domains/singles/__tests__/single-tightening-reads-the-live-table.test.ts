@@ -25,13 +25,16 @@ const TABLE = "single_site_settings";
  *
  * Dispatched on `udt_name` / `IS NULL` rather than on call order, because the reader runs its
  * four reads in `Promise.all` and an order-keyed fake would pass while the code asked for
- * anything at all. `udt_name` appears only in the catalog read; the null probe is the only query
- * carrying `IS NULL`; `tableHasRows` is what is left holding `LIMIT 1`.
+ * anything at all. `udt_name` appears only in the catalog read; the null count carries `IS NULL`
+ * and `COUNT(*)`, the null probe `IS NULL` alone; `tableHasRows` is what is left holding
+ * `LIMIT 1`; the row count is the `COUNT(*)` left after those. A column holding null holds it in
+ * `nullRows` rows (default 1).
  */
 function fakeDb(live: {
   columns: string[];
   someColumnHoldsNull: boolean;
   hasRows: boolean;
+  nullRows?: number;
 }) {
   return {
     execute: vi.fn(async (query: unknown) => {
@@ -45,11 +48,22 @@ function fakeDb(live: {
           })),
         };
       }
+      if (text.includes("IS NULL") && text.includes("COUNT(*)")) {
+        // The shared counter's answer: how many rows hold null in the column asked about.
+        return {
+          rows: [
+            { count: live.someColumnHoldsNull ? (live.nullRows ?? 1) : 0 },
+          ],
+        };
+      }
       if (text.includes("IS NULL")) {
         return { rows: live.someColumnHoldsNull ? [{ "?column?": 1 }] : [] };
       }
       if (text.includes("LIMIT 1")) {
         return { rows: live.hasRows ? [{ "?column?": 1 }] : [] };
+      }
+      if (text.includes("COUNT(*)")) {
+        return { rows: [{ count: live.hasRows ? 1 : 0 }] };
       }
       return { rows: [] };
     }),
@@ -119,20 +133,30 @@ describe("a single tightening a field over a live table", () => {
     );
   });
 
-  it("refuses when the column exists and an entry still leaves it empty", async () => {
+  it("refuses when the column exists and an entry still leaves it empty, naming the Single and the count", async () => {
     const db = fakeDb({
       columns: ["id", "title", "slug", "updated_at", "tagline"],
       someColumnHoldsNull: true,
       hasRows: true,
     });
 
-    await expect(
-      serviceOver(db).planUpdate(tighteningInput())
-    ).rejects.toSatisfy(
-      error =>
-        NextlyError.is(error) &&
-        JSON.stringify(error).includes("REQUIRED_COLUMN_HAS_NULLS")
-    );
+    const refused = await serviceOver(db)
+      .planUpdate(tighteningInput())
+      .then(
+        () => null,
+        (error: unknown) => error
+      );
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    expect((refused as NextlyError).publicData).toEqual({
+      errors: [
+        {
+          path: "fields.tagline",
+          code: "REQUIRED_COLUMN_HAS_NULLS",
+          message:
+            "Single 'site-settings': field 'tagline' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the field optional.",
+        },
+      ],
+    });
   });
 
   it("emits the tightening when the column is there and holds no NULL", async () => {

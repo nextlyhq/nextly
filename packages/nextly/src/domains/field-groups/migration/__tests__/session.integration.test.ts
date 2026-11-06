@@ -15,6 +15,7 @@
  * dialect passing says nothing about the other two, which is exactly the gap
  * that let a double stand in for reality the first time.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
@@ -22,6 +23,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   getMigrationLockDdl,
@@ -29,12 +32,6 @@ import {
   withMigrationSession,
   type MigrationSession,
 } from "../session";
-
-interface LockAdapter {
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-}
 
 /**
  * The servers this runs against.
@@ -45,7 +42,7 @@ interface LockAdapter {
 const DIALECTS: {
   dialect: SupportedDialect;
   url: string | null;
-  make: () => LockAdapter;
+  make: () => DrizzleAdapter;
 }[] = [
   {
     dialect: "postgresql",
@@ -53,7 +50,7 @@ const DIALECTS: {
     make: () =>
       createPostgresAdapter({
         url: process.env.TEST_POSTGRES_URL as string,
-      }) as unknown as LockAdapter,
+      }) as unknown as DrizzleAdapter,
   },
   {
     dialect: "mysql",
@@ -61,27 +58,32 @@ const DIALECTS: {
     make: () =>
       createMySqlAdapter({
         url: process.env.TEST_MYSQL_URL as string,
-      }) as unknown as LockAdapter,
+      }) as unknown as DrizzleAdapter,
   },
   {
     dialect: "sqlite",
     url: "memory",
-    make: () => createSqliteAdapter({ memory: true }) as unknown as LockAdapter,
+    make: () =>
+      createSqliteAdapter({ memory: true }) as unknown as DrizzleAdapter,
   },
 ];
 
 describe.each(DIALECTS)(
   "field-group migration lock on a live $dialect server",
   ({ dialect, url, make }) => {
-    let adapter: LockAdapter;
+    let adapter: DrizzleAdapter;
     const runs = url === null ? describe.skip : describe;
 
     beforeAll(async () => {
       if (url === null) return;
       adapter = make();
       await adapter.connect();
-      // No table, no row, and no schema registry has ever been told about it:
-      // exactly the state a first run meets.
+      await loadDialectTables(dialect);
+      // The static resolver every production adapter carries: the lock seeds
+      // its row through a transaction insert, which an adapter refuses for a
+      // table its resolver does not hold.
+      installRegistryResolver(adapter);
+      // No table and no row: exactly the state a first run meets.
       await adapter.executeQuery(
         `DROP TABLE IF EXISTS ${MIGRATION_LOCK_TABLE}`
       );
@@ -101,9 +103,7 @@ describe.each(DIALECTS)(
     ): Promise<T> {
       return withMigrationSession(
         {
-          // The adapter's own type; the cast is only to keep this suite's
-          // surface narrow.
-          adapter: adapter as never,
+          adapter,
           dialect,
           label,
         },

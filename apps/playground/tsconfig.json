@@ -28,6 +28,24 @@
       // serverExternalPackages flip), but tsc's source view is correct
       // either way because the source IS what gets shipped to dist anyway.
       "nextly": ["../../packages/nextly/src/index.ts"],
+      // A subpath whose source is not at its own name: the seed loads
+      // nextly.config.ts through tsx as CommonJS, and the plugin SDK's
+      // routing entry (reached through the SEO plugin) asks for it, which
+      // nextly exports for `import` only. Mapped to its source here, as
+      // the wildcard below maps the rest.
+      "nextly/route-path": [
+        "../../packages/nextly/src/runtime/routing/slug-param.ts"
+      ],
+      // The source behind a subpath that is not at the top of src, as with
+      // route-path above: the catch-all below would look for it there.
+      "nextly/reserved-filter-keys": [
+        "../../packages/nextly/src/domains/collections/query/reserved-filter-keys.ts"
+      ],
+      // The same again: the page builder's loop collections route names a
+      // field by this humaniser, and the seed loads that route through tsx.
+      "nextly/field-label": [
+        "../../packages/nextly/src/collections/fields/field-label.ts"
+      ],
       "nextly/*": ["../../packages/nextly/src/*"],
       "@nextlyhq/adapter-drizzle": [
         "../../packages/adapter-drizzle/src/index.ts"

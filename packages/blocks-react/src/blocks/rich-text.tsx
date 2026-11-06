@@ -33,7 +33,7 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
-import { RichText } from "../rich-text";
+import { drawsInteractive, RichText } from "../rich-text";
 
 import { CONTENT } from "./categories";
 
@@ -68,6 +68,7 @@ export function renderRichText({
   className,
   markProp,
   hostPolicy,
+  spacingMode,
 }: BlockRenderArgs<RichTextBlockProps>): ReactElement {
   /*
    * The wrapper carries both the class and the mark, so the element an author
@@ -77,7 +78,11 @@ export function renderRichText({
    */
   return (
     <div className={className} {...markProp?.("content")}>
-      <RichText value={props.content} hostPolicy={hostPolicy} />
+      <RichText
+        value={props.content}
+        hostPolicy={hostPolicy}
+        {...(spacingMode === undefined ? {} : { spacingMode })}
+      />
     </div>
   );
 }
@@ -90,19 +95,28 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
   defineBlock({
     name: "core/rich-text",
     version: 1,
-    description:
-      "A passage of formatted text: bold and links within a sentence, lists, and headings between paragraphs, all held as one value.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A passage of
+    // formatted text: bold and links within a sentence, lists, and headings
+    // between paragraphs, all held as one value.
+    description: "Text with bold, links, lists and headings.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
     editor: {
       label: "Rich text",
-      icon: "text",
+      // Its own mark, so a passage is told from plain Text at a glance.
+      icon: "rich-text",
       category: CONTENT,
       keywords: ["rich text", "formatted", "prose", "wysiwyg", "editor"],
     },
     props: {
-      content: { role: "content", type: RICH_TEXT_PROP_TYPE, inline: true },
+      content: {
+        label: "Content",
+        role: "content",
+        type: RICH_TEXT_PROP_TYPE,
+        inline: true,
+      },
     },
     defaultProps: { content: EMPTY_PASSAGE },
     /*
@@ -139,6 +153,10 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
         },
       },
     },
+    // The space between this block's own paragraphs, headings and lists:
+    // inside the block, from the second element on, so none of it reaches the
+    // block's outer edge. `1em` follows the size of the element it spaces.
+    childGap: { $token: "space.paragraph" },
     supports: {
       typography: true,
       color: true,
@@ -149,5 +167,12 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
       effects: true,
       position: true,
     },
+    // A passage drawing a link or a button is interactive while it does,
+    // decided the way the renderer decides what it draws.
+    contentModel: props =>
+      isRichTextValue(props.content) &&
+      drawsInteractive(props.content.root.children)
+        ? { is: ["flow", "interactive"] }
+        : { is: ["flow"] },
     render: renderRichText,
   });

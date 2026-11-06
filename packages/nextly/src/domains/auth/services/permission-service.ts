@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import { and, asc, count, desc, eq, or, sql } from "drizzle-orm";
 
 import type {
@@ -37,8 +38,6 @@ function buildHiddenPermissionConditions(
   const conditions = [
     // Hide the legacy `permissions` resource from assignable/admin permission lists.
     sql`${permissionsTable.resource} <> 'permissions'`,
-    // Hide create/delete actions for `settings` resource.
-    sql`NOT (${permissionsTable.resource} = 'settings' AND ${permissionsTable.action} IN ('create', 'delete'))`,
   ];
 
   if (!options?.includeOrphaned) {
@@ -55,19 +54,13 @@ function buildHiddenPermissionConditions(
 
 /**
  * Whether a permission is one of the hidden internal ones: the legacy
- * `permissions` resource, or create/delete on `settings`, as
- * {@link buildHiddenPermissionConditions} hides them from lists. They are
- * answered as if absent, so nothing confirms they exist.
+ * `permissions` resource, as {@link buildHiddenPermissionConditions} hides it
+ * from lists. It is answered as if absent, so nothing confirms it exists.
+ * Create and delete on `settings` are granted like any other permission, so
+ * they are listed.
  */
-function isHiddenPermission(permission: {
-  action: string;
-  resource: string;
-}): boolean {
-  return (
-    permission.resource === "permissions" ||
-    (permission.resource === "settings" &&
-      (permission.action === "create" || permission.action === "delete"))
-  );
+function isHiddenPermission(permission: { resource: string }): boolean {
+  return permission.resource === "permissions";
 }
 
 /**
@@ -248,13 +241,13 @@ export class PermissionService extends BaseService {
         ...buildHiddenPermissionConditions(permissions, { includeOrphaned }),
       ];
 
+      // Each text as typed, ignoring case on every dialect, through the one rule for it.
       if (search) {
-        const searchPattern = `%${search}%`;
         const searchCondition = or(
-          sql`LOWER(${permissions.name}) LIKE LOWER(${searchPattern})`,
-          sql`LOWER(${permissions.action}) LIKE LOWER(${searchPattern})`,
-          sql`LOWER(${permissions.resource}) LIKE LOWER(${searchPattern})`,
-          sql`LOWER(${permissions.description}) LIKE LOWER(${searchPattern})`
+          caseInsensitiveContains(this.dialect, permissions.name, search),
+          caseInsensitiveContains(this.dialect, permissions.action, search),
+          caseInsensitiveContains(this.dialect, permissions.resource, search),
+          caseInsensitiveContains(this.dialect, permissions.description, search)
         );
 
         if (searchCondition) {
@@ -263,16 +256,14 @@ export class PermissionService extends BaseService {
       }
 
       if (action) {
-        const actionPattern = `%${action}%`;
         conditions.push(
-          sql`LOWER(${permissions.action}) LIKE LOWER(${actionPattern})`
+          caseInsensitiveContains(this.dialect, permissions.action, action)
         );
       }
 
       if (resource) {
-        const resourcePattern = `%${resource}%`;
         conditions.push(
-          sql`LOWER(${permissions.resource}) LIKE LOWER(${resourcePattern})`
+          caseInsensitiveContains(this.dialect, permissions.resource, resource)
         );
       }
 
@@ -660,6 +651,18 @@ export class PermissionService extends BaseService {
     const winner = await this.findByActionResource(action, resource);
     if (winner) return { id: String(winner.id), created: false };
     throw NextlyError.fromDatabaseError(toDbError(this.dialect, duplicate));
+  }
+
+  /**
+   * Who declared the permission for `action` on `resource`: a plugin's or app's name, `null` for
+   * the framework's own seed, or `undefined` when there is no such permission.
+   */
+  async ownerOf(
+    action: string,
+    resource: string
+  ): Promise<string | null | undefined> {
+    const row = await this.findByActionResource(action, resource);
+    return row ? ((row as { owner?: string | null }).owner ?? null) : undefined;
   }
 
   /**

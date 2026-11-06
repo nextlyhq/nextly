@@ -36,6 +36,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { Logger } from "../../../shared/types";
+import { rowLockServer } from "../../audit/audit-log-writer";
 import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
 import { linkedTransaction } from "../../../plugins/database/plugin-transaction-link";
@@ -359,7 +360,12 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
       storeQueuedEmail(ctx, {
         scope: "site",
         message: { kind: "message", send: message },
+        person: null,
         secrets: pluginSettingsSecrets(env),
+        lockServer: rowLockServer(
+          t.adapter,
+          t.adapter.getCapabilities().dialect
+        ),
         dialect: t.adapter.getCapabilities().dialect,
         now: new Date(),
       })
@@ -475,7 +481,12 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
           },
           options: {},
         },
+        person: null,
         secrets: pluginSettingsSecrets(env),
+        lockServer: rowLockServer(
+          t.adapter,
+          t.adapter.getCapabilities().dialect
+        ),
         dialect: t.adapter.getCapabilities().dialect,
         now: new Date(),
       })
@@ -562,7 +573,12 @@ describe.each(getConfiguredTestDialects())("a queued email (%s)", dialect => {
       storeQueuedEmail(ctx, {
         scope: "site",
         message: { kind: "message", send: message },
+        person: null,
         secrets: pluginSettingsSecrets(env),
+        lockServer: rowLockServer(
+          t.adapter,
+          t.adapter.getCapabilities().dialect
+        ),
         dialect: t.adapter.getCapabilities().dialect,
         now: new Date(),
       })

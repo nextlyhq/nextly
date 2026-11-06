@@ -6,7 +6,7 @@
 // this helper accounted for the table re-registers main + companion. A
 // broken resolver degrades to a no-op instead of throwing.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -302,5 +302,108 @@ describe("ensureSingleRuntimeTable — pre-migration window", () => {
       "single_test_page",
       "single_test_page_locales",
     ]);
+  });
+});
+
+// A write in production to a Single this instance did not register at boot or
+// create time is refused rather than recovered: the instance predates the
+// deploy that added or changed the Single, so its code may not match what the
+// database now holds. Reads keep recovering, and development keeps recovering
+// both, since a second dev worker or an HMR reload is the case the recovery
+// exists for.
+describe("ensureSingleRuntimeTable — writes in production", () => {
+  const meta = { ...localizedMeta, localized: false };
+  const write = { intent: "write" } as const;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const refusal = (promise: Promise<unknown>) =>
+    promise.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  it("refuses a write on a resolver miss, naming the table, and registers nothing", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, registered } = makeAdapter();
+    const error = await refusal(
+      ensureSingleRuntimeTable(adapter, meta, undefined, write)
+    );
+    expect(error).toMatchObject({ code: "NEXTLY_TABLE_NOT_REGISTERED" });
+    expect((error as Error).message).toContain('"single_test_page"');
+    expect(registered).toEqual([]);
+  });
+
+  it("recovers the same write in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const { adapter, registered } = makeAdapter();
+    await ensureSingleRuntimeTable(adapter, meta, undefined, write);
+    expect(registered).toEqual(["single_test_page"]);
+  });
+
+  it("still registers for a read, and refuses a write after it", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, registered } = makeAdapter();
+    await ensureSingleRuntimeTable(adapter, meta);
+    expect(registered).toEqual(["single_test_page"]);
+    const error = await refusal(
+      ensureSingleRuntimeTable(adapter, meta, undefined, write)
+    );
+    expect(error).toMatchObject({ code: "NEXTLY_TABLE_NOT_REGISTERED" });
+  });
+
+  it("lets a write through to a table boot or create time registered", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, registered } = makeAdapter({
+      single_test_page: { foreign: true },
+    });
+    await ensureSingleRuntimeTable(adapter, meta, undefined, write);
+    expect(registered).toEqual([]);
+  });
+
+  it("keeps letting writes through after it rebuilds a table boot registered", async () => {
+    // This instance changed the Single's fields (the Builder in production):
+    // the row moves on, and the next touch rebuilds a registration that was
+    // never a recovery.
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, registered } = makeAdapter({
+      single_test_page: { foreign: true },
+    });
+    await ensureSingleRuntimeTable(adapter, { ...meta, schemaVersion: 1 });
+    const moved = { ...meta, schemaVersion: 2 };
+    await ensureSingleRuntimeTable(adapter, moved);
+    expect(registered).toEqual(["single_test_page"]);
+    for (const attempt of [1, 2]) {
+      await expect(
+        ensureSingleRuntimeTable(adapter, moved, undefined, write),
+        `write ${attempt}`
+      ).resolves.toBeUndefined();
+    }
+  });
+
+  it("still refuses a write after it rebuilds a table only a read recovered", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, registered } = makeAdapter();
+    await ensureSingleRuntimeTable(adapter, { ...meta, schemaVersion: 1 });
+    const moved = { ...meta, schemaVersion: 2 };
+    await ensureSingleRuntimeTable(adapter, moved);
+    expect(registered).toEqual(["single_test_page", "single_test_page"]);
+    const error = await refusal(
+      ensureSingleRuntimeTable(adapter, moved, undefined, write)
+    );
+    expect(error).toMatchObject({ code: "NEXTLY_TABLE_NOT_REGISTERED" });
+  });
+
+  it("lets a write through once a registration of its own replaces the read's", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const { adapter, tables } = makeAdapter();
+    await ensureSingleRuntimeTable(adapter, meta);
+    // A reload after a migration registers the table again, from config.
+    tables.set("single_test_page", { reloaded: true });
+    await expect(
+      ensureSingleRuntimeTable(adapter, meta, undefined, write)
+    ).resolves.toBeUndefined();
   });
 });

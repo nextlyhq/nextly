@@ -15,6 +15,7 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
+import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import {
   DocumentLockBanner,
@@ -26,7 +27,12 @@ import {
 } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
-import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
+import {
+  isRemovedFromCode,
+  removedEntityHasNoTable,
+} from "@admin/components/features/entries/removed-from-code-notice";
+import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
+import { useScheduleDocumentAction } from "@admin/components/features/releases/ScheduleDocumentAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
   CONTENT_PAGE_MEASURE,
@@ -46,10 +52,14 @@ import {
   useStoredEntry,
   useWithStoredReferences,
 } from "@admin/hooks/queries/useStoredReferences";
+import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -270,7 +280,14 @@ export default function EditEntryPage({
   // depth: 2 ensures relationship fields include display labels (title, name, etc.)
   // On a localized app, request the per-locale translation-status overview so the editor
   // can show per-language status pills. Inert (param omitted) for non-localized apps.
-  const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+  const {
+    defaultLocale,
+    enabled: localizationEnabled,
+    locales,
+  } = useLocalization();
+  // The overview reads every language's state, so it is asked only of a user
+  // the server lets read them all; otherwise the editor would be refused.
+  const asksTranslationStatus = useAsksTranslationStatus(slug ?? "");
 
   const populatedEntry = useEntry({
     collectionSlug: slug || "",
@@ -287,7 +304,7 @@ export default function EditEntryPage({
     // as this locale's translation). sourceEntry (below) supplies the default-language
     // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
-    translationStatus: localizationEnabled,
+    translationStatus: asksTranslationStatus,
   });
   // The same document as stored, read in the same language and view. The
   // populated read above leaves out a related item the editor may not read,
@@ -305,6 +322,7 @@ export default function EditEntryPage({
     document: entry,
     isLoading: isLoadingEntry,
     error: entryError,
+    latest: entryLatest,
   } = useWithStoredReferences({
     // The fields the form renders, so the merge and the form read one list.
     fields: collection
@@ -329,15 +347,37 @@ export default function EditEntryPage({
    * loading it reports no action, which is correct — there is nothing on screen
    * to contribute one to.
    */
-  const release = useAddToReleaseAction({
+  // The reader's own pin of this entry, offered beside "Schedule…".
+  const pin = usePinAction(
+    id && slug
+      ? { targetType: "collection", targetSlug: slug, entryId: id }
+      : null
+  );
+  // Schedule…, on the Publish split: on its own at a time, with a release or
+  // in a new one. A release of its own is named after the entry as it is
+  // SAVED, the version the release ships, so a title typed and not yet saved
+  // does not name a release it is not in.
+  const schedule = useScheduleDocumentAction({
     scopeKind: "collection",
     scopeSlug: slug,
     entryId: id,
-    // The same flag the editor's own publish controls read. A release member
-    // performs a publish or unpublish, and the route refuses a collection whose
-    // schema declares no lifecycle.
     lifecycleEnabled: collection?.status,
     onDefaultLocale: !isNonDefaultLocale,
+    documentTitle: () =>
+      entry ? entryTitleValue(entry, collection?.admin?.useAsTitle) : undefined,
+    // With no drafts, a save of a live entry is published at once.
+    savesGoLive:
+      collection?.draftsEnabled !== true && entry?.status === "published",
+    // A release moves every language of a translated entry together. The
+    // collection read carries `localized`, which the admin's Collection type
+    // does not declare, so it is narrowed here rather than cast.
+    languages:
+      localizationEnabled &&
+      collection !== undefined &&
+      "localized" in collection &&
+      collection.localized === true
+        ? locales.map(each => each.label)
+        : undefined,
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
@@ -362,6 +402,14 @@ export default function EditEntryPage({
 
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;
+  // The tab names the entry as the page heading does, once both the entry and
+  // the collection that says which field titles it have arrived. Above the
+  // loading and error returns below, because it is a hook.
+  useDocumentTitle(
+    entry && collection && id
+      ? getEntryTitle(entry, id, collection.admin?.useAsTitle)
+      : undefined
+  );
 
   // Resolved here, above this component's loading and error returns, for the
   // reason the hooks above give: whether a custom view renders decides whether
@@ -389,15 +437,32 @@ export default function EditEntryPage({
    * resolves to nothing falls through to `EntryForm` and that branch has its
    * own claim.
    */
+  // A reader gets the custom view read-only too, through the same gates a
+  // colleague's claim hands it, with no claim made. While a language switch's
+  // answer is on its way the view and the edit slots hold their writes as the
+  // editor does, since the answer on screen grants nothing in the new one.
+  const customViewAnswer = useUpdateAnswer(slug ?? "");
+  // A collection removed from code refuses every write to its entries, so the
+  // custom view and the edit slots are handed their writes held, as a
+  // reader's are, whoever opens it.
+  const removedFromCode = isRemovedFromCode(collection);
+  const customViewReader = customViewAnswer === "refused" || removedFromCode;
+  const customViewWritesHeld =
+    !editsOffered(customViewAnswer) || removedFromCode;
   const customViewLock = useDocumentLockSurface({
+    readOnlyForReader: customViewReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,
+    latest: entryLatest,
     // 🔴 The same prerequisites the custom branch renders under, not merely a
     // resolved component. A claim taken while the entry is still loading, or
     // after it failed, heartbeats a document the editor is not looking at - and
     // on a load failure that leaves the lock endpoint reachable, colleagues are
-    // told this person is editing a page that never appeared for them.
+    // told this person is editing a page that never appeared for them. A failed
+    // re-read of the entry on screen is not such a failure: `error` stays
+    // empty, the view stays, and so does its claim.
     enabled: Boolean(
       CustomEditView &&
         slug &&
@@ -476,14 +541,45 @@ export default function EditEntryPage({
     return <EditEntryPageSkeleton />;
   }
 
-  // Error state
+  // A collection removed from code is named, with its next step, above
+  // whatever else this page has to say; where its table is gone, in place of
+  // the failed read, which says nothing the notice does not.
+  const removedNotice =
+    slug && collection && removedFromCode ? (
+      <RemovedFromCodeNotice
+        entity={{
+          kind: "collection",
+          label: collection.label || collection.name || slug,
+          slug,
+        }}
+        state={collection.removedFromCodeState}
+      />
+    ) : null;
+
+  if (error && removedEntityHasNoTable(collection)) {
+    return (
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice}
+        <div className="mt-6">
+          <Link href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}>
+            <Button variant="outline">← Back to {slug}</Button>
+          </Link>
+        </div>
+      </PageContainer>
+    );
+  }
+
+  // Error state: no entry to show. A failed re-read of the entry on screen
+  // keeps the editor, read-only until a read succeeds.
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice ? <div className="mb-6">{removedNotice}</div> : null}
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see posts."). */}
           <AlertDescription>
-            Failed to load entry:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The entry couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">
@@ -574,8 +670,11 @@ export default function EditEntryPage({
       // colleague holds this. Passing the same decision the banner was derived
       // from is what keeps that sentence true.
       documentLock: {
-        readOnly: customViewLock.readOnly,
-        actionsDisabled: customViewLock.actionsDisabled,
+        readOnly: customViewLock.readOnly || customViewWritesHeld,
+        // A view knows only these two gates, and its own writes (a save
+        // among them) follow `actionsDisabled`, so a reader's view has them
+        // withheld too, and so does one waiting on a language's answer.
+        actionsDisabled: customViewLock.actionsDisabled || customViewWritesHeld,
       },
     };
 
@@ -595,6 +694,7 @@ export default function EditEntryPage({
               release as any other, and omitting the banner here would withhold
               the warning from precisely the documents a project cared enough
               about to build a bespoke editor for. */}
+          {removedNotice}
           <ScheduledReleaseBanner
             document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
             onDefaultLocale={!isNonDefaultLocale}
@@ -608,6 +708,7 @@ export default function EditEntryPage({
             notice={customViewLock.notice}
             onTakeOver={customViewLock.takeOver}
             onRequestAccess={customViewLock.requestAccess}
+            onRetry={customViewLock.retryLoad}
           />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
@@ -615,8 +716,11 @@ export default function EditEntryPage({
               generated element box. A view rooted in bare text, or in an
               element with `display: contents`, produces none and is
               auto-placed into a gutter. The registry imposes no root-element
-              contract, so the page provides the box. */}
-          <div>
+              contract, so the page provides the box. Keyed on the loads of
+              the latest version, since a view may read `initialData` once, as
+              it mounts: one that gains the document starts again from the
+              copy just loaded rather than unlocking over the one before. */}
+          <div key={customViewLock.reloads}>
             <PluginSlot path={customEditViewPath} props={customViewProps} />
           </div>
         </MeasuredPageFrame>
@@ -637,6 +741,14 @@ export default function EditEntryPage({
     entryId: id,
     collection: collection,
     entry: apiEntryData,
+    // The gates a custom edit view receives, for a user who may only read
+    // the entry: the slots open on read as the editor does, so one written to
+    // change the entry is told to hold its writes. A colleague's claim is the
+    // form's, below, and not stated here.
+    documentLock: {
+      readOnly: customViewWritesHeld,
+      actionsDisabled: customViewWritesHeld,
+    },
   };
 
   return (
@@ -670,18 +782,41 @@ export default function EditEntryPage({
               <PluginSlot path={beforeEditPath} props={editInjectionProps} />
             </div>
           )}
-          {/* FULL WIDTH and first, matching the historical-version banner: this
-            is a standing fact about the whole document, and a bar constrained
-            to the content measure reads as a note about the fields under it.
-            It does not touch the per-language staleness markers in the language
-            panel — those answer a different question, and a stale translation
-            inside a scheduled release is exactly where an editor needs both. */}
-          <ScheduledReleaseBanner
-            document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
-            onDefaultLocale={!isNonDefaultLocale}
-          />
-          {release.dialog}
+          {schedule.dialog}
           <EntryForm
+            /* A standing fact about the whole document, so a band across the
+             editor's column directly under its header, read before the fields.
+             Inside the editor rather than above it: the editor's row pulls up
+             over the page's top inset, and a banner placed before it slid
+             under the sticky header. It does not touch the per-language
+             staleness markers in the language panel — those answer a different
+             question, and a stale translation inside a scheduled release is
+             exactly where an editor needs both. */
+            documentBanner={
+              <>
+                {/* First in the banner order: it changes what every control
+                    below means, as nothing here can be changed. */}
+                {removedFromCode ? (
+                  <RemovedFromCodeNotice
+                    entity={{
+                      kind: "collection",
+                      label: collectionLabel,
+                      slug,
+                    }}
+                    state={collection.removedFromCodeState}
+                    variant="strip"
+                  />
+                ) : null}
+                <ScheduledReleaseBanner
+                  document={{
+                    scopeKind: "collection",
+                    scopeSlug: slug,
+                    entryId: id,
+                  }}
+                  onDefaultLocale={!isNonDefaultLocale}
+                />
+              </>
+            }
             collection={collection as unknown as EntryFormCollection}
             entry={entry}
             mode="edit"
@@ -691,12 +826,20 @@ export default function EditEntryPage({
             onViewApi={() =>
               navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
             }
-            /* Contributed to the editor's action model, which places it in the
-             overflow menu beside Duplicate: scheduling a release is a
-             document-management act rather than a leading one, and the toolbar
-             is reserved for the verbs an author reaches for while writing. */
+            /* Contributed to the editor's action model, which places both on
+             the Publish split's arrow: they decide when this goes live, and
+             the toolbar is reserved for the verbs an author reaches for while
+             writing. Schedule first, the one most often reached for. A
+             document whose collection was removed from code offers none. */
             documentActions={
-              release.contributed === null ? [] : [release.contributed]
+              removedFromCode
+                ? []
+                : [
+                    ...(schedule.contributed === null
+                      ? []
+                      : [schedule.contributed]),
+                    ...(pin === null ? [] : [pin]),
+                  ]
             }
             locale={locale}
             onLocaleChange={changeLocale}
@@ -713,6 +856,7 @@ export default function EditEntryPage({
             onDelete={handleDelete}
             onCancel={handleCancel}
             documentView={documentView}
+            latest={entryLatest}
           />
           {afterEditPath && (
             <div

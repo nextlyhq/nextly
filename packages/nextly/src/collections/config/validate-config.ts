@@ -46,15 +46,11 @@ import {
   isReservedSystemColumn,
 } from "../../lib/system-columns";
 import {
-  NEWLY_RESERVED_SLUG_NOTES,
-  SYSTEM_RESOURCES,
-} from "../../schemas/_zod/rbac";
-import {
   type BaseValidationError,
-  DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldTypeShared,
+  validateIconDefaultShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validatePluginFieldOptionsShared,
@@ -63,12 +59,12 @@ import {
   validateAccessShared,
   COLLECTION_ACCESS_KEYS,
   validateFieldBasicsShared,
+  validateSiblingFieldsShared,
 } from "../../shared/base-validator";
 import { isPlainObject } from "../../shared/lib/plain-copy";
 // RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
 // moved to shared/sql-reserved.ts to break a circular dependency with
-// base-validator. Imported here for local use in RESERVED_SLUGS_SET below
-// and re-exported so existing consumers that import them from this file's
+// base-validator. Re-exported so existing consumers that import them from this file's
 // path continue to work unchanged.
 import {
   RESERVED_SLUGS,
@@ -131,6 +127,7 @@ export type ValidationErrorCode =
   | "DECIMAL_PRECISION_INVALID"
   | "DECIMAL_SCALE_INVALID"
   | "DECIMAL_SCALE_EXCEEDS_PRECISION"
+  | "ICON_DEFAULT_INVALID"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
   | "BLOCK_SLUG_REQUIRED"
@@ -192,17 +189,8 @@ export interface ValidationResult {
 // they now live in shared/sql-reserved.ts and are re-exported above so the
 // public API surface for this file is unchanged.
 
-// System-resource names are added on top of the base reserved slugs. A
-// collection named after a system resource would seed the same permission rows
-// that resource's routes check (a `settings` collection reaches the user-fields
-// and component admin surfaces, a `media` collection the media routes), so it is
-// rejected here — at config validation, before any migration or table is built.
-// The names are NOT in the shared base list, because that list also feeds the
-// component validator and a component does not seed a permission under its slug.
-const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
-  ...RESERVED_SLUGS,
-  ...SYSTEM_RESOURCES,
-]);
+// The slug itself is judged by the one address rule (`shared/address-rule`),
+// which every road that writes an address shares; `validateSlugShared` asks it.
 
 // System columns injected onto a collection table, under both the snake_case
 // name and the camelCase alias that snake-cases to the same column. A code-first
@@ -430,7 +418,6 @@ function validateField(
   field: unknown,
   path: string,
   errors: ValidationError[],
-  seenNames: Set<string>,
   allCollectionSlugs?: string[]
 ): void {
   if (!field || typeof field !== "object") {
@@ -448,7 +435,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldBasicsShared(f, path, errsBase, seenNames);
+  validateFieldBasicsShared(f, path, errsBase);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -512,6 +499,10 @@ function validateField(
     case "number":
       validateNumberDecimalDimensionsShared(f, path, errsBase);
       break;
+
+    case "icon":
+      validateIconDefaultShared(f, path, errsBase);
+      break;
   }
 }
 
@@ -524,11 +515,9 @@ function validateFieldsArray(
   errors: ValidationError[],
   allCollectionSlugs?: string[]
 ): void {
-  const seenNames = new Set<string>();
-
   fields.forEach((field, index) => {
     const fieldPath = `${basePath}[${index}]`;
-    validateField(field, fieldPath, errors, seenNames, allCollectionSlugs);
+    validateField(field, fieldPath, errors, allCollectionSlugs);
   });
 }
 
@@ -595,7 +584,6 @@ function validateFields(
   //
   // Both keys land on `foo_bar` and the second silently overwrites the first, so one of the two
   // authored values is already gone by the time anything decides which table it belongs to.
-  const columnOwners = new Map<string, string>();
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const candidate = field as Record<string, unknown>;
@@ -662,24 +650,8 @@ function validateFields(
       errors.push(statusError);
       return;
     }
-    // Two names that reach one column cannot both be emitted, so the table could never be
-    // created. Checked here rather than in the shared field-name rule because only this level has
-    // columns at all: a repeater or group keeps its children inside a single JSON column, where
-    // two names that convert alike are simply two keys.
-    //
-    // Column-less field types are exempt for the same reason. A component and a many-to-many
-    // relationship store their values in their own tables, keyed by the field's declared name, so
-    // two of them whose names converge stay distinct and nothing is emitted twice.
-    const owner = columnOwners.get(column);
-    if (owner !== undefined) {
-      errors.push({
-        path: `${path}[${index}].name`,
-        message: `Field name '${name}' collides with '${owner}': both become the column '${column}'`,
-        code: "FIELD_NAME_DUPLICATE",
-      });
-      return;
-    }
-    columnOwners.set(column, name);
+    // Two names that reach one column are sibling fields the one sibling rule judges, for the
+    // whole entity at once (`validateSiblingFieldsShared`).
   });
 
   validateFieldsArray(fields, path, errors, allCollectionSlugs);
@@ -797,18 +769,19 @@ export function validateCollectionConfig(
   const errors: ValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
-  validateSlugShared(config.slug, errsBase, {
-    entityLabel: "Collection",
-    reservedSlugsSet: RESERVED_SLUGS_SET,
-    reservedSlugNotes: NEWLY_RESERVED_SLUG_NOTES,
-    sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
-  });
+  validateSlugShared(config.slug, errsBase, "collection");
 
   validateFields(
     config.fields,
     errors,
     allCollectionSlugs,
     (config as { status?: boolean }).status === true
+  );
+  validateSiblingFieldsShared(
+    "collection",
+    config.slug,
+    config.fields,
+    errsBase
   );
 
   validateIndexes(

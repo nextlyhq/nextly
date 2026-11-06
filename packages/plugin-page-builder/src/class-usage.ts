@@ -138,6 +138,12 @@ export interface ClassUsage {
    * missing id as absent when this is false.
    */
   complete: boolean;
+  /**
+   * How many blocks carry each class, by id: the richer view `ids` is read
+   * from. A block counts once however often its list repeats a class. A Map,
+   * so a class id such as `__proto__` is a key like any other.
+   */
+  blocks: ReadonlyMap<string, number>;
 }
 
 /**
@@ -173,7 +179,9 @@ export function classUsageOf(
   definitions?: ComponentLookup
 ): ClassUsage {
   const document = readStoredJson(stored);
-  if (!composable(document)) return { ids: [], complete: true };
+  if (!composable(document)) {
+    return { ids: [], complete: true, blocks: new Map() };
+  }
 
   // WHICH nodes are read is the engine's, shared with the style compiler rather
   // than reproduced here. The selection is the compiler's, so a reader that
@@ -203,7 +211,7 @@ export function classUsageOf(
       : resolveComponentInstances(document, definitions, { limits }).document;
   const selection = selectNodes(rendered, limits);
 
-  const ids = new Set<string>();
+  const blocks = new Map<string, number>();
   for (const entry of selection.nodes) {
     const classes: unknown = (entry.node as { classes?: unknown }).classes;
     if (!Array.isArray(classes)) continue;
@@ -212,11 +220,17 @@ export function classUsageOf(
     // distinct-count bound never trips and the whole array is read. The cap is
     // the compiler's, which applies this many of a node's list and no more.
     const readable = Math.min(classes.length, MAX_CLASSES_PER_NODE);
+    const onThisBlock = new Set<string>();
     for (let i = 0; i < readable; i++) {
       const id: unknown = classes[i];
-      if (namesAClass(id)) ids.add(id);
+      if (namesAClass(id)) onThisBlock.add(id);
     }
+    for (const id of onThisBlock) blocks.set(id, (blocks.get(id) ?? 0) + 1);
   }
 
-  return { ids: [...ids].sort(), complete: selection.stopped === undefined };
+  return {
+    ids: [...blocks.keys()].sort(),
+    complete: selection.stopped === undefined,
+    blocks,
+  };
 }

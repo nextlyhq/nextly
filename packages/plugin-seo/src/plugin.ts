@@ -24,8 +24,7 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
-import { seoIssuesWidget } from "./widget-card";
-import { seoIssuesWidgetSource } from "./widget-source";
+import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -161,22 +160,21 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
-    // A dashboard source counting the SEO issues in those same collections.
-    // Bound to `targets` rather than to every collection: a collection this
-    // plugin never extended has no `seo` group, so every one of its documents
-    // would report the full set of missing fields and drown the real answer.
-    widgetSources: [seoIssuesWidgetSource(targets, seoFields)],
   };
 
-  // The card that draws that source. Contributed only where the configured
-  // fields give it something to count (see `widget-card`) AND some collection
-  // carries them: a plugin registered with no collections extends nothing, so
-  // every cell would answer zero and the card would report a clean site for a
-  // plugin that is doing nothing at all.
-  const issuesCard =
-    targets.length > 0 ? seoIssuesWidget(seoFields) : undefined;
-  if (issuesCard) {
-    contributes.admin = { ...contributes.admin, widgets: [issuesCard] };
+  // The SEO issues card and its Needs attention lines, one per collection,
+  // all counting the issues in those same collections. Bound to `targets`
+  // rather than to every collection: a collection this plugin never extended
+  // has no `seo` group, so every one of its documents would report the full
+  // set of missing fields and drown the real answer. Each is withheld where it
+  // would have nothing to say (see `widget-card`).
+  const issuesCard = seoIssuesWidget(targets, seoFields);
+  const issuesItems = seoIssuesAttentionItems(targets, seoFields);
+  if (issuesCard || issuesItems.length > 0) {
+    contributes.dashboard = {
+      ...(issuesCard ? { widgets: [issuesCard] } : {}),
+      ...(issuesItems.length > 0 ? { attention: issuesItems } : {}),
+    };
   }
 
   if (sitemapEnabled) {
@@ -231,9 +229,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     //
     // 🔴 A hand-written floor goes stale the moment the plugin starts using
     // something newer, and the staleness is silent in the direction that
-    // accepts: an older core satisfying the wider range is installed, registers
-    // no source for `contributes.widgetSources`, and leaves the contributed card
-    // querying a source that does not exist. The floor stood at alpha.55 -- the
+    // accepts: an older core satisfying the wider range is installed, does not
+    // read the `contributes.dashboard` this plugin declares in the shape it
+    // declares it, and the card and its Needs attention line silently never
+    // appear. The floor stood at alpha.55 -- the
     // release that first exported `slugToStaticParam` -- while this plugin had
     // begun requiring a contract that shipped much later.
     //

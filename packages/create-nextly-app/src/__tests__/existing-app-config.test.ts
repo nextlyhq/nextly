@@ -7,13 +7,27 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { parse } from "@babel/parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { generateConfig } from "../generators/config";
+import { readMediaRouteTemplates } from "../generators/media-routes";
 import { generateTypesDirectory } from "../generators/types";
 import type { ProjectInfo } from "../types";
+
+// The templates the CLI ships, which the types step copies the component map from.
+const templates = await readMediaRouteTemplates(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "..",
+    "templates"
+  )
+);
 
 let dir: string;
 
@@ -71,7 +85,7 @@ describe.each([
 
   it("sends types to a folder the same run creates", async () => {
     const config = await written();
-    await generateTypesDirectory(dir, info(srcDir));
+    await generateTypesDirectory(dir, info(srcDir), templates);
 
     const outputFile = /outputFile: "([^"]+)"/.exec(config)?.[1] ?? "";
     expect(outputFile).toBe(

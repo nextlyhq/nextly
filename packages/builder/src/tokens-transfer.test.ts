@@ -20,7 +20,15 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { exportCss, exportDtcg, importDtcg } from "./tokens-transfer";
+import {
+  applyImport,
+  exportCss,
+  exportDtcg,
+  exportDtcgWithTheme,
+  exportForFigma,
+  importDtcg,
+  planImport,
+} from "./tokens-transfer";
 
 /** A site whose second token is RENAMED, so identity and name differ. */
 const SITE: SiteTokenSet = {
@@ -1439,5 +1447,482 @@ describe("a document nested past what the reader can name", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.skipped.join(" ")).toContain("g0.g1.g2.g3.g4.bad");
+  });
+});
+
+describe("an import is planned before anything changes", () => {
+  const MINE: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "color.paper", kind: "color", values: { light: "#ffffff" } },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ],
+  };
+  const FILE = exportDtcg({
+    tokens: [
+      // Unchanged.
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      // Changed: adds a dark value the site lacks, clashing with nothing.
+      {
+        name: "color.paper",
+        kind: "color",
+        values: { light: "#ffffff", dark: "#0b0f19" },
+      },
+      // A conflict: both hold a light value, and they differ.
+      { name: "color.ink", kind: "color", values: { light: "#222222" } },
+      // Added.
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+      // Skipped: a composite this site has no kind for.
+      { name: "shadow.card", kind: "custom", values: { light: "x" } },
+    ],
+  }).text;
+
+  it("sorts the file into added, changed, unchanged and conflicts", () => {
+    const plan = planImport(
+      [{ name: "variables.tokens.json", text: FILE }],
+      MINE
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added.map(t => t.name)).toEqual(["color.brand"]);
+    expect(plan.changed.map(t => t.name)).toEqual(["color.paper"]);
+    expect(plan.unchanged.map(t => t.name)).toEqual(["space.4"]);
+    expect(
+      plan.conflicts.map(c => [c.mine.values.light, c.imported.values.light])
+    ).toEqual([["#111111", "#222222"]]);
+  });
+
+  it("changes nothing by itself", () => {
+    const before = JSON.stringify(MINE);
+    planImport([{ name: "variables.tokens.json", text: FILE }], MINE);
+    expect(JSON.stringify(MINE)).toBe(before);
+  });
+
+  it("applies the author's choice per conflict", () => {
+    const plan = planImport(
+      [{ name: "variables.tokens.json", text: FILE }],
+      MINE
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    const ink = (choice: "keep" | "use") => {
+      const result = applyImport(
+        plan,
+        MINE,
+        new Map([[plan.conflicts[0]!.identity, choice]])
+      );
+      if (!result.ok) throw new Error(result.error);
+      return result.tokens.tokens.find(t => t.name === "color.ink")?.values
+        .light;
+    };
+    expect(ink("keep")).toBe("#111111");
+    expect(ink("use")).toBe("#222222");
+  });
+
+  it("takes the imported side of a conflict when no choice was made", () => {
+    const plan = planImport(
+      [{ name: "variables.tokens.json", text: FILE }],
+      MINE
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, MINE, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.tokens.tokens.map(t => t.name)).toEqual([
+      "color.ink",
+      "color.paper",
+      "space.4",
+      "color.brand",
+    ]);
+    expect(
+      result.tokens.tokens.find(t => t.name === "color.paper")?.values.dark
+    ).toBe("#0b0f19");
+  });
+
+  it("lists a composite this site has no kind for as skipped", () => {
+    const plan = planImport(
+      [
+        {
+          name: "type.tokens.json",
+          text: JSON.stringify({
+            heading: {
+              $type: "typography",
+              $value: {
+                fontFamily: "Inter",
+                fontSize: { value: 40, unit: "px" },
+              },
+            },
+            gap: { $type: "dimension", $value: { value: 8, unit: "px" } },
+          }),
+        },
+      ],
+      { tokens: [] }
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added.map(t => t.name)).toEqual(["gap"]);
+    expect(plan.skipped.join(" ")).toMatch(/"heading".*typography/);
+  });
+
+  it("refuses a file that is not JSON, naming it", () => {
+    const plan = planImport([{ name: "broken.json", text: "{" }], MINE);
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.error).toMatch(/broken\.json/);
+  });
+
+  it("reads a token file with its theme file, wherever the theme came from", () => {
+    const made = exportDtcgWithTheme({
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#1d2b6b", dark: "#8fa7ff" },
+        },
+      ],
+    });
+    // As another tool would write it: without this system's own extension,
+    // so the dark value can only come from the theme file.
+    const files = made.map(file => ({
+      name: file.filename,
+      text: file.filename.endsWith(".resolver.json")
+        ? file.text
+        : JSON.stringify(JSON.parse(file.text), (key, value: unknown) =>
+            key === "$extensions" ? undefined : value
+          ),
+    }));
+    const plan = planImport(files, { tokens: [] });
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added[0]?.values).toEqual({
+      light: "#1d2b6b",
+      dark: "#8fa7ff",
+    });
+  });
+
+  it("reads Figma's one file per mode", () => {
+    const made = exportForFigma({
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#1d2b6b", dark: "#8fa7ff" },
+        },
+      ],
+    });
+    const plan = planImport(
+      made.map(file => ({ name: file.filename, text: file.text })),
+      { tokens: [] }
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added[0]?.values).toEqual({
+      light: "#1D2B6B",
+      dark: "#8FA7FF",
+    });
+  });
+});
+
+describe("the exports' files", () => {
+  const DARK: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.brand",
+        kind: "color",
+        values: { light: "#1d2b6b", dark: "#8fa7ff" },
+      },
+    ],
+  };
+
+  it("adds a theme file to the DTCG export only when there are dark values", () => {
+    expect(exportDtcgWithTheme(DARK).map(f => f.filename)).toEqual([
+      "variables.tokens.json",
+      "variables.resolver.json",
+    ]);
+    expect(exportDtcgWithTheme(SITE).map(f => f.filename)).toEqual([
+      "variables.tokens.json",
+    ]);
+  });
+
+  it("writes one Figma file per mode", () => {
+    expect(exportForFigma(DARK).map(f => f.filename)).toEqual([
+      "light.tokens.json",
+      "dark.tokens.json",
+    ]);
+  });
+});
+
+describe("an import from Figma, which carries no identity", () => {
+  it("updates a renamed variable by its name, keeping the stored id", () => {
+    const site: SiteTokenSet = {
+      tokens: [
+        {
+          id: "color.primary",
+          name: "brand.main",
+          kind: "color",
+          values: { light: "#3b82f6" },
+        },
+      ],
+    };
+    // Figma's files hold names only: edit the light value as a designer would.
+    const files = exportForFigma(site).map(file => ({
+      name: file.filename,
+      text: file.text
+        .replaceAll("#3B82F6", "#112233")
+        .replace(
+          /"components": \[[^\]]*\]/,
+          '"components": [0.06666666666666667, 0.13333333333333333, 0.2]'
+        ),
+    }));
+    const plan = planImport(files, site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.added).toEqual([]);
+    expect(plan.conflicts.map(c => c.identity)).toEqual(["color.primary"]);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.tokens.tokens).toEqual([
+      {
+        id: "color.primary",
+        name: "brand.main",
+        kind: "color",
+        values: { light: "#112233" },
+      },
+    ]);
+  });
+});
+
+describe("what a conflict differs in", () => {
+  it("names each field that differs, not only the light values", () => {
+    const mine: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#ffffff", dark: "#111111" },
+        },
+      ],
+    };
+    const file = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#ffffff", dark: "#222222" },
+          description: "Body text",
+        },
+      ],
+    }).text;
+    const plan = planImport([{ name: "ink.tokens.json", text: file }], {
+      tokens: [{ ...mine.tokens[0]!, description: "Text" }],
+    });
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.conflicts[0]?.fields).toEqual([
+      { field: "Dark", mine: "#111111", imported: "#222222" },
+      { field: "Description", mine: "Text", imported: "Body text" },
+    ]);
+  });
+});
+
+describe("an import that would give two variables one name", () => {
+  const site: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.ink",
+        label: "Brand",
+        kind: "color",
+        values: { light: "#111111" },
+      },
+    ],
+  };
+  const file = exportDtcg({
+    tokens: [
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+    ],
+  }).text;
+
+  it("says so in the preview", () => {
+    const plan = planImport([{ name: "brand.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.labelClashes).toEqual(["Brand"]);
+  });
+
+  it("is refused rather than saved", () => {
+    const plan = planImport([{ name: "brand.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/"Brand"/);
+  });
+});
+
+describe("an import of a type size", () => {
+  it("does not count a size and its paired line height as two variables with one name", () => {
+    const file = exportDtcg({
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    }).text;
+    const plan = planImport([{ name: "type.tokens.json", text: file }], {
+      tokens: [],
+    });
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.labelClashes).toEqual([]);
+    expect(applyImport(plan, { tokens: [] }, new Map()).ok).toBe(true);
+  });
+});
+
+describe("a file naming one variable twice", () => {
+  it("previews the one that will be applied, and says the other was dropped", () => {
+    const entry = (hex: string, id: string) => ({
+      $type: "color",
+      $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+      $extensions: {
+        "com.nextlyhq.nextly": { css: { light: hex }, kind: "color", id },
+      },
+    });
+    const text = JSON.stringify({
+      color: {
+        first: entry("#111111", "color.ink"),
+        second: entry("#222222", "color.ink"),
+      },
+    });
+    const site: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      ],
+    };
+    const plan = planImport([{ name: "twice.tokens.json", text }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged).toEqual([]);
+    expect(plan.conflicts.map(c => c.imported.values.light)).toEqual([
+      "#222222",
+    ]);
+    expect(plan.skipped.join(" ")).toMatch(/color\.ink/);
+  });
+});
+
+describe("what an import applies", () => {
+  const site: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "color.paper", kind: "color", values: { light: "#ffffff" } },
+    ],
+  };
+
+  it("applies and counts only what changes the site", () => {
+    const file = exportDtcg({
+      tokens: [
+        site.tokens[0]!,
+        { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+      ],
+    }).text;
+    const plan = planImport([{ name: "f.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.imported).toBe(1);
+  });
+
+  it("changes nothing, and says so, when nothing differs or every conflict is kept", () => {
+    const same = exportDtcg(site).text;
+    const plan = planImport([{ name: "same.tokens.json", text: same }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, site, new Map());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/nothing was changed/);
+
+    const differs = exportDtcg({
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#222222" } },
+      ],
+    }).text;
+    const conflict = planImport(
+      [{ name: "d.tokens.json", text: differs }],
+      site
+    );
+    if (!conflict.ok) throw new Error(conflict.error);
+    const kept = applyImport(
+      conflict,
+      site,
+      new Map([[conflict.conflicts[0]!.identity, "keep"]])
+    );
+    expect(kept.ok).toBe(false);
+  });
+});
+
+describe("an import that changes only a variable's vendor data", () => {
+  it("counts as a change, is previewed as one, and is stored", () => {
+    const site: SiteTokenSet = {
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      ],
+    };
+    const file = exportDtcg({
+      tokens: [
+        {
+          ...site.tokens[0]!,
+          extensions: { "com.figma.variableId": "VariableID:9:9" },
+        },
+      ],
+    }).text;
+    const plan = planImport([{ name: "ink.tokens.json", text: file }], site);
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged).toEqual([]);
+    expect(plan.changed.map(t => t.name)).toEqual(["color.ink"]);
+    const result = applyImport(plan, site, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.imported).toBe(1);
+    expect(result.tokens.tokens[0]?.extensions).toEqual({
+      "com.figma.variableId": "VariableID:9:9",
+    });
+  });
+});
+
+describe("an import that leaves out a variable's optional fields", () => {
+  const stored: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.ink",
+        label: "Ink",
+        kind: "color",
+        values: { light: "#111111" },
+        extensions: { "com.figma.variableId": "VariableID:1:1" },
+      },
+    ],
+  };
+  const sparse = (values: { light: string; dark?: string }) =>
+    exportDtcg({
+      tokens: [{ name: "color.ink", kind: "color", values }],
+    }).text;
+
+  it("is unchanged when nothing it does state differs", () => {
+    const plan = planImport(
+      [{ name: "ink.tokens.json", text: sparse({ light: "#111111" }) }],
+      stored
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    expect(plan.unchanged.map(t => t.name)).toEqual(["color.ink"]);
+    expect(plan.changed).toEqual([]);
+  });
+
+  it("keeps the site's label and vendor data when it changes something else", () => {
+    const plan = planImport(
+      [
+        {
+          name: "ink.tokens.json",
+          text: sparse({ light: "#111111", dark: "#eeeeee" }),
+        },
+      ],
+      stored
+    );
+    if (!plan.ok) throw new Error(plan.error);
+    const result = applyImport(plan, stored, new Map());
+    if (!result.ok) throw new Error(result.error);
+    expect(result.tokens.tokens[0]).toEqual({
+      ...stored.tokens[0],
+      values: { light: "#111111", dark: "#eeeeee" },
+    });
   });
 });

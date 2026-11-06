@@ -31,6 +31,8 @@
 // getNextly() bootstraps with this project's collections list.
 // Without this, the global singleton initializes empty and
 // find('posts') throws "Schema not in registry".
+// Registers Nextly's cached reads under Cache Components (see the file).
+import "@/nextly/cached-read";
 import { getNextly } from "nextly";
 import type { WhereFilter } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";

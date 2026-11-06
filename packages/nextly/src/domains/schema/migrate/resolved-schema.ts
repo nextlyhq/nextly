@@ -69,9 +69,25 @@ export interface ResolvedEntity {
   builtBy: ColumnOrigin;
 }
 
+/**
+ * Which registry an entity's row belongs in: `dynamic_collections`,
+ * `dynamic_singles`, or the field-group registry. The same slug may name one
+ * entity of each kind, so a slug alone does not say which row to look for.
+ */
+export type EntityKind = "collection" | "single" | "fieldGroup";
+
+/**
+ * A declared entity, with the registry its row belongs in. Every entity this
+ * module resolves carries its kind; a caller that only rebuilds tables takes
+ * the narrower {@link ResolvedEntity}.
+ */
+export interface DeclaredEntity extends ResolvedEntity {
+  kind: EntityKind;
+}
+
 export interface ResolvedSchema {
   /** Every declared entity, code-first winning on a slug collision. */
-  entities: ResolvedEntity[];
+  entities: DeclaredEntity[];
   /** Table names the schema declares, for telling a real table from a junction. */
   declaredTables: Set<string>;
   /** Junction tables named outright via `options.junctionTable`. */
@@ -87,12 +103,14 @@ interface RawEntity {
 
 function toResolved(
   entities: readonly unknown[],
+  kind: EntityKind,
   builtBy: ColumnOrigin,
   resolveTableName: (e: { slug: string; dbName?: string }) => string
-): ResolvedEntity[] {
+): DeclaredEntity[] {
   return entities.map(raw => {
     const e = raw as RawEntity;
     return {
+      kind,
       slug: e.slug,
       tableName: resolveTableName({ slug: e.slug, dbName: e.dbName }),
       fields: e.fields ?? [],
@@ -152,9 +170,19 @@ export async function resolveDeclaredSchema(
 ): Promise<ResolvedSchema> {
   const resolvers = args.resolvers ?? DEFAULT_TABLE_NAME_RESOLVERS;
   const codeFirst = [
-    ...toResolved(args.config.collections, "codeFirst", resolvers.collection),
-    ...toResolved(args.config.singles ?? [], "codeFirst", resolvers.single),
-    ...toResolved(args.config.fieldGroups ?? [], "codeFirst", e =>
+    ...toResolved(
+      args.config.collections,
+      "collection",
+      "codeFirst",
+      resolvers.collection
+    ),
+    ...toResolved(
+      args.config.singles ?? [],
+      "single",
+      "codeFirst",
+      resolvers.single
+    ),
+    ...toResolved(args.config.fieldGroups ?? [], "fieldGroup", "codeFirst", e =>
       resolvers.component(e)
     ),
   ];
@@ -169,7 +197,7 @@ export async function resolveDeclaredSchema(
     if ((error as { code?: string }).code !== "ENOENT") throw error;
   }
 
-  let builder: ResolvedEntity[] = [];
+  let builder: DeclaredEntity[] = [];
   let builderJunctions: string[] = [];
   if (manifest) {
     const merged = applyDeferredExtendsToManifest(
@@ -186,16 +214,18 @@ export async function resolveDeclaredSchema(
       args.config.collections
     );
     builder = [
-      ...toResolved(survivingCollections, "collection", e =>
+      ...toResolved(survivingCollections, "collection", "collection", e =>
         resolveCollectionTableName(e.slug)
       ),
       ...toResolved(
         survivingOf(merged.singles ?? [], args.config.singles ?? []),
+        "single",
         "collection",
         resolvers.single
       ),
       ...toResolved(
         survivingOf(merged.components ?? [], args.config.fieldGroups ?? []),
+        "fieldGroup",
         "fieldGroup",
         e => resolveComponentTableName(e.slug)
       ),

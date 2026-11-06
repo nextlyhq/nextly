@@ -255,6 +255,15 @@ export function buildServiceConfig(
     ) {
       serviceConfig.webhookAuditEnabled = nextlyConfig.webhookAuditEnabled;
     }
+
+    // Per-language storage, chosen once for the site: carried so registration publishes the
+    // choice the config makes rather than the default.
+    if (
+      serviceConfig.perLanguageStorage === undefined &&
+      nextlyConfig?.perLanguageStorage !== undefined
+    ) {
+      serviceConfig.perLanguageStorage = nextlyConfig.perLanguageStorage;
+    }
   }
 
   // Ensure imageProcessor is always provided

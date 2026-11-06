@@ -65,10 +65,23 @@ const NEXTLY_FILES = [
   "app/admin/api/media/[[...path]]/route.ts",
   "app/api/media/[[...path]]/route.ts",
   "app/api/health/route.ts",
+  "app/uploads/[...path]/route.ts",
   "instrumentation.ts",
   "types/generated/.gitkeep",
   "types/generated/nextly-types.ts",
+  "types/generated/plugin-admin-components.generated.ts",
+  "types/generated/plugin-admin-imports.generated.ts",
 ];
+
+/** The templates folder the existing-app path reads, as the CLI ships it. */
+const TEMPLATES_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "..",
+  "templates"
+);
 
 let dir: string;
 
@@ -101,6 +114,40 @@ async function seed(files: readonly string[]): Promise<void> {
 describe("adding Nextly to an existing app", () => {
   // The control: on an app with none of them, every one is written. Without
   // it, a path no step writes would pass the next case by absence.
+  it("writes the component map its admin layout and page import, the template's own, so both resolve", async () => {
+    await run();
+
+    for (const file of [
+      "app/admin/[[...params]]/layout.tsx",
+      "app/admin/[[...params]]/page.tsx",
+    ]) {
+      const text = await readFile(join(dir, file), "utf8");
+      const imported = [
+        ...text.matchAll(/"(\.[^"]*\/plugin-admin-[a-z]+\.generated)"/g),
+      ].map(match => match[1]);
+      // Each imports one of the pair: the layout the list, the page the map.
+      expect(imported, file).toHaveLength(1);
+      for (const specifier of imported) {
+        expect(
+          existsSync(join(dirname(join(dir, file)), `${specifier}.ts`)),
+          `${file} imports ${specifier}`
+        ).toBe(true);
+      }
+    }
+    // Copies of what the base template commits, not a second empty map.
+    for (const name of [
+      "plugin-admin-components.generated.ts",
+      "plugin-admin-imports.generated.ts",
+    ]) {
+      expect(await readFile(join(dir, "types/generated", name), "utf8")).toBe(
+        await readFile(
+          join(TEMPLATES_DIR, "base/src/types/generated", name),
+          "utf8"
+        )
+      );
+    }
+  });
+
   it("writes each of Nextly's files into an app that has none", async () => {
     await run();
 

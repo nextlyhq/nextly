@@ -15,6 +15,7 @@ import {
   type LastSuperAdminTx,
 } from "../../users/services/last-super-admin";
 
+import { refuseLinkingPublicRole } from "./public-role";
 import { listDescendantRoleIds } from "./role-descendants";
 import { afterRoleGrantsChanged } from "./role-grants-changed";
 import { MAX_ROLE_HIERARCHY_DEPTH, walkRoleGraph } from "./role-graph";
@@ -68,6 +69,16 @@ export class RoleInheritanceService extends BaseService {
     const childRoleId = await this.storedRoleId(requestedChildRoleId);
     const parentRoleId = await this.storedRoleId(requestedParentRoleId);
     if (childRoleId === parentRoleId) throw new Error("INHERIT_SELF_FORBIDDEN");
+    // The Public role is never joined to inheritance, on either side: it
+    // would pass visitors' grants to another role, or another role's to
+    // visitors.
+    await refuseLinkingPublicRole(
+      this.db as LastSuperAdminTx,
+      this.dialect,
+      [childRoleId, parentRoleId],
+      "inherit",
+      { childRoleId, parentRoleId }
+    );
     await this.refuseEditingSystemRole(parentRoleId);
     if (await this.willCreateCycle(childRoleId, parentRoleId))
       throw new Error("INHERIT_CYCLE_FORBIDDEN");

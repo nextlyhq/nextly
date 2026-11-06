@@ -14,6 +14,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { useSettingsPreview } from "../useSettingsPreview";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -36,9 +37,17 @@ const WIDGET: DashboardWidget = {
   id: "core/recent",
   title: "Recent posts",
   archetype: "list",
-  size: "md",
-  query: { source: "collection:posts", op: "list", limit: 5 },
-  settings: [{ name: "limit", type: "number", label: "Rows", defaultValue: 5 }],
+  size: gridBounds(4),
+  // The card's Collection: what it is set to is part of the question its
+  // widget's `load` answers.
+  settings: [
+    {
+      name: "collection",
+      type: "collection",
+      label: "Collection",
+      defaultValue: "posts",
+    },
+  ],
 };
 
 const SHOWN: WidgetSlot = {
@@ -46,24 +55,34 @@ const SHOWN: WidgetSlot = {
   result: { op: "list", items: [{ title: "shown" }] },
 };
 
-/** The queries each request carried, in order. */
+/**
+ * A card ask as the preview sends it: its widget, with the settings it is drawn with, and the
+ * size it is drawn at where that is known.
+ */
+type SentAsk = {
+  widget: string;
+  settings?: Record<string, unknown>;
+  size?: { w: number; h: number; tier: string };
+};
+
+/** The cards each request asked for, in order. */
 const sent = () =>
   vi
     .mocked(protectedApi.post)
-    .mock.calls.map(
-      ([, body]) => (body as { queries: Array<{ limit?: number }> }).queries
-    );
+    .mock.calls.map(([, body]) => (body as { queries: SentAsk[] }).queries);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Each card answered with one row titled by the collection it was asked with.
   vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
     Promise.resolve({
-      results: (body as { queries: Array<{ limit?: number }> }).queries.map(
-        query => ({
-          ok: true,
-          result: { op: "list", items: [{ title: `limit ${query.limit}` }] },
-        })
-      ),
+      results: (body as { queries: SentAsk[] }).queries.map(query => ({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ title: `${String(query.settings?.collection)}` }],
+        },
+      })),
     })
   );
 });
@@ -75,10 +94,14 @@ function preview(
   initialDraft: Record<string, unknown>,
   {
     widget = WIDGET,
-    shown = {},
+    size,
+    tier,
   }: {
     widget?: DashboardWidget;
-    shown?: { answerTier?: "small" | "medium" | "large" };
+    /** The size the card is drawn at on the dashboard. */
+    size?: { w: number; h: number };
+    /** The tier the card is drawn at, from its width on the dashboard. */
+    tier?: "small" | "medium" | "large";
   } = {}
 ) {
   return renderHook(
@@ -88,7 +111,9 @@ function preview(
         placementId: "p1",
         stored: undefined,
         draft,
-        shown: { slot: SHOWN, updatedAt: null, isFetching: false, ...shown },
+        shown: { slot: SHOWN, updatedAt: null, isFetching: false },
+        ...(size === undefined ? {} : { size }),
+        ...(tier === undefined ? {} : { tier }),
       }),
     { wrapper, initialProps: { draft: initialDraft } }
   );
@@ -110,8 +135,8 @@ describe("the settings sheet's preview", () => {
   it("asks a changed question once the values stop changing, as its own card", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { result, rerender } = preview({});
-    rerender({ draft: { limit: 1 } });
-    rerender({ draft: { limit: 12 } });
+    rerender({ draft: { collection: "pages" } });
+    rerender({ draft: { collection: "tags" } });
     // Waiting for the values to settle: the card's answer was asked another way, so it is not
     // drawn, and nothing has been asked yet.
     expect(result.current.slot).toBeUndefined();
@@ -121,73 +146,69 @@ describe("the settings sheet's preview", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
-    await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 13"));
-    // One request, for the settled question only, with the settings it would keep. Sized as a
-    // card the dashboard draws: one row more than the twelve it draws, which is how a list learns
-    // that more exist, at the widest tier, which serves whatever width the sheet gives it.
+    await waitFor(() => expect(titleOf(result.current.slot)).toBe("tags"));
+    // One request, for the settled question only: the card asked for with the settings it would
+    // keep, never by the stored card's id, so its answer is never filed as the stored card's.
     expect(sent()).toEqual([
-      [{ source: "collection:posts", op: "list", limit: 13 }],
+      [{ widget: "core/recent", settings: { collection: "tags" } }],
     ]);
-    expect(result.current.answerTier).toBe("large");
-    expect(result.current.placement.settings).toMatchObject({ limit: 12 });
-  });
-
-  it("draws the card's own answer with the tier it was fetched at", () => {
-    // 🔴 A small card's answer is three rows and a fourth that says more exist. Drawn without its
-    // tier, a wider preview shows all four as rows, and nothing says more exist.
-    const { result } = preview({}, { shown: { answerTier: "small" } });
-    expect(result.current.slot).toBe(SHOWN);
-    expect(result.current.answerTier).toBe("small");
-  });
-
-  it("asks a custom card's changed question as declared, since its own component draws it", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { result, rerender } = preview(
-      {},
-      { widget: { ...WIDGET, archetype: "custom" } }
-    );
-    rerender({ draft: { limit: 12 } });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400);
+    expect(result.current.placement.settings).toMatchObject({
+      collection: "tags",
     });
-    await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 12"));
-    expect(sent()).toEqual([
-      [{ source: "collection:posts", op: "list", limit: 12 }],
-    ]);
-    expect(result.current.answerTier).toBeUndefined();
   });
 
-  it("asks a cells card's cells under the changed values, and hands their answers back by key", async () => {
-    // 🔴 With no query of its own, a cells card asked nothing, and its preview
-    // stayed on its skeleton.
-    vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
-      Promise.resolve({
-        results: (body as { queries: unknown[] }).queries.map(() => ({
-          ok: true,
-          result: { op: "count", total: 4 },
-        })),
-      })
-    );
+  // A size-aware `load` reads the size it is handed to choose how many rows to fetch, so the
+  // preview's question carries the card's own size and tier, not its widget's default; two
+  // sizes, so a size fixed in the request cannot pass both.
+  it.each([
+    { size: { w: 4, h: 4 }, tier: "medium" as const },
+    { size: { w: 12, h: 2 }, tier: "large" as const },
+  ])(
+    "asks a changed question at the card's own size, $size.w by $size.h at $tier",
+    async ({ size, tier }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const { rerender } = preview({}, { size, tier });
+      rerender({ draft: { collection: "pages" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await waitFor(() => expect(sent()).toHaveLength(1));
+      expect(sent()[0]).toEqual([
+        {
+          widget: "core/recent",
+          settings: { collection: "pages" },
+          size: { ...size, tier },
+        },
+      ]);
+    }
+  );
+
+  it("asks again when only the density changes, which its `load` reads too", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const count = {
-      id: "core/count",
-      title: "Count",
-      archetype: "custom",
-      size: "sm",
+    const widget: DashboardWidget = {
+      ...WIDGET,
       settings: [
-        { name: "collection", type: "collection", label: "Collection" },
+        {
+          name: "density",
+          type: "select",
+          label: "Density",
+          defaultValue: "default",
+          options: [
+            { label: "Default", value: "default" },
+            { label: "Compact", value: "compact" },
+          ],
+        },
       ],
-      cells: [{ key: "total", query: { op: "count" } }],
-    } as DashboardWidget;
-    const { result, rerender } = preview({}, { widget: count });
-    rerender({ draft: { collection: "pages" } });
+    };
+    const { result, rerender } = preview({}, { widget, size: { w: 4, h: 4 } });
+    rerender({ draft: { density: "compact" } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
-    await waitFor(() =>
-      expect(result.current.slotFor?.("total")).toMatchObject({ ok: true })
-    );
-    expect(sent()).toEqual([[{ op: "count", source: "collection:pages" }]]);
-    expect(result.current.definition.title).toBe("Count: pages");
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    expect(sent()[0]?.[0]?.settings).toEqual({ density: "compact" });
+    expect(result.current.placement.settings).toMatchObject({
+      density: "compact",
+    });
   });
 });

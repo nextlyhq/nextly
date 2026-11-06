@@ -80,7 +80,9 @@ describe("the write seam judges a submission", () => {
     // while making the Spam view the only view.
     const ctx = writeOf({ email: "a@b.test" });
     await run(ctx, { honeypot: true });
-    expect(ctx.data.status).toBeUndefined();
+    // Not flagged: a submission a request created starts as new, and stays so.
+    expect(ctx.data.status).toBe("new");
+    expect(ctx.data.spamReason).toBeUndefined();
   });
 
   it("does not trip on a field the form actually declares", async () => {
@@ -92,7 +94,8 @@ describe("the write seam judges a submission", () => {
       { fields: [...FIELDS, { name: "website", label: "Site", type: "text" }] }
     );
     await run(ctx, { honeypot: true });
-    expect(ctx.data.status).toBeUndefined();
+    expect(ctx.data.status).toBe("new");
+    expect(ctx.data.spamReason).toBeUndefined();
   });
 
   it("says nothing about a write no request produced", async () => {

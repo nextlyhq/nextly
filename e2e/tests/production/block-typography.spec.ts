@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "../support/visible";
 
 /**
  * A heading a visitor reads is set apart from the body text around it.

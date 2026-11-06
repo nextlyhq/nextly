@@ -15,24 +15,18 @@
  * silent in both directions: a step offered whose endpoint refuses it, or a
  * step hidden from someone allowed to take it.
  *
- * Split into its parts as well as the slug because the two consumers spell the
- * same fact differently: `requirePermission`/`requireRoutePermission` take an
- * action and a resource, while a permission-table lookup wants the joined
- * `{action}-{resource}`. Deriving the slug here keeps the join from being a
- * fourth place the policy is written.
+ * It is a schema change, so it asks what every schema change asks
+ * (`SCHEMA_CHANGE_PERMISSIONS`, in the system write policy): all three of
+ * create, update and delete on settings, each asked as one permission is.
  *
  * @module auth/collection-definition-policy
  */
 
-/** The action half, as the route guards spell it. */
-export const COLLECTION_DEFINITION_ACTION = "manage";
+import {
+  SCHEMA_CHANGE_PERMISSIONS,
+  type SystemPermission,
+} from "../domains/auth/system-write-policy";
 
-/** The resource half, as the route guards spell it. */
-export const COLLECTION_DEFINITION_RESOURCE = "settings";
-
-/**
- * The same policy as a permission slug, for a caller that looks one up rather
- * than guarding a route with it.
- */
-export const COLLECTION_DEFINITION_PERMISSION =
-  `${COLLECTION_DEFINITION_ACTION}-${COLLECTION_DEFINITION_RESOURCE}` as const;
+/** Every permission a collection definition change asks, all of them. */
+export const COLLECTION_DEFINITION_PERMISSIONS: readonly SystemPermission[] =
+  SCHEMA_CHANGE_PERMISSIONS;

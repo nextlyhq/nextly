@@ -21,7 +21,7 @@ import { useDocumentHistory } from "@admin/components/features/versions/document
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
-import { documentActions, type DocumentAction } from "./document-actions";
+import { documentActions, type EditorDocumentAction } from "./document-actions";
 import {
   acceptContributions,
   reasonFor,
@@ -116,6 +116,18 @@ export interface DocumentActionBindingsInput {
   /** Whether a colleague's claim withholds writing. */
   documentLocked?: boolean;
   /**
+   * Whether the user may change the document: create it, or update it. Without
+   * it the page offers nothing that writes its content, while publishing,
+   * unpublishing and deleting follow their own permissions.
+   */
+  canEdit?: boolean;
+  /**
+   * Whether the server refuses every write to the document whoever asks (its
+   * collection or Single was removed from code): only what reads is offered,
+   * and no contributed action is folded in.
+   */
+  writesRefused?: boolean;
+  /**
    * Document actions the PAGE owns, folded in with the built-in ones.
    *
    * Descriptions rather than rendered controls, so placement, ordering and
@@ -125,6 +137,13 @@ export interface DocumentActionBindingsInput {
    * distinguish from a feature that does not exist.
    */
   contributedActions?: readonly ContributedAction[];
+  /**
+   * The form's current values, unsaved edits included, which a contributed
+   * action is told when it is chosen.
+   */
+  currentValues?: () => Record<string, unknown>;
+  /** Whether the form holds unsaved edits, told to a contributed action with its values. */
+  currentDirty?: () => boolean;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -167,7 +186,18 @@ export interface DocumentActionBindingsInput {
  */
 export type DocumentActionOutcome =
   | { ok: true; item?: { id: string } }
-  | { ok: false; reason: SubmitRefusal | "cancelled"; message: string };
+  | {
+      ok: false;
+      reason: SubmitRefusal | "cancelled";
+      message: string;
+      /**
+       * Set where the store stopped before any write, readying the editor's
+       * work: no write failed, so nothing but this outcome says why.
+       */
+      beforeWrite?: true;
+      /** Set where the author has already been told, so nothing says it again. */
+      reported?: true;
+    };
 
 /** A confirmation an action asks before it runs. */
 export interface ActionConfirmation {
@@ -182,9 +212,9 @@ export interface ActionConfirmation {
 
 export interface DocumentActionBindings {
   /** Every action, in the order and placement the model gives it. */
-  actions: DocumentAction[];
+  actions: EditorDocumentAction[];
   /** The action that leads, when one does. */
-  primary: DocumentAction | undefined;
+  primary: EditorDocumentAction | undefined;
   /** What each action's control runs, and why it cannot at this instant. */
   bindings: Record<string, ActionBinding | undefined>;
   /**
@@ -218,6 +248,15 @@ export interface DocumentActionBindings {
    * has failed.
    */
   trackWrite: (label: string, write: Promise<unknown>) => void;
+  /** Whether a tracked write is still on its way. */
+  writesPending: boolean;
+  /**
+   * The Save the document's state calls for, run as its control runs it —
+   * every open edit committed and tracked write settled first — wherever that
+   * Save stores without publishing; absent where it would publish. For a
+   * refused publish's way out, which must never put anything live.
+   */
+  saveWithoutPublishing: (() => Promise<DocumentActionOutcome>) | undefined;
   /**
    * Whether the document's work is stored, as one value every surface reads,
    * so no two of them can say different things.
@@ -256,8 +295,38 @@ export type DocumentSaveState =
       retry?: () => Promise<DocumentActionOutcome>;
     };
 
-/** Run before an action that stores the editor's work; given its id. */
-export type BeforeDocumentAction = (action: string) => void | Promise<void>;
+/**
+ * Run before an action that stores the editor's work; given its id, and how
+ * to wait for the writes the store depends on.
+ */
+export type BeforeDocumentAction = (
+  action: string,
+  store: StoreReadiness
+) => void | Promise<void>;
+
+/** What a before-action handler may ask of the store it runs before. */
+export interface StoreReadiness {
+  /**
+   * Waits for every write the document depends on but does not contain (see
+   * `useTrackedWrite`), and answers whether they all landed. A handler that
+   * acts on the server for the store, beyond committing work to the form,
+   * asks this first and acts only on `true`: on `false` the store is refused,
+   * and anything the handler did would stand without it.
+   */
+  writesSettled(): Promise<boolean>;
+  /**
+   * Gives the store a check to make once every handler has run and every
+   * tracked write has settled, immediately before it writes, with nothing
+   * awaited in between. A handler that judged the work (asked a question
+   * about it, say) checks there that the work is still what it judged: the
+   * handlers after it, and the writes the store waits for, give the author
+   * time to change it. A check answering `false` runs every handler again;
+   * work still changing after a few rounds is refused.
+   *
+   * @experimental
+   */
+  checkBeforeWrite(check: () => boolean): void;
+}
 
 const CANCELLED: DocumentActionOutcome = {
   ok: false,
@@ -381,7 +450,11 @@ export function useDocumentActionBindings({
   collectionSlug,
   locale,
   documentLocked = false,
+  canEdit = true,
+  writesRefused = false,
   contributedActions = [],
+  currentValues,
+  currentDirty,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -473,11 +546,13 @@ export function useDocumentActionBindings({
     status: effectiveStatus === "published" ? "published" : "draft",
     hasWorkingDraft: hasWorkingDraft === true,
     readingHistory: isReadingHistory,
+    canEdit,
     canPublish: canPublishDocument,
     canUnpublish: canUnpublishDocument,
     canDelete: onDelete !== undefined,
     isDirty: isDirty === true,
     canDuplicate: onDuplicate !== undefined,
+    writesRefused,
   });
 
   const { reasons, refusalFor } = refusalReasons({
@@ -488,20 +563,21 @@ export function useDocumentActionBindings({
     isPublishedEditState,
   });
 
+  // Saving means three different calls depending on where the work lands, a
+  // fact about this host rather than the document: a drafts-enabled published
+  // entry stores a working draft and leaves the live one alone, a
+  // drafts-disabled one re-asserts published, and anything else writes a
+  // draft. The model names ONE verb, `save`; its label says which.
+  const runSave = saveFor({
+    isPublishedEditState,
+    draftsEnabled,
+    onSaveDraft,
+    onSaveChanges,
+    onSaveWorkingDraft,
+  });
   const performers = builtInPerformers({
     hasStatus,
-    // Saving means three different calls depending on where the work lands, a
-    // fact about this host rather than the document: a drafts-enabled
-    // published entry stores a working draft and leaves the live one alone, a
-    // drafts-disabled one re-asserts published, and anything else writes a
-    // draft. The model names ONE verb, `save`; its label says which.
-    runSave: saveFor({
-      isPublishedEditState,
-      draftsEnabled,
-      onSaveDraft,
-      onSaveChanges,
-      onSaveWorkingDraft,
-    }),
+    runSave,
     onSubmit,
     onPublish,
     storing,
@@ -535,7 +611,13 @@ export function useDocumentActionBindings({
   const withContributions = acceptContributions(
     documentVerbs,
     actionBindings,
-    isReadingHistory ? [] : contributedActions
+    // A contribution acts on the document too (adding it to a release), which
+    // is not offered where every write to it is refused.
+    isReadingHistory || writesRefused
+      ? []
+      : heldUnderLock(contributedActions, documentLocked),
+    currentValues,
+    currentDirty
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>
@@ -566,6 +648,12 @@ export function useDocumentActionBindings({
     },
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
+    writesPending: gate.writesPending,
+    saveWithoutPublishing: storingWithoutPublishing(
+      hasStatus,
+      saveWithoutPublishing(runSave, onSaveChanges),
+      storing
+    ),
     saveState,
     lastStoredAt: storedAt(gate.lastStore),
   };
@@ -611,7 +699,7 @@ function runAction(
     refusalFor,
   }: {
     offered: {
-      actions: readonly DocumentAction[];
+      actions: readonly EditorDocumentAction[];
       bindings: Record<string, ActionBinding | undefined>;
     };
     builtIn: {
@@ -661,6 +749,30 @@ function saveFor(host: {
 }): StoringHandler | undefined {
   if (!host.isPublishedEditState) return host.onSaveDraft;
   return host.draftsEnabled ? host.onSaveWorkingDraft : host.onSaveChanges;
+}
+
+/**
+ * The Save the document's state calls for, unless that Save publishes: a
+ * drafts-disabled published document's Save re-asserts it live.
+ */
+function saveWithoutPublishing(
+  runSave: StoringHandler | undefined,
+  onSaveChanges: StoringHandler | undefined
+): StoringHandler | undefined {
+  return runSave === onSaveChanges ? undefined : runSave;
+}
+
+/**
+ * That Save as a storing action, where the document has a status to keep: a
+ * document without one has no Save that leaves it unpublished.
+ */
+function storingWithoutPublishing(
+  hasStatus: boolean,
+  save: StoringHandler | undefined,
+  storing: StoringGate["storing"]
+): (() => Promise<DocumentActionOutcome>) | undefined {
+  if (!hasStatus || save === undefined) return undefined;
+  return storing("save", () => stored(save));
 }
 
 /** `perform` when the action is offered here, otherwise nothing. */
@@ -807,9 +919,7 @@ export function refusalReasons({
    * Reading verbs are deliberately left alone: discarding your own unsaved
    * changes, previewing and opening history are yours to do whoever holds the row.
    */
-  const lockedReason = documentLocked
-    ? "Someone else is editing this document"
-    : undefined;
+  const lockedReason = documentLocked ? LOCKED_REASON : undefined;
   const invalidReason = isInvalid
     ? "Fix the errors on this page first."
     : undefined;
@@ -837,6 +947,40 @@ export function refusalReasons({
           ? "invalid"
           : "refused",
   };
+}
+
+/**
+ * Why a write is refused while the document is held elsewhere.
+ *
+ * Says where, not who: the holder may be a colleague, an API key, or this
+ * person in another tab, and the lock notice above the form names which.
+ */
+const LOCKED_REASON = "This document is being edited elsewhere";
+
+/**
+ * The page's contributions, with each way to publish held while a colleague
+ * holds the document, as Publish is: scheduling the document or adding it to
+ * a release publishes it later, which is a write the lock withholds. Other
+ * contributions (a reader's own pin) write nothing of the document's and stay
+ * usable. Held through the binding's transient reason, so a permission the
+ * page already refused with still speaks first.
+ */
+function heldUnderLock(
+  contributed: readonly ContributedAction[],
+  documentLocked: boolean
+): readonly ContributedAction[] {
+  if (!documentLocked) return contributed;
+  return contributed.map(entry =>
+    entry.action.placement === "publish-menu"
+      ? {
+          ...entry,
+          binding: {
+            ...entry.binding,
+            disabledReason: entry.binding.disabledReason ?? LOCKED_REASON,
+          },
+        }
+      : entry
+  );
 }
 
 /** The document's one save state, from the form and the storing gate. */

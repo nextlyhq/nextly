@@ -36,6 +36,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
+import { dashboardWidthNow } from "@admin/components/features/widgets/useDashboardWidth";
 import {
   ADMIN_WORKSPACE_KEY,
   useSchemaUpdateInvalidation,
@@ -43,9 +44,12 @@ import {
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { AdminBranding } from "@admin/types/branding";
 import type {
+  DashboardLayoutRead,
   DashboardLayoutResponse,
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
+
+import { DASHBOARD_SUMMARY_KEY } from "./useDashboardSummary";
 
 /** The one query key this feature owns, so a save can invalidate exactly it. */
 export const DASHBOARD_LAYOUT_KEY = ["dashboard", "layout"] as const;
@@ -56,19 +60,25 @@ const LAYOUT_PATH = "/dashboard/layout";
 /**
  * The layout read: one fetch for every query under {@link DASHBOARD_LAYOUT_KEY}, so a card
  * reading the same answer as the grid shares the grid's request and cache entry.
+ *
+ * Sent the dashboard's width as it measures now (`dashboardWidthNow`), for the server to judge
+ * each card that hides while empty at the tier it is drawn at. Read at the request, never part of
+ * the key, so a resize does not split the cache; asked with no dashboard drawn, it sends none and
+ * the answer judges no card.
+ *
+ * The answer carries the width it was sent (`askedAtWidth`): a cached answer is drawn from on the
+ * next visit, whose dashboard may be another width, and its verdict holds only where every card
+ * is drawn at the tier it was judged at (`useHiddenWhileEmptyAtFirstPaint`).
  */
-export function fetchDashboardLayout(): Promise<DashboardLayoutResponse> {
-  return protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH);
-}
-
-/**
- * The layout read with the Get started steps answered even for a removed card, which the card
- * needs once it is restored in customise mode and drawn before the save that restores it.
- */
-export function fetchGetStartedOnRestore(): Promise<DashboardLayoutResponse> {
-  return protectedApi.get<DashboardLayoutResponse>(
-    `${LAYOUT_PATH}?getStarted=1`
+export async function fetchDashboardLayout(): Promise<DashboardLayoutRead> {
+  const width = dashboardWidthNow();
+  if (width === undefined) {
+    return protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH);
+  }
+  const answer = await protectedApi.get<DashboardLayoutResponse>(
+    `${LAYOUT_PATH}?${new URLSearchParams({ width: String(width) })}`
   );
+  return { ...answer, askedAtWidth: width };
 }
 
 export interface SaveLayoutInput {
@@ -111,7 +121,7 @@ export interface ResetLayoutInput {
 }
 
 export interface UseDashboardLayoutResult {
-  layout: DashboardLayoutResponse | undefined;
+  layout: DashboardLayoutRead | undefined;
   isPending: boolean;
   /**
    * Whether the arrangement could not be read at all.
@@ -182,6 +192,12 @@ export interface UseDashboardLayoutResult {
    */
   isUnreadable: boolean;
   /**
+   * Whether the reader has arranged their dashboard, as the read says (`arranged`): a card they
+   * remove at rest is then taken out of their arrangement, where a reader following the default
+   * has it hidden.
+   */
+  isArranged: boolean;
+  /**
    * Whether ANY write against this layout is in flight.
    *
    * 🔴 All three channels, because they all send a whole-layout snapshot
@@ -202,6 +218,14 @@ export interface UseDashboardLayoutResult {
    * the same thing a reader's eyes do.
    */
   cached: () => DashboardLayoutResponse | undefined;
+  /**
+   * When the arrangement in the cache was read, and whether the latest read of it failed.
+   *
+   * 🔴 What tells a re-read that landed from one that did not: `invalidateQueries` resolves
+   * either way, and a failed re-read leaves the earlier answer in the cache, so `cached()` alone
+   * reads the same before and after a re-read that failed.
+   */
+  lastRead: () => { at: number; failed: boolean };
   reload: () => Promise<unknown>;
 }
 
@@ -283,10 +307,15 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     refetchOnWindowFocus: true,
   });
 
-  const invalidate = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY }),
-    [queryClient]
-  );
+  // Every write and every reload re-reads the header's summary with the
+  // layout: a part counts for a card on the dashboard, so a card added,
+  // removed, dismissed or reset moves the summary as it moves the layout.
+  // Fired rather than returned, so a write is held only until its own layout
+  // re-read lands, never behind a summary part still being counted.
+  const invalidate = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: DASHBOARD_SUMMARY_KEY });
+    return queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
+  }, [queryClient]);
 
   // 🔴 The workspace payload is held fresh for minutes, and it is built for
   // one audience -- the cards this reader may see and the shortcut gates
@@ -354,6 +383,12 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     [queryClient]
   );
 
+  // The query's own state, so a failed re-read is told apart from one that landed.
+  const lastRead = useCallback(() => {
+    const state = queryClient.getQueryState(DASHBOARD_LAYOUT_KEY);
+    return { at: state?.dataUpdatedAt ?? 0, failed: state?.status === "error" };
+  }, [queryClient]);
+
   const save = useMutation(writeLayout);
 
   /*
@@ -370,8 +405,21 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
    * with. Every dismissal builds a whole-layout snapshot from the cached
    * version, so two in flight at once carry the same guard and the server can
    * only honour one.
+   *
+   * A write refused as a conflict reads the layout again before it reports,
+   * RETURNED for the reason `onSuccess` returns its invalidation: the channel
+   * stays pending through the re-read, so nothing else is sent against the
+   * refused guards, and a `mutate` callback finds the cache holding the
+   * guards a second attempt must carry, or `lastRead` saying the re-read
+   * failed and there are none (`useDismissPlacement`). Without it the
+   * cache kept the refused guards, and every later attempt was refused the
+   * same way until the page was reloaded.
    */
-  const dismiss = useMutation(writeLayout);
+  const dismiss = useMutation({
+    ...writeLayout,
+    onError: (error: Error) =>
+      isConflictError(error) ? invalidate() : undefined,
+  });
 
   // A card's settings changed outside customise mode: the same request again,
   // on its own channel, for the reasons `dismiss` has its own.
@@ -409,7 +457,9 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     ...writeState(save, reset, [dismiss, cardSettings]),
     hasStoredRow: (query.data?.version ?? 0) > 0,
     isUnreadable: query.data?.source === "unreadable",
+    isArranged: query.data?.arranged === true,
     cached,
+    lastRead,
     reload: invalidate,
   };
 }

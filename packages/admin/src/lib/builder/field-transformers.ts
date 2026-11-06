@@ -13,6 +13,8 @@ import type {
 } from "@admin/components/features/schema-builder/types";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import { insertField } from "./insert-field";
+
 /**
  * Generate a unique ID for builder fields.
  */
@@ -105,53 +107,32 @@ export function findParentContainerId(
 }
 
 /**
- * Add a field to a Repeater field's nested fields.
+ * Add a field at the end of a Repeater field's nested fields. Placed by
+ * `insertField`, the one rule for where a field goes in a container; the type
+ * check keeps this helper to repeaters, as its name says.
  */
 export function addFieldToArray(
   fields: BuilderField[],
   arrayFieldId: string,
   newField: BuilderField
 ): BuilderField[] {
-  return fields.map(field => {
-    if (field.id === arrayFieldId && field.type === "repeater") {
-      return {
-        ...field,
-        fields: [...(field.fields || []), newField],
-      };
-    }
-    if (field.fields && field.fields.length > 0) {
-      return {
-        ...field,
-        fields: addFieldToArray(field.fields, arrayFieldId, newField),
-      };
-    }
-    return field;
-  });
+  return findFieldById(fields, arrayFieldId)?.type === "repeater"
+    ? (insertField(fields, newField, { parentFieldId: arrayFieldId }) ?? fields)
+    : fields;
 }
 
 /**
- * Add a field to a Group field's nested fields.
+ * Add a field at the end of a Group field's nested fields, placed by
+ * `insertField` as `addFieldToArray` is.
  */
 export function addFieldToGroup(
   fields: BuilderField[],
   groupFieldId: string,
   newField: BuilderField
 ): BuilderField[] {
-  return fields.map(field => {
-    if (field.id === groupFieldId && field.type === "group") {
-      return {
-        ...field,
-        fields: [...(field.fields || []), newField],
-      };
-    }
-    if (field.fields && field.fields.length > 0) {
-      return {
-        ...field,
-        fields: addFieldToGroup(field.fields, groupFieldId, newField),
-      };
-    }
-    return field;
-  });
+  return findFieldById(fields, groupFieldId)?.type === "group"
+    ? (insertField(fields, newField, { parentFieldId: groupFieldId }) ?? fields)
+    : fields;
 }
 
 /**

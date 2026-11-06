@@ -419,7 +419,7 @@ export interface DirectAPIConfig {
    * Bypass access control checks.
    *
    * When `true` (default for Direct API), all access control is skipped.
-   * Set to `false` to enforce collection, field, and row-level permissions.
+   * Set to `false` to enforce collection and field access rules.
    *
    * @default true
    */
@@ -513,8 +513,9 @@ export interface DirectAPIConfig {
   /**
    * User context for access control.
    *
-   * Required when `overrideAccess` is `false`. Provides the user identity
-   * and role for permission checks.
+   * Whose access is judged when `overrideAccess` is `false`: the identity
+   * and role permission checks read. Without one, the call is judged as a
+   * signed-out visitor.
    */
   user?: UserContext;
 
@@ -561,12 +562,18 @@ export interface DirectAPIConfig {
   request?: Request;
 
   /**
-   * Include hidden fields in the response.
+   * Include hidden fields (`admin.hidden: true`) in the response.
    *
-   * Hidden fields (defined with `hidden: true` in field config)
-   * are normally excluded from responses. Set to `true` to include them.
+   * `admin.hidden` is a UI flag, so every read returns such fields unless it
+   * passes `false`, trusted or judged as a caller alike; a field's read rule
+   * (`access.read`) is what keeps a value from a caller. With `false`, a
+   * `where` or `sort` naming a hidden field is refused, as is an aggregate's
+   * group key or date field, once the caller has passed the read gate. A
+   * related document populated at a `depth` loses its own collection's hidden
+   * fields too, and a user read its hidden custom user fields.
+   * Password fields are never returned, whatever this says.
    *
-   * @default false
+   * @default true
    */
   showHiddenFields?: boolean;
 

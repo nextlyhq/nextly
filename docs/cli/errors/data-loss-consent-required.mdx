@@ -1,0 +1,25 @@
+---
+title: DATA_LOSS_CONSENT_REQUIRED
+description: "The command would delete data, no consent covers it, and nobody can be asked (no terminal, CI, or --non-interactive)."
+---
+
+## Cause
+
+The command would delete data, no consent covers it, and nobody can be asked (no terminal, CI, or --non-interactive).
+
+A command that deletes data (a table, a column, or the rows in them) asks first. Where nobody can be asked (no terminal, as in a script; `CI` set; or `--non-interactive` given), it needs the data-loss consent instead, and without it nothing changes. The Why line lists what would be deleted.
+
+## Fix
+
+Give the consent the Next line names: `--accept-data-loss` with the targets listed, or `NEXTLY_ACCEPT_DATA_LOSS` in the environment. Or run the command at a terminal, without `CI` or `--non-interactive`, where it lists the deletions and asks.
+
+## Example
+
+```text
+✗ Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
+  Why:  This would delete:
+        - column dc_posts.summary (42 non-empty values)
+        Nothing was changed.
+  Next: To consent: --accept-data-loss=dc_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts.summary).
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)
+```

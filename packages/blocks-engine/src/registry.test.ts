@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import type { BlockDefinition, BlockSupports, InferBlockProps } from "./block";
-import type { BlockNode } from "./document";
+import type { BlockNode, TokenRef } from "./document";
 import { defineBlock } from "./block";
 import { migrateDocument } from "./migration";
 import {
@@ -195,6 +195,78 @@ describe("registration rules", () => {
         registerBlocks([block({ name: "core/h2", island } as never)])
       ).toThrow(/NEXTLY_BLOCK_INVALID.*island/s);
     }
+  });
+
+  it("registers a container declaring a child gap as a token or a length", () => {
+    // The control for the refusal below.
+    registerBlocks([
+      block({ name: "core/g1", childGap: { $token: "space.stack" } } as never),
+      block({ name: "core/g2", childGap: "1rem" } as never),
+    ]);
+    expect(getBlock("core/g1")?.childGap).toEqual({ $token: "space.stack" });
+    expect(hasBlock("core/g2")).toBe(true);
+  });
+
+  it("registers a child gap that scales its token, as the type allows", () => {
+    registerBlocks([
+      block({
+        name: "core/g3",
+        childGap: { $token: "space.stack", times: 0.75 },
+      } as never),
+    ]);
+    expect(getBlock("core/g3")?.childGap).toEqual({
+      $token: "space.stack",
+      times: 0.75,
+    });
+    // Out of range, refused by the same rule a stored value is.
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/g4",
+          childGap: { $token: "space.stack", times: 9 },
+        } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID/);
+  });
+
+  it("types a child gap as exactly what registration accepts", () => {
+    // A length, the number zero the catalog's `gap` accepts, or a token
+    // reference: the declared type and the runtime check are one contract.
+    expectTypeOf<NonNullable<BlockDefinition["childGap"]>>().toEqualTypeOf<
+      string | 0 | TokenRef
+    >();
+  });
+
+  it("registers a child gap of the number zero, as the catalog's gap takes it", () => {
+    registerBlocks([block({ name: "core/g0", childGap: 0 } as never)]);
+    expect(getBlock("core/g0")?.childGap).toBe(0);
+  });
+
+  it("refuses a child gap that is neither a length nor a token reference", () => {
+    for (const childGap of [null, 16, { $token: 1 }, { $token: "a", x: 1 }]) {
+      expect(() =>
+        registerBlocks([block({ name: "core/g3", childGap } as never)])
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*childGap/s);
+    }
+  });
+
+  it("refuses a child gap that a margin or a gap could not take", () => {
+    // A child gap is written as a top margin in block flow and as `gap` under
+    // flex or grid, so it has to be a value BOTH take: a negative length is a
+    // margin but never a gap, `auto` only a margin, `normal` and a second
+    // length only a gap. Accepting any of them loses the spacing in one mode.
+    for (const childGap of ["-1rem", "auto", "normal", "1rem 2rem", "red"]) {
+      expect(
+        () => registerBlocks([block({ name: "core/g4", childGap } as never)]),
+        childGap
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*childGap/s);
+    }
+    // The control: lengths both take, including a fluid one and a percentage.
+    registerBlocks([
+      block({ name: "core/g5", childGap: "clamp(1rem, 2vw, 2rem)" } as never),
+      block({ name: "core/g6", childGap: "5%" } as never),
+    ]);
+    expect(hasBlock("core/g5") && hasBlock("core/g6")).toBe(true);
   });
 
   it("registers a block declaring well-formed parts", () => {

@@ -1,0 +1,23 @@
+---
+title: CONFIG_LOAD_FAILED
+description: "The configuration file compiled, but threw an error while it ran."
+---
+
+## Cause
+
+The configuration file compiled, but threw an error while it ran.
+
+The configuration is ordinary code: the CLI runs it to read the configuration it exports. Here the code compiled, but something in it, or in a file it imports, threw while it ran: reading a property of `undefined`, a missing environment variable, a function that failed.
+
+## Fix
+
+Find the code the Why line names and fix it. Run the command again with `--verbose` to see the stack, which shows the file and line it was thrown from.
+
+## Example
+
+```text
+✗ `nextly.config.ts` threw an error while it was loading.
+  Why:  Cannot read properties of undefined (reading 'slug')
+  Next: Fix the code that throws in `nextly.config.ts` or a file it imports; `--verbose` shows where it was thrown.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-load-failed  (CONFIG_LOAD_FAILED)
+```

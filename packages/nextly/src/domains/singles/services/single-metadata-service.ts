@@ -46,6 +46,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { FieldConfig } from "@nextly/collections";
+
 import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -54,16 +56,31 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
+import { assertAddressAllowed } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../../i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsLeavingTranslationUnder,
+} from "../../i18n/migration/archive-preflight";
+import {
+  leavingFieldConstraints,
+  withoutLeavingConstraints,
+} from "../../i18n/migration/field-leaves-translation-rules";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -182,6 +199,39 @@ export interface UpdateSingleSchemaInput {
 export interface UpdateSingleSchemaResult {
   record: DynamicSingleRecord;
   migrationStatus: SingleMigrationStatus;
+  /**
+   * The Required and Unique settings of fields leaving translation that the database refused, so
+   * the fields were recorded without them; empty when they were applied or none was asked for.
+   */
+  refusedSettings: { field: string; setting: "required" | "unique" }[];
+}
+
+/** One Required or Unique setting of a field leaving translation, and the SQL that undoes it. */
+interface LeavingSettingStep {
+  field: string;
+  setting: "required" | "unique";
+  forward: string;
+  inverse: string;
+  /**
+   * On SQLite, the nullability `forward` can't express: column → true for NOT NULL. Applied by
+   * rebuilding the table after `forward` runs.
+   */
+  sqliteNullability: ReadonlyMap<string, boolean>;
+}
+
+/**
+ * `fields` without the settings `refused` names, each field keeping any other: the list a Single's
+ * save records when the database refused those settings, as the table then holds the fields.
+ */
+function withoutRefusedSettings<F extends { name: string }>(
+  fields: readonly F[],
+  refused: readonly Pick<LeavingSettingStep, "field" | "setting">[]
+): F[] {
+  return fields.map(f =>
+    refused
+      .filter(r => r.field === f.name)
+      .reduce<F>((field, r) => ({ ...field, [r.setting]: false }), f)
+  );
 }
 
 /**
@@ -195,10 +245,22 @@ export interface UpdateSingleSchemaResult {
 interface UpdateDdlPlan {
   /** Statements to run. Empty for a save that changes only flags. */
   migrationSQL: string;
+  /**
+   * On SQLite, the nullability changes `migrationSQL` can't express (column → true for NOT NULL),
+   * applied by rebuilding the table once its statements have run, in the same transaction.
+   */
+  sqliteNullability?: ReadonlyMap<string, boolean>;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
   previousFields: FieldDefinition[];
+  /**
+   * The Required and Unique settings of fields leaving translation, one step per setting, run
+   * after the companion reconcile has copied their default language's values in. `migrationSQL`
+   * creates their shared columns without the settings, since every entry would otherwise hold NULL
+   * or one placeholder before the copy. Empty when no such field leaves.
+   */
+  leavingSettings: LeavingSettingStep[];
   /**
    * Whether the statements describe the WHOLE table rather than a change to it.
    *
@@ -341,11 +403,30 @@ export class SingleMetadataService {
     // the process restarts, even though the registry insert afterwards correctly rejects the
     // duplicate. The insert is what makes the row safe; it is not what makes the process safe.
     await this.assertCreateStillPossible(input);
+    // A new Single holds no pair of sibling fields yet, so every pair it is created with is new.
+    assertNoNewSiblingClashes(
+      { kind: "single", slug: input.slug },
+      input.fields ?? [],
+      null
+    );
 
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
     // corrected retry is a fresh create rather than a collision with its own wreckage.
     const plan = await this.planCreate(input);
+    // A translated field marked unique needs an index this server may not be able to key. Refused
+    // here, before the main table: the companion is provisioned after it, and a failure there is
+    // recorded rather than raised. With no adapter, nothing is applied at all.
+    if (this.adapter) {
+      refuseUnindexableTranslatedUnique(this.adapter, {
+        entity: input.slug,
+        builtBy: "collection",
+        oldFields: [],
+        newFields: plan.fields,
+        wasLocalized: false,
+        isLocalized: plan.isLocalized,
+      });
+    }
 
     // 2. CLEAR THE GROUND. A table already standing where this create is about to build is never
     // adopted: empty, it is dropped so the apply renders every column from THIS request's fields;
@@ -496,7 +577,8 @@ export class SingleMetadataService {
     // A record that has already gone is NOT an error here. Delete is idempotent by intent, and
     // refusing a second delete would turn a retry into a failure; the teardown below still runs
     // against the caller's table name so a half-finished delete can be completed.
-    const current = await this.registry.getSingleBySlug(slug);
+    // As stored, past the registry row cache: a cached row could still say unlocked.
+    const current = await this.registry.getSingleForWrite(slug);
     if (current?.locked === true) {
       throw NextlyError.definedInCode({
         thing: "Single",
@@ -633,6 +715,15 @@ export class SingleMetadataService {
       "../../../api/fields-payload"
     );
     assertValidPluginFieldOptions(args.fields ?? []);
+    // Judged against the fields as stored now, so only a pair of sibling fields this save creates
+    // is refused, and one the Single already holds keeps working.
+    if (args.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "single", slug: current.slug },
+        args.fields,
+        current.fields ?? []
+      );
+    }
 
     // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed
     // record. The `is*`/`has*` flags describe what the request asked for — but only where it
@@ -665,13 +756,34 @@ export class SingleMetadataService {
     // migration reached, because this request neither confirmed nor changed it.
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
+    let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
 
     if (plan) {
       // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below).
-      const applied = await this.applyUpdateDdl(input, plan);
+      const { status: applied, refused } = await this.applyUpdateDdl(
+        input,
+        plan
+      );
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
         migrationStatus = applied;
+      }
+      // Leaving settings the database refused: the fields are recorded as the table holds them,
+      // without the settings, and hashed as recorded, so the version moves on and the next save
+      // sees the settings as a change and applies them.
+      if (refused.length > 0 && Array.isArray(updateData.fields)) {
+        const recorded = withoutRefusedSettings(
+          updateData.fields as FieldDefinition[],
+          refused
+        );
+        updateData.fields = recorded;
+        updateData.schemaHash = calculateSchemaHash(
+          recorded as unknown as FieldConfig[]
+        );
+        refusedSettings = refused.map(({ field, setting }) => ({
+          field,
+          setting,
+        }));
       }
     }
 
@@ -680,7 +792,7 @@ export class SingleMetadataService {
       source: "ui",
     });
 
-    return { record, migrationStatus };
+    return { record, migrationStatus, refusedSettings };
   }
 
   /**
@@ -745,7 +857,8 @@ export class SingleMetadataService {
   private async refreshForUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<DynamicSingleRecord> {
-    const current = await this.registry.getSingleBySlug(input.slug);
+    // As stored, past the registry row cache: the update plans from this row.
+    const current = await this.registry.getSingleForWrite(input.slug);
 
     if (!current) {
       throw NextlyError.notFound({
@@ -815,6 +928,7 @@ export class SingleMetadataService {
 
     if (fields === undefined) {
       return {
+        leavingSettings: [],
         migrationSQL: "",
         fields: previousFields,
         previousFields,
@@ -837,6 +951,7 @@ export class SingleMetadataService {
     // records `pending`, which is what the migration runner looks for.
     if (!adapter) {
       return {
+        leavingSettings: [],
         migrationSQL: "",
         fields,
         previousFields,
@@ -853,6 +968,7 @@ export class SingleMetadataService {
       return {
         // i18n: a fresh (re)create omits translatable columns when localized; they belong to the
         // companion.
+        leavingSettings: [],
         migrationSQL: schemaService.generateMigrationSQL(tableName, fields, {
           isSingle: true,
           hasStatus,
@@ -927,11 +1043,20 @@ export class SingleMetadataService {
       fields
     );
 
+    const deferred = this.withLeavingSettingsDeferred(
+      input,
+      alterInput.newFields,
+      schemaService
+    );
+
+    // What SQLite can't alter in place, which the apply rebuilds the table for.
+    const sqliteNullability = new Map<string, boolean>();
     return {
+      leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
         tableName,
         alterInput.oldFields,
-        alterInput.newFields,
+        deferred.newFields,
         {
           wasStatus,
           hasStatus,
@@ -943,8 +1068,11 @@ export class SingleMetadataService {
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
           ...groupMigration,
+          onSqliteNullability: (column, required) =>
+            sqliteNullability.set(column, required),
         }
       ),
+      sqliteNullability,
       fields,
       previousFields,
       describesWholeTable: false,
@@ -997,6 +1125,11 @@ export class SingleMetadataService {
       ),
       addedColumnBackfill: field => schemaService.addedColumnBackfill(field),
       presentColumns: new Set(liveColumnTypes.keys()),
+      // Counts the rows a field made required would break, naming the Single.
+      requiredColumns: {
+        db: adapter.getDrizzle(),
+        entity: { kind: "single", slug },
+      },
     });
     const companionTable = `${tableName}_locales`;
     const companionColumns =
@@ -1129,6 +1262,92 @@ export class SingleMetadataService {
   }
 
   /**
+   * `newFields` with the Required and Unique settings of fields leaving translation taken off, and
+   * the steps that put them back. Their shared columns are created without the settings, since
+   * every entry would otherwise hold NULL or one placeholder until the companion reconcile copies
+   * the default language's values in; the settings follow the copy. Each step puts back one
+   * setting, from the state the step before it leaves, with the SQL that takes it off again, so a
+   * step that committed can be undone on its own. On SQLite, which can't alter a column, a Required
+   * setting is carried as the nullability the apply rebuilds the table for; a step with nothing to
+   * do is left out. The SQL is planned without the live table's facts, which describe the columns
+   * before the migration creates them.
+   */
+  private withLeavingSettingsDeferred(
+    input: UpdateSingleSchemaInput,
+    newFields: FieldDefinition[],
+    schemaService: Pick<
+      DynamicCollectionSchemaService,
+      "generateAlterTableMigration" | "plannedColumnTypes" | "detectFieldRename"
+    >
+  ): { newFields: FieldDefinition[]; leavingSettings: LeavingSettingStep[] } {
+    const { wasLocalized, isLocalized, hasStatus } = input;
+    const previousFields = (input.existing.fields ??
+      []) as unknown as FieldDefinition[];
+    // Named after the change, by the main table's rename rule, so a field renamed and made shared
+    // leaves under its new name and its setting waits for the copy too.
+    const rename = schemaService.detectFieldRename(
+      previousFields,
+      input.fields ?? []
+    );
+    const leaving = new Set(
+      wasLocalized && isLocalized
+        ? fieldsLeavingTranslationUnder(
+            previousFields,
+            input.fields ?? [],
+            rename ? { from: rename.from.name, to: rename.to.name } : null
+          )
+        : []
+    );
+    const unconstrained = withoutLeavingConstraints(newFields, leaving);
+    const alter = (from: FieldDefinition[], to: FieldDefinition[]) => {
+      const sqliteNullability = new Map<string, boolean>();
+      const sql = schemaService.generateAlterTableMigration(
+        input.existing.tableName,
+        from,
+        to,
+        {
+          wasStatus: hasStatus,
+          hasStatus,
+          // The type the diff BEFORE this one writes, not the live table's: MySQL restates a
+          // whole column definition on every MODIFY, and with none to restate it falls back to
+          // the legacy renderer, narrowing a float that diff had just created `double` down to
+          // `decimal(10,2)`.
+          liveColumnTypes: schemaService.plannedColumnTypes(from),
+          onSqliteNullability: (column, required) =>
+            sqliteNullability.set(column, required),
+        }
+      );
+      return { sql, sqliteNullability };
+    };
+    const leavingSettings: LeavingSettingStep[] = [];
+    let state = unconstrained;
+    newFields.forEach((field, i) => {
+      if (unconstrained[i] === field) return;
+      for (const setting of leavingFieldConstraints(field, undefined)) {
+        const next = state.map((f, j) =>
+          j !== i
+            ? f
+            : setting === "required"
+              ? { ...f, required: field.required }
+              : { ...f, unique: field.unique }
+        );
+        const forward = alter(state, next);
+        if (forward.sql.trim() !== "" || forward.sqliteNullability.size > 0) {
+          leavingSettings.push({
+            field: field.name,
+            setting,
+            forward: forward.sql,
+            inverse: alter(next, state).sql,
+            sqliteNullability: forward.sqliteNullability,
+          });
+        }
+        state = next;
+      }
+    });
+    return { newFields: unconstrained, leavingSettings };
+  }
+
+  /**
    * The options a field-group association rename contributes to the alter
    * generator: the rename pair itself and the registry-resolved physical
    * table per referenced slug.
@@ -1171,7 +1390,8 @@ export class SingleMetadataService {
     }
     await Promise.all(
       [...slugs].map(async slug => {
-        const record = await registry.getComponentBySlug(slug);
+        // As stored, past the registry row cache: the DDL is planned against this table.
+        const record = await registry.findComponentForWrite(slug);
         if (record) resolved.set(slug, record.tableName);
       })
     );
@@ -1457,10 +1677,11 @@ export class SingleMetadataService {
   private async applyMainMigrationOrUndo(
     adapter: DrizzleAdapter,
     slug: string,
+    tableName: string,
     plan: UpdateDdlPlan,
     undoRename: readonly string[]
   ): Promise<void> {
-    if (!plan.migrationSQL) return;
+    if (!plan.migrationSQL && !plan.sqliteNullability?.size) return;
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
@@ -1468,6 +1689,11 @@ export class SingleMetadataService {
         migrationSQL: plan.migrationSQL,
         entity: "single",
         tolerateApplied: true,
+        sqliteNullability: plan.sqliteNullability && {
+          adapter,
+          tableName,
+          required: plan.sqliteNullability,
+        },
       });
     } catch (refusal) {
       await this.undoCompanionRename(adapter, slug, undoRename);
@@ -1534,7 +1760,11 @@ export class SingleMetadataService {
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan
-  ): Promise<SingleMigrationStatus | undefined> {
+  ): Promise<{
+    status: SingleMigrationStatus | undefined;
+    /** The leaving settings refused, so the fields are recorded without them; else empty. */
+    refused: LeavingSettingStep[];
+  }> {
     const adapter = this.adapter;
     const tableName = input.existing.tableName;
 
@@ -1542,7 +1772,10 @@ export class SingleMetadataService {
       this.logger.warn(
         "[Singles] No adapter registered, migration not executed"
       );
-      return plan.ownsMigrationStatus ? "pending" : undefined;
+      return {
+        status: plan.ownsMigrationStatus ? "pending" : undefined,
+        refused: [],
+      };
     }
 
     // A field becoming translated takes its value to the default language's companion row first:
@@ -1562,7 +1795,13 @@ export class SingleMetadataService {
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
     // the registry should describe, so it fails the save.
-    await this.applyMainMigrationOrUndo(adapter, input.slug, plan, undoRename);
+    await this.applyMainMigrationOrUndo(
+      adapter,
+      input.slug,
+      tableName,
+      plan,
+      undoRename
+    );
 
     try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
@@ -1571,7 +1810,7 @@ export class SingleMetadataService {
         this.logger.error(
           `[Singles] Table "${tableName}" not found after migration update`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
 
       // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
@@ -1627,8 +1866,18 @@ export class SingleMetadataService {
               : String(companionError)
           }`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
+
+      // The Required and Unique settings of fields leaving translation, now that their shared
+      // columns hold the default language's values: all of them or none. Refused, the fields are
+      // recorded as the table then holds them, without the settings, and the runtime shape is
+      // bound from the same list, so the next save sees the settings as a change and applies them.
+      const refused = await this.applyLeavingSettings(adapter, tableName, plan);
+      const recorded = {
+        ...plan,
+        fields: withoutRefusedSettings(plan.fields, refused),
+      };
 
       // 🔴 Registered only once the companion has been reconciled, never before it.
       //
@@ -1644,10 +1893,12 @@ export class SingleMetadataService {
       // in the same way it was before the save, and the lazy rebuild can still correct it.
       await this.registerUpdatedRuntimeSchema(
         input,
-        plan,
+        recorded,
         adapter,
         input.isLocalized
       );
+
+      if (refused.length > 0) return { status: "failed", refused };
 
       // 🔴 Only a plan that describes the WHOLE table may clear a durable `failed`.
       //
@@ -1677,10 +1928,10 @@ export class SingleMetadataService {
           `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
             `describes a change to it, so its status is left as failed`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
 
-      return "applied";
+      return { status: "applied", refused: [] };
     } catch (error) {
       // 🔴 Everything inside this block is recorded, including a `NextlyError`, and the error TYPE
       // is deliberately not consulted.
@@ -1707,10 +1958,85 @@ export class SingleMetadataService {
       if (plan.migrationSQL) {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
-      return "failed";
+      return { status: "failed", refused: [] };
     }
   }
 
+  /**
+   * Applies the plan's leaving settings, all of them or none, and returns those refused: every one
+   * of them, or none.
+   * The statements themselves refuse values that cannot take a setting, a value written since the
+   * save's first check included. PostgreSQL and SQLite run the steps in one transaction. MySQL
+   * commits each schema statement, so a step it refuses has itself and every step before it
+   * undone, newest first.
+   */
+  private async applyLeavingSettings(
+    adapter: DrizzleAdapter,
+    tableName: string,
+    plan: UpdateDdlPlan
+  ): Promise<LeavingSettingStep[]> {
+    const steps = plan.leavingSettings;
+    if (steps.length === 0) return [];
+    const dialect = adapter.getCapabilities().dialect;
+    const run = (
+      migrationSQL: string,
+      required: ReadonlyMap<string, boolean> = new Map()
+    ) =>
+      applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect,
+        migrationSQL,
+        entity: "single",
+        sqliteNullability: { adapter, tableName, required },
+      });
+    try {
+      if (dialect !== "mysql") {
+        // On SQLite the Required settings are one rebuild after the steps' statements, all in one
+        // transaction.
+        await run(
+          steps.map(step => step.forward).join("\n--> statement-breakpoint\n"),
+          new Map(steps.flatMap(step => [...step.sqliteNullability]))
+        );
+        return [];
+      }
+      for (const [i, step] of steps.entries()) {
+        try {
+          await run(step.forward);
+        } catch (error) {
+          await this.undoLeavingSettings(adapter, steps.slice(0, i + 1));
+          throw error;
+        }
+      }
+      return [];
+    } catch (error) {
+      this.logger.error(
+        `[Singles] The Required and Unique settings of fields leaving translation on ` +
+          `"${tableName}" were refused, so the fields are recorded without them: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+      );
+      return steps;
+    }
+  }
+
+  /** Takes off again the leaving settings `steps` applied, newest first. Each is safe to repeat. */
+  private async undoLeavingSettings(
+    adapter: DrizzleAdapter,
+    steps: readonly LeavingSettingStep[]
+  ): Promise<void> {
+    for (const step of [...steps].reverse()) {
+      try {
+        await applyMigrationStatements(adapter, step.inverse);
+      } catch (error) {
+        this.logger.error(
+          `[Singles] Could not take the ${step.setting} setting of "${step.field}" off again ` +
+            `after its settings were refused: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+        );
+      }
+    }
+  }
   /**
    * Forget the main table's registered shape, so the next read rebuilds it from the database.
    *
@@ -1814,9 +2140,15 @@ export class SingleMetadataService {
       });
     }
 
+    // The address, judged inside the exclusion every Single create holds, whichever road reached
+    // it: by the one rule, then against the collections' and Singles' addresses, which a create
+    // that started while this one waited may have added.
+    assertAddressAllowed("single", input.slug);
     const adapter = this.adapter;
     if (adapter) {
-      await assertGlobalResourceSlugAvailable(adapter, input.slug);
+      await assertGlobalResourceSlugAvailable(adapter, input.slug, {
+        addressKind: "single",
+      });
     }
 
     // 🔴 Re-judged here, not only by the caller, because the thing that judges it can CHANGE while
@@ -1835,7 +2167,8 @@ export class SingleMetadataService {
   }
 
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
-    const isLocalized = input.localized === true;
+    // Whether its translatable columns live in its companion (`storesPerLanguage`), for the DDL.
+    const isLocalized = storesPerLanguage(input);
     const hasStatus = input.status === true;
     const fields = input.fields as unknown as FieldDefinition[];
     const { DynamicCollectionSchemaService } = await import(
@@ -1926,7 +2259,9 @@ export class SingleMetadataService {
         wasLocalized: false,
         // A single being created has no prior state at all.
         wasStatus: false,
-        status: hasStatus,
+        // A `_status` of each language only where each language publishes on its own: an
+        // untranslated Single kept per language under the setting publishes as a document.
+        status: publishesPerLanguage(input),
         adapter,
       });
     } catch (error) {

@@ -13,12 +13,23 @@ import type {
   EmailProviderDescriptor,
   EmailProviderRecord,
 } from "@admin/services/emailProviderApi";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
 import { EmailProviderTable } from "../index";
 
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: vi.fn(),
 }));
+
+// The pages ask through the router-free hook, which reads the same answer.
+vi.mock("@admin/hooks/useHasPermission", async () => {
+  const { useCurrentUserPermissions } = await import(
+    "@admin/hooks/useCurrentUserPermissions"
+  );
+  return {
+    useHasPermission: () => useCurrentUserPermissions().hasPermission,
+  };
+});
 
 vi.mock("@admin/hooks/queries/useEmailProviders", () => ({
   useEmailProviders: () => ({
@@ -64,7 +75,8 @@ const RESEND: EmailProviderDescriptor = {
 
 function holding(slugs: string[]) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    hasPermission: (slug: string) => slugs.includes(slug),
+    // Asked as the product asks it.
+    hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: false,
     hasAnswer: true,
     error: null,
@@ -97,16 +109,21 @@ describe("the providers table, by grant", () => {
   it("offers a test send to someone who may create providers", async () => {
     holding(["read-email-providers", "create-email-providers"]);
     render(<EmailProviderTable />);
-    expect(await rowActions()).toEqual(["Send Test"]);
+    expect(await rowActions()).toEqual(["Send a test"]);
   });
 
   it("offers a manager every action", async () => {
-    holding(["manage-email-providers"]);
+    holding([
+      "read-email-providers",
+      "create-email-providers",
+      "update-email-providers",
+      "delete-email-providers",
+    ]);
     render(<EmailProviderTable />);
     expect(await rowActions()).toEqual([
       "Edit",
       "Set Default",
-      "Send Test",
+      "Send a test",
       "Delete",
     ]);
   });

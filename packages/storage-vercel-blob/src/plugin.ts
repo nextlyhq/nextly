@@ -78,7 +78,8 @@ import type { VercelBlobStorageConfig } from "./types";
  * @param config - Vercel Blob storage configuration
  * @returns A StoragePlugin that MediaStorage can register
  *
- * @throws Error if token is not provided (via adapter)
+ * Constructing the plugin never requires the token: a missing credential is
+ * refused when storage is first used, not while the config loads.
  */
 export function vercelBlobStorage(
   config: VercelBlobStorageConfig

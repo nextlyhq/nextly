@@ -1,0 +1,23 @@
+---
+title: PLUGIN_WIDGET_SOURCE_COLLISION
+description: "Two plugins contribute a widget source with the same id."
+---
+
+## Cause
+
+Two plugins contribute a widget source with the same id.
+
+A widget finds its data by its source's id, so each id names one source across every plugin.
+
+## Fix
+
+Rename one of the two sources, or remove one of the plugins.
+
+## Example
+
+```text
+✗ Widget source "acme/visits" is declared by both "@acme/stats" and "@acme/analytics". Source ids must be unique.
+  Why:  A widget finds its data by its source's id, so each id names one source.
+  Next: Rename one of the two sources, or remove one of the plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-widget-source-collision  (PLUGIN_WIDGET_SOURCE_COLLISION)
+```

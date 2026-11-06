@@ -31,10 +31,10 @@ import {
 } from "../../../../cli/commands/dev-build";
 import { ensureCoreTables } from "../../../../cli/commands/dev-server";
 import {
-  parseSqlSections,
   runFileMigrations,
   splitSqlStatements,
 } from "../../../../cli/commands/migrate";
+import { parseSqlSections } from "../../migrate/sql-sections";
 import type { CommandContext } from "../../../../cli/program";
 import type { CLIDatabaseAdapter } from "../../../../cli/utils/adapter";
 import type { LoadConfigResult } from "../../../../cli/utils/config-loader";

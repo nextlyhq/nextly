@@ -33,7 +33,11 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style
  */
-import { tokenIdentity } from "@nextlyhq/blocks-engine";
+import {
+  sameJsonValue,
+  sameSiteToken,
+  tokenIdentity,
+} from "@nextlyhq/blocks-engine";
 import type {
   BreakpointSet,
   FontFaceDef,
@@ -41,6 +45,7 @@ import type {
   SiteSheetInput,
   SiteToken,
   SiteTokenSet,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -62,6 +67,12 @@ export interface SiteStyleData {
   classes?: readonly NamedClass[];
   /** The site's breakpoints, on both axes. */
   breakpoints?: BreakpointSet;
+  /**
+   * The site's spacing model: blocks spaced by their own margins (`classic`)
+   * or by the gap of the container holding them (`gaps`). Absent means the
+   * engine's default, `gaps`.
+   */
+  spacingMode?: SpacingMode;
 }
 
 /**
@@ -87,8 +98,8 @@ export interface SiteStyleData {
  *   id is the unit of override: a stored class replaces the config class with
  *   the same id and keeps every other one. Each entry keeps its own
  *   `orderIndex`; precedence stays the engine's question.
- * - **Fonts merge by face identity** — family, weight and style together,
- *   because one family legitimately ships several faces and replacing by
+ * - **Fonts merge by face identity** — family, weight, style and range
+ *   together, because one family legitimately ships several faces and replacing by
  *   family alone would drop the italics when someone re-uploads the regular.
  * - **Breakpoints REPLACE as a whole set.** A breakpoint set is one designed
  *   cascade; splicing half of one set into half of another produces at-rules
@@ -106,6 +117,8 @@ export function resolveSiteStyle(
     breakpoints: hasBreakpoints(stored?.breakpoints)
       ? stored?.breakpoints
       : defaults?.breakpoints,
+    // One site-wide choice, so the stored one wins when there is one.
+    spacingMode: stored?.spacingMode ?? defaults?.spacingMode,
   });
 }
 
@@ -133,12 +146,24 @@ export function classOverrideOf(
   });
 }
 
-/** Whether two classes are the same class, to the byte. */
+/**
+ * Whether two classes are the same class, to the byte: every key an entry
+ * stores, so an override that only names a supplied class, or only locks it,
+ * is a difference worth storing.
+ */
 function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
   return (
     a.id === b.id &&
     a.slug === b.slug &&
+    a.label === b.label &&
+    a.locked === b.locked &&
     a.orderIndex === b.orderIndex &&
+    // The block type a look is bound to: the same styles on another type is
+    // another look.
+    a.blockType === b.blockType &&
+    // A block's own look edits its type's base; the same entry without the
+    // mark is a look blocks wear instead.
+    a.isDefault === b.isDefault &&
     sameJsonValue(a.styles, b.styles)
   );
 }
@@ -255,91 +280,6 @@ export function tokensAfterRefusal(
 }
 
 /**
- * Whether two tokens say the same thing.
- *
- * Field by field rather than by serialising both, because key order is not
- * meaning: a token that round-tripped through storage can carry its fields in
- * a different order and would compare as changed, so every edit anywhere would
- * store every config token — the failure this comparison exists to prevent.
- */
-function sameSiteToken(a: SiteToken, b: SiteToken): boolean {
-  return (
-    a.id === b.id &&
-    a.name === b.name &&
-    a.kind === b.kind &&
-    a.description === b.description &&
-    a.values.light === b.values.light &&
-    a.values.dark === b.values.dark &&
-    // `extensions` is vendor data from Figma, Style Dictionary or whatever else
-    // wrote the token, and DTCG requires a tool to preserve what it does not
-    // understand. Left out of this comparison, a stored override differing ONLY
-    // in extensions reads as identical to the config default — so the next edit
-    // anywhere in the table filters it out of the payload and the vendor data is
-    // gone, silently, from a save the author made about a different token.
-    sameJsonValue(a.extensions, b.extensions) &&
-    // The same argument for the half of this system's own extension key that
-    // this build does not read. It is preserved for exactly one reason — that
-    // an export written by an older build still carries what a newer one wrote
-    // — and a comparison blind to it would drop it on the next unrelated edit,
-    // which is the loss it exists to prevent.
-    sameJsonValue(a.unreadExtension, b.unreadExtension)
-  );
-}
-
-/**
- * Whether two values decoded from JSON say the same thing.
- *
- * Structural rather than `JSON.stringify`, because key order is not meaning and
- * a token that round-tripped through storage can carry its fields in another
- * order — the same reason the token comparison above is field by field. Written
- * for `extensions`, whose shape is by definition unknown: it is whatever
- * another tool wrote, so there is no set of fields to enumerate.
- */
-function sameJsonValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) || Array.isArray(b)) return sameJsonArray(a, b);
-  if (isJsonRecord(a) && isJsonRecord(b)) return sameJsonRecord(a, b);
-  // Two primitives that were not `===` above, or one of each kind. Neither is
-  // worth descending into.
-  return false;
-}
-
-/**
- * Two arrays, element by element and in order.
- *
- * Asked apart from the record case because order MATTERS here and does not
- * there, which is the whole difference between the two — and an equality that
- * decided both in one branch would be one edit from applying the wrong rule.
- * An array beside a non-array is not equal, which is why both sides are tested
- * rather than only the one that got us here.
- */
-function sameJsonArray(a: unknown, b: unknown): boolean {
-  return (
-    Array.isArray(a) &&
-    Array.isArray(b) &&
-    a.length === b.length &&
-    a.every((item, index) => sameJsonValue(item, b[index]))
-  );
-}
-
-/** Two records: the same own keys, and the same value under each. */
-function sameJsonRecord(
-  a: Record<string, unknown>,
-  b: Record<string, unknown>
-): boolean {
-  const keys = Object.keys(a);
-  return (
-    keys.length === Object.keys(b).length &&
-    keys.every(key => Object.hasOwn(b, key) && sameJsonValue(a[key], b[key]))
-  );
-}
-
-/** An object with named keys, as JSON produces. Arrays are handled apart. */
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-/**
  * A style whose keys are only the DEFINED sections.
  *
  * An `undefined` property and an absent one mean the same thing to a reader,
@@ -356,6 +296,9 @@ export function siteStyleOf(sections: SiteStyleData): SiteStyleData {
     ...(sections.breakpoints === undefined
       ? {}
       : { breakpoints: sections.breakpoints }),
+    ...(sections.spacingMode === undefined
+      ? {}
+      : { spacingMode: sections.spacingMode }),
   };
 }
 
@@ -366,11 +309,15 @@ function hasBreakpoints(set: BreakpointSet | undefined): boolean {
   );
 }
 
-/** What makes two font faces the same face: family, weight and style. */
+/**
+ * What makes two font faces the same face: family, weight, style and the
+ * characters it covers. One cut in two scripts is two files, each with its
+ * own `unicode-range`, and both must load.
+ */
 function faceIdentity(face: FontFaceDef): string {
   // Weight and style default at emission (`normal` both), so an absent value
   // and the default spelled out are the same face and must collide here.
-  return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"}`;
+  return `${face.family} ${face.weight ?? "normal"} ${face.style ?? "normal"} ${face.unicodeRange ?? ""}`;
 }
 
 /**
@@ -453,5 +400,9 @@ export function siteSheet(style?: SiteStyleData): SiteSheetInput {
     ...(style?.fonts === undefined ? {} : { fonts: style.fonts }),
     ...(style?.classes === undefined ? {} : { classes: style.classes }),
     breakpoints: siteBreakpoints(style),
+    // Carried to the renderer, which compiles the page under it.
+    ...(style?.spacingMode === undefined
+      ? {}
+      : { spacingMode: style.spacingMode }),
   };
 }

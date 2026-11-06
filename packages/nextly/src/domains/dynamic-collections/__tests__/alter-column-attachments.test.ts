@@ -67,7 +67,7 @@ function hasUniqueness(
 /** A plain (non-unique) index on this column, in either generator's spelling. */
 function hasPlainIndex(sql: string, column: string): boolean {
   return new RegExp(
-    `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE}\\(${column}\\)`
+    `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE} ?\\(${column}\\)`
   ).test(sql);
 }
 
@@ -343,7 +343,7 @@ describe("the attachments the ADD path used to lose", () => {
       );
       const matches = sql.match(
         new RegExp(
-          `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE}\\(rank\\)`,
+          `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE} ?\\(rank\\)`,
           "g"
         )
       );
@@ -379,8 +379,28 @@ describe("an index the dialect can actually accept", () => {
     );
     // Without a key length MySQL rejects the statement outright: "BLOB/TEXT column used in key
     // specification without a key length".
-    expect(sql).toContain("ON dc_probe(note(191))");
+    expect(sql).toContain("ON dc_probe (note(191))");
   });
+
+  // Every TEXT and BLOB size needs the key length, not only the one spelled `text`: an index
+  // toggled on a column the database holds as MEDIUMTEXT is keyed by the same prefix.
+  it.each(["mediumtext", "longtext", "tinytext", "mediumblob"])(
+    "indexes a mysql %s column it toggles by prefix",
+    liveType => {
+      const sql = unquote(
+        service("mysql").generateAlterTableMigration(
+          TABLE,
+          [field({ name: "note", type: "text" })],
+          [field({ name: "note", type: "text", index: true })],
+          {
+            tableHasRows: false,
+            liveColumnTypes: new Map([["note", liveType]]),
+          }
+        )
+      );
+      expect(sql).toContain("ON dc_probe (note(191))");
+    }
+  );
 
   it("indexes a mysql varchar column whole, so the prefix is not applied to everything", () => {
     const sql = unquote(
@@ -397,7 +417,7 @@ describe("an index the dialect can actually accept", () => {
         { tableHasRows: false }
       )
     );
-    expect(sql).toContain("ON dc_probe(author)");
+    expect(sql).toContain("ON dc_probe (author)");
     expect(sql).not.toContain("author(191)");
   });
 
@@ -412,7 +432,7 @@ describe("an index the dialect can actually accept", () => {
           { tableHasRows: false }
         )
       );
-      expect(sql).toContain("ON dc_probe(note)");
+      expect(sql).toContain("ON dc_probe (note)");
     }
   );
 
@@ -467,7 +487,7 @@ describe("an index the dialect can actually accept", () => {
           { tableHasRows: false }
         )
       );
-      expect(sql).toContain("ON dc_probe(payload)");
+      expect(sql).toContain("ON dc_probe (payload)");
     }
   );
 

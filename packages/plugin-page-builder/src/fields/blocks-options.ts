@@ -150,3 +150,18 @@ export function acceptedKinds(
 ): readonly DocumentKind[] | undefined {
   return blocksOptionsOf(field).kinds;
 }
+
+/**
+ * What a field accepts when it says nothing: its own entry's page content.
+ * Stated once, for the validator, the generated schema and every reader that
+ * asks whether a field holds a given kind.
+ */
+export const DEFAULT_ACCEPTED_KINDS: readonly DocumentKind[] = ["page"];
+
+/**
+ * Whether a field accepts documents of `kind`, its declared kinds or the
+ * default where it declares none.
+ */
+export function acceptsKind(field: unknown, kind: DocumentKind): boolean {
+  return (acceptedKinds(field) ?? DEFAULT_ACCEPTED_KINDS).includes(kind);
+}

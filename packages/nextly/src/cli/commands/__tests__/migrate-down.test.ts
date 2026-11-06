@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { migrateDownCore, selectAppliedTargets } from "../migrate-down";
+import { createTestDb } from "../../../__tests__/fixtures/db";
+import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+  selectAppliedTargets,
+} from "../migrate-down";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { recordPluginSchemaVersionFromLedger } from "../../../domains/schema/migrate/plugin/plugin-schema-version";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
@@ -25,7 +32,8 @@ function row(
     durationMs: null,
     note: null,
     statementsExecuted: null,
-    supersededEventIds: null,
+    // A rollback retires the applied row it undoes, as `migrate:down` writes it.
+    supersededEventIds: status === "rolled_back" ? ["the-applied-row"] : null,
     supersededBy: null,
   };
 }
@@ -39,6 +47,16 @@ describe("selectAppliedTargets", () => {
       row("c.sql", "applied", 4000),
     ];
     expect(selectAppliedTargets(rows, 2)).toEqual(["c.sql", "a.sql"]);
+  });
+
+  it("keeps an app migration applied when an attempt that is not an outcome follows it", () => {
+    const rows = [
+      row("a.sql", "applied", 1000),
+      row("a.sql", "failed", 2000),
+      row("b.sql", "applied", 3000),
+      row("b.sql", "in_progress", 4000),
+    ];
+    expect(selectAppliedTargets(rows, 2)).toEqual(["b.sql", "a.sql"]);
   });
 
   it("returns [] when nothing is applied", () => {
@@ -168,7 +186,198 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Live facts answering that nothing references, carries code or inherits from anything. */
+const quietFacts = async () => ({
+  cascadeFrom: () => [],
+  truncateCascadeFrom: () => [],
+  nulledBy: () => [],
+  hiddenCode: () => false,
+  descendantsOf: () => [],
+  liveTable: () => undefined,
+  liveColumns: new Map(),
+});
+
+describe("a rollback's deletions, read as one run", () => {
+  it("follows a cascade key an earlier target's DOWN restores from a later target's removal of rows", async () => {
+    // a.sql is the newer file, so its DOWN runs first and restores the key.
+    const downs: Record<string, string> = {
+      "a.sql":
+        'ALTER TABLE "comments" ADD CONSTRAINT "fk" FOREIGN KEY ("post_id") REFERENCES "posts" ("id") ON DELETE CASCADE;',
+      "b.sql": 'DELETE FROM "posts";',
+    };
+    const { deps, executed } = baseDeps({
+      options: {
+        step: 2,
+        yes: false,
+        dryRun: false,
+        consent: resolveDataLossConsent({ flag: "posts", env: {} }),
+      },
+      listFileApplies: async () => [
+        row("b.sql", "applied", 1000),
+        row("a.sql", "applied", 2000),
+      ],
+      readDownSql: async (filename: string) => down(downs[filename] ?? ""),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/comments/);
+    expect(executed).toEqual([]);
+  });
+
+  it("names the database's DDL event triggers beside a rollback's deletions", async () => {
+    const { deps, executed } = baseDeps({
+      listFileApplies: async () => [row("b.sql", "applied", 1000)],
+      readDownSql: async () => down('DELETE FROM "posts";'),
+      readDeletionFacts: quietFacts,
+      readEventTriggers: async () => ["audit_ddl"],
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(
+      /DDL event trigger audit_ddl/
+    );
+    expect(executed).toEqual([]);
+  });
+
+  it("never lets a yes to one file's deletion stand for another file's, when the plan moves while the lock is awaited", async () => {
+    // Before the lock a.sql is the newest applied file; while this run waits,
+    // another rolls it back, and the plan under the lock reaches b.sql,
+    // which deletes the same rows by the same statement.
+    let reads = 0;
+    const asked: string[] = [];
+    const { deps, executed } = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+      listFileApplies: async () =>
+        reads++ === 0
+          ? [row("b.sql", "applied", 1000), row("a.sql", "applied", 2000)]
+          : [
+              row("b.sql", "applied", 1000),
+              row("a.sql", "applied", 2000),
+              row("a.sql", "rolled_back", 3000),
+            ],
+      readDownSql: async () => down('DELETE FROM "posts";'),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/b\.sql/);
+    expect(asked).toHaveLength(1);
+    expect(executed).toEqual([]);
+  });
+
+  it("never lets one file's agreed deletion cover another file's same deletion once that file changed", async () => {
+    // Both DOWNs delete posts' rows. a.sql stays as agreed; b.sql's text
+    // changes while the lock is awaited, so its deletion is not the one agreed.
+    const reads = new Map<string, number>();
+    const asked: string[] = [];
+    const { deps, executed } = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+      options: { step: 2, allowDataLoss: false, yes: false, dryRun: false },
+      listFileApplies: async () => [
+        row("b.sql", "applied", 1000),
+        row("a.sql", "applied", 2000),
+      ],
+      readDownSql: async (filename: string) => {
+        const read = reads.get(filename) ?? 0;
+        reads.set(filename, read + 1);
+        return down(
+          filename === "b.sql" && read > 0
+            ? 'DELETE FROM "posts"; DELETE FROM "posts";'
+            : 'DELETE FROM "posts";'
+        );
+      },
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/b\.sql/);
+    expect(asked).toHaveLength(1);
+    expect(executed).toEqual([]);
+  });
+
+  it("names what a plugin module's DOWN deletes, a removal of rows included, and needs consent for it", async () => {
+    const { deps, executed } = baseDeps({
+      owners: authOwnsT,
+      options: {
+        step: 1,
+        allowDataLoss: false,
+        yes: false,
+        dryRun: false,
+        plugin: "auth",
+      },
+      listFileApplies: async () => [
+        row("plugin:auth/001_init.sql", "applied", 2000),
+      ],
+      readDownSql: async () => down('DELETE FROM "t";'),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/rows of t/);
+    expect(executed).toEqual([]);
+  });
+});
+
 describe("migrateDownCore", () => {
+  describe("an unresolved attempt", () => {
+    const refusal = new Error("unresolved attempt");
+    const refuse = () => Promise.reject(refusal);
+
+    it("is refused under the lock even with nothing to roll back, and reported by a dry run", async () => {
+      const lines: string[] = [];
+      const logger = {
+        ...createLogger({ quiet: true }),
+        info: (m: string) => {
+          lines.push(m);
+        },
+      };
+      const empty = { listFileApplies: async () => [] };
+      const real = baseDeps({ ...empty, refuseUnresolvedAttempts: refuse });
+      await expect(migrateDownCore(real.deps as never)).rejects.toBe(refusal);
+
+      const dry = baseDeps({
+        ...empty,
+        logger,
+        refuseUnresolvedAttempts: refuse,
+        options: { step: 1, allowDataLoss: false, yes: false, dryRun: true },
+      });
+      await expect(migrateDownCore(dry.deps as never)).resolves.toEqual({
+        rolledBack: [],
+      });
+      expect(lines).toContain(
+        "✖ a real run would be refused: unresolved attempt"
+      );
+    });
+
+    it("stops a run with targets before any DOWN runs", async () => {
+      const { deps, executed } = baseDeps({
+        refuseUnresolvedAttempts: refuse,
+        // Consented, so the run reaches the lock rather than stopping on it.
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+      });
+      await expect(migrateDownCore(deps as never)).rejects.toBe(refusal);
+      expect(executed).toEqual([]);
+    });
+
+    it("is not asked for a plugin's stream", async () => {
+      const asked: string[] = [];
+      const { deps } = baseDeps({
+        listFileApplies: async () => [],
+        refuseUnresolvedAttempts: async () => {
+          asked.push("asked");
+        },
+        options: {
+          step: 1,
+          allowDataLoss: false,
+          yes: false,
+          dryRun: false,
+          plugin: "shop",
+        },
+      });
+      await migrateDownCore(deps as never);
+      expect(asked).toEqual([]);
+    });
+  });
+
   it("refuses when the DOWN section is empty", async () => {
     const { deps } = baseDeps({ readDownSql: async () => down("   ") });
     await expect(migrateDownCore(deps)).rejects.toThrow(/irreversible/i);
@@ -191,9 +400,9 @@ describe("migrateDownCore", () => {
     expect(executed).toEqual([]);
   });
 
-  it("requires --allow-data-loss when DOWN drops a column", async () => {
+  it("requires the data-loss consent when DOWN drops a column", async () => {
     const { deps } = baseDeps();
-    await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+    await expect(migrateDownCore(deps)).rejects.toThrow(/--accept-data-loss/);
   });
 
   it.each([
@@ -203,7 +412,7 @@ describe("migrateDownCore", () => {
     // A column drop beside a constraint drop, in one ALTER.
     ['ALTER TABLE "t" DROP COLUMN "c", DROP CONSTRAINT "t_k"', "postgresql"],
   ] as const)(
-    "requires --allow-data-loss for %s on %s",
+    "requires the data-loss consent for %s on %s",
     async (downSql, dialect) => {
       // PostgreSQL and MySQL drop a column without the COLUMN keyword; each of
       // these loses data as surely as `DROP COLUMN` does.
@@ -211,12 +420,90 @@ describe("migrateDownCore", () => {
         dialect,
         readDownSql: async () => down(downSql),
       });
-      await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+      await expect(migrateDownCore(deps)).rejects.toThrow(/--accept-data-loss/);
       expect(executed).toEqual([]);
     }
   );
 
-  it("does not require --allow-data-loss for a complete SQLite table rebuild", async () => {
+  it("rolls back a DOWN that drops a column with the consent without targets", async () => {
+    const { deps, executed } = baseDeps({
+      options: {
+        step: 1,
+        yes: false,
+        dryRun: false,
+        consent: resolveDataLossConsent({ flag: true, env: {} }),
+      },
+    });
+    await migrateDownCore(deps);
+    expect(executed.length).toBe(1);
+  });
+
+  it("refuses a consent naming targets that leave out what the DOWN deletes, and rolls back with one naming it", async () => {
+    const withConsent = (targets: string) =>
+      baseDeps({
+        options: {
+          step: 1,
+          yes: false,
+          dryRun: false,
+          consent: resolveDataLossConsent({ flag: targets, env: {} }),
+        },
+      });
+    const other = withConsent("u");
+    await expect(migrateDownCore(other.deps)).rejects.toThrow(
+      /does not cover[\s\S]*column t\.c[\s\S]*--accept-data-loss=u,t\.c/
+    );
+    expect(other.executed).toEqual([]);
+    const named = withConsent("t.c");
+    await migrateDownCore(named.deps);
+    expect(named.executed.length).toBe(1);
+  });
+
+  it("asks a terminal, and rolls back only on yes", async () => {
+    const asked: string[] = [];
+    const yes = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+    });
+    await migrateDownCore(yes.deps);
+    expect(asked).toHaveLength(1);
+    expect(yes.executed.length).toBe(1);
+
+    // A no stops the run, which exits 1 on it, naming the consent.
+    const no = baseDeps({
+      interactive: true,
+      askToDelete: async () => false,
+    });
+    await expect(migrateDownCore(no.deps)).rejects.toMatchObject({
+      what: expect.stringContaining("the deletion was not confirmed"),
+      next: expect.stringContaining("--accept-data-loss"),
+    });
+    expect(no.executed).toEqual([]);
+  });
+
+  it("refuses a DOWN that changed after it was agreed to, before the lock", async () => {
+    // The DOWN is read again under the lock; agreeing to the one first read
+    // does not agree to a different one read there.
+    let reads = 0;
+    const changed = baseDeps({
+      interactive: true,
+      askToDelete: async () => true,
+      readDownSql: async () =>
+        down(
+          reads++ === 0
+            ? 'ALTER TABLE "t" DROP COLUMN "c";'
+            : 'ALTER TABLE "t" DROP COLUMN "d";'
+        ),
+    });
+    await expect(migrateDownCore(changed.deps)).rejects.toThrow(
+      /needs consent[\s\S]*column t\.d/
+    );
+    expect(changed.executed).toEqual([]);
+  });
+
+  it("does not require the data-loss consent for a complete SQLite table rebuild", async () => {
     // A constraint-only DOWN on SQLite rebuilds the table: the rows are
     // copied into the twin before the original is dropped.
     const rebuild = [
@@ -228,8 +515,23 @@ describe("migrateDownCore", () => {
     const { deps, executed } = baseDeps({
       dialect: "sqlite",
       readDownSql: async () => down(`${rebuild.join(";\n")};`),
-      // The table as the database holds it: the twin declares every column.
+      // The table as the database holds it: the twin declares every column,
+      // each with the type it has.
       readLiveColumns: async () => new Map([["t", new Set(["id", "a"])]]),
+      readDeletionFacts: async () => ({
+        cascadeFrom: () => [],
+        truncateCascadeFrom: () => [],
+        liveColumns: new Map([["t", new Set(["id", "a"])]]),
+        liveColumnTypes: new Map([
+          [
+            "t",
+            new Map([
+              ["id", "text"],
+              ["a", "text"],
+            ]),
+          ],
+        ]),
+      }),
     });
     await migrateDownCore(deps);
     expect(executed).toEqual([rebuild.join(";\n")]);
@@ -242,7 +544,7 @@ describe("migrateDownCore", () => {
         new Map([["t", new Set(["id", "a", "secret"])]]),
     });
     await expect(migrateDownCore(narrow.deps)).rejects.toThrow(
-      /allow-data-loss/
+      /--accept-data-loss/
     );
 
     // The control: the same DROP without the copy before it loses the rows.
@@ -250,10 +552,12 @@ describe("migrateDownCore", () => {
       dialect: "sqlite",
       readDownSql: async () => down('DROP TABLE "t";'),
     });
-    await expect(migrateDownCore(bare.deps)).rejects.toThrow(/allow-data-loss/);
+    await expect(migrateDownCore(bare.deps)).rejects.toThrow(
+      /--accept-data-loss/
+    );
   });
 
-  it("does not require --allow-data-loss for a DOWN that drops no data", async () => {
+  it("does not require the data-loss consent for a DOWN that drops no data", async () => {
     // The control: the same path, with a DOWN that drops a constraint and an
     // index — schema only.
     const { deps, executed } = baseDeps({
@@ -344,7 +648,7 @@ describe("migrateDownCore", () => {
     expect(res.rolledBack).toEqual([]);
   });
 
-  it("dry-run previews a destructive DOWN even WITHOUT --allow-data-loss", async () => {
+  it("dry-run previews a destructive DOWN even without the data-loss consent", async () => {
     // dry-run is a non-destructive preview: it must not be blocked by the
     // data-loss guard (so operators can read the SQL before deciding).
     const { deps, executed } = baseDeps({
@@ -417,6 +721,149 @@ describe("migrateDownCore", () => {
     });
     await expect(migrateDownCore(deps)).rejects.toThrow(/boom/);
     expect(failures).toEqual(["a.sql"]);
+  });
+
+  describe("where a DOWN's attempt is recorded", () => {
+    /**
+     * Runs one DOWN through the core, noting each ledger write in order and
+     * whether the first statement ran after the attempt was recorded.
+     */
+    async function runDown(over: {
+      dialect: "postgresql" | "mysql" | "sqlite";
+      transaction: boolean;
+      filename?: string;
+      fail?: boolean;
+      /** The start row's removal fails. */
+      endFails?: boolean;
+    }) {
+      const filename = over.filename ?? "a.sql";
+      const log: string[] = [];
+      const { deps } = baseDeps({
+        dialect: over.dialect,
+        options: {
+          step: 1,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          ...(over.filename?.startsWith("plugin:") ? { plugin: "auth" } : {}),
+        },
+        listFileApplies: async () => [row(filename, "applied", 1000)],
+        readDownSql: async () => ({
+          // A statement no guard refuses, whoever owns the table: the
+          // recording is under test, not the drop guard.
+          sql: 'CREATE INDEX "t_c_idx" ON "t" ("c");',
+          transaction: over.transaction,
+        }),
+        execDown: async (
+          statements: readonly string[],
+          _unit: unknown,
+          after: (db: unknown) => Promise<void>
+        ) => {
+          log.push("first statement");
+          if (over.fail) throw new Error("boom");
+          await after(TX_HANDLE);
+          return statements.length;
+        },
+        recordRolledBack: async () => {
+          log.push("rolled back");
+          return true;
+        },
+        recordFailed: async () => {
+          log.push("failed");
+        },
+        recordDownStarted: async (name: string) => {
+          log.push(`started ${name}`);
+          return "attempt-1";
+        },
+        endDownAttempt: async (id: string, db?: unknown) => {
+          log.push(
+            `ended ${id}${db === TX_HANDLE ? " in the DOWN's handle" : ""}`
+          );
+          if (over.endFails) throw new Error("delete failed");
+        },
+      });
+      const run = migrateDownCore(deps);
+      if (over.fail) await expect(run).rejects.toThrow(/boom/);
+      else await run;
+      return log;
+    }
+
+    it.each([
+      ["mysql", true],
+      ["mysql", false],
+      ["postgresql", false],
+      ["sqlite", false],
+    ] as const)(
+      "records an app DOWN's start on %s (transaction: %s) before its first statement, and ends it with the rollback",
+      async (dialect, transaction) => {
+        expect(await runDown({ dialect, transaction })).toEqual([
+          "started a.sql",
+          "first statement",
+          "rolled back",
+          "ended attempt-1 in the DOWN's handle",
+        ]);
+      }
+    );
+
+    it("finishes a DOWN whose start row could not be removed, recording no failure", async () => {
+      // Its statements ran and its rollback is recorded: the start row left
+      // behind is older than that outcome, which resolves it.
+      expect(
+        await runDown({ dialect: "mysql", transaction: true, endFails: true })
+      ).toEqual([
+        "started a.sql",
+        "first statement",
+        "rolled back",
+        "ended attempt-1 in the DOWN's handle",
+      ]);
+    });
+
+    it("keeps the DOWN's own error when its start row could not be removed after it failed", async () => {
+      expect(
+        await runDown({
+          dialect: "mysql",
+          transaction: true,
+          fail: true,
+          endFails: true,
+        })
+      ).toEqual([
+        "started a.sql",
+        "first statement",
+        "failed",
+        "ended attempt-1",
+      ]);
+    });
+
+    it("records the failure, then ends the attempt, when the DOWN fails", async () => {
+      expect(
+        await runDown({ dialect: "mysql", transaction: true, fail: true })
+      ).toEqual([
+        "started a.sql",
+        "first statement",
+        "failed",
+        "ended attempt-1",
+      ]);
+    });
+
+    it.each(["postgresql", "sqlite"] as const)(
+      "records no start for a DOWN in a transaction on %s, which leaves nothing when it stops",
+      async dialect => {
+        expect(await runDown({ dialect, transaction: true })).toEqual([
+          "first statement",
+          "rolled back",
+        ]);
+      }
+    );
+
+    it("records no start for a plugin module's DOWN, whose history keeps its record", async () => {
+      expect(
+        await runDown({
+          dialect: "mysql",
+          transaction: true,
+          filename: "plugin:auth/001_init",
+        })
+      ).toEqual(["first statement", "rolled back"]);
+    });
   });
 
   describe("a DOWN marked to run outside a transaction", () => {
@@ -873,5 +1320,34 @@ describe("migrateDownCore and the tables a DOWN creates", () => {
       },
     });
     expect(executed).toEqual([]);
+  });
+});
+
+describe("downDatabaseDeps: a DOWN's start row", () => {
+  it("is recorded in progress, and removed through the handle it is given", async () => {
+    // Removed through the DOWN's own handle, it commits or rolls back with the
+    // rolled-back row written there. Two databases tell the handles apart: a
+    // removal that ignored its handle would reach this ledger either way.
+    const own = await createTestDb();
+    const other = await createTestDb();
+    const deps = await downDatabaseDeps({
+      adapter: own.adapter as never,
+      dialect: "sqlite",
+    });
+    const ledger = new SchemaEventsRepository(own.db, "sqlite");
+    const id = await deps.recordDownStarted?.("0001_a.sql");
+    expect(id).toBeDefined();
+    const started = await ledger.findById(id as string);
+    expect([started?.eventType, started?.status, started?.filename]).toEqual([
+      "file_rollback",
+      "in_progress",
+      "0001_a.sql",
+    ]);
+
+    await deps.endDownAttempt?.(id as string, other.db);
+    expect((await ledger.findById(id as string))?.status).toBe("in_progress");
+
+    await deps.endDownAttempt?.(id as string, own.db);
+    expect(await ledger.findById(id as string)).toBeUndefined();
   });
 });

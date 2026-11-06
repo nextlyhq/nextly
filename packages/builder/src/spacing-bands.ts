@@ -89,6 +89,13 @@ export interface SpacingBand {
    * the band is resolved against.
    */
   readonly clip?: RoundedShape;
+  /**
+   * The container this margin is the gap OF, by name, when it is not the
+   * block's own: a container spaces every child after the first, and the
+   * child's computed margin reports that space. Absent on a margin the block
+   * carries itself, and on every padding band.
+   */
+  readonly gapFrom?: string;
 }
 
 /** Everything the placement needs, and nothing that has to be read from a DOM. */
@@ -521,6 +528,7 @@ function sameBand(one: SpacingBand, other: SpacingBand): boolean {
     one.side === other.side &&
     one.label === other.label &&
     one.negative === other.negative &&
+    one.gapFrom === other.gapFrom &&
     sameRect(one.rect, other.rect) &&
     sameClip(one.clip, other.clip)
   );

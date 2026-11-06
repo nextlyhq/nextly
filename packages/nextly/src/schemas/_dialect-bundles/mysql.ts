@@ -9,6 +9,9 @@
  * @module schemas/_dialect-bundles/mysql
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/mysql.ts)
  */
+// Every dialect's bundle exports its own tables under the same names, by
+// design: one is chosen by dialect at runtime.
+// fallow-ignore-file duplicate-export
 
 export { users } from "../users/mysql";
 
@@ -16,6 +19,9 @@ export { users } from "../users/mysql";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
+// The one schema lock every schema change takes; the field-group lock above is held beside it
+// for processes of an earlier version.
+export { nextlySchemaLock } from "../field-group-lock/mysql";
 export { nextlyDocumentLock } from "../document-lock/mysql";
 export { nextlyRbacEpoch } from "../rbac-epoch/mysql";
 export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
@@ -25,6 +31,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
 export { nextlyPluginSettings } from "../plugin-settings/mysql";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/mysql";
 export { nextlyLimitStore } from "../limit-store/mysql";
+export { nextlyCacheTagExpiries } from "../cache-tag-expiries/mysql";
 export { nextlySpentChallenges } from "../spent-challenges/mysql";
 export { nextlySchemaOwners } from "../schema-owners/mysql";
 export { nextlyWidgetLayout } from "../widget-layout/mysql";
@@ -48,7 +55,7 @@ export { apiKeys } from "../api-keys/mysql";
 
 export { auditLog, activityLog } from "../audit/mysql";
 
-export { media, mediaFolders, imageSizes } from "../media/mysql";
+export { media, mediaFolders } from "../media/mysql";
 
 export { nextlyMeta } from "../nextly-meta/mysql";
 
@@ -62,6 +69,7 @@ export { emailProvidersMysql as emailProviders } from "../email-providers/mysql"
 export { emailDeliveriesMysql as emailDeliveries } from "../email-deliveries/mysql";
 export { emailSendClaimsMysql as emailSendClaims } from "../email-send-claims/mysql";
 export { emailQueueMysql as emailQueue } from "../email-queue/mysql";
+export { emailQueueRecipientsMysql as emailQueueRecipients } from "../email-queue-recipients/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";
@@ -103,6 +111,14 @@ export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
+// Each reader's pinned entries and dashboard preferences; in the bundle for
+// the reason the releases note above gives — this map is what the push
+// creates.
+export { nextlyDashboardPinsMysql as nextlyDashboardPins } from "../dashboard-pins/mysql";
+export { nextlyDashboardPreferencesMysql as nextlyDashboardPreferences } from "../dashboard-preferences/mysql";
+// Which media items each document uses; in the bundle for the reason the
+// releases note above gives — this map is what the push creates.
+export { nextlyMediaUsageMysql as nextlyMediaUsage } from "../media-usage/mysql";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.
@@ -111,6 +127,9 @@ export { nextlyEmailBrandMysql as nextlyEmailBrand } from "../email-brand/mysql"
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsMysql as nextlyVersionViews } from "../version-views/mysql";
+export { nextlyReviewStatesMysql as nextlyReviewStates } from "../review-states/mysql";
+export { nextlyWorkflowSettingsMysql as nextlyWorkflowSettings } from "../workflow-settings/mysql";
+export { nextlyScheduleWindowsMysql as nextlyScheduleWindows } from "../schedule-windows/mysql";
 // The record of content events; in the bundle so freshPushSchema creates the
 // tables on a fresh database, for the reason the release tables above give.
 export {

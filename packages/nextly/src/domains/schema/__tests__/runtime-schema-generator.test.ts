@@ -4,11 +4,43 @@
 import { getTableName, getColumns } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
+import { MIGRATE_STEP_COLUMN_NAMES } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   generateRuntimeSchema,
+  languageRevisionTable,
   type RuntimeSchemaResult,
 } from "../services/runtime-schema-generator";
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "languageRevisionTable (%s)",
+  dialect => {
+    it("declares the keys and every per-document column, each as a main table declares it", () => {
+      const model = getColumns(
+        languageRevisionTable(dialect, "dc_docs_locales") as never
+      ) as Record<string, { getSQLType(): string; notNull: boolean }>;
+      expect(Object.keys(model).sort()).toEqual(
+        ["_locale", "_parent", ...MIGRATE_STEP_COLUMN_NAMES].sort()
+      );
+      // A localized collection's main table, built by the runtime generator.
+      const main = getColumns(
+        generateRuntimeSchema(
+          "dc_docs",
+          [{ name: "title", type: "text", localized: true }],
+          dialect
+        ).table as never
+      ) as Record<string, { getSQLType(): string; notNull: boolean }>;
+      for (const name of MIGRATE_STEP_COLUMN_NAMES) {
+        expect({ [name]: model[name].getSQLType() }).toEqual({
+          [name]: main[name].getSQLType(),
+        });
+        expect({ [name]: model[name].notNull }).toEqual({
+          [name]: main[name].notNull,
+        });
+      }
+    });
+  }
+);
 
 describe("generateRuntimeSchema", () => {
   const baseFields: FieldDefinition[] = [

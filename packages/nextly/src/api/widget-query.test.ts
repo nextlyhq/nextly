@@ -64,6 +64,13 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
   return { ...actual, canReadEntity };
 });
 
+// Watched, not replaced: the batch's cards are prepared by the real function,
+// and a case reads the card batch it was handed.
+vi.mock("./widget-cards", async importOriginal => {
+  const actual = await importOriginal<typeof import("./widget-cards")>();
+  return { ...actual, prepareCards: vi.fn(actual.prepareCards) };
+});
+
 import { requireAuthentication } from "../auth/middleware";
 import {
   clearResolvers,
@@ -78,9 +85,11 @@ import { NextlyError } from "../errors/nextly-error";
 import { setNextlyLogger } from "../observability/logger";
 import { withTimezoneFormatting } from "../shared/lib/date-formatting";
 
+import { prepareCards } from "./widget-cards";
 import { postWidgetQuery } from "./widget-query";
 
 const reqAuth = vi.mocked(requireAuthentication);
+const preparedCards = vi.mocked(prepareCards);
 
 /** Captures what the boundary logs, so "it was logged" is observed, not assumed. */
 const logged: object[] = [];
@@ -1041,6 +1050,69 @@ describe("a body that is not JSON at all", () => {
     expect(res.status).toBe(400);
     expect(executeWidgetQuery).not.toHaveBeenCalled();
   });
+});
+
+describe("the dashboard load a batch names", () => {
+  const count = { source: "collection:posts", op: "count" };
+
+  /** The card batch each request handed `prepareCards`, in order. */
+  function cardBatches() {
+    return preparedCards.mock.calls.map(([, batch]) => batch);
+  }
+
+  it("hands its cards the load the body names, as that load's batch, and none when it names none", async () => {
+    const named = await postWidgetQuery(
+      makeReq({ queries: [count], readAheadToken: "load-1" })
+    );
+    const unnamed = await postWidgetQuery(makeReq({ queries: [count] }));
+
+    expect(named.status).toBe(200);
+    expect(unnamed.status).toBe(200);
+    const [asNamed, asUnnamed] = cardBatches();
+    expect(asNamed?.readAhead).toEqual({ side: "batch", token: "load-1" });
+    // A batch of no load takes nothing read ahead for any.
+    expect(asUnnamed).toBeDefined();
+    expect(asUnnamed).not.toHaveProperty("readAhead");
+  });
+
+  it("takes a token as long as the longest it accepts", async () => {
+    const longest = "x".repeat(64);
+    const res = await postWidgetQuery(
+      makeReq({ queries: [count], readAheadToken: longest })
+    );
+
+    expect(res.status).toBe(200);
+    expect(cardBatches()[0]?.readAhead).toEqual({
+      side: "batch",
+      token: longest,
+    });
+  });
+
+  it.each([
+    ["not a string", 7],
+    ["null", null],
+    ["empty", ""],
+    ["longer than the longest it accepts", "x".repeat(65)],
+  ])(
+    "refuses a token that is %s, as a malformed field of the body, before any read",
+    async (_, readAheadToken) => {
+      const res = await postWidgetQuery(
+        makeReq({ queries: [count], readAheadToken })
+      );
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as {
+        error: { code: string; data?: { errors: Array<{ path: string }> } };
+      };
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+      expect(body.error.data?.errors[0].path).toBe("readAheadToken");
+      // A validity check, so a precondition: refused before the registry read.
+      expect(containerGet).not.toHaveBeenCalledWith(
+        "collectionRegistryService"
+      );
+      expect(preparedCards).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("a slot that never settles", () => {

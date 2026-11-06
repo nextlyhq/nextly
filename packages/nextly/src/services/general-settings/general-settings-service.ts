@@ -12,9 +12,9 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, sql } from "drizzle-orm";
 
-import { siteSettingsMysql } from "../../schemas/site-settings/mysql";
-import { siteSettingsPg } from "../../schemas/site-settings/postgres";
-import { siteSettingsSqlite } from "../../schemas/site-settings/sqlite";
+import { loadedDialect } from "../../database/dialect-tables";
+import { flushContentChange } from "../../domains/flush-content-change";
+import { nextlySiteSettingsTags } from "../../runtime/cache/nextly-tags";
 import type {
   GeneralSettingsRecord,
   GeneralSettingsUpdate,
@@ -56,13 +56,11 @@ export class GeneralSettingsService extends BaseService {
 
     switch (this.dialect) {
       case "postgresql":
-        this.siteSettings = siteSettingsPg;
-        break;
       case "mysql":
-        this.siteSettings = siteSettingsMysql;
-        break;
       case "sqlite":
-        this.siteSettings = siteSettingsSqlite;
+        // The loaded dialect's own table, so only that dialect's file is
+        // imported; `createAdapter` loads it.
+        this.siteSettings = loadedDialect(this.dialect).tables.siteSettings;
         break;
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
@@ -214,6 +212,15 @@ export class GeneralSettingsService extends BaseService {
         updatedAt: now,
       });
     }
+
+    // Pages that show the site's name, address, logo or time zone are cached
+    // under the settings tag, so every saved change expires it. Best-effort:
+    // the write is committed, so a cache failure is logged, never thrown.
+    await flushContentChange(
+      { tags: nextlySiteSettingsTags() },
+      this.logger,
+      "a site settings write"
+    );
 
     return this.getSettings();
   }

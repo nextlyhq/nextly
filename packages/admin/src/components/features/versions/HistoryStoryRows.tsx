@@ -11,27 +11,17 @@
  */
 
 import {
-  Bot,
   Bookmark,
   ChevronDown,
   ChevronRight,
-  Cog,
-  KeyRound,
   Pencil,
-  Rocket,
   RotateCcw,
-  User,
-  UserRound,
 } from "lucide-react";
 import type { JSX } from "react";
 import { useState } from "react";
 
 import { cn } from "@admin/lib/utils";
-import type {
-  HistoryActorKind,
-  VersionMeta,
-  VersionScope,
-} from "@admin/services/versionApi";
+import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
 import type { StoryEvent, StoryRemoval, StoryVersion } from "./history-story";
 import {
@@ -43,18 +33,9 @@ import {
   type PartsLabel,
   type StoryActor,
 } from "./history-story-text";
+import { StoryActorName } from "./StoryActorName";
 import type { Predecessor } from "./version-pairing";
 import { VersionSummaryLine } from "./VersionSummaryLine";
-
-/** The icon for each kind of actor; a person when none was recorded. */
-const ACTOR_ICONS: Record<HistoryActorKind, typeof User> = {
-  person: User,
-  apiKey: KeyRound,
-  principal: UserRound,
-  release: Rocket,
-  system: Cog,
-  agent: Bot,
-};
 
 /** The shape a row's kind is drawn as. */
 export type StoryShape = "publish" | "save" | "event";
@@ -94,19 +75,6 @@ export function StoryNode({ shape }: { shape: StoryShape }): JSX.Element {
         />
       )}
     </svg>
-  );
-}
-
-/** Who or what did it, with an icon for the kind. */
-export function StoryActorName({ actor }: { actor: StoryActor }): JSX.Element {
-  const Icon = actor.kind ? ACTOR_ICONS[actor.kind] : User;
-  const name =
-    actor.kind === "release" ? `Release “${actor.name}”` : actor.name;
-  return (
-    <span className="inline-flex min-w-0 items-center gap-1 truncate font-medium text-foreground">
-      <Icon className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="truncate">{name}</span>
-    </span>
   );
 }
 

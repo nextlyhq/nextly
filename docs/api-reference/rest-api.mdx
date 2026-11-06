@@ -209,7 +209,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `POST`          | `/admin/api/auth/verify-email/resend`                  | Resend the verification email.                                                                                                                                                                       | Public                                                          |
 | `PATCH`         | `/admin/api/auth/change-password`                      | Change current user's password.                                                                                                                                                                      | Cookie                                                          |
 | `GET`           | `/admin/api/me`                                        | Current user profile.                                                                                                                                                                                | Cookie / Bearer                                                 |
-| `PATCH`         | `/admin/api/me`                                        | Update current user profile.                                                                                                                                                                         | Cookie / Bearer                                                 |
+| `PATCH`         | `/admin/api/me`                                        | Update current user profile: `name`, `image`, `interfaceLanguage`.                                                                                                                                   | Cookie / Bearer                                                 |
 | `GET`           | `/admin/api/me/permissions`                            | Resolved permissions for current user.                                                                                                                                                               | Cookie / Bearer                                                 |
 | `GET`           | `/admin/api/users`                                     | List users.                                                                                                                                                                                          | `read-users`                                                    |
 | `POST`          | `/admin/api/users`                                     | Create user.                                                                                                                                                                                         | `create-users`                                                  |
@@ -239,13 +239,13 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `PATCH`         | `/admin/api/permissions/{id}`                          | Update permission.                                                                                                                                                                                   | `update-permissions`                                            |
 | `DELETE`        | `/admin/api/permissions/{id}`                          | Delete permission.                                                                                                                                                                                   | `delete-permissions`                                            |
 | `GET`           | `/admin/api/collections`                               | List collection definitions.                                                                                                                                                                         | Authenticated                                                   |
-| `POST`          | `/admin/api/collections`                               | Create collection (Schema Builder).                                                                                                                                                                  | `manage-settings`                                               |
+| `POST`          | `/admin/api/collections`                               | Create collection (Schema Builder).                                                                                                                                                                  | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `GET`           | `/admin/api/collections/{slug}`                        | Get collection definition.                                                                                                                                                                           | `read-{slug}`                                                   |
-| `PATCH`         | `/admin/api/collections/{slug}`                        | Update collection definition.                                                                                                                                                                        | `manage-settings`                                               |
-| `DELETE`        | `/admin/api/collections/{slug}`                        | Delete collection.                                                                                                                                                                                   | `manage-settings`                                               |
+| `PATCH`         | `/admin/api/collections/{slug}`                        | Update collection definition.                                                                                                                                                                        | `create-settings`, `update-settings` and `delete-settings`                                               |
+| `DELETE`        | `/admin/api/collections/{slug}`                        | Delete collection.                                                                                                                                                                                   | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `GET`           | `/admin/api/collections/schema/{slug}`                 | Get enriched schema (with component fields).                                                                                                                                                         | `read-{slug}`                                                   |
-| `POST`          | `/admin/api/collections/schema/{slug}/preview`         | Dry-run schema diff.                                                                                                                                                                                 | `manage-settings`                                               |
-| `POST`          | `/admin/api/collections/schema/{slug}/apply`           | Apply confirmed schema changes.                                                                                                                                                                      | `manage-settings`                                               |
+| `POST`          | `/admin/api/collections/schema/{slug}/preview`         | Dry-run schema diff.                                                                                                                                                                                 | `create-settings`, `update-settings` and `delete-settings`                                               |
+| `POST`          | `/admin/api/collections/schema/{slug}/apply`           | Apply confirmed schema changes.                                                                                                                                                                      | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `GET`           | `/admin/api/collections/{slug}/entries`                | List entries.                                                                                                                                                                                        | `read-{slug}`                                                   |
 | `POST`          | `/admin/api/collections/{slug}/entries`                | Create entry.                                                                                                                                                                                        | `create-{slug}`                                                 |
 | `GET`           | `/admin/api/collections/{slug}/entries/{id}`           | Get entry by ID.                                                                                                                                                                                     | `read-{slug}`                                                   |
@@ -257,21 +257,21 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `POST`          | `/admin/api/collections/{slug}/entries/bulk-update`    | Bulk update by IDs.                                                                                                                                                                                  | `update-{slug}`                                                 |
 | `PATCH`         | `/admin/api/collections/{slug}/entries`                | Bulk update by query.                                                                                                                                                                                | `update-{slug}`                                                 |
 | `GET`           | `/admin/api/singles`                                   | List singles.                                                                                                                                                                                        | Authenticated                                                   |
-| `POST`          | `/admin/api/singles`                                   | Create single (Schema Builder).                                                                                                                                                                      | `manage-settings`                                               |
+| `POST`          | `/admin/api/singles`                                   | Create single (Schema Builder).                                                                                                                                                                      | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `GET`           | `/admin/api/singles/{slug}`                            | Get single content.                                                                                                                                                                                  | `read-{slug}`                                                   |
 | `PATCH`         | `/admin/api/singles/{slug}`                            | Update single content.                                                                                                                                                                               | `update-{slug}`                                                 |
-| `DELETE`        | `/admin/api/singles/{slug}`                            | Delete UI-created single.                                                                                                                                                                            | `manage-settings`                                               |
+| `DELETE`        | `/admin/api/singles/{slug}`                            | Delete UI-created single.                                                                                                                                                                            | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `GET`           | `/admin/api/singles/{slug}/schema`                     | Get single schema.                                                                                                                                                                                   | `read-{slug}`                                                   |
-| `PATCH`         | `/admin/api/singles/{slug}/schema`                     | Update single schema (Schema Builder).                                                                                                                                                               | `manage-settings`                                               |
-| `POST`          | `/admin/api/singles/schema/{slug}/preview`             | Dry-run single schema diff.                                                                                                                                                                          | `manage-settings`                                               |
-| `POST`          | `/admin/api/singles/schema/{slug}/apply`               | Apply single schema changes.                                                                                                                                                                         | `manage-settings`                                               |
+| `PATCH`         | `/admin/api/singles/{slug}/schema`                     | Update single schema (Schema Builder).                                                                                                                                                               | `create-settings`, `update-settings` and `delete-settings`                                               |
+| `POST`          | `/admin/api/singles/schema/{slug}/preview`             | Dry-run single schema diff.                                                                                                                                                                          | `create-settings`, `update-settings` and `delete-settings`                                               |
+| `POST`          | `/admin/api/singles/schema/{slug}/apply`               | Apply single schema changes.                                                                                                                                                                         | `create-settings`, `update-settings` and `delete-settings`                                               |
 | `GET`           | `/admin/api/field-groups`                              | List field group definitions.                                                                                                                                                                        | Authenticated                                                   |
-| `POST`          | `/admin/api/field-groups`                              | Create field group.                                                                                                                                                                                  | `manage-settings`                                               |
+| `POST`          | `/admin/api/field-groups`                              | Create field group.                                                                                                                                                                                  | `create-settings`                                               |
 | `GET`           | `/admin/api/field-groups/{slug}`                       | Get field group.                                                                                                                                                                                     | Authenticated                                                   |
-| `PATCH`         | `/admin/api/field-groups/{slug}`                       | Update field group.                                                                                                                                                                                  | `manage-settings`                                               |
-| `DELETE`        | `/admin/api/field-groups/{slug}`                       | Delete field group.                                                                                                                                                                                  | `manage-settings`                                               |
-| `POST`          | `/admin/api/field-groups/schema/{slug}/preview`        | Dry-run field group schema diff.                                                                                                                                                                     | `manage-settings`                                               |
-| `POST`          | `/admin/api/field-groups/schema/{slug}/apply`          | Apply field group schema changes.                                                                                                                                                                    | `manage-settings`                                               |
+| `PATCH`         | `/admin/api/field-groups/{slug}`                       | Update field group.                                                                                                                                                                                  | `update-settings`                                               |
+| `DELETE`        | `/admin/api/field-groups/{slug}`                       | Delete field group.                                                                                                                                                                                  | `delete-settings`                                               |
+| `POST`          | `/admin/api/field-groups/schema/{slug}/preview`        | Dry-run field group schema diff.                                                                                                                                                                     | `create-settings`                                               |
+| `POST`          | `/admin/api/field-groups/schema/{slug}/apply`          | Apply field group schema changes.                                                                                                                                                                    | `update-settings`                                               |
 | `GET`           | `/admin/api/email-providers`                           | List providers.                                                                                                                                                                                      | `read-email-providers`                                          |
 | `POST`          | `/admin/api/email-providers`                           | Create provider.                                                                                                                                                                                     | `create-email-providers`                                        |
 | `GET`           | `/admin/api/email-providers/{id}`                      | Get provider.                                                                                                                                                                                        | `read-email-providers`                                          |
@@ -304,11 +304,8 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `GET`           | `/admin/api/dashboard/recent-entries`                  | Recent activity.                                                                                                                                                                                     | Cookie                                                          |
 | `GET`           | `/admin/api/dashboard/activity`                        | Activity feed.                                                                                                                                                                                       | Cookie                                                          |
 | `GET`           | `/admin/api/schema/journal`                            | Schema migration journal (super-admin only).                                                                                                                                                         | Cookie + super admin                                            |
-| `GET` / `PATCH` | `/admin/api/general-settings`                          | Project-wide settings.                                                                                                                                                                               | `manage-settings`                                               |
-| `GET`           | `/admin/api/image-sizes`                               | List image-size presets.                                                                                                                                                                             | Cookie                                                          |
-| `POST`          | `/admin/api/image-sizes`                               | Create image-size preset.                                                                                                                                                                            | `manage-settings`                                               |
-| `PATCH`         | `/admin/api/image-sizes/{id}`                          | Update preset.                                                                                                                                                                                       | `manage-settings`                                               |
-| `DELETE`        | `/admin/api/image-sizes/{id}`                          | Delete preset.                                                                                                                                                                                       | `manage-settings`                                               |
+| `GET` / `PATCH` | `/admin/api/general-settings`                          | Project-wide settings.                                                                                                                                                                               | `read-settings` to read, `update-settings` to change                                               |
+| `GET`           | `/admin/api/translations`                              | One language's translation worklist across every localized collection: `?locale=es&state=missing&limit=50`. See [Languages](#languages). | Signed in; which rows come back is each collection's read rule |
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
 
@@ -362,7 +359,7 @@ curl -i -X POST http://localhost:3000/admin/api/auth/login \
   -d '{"email":"user@example.com","password":"secure-password"}'
 ```
 
-A successful login responds 200 with the action envelope `{ message, user, token, exp }` and sets the `nextly_session` and `nextly_refresh` cookies on the response. Browsers handle these automatically; for API clients you can ignore them and use the returned `token` as a Bearer token instead.
+A successful login responds 200 with the action envelope `{ message, user, accessToken, refreshToken, expiresAt }` and sets the `nextly_session` and `nextly_refresh` cookies on the response. The REST routes authenticate a session by those cookies: browsers send them automatically, and an API client keeps them, as `curl` does with a cookie jar (`-c` and `-b`). An `Authorization: Bearer` header carries an [API key](#api-key-server-to-server), not the login's `accessToken`.
 
 ```bash
 # Register
@@ -569,7 +566,7 @@ The admin's test send, `PATCH /admin/api/email-templates/{id}/send-test`, sends 
 
 The media collection is just a normal collection (`/admin/api/collections/media/entries`) with extra plumbing for binary uploads. The `POST /admin/api/collections/media/entries` endpoint accepts `multipart/form-data` with the file under `file` and any other fields alongside.
 
-Image-size presets are managed under `/admin/api/image-sizes`. The `regeneration-status` and `regenerate` sub-routes return a "coming soon" placeholder today (see [`packages/nextly/src/routeHandler.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/routeHandler.ts)).
+An uploaded image is stored as the original and one thumbnail, the whole image fitted inside 480 by 480; no other size is made. See [Images and thumbnails](/docs/guides/media-storage#images-and-thumbnails).
 
 ### API keys
 
@@ -638,7 +635,7 @@ Operators (verified against `packages/nextly/src/domains/collections/query/query
 | `less_than`          | `<`                                               | `where[price][less_than]=50`           |
 | `less_than_equal`    | `<=`                                              | `where[price][less_than_equal]=50`     |
 | `like`               | SQL `LIKE` (case-sensitive).                      | `where[title][like]=%hello%`           |
-| `contains`           | Case-insensitive substring (`ILIKE`).             | `where[title][contains]=hello`         |
+| `contains`           | Substring, ignoring case on every database, letters outside ASCII included; `%` and `_` are matched as typed. See [Direct API operators](/docs/api-reference/direct-api#operators). | `where[title][contains]=hello`         |
 | `search`             | Alias for `contains`.                             | `where[title][search]=hello`           |
 | `in`                 | Value in comma-separated list.                    | `where[status][in]=draft,published`    |
 | `not_in`             | Value not in comma-separated list.                | `where[status][not_in]=archived`       |
@@ -676,12 +673,15 @@ Two reserved conditions keep a collection's entries by where they stand in publi
 
 ### sort
 
-Field name; prefix with `-` for descending.
+Field name; prefix with `-` for descending. Separate several keys with commas; each sorts in turn, and entries still tied come back in id order.
 
 ```
 ?sort=-createdAt
 ?sort=title
+?sort=-featured,createdAt
 ```
+
+An entry with no value for a key sorts after the entries with one, in either direction.
 
 ### Pagination
 
@@ -724,6 +724,40 @@ the parameter to get every field.
 ?richTextFormat=json       # Lexical JSON (default)
 ?richTextFormat=both       # { json, html }
 ```
+
+### Languages
+
+On a localized collection or Single (see [Localization](/docs/localization)). How each language
+falls back, and how access rules are told which languages a request involves, are described
+there; these are the parameters that choose them.
+
+| Parameter              | Values                                                   | What it does                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locale`               | A configured language code; `all` on a read; `*` on a write | The language a read returns or a write stores. Missing, the default language. A read naming an unknown code reads the default; a write naming one is refused with a `400`, rather than storing into the default. `all` answers a read with every language's value for each translated field. `*` moves a publication status across every language: its body must be a `status` patch alone, and any field value is refused with a `400`. To write values, name their language. |
+| `fallback-locale`      | A language code, or `none`                                | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `none` turns fallback off, so an untranslated field reads empty.    |
+| `translation-status`   | `1`                                                      | Adds `_translations` to each document: for every configured language, whether it has content of its own (`translated`) and, with a draft/published lifecycle, its `status`.                      |
+| `where[_translated]`   | `[locale]=<code>` and `[state]=<state>`                  | Lists only the documents in that state in that language: `missing`, `translated`, `draft`, `published` or `stale`. `draft` and `published` need Draft/Published enabled; without it they filter nothing and every matching document comes back. A reserved key, not a field filter.                                           |
+
+```
+?locale=es&fallback-locale=none
+?locale=all
+?translation-status=1
+?where[_translated][locale]=es&where[_translated][state]=missing
+```
+
+`GET /admin/api/translations` is the same question across the localized collections: one
+language's outstanding work, `?locale=es&state=missing&limit=50`, with `state` taking the values
+above. Each collection's read rules decide which of its documents come back.
+
+The answer can be incomplete, and says so in `meta`. It asks at most 20 collections
+(`MAX_WORKLIST_COLLECTIONS`); the slugs it skipped, and any whose read failed, are listed in
+`meta.notConsulted`. Collections that cannot answer a translation question until their
+schema is migrated are listed in `meta.unanswerable`. Each field is present only when it
+has entries. The rows are also cut at `limit`: `meta.total` counts every matching document
+in the collections asked, so `meta.total` above the number of rows (or `meta.totalPages`
+above 1) means more work than this answer lists. The endpoint takes no `page`, and
+`meta.hasNext` is always `false`, so read these fields, not `hasNext`, to know whether the
+answer is whole; ask with a larger `limit`, up to 200, to see more.
 
 ## Pagination
 

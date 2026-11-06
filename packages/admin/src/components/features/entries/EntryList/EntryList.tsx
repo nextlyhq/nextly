@@ -11,7 +11,7 @@
  * @since 1.0.0
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
@@ -22,17 +22,23 @@ import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
+import {
   useEntries,
   useBulkDeleteEntries,
   useBulkUpdateEntries,
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useCan } from "@admin/hooks/useCan";
+import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
-import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
+import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
 import { getSearchParam } from "@admin/lib/search-params";
@@ -40,7 +46,16 @@ import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
+import {
+  isRemovedFromCode,
+  removedEntityHasNoTable,
+} from "../removed-from-code-notice";
+import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 
+import {
+  getCollectionLabels,
+  toCollectionForColumns,
+} from "./collection-for-columns";
 import { EntryEmptyState } from "./EntryEmptyState";
 import {
   buildEntryWhereFilter,
@@ -58,10 +73,17 @@ import {
   linkedSortFor,
   linkedStatusFor,
   type ChosenForCollection,
-  type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import {
+  chosenPluginFilters,
+  listFiltersFor,
+  pluginFilterParamValues,
+  pluginFilterWheres,
+  writePluginFilterParams,
+} from "./plugin-filters";
 import { useEntryBulkActions } from "./useEntryBulkActions";
+import type { EntryVersions } from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -103,105 +125,6 @@ function toTablePaginationState(
     limit: response.meta.limit,
     total: response.meta.total,
     totalPages: response.meta.totalPages,
-  };
-}
-
-/**
- * Creates a CollectionForColumns object from collection data.
- * Uses slug as fallback for labels.
- */
-function toCollectionForColumns(
-  collection:
-    | {
-        name: string;
-        label?: string;
-        schemaDefinition?: { fields: Array<{ name?: string; type?: string }> };
-        fields?: Array<{ name?: string; type?: string }>;
-        admin?: { defaultColumns?: string[]; useAsTitle?: string };
-        /**
-         * Built-in Draft / Published lifecycle flag (collection-level).
-         * Read from the dynamic-collections row or the code-first config.
-         * Forwarded to `CollectionForColumns.status` so the table's
-         * bulk-action bar can decide whether to render Publish /
-         * Unpublish buttons.
-         */
-        status?: boolean;
-        /** i18n: collection has multilingual content — drives the translation-status column. */
-        localized?: boolean;
-      }
-    | undefined,
-  slug: string
-): CollectionForColumns {
-  // Default collection structure when data is loading
-  if (!collection) {
-    return {
-      slug,
-      fields: [],
-      admin: {},
-    };
-  }
-
-  // Get fields from either new or old API format
-  // schemaDefinition.fields is the legacy format from the API
-  const rawFields =
-    collection.schemaDefinition?.fields || collection.fields || [];
-  const fields = rawFields as CollectionForColumns["fields"];
-
-  // Determine default columns: use admin config or auto-generate from first few fields
-  // Filter to only data fields (those with name property, excluding layout fields)
-  const layoutTypes = ["group", "relationship", "repeater", "component"];
-  const dataFields = rawFields.filter(
-    (f): f is { name: string; type: string } =>
-      typeof f.name === "string" &&
-      f.name.length > 0 &&
-      typeof f.type === "string" &&
-      !layoutTypes.includes(f.type)
-  );
-
-  const defaultColumns =
-    collection.admin?.defaultColumns || dataFields.slice(0, 4).map(f => f.name);
-
-  const labels = getCollectionLabels(collection, slug);
-
-  return {
-    slug,
-    label: labels.plural,
-    fields,
-    // Forward the Draft / Published flag so the bulk-action bar can
-    // surface Publish / Unpublish only for collections that opted in.
-    status: collection.status === true,
-    // Forward the localization flag so the table can render a
-    // per-row translation-completeness column.
-    localized: collection.localized === true,
-    admin: {
-      useAsTitle: collection.admin?.useAsTitle,
-      defaultColumns: [
-        "title",
-        ...defaultColumns.filter(
-          c => c !== "title" && c !== "slug" && c !== "updatedAt"
-        ),
-        "slug",
-        "updatedAt",
-      ],
-    },
-  };
-}
-
-/**
- * Gets display labels for the collection.
- */
-function getCollectionLabels(
-  collection: { label?: string; name?: string } | undefined,
-  slug: string
-): { singular: string; plural: string } {
-  const displayName = collection?.label || collection?.name || slug;
-
-  // Simple pluralization: add 's' if doesn't already end with 's'
-  const plural = displayName.endsWith("s") ? displayName : `${displayName}s`;
-
-  return {
-    singular: displayName,
-    plural,
   };
 }
 
@@ -275,6 +198,46 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   const searchParams = useSearchParams();
   const whereParam = getSearchParam(searchParams, "where");
 
+  // The filters plugins offer this list, and the options the page's URL has
+  // chosen among them (`?pf=<filter>:<value>`), each resolved by name against
+  // what was declared, so a `pf` naming anything else is ignored.
+  const { plugins } = useBranding();
+  const pluginFilters = useMemo(
+    () => listFiltersFor(plugins, collectionSlug),
+    [plugins, collectionSlug]
+  );
+  const chosenPluginFilterOptions = useMemo(
+    () =>
+      chosenPluginFilters(pluginFilters, pluginFilterParamValues(searchParams)),
+    [pluginFilters, searchParams]
+  );
+  // The filters are declared in the signed-in workspace meta, so until it
+  // arrives a `pf` in the URL resolves to nothing. The list waits for it
+  // rather than requesting, and showing, the rows the filter would remove;
+  // if it never arrives, the list says so and is not read at all, since the
+  // list without the filter is not the one the link asks for.
+  const {
+    isPending: pluginFiltersPending,
+    isUnavailable: pluginFiltersUnavailable,
+  } = useBrandingStatus();
+  const choosesPluginFilter = pluginFilterParamValues(searchParams).length > 0;
+  const awaitsPluginFilters = pluginFiltersPending && choosesPluginFilter;
+  const lostPluginFilters =
+    !pluginFiltersPending && pluginFiltersUnavailable && choosesPluginFilter;
+  // The page returns to the first whenever the choice changes, however it
+  // changed: a choice in the toolbar, or the back button restoring an older
+  // one. Kept on the page alone, a narrower choice would ask for a page past
+  // its last.
+  const pluginFilterChoice = JSON.stringify(
+    [...chosenPluginFilterOptions].sort(([a], [b]) => a.localeCompare(b))
+  );
+  const [pagedPluginFilterChoice, setPagedPluginFilterChoice] =
+    useState(pluginFilterChoice);
+  if (pagedPluginFilterChoice !== pluginFilterChoice) {
+    setPagedPluginFilterChoice(pluginFilterChoice);
+    setPage(1);
+  }
+
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -297,9 +260,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
 
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
-  const { enabled: localizationEnabled } = useLocalization();
+  // Asked only of a user the server lets read every language's state: the
+  // overview reads them all, so without that the whole list would be refused
+  // rather than shown without its translation column. The list's read carries
+  // no language, so the server judges it in the default language.
+  const asksTranslationStatus =
+    useDefaultLanguageAsksTranslationStatus(collectionSlug);
   const wantsTranslationStatus =
-    localizationEnabled &&
+    asksTranslationStatus &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
 
   // A sort the link that opened this list carried (`?sort=-updatedAt`, from a dashboard card's
@@ -312,10 +280,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       linkedSortFor(
         sortParam,
         collection
-          ? toCollectionForColumns(collection, collectionSlug)
+          ? toCollectionForColumns(
+              collection,
+              collectionSlug,
+              asksTranslationStatus
+            )
           : undefined
       ),
-    [sortParam, collection, collectionSlug]
+    [sortParam, collection, collectionSlug, asksTranslationStatus]
   );
   const sort = choiceInForce(
     chosenSort,
@@ -333,10 +305,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       linkedStatusFor(
         statusParam,
         collection
-          ? toCollectionForColumns(collection, collectionSlug)
+          ? toCollectionForColumns(
+              collection,
+              collectionSlug,
+              asksTranslationStatus
+            )
           : undefined
       ),
-    [statusParam, collection, collectionSlug]
+    [statusParam, collection, collectionSlug, asksTranslationStatus]
   );
   const status = choiceInForce(
     chosenStatus,
@@ -354,8 +330,15 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       updatedFrom,
       updatedTo,
       translated: translationFilter,
+      readsTranslationState: asksTranslationStatus,
+      pluginWheres: pluginFilterWheres(
+        pluginFilters,
+        chosenPluginFilterOptions
+      ),
     });
   }, [
+    pluginFilters,
+    chosenPluginFilterOptions,
     whereParam,
     status,
     createdFrom,
@@ -363,11 +346,22 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     updatedFrom,
     updatedTo,
     translationFilter,
+    asksTranslationStatus,
   ]);
 
+  // A collection removed from code whose main table an applied migration
+  // dropped has no entries to read: the read would only fail, after its
+  // retries, with the table's skeleton standing under the notice until then.
+  const tableGone = removedEntityHasNoTable(collection);
+
   // Fetch entries with pagination and filters
-  const { data: entriesResponse, isLoading: entriesLoading } = useEntries({
+  const {
+    data: entriesResponse,
+    isLoading: entriesRequestLoading,
+    error: entriesError,
+  } = useEntries({
     collectionSlug,
+    enabled: !tableGone && !awaitsPluginFilters && !lostPluginFilters,
     params: {
       page,
       limit,
@@ -381,6 +375,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       translationStatus: wantsTranslationStatus || undefined,
     },
   });
+  // A request held for the filters is still loading: a disabled query reports
+  // no loading, which would draw the empty state over a list not yet read.
+  const entriesLoading = entriesRequestLoading || awaitsPluginFilters;
 
   // ---------------------------------------------------------------------------
   // Mutations
@@ -412,8 +409,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // ---------------------------------------------------------------------------
 
   const collectionForColumns = useMemo(
-    () => toCollectionForColumns(collection, collectionSlug),
-    [collection, collectionSlug]
+    () =>
+      toCollectionForColumns(collection, collectionSlug, asksTranslationStatus),
+    [collection, collectionSlug, asksTranslationStatus]
   );
 
   // ---------------------------------------------------------------------------
@@ -490,15 +488,25 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Bulk publish/unpublish: fire the bulk-update mutation directly (no
   // confirmation modal — the action is reversible by clicking the
   // opposite button). The hook's onSuccess clears row selection.
+  // Each judged by the version its row had when selected, so a document
+  // changed since is refused alone and named, and the rest go ahead.
   const handleBulkPublish = useCallback(
-    (entryIds: string[]) => {
-      void bulkUpdate.mutate({ ids: entryIds, data: { status: "published" } });
+    (entryIds: string[], versions: EntryVersions) => {
+      void bulkUpdate.mutate({
+        ids: entryIds,
+        data: { status: "published" },
+        revs: revsFor(entryIds, versions),
+      });
     },
     [bulkUpdate]
   );
   const handleBulkUnpublish = useCallback(
-    (entryIds: string[]) => {
-      void bulkUpdate.mutate({ ids: entryIds, data: { status: "draft" } });
+    (entryIds: string[], versions: EntryVersions) => {
+      void bulkUpdate.mutate({
+        ids: entryIds,
+        data: { status: "draft" },
+        revs: revsFor(entryIds, versions),
+      });
     },
     [bulkUpdate]
   );
@@ -540,6 +548,18 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     [collectionSlug]
   );
 
+  const handlePluginFilterChange = useCallback(
+    (name: string, value: string | null) => {
+      const next = new Map(chosenPluginFilterOptions);
+      if (value === null) next.delete(name);
+      else next.set(name, value);
+      // Kept in the URL, which the list reads back: the choice survives a
+      // reload and a shared link, and the request and the page follow the URL.
+      writePluginFilterParams(pluginFilters, next);
+    },
+    [chosenPluginFilterOptions, pluginFilters]
+  );
+
   const handleTranslationFilterChange = useCallback(
     (value: TranslationListFilter | null) => {
       setTranslationFilter(value);
@@ -578,7 +598,10 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // is unknown, and unknown counts as disabled: the shortcut must not slip
   // through the loading window.
   const canCreate = useCan(`create-${collectionSlug}`);
-  const createDisabled = Boolean(collection?.admin?.disableCreate);
+  // A collection removed from code refuses every write, a create included.
+  const removedFromCode = isRemovedFromCode(collection);
+  const createDisabled =
+    Boolean(collection?.admin?.disableCreate) || removedFromCode;
   const createAllowed = Boolean(collection) && !createDisabled && canCreate;
   // The bulk actions offered here, which the table's checkboxes and bar
   // follow too, so the Delete shortcut opens nothing they would not.
@@ -724,6 +747,19 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         </div>
       </div>
 
+      {/* Above the list: why nothing here can be changed, and the next step. */}
+      {removedFromCode && (
+        <RemovedFromCodeNotice
+          entity={{
+            kind: "collection",
+            label: labels.plural,
+            slug: collectionSlug,
+          }}
+          state={collection?.removedFromCodeState}
+          className="mb-6"
+        />
+      )}
+
       {/* BeforeListTable injection point */}
       {beforeListTablePath && (
         <PluginSlot path={beforeListTablePath} props={injectionProps} />
@@ -732,7 +768,29 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       {/* Content — a plugin List override replaces the default table (D23) */}
       {listViewPath ? (
         <PluginSlot path={listViewPath} props={injectionProps} />
-      ) : entries.length === 0 && !entriesLoading && !search ? (
+      ) : tableGone ? null : lostPluginFilters ? (
+        <Alert variant="destructive">
+          <AlertDescription>
+            This link chooses a plugin&apos;s filter, and the filters
+            couldn&apos;t be loaded, so the list isn&apos;t shown. Reload the
+            page to try again.
+          </AlertDescription>
+        </Alert>
+      ) : entriesError ? (
+        // A list the server refused says so in its own words where the rows
+        // would be. Without this a failed read has no rows and is not
+        // loading, which draws the empty state and calls the collection empty.
+        <Alert variant="destructive">
+          <AlertDescription>
+            {apiErrorMessage(entriesError, "The entries couldn't be loaded.")}
+          </AlertDescription>
+        </Alert>
+      ) : entries.length === 0 &&
+        !entriesLoading &&
+        !search &&
+        whereFilter === undefined ? (
+        // Only an unfiltered list is empty. A filtered one with no rows keeps
+        // its table, and with it the toolbar that clears the filter.
         <EntryEmptyState
           collectionName={labels.plural}
           singularName={labels.singular}
@@ -761,6 +819,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
           onStatusChange={handleStatusChange}
           translationFilter={translationFilter}
           onTranslationFilterChange={handleTranslationFilterChange}
+          pluginFilters={pluginFilters}
+          chosenPluginFilters={chosenPluginFilterOptions}
+          onPluginFilterChange={handlePluginFilterChange}
           createdFrom={createdFrom}
           createdTo={createdTo}
           updatedFrom={updatedFrom}

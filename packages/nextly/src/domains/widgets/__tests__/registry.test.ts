@@ -4,11 +4,8 @@ import type { WidgetDefinition } from "../definition";
 import {
   clearWidgets,
   deregisterWidget,
-  extendWidget,
   getWidget,
   listWidgets,
-  overrideWidget,
-  registerDeclaredDefinition,
   registerWidget,
 } from "../registry";
 
@@ -19,8 +16,7 @@ const def = (
   id,
   title: id,
   archetype: "metric",
-  defaultSize: "sm",
-  query: { source: "collection:posts", op: "count" },
+  size: { default: { w: 3, h: 2 } },
   ...over,
 });
 
@@ -49,91 +45,51 @@ describe("widget registry", () => {
     expect(() =>
       registerWidget(def("metrics/totals"), { source: "@acme/stripe" })
     ).toThrow(/"@acme\/stripe"/);
+    // The whole message, anchored: there is no door to replace a widget by,
+    // so the refusal points at none.
+    expect(() =>
+      registerWidget(def("metrics/totals"), { source: "@acme/stripe" })
+    ).toThrow(
+      /^Widget id "metrics\/totals" is already registered by "core"; "@acme\/stripe" cannot claim it\.$/
+    );
   });
 
   it("validates at registration", () => {
     expect(() => registerWidget(def("nonamespace"))).toThrow(/namespace\/name/);
   });
 
-  it("lets a plugin replace a core widget wholesale", () => {
-    registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
-    overrideWidget("core/totals", def("core/totals", { title: "Our totals" }), {
-      source: "@acme/stripe",
-    });
-    expect(getWidget("core/totals")?.title).toBe("Our totals");
-  });
-
-  it("refuses an override whose definition claims a different id", () => {
-    // `overrideWidget("core/a", def)` stores `def` under key "core/a", so a
-    // `def.id` of "core/b" makes `getWidget("core/a")` answer with an object
-    // announcing itself as "core/b" -- and leaves "core/b" free for someone
-    // else to register alongside it. Anything keying off the definition's own
-    // id (a picker, a layout, a diagnostic) then disagrees with the registry.
-    registerWidget(def("core/totals"), { source: "core" });
-    expect(() => overrideWidget("core/totals", def("stripe/revenue"))).toThrow(
-      /stripe\/revenue/
+  it("refuses an id in a retired namespace, saying what replaced it, and keeps none", () => {
+    // 🔴 Core no longer makes a card per collection or per Single. One
+    // registered there would be offered, then refused by every layout write
+    // and dropped by every read, so the registry refuses it at startup.
+    expect(() => registerWidget(def("collection/x-count"))).toThrow(
+      'Widget "collection/x-count" cannot be registered: "collection/x-count" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.'
     );
-    expect(getWidget("core/totals")?.id).toBe("core/totals");
-  });
-
-  it("refuses to override a widget that was never registered", () => {
-    // This guard is what stops a plugin bypassing registerWidget's duplicate-id
-    // check by calling overrideWidget instead -- overrideWidget must never be
-    // usable to create a widget, only to replace one that already exists.
-    expect(() =>
-      overrideWidget("metrics/missing", def("metrics/missing"))
-    ).toThrow(/metrics\/missing/);
-  });
-
-  it("lets a plugin patch named fields of a core widget", () => {
-    registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
-    extendWidget("core/totals", { title: "Revenue totals", defaultSize: "lg" });
-
-    const patched = getWidget("core/totals");
-    expect(patched?.title).toBe("Revenue totals");
-    expect(patched?.defaultSize).toBe("lg");
-    // Untouched fields survive.
-    expect(patched?.archetype).toBe("metric");
-  });
-
-  it("refuses to patch a widget that was never registered", () => {
-    expect(() => extendWidget("core/missing", { title: "x" })).toThrow(
-      /core\/missing/
+    expect(() => registerWidget(def("single/about-card"))).toThrow(
+      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`
     );
-  });
-
-  it("re-validates the result of a patch, leaving the store unmutated", () => {
-    registerWidget(def("core/totals"), { source: "core" });
-    expect(() =>
-      extendWidget("core/totals", { minSize: "xl", maxSize: "sm" })
-    ).toThrow(/minSize/);
-
-    // A rejected patch must not be written even partially: the stored widget
-    // still has no minSize/maxSize bounds, not the invalid ones the patch
-    // tried to set. This would stay green if validation ran AFTER the write.
-    const survivor = getWidget("core/totals");
-    expect(survivor?.minSize).toBeUndefined();
-    expect(survivor?.maxSize).toBeUndefined();
+    expect(listWidgets()).toEqual([]);
+    // The control: the same definition outside those namespaces registers.
+    registerWidget(def("acme/x-count"));
+    expect(listWidgets().map(w => w.id)).toEqual(["acme/x-count"]);
   });
 
   it("stores a snapshot, so mutating the registered object changes nothing", () => {
-    // Registration is the gate: `validateWidgetDefinition` runs, `extendWidget`
-    // restricts a patch to named fields, and `overrideWidget` is the only way
-    // to replace one wholesale. Keeping the caller's object by reference makes
-    // all three optional -- a plugin holds the object it handed over and edits
-    // it afterwards, changing the archetype or the query the host will execute
-    // with nothing revalidating anything.
+    // Registration is the gate: `validateWidgetDefinition` runs there. Keeping
+    // the caller's object by reference would make it optional -- whoever holds
+    // the object it handed over could edit the archetype or a nested size
+    // afterwards with nothing revalidating anything.
     const original = def("core/totals", { title: "Totals" });
     registerWidget(original, { source: "core" });
 
     original.title = "Hijacked";
     original.archetype = "custom";
-    if (original.query) original.query.op = "list";
+    original.size.default.w = 12;
 
     const stored = getWidget("core/totals");
     expect(stored?.title).toBe("Totals");
     expect(stored?.archetype).toBe("metric");
-    expect(stored?.query?.op).toBe("count");
+    expect(stored?.size.default.w).toBe(3);
   });
 
   it("hands out a definition the caller cannot mutate, at every depth", () => {
@@ -145,22 +101,13 @@ describe("widget registry", () => {
     expect(() => {
       stored.title = "Hijacked";
     }).toThrow(TypeError);
+    // A nested field, so a freeze of the top level alone would not pass.
     expect(() => {
-      (stored.query as { op: string }).op = "list";
+      (stored.size.default as { w: number }).w = 12;
     }).toThrow(TypeError);
 
     expect(getWidget("core/totals")?.title).toBe("Totals");
-    expect(listWidgets()[0].query?.op).toBe("count");
-  });
-
-  it("snapshots a patched widget too", () => {
-    registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
-    extendWidget("core/totals", { title: "Revenue totals" });
-
-    const patched = getWidget("core/totals") as WidgetDefinition;
-    expect(() => {
-      patched.title = "Hijacked";
-    }).toThrow(TypeError);
+    expect(listWidgets()[0].size.default.w).toBe(3);
   });
 
   it("reports whether a deregistration removed anything", () => {
@@ -171,68 +118,25 @@ describe("widget registry", () => {
   });
 });
 
-describe("the doors a widget whose data core builds may come through", () => {
-  // A declared widget as core publishes it: its data is built on the server, so it has no query.
-  const declared = (id: string): WidgetDefinition => {
-    const { query: _query, ...rest } = def(id);
-    return { ...rest, serverData: true };
-  };
-
-  it("comes in through core's own door, and through no public one", () => {
-    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
-    expect(getWidget("acme/orders")?.serverData).toBe(true);
-
-    expect(() => registerWidget(declared("acme/other"))).toThrow(
-      /registerWidget\(\) with serverData/
-    );
-    expect(getWidget("acme/other")).toBeUndefined();
-  });
-
-  it("is refused through a public door even untyped, as a spread of a published one carries it", () => {
-    const spread = {
-      ...def("acme/spread"),
-      serverData: "yes",
-    } as unknown as WidgetDefinition;
-    expect(() => registerWidget(spread)).toThrow(/with serverData/);
-  });
-
-  it("cannot be replaced, since its card is answered from its declaration", () => {
-    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
-    expect(() => overrideWidget("acme/orders", def("acme/orders"))).toThrow(
-      /"plugin @acme\/shop" declares it/
-    );
-    expect(getWidget("acme/orders")?.serverData).toBe(true);
-    // Nor replaced by one that claims to be server-built, through the public door.
-    expect(() =>
-      overrideWidget("acme/orders", declared("acme/orders"))
-    ).toThrow(/overrideWidget\(\) with serverData/);
-  });
-
-  it("cannot be handed a query by a patch", () => {
-    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
-    expect(() =>
-      extendWidget("acme/orders", {
-        query: { source: "collection:posts", op: "count" },
-      })
-    ).toThrow(/built on the server takes no query/);
-    expect(getWidget("acme/orders")?.query).toBeUndefined();
-  });
-
-  it("admits only what core built: a definition without the mark is refused at core's door too", () => {
-    let refused: unknown;
-    try {
-      registerDeclaredDefinition(def("acme/plain"), "plugin @acme/shop");
-    } catch (error) {
-      refused = error;
-    }
-    // Core's own fault, so an internal error whose detail is for the log only.
-    expect(refused).toMatchObject({
-      code: "INTERNAL_ERROR",
-      logContext: {
-        widgetId: "acme/plain",
-        reason: "a declared widget was published without serverData",
+describe("a setting's own editor", () => {
+  it("is kept with the widget, since every registered widget is a declaration core published", () => {
+    // Every widget reaching the registry was published from a `defineWidget`
+    // declaration, whose editors join the generated component map, so its
+    // settings are judged as core's own and an editor is kept rather than
+    // refused.
+    const settings: WidgetDefinition["settings"] = [
+      {
+        name: "goal",
+        label: "Goal",
+        type: "number",
+        editor: { component: "@acme/goals/admin#GoalEditor" },
       },
+    ];
+    registerWidget(def("acme/goal", { settings }), {
+      source: "plugin @acme/goals",
     });
-    expect(getWidget("acme/plain")).toBeUndefined();
+    expect(getWidget("acme/goal")?.settings?.[0]?.editor).toEqual({
+      component: "@acme/goals/admin#GoalEditor",
+    });
   });
 });

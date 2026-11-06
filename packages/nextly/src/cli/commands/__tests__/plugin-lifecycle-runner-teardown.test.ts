@@ -43,17 +43,53 @@ const state = vi.hoisted(() => {
 });
 const { calls, onInstall, onUninstall, registerServices } = state;
 
+// The schema lock is exercised against real databases in its own suites. These drive the lifecycle hook's boot
+// through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
+vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/pipeline/locks")
+  >()),
+  withMigrateLock: async <T>(
+    _adapter: unknown,
+    _dialect: unknown,
+    fn: () => Promise<T>
+  ) => ({ ran: true as const, value: await fn() }),
+}));
+
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
     config: state.loadedConfig,
     appConfig: state.appConfig,
+    // The project `--cwd` named, which is not the directory the test runs in.
+    projectRoot: "/projects/site",
   }),
+}));
+
+// What other owners built on the schema is its own question, tested where
+// it is answered; here nothing has been built, so the uninstall goes ahead.
+vi.mock("../../utils/registry-resolver", () => ({
+  installRegistryResolver: () => undefined,
+}));
+vi.mock("../../../domains/schema/ownership/uninstall-dependents", () => ({
+  findUninstallDependents: () => Promise.resolve([]),
+  pluginEntities: () =>
+    Promise.resolve({
+      collectionSlugs: [],
+      collectionSlugForTable: () => null,
+      single: [],
+      fieldGroup: [],
+      extendedFields: new Map(),
+    }),
 }));
 
 vi.mock("../../utils/adapter", () => ({
   createCliAdapter: async () => ({
     dialect: "sqlite",
-    getDrizzle: () => ({}),
+    // A full uninstall forgets the plugin with three deletes; nothing here
+    // reads what they leave.
+    getDrizzle: () => ({
+      delete: () => ({ where: () => Promise.resolve() }),
+    }),
     tableExists: async () => state.migrated,
     // Each read of SQLite's schema version, so the order of the
     // uninstall's reads around the boot and the hook can be told.
@@ -81,6 +117,9 @@ vi.mock("../../../domains/schema/events/schema-events-repository", () => ({
     insertEvent() {
       return Promise.resolve("event");
     }
+    deletePluginModuleRows() {
+      return Promise.resolve();
+    }
   },
 }));
 
@@ -91,6 +130,9 @@ vi.mock(
     SchemaOwnersRepository: class {
       read() {
         return Promise.resolve([]);
+      }
+      deletePluginOwner() {
+        return Promise.resolve();
       }
     },
   })
@@ -147,6 +189,18 @@ beforeEach(() => {
   });
   registerServices.mockReset().mockImplementation(async () => {
     calls.push("register");
+  });
+});
+
+describe("the lifecycle hook's boot", () => {
+  // The start check judges the Next.js and React of the app the command was
+  // pointed at, not of wherever the CLI happened to run.
+  it("judges the project --cwd names", async () => {
+    await runPluginInstall("@acme/fx", {}, context);
+
+    expect(registerServices).toHaveBeenCalledWith(
+      expect.objectContaining({ appRoot: "/projects/site" })
+    );
   });
 });
 

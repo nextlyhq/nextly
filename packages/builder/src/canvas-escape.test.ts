@@ -56,6 +56,16 @@ describe("isTextEntry", () => {
     expect(isTextEntry(mount("<input />"))).toBe(true);
     const editable = mount('<div contenteditable="true"></div>');
     expect(isTextEntry(editable)).toBe(true);
+    // A control inside a non-editable island in editable text is a control
+    // again: the NEAREST contenteditable decides, as the browser's does.
+    const island = mount(
+      '<div contenteditable="true"><span contenteditable="false"><button>Go</button></span></div>'
+    );
+    expect(isTextEntry(island.querySelector("button"))).toBe(false);
+    // The canvas's own line editor is plain-text-only editable.
+    expect(
+      isTextEntry(mount('<span contenteditable="plaintext-only"></span>'))
+    ).toBe(true);
   });
 
   it("follows editability down to the node the caret is actually in", () => {
@@ -72,6 +82,28 @@ describe("isTextEntry", () => {
     );
 
     expect(isTextEntry(editable.querySelector("#deep"))).toBe(true);
+  });
+
+  it("reads contenteditable's values as the browser does: any case, and an unknown one inherits", () => {
+    // Recognised values are ASCII case-insensitive.
+    for (const value of ["TRUE", "True", "PlainText-Only"]) {
+      expect(
+        isTextEntry(mount(`<div contenteditable="${value}"></div>`)),
+        value
+      ).toBe(true);
+    }
+    // An unrecognised value is the inherit state: inside editable text it is
+    // editable, and on its own it is not.
+    const inherited = mount(
+      '<div contenteditable="true"><span contenteditable="yes"><b id="in">x</b></span></div>'
+    );
+    expect(isTextEntry(inherited.querySelector("#in"))).toBe(true);
+    expect(isTextEntry(mount('<div contenteditable="yes"></div>'))).toBe(false);
+    // `FALSE` is still false, and stops the walk outwards.
+    const island = mount(
+      '<div contenteditable="true"><span contenteditable="FALSE"><button>Go</button></span></div>'
+    );
+    expect(isTextEntry(island.querySelector("button"))).toBe(false);
   });
 
   it("does not count an explicitly NON-editable region", () => {
@@ -116,7 +148,28 @@ describe("escapeOutcome", () => {
      * it there, and the keystroke would reach the entry form's cancel and take
      * every uncommitted block edit with it.
      */
-    expect(escapeOutcome(document)).toBe("deselect");
+    expect(escapeOutcome(document)).toBe("navigate-selection");
+  });
+
+  it("leaves the key to a menu or list floating over the editor", () => {
+    /*
+     * A unit menu, a select's list or a picker's list portals into a floating
+     * layer and closes on Escape. Moving the canvas selection on the same key
+     * would do two things for one press, so while focus is inside one the
+     * editor consumes the key and does nothing more with it. A list that is
+     * NOT floating is the control below.
+     */
+    const layer = mount(
+      '<div data-radix-popper-content-wrapper=""><ul role="listbox" tabindex="0"></ul></div>'
+    );
+    layer.querySelector("ul")?.focus();
+    expect(escapeOutcome(document)).toBe("leave-to-field");
+  });
+
+  it("control: a list in the panel itself still lets Escape go up", () => {
+    const list = mount('<ul role="listbox" tabindex="0"></ul>');
+    (list as HTMLElement).focus();
+    expect(escapeOutcome(document)).toBe("navigate-selection");
   });
 
   it("prefers the modal over a field inside it", () => {

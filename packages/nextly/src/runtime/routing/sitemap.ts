@@ -13,7 +13,7 @@ import type { MetadataRoute } from "next";
 
 import { cachedFind } from "../cache/cached-find";
 
-import { markDynamic } from "./mark-dynamic";
+import { deferToRequest } from "./defer-to-request";
 
 /** A sitemap entry (a superset-compatible slice of Next's `MetadataRoute.Sitemap`). */
 export interface NextlySitemapEntry {
@@ -83,11 +83,11 @@ export function nextlySitemap(
       : false;
   // With neither invalidation tags nor a revalidate window, a cached entry would
   // pin the first render forever — publishes, edits, and deletes would never
-  // reach `/sitemap.xml`. Mark the render dynamic (so Next doesn't freeze it as
-  // a build-time prerender either) and read uncached so it always stays current.
+  // reach `/sitemap.xml`. Wait for the request (so Next doesn't freeze it as a
+  // build-time prerender either) and read uncached so it always stays current.
   if (!hasTags && revalidate === false) {
     return async () => {
-      markDynamic();
+      await deferToRequest();
       return normalize(await options.entries());
     };
   }

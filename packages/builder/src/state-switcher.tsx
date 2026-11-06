@@ -1,7 +1,9 @@
 "use client";
 
 /**
- * The control that chooses which interaction state the Style tab edits.
+ * The control that chooses which interaction state the Style tab edits: a
+ * compact menu named "State" on the bar's second line, as the editor mock
+ * draws it ("State: Normal ⌄"), its items the four states.
  *
  * **At the top of the Style tab, not in the canvas chrome.** A breakpoint is a
  * fact about the whole page and belongs beside the canvas it resizes; a state
@@ -28,10 +30,15 @@ import {
   STYLE_STATES,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
-import { cn } from "@nextlyhq/ui/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@nextlyhq/ui";
+import { Check, ChevronDown } from "lucide-react";
 import * as React from "react";
 
-import { radioGroupStep } from "./roving-radios";
 import { stateHasOwnValues } from "./style-values";
 
 /**
@@ -48,11 +55,16 @@ import { stateHasOwnValues } from "./style-values";
  * an unnamed option.
  */
 const STATE_LABELS: Readonly<Record<StyleState, string>> = {
-  base: "None",
+  base: "Normal",
   hover: "Hover",
-  focus: "Focused",
+  focus: "Focus",
   active: "Pressed",
 };
+
+/** A state's name in this product's words: Normal, Hover, Focus, Pressed. */
+export function stateLabel(state: StyleState): string {
+  return STATE_LABELS[state];
+}
 
 /**
  * What each state MEANS, for the accessible name and the tooltip.
@@ -101,121 +113,105 @@ export function StateSwitcher({
   styles,
   breakpoints,
 }: StateSwitcherProps): React.JSX.Element {
-  const radios = React.useRef<Array<HTMLButtonElement | null>>([]);
-  const index = STYLE_STATES.indexOf(state);
   /*
-   * A selection that is somehow not one of the states still leaves a reachable
-   * control: the roving tab stop falls back to the first option rather than to
-   * `-1`, which would put every option out of the tab order and strand a
-   * keyboard user on a group they cannot enter.
+   * Not marked on `base`. It carries values on almost every block, so a dot
+   * there is on permanently and says nothing, and a marker that is always lit
+   * is read as decoration, which costs the other three the meaning they
+   * depend on.
    */
-  const activeIndex = index === -1 ? 0 : index;
-
-  /*
-   * Roving tabindex: one stop for the whole group, arrows move within it.
-   *
-   * The same model the breakpoint switcher uses, and for the same reason — a
-   * radio group that put every option in the tab order costs a keyboard user
-   * one Tab per state to cross a control they may not be using.
-   *
-   * Selection FOLLOWS focus, which is the APG's radio-group behaviour and is
-   * right here: choosing a state is free and instantly reversible, and the
-   * canvas showing the state under the cursor is the whole point of arrowing
-   * through them.
-   */
-  const move = (delta: number): void => {
-    const next =
-      (activeIndex + delta + STYLE_STATES.length) % STYLE_STATES.length;
-    const target = STYLE_STATES[next];
-    if (target === undefined) return;
-    onSelect(target);
-    radios.current[next]?.focus();
-  };
-
+  const marked = (option: StyleState): boolean =>
+    option !== "base" && stateHasOwnValues(styles, option, breakpoints);
+  // The states with values that the canvas is NOT showing, which the trigger
+  // names so a hidden state stays discoverable with the menu closed.
+  const elsewhere = STYLE_STATES.filter(
+    option => option !== state && marked(option)
+  );
+  const triggerName = [
+    `State: ${STATE_LABELS[state]}`,
+    ...elsewhere.map(option => `${STATE_LABELS[option]} has values`),
+  ].join(", ");
   return (
-    <div
-      role="radiogroup"
-      aria-label="Interaction state"
-      className="nx-state-switcher flex items-center gap-0.5 rounded-md border p-0.5"
-      onKeyDown={event => {
-        const step = radioGroupStep(event.key);
-        if (step === null) return;
-        event.preventDefault();
-        move(step);
-      }}
-    >
-      {STYLE_STATES.map((option, position) => {
-        const selected = option === state;
-        /*
-         * Not marked on `base`. It carries values on almost every block, so a
-         * dot there is on permanently and says nothing — and a marker that is
-         * always lit is read as decoration, which costs the other three the
-         * meaning they depend on.
-         */
-        const marked =
-          option !== "base" && stateHasOwnValues(styles, option, breakpoints);
-        return (
+    <>
+      {/* Not modal, as the editor's other menus are not: a modal menu hides
+          the editor around it while its controls stay focusable. */}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
           <button
-            key={option}
-            ref={element => {
-              radios.current[position] = element;
-            }}
             type="button"
-            role="radio"
-            aria-checked={selected}
-            /*
-             * The marker is in the ACCESSIBLE NAME, not only in the dot. It is
-             * the one piece of information this control adds beyond its labels,
-             * and a purely visual form withholds it from the people who can
-             * least afford to click through four states to find out.
-             */
-            aria-label={`${STATE_LABELS[option]} — ${STATE_HINTS[option]}${
-              marked ? ", has styles" : ""
-            }`}
-            title={`${STATE_LABELS[option]}: ${STATE_HINTS[option]}`}
-            tabIndex={position === activeIndex ? 0 : -1}
-            onClick={() => onSelect(option)}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1 rounded px-2 py-1 text-xs",
-              selected
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground"
-            )}
+            className="nx-state-menu"
+            aria-label={triggerName}
+            title={`${STATE_LABELS[state]}: ${STATE_HINTS[state]}`}
           >
-            <span aria-hidden="true">{STATE_LABELS[option]}</span>
-            {marked ? (
-              <span
-                aria-hidden="true"
-                data-nx-state-marked="true"
-                /*
-                 * `bg-current` — the button's own text colour — rather than a
-                 * named colour utility, and the reason is measured rather than
-                 * stylistic.
-                 *
-                 * A named one fails at TWO layers here, so fixing either alone
-                 * leaves the dot invisible. `bg-accent-foreground` is emitted
-                 * into no stylesheet this package produces or consumes: the
-                 * builder's own is built from these sources and this was its
-                 * only use, and the admin's emits `bg-muted-foreground` and not
-                 * the accent one. And the theme token behind it,
-                 * `--accent-foreground`, is undefined on both `:root` and
-                 * `.nx-builder-chrome` in the editor, so even a rule that WAS
-                 * emitted would paint transparent.
-                 *
-                 * `currentColor` depends on neither: it is a CSS keyword rather
-                 * than a theme lookup, so the utility is generated from this
-                 * use alone. It is also the better answer independently — the
-                 * dot takes the colour of the label it sits beside, so it stays
-                 * legible in both the selected and unselected states without
-                 * restating either, and cannot drift from them.
-                 */
-                className="size-1 rounded-full bg-current"
-              />
-            ) : null}
+            <span aria-hidden="true">{STATE_LABELS[state]}</span>
+            <ChevronDown aria-hidden="true" size={12} />
           </button>
-        );
-      })}
-    </div>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" collisionPadding={8}>
+          {STYLE_STATES.map(option => (
+            <DropdownMenuItem
+              key={option}
+              // One choice of four: a radio item, its choice marked with a
+              // tick, which cannot be mistaken for the "has values" dot.
+              role="menuitemradio"
+              aria-checked={option === state}
+              /*
+               * The marker is in the ACCESSIBLE NAME, not only in the dot: it
+               * is the one piece of information this control adds beyond its
+               * labels.
+               */
+              aria-label={
+                marked(option)
+                  ? `${STATE_LABELS[option]}, has values`
+                  : STATE_LABELS[option]
+              }
+              title={STATE_HINTS[option]}
+              onSelect={() => onSelect(option)}
+            >
+              <span className="nx-state-menu__tick" aria-hidden="true">
+                {option === state ? <Check size={12} /> : null}
+              </span>
+              {STATE_LABELS[option]}
+              {marked(option) ? <StateDot /> : null}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {/*
+       * The states with values the canvas is not showing, in words beside the
+       * trigger rather than as a dot on it, where a dot would read as the
+       * shown state having values. The trigger's name already says which.
+       * One state is named, so the words say where to look; several are
+       * counted, since naming each would outgrow the bar's line.
+       */}
+      {elsewhere.length > 0 ? (
+        <span className="nx-state-menu__elsewhere" aria-hidden="true">
+          {elsewhereWords(elsewhere)}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/** The words beside the trigger for the other states with values. */
+function elsewhereWords(elsewhere: readonly StyleState[]): string {
+  const [only] = elsewhere;
+  return elsewhere.length === 1 && only !== undefined
+    ? `· ${STATE_LABELS[only]} set`
+    : `· ${elsewhere.length} more set`;
+}
+
+/**
+ * The dot beside a state with values. Coloured `currentColor`, a CSS keyword
+ * rather than a theme lookup, so it takes the colour of the words beside it in
+ * either theme and in the selected item alike.
+ */
+function StateDot(): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      data-nx-state-marked="true"
+      className="nx-state-menu__dot"
+    />
   );
 }
 
@@ -266,13 +262,13 @@ export function StyleStateField({
 }: StyleStateFieldProps): React.JSX.Element | null {
   if (onSelect === undefined) return null;
   return (
-    <div className="nx-inspector__state">
+    <span className="nx-inspector__state">
       <StateSwitcher
         state={state}
         onSelect={onSelect}
         styles={node?.styles}
         breakpoints={breakpoints}
       />
-    </div>
+    </span>
   );
 }

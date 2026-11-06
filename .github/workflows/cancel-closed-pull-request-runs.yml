@@ -7,8 +7,14 @@ name: Cancel closed pull request runs
 # every workflow at once. Runs of a push to `main`, the merge queue and
 # schedules are never touched: see `scripts/cancel-closed-pull-request-runs.mjs`.
 #
-# On a fork's pull request the token cannot cancel runs, so the job fails and
-# says so; those runs then finish on their own.
+# The same job then deletes the Actions caches a closed pull request's runs
+# saved under its merge ref, which nothing reads once it is closed and which would
+# otherwise hold the repository's cache allowance until eviction reaches them,
+# taking `main`'s caches with them: see
+# `scripts/delete-closed-pull-request-caches.mjs`.
+#
+# On a fork's pull request the token cannot cancel runs or delete caches, so
+# the job fails and says so; those runs then finish on their own.
 on:
   pull_request:
     branches: [main]
@@ -45,3 +51,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/cancel-closed-pull-request-runs.mjs
+      # After the cancel, so a run it stopped cannot save a cache afterwards
+      # (a cancelled job saves none), and whatever the cancel's verdict, so a
+      # run it could not stop does not keep the caches too.
+      - name: Delete its caches
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/delete-closed-pull-request-caches.mjs

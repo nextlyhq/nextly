@@ -1,0 +1,23 @@
+---
+title: NEXTLY_PERMISSION_COLLISION
+description: "A plugin's custom permission repeats another, targets a resource Nextly reserves, or repeats one Nextly creates itself."
+---
+
+## Cause
+
+A plugin's custom permission repeats another, targets a resource Nextly reserves, or repeats one Nextly creates itself.
+
+A plugin's custom permissions are added beside the ones Nextly creates for every collection and Single. A permission that repeats another plugin's (`duplicate-permission`), names a resource Nextly reserves for its own (`system-resource-reserved`), or repeats one Nextly creates itself (`crud-permission-reserved`) would make two grants mean the same thing.
+
+## Fix
+
+Choose a unique `(action, resource)` pair for the permission, or remove it if Nextly already creates the one you need. If the plugin is third-party, update it.
+
+## Example
+
+```text
+✗ The custom permission "export-reports" is declared twice, by `nextly.config.ts` and "reports".
+  Why:  A permission is one action on one resource, compared without regard to case, and the database holds one row for it.
+  Next: Remove one of the two declarations, or give one of them another action or resource.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-permission-collision  (NEXTLY_PERMISSION_COLLISION)
+```

@@ -29,11 +29,19 @@ import { BLOCKS_FIELD_COMPONENT } from "../fields/blocksField";
 // literal would keep passing after the real call stopped happening — which is
 // precisely the defect this file exists to catch.
 const registered: Record<string, unknown> = {};
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   registerComponents: (map: Record<string, unknown>) => {
     Object.assign(registered, map);
   },
   registerKnownPlugin: () => undefined,
+  // The list actions and the import bar the entry also registers; their own
+  // behaviour is tested beside them.
+  registerRowAction: () => undefined,
+  writePluginRoute: () => Promise.resolve(undefined),
+  isApiError: () => false,
+  navigateTo: () => undefined,
 }));
 
 describe("the admin entry's component registration", () => {
@@ -79,6 +87,19 @@ describe("the admin entry's component registration", () => {
           `${path} names an export this module does not have`
         ).toHaveProperty(name as string);
       }
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
+
+  it(
+    "exports the function the generated component map hands block modules to",
+    async () => {
+      // The map names this entry and this function by string (core's codegen,
+      // `PAGE_BUILDER_ADMIN_MODULE` and `BLOCK_EDITOR_REGISTRAR`), since core
+      // may not depend on this package. Renamed here alone, every site whose
+      // plugins contribute blocks would fail to build its admin.
+      const entry: Record<string, unknown> = await import("./index");
+      expect(entry.registerBlockEditorModules).toBeTypeOf("function");
     },
     IMPORT_GRAPH_BUDGET_MS
   );

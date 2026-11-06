@@ -69,11 +69,26 @@ export async function seedRolePresets(
     action: String(p.action),
     resource: String(p.resource),
     owner: p.owner ?? null,
+    group: p.group ?? null,
   }));
+
+  // The permissions workflows seed, which no preset grants: those the published workflows seed
+  // (boot publishes them before it seeds the presets), and any row stored under the workflow
+  // group, which a workflow seeded before it was detached or its action renamed.
+  const [
+    { registeredWorkflows },
+    { isWorkflowSeededRow, workflowSeededPermissions },
+  ] = await Promise.all([
+    import("../../domains/workflows/registry"),
+    import("../../domains/workflows/permissions"),
+  ]);
+  const attached = workflowSeededPermissions(registeredWorkflows());
+  const isWorkflow = (p: (typeof permissions)[number]) =>
+    attached(p) || isWorkflowSeededRow(p);
 
   for (const preset of ROLE_PRESETS) {
     try {
-      const matched = resolvePreset(preset, permissions);
+      const matched = resolvePreset(preset, permissions, isWorkflow);
       const permissionIds = permissions
         .filter(p => matched.includes(p))
         .map(p => p.id);

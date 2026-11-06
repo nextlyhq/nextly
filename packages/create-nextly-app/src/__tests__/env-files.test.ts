@@ -556,17 +556,22 @@ export SOME_APP_KEY="kept as it is"
     expect(files.changed.filter(f => f.path === ".env")).toEqual([]);
   });
 
-  it("scans a blank-line-heavy file without backtracking", async () => {
-    await writeFile(
-      join(dir, ".env"),
-      "DATABASE_URL=x\n" + "   \n".repeat(20000)
-    );
+  // The reader matches each line on its own, so it is linear in the file.
+  // A scan whose pattern runs across lines (`\s*` from every line start, as a
+  // multiline key search or dotenv's own line pattern can) is quadratic here:
+  // measured on an Apple M1, 0.8 s at 20,000 blank lines and 3.1 s at 40,000,
+  // so about 20 s at the 100,000 below, while the reader takes a few
+  // milliseconds. The bound sits far from both, so a loaded runner never
+  // reaches it and a backtracking scan never fits under it.
+  it("reads a blank-line-heavy file in linear time", () => {
+    const text = "DATABASE_URL=x\n" + "   \n".repeat(100_000);
 
     const started = performance.now();
-    await generateEnv(dir, sqlite);
+    const keys = readEnvKeys(text);
+    const elapsed = performance.now() - started;
 
-    // Generous: this fails on catastrophic backtracking, not on a slow machine.
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(keys.defined.get("DATABASE_URL")).toBe("x");
+    expect(elapsed).toBeLessThan(10_000);
   });
 });
 

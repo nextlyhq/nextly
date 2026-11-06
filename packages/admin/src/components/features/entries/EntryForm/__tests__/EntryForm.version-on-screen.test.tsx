@@ -1,6 +1,6 @@
 /**
- * What the document area and the version's Restore… do while a chosen version
- * has not arrived.
+ * What the document area and the version's restore button do while a chosen
+ * version has not arrived.
  *
  * `isLoading` is false for a query that was never started as well as for one
  * that has finished, so it cannot stand for "the snapshot is here": the version
@@ -24,8 +24,8 @@ const { viewed } = vi.hoisted(() => ({
 // The header is where the history panel normally mounts and publishes both the
 // chosen version and the restore affordance. Standing in for it lets a test
 // name the arrival state directly, which no fixture of the real panel can.
-vi.mock("../EntrySystemHeader", () => ({
-  EntrySystemHeader: () => {
+vi.mock("../DocumentBar", () => ({
+  DocumentBar: () => {
     const { setViewing, setRestore } = useDocumentHistory();
     useEffect(() => {
       setViewing(viewed.current);
@@ -81,6 +81,7 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       versionNo: 7,
       snapshot: { title: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "collection", slug: "posts", entryId: "e1" },
@@ -89,7 +90,9 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
     });
 
     expect(screen.getByTestId("snapshot-form")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restore…" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Restore this version" })
+    ).toBeEnabled();
   });
 
   it("prevents the native form submit while a version is being read", () => {
@@ -101,6 +104,7 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       versionNo: 7,
       snapshot: { title: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "collection", slug: "posts", entryId: "e1" },
@@ -128,6 +132,7 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       // which is what a disabled or paused read looks like.
       snapshot: undefined,
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "collection", slug: "posts", entryId: "e1" },
@@ -138,6 +143,8 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
     // An absent snapshot must not render as an empty version.
     expect(screen.queryByTestId("snapshot-form")).toBeNull();
     expect(screen.getByText(/loading version 7/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Restore this version" })
+    ).toBeDisabled();
   });
 });

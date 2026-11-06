@@ -13,7 +13,7 @@
  *   denied, error handling.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { runFieldHooks } from "../../../shared/lib/field-level-registry";
@@ -39,6 +39,13 @@ import {
   fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 
@@ -50,6 +57,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     const fake = await import("./collection-test-helpers");
     return {
       actorForUser: fake.fakeActorForUser,
+      actorForVisitor: fake.fakeActorForVisitor,
       userHoldsPermission: fake.fakeUserHoldsPermission,
       userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
@@ -303,8 +311,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         new Error("Collection 'nonexistent' not found")
       );
 
+      // Trusted, so the missing collection answers rather than a visitor's
+      // refusal: the Public role grants nothing on a collection that is not.
       const result = await service.listEntries({
         collectionName: "nonexistent",
+        overrideAccess: true,
       });
 
       expect(result.success).toBe(false);
@@ -488,7 +499,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ overrideAccess: true })
+        expect.objectContaining({ overrideAccess: true }),
+        // The page's own access, so the total counts what the page read.
+        expect.anything()
       );
     });
 
@@ -505,7 +518,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "draft" })
+        expect.objectContaining({ status: "draft" }),
+        // The page's own access, so the total counts what the page read.
+        expect.anything()
       );
     });
 
@@ -526,7 +541,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       // A count evaluated for a different caller than the rows would report a
       // total the caller cannot page through.
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ user, routeAuthorized: true })
+        expect.objectContaining({ user, routeAuthorized: true }),
+        // The page's own access, so the total counts what the page read.
+        expect.anything()
       );
     });
 
@@ -552,7 +569,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ authenticatedScope })
+        expect.objectContaining({ authenticatedScope }),
+        // The page's own access, so the total counts what the page read.
+        expect.anything()
       );
     });
 
@@ -585,6 +604,8 @@ describe("CollectionEntryService — Query Contracts", () => {
         targetPolicies: expect.any(Map),
         targetCompanions: expect.any(Map),
         targetVerdicts: expect.any(Map),
+        // Which of a target's rows its read rule's filter matched, per target.
+        targetRuleMatches: expect.any(Map),
       });
     });
 
@@ -606,6 +627,8 @@ describe("CollectionEntryService — Query Contracts", () => {
         targetPolicies: expect.any(Map),
         targetCompanions: expect.any(Map),
         targetVerdicts: expect.any(Map),
+        // Which of a target's rows its read rule's filter matched, per target.
+        targetRuleMatches: expect.any(Map),
       });
     });
 
@@ -696,6 +719,29 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(result.statusCode).toBe(403);
     });
 
+    it("judges access itself where a second argument is not the list's own", async () => {
+      // A caller inside the package that holds the query service and passes
+      // what looks like settled access is still judged: only the list's own
+      // count can skip the gate.
+      callerMay();
+      const query = (
+        service as unknown as {
+          queryService: {
+            countEntries(
+              params: unknown,
+              settled: unknown
+            ): Promise<{ success: boolean; statusCode: number }>;
+          };
+        }
+      ).queryService;
+      const result = await query.countEntries(
+        { collectionName: "posts", user: { id: "user-1", role: "viewer" } },
+        { denied: null }
+      );
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
     it("should skip access control when overrideAccess is true", async () => {
       selectData.rows = [{ value: 5 }];
 
@@ -717,8 +763,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         new Error("Collection 'missing' does not exist")
       );
 
+      // Trusted, so the missing collection answers rather than a visitor's
+      // refusal: the Public role grants nothing on a collection that is not.
       const result = await service.countEntries({
         collectionName: "missing",
+        overrideAccess: true,
       });
 
       expect(result.success).toBe(false);
@@ -809,7 +858,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should load the dynamic schema for the requested collection", async () => {

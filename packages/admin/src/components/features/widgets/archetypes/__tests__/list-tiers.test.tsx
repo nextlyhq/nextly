@@ -1,44 +1,28 @@
 /**
- * A list card at each tier: how many rows it draws, and when it says more exist.
+ * A list card at each tier: how many rows it draws, and that the list archetype draws no footer.
  *
- * The card's query asks one row more than its tier draws, so an answer holding that extra row
- * is the only sign more exist; an answer of exactly the rows drawn has nothing more to point
- * to. A list from one collection points to that collection's list view, with the card's own
- * filter and sort; a list without one collection says that more exist and links nowhere.
+ * Its rows are what its widget's `load` answered; the card draws as many of them as its tier
+ * holds. The archetype names no list view for its rows, so its footer is never drawn: a card
+ * that links to a list view draws that link itself (`Widget.List`'s `viewAllHref`). The View
+ * all link's own address, from a card's read, is `listViewHref`'s, tested below.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-import { AnswerTierContext, CardTierContext } from "../../frame/tier";
+import { AnswerSizeContext, CardTierContext } from "../../frame/tier";
+import { listViewHref } from "../../frame/list-view-href";
 import { listBody } from "../list";
-import { moreExistHref } from "../more-exist";
 import { tableBody } from "../table";
 
 afterEach(() => cleanup());
 
-const where = { status: { equals: "draft" } };
-
+// A declared list card, answered on the server: its rows are drawn by the fields they carry.
 const recentPosts = {
   id: "core/recent-posts",
   title: "Recent posts",
   archetype: "list",
-  query: {
-    source: "collection:posts",
-    op: "list",
-    select: ["title", "status"],
-    where,
-    sort: "-updatedAt",
-    limit: 5,
-  },
-} as unknown as Parameters<typeof listBody>[1];
-
-const recentActivity = {
-  ...recentPosts,
-  id: "core/recent-activity",
-  title: "Recent activity",
-  query: { source: "system:activity", op: "list", select: ["title"], limit: 5 },
 } as unknown as Parameters<typeof listBody>[1];
 
 function items(count: number) {
@@ -48,13 +32,22 @@ function items(count: number) {
   }));
 }
 
+/** The columns the server describes for `recentPosts`' rows. */
+const described = [{ name: "title" }, { name: "status" }];
+
 function drawAt(
   tier: SizeTier,
   count: number,
-  definition: Parameters<typeof listBody>[1] = recentPosts
+  definition: Parameters<typeof listBody>[1] = recentPosts,
+  total?: number
 ) {
   const outcome = listBody(
-    { op: "list", items: items(count) } as never,
+    {
+      op: "list",
+      items: items(count),
+      fields: described,
+      ...(total !== undefined && { total }),
+    } as never,
     definition
   );
   if (!outcome.ok || !("node" in outcome) || !outcome.node) {
@@ -68,48 +61,42 @@ function drawAt(
 }
 
 describe("a list card's rows at each tier", () => {
-  it("draws three rows at small, titles only", () => {
+  it("draws three rows at small", () => {
     drawAt("small", 4);
-    expect(screen.getAllByTestId("widget-list-row")).toHaveLength(3);
-    // Small is title only: the detail line is medium's.
-    expect(screen.queryByText("draft")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
+  });
+
+  it("draws a row's meta at small too, stacked in its fixed-height row", () => {
+    drawAt("small", 4);
+    // Every tier below large stacks the row's slots, so a small card keeps the detail a
+    // medium one shows; only the number of rows is the small tier's own.
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
+    expect(
+      screen.getAllByTestId("entity-row-meta").map(node => node.textContent)
+    ).toEqual(Array(3).fill("draft"));
   });
 
   it("draws the card's number of items at medium, with a line of detail", () => {
     drawAt("medium", 6);
-    expect(screen.getAllByTestId("widget-list-row")).toHaveLength(5);
-    expect(screen.getAllByText("draft")).toHaveLength(5);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
+    expect(
+      screen.getAllByTestId("entity-row-meta").map(node => node.textContent)
+    ).toEqual(Array(5).fill("draft"));
+  });
+
+  it("draws at most the default five rows at large, where a table is drawn", () => {
+    // No items setting reaches the archetype, so its rows are capped at the default number.
+    drawAt("large", 26);
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(5);
   });
 });
 
-describe("saying more exist", () => {
-  it("says nothing when the answer holds exactly the rows the tier draws", () => {
-    // 🔴 The separating case: a card that always showed the link, or showed it on a full page,
-    // fails here; one that never showed it fails the case below.
-    drawAt("small", 3);
-    expect(
-      screen.queryByRole("link", { name: /more exist/i })
-    ).not.toBeInTheDocument();
-  });
-
-  it("links to the collection's list view with the card's filter and sort when there are more", () => {
-    drawAt("small", 4);
-    const link = screen.getByRole("link", { name: /more exist/i });
-    const href = new URL(link.getAttribute("href") ?? "", "http://admin.test");
-    expect(href.pathname).toBe("/admin/collections/posts");
-    expect(JSON.parse(href.searchParams.get("where") ?? "null")).toEqual(where);
-    expect(href.searchParams.get("sort")).toBe("-updatedAt");
-  });
-
-  it("says more exist without a link for a list that is not one collection's", () => {
-    drawAt("medium", 6, recentActivity);
-    const list = screen.getByTestId("widget-list");
-    expect(
-      within(list.parentElement ?? list).getByText(/more exist/i)
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: /more exist/i })
-    ).not.toBeInTheDocument();
+describe("its footer", () => {
+  it("has none, however many more its answer holds", () => {
+    // A footer holds a link, never a bare count, and the archetype names no list view to open.
+    drawAt("medium", 6, recentPosts, 42);
+    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });
 
@@ -140,11 +127,9 @@ describe("the large tier draws a table, and below it a table card is a list", ()
 
   it("draws a list card at the large tier as a table with readable headings", () => {
     drawBody(listBody, "large", recentPosts);
-    expect(screen.getByTestId("widget-table")).toBeInTheDocument();
+    expect(screen.getByTestId("list-card-table")).toBeInTheDocument();
     expect(
-      screen
-        .getAllByTestId("widget-table-heading")
-        .map(node => node.textContent)
+      screen.getAllByRole("columnheader").map(node => node.textContent)
     ).toEqual(["Title", "Status"]);
   });
 
@@ -153,18 +138,20 @@ describe("the large tier draws a table, and below it a table card is a list", ()
       typeof listBody
     >[1];
     drawBody(tableBody, "medium", table);
-    expect(screen.queryByTestId("widget-table")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("widget-list-row")).toHaveLength(2);
-    expect(screen.getByText("Post 1")).toBeInTheDocument();
+    expect(screen.queryByTestId("list-card-table")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(2);
+    expect(screen.getAllByTestId("entity-row-title")[0]).toHaveTextContent(
+      "Post 1"
+    );
   });
 });
 
-describe("the lifecycle a More exist link carries", () => {
+describe("the lifecycle a View all link carries", () => {
   // The card's rows are bounded by its lifecycle status as well as its filter, and the list view
   // shows every entry unless told otherwise, so the link says which entries the card was drawn
   // from. An omitted status is the widget read's default, published.
   const statusOf = (status: "draft" | "published" | "all" | undefined) => {
-    const href = moreExistHref({
+    const href = listViewHref({
       source: "collection:posts",
       op: "list",
       status,
@@ -187,23 +174,22 @@ describe("the lifecycle a More exist link carries", () => {
 });
 
 describe("an answer smaller than the card", () => {
-  it("draws the rows its answer was asked for, and says more exist", () => {
+  it("draws the rows its answer was asked for", () => {
     // Fetched for a small card (three rows and one more), shown on a card that has since grown to
     // medium while its larger answer is out or was refused: the extra row is not an item.
     const outcome = listBody(
-      { op: "list", items: items(4) } as never,
+      { op: "list", items: items(4), fields: described } as never,
       recentPosts
     );
     if (!outcome.ok || !("node" in outcome) || !outcome.node)
       throw new Error("drew nothing");
     render(
       <CardTierContext.Provider value="medium">
-        <AnswerTierContext.Provider value="small">
+        <AnswerSizeContext.Provider value={{ tier: "small" }}>
           {outcome.node}
-        </AnswerTierContext.Provider>
+        </AnswerSizeContext.Provider>
       </CardTierContext.Provider>
     );
-    expect(screen.getAllByTestId("widget-list-row")).toHaveLength(3);
-    expect(screen.getByText("More exist")).toBeInTheDocument();
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
   });
 });

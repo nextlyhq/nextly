@@ -39,33 +39,6 @@ export const NO_CYCLE = [
 
 /** Each cycle as its member files, relative to `NEXTLY_SOURCE`. */
 export const IMPORT_CYCLES = [
-  // The CLI's program and the commands it registers, each of which imports
-  // the program back.
-  [
-    "cli/commands/add.ts",
-    "cli/commands/build.ts",
-    "cli/commands/db-sync.ts",
-    "cli/commands/generate-manifest.ts",
-    "cli/commands/generate-types.ts",
-    "cli/commands/i18n-restore.ts",
-    "cli/commands/init.ts",
-    "cli/commands/migrate-baseline.ts",
-    "cli/commands/migrate-check.ts",
-    "cli/commands/migrate-create.ts",
-    "cli/commands/migrate-down.ts",
-    "cli/commands/migrate-field-groups.ts",
-    "cli/commands/migrate-fresh.ts",
-    "cli/commands/migrate-resolve.ts",
-    "cli/commands/migrate-status.ts",
-    "cli/commands/migrate.ts",
-    "cli/commands/permissions-cleanup.ts",
-    "cli/commands/plugins.ts",
-    "cli/commands/prune.ts",
-    "cli/commands/telemetry.ts",
-    "cli/commands/upgrade.ts",
-    "cli/commands/webhooks-prune.ts",
-    "cli/program.ts",
-  ],
   // The Direct API and `init`, through the content-event namespaces.
   [
     "api/subject-events.ts",

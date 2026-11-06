@@ -20,6 +20,8 @@
  * ```
  */
 
+import { createHash } from "node:crypto";
+
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -31,6 +33,7 @@ import {
 import { env } from "../../../shared/lib/env";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { consoleLogger } from "../../../shared/types";
+import { getTableName } from "../../collections/services/collection-utils";
 import {
   fieldGroupSlugList,
   isFieldGroupFieldType,
@@ -41,6 +44,7 @@ import type {
   ReferentialAction,
 } from "../../schema/pipeline/diff/types";
 import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
   addForeignKeySql,
   changeForeignKeyActionStatements,
@@ -49,6 +53,9 @@ import {
 } from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
+  junctionTableNameBetween,
+  junctionTableNameFor,
+  junctionTablesOf,
   usesJunctionTable,
   getColumnDescriptor,
   getSystemColumnDescriptors,
@@ -62,10 +69,31 @@ import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
-import { backfillDefaultForType } from "../../schema/utils/backfill-default";
+import {
+  backfillDefaultForType,
+  backfillValueForType,
+} from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+
+/** A field-group field renamed with no column of its own: its instances move with it. */
+type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
+
+/**
+ * What a drop file's name says it drops: the collection, or for several, how
+ * many and a digest of which. A name listing every slug grows with the
+ * selection, and past the filesystem's limit on one name the file cannot be
+ * written at all.
+ */
+function dropFileLabel(names: readonly string[]): string {
+  if (names.length === 1) return names[0];
+  const digest = createHash("sha256")
+    .update(names.join(","))
+    .digest("hex")
+    .slice(0, 12);
+  return `${String(names.length)}_collections_${digest}`;
+}
 
 /**
  * Field types this service stores in a JSON array column (see its column-type
@@ -466,6 +494,26 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * Each new field an ALTER may change the column of, with the definition it had: one that has a
+   * parent column and was there before. Toggling `required` on a many-to-many emitted ALTER COLUMN
+   * against a name the table does not have, and a storage move is handled by the add and remove
+   * passes, so altering its column would target one the table doesn't have yet, or no longer has.
+   */
+  private *alterableFields(
+    newFields: readonly FieldDefinition[],
+    previousDefinitionOf: (
+      field: FieldDefinition
+    ) => FieldDefinition | undefined
+  ): Generator<{ field: FieldDefinition; oldField: FieldDefinition }> {
+    for (const field of newFields) {
+      if (!fieldProducesColumn(field)) continue;
+      const oldField = previousDefinitionOf(field);
+      if (!oldField || this.storageClassChanged(oldField, field)) continue;
+      yield { field, oldField };
+    }
+  }
+
+  /**
    * The statement that makes a column unique, in the one spelling everything else expects.
    *
    * `uq_<table>_<column>` is what the desired schema declares for a unique field and what the
@@ -535,30 +583,23 @@ export class DynamicCollectionSchemaService {
    * development, where saves queue files without running them: a save that turns Unique off and
    * a later one that turns it back on must replay as a drop and then a create, whatever the table
    * shows while both are waiting.
-   *
-   * This database's own run (`planFor: "database"`) also skips what the live table already shows,
-   * for a save MySQL stopped part-way: a create where a unique index already covers the column
-   * (asked by what the index covers, since a name proves nothing), and a drop where none is left.
    */
   private uniquenessToggleStatements(
     tableName: string,
     pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
     options:
       | {
-          planFor?: "artefact" | "database";
           uniqueColumns?: ReadonlyMap<string, string | null>;
           indexNames?: ReadonlySet<string>;
         }
       | undefined
   ): string[] {
-    const forDatabase = options?.planFor === "database";
     const statements: string[] = [];
     for (const { previous, field } of pairs) {
       if (previous.unique === field.unique || !fieldProducesColumn(field))
         continue;
       const column = toSnakeCase(field.name);
       if (field.unique === true) {
-        if (forDatabase && options?.uniqueColumns?.has(column)) continue;
         if (this.plannedUniqueIndexName(tableName, field) === null) {
           if (column === "slug") continue;
           throw this.uniquenessNotEnforceable(tableName, field);
@@ -579,7 +620,6 @@ export class DynamicCollectionSchemaService {
         ) ??
         options?.uniqueColumns?.get(before) ??
         undefined;
-      if (forDatabase && live === undefined) continue;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
       // index of its own to drop.
       if (
@@ -739,7 +779,8 @@ export class DynamicCollectionSchemaService {
     return {
       name: this.relationshipKeyName(tableName, column),
       columns: [column],
-      referencesTable: `dc_${field.options.target}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      referencesTable: getTableName(field.options.target),
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
@@ -842,32 +883,6 @@ export class DynamicCollectionSchemaService {
     ];
   }
 
-  /**
-   * Whether this database's own run already has a column's plain index: a save that MySQL, which
-   * commits each schema statement, refused part-way can have created it while the registry still
-   * records the index off. The migration file keeps the create, since it is replayed on
-   * databases that never ran that save.
-   */
-  private indexAlreadyRun(
-    tableName: string,
-    column: string,
-    options:
-      | {
-          planFor?: "artefact" | "database";
-          indexColumns?: ReadonlyMap<string, readonly string[]>;
-        }
-      | undefined
-  ): boolean {
-    // The index of the expected name, and on exactly this column: another index can hold the name.
-    return (
-      options?.planFor === "database" &&
-      this.indexNameCandidates(tableName, column).some(name => {
-        const covered = options.indexColumns?.get(name);
-        return covered?.length === 1 && covered[0] === column;
-      })
-    );
-  }
-
   private indexNameCandidates(tableName: string, column: string): string[] {
     const full = `idx_${tableName}_${column}`;
     const candidates = [indexNameForColumn(tableName, column), full];
@@ -878,29 +893,28 @@ export class DynamicCollectionSchemaService {
   /**
    * `CREATE INDEX` for one column, in the spelling the dialect accepts.
    *
-   * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
-   * outright, so a text-backed column is indexed by prefix. 191 characters is the longest prefix
-   * that fits the 767-byte index limit under utf8mb4 on every InnoDB row format, including the
-   * compact ones where a longer prefix is refused. PostgreSQL and SQLite index the whole value.
+   * MySQL cannot index a `BLOB`/`TEXT` column of any size without a key length and rejects the
+   * statement outright, so a text-backed column is indexed by prefix. Rendered by the schema
+   * pipeline's own rule, so the prefix and the types it applies to are the ones a migration file
+   * and the dev push use. PostgreSQL and SQLite index the whole value.
    */
   private createIndexSql(
     tableName: string,
     column: string,
     columnType: string
   ): string | null {
-    const name = this.quoteIdentifier(indexNameForColumn(tableName, column));
-    const table = this.quoteIdentifier(tableName);
-    const quoted = this.quoteIdentifier(column);
     // Asked through the shared rule, which the desired schema reads too: an index only one of
     // them believes in is proposed by every diff and refused by every apply.
     if (!columnTypeIsIndexable(columnType, this.dialect)) return null;
-    if (this.dialect === "mysql") {
-      const target = /\b(text|blob)\b/i.test(columnType)
-        ? `${quoted}(191)`
-        : quoted;
-      return `CREATE INDEX ${name} ON ${table}(${target});`;
-    }
-    return `CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${quoted});`;
+    const sql = columnIndexSql(
+      tableName,
+      indexNameForColumn(tableName, column),
+      column,
+      columnType,
+      this.dialect,
+      name => this.quoteIdentifier(name)
+    );
+    return `${sql};`;
   }
 
   /**
@@ -916,6 +930,79 @@ export class DynamicCollectionSchemaService {
       return `DROP INDEX ${name} ON ${this.quoteIdentifier(tableName)};`;
     }
     return `DROP INDEX IF EXISTS ${name};`;
+  }
+
+  /**
+   * A field-group field's association moved to its new name, when the change renames one and
+   * renames no column: a field group's instances are keyed by the field name in its own table, so
+   * a rename that emits no DDL would leave every existing row keyed by the old name and reads would
+   * return no nested data. Only an unambiguous removed/added pair whose referenced slugs are
+   * identical is moved; anything else is a remove and an add of different field groups.
+   */
+  private associationMove(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+    }
+  ): { rename: AssociationRename; statements: string[] } | null {
+    // The caller's pair wins: it was detected from the save's full field lists, which these
+    // arguments may be a filtered subset of.
+    const groupRename =
+      options?.associationRename ??
+      this.detectFieldGroupAssociationRename(oldFields, newFields);
+    if (!groupRename) return null;
+    const statements: string[] = [];
+    for (const slug of fieldGroupSlugList(groupRename.to)) {
+      // The registry resolves the physical table: comp_ today, fg_ or a historical custom name
+      // once the storage migration has run, so the name is passed in per slug rather than derived
+      // here. A slug with no resolved name has no record and no table: nothing to move.
+      const groupTable = options?.fieldGroupTableNames?.get(slug);
+      if (groupTable === undefined) continue;
+      statements.push(
+        `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
+          `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
+          `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
+          `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
+      );
+    }
+    return { rename: groupRename, statements };
+  }
+
+  /**
+   * What a collection change needs beside the schema pipeline's push, which leaves these tables
+   * out of its diff: a renamed field-group field's association, and the junction tables of
+   * many-to-many fields. The same statements the change's migration file carries for them, from
+   * the same lists, so this database and one built from the files end alike.
+   *
+   * `oldFields` / `newFields` are the lists the main diff is planned on; the junctions are decided
+   * on the full lists when those are a localized collection's shared subset.
+   */
+  statementsBesideThePush(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+      junctionFields?: { old: FieldDefinition[]; new: FieldDefinition[] };
+    }
+  ): string[] {
+    // The association moves only when no column is renamed, as the file decides it.
+    const association =
+      this.detectFieldRename(oldFields, newFields) === null
+        ? this.associationMove(tableName, oldFields, newFields, options)
+        : null;
+    return [
+      ...(association?.statements ?? []),
+      ...this.junctionLifecycle(
+        tableName,
+        options?.junctionFields?.old ?? oldFields,
+        options?.junctionFields?.new ?? newFields
+      ),
+    ];
   }
 
   /**
@@ -935,6 +1022,57 @@ export class DynamicCollectionSchemaService {
     return field.required || field.default !== undefined
       ? this.requiredColumnBackfill(field)
       : null;
+  }
+
+  /**
+   * The value the rows already there are filled with when this required column is added, bound by
+   * the apply rather than written into the column's definition: the field's stated default, or
+   * the empty its type backfills with, as `requiredColumnBackfill` writes it in SQL. `undefined`
+   * where nothing satisfies NOT NULL.
+   */
+  addedColumnFillValue(field: FieldDefinition, now: Date): unknown {
+    if (field.default !== undefined) {
+      const value: unknown = field.default;
+      // SQLite's driver binds no boolean.
+      if (this.dialect === "sqlite" && typeof value === "boolean") {
+        return Number(value);
+      }
+      // A stated date is bound as the moment it names, in whatever form it was
+      // typed ("2026-01-02", an offset time): a Date, which every driver binds
+      // as one, or on SQLite, which keeps a date as its epoch seconds, those, as
+      // `formatDefaultValue` writes it into the migration file. A plugin type is judged by what it
+      // stores, so one stored as a timestamp is bound as a date too.
+      if (storageTypeToken(field) === "date") {
+        const at =
+          value instanceof Date
+            ? value
+            : typeof value === "string"
+              ? new Date(value)
+              : null;
+        if (at !== null && !Number.isNaN(at.getTime())) {
+          return this.dialect === "sqlite"
+            ? Math.floor(at.getTime() / 1000)
+            : at;
+        }
+      }
+      // No driver binds an object or an array as JSON: SQLite refuses one, and PostgreSQL's
+      // driver turns an array into an array literal. A JSON default is bound as its text, which
+      // every dialect's JSON column reads back as written.
+      return value !== null &&
+        typeof value === "object" &&
+        !(value instanceof Date)
+        ? JSON.stringify(value)
+        : value;
+    }
+    return backfillValueForType(
+      {
+        type: field.type,
+        field,
+        dialect: this.dialect,
+        jsonArrayTypes: COLLECTION_JSON_ARRAY_TYPES,
+      },
+      now
+    );
   }
 
   private requiredColumnBackfill(field: FieldDefinition): string | null {
@@ -1033,16 +1171,17 @@ export class DynamicCollectionSchemaService {
             ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
-        // Add CHECK constraints for validation
+        // Add CHECK constraints for validation, on the field's column: a name
+        // kept in camelCase is stored in its snake_case column.
         if (f.validation) {
           if (f.validation.min !== undefined) {
             checks.push(
-              `${this.quoteIdentifier(f.name)} >= ${f.validation.min}`
+              `${this.quoteIdentifier(toSnakeCase(f.name))} >= ${f.validation.min}`
             );
           }
           if (f.validation.max !== undefined) {
             checks.push(
-              `${this.quoteIdentifier(f.name)} <= ${f.validation.max}`
+              `${this.quoteIdentifier(toSnakeCase(f.name))} <= ${f.validation.max}`
             );
           }
           if (
@@ -1054,7 +1193,7 @@ export class DynamicCollectionSchemaService {
               f.type === "code")
           ) {
             checks.push(
-              `LENGTH(${this.quoteIdentifier(f.name)}) >= ${f.validation.minLength}`
+              `LENGTH(${this.quoteIdentifier(toSnakeCase(f.name))}) >= ${f.validation.minLength}`
             );
           }
           if (f.validation.regex && this.dialect !== "sqlite") {
@@ -1283,22 +1422,15 @@ ${allColumnDefs.join(",\n")}
    * - DROP COLUMN is supported (SQLite 3.35.0+)
    * - ALTER COLUMN (change type, nullability) is NOT supported
    *
-   * For complex schema changes in SQLite, a table rebuild is required,
-   * but for dynamic collections we keep it simple and only support
-   * adding/removing columns.
+   * For complex schema changes in SQLite, a table rebuild is required. A
+   * nullability change is handed to the caller (`onSqliteNullability`), which
+   * rebuilds the table; a type change is not made there.
    */
   generateAlterTableMigration(
     tableName: string,
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[],
     options?: {
-      /**
-       * Whom the statements are for. The migration file (`"artefact"`, the default) is replayed on
-       * databases that only ever ran migrations, so what it does to an index follows from the
-       * field's history alone. `"database"` is this database's own run, which also skips an index
-       * change the live table already shows: a save MySQL stopped part-way can have made it.
-       */
-      planFor?: "artefact" | "database";
       /**
        * Previous Draft/Published flag — pass `existing.status === true` so
        * the diff knows whether the table currently has a `status` column.
@@ -1416,6 +1548,12 @@ ${allColumnDefs.join(",\n")}
         from: FieldDefinition;
         to: FieldDefinition;
       };
+      /**
+       * Told, on SQLite, of each kept column whose nullability this change moves, with whether it
+       * becomes NOT NULL. SQLite can't alter a column, so this renders no statement for it; a
+       * caller that can rebuild the table once these statements have run applies it there.
+       */
+      onSqliteNullability?: (column: string, required: boolean) => void;
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
@@ -1470,12 +1608,6 @@ ${allColumnDefs.join(",\n")}
       );
 
       for (const column of lifecycleColumns) {
-        // This database's own run skips a lifecycle column change the table already shows: a
-        // save that MySQL, which commits each schema statement, refused part-way can have added
-        // or dropped it while the registry still records the lifecycle as before. The migration
-        // file keeps both, since it is replayed on databases that never ran that save.
-        const present = options?.liveColumnTypes?.has(column.name) === true;
-        if (options?.planFor === "database" && present === hasStatus) continue;
         statements.push(
           hasStatus
             ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
@@ -1560,26 +1692,16 @@ ${allColumnDefs.join(",\n")}
       // stays with the loops.
       // The caller's pair wins: it was detected from the save's full field
       // lists, which these arguments may be a filtered subset of.
-      const groupRename =
-        options?.associationRename ??
-        this.detectFieldGroupAssociationRename(oldFields, newFields);
-      if (groupRename) {
-        renamedFromName = groupRename.from.name;
-        renamedToName = groupRename.to.name;
-        for (const slug of fieldGroupSlugList(groupRename.to)) {
-          // The registry resolves the physical table: comp_ today, fg_ or a
-          // historical custom name once the storage migration has run, so the
-          // name is passed in per slug rather than derived here. A slug with
-          // no resolved name has no record and no table — nothing to migrate.
-          const groupTable = options?.fieldGroupTableNames?.get(slug);
-          if (groupTable === undefined) continue;
-          statements.push(
-            `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
-              `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
-              `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
-              `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
-          );
-        }
+      const association = this.associationMove(
+        tableName,
+        oldFields,
+        newFields,
+        options
+      );
+      if (association) {
+        renamedFromName = association.rename.from.name;
+        renamedToName = association.rename.to.name;
+        statements.push(...association.statements);
       }
     }
 
@@ -1656,7 +1778,8 @@ ${allColumnDefs.join(",\n")}
         if (this.dialect !== "sqlite") {
           // Add foreign key for non-manyToMany relations
           if (field.type === "relationship" && field.options?.target) {
-            const targetTable = `dc_${field.options.target}`;
+            // The table the target was created under: a hyphen in its address is an underscore in the table.
+            const targetTable = getTableName(field.options.target);
             const onDelete = this.relationOnDelete(field);
             const onUpdate = this.relationOnUpdate(field);
             statements.push(
@@ -1726,12 +1849,7 @@ ${allColumnDefs.join(",\n")}
                 field
               )
           );
-          if (
-            toggleIndexSql &&
-            !this.indexAlreadyRun(tableName, idxCol, options)
-          ) {
-            statements.push(toggleIndexSql);
-          }
+          if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
           // Same guard as the removal path: turning an index off that the table never carried
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
@@ -1903,17 +2021,25 @@ ${allColumnDefs.join(",\n")}
     }
     statements.push(...fkActionsBeforeColumns);
 
-    // Note: SQLite doesn't support ALTER COLUMN - modifications require table rebuild
-    // For simplicity, we skip column modifications for SQLite
-    if (this.dialect !== "sqlite") {
-      for (const field of newFields) {
-        // A field with no parent column has nothing to alter. Toggling `required` on a
-        // many-to-many emitted ALTER COLUMN against a name the table does not have.
-        if (!fieldProducesColumn(field)) continue;
-        const oldField = previousDefinitionOf(field);
-        // A storage move is handled by the add and remove loops above; altering the column here
-        // would target one the table does not have yet, or no longer has.
-        if (oldField && this.storageClassChanged(oldField, field)) continue;
+    // SQLite can't alter a column. A nullability change goes to the caller, which rebuilds the
+    // table once these statements have run (`onSqliteNullability`); a type change is skipped there.
+    if (this.dialect === "sqlite") {
+      for (const { field, oldField } of this.alterableFields(
+        newFields,
+        previousDefinitionOf
+      )) {
+        if (field.required !== oldField.required) {
+          options?.onSqliteNullability?.(
+            toSnakeCase(field.name),
+            field.required === true
+          );
+        }
+      }
+    } else {
+      for (const { field, oldField } of this.alterableFields(
+        newFields,
+        previousDefinitionOf
+      )) {
         // Requiredness is asked SEPARATELY from `isFieldModified`, because for
         // one kind of field the two disagree. `getColumnDescriptor` reports a
         // relationship as nullable whatever its `required` says — the column
@@ -1930,12 +2056,8 @@ ${allColumnDefs.join(",\n")}
         // rewrite is still gated on `columnChanged` below, so a field that
         // arrives here only because its requiredness moved restates
         // nullability and nothing else.
-        const requirednessChanged =
-          oldField !== undefined && field.required !== oldField.required;
-        if (
-          oldField &&
-          (this.isFieldModified(oldField, field) || requirednessChanged)
-        ) {
+        const requirednessChanged = field.required !== oldField.required;
+        if (this.isFieldModified(oldField, field) || requirednessChanged) {
           const alterCol = toSnakeCase(field.name);
           // The descriptor decides the target column, the same answer the comparison above used to
           // decide there was a change at all. Asking a different renderer here is what let a field
@@ -2232,7 +2354,8 @@ ${allColumnDefs.join(",\n")}
       tableName,
       constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
-      referencesTable: `dc_${target}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      referencesTable: getTableName(target),
       referencesColumn: "id",
       fromOnDelete: from.onDelete,
       fromOnUpdate: from.onUpdate,
@@ -2703,39 +2826,70 @@ ${allColumnDefs.join(",\n")}
     migrationSQL: string;
     migrationFileName: string;
   } {
-    // SQLite doesn't support CASCADE on DROP TABLE
-    const dropStatement =
+    return this.generateDropTablesMigration([
+      { collectionName, tableName, fields },
+    ]);
+  }
+
+  /**
+   * One migration dropping every table of the collections deleted in one
+   * operation, in the order given: the order their own keys allow.
+   *
+   * Every member's many-to-many junctions come first. A junction holds keys
+   * to both of its tables, so while one stands MySQL drops neither, and
+   * SQLite neither while it holds a link; with all of them gone, only the
+   * members' own keys tie one table to another, and the order given respects
+   * those. One file rather than one per collection, so the sequence a
+   * database receives when the file is applied is the sequence development
+   * ran, whatever order files are read in.
+   */
+  generateDropTablesMigration(
+    collections: ReadonlyArray<{
+      collectionName: string;
+      tableName: string;
+      fields?: readonly FieldDefinition[];
+    }>
+  ): {
+    migrationSQL: string;
+    migrationFileName: string;
+  } {
+    // The collections' own many-to-many junctions. Only their own fields are
+    // known here; a junction another collection's field points at one of
+    // these tables through is that collection's, and stays until its field
+    // goes. Named by `junctionTablesOf`, the list the check before a delete
+    // reads, so both name the same tables.
+    const junctions = collections.flatMap(collection =>
+      junctionTablesOf(collection.tableName, collection.fields ?? []).map(
+        junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
+      )
+    );
+
+    const tables = collections.flatMap(({ tableName }) => [
+      // The localized companion is excluded from the schema pipeline, so
+      // nothing else in a replayed migration would remove it. It carries an
+      // FK to `<main>.id` and therefore has to be dropped BEFORE the main
+      // table. IF EXISTS keeps this a no-op for collections that were never
+      // localized, and for the API delete path that already tore it down
+      // in-process.
+      `DROP TABLE IF EXISTS ${this.quoteIdentifier(`${tableName}_locales`)};`,
+      // SQLite doesn't support CASCADE on DROP TABLE
       this.dialect === "sqlite"
         ? `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)};`
-        : `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)} CASCADE;`;
+        : `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)} CASCADE;`,
+    ]);
 
-    // The localized companion is excluded from the schema pipeline, so nothing else in a
-    // replayed migration would remove it. It carries an FK to `<main>.id` and therefore has
-    // to be dropped BEFORE the main table. IF EXISTS keeps this a no-op for collections that
-    // were never localized, and for the API delete path that already tore it down in-process.
-    const dropCompanionStatement = `DROP TABLE IF EXISTS ${this.quoteIdentifier(`${tableName}_locales`)};`;
-
-    // The collection's own many-to-many junctions, for the same reason and in the same
-    // position: each holds an FK to `<main>.id`, and nothing else names them. Only this
-    // collection's fields are known here; a junction another collection's field points at
-    // this table through is that collection's, and stays until its field goes.
-    const dropJunctionStatements = fields
-      .filter(usesJunctionTable)
-      .map(
-        field =>
-          `DROP TABLE IF EXISTS ${this.quoteIdentifier(this.junctionTableNameFor(tableName, field))};`
-      );
-
-    const migrationSQL = [
-      `-- Drop dynamic collection: ${collectionName}`,
-      ...dropJunctionStatements,
-      dropCompanionStatement,
-      dropStatement,
-    ].join("\n");
+    const names = collections.map(collection => collection.collectionName);
+    // One statement per breakpoint, as every other file this service writes:
+    // the runner splits on the breakpoint line, and MySQL refuses several
+    // statements sent as one.
+    const migrationSQL = `-- Drop dynamic collection${names.length === 1 ? "" : "s"}: ${names.join(", ")}\n${[
+      ...junctions,
+      ...tables,
+    ].join("\n--> statement-breakpoint\n")}`;
 
     return {
       migrationSQL,
-      migrationFileName: `${Date.now()}_drop_${collectionName}.sql`,
+      migrationFileName: `${Date.now()}_drop_${dropFileLabel(names)}.sql`,
     };
   }
 
@@ -2770,7 +2924,7 @@ ${allColumnDefs.join(",\n")}
     // declared NOT NULL: a junction created with `set null` could never have
     // enforced it, and would meet the refusal on its first action edit.
     this.refuseJunctionSetNull(field, j);
-    return `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
+    const table = `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
 CREATE TABLE IF NOT EXISTS ${q(j.table)} (
   ${q("id")} ${idType} PRIMARY KEY NOT NULL,
   ${q(j.sourceColumn)} ${idType} NOT NULL,
@@ -2778,12 +2932,24 @@ CREATE TABLE IF NOT EXISTS ${q(j.table)} (
   ${q("created_at")} ${timestampDefault},
   CONSTRAINT ${q(j.fkSource)} FOREIGN KEY (${q(j.sourceColumn)}) REFERENCES ${q(j.sourceTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
   CONSTRAINT ${q(j.fkTarget)} FOREIGN KEY (${q(j.targetColumn)}) REFERENCES ${q(j.targetTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
-  CONSTRAINT ${q(j.uqPair)} UNIQUE (${q(j.sourceColumn)}, ${q(j.targetColumn)})
+  CONSTRAINT ${q(j.uqPair)} UNIQUE (${q(j.sourceColumn)}, ${q(j.targetColumn)})`;
+    // MySQL commits each schema statement alone and has no `IF NOT EXISTS` on
+    // CREATE INDEX, so a junction created by one statement and indexed by two
+    // more could be left half-built, and the next run would stop at the first
+    // index's name. There the indexes are declared inside the table, so the
+    // junction lands whole and a repeated run passes over it.
+    if (this.dialect === "mysql") {
+      return `${table},
+  INDEX ${q(j.idxSource)} (${q(j.sourceColumn)}),
+  INDEX ${q(j.idxTarget)} (${q(j.targetColumn)})
+);`;
+    }
+    return `${table}
 );
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxSource)} ON ${q(j.table)}(${q(j.sourceColumn)});
+CREATE INDEX IF NOT EXISTS ${q(j.idxSource)} ON ${q(j.table)}(${q(j.sourceColumn)});
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn)});`;
+CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn)});`;
   }
 
   /**
@@ -2805,7 +2971,8 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
       sourceCollection,
       targetCollection,
       sourceTable: sourceTableName,
-      targetTable: `dc_${targetCollection}`,
+      // The table the target was created under: a hyphen in its address is an underscore in the table.
+      targetTable: getTableName(targetCollection),
       sourceColumn: `${sourceCollection}_id`,
       targetColumn: `${targetCollection}_id`,
       fkSource: `fk_${table}_${sourceCollection}`,
@@ -3365,33 +3532,33 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
    * The junction table a many-to-many field's links live in: the author's own
    * name when the field sets one, else the generated one. Asked here by the
    * CREATE, the DROP and the RENAME alike, so the three cannot name different
-   * tables for one field.
+   * tables for one field. The rule itself is in `field-column-descriptor`, which the
+   * check before a delete asks too.
    */
   junctionTableNameFor(
     sourceTableName: string,
     field: FieldDefinition
   ): string {
-    return (
-      field.options?.junctionTable ||
-      this.generateJunctionTableName(
-        sourceTableName,
-        `dc_${field.options?.target ?? ""}`,
-        field.name
-      )
+    // Generated names through `generateJunctionTableName`, as this method
+    // always derived them.
+    return junctionTableNameFor(
+      sourceTableName,
+      field,
+      (source, target, name) =>
+        this.generateJunctionTableName(source, target, name)
     );
   }
 
   /**
-   * Generate junction table name following naming convention
+   * The generated name of the junction table between two tables for one
+   * field, by the rule `junctionTableNameFor` applies (`field-column-descriptor`).
    */
   generateJunctionTableName(
     sourceTable: string,
     targetTable: string,
     fieldName: string
   ): string {
-    // Sort table names alphabetically for consistency
-    const tables = [sourceTable, targetTable].sort();
-    return `${tables[0]}_${tables[1]}_${fieldName}`;
+    return junctionTableNameBetween(sourceTable, targetTable, fieldName);
   }
 
   // ==================== TYPE MAPPING METHODS ====================
@@ -3619,6 +3786,9 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
       type === "text" ||
       type === "textarea" ||
       type === "email" ||
+      // An icon id ("lucide:star") is a string; its config gate admits only
+      // lowercase letters, digits, hyphens and one colon, so it quotes safely.
+      type === "icon" ||
       type === "password" ||
       type === "richText" ||
       type === "code" ||

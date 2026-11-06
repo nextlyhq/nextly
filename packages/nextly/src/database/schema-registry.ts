@@ -22,21 +22,8 @@ import { PgTable } from "drizzle-orm/pg-core";
 import { SQLiteTable } from "drizzle-orm/sqlite-core";
 
 import { NextlyError } from "../errors/nextly-error";
-import * as mysqlBundle from "../schemas/_dialect-bundles/mysql";
-import {
-  buildMysqlEdges,
-  relations as mysqlRelations,
-} from "../schemas/_dialect-bundles/mysql.relations";
-import * as postgresBundle from "../schemas/_dialect-bundles/postgres";
-import {
-  buildPostgresEdges,
-  relations as postgresRelations,
-} from "../schemas/_dialect-bundles/postgres.relations";
-import * as sqliteBundle from "../schemas/_dialect-bundles/sqlite";
-import {
-  buildSqliteEdges,
-  relations as sqliteRelations,
-} from "../schemas/_dialect-bundles/sqlite.relations";
+
+import { loadedDialect } from "./dialect-tables";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -165,14 +152,8 @@ function unresolvedRelationsError(
 export function staticRelationTables(
   dialect: SupportedDialect
 ): Record<string, unknown> {
-  switch (dialect) {
-    case "postgresql":
-      return postgresBundle;
-    case "mysql":
-      return mysqlBundle;
-    case "sqlite":
-      return sqliteBundle;
-  }
+  // The bundle loaded for this dialect when its adapter was created.
+  return loadedDialect(dialect).tables;
 }
 
 export class SchemaRegistry {
@@ -419,30 +400,38 @@ export class SchemaRegistry {
     // per-dialect cast inside each arm.
     buildEdges: (helper: unknown) => Record<string, unknown>;
   } {
-    switch (this.dialect) {
-      case "postgresql":
+    // The dialect's tables and relations, loaded when its adapter was created.
+    const loaded = loadedDialect(this.dialect);
+    switch (loaded.dialect) {
+      case "postgresql": {
+        const { buildPostgresEdges, relations } = loaded.relations;
         return {
-          bundle: staticRelationTables(this.dialect),
-          prebuilt: postgresRelations,
+          bundle: loaded.tables,
+          prebuilt: relations,
           buildEdges: helper =>
             buildPostgresEdges(
               helper as Parameters<typeof buildPostgresEdges>[0]
             ),
         };
-      case "mysql":
+      }
+      case "mysql": {
+        const { buildMysqlEdges, relations } = loaded.relations;
         return {
-          bundle: staticRelationTables(this.dialect),
-          prebuilt: mysqlRelations,
+          bundle: loaded.tables,
+          prebuilt: relations,
           buildEdges: helper =>
             buildMysqlEdges(helper as Parameters<typeof buildMysqlEdges>[0]),
         };
-      case "sqlite":
+      }
+      case "sqlite": {
+        const { buildSqliteEdges, relations } = loaded.relations;
         return {
-          bundle: staticRelationTables(this.dialect),
-          prebuilt: sqliteRelations,
+          bundle: loaded.tables,
+          prebuilt: relations,
           buildEdges: helper =>
             buildSqliteEdges(helper as Parameters<typeof buildSqliteEdges>[0]),
         };
+      }
     }
   }
 

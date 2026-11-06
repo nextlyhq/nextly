@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef } from "react";
 
-import type { DocumentAction } from "./document-actions";
+import type { DocumentAction, EditorDocumentAction } from "./document-actions";
 import { reasonFor } from "./DocumentActionBar";
 import { useDocumentActionsContext } from "./DocumentActionsContext";
 import type {
@@ -59,8 +59,11 @@ export function useDocumentActions(): DocumentActions | null {
     const binding = hosted.bindings[action.id];
     if (binding === undefined) return [];
     const reason = reasonFor(action, binding);
+    const published = publishedAction(action);
     return [
-      reason === undefined ? action : { ...action, disabledReason: reason },
+      reason === undefined
+        ? published
+        : { ...published, disabledReason: reason },
     ];
   });
   return {
@@ -73,10 +76,25 @@ export function useDocumentActions(): DocumentActions | null {
 }
 
 /**
+ * An action in its published shape. The editor's arrow beside the primary
+ * action (`publish-menu`) is not a placement the published contract names, so
+ * a plugin's view is handed such an action as a `menu` one in the `document`
+ * group: where the editor itself draws it when there is no arrow to draw it
+ * on, and where Add to release sat before the arrow, so a view drawing the
+ * menu by group still finds it.
+ */
+function publishedAction(action: EditorDocumentAction): DocumentAction {
+  return action.placement === "publish-menu"
+    ? { ...action, placement: "menu", group: "document" }
+    : { ...action, placement: action.placement };
+}
+
+/**
  * Runs `handler` before every action that stores the editor's work — Save and
  * Publish, from any control, the shortcut or a plugin — while the calling
  * component is mounted. It may be asynchronous, and the action waits for it;
- * throwing refuses the action with the error's message.
+ * throwing refuses the action with the error's message, and throwing an
+ * `AbortError` cancels it, as an author's "no" to a question does.
  *
  * The latest `handler` is the one run, so it may close over render state
  * without re-registering on every render.
@@ -89,7 +107,7 @@ export function useBeforeDocumentAction(handler: BeforeDocumentAction): void {
   });
   useEffect(() => {
     if (register === undefined) return undefined;
-    return register(action => latest.current(action));
+    return register((action, store) => latest.current(action, store));
   }, [register]);
 }
 

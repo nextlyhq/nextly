@@ -16,11 +16,8 @@ export {
 } from "./db-sync";
 
 // Build commands
-export {
-  registerBuildCommand,
-  runBuild,
-  type BuildCommandOptions,
-} from "./build";
+export { registerBuildCommand } from "./build.command";
+export { runBuild, type BuildCommandOptions } from "./build";
 
 // Type generation commands
 export {
@@ -42,8 +39,8 @@ export {
   type MigrateCreateCommandOptions,
 } from "./migrate-create";
 
+export { registerMigrateStatusCommand } from "./migrate-status.command";
 export {
-  registerMigrateStatusCommand,
   runMigrateStatus,
   type MigrateStatusCommandOptions,
 } from "./migrate-status";
@@ -70,11 +67,12 @@ export { registerMigrateDownCommand, runMigrateDown } from "./migrate-down";
 // `MigrateResetCommandOptions` from this barrel must remove that import.
 
 // Init command
-export { registerInitCommand, runInit, type InitCommandOptions } from "./init";
+export { registerInitCommand } from "./init.command";
+export { runInit, type InitCommandOptions } from "./init";
 
 // Add (install sugar) command (D70)
+export { registerAddCommand } from "./add.command";
 export {
-  registerAddCommand,
   runAdd,
   buildInstallArgs,
   detectPackageManager,
@@ -91,4 +89,4 @@ export {
 } from "./upgrade";
 
 // Permissions commands
-export { createPermissionsCleanupCommand } from "./permissions-cleanup";
+export { createPermissionsCleanupCommand } from "./permissions-cleanup.command";

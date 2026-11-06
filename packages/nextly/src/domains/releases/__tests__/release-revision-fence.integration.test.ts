@@ -5,6 +5,8 @@
  * one document — and written by a later statement. A member removal landing
  * between the two must make the write miss, and so must the opposite order:
  * a removal judged against a draft must not land on a release scheduled since.
+ * (Taking the document out of a single release through the service cancels
+ * it, so the removals below are an ordinary release's, or the repository's.)
  * The fence that decides both is the revision every membership change and every
  * schedule bumps, so the interleavings are run on each dialect the integration
  * run configures.
@@ -75,12 +77,14 @@ async function post(t: TestNextly, title: string): Promise<string> {
 
 /** A single-document release holding one post, and that member's id. */
 async function singleWithOneMember(
-  t: TestNextly
+  t: TestNextly,
+  /** `release` for an ordinary release holding the one post instead. */
+  kind: "single" | "release" = "single"
 ): Promise<{ releaseId: string; memberId: string }> {
   const userId = await seedLiveAuthor(t);
   const release = await t.nextly.releases.create({
     title: "Launch post",
-    kind: "single",
+    kind,
   });
   const member = await t.nextly.releases.addMember({
     releaseId: release.id,
@@ -208,9 +212,14 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const { releaseId, memberId } = await singleWithOneMember(t);
       // The removal commits AFTER the service has read the release and seen
-      // its one member, and BEFORE the schedule writes.
+      // its one member, and BEFORE the schedule writes. Below the service:
+      // taking the document out through it cancels a single release, and the
+      // fence is what must hold however the release came to be empty.
       const repo = new InterleavedSchedule(t.adapter, () =>
-        t.nextly.releases.removeMember({ memberId, releaseId })
+        new ReleasesRepository(t.adapter).removeMember(
+          { id: memberId, releaseId },
+          RELEASE_ASSEMBLABLE_FROM
+        )
       );
 
       await expect(
@@ -227,8 +236,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a removal judged against a draft once the release is scheduled", async () => {
+      // An ordinary release: taking the document out of a single one cancels
+      // it instead, which is the cancel's own fence.
       const t = await boot(dialect);
-      const { releaseId, memberId } = await singleWithOneMember(t);
+      const { releaseId, memberId } = await singleWithOneMember(t, "release");
       // The schedule commits AFTER the service has judged the release a draft,
       // and BEFORE the removal writes.
       const repo = new InterleavedRemoval(t.adapter, () =>
@@ -366,7 +377,9 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(false);
     });
 
-    it("refuses removing the member of a scheduled single release, and keeps it", async () => {
+    it("cancels a scheduled single release when its member is taken out, and keeps the member", async () => {
+      // Taking the document out of a single release that has not run calls it
+      // off: it is never left scheduled with nothing in it.
       const t = await boot(dialect);
       const { releaseId, memberId } = await singleWithOneMember(t);
       await t.nextly.releases.schedule({
@@ -375,10 +388,9 @@ describe.each(getConfiguredTestDialects())(
         timezone: "UTC",
       });
 
-      await expect(
-        t.nextly.releases.removeMember({ memberId, releaseId })
-      ).rejects.toMatchObject({ code: "CONFLICT" });
+      await t.nextly.releases.removeMember({ memberId, releaseId });
       const repo = new ReleasesRepository(t.adapter);
+      expect((await readRelease(repo, releaseId)).state).toBe("cancelled");
       expect(
         (await repo.listMembers(releaseId)).map(member => member.id)
       ).toEqual([memberId]);

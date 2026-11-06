@@ -20,6 +20,17 @@ interface PluginSlotProps<P extends object> {
   props?: P;
   /** Rendered when `path` is empty or unresolved (plugin not installed/registered). */
   fallback?: ReactNode;
+  /**
+   * Rendered in place of the component when it throws while drawing; the
+   * boundary's own identifiable message when absent. A dashboard card passes
+   * its error state, so a throw reads as that card's failure, with its Retry.
+   */
+  errorFallback?: ReactNode;
+  /**
+   * Told when the component throws while drawing, so a host that draws the
+   * failure itself (a dashboard card's frame) can.
+   */
+  onError?: () => void;
 }
 
 /**
@@ -34,6 +45,8 @@ export function PluginSlot<P extends object = Record<string, unknown>>({
   path,
   props,
   fallback,
+  errorFallback,
+  onError,
 }: PluginSlotProps<P>): ReactNode {
   // Resolved as taking `Partial<P>`: `props` is optional here, so the
   // component is told the truth that it may be rendered with none of them.
@@ -44,7 +57,11 @@ export function PluginSlot<P extends object = Record<string, unknown>>({
     return fallback ?? null;
   }
   return (
-    <PluginComponentBoundary componentPath={path as string}>
+    <PluginComponentBoundary
+      componentPath={path as string}
+      {...(errorFallback === undefined ? {} : { fallback: errorFallback })}
+      {...(onError === undefined ? {} : { onError })}
+    >
       <Component {...props} />
     </PluginComponentBoundary>
   );

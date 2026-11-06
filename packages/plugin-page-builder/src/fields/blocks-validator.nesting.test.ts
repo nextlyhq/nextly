@@ -27,7 +27,9 @@ const base = {
 function registerRestrictedBlock(): void {
   registerBlocks(
     [
-      { ...base, name: "acme/columns" },
+      // Its slot is declared: a child in a slot its container never declares
+      // is refused on its own account, which is not what these cases test.
+      { ...base, name: "acme/columns", slots: { default: {} } },
       { ...base, name: "acme/column", parent: ["acme/columns"] },
     ] as never,
     { source: "acme" }
@@ -60,7 +62,10 @@ describe("nesting on the write path", () => {
     );
 
     expect(issues.length).toBeGreaterThan(0);
-    expect(issues.map(i => i.message).join(" ")).toContain("acme/columns");
+    // Names where the block WILL go, by the label the editor shows.
+    expect(issues.map(i => i.message).join(" ")).toContain(
+      "goes inside a Columns."
+    );
   });
 
   it("refuses a restricted block written under the wrong container", () => {

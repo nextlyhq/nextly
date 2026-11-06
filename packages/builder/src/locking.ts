@@ -1,41 +1,36 @@
 /**
- * Whether the editor may move or delete a block the author has locked.
+ * Whether the editor may change, move or delete a block an author has locked.
  *
- * `BlockNode.locked` is described by the engine as an author-facing policy
- * flag: *"while true, the editor command layer must not let the author move or
- * delete this node"*, and — the half that decides where this module lives —
- * *"system transforms (migrations, overlays, restore) still operate on locked
- * nodes, and the pure tree primitives do not read it."*
+ * `BlockNode.locked` is the Layers lock: while it is set, nothing changes the
+ * block or anything inside it, and the op layer refuses any op that would
+ * (`layersLockBreak` in the engine). The editor asks the same question BEFORE
+ * offering an action, so a control never offers what the apply then refuses,
+ * and the answer comes from the engine's own rule rather than a second reading
+ * of the flag here.
  *
- * So the check belongs to the COMMAND layer and nowhere below it. Putting it in
- * `applyOp` would read correctly and be wrong: a restore, a migration or an
- * agent replaying history would start refusing ops on locked nodes, and a lock
- * an author set to protect their own editing would begin blocking the system's
- * own writes.
+ * **One predicate per question, because the command layer is several places.**
+ * Delete, the keyboard moves, the toolbar, the canvas drag and the inspector
+ * each have to ask, and copies of "is this locked" agree only until one of
+ * them gains the subtree rule below.
  *
- * **One predicate, because the command layer is several places.** Delete, the
- * keyboard moves and the canvas drag each have to ask, and three copies of "is
- * this locked" agree until one of them gains the subtree rule below.
+ * ## A lock covers its subtree
  *
- * ## Moving checks the node; deleting checks the subtree
+ * A block inside a locked one is locked too, without a flag of its own: it can
+ * be neither changed nor moved out, and nothing can be added beside it. And a
+ * block HOLDING a locked one cannot be moved or deleted, because moving or
+ * deleting it takes the locked block with it, through an action aimed at
+ * something else.
  *
- * They are different questions and the difference is not a nicety.
- *
- * Moving a container that holds a locked child leaves that child exactly where
- * it was relative to its parent — same slot, same index, same neighbours — so
- * the lock is not violated and refusing would make a locked caption freeze the
- * whole section around it.
- *
- * Deleting that container DESTROYS the child. An author who locked a block and
- * then removed its container would lose the thing they locked, which is the one
- * outcome the flag exists to prevent — and it would happen through an action
- * aimed at something else, with the count in the announcement as the only clue.
+ * What stays free is the block around a locked one: a section holding a locked
+ * caption can still be restyled, because its own props are not inside the
+ * caption.
  *
  * @module locking
  */
 
 import {
   findNode,
+  lockedAncestorOf as lockedAncestorIn,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -46,9 +41,39 @@ export function isLocked(node: BlockNode): boolean {
 }
 
 /**
- * The locked node that stops this one being MOVED, or `undefined`.
+ * The nearest locked block this one sits inside, or `undefined`. The node's
+ * own flag is not read: a block inside a locked one is locked by it.
  *
- * Only the node itself, for the reason in the module docblock.
+ * The engine's answer, asked rather than restated.
+ */
+export function lockedAncestorOf(
+  document: BlockDocument,
+  id: string
+): BlockNode | undefined {
+  return lockedAncestorIn(document.nodes, id);
+}
+
+/**
+ * The locked block that stops this one being CHANGED, or `undefined`: the
+ * block itself, or a locked block it sits inside. A locked block further down
+ * does not stop it, because a block's own props are not inside its children.
+ */
+export function lockBlockingEdit(
+  document: BlockDocument,
+  id: string
+): BlockNode | undefined {
+  const node = findNode(document.nodes, id);
+  if (node === undefined) return undefined;
+  return isLocked(node) ? node : lockedAncestorOf(document, id);
+}
+
+/**
+ * The locked block that stops this one being MOVED, or `undefined`.
+ *
+ * The block itself or one inside it, outermost first, since the move would
+ * carry it; else a locked block it sits inside, since the move would take it
+ * out. The op layer refuses both, so offering either move would be offering a
+ * refusal.
  */
 export function lockBlockingMove(
   document: BlockDocument,
@@ -56,7 +81,7 @@ export function lockBlockingMove(
 ): BlockNode | undefined {
   const node = findNode(document.nodes, id);
   if (node === undefined) return undefined;
-  return isLocked(node) ? node : undefined;
+  return firstLockedIn(node) ?? lockedAncestorOf(document, id);
 }
 
 /** The first locked node in a subtree, walking outermost first. */
@@ -74,17 +99,20 @@ function firstLockedIn(node: BlockNode): BlockNode | undefined {
 /**
  * The locked node that stops this one being DELETED, or `undefined`.
  *
- * The node or anything inside it. Returns the OUTERMOST locked node rather than
- * merely reporting that one exists, because the refusal has to name something
- * an author can act on — "this section holds a locked block" is followed by
- * going and finding it, and the deepest match is the least likely to be the one
- * they meant.
+ * The node or anything inside it, else a locked block it sits inside: deleting
+ * a block out of a locked one changes what that lock protects. Returns the
+ * OUTERMOST locked node inside rather than merely reporting that one exists,
+ * because the refusal has to name something an author can act on — "this
+ * section holds a locked block" is followed by going and finding it, and the
+ * deepest match is the least likely to be the one they meant.
+ *
+ * The same answer as {@link lockBlockingMove}, asked under its own name
+ * because the verb reaches the author: callers word a refusal to delete and a
+ * refusal to move differently.
  */
 export function lockBlockingDelete(
   document: BlockDocument,
   id: string
 ): BlockNode | undefined {
-  const node = findNode(document.nodes, id);
-  if (node === undefined) return undefined;
-  return firstLockedIn(node);
+  return lockBlockingMove(document, id);
 }

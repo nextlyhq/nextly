@@ -62,6 +62,7 @@
  * @module domains/releases/apply-due-releases
  */
 
+import { getNextlyLogger } from "../../observability/logger";
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
@@ -310,9 +311,46 @@ async function stopHopelessReleases(
     const at = plannedInstants.get(id);
     return at === undefined ? undefined : { id, scheduledAt: at };
   })) {
-    blocked += (await deps.repository.blockReleases(entries)).length;
+    blocked +=
+      (await withinComponent("stop", entries, () =>
+        deps.repository.blockReleases(entries)
+      )) ?? 0;
   }
   return blocked;
+}
+
+/**
+ * One component's stop or settle, with a failure kept to that component.
+ *
+ * Each component moves in a transaction of its own, with its owners' notices
+ * and their email jobs, so a write that fails rolls back that component
+ * alone. It stays scheduled, and the next pass retries it; the documents it
+ * already wrote are marked applied, so that pass writes only what is left.
+ * Letting the failure escape would end the pass there instead, and every
+ * component after it, applied or not, would wait with it.
+ *
+ * @returns how many releases moved, or `null` when the move failed
+ */
+async function withinComponent(
+  transition: "stop" | "settle",
+  entries: readonly { id: string }[],
+  move: () => Promise<readonly string[] | number>
+): Promise<number | null> {
+  try {
+    const moved = await move();
+    return typeof moved === "number" ? moved : moved.length;
+  } catch (error) {
+    getNextlyLogger().warn({
+      kind: "release-component-transition-failed",
+      message:
+        transition === "stop"
+          ? "Releases that cannot run could not be stopped; the next pass tries again"
+          : "Releases that ran could not be marked published; the next pass tries again",
+      releaseIds: entries.map(entry => entry.id),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 /** The releases this pass proved can never be applied as they stand. */
@@ -906,7 +944,12 @@ async function dischargeSettledComponents(
       continue;
     }
     finalizedComponents += 1;
-    published += await settleComponent(deps, settleable, now, planned);
+    published +=
+      (await withinComponent(
+        "settle",
+        settleable.map(id => ({ id })),
+        () => settleComponent(deps, settleable, now, planned)
+      )) ?? 0;
   }
   return { published, undischarged };
 }

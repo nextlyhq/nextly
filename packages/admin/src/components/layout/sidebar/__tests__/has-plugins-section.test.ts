@@ -82,7 +82,7 @@ describe("hasPluginsSection", () => {
   /**
    * A collection reader whose plugins own no collection they may see has no
    * reachable destination in the panel: the overview and the per-plugin pages
-   * are both manage-settings guarded. The rail item would open an empty panel.
+   * are both guarded by the settings permissions. The rail item would open an empty panel.
    */
   it("hides it from a collection reader whose plugins expose nothing to them", () => {
     expect(

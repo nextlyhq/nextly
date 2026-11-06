@@ -18,7 +18,10 @@
 import { z } from "zod";
 
 import { SCHEMA_VERSION_SHAPE } from "../domains/schema/migrate/plugin/schema-version-shape";
-import { nextlyPluginSettings as mysqlPluginSettings } from "../schemas/plugin-settings/mysql";
+import {
+  PLUGIN_SETTING_KEY_LENGTH,
+  PLUGIN_SETTING_OWNER_LENGTH,
+} from "../schemas/plugin-settings/widths";
 
 import type { PluginDefinition } from "./plugin-context";
 import { resolutionError } from "./resolution-error";
@@ -300,19 +303,13 @@ function isGroupSchema(node: unknown): boolean {
 }
 
 /**
- * The identifier widths the settings storage declares, read from the MySQL
- * table — the bounded one of the three dialects, and therefore the ceiling a
- * portable manifest has to fit. Read as plain column properties rather than
- * restated, so a widened column loosens the refusal with it.
+ * The identifier widths the settings storage declares on MySQL — the bounded
+ * one of the three dialects, and therefore the ceiling a portable manifest has
+ * to fit. The widths the column declarations are written with, not restated,
+ * so a widened column loosens the refusal with it.
  */
-const SETTINGS_OWNER_MAX = (() => {
-  const length = (mysqlPluginSettings.owner as { length?: number }).length;
-  return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
-})();
-const SETTINGS_KEY_MAX = (() => {
-  const length = (mysqlPluginSettings.key as { length?: number }).length;
-  return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
-})();
+const SETTINGS_OWNER_MAX = PLUGIN_SETTING_OWNER_LENGTH;
+const SETTINGS_KEY_MAX = PLUGIN_SETTING_KEY_LENGTH;
 
 /**
  * Refuse settings identifiers the storage cannot hold.

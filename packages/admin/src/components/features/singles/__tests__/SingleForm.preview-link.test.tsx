@@ -2,7 +2,7 @@
  * The join between `SingleForm` and its header for the shareable link.
  *
  * The halves are covered elsewhere — `entry-address.test.tsx` pins the locale
- * outcomes and `EntrySystemHeader.preview.test.tsx` pins what the header
+ * outcomes and `DocumentBar.preview.test.tsx` pins what the header
  * renders given props — and neither sees the conjunction that consumes them.
  * The collection form has the same seam and the same tests, for the reason
  * recorded there: removing the `unresolved` guard leaves every test around the
@@ -24,20 +24,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
 
-const { headerProps, localization } = vi.hoisted(() => ({
+const { headerProps, localization, reader } = vi.hoisted(() => ({
   headerProps: vi.fn(),
   localization: { current: { defaultLocale: "en" } },
+  /** Whether the signed-in user may only read the Single. */
+  reader: { current: false },
 }));
 
-vi.mock(
-  "@admin/components/features/entries/EntryForm/EntrySystemHeader",
-  () => ({
-    EntrySystemHeader: (props: Record<string, unknown>) => {
-      headerProps(props);
-      return null;
-    },
-  })
-);
+vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
+  useUpdateAnswer: () => (reader.current ? "refused" : "allowed"),
+}));
+
+vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
+  DocumentBar: (props: Record<string, unknown>) => {
+    headerProps(props);
+    return null;
+  },
+}));
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
@@ -87,6 +91,25 @@ describe("SingleForm wires the shareable link into its header", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localization.current = { defaultLocale: "en" };
+    reader.current = false;
+  });
+
+  it("offers a user who may only read the Single neither the link nor the preview", () => {
+    // Both mint a credential the server grants only to a user who may change
+    // the Single.
+    reader.current = true;
+    renderForm();
+
+    expect(lastHeaderProps().isLinkAvailable).toBe(false);
+    expect(lastHeaderProps().onTogglePreviewPane).toBeUndefined();
+    // No document to share either, so no share popover can stay mounted.
+    expect(lastHeaderProps()).not.toHaveProperty("shareDocument");
+    // POPULATION CONTROL: the same Single offers both to one who may change it.
+    reader.current = false;
+    renderForm();
+    expect(lastHeaderProps().isLinkAvailable).toBe(true);
+    expect(lastHeaderProps().onTogglePreviewPane).toEqual(expect.any(Function));
+    expect(lastHeaderProps()).toHaveProperty("shareDocument");
   });
 
   it("offers the link once the language resolves", () => {

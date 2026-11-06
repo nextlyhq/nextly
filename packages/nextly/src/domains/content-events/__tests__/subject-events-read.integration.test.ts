@@ -338,8 +338,15 @@ async function postWithFourEvents(t: TestNextly, id?: string): Promise<string> {
     data: { ...(id === undefined ? {} : { id }), title: "one" },
   });
   const postId = (created.item as { id: string }).id;
+  // Each save names the version the one before it left.
+  let rev = String((created.item as { _rev: string })._rev);
   for (const title of ["two", "three", "four"]) {
-    await t.nextly.update({ collection: "posts", id: postId, data: { title } });
+    const updated = await t.nextly.update({
+      collection: "posts",
+      id: postId,
+      data: { title, _rev: rev },
+    });
+    rev = String((updated.item as { _rev: string })._rev);
   }
   return postId;
 }
@@ -400,7 +407,8 @@ describe.each(getConfiguredTestDialects())(
       // Refused at the collection, as its version history is: the route's own
       // gate, before the document is looked at, so it says nothing of whether
       // this document exists. The read by subject answers not found.
-      expect((await restGet(outsider, path)).status).toBe(403);
+      // Refused read as well, so answered as a missing entry is.
+      expect((await restGet(outsider, path)).status).toBe(404);
       expect(
         (
           await restGet(outsider, ["content-events"], {

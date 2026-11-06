@@ -21,7 +21,6 @@ import {
 } from "react";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
-import { ONBOARDING_STEPS_KEY } from "@admin/hooks/queries/useOnboardingSteps";
 import { ADMIN_META_KEY } from "@admin/hooks/useSchemaUpdateInvalidation";
 
 import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
@@ -108,12 +107,6 @@ export function RestartProvider({
         // which are offered. Both go stale for the same reason and neither is
         // reachable from the other's key.
         void queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
-        // And the onboarding steps, two of which are answered from the
-        // collection registry a schema apply has just moved. Invalidated here
-        // rather than only through the card's own listener, because that
-        // listener is unmounted whenever the card is not offered -- and the
-        // moment the answer changes is exactly when it is not.
-        void queryClient.invalidateQueries({ queryKey: ONBOARDING_STEPS_KEY });
       } else {
         toast.error(message ?? "Failed to apply schema changes");
       }

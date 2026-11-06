@@ -51,7 +51,10 @@ export function CopyFromLanguageDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          {/* Red: the copy overwrites what is already entered for this
+              language, with no undo here. */}
           <AlertDialogAction
+            variant="destructive"
             disabled={busy}
             onClick={e => {
               e.preventDefault();

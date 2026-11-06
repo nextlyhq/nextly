@@ -83,7 +83,10 @@ describe("core.permission", () => {
         member("comes-down", { action: "unpublish" }),
       ],
       // May publish, may not unpublish.
-      { mayPerform: async (_user, _scope, action) => action === "publish" }
+      {
+        mayPerform: async (_user, _scope, action, entryIds) =>
+          new Set(action === "publish" ? entryIds : []),
+      }
     );
     expect(found).toEqual([
       { memberId: "comes-down", code: "AUTHOR_MAY_NOT_ACT" },
@@ -91,7 +94,14 @@ describe("core.permission", () => {
   });
 
   it("asks once per author, scope and action, as the run's author", async () => {
-    const mayPerform = vi.fn(async () => true);
+    const mayPerform = vi.fn(
+      async (
+        _user: unknown,
+        _scope: unknown,
+        _action: unknown,
+        entryIds: readonly string[]
+      ) => new Set(entryIds)
+    );
     const actingAs = vi.fn(async (id: string) => ({ id, roles: ["editor"] }));
     await run(
       CORE_PERMISSION_SOURCE,
@@ -111,12 +121,14 @@ describe("core.permission", () => {
     expect(mayPerform).toHaveBeenCalledWith(
       { id: "author", roles: ["editor"] },
       expect.objectContaining({ scopeKind: "collection", scopeSlug: "posts" }),
-      "publish"
+      "publish",
+      // The group's documents together, each answered on its own.
+      ["entry-a", "entry-b"]
     );
   });
 
   it("leaves members the run cannot act for to core.author", async () => {
-    const mayPerform = vi.fn(async () => false);
+    const mayPerform = vi.fn(async () => new Set<string>());
     const found = await run(
       CORE_PERMISSION_SOURCE,
       [

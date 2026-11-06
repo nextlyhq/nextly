@@ -15,40 +15,58 @@
  * a list written here would be a second answer to a question the engine already
  * holds and the two would agree only on the day they were written.
  *
- * **Every supported property is offered, and the one-open accordion is what
- * bounds the screen.** The alternative — render only the properties that
- * already hold a value and put the rest behind an "add" menu — answers a
- * problem this layout does not have: it exists for editors that expand every
- * section at once, and here exactly one section is open. Measured against the
- * catalog, the largest group is layout at twelve scalar controls, which is a
- * panel rather than a wall. A control an author cannot see is one they cannot
- * discover, and the content tab beside this one already lists every prop a
- * block declares, including the ones it cannot draw.
+ * **The sections are the builder's, not the engine's.** The engine's groups
+ * are the `supports` vocabulary block authors declare, so they decide WHICH
+ * properties a block has; `inspector-sections.ts` decides where an author
+ * finds each one — eight sections, Layout to Effects, every property placed
+ * once. A property the table has not met yet still appears, behind "+ More"
+ * in its group's section.
+ *
+ * **Every supported property is offered; the common ones show at once.** Each
+ * property carries whether it shows without being asked for (`common`), from
+ * its tier and the block in hand. The rest wait behind the section's "+ More",
+ * which is the panel's to draw. A property holding a value here always shows.
  *
  * @module style-inspector
  */
 
 import {
+  asciiLower,
   BASE_BREAKPOINT,
+  breakpointContexts,
+  decodeIdentifier,
+  DISCLOSURE_ICON_PROPERTY,
   getBlock,
   getStyleProperty,
   STYLE_CATALOG,
-  STYLE_GROUP_DEFS,
   stylePropertiesForSupports,
+  trimCssWhitespace,
   type BlockDocument,
   type BreakpointId,
-  type StyleGroup,
+  type BreakpointSet,
+  type NodeStyles,
   type StyleState,
+  type StyleSubject,
+  type StyleTraceEntry,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
+import {
+  INSPECTOR_SECTIONS,
+  placementOf,
+  tierShows,
+  type InspectorSectionKey,
+  type TierContext,
+} from "./inspector-sections";
 import {
   styleControlsFor,
   type StyleControl,
   type StyleControlOptions,
   type StyleControlVariants,
 } from "./style-controls";
+import { styleProvenance } from "./style-provenance";
 import { readStyleValue } from "./style-values";
 
 /** Which state × breakpoint the panel reads and writes, and what the site is. */
@@ -81,6 +99,32 @@ export interface StyleInspectionOptions extends StyleControlOptions {
    * apply at every width, not a narrow band an author never chose.
    */
   readonly breakpoint?: BreakpointId;
+  /**
+   * Whether the block renders a replaced element (an image, a video, an
+   * embed), which is where the media fit properties show without being asked
+   * for. The canvas knows what a block renders as; the document does not.
+   */
+  readonly media?: boolean;
+  /**
+   * The styles the controls read, when they are not the node's own: a shared
+   * style the block wears, chosen as the target. The node's own otherwise.
+   */
+  readonly styles?: NodeStyles;
+  /**
+   * The site's breakpoints, so the display a tier is judged by can be read
+   * through the wider tiers that also apply at this one. Without them only
+   * this tier and the unconditional one are read.
+   */
+  readonly breakpoints?: BreakpointSet;
+  /**
+   * The page's compiled cascade and the node in it, so the display a tier is
+   * judged by includes what a class or the block's own defaults set, not just
+   * the node's stored styles. Without it only the node's own values are read.
+   */
+  readonly cascade?: {
+    readonly trace: readonly StyleTraceEntry[];
+    readonly subject: StyleSubject;
+  };
 }
 
 /** One catalog property as the Style tab offers it. */
@@ -118,13 +162,21 @@ export interface InspectedStyleProperty {
    * it more than they need it hidden.
    */
   readonly offered: boolean;
+  /**
+   * Whether it shows without being asked for: its tier holds for this block,
+   * or it holds a value here. False puts it behind its section's "+ More".
+   */
+  readonly common: boolean;
 }
 
-/** One accordion section: a catalog group, and the properties this block has in it. */
+/** One section of the Style tab, and the properties this block has in it. */
 export interface StyleSection {
-  readonly group: StyleGroup;
+  readonly key: InspectorSectionKey;
   readonly label: string;
-  /** Never empty — a group this block supports nothing in is not a section. */
+  /**
+   * In the placement table's order. Never empty — a section this block has
+   * nothing in is not drawn.
+   */
   readonly properties: readonly InspectedStyleProperty[];
 }
 
@@ -134,13 +186,20 @@ export interface StyleInspection {
   readonly state: StyleState;
   readonly breakpoint: BreakpointId;
   /**
-   * Sections in the catalog's own order, each holding at least one property.
+   * Sections in the builder's order, Layout to Effects, each holding at least
+   * one property.
    *
    * Empty for a block that opts into no style groups at all, which is a real
    * answer rather than a failure: the panel says the block offers none, exactly
    * as the content tab says when a block declares no props.
    */
   readonly sections: readonly StyleSection[];
+  /**
+   * The `object-fit` keyword in force here, lowercased, or `undefined` when
+   * nothing sets one: what decides whether the focal point shows, and what it
+   * says it does.
+   */
+  readonly objectFit?: string | undefined;
 }
 
 /**
@@ -163,6 +222,9 @@ export function inspectStyle(
   const node = selectedNode(document, selectedId);
   if (node === null) return null;
   const definition = getBlock(node.type);
+  // The envelope every control below reads: the target's, which is the
+  // node's own unless a shared style is being edited.
+  const styles = options?.styles ?? node.styles;
 
   const state = options?.state ?? "base";
   const breakpoint = options?.breakpoint ?? BASE_BREAKPOINT;
@@ -191,7 +253,7 @@ export function inspectStyle(
   const allowed = new Set(offered);
   for (const entry of STYLE_CATALOG) {
     if (allowed.has(entry.property)) continue;
-    const stored = readStyleValue(node.styles, {
+    const stored = readStyleValue(styles, {
       state,
       breakpoint,
       property: entry.property,
@@ -200,48 +262,174 @@ export function inspectStyle(
     if (stored !== undefined) allowed.add(entry.property);
   }
 
+  const at = {
+    state,
+    breakpoint,
+    breakpoints: options?.breakpoints,
+    cascade: options?.cascade,
+  };
+  const tiers: TierContext = {
+    display: cascadedKeyword(styles, at, "display", "display"),
+    media: options?.media === true,
+    objectFit: cascadedKeyword(styles, at, "object-fit", "objectFit"),
+    // Read as the engine reads the keyword, escapes and all, so the icon a
+    // page draws is the one the tier judges.
+    disclosureIcon: keywordIdentity(
+      cascadedKeyword(styles, at, DISCLOSURE_ICON_PROPERTY, "disclosureIcon")
+    ),
+    state,
+  };
+  const inspected = [...allowed].map(property => {
+    const entry = getStyleProperty(property);
+    const placement = placementOf(property, entry?.group ?? "effects");
+    const row = inspectProperty(property, styles, offered.has(property), {
+      ...options,
+      state,
+      breakpoint,
+    });
+    return {
+      placement,
+      row: { ...row, common: row.set || tierShows(placement.tier, tiers) },
+    };
+  });
   const sections: StyleSection[] = [];
-  for (const group of STYLE_GROUP_DEFS) {
-    const properties = propertiesInGroup(allowed, group.key).map(property =>
-      inspectProperty(property, node.styles, offered.has(property), {
-        ...options,
-        state,
-        breakpoint,
-      })
-    );
-    // A group the block supports nothing in is not a section. Rendering an
-    // empty accordion would offer an author somewhere to click that opens onto
-    // nothing, and every block would show all eleven headings whatever it does.
+  for (const section of INSPECTOR_SECTIONS) {
+    const properties = inspected
+      .filter(each => each.placement.section === section.key)
+      .sort((a, b) => a.placement.order - b.placement.order)
+      .map(each => each.row);
+    // A section the block has nothing in is not drawn. Rendering an empty one
+    // would offer an author somewhere to click that opens onto nothing.
     if (properties.length > 0) {
-      sections.push({ group: group.key, label: group.label, properties });
+      sections.push({ key: section.key, label: section.label, properties });
     }
   }
 
-  return { nodeId: node.id, state, breakpoint, sections };
+  return {
+    nodeId: node.id,
+    state,
+    breakpoint,
+    sections,
+    ...(tiers.objectFit === undefined ? {} : { objectFit: tiers.objectFit }),
+  };
+}
+
+/** A keyword as the engine identifies it: trimmed, unescaped, lowercased. */
+function keywordIdentity(value: string | undefined): string | undefined {
+  return value === undefined
+    ? undefined
+    : asciiLower(decodeIdentifier(trimCssWhitespace(value)));
 }
 
 /**
- * The allowed properties of one group, in the CATALOG's order.
+ * The keyword a property takes at this address, lowercased: the display that
+ * decides the flex and grid tiers, the fit that decides the focal point's.
  *
- * Read off `STYLE_CATALOG` rather than off the allowed set. A `Set` iterates in
- * insertion order, and the set above is built in two passes — everything the
- * block supports, then anything it merely retains — so a group holding both
- * listed the supported one first however the catalog declares them. Measured:
- * a block supporting `border: { radius: true }` while still storing `border`
- * listed `borderRadius, border` where the catalog says `border, borderRadius`.
+ * Asked of the compiled cascade when there is one, through the same ranking
+ * the provenance dots use: a class or the block's defaults can make a block a
+ * flex container, or give an image its fit, without the node storing it. The live tiers are
+ * the ones that apply at the edited tier, and the live state is the edited one
+ * (base always matches as well).
+ *
+ * Without a cascade it reads what the node stores, the way the cascade would:
+ * this state at this tier, then at each wider tier, then the base state the
+ * same way. A state rule outranks a breakpoint rule (its pseudo-class is more
+ * specific), so the whole state comes first.
  */
-function propertiesInGroup(
-  allowed: ReadonlySet<string>,
-  group: StyleGroup
-): readonly string[] {
-  const rows: string[] = [];
-  for (const entry of STYLE_CATALOG) {
-    if (entry.group === group && allowed.has(entry.property)) {
-      rows.push(entry.property);
+function cascadedKeyword(
+  styles: Parameters<typeof readStyleValue>[0],
+  at: {
+    state: StyleState;
+    breakpoint: BreakpointId;
+    breakpoints: BreakpointSet | undefined;
+    cascade: StyleInspectionOptions["cascade"];
+  },
+  cssProperty: string,
+  property: string
+): string | undefined {
+  const tiers = tiersFrom(at.breakpoint, at.breakpoints);
+  if (at.cascade !== undefined) {
+    const shown = styleProvenance({
+      trace: at.cascade.trace,
+      subject: at.cascade.subject,
+      cssProperty,
+      state: at.state,
+      breakpoint: at.breakpoint,
+      liveBreakpoints: tiers,
+      liveStates: [at.state],
+    });
+    return shown.kind === "unset"
+      ? undefined
+      : shown.entry.value.trim().toLowerCase();
+  }
+  const states: StyleState[] =
+    at.state === "base" ? ["base"] : [at.state, "base"];
+  for (const atState of states) {
+    for (const atBreakpoint of tiers) {
+      const value = readStyleValue(styles, {
+        state: atState,
+        breakpoint: atBreakpoint,
+        property,
+        path: [],
+      });
+      if (typeof value === "string") return value.trim().toLowerCase();
     }
   }
-  return rows;
+  return undefined;
 }
+
+/**
+ * The tiers whose rules apply at the edited one, the one that wins first.
+ *
+ * WHICH tiers is the shared resolver's answer (`liveBreakpointsFor`), the one
+ * the provenance dots use, so an axis's unbounded container tier is included
+ * exactly where the compiler applies it. The ORDER is the compiler's own
+ * emission order, reversed: `breakpointContexts` lists the contexts in cascade
+ * order, where a later rule wins over an earlier one of the same specificity,
+ * so the walk over a node's own values meets the winner first. Two tiers with
+ * no upper bound (the unconditional one and a container axis's unbounded one)
+ * are then ordered as the stylesheet orders them, not as equals.
+ */
+function tiersFrom(
+  breakpoint: BreakpointId,
+  breakpoints: BreakpointSet | undefined
+): BreakpointId[] {
+  const emitted = new Map(
+    breakpointContexts(breakpoints).map((context, index) => [context.id, index])
+  );
+  // An id the compiler does not emit sorts last: nothing it holds applies.
+  const positionOf = (id: BreakpointId) => emitted.get(id) ?? -1;
+  return liveBreakpointsFor(breakpoints, breakpoint).sort(
+    (a, b) => positionOf(b) - positionOf(a)
+  );
+}
+
+/**
+ * Labels other than the property's name: shorter, where the name is cut short
+ * in the Style tab's 7rem label column ("Justify content" read "Justify
+ * cont…"), Webflow's and Figma's words for the same two controls; or plainer,
+ * where the name says how CSS does it rather than what it is.
+ */
+const SHORT_LABELS: Readonly<Record<string, string>> = {
+  justifyContent: "Justify",
+  alignItems: "Align",
+  textTransform: "Letter case",
+  objectFit: "Fit",
+  // Which part of the picture stays in view: what an author is choosing.
+  objectPosition: "Focal point",
+  // In an Accordion's own Icon section, where "Disclosure" says nothing an
+  // author does not already see.
+  disclosureIcon: "Icon",
+  disclosurePosition: "Position",
+};
+
+/**
+ * What a property's label says on hover, where the inspector edits it on
+ * another scale than the catalog describes: opacity is a percent here.
+ */
+const SUMMARIES: Readonly<Record<string, string>> = {
+  opacity: "How solid the element is, from 0 (clear) to 100 percent.",
+};
 
 /** One property's controls and the value they are showing. */
 function inspectProperty(
@@ -252,7 +440,7 @@ function inspectProperty(
     state: StyleState;
     breakpoint: BreakpointId;
   }
-): InspectedStyleProperty {
+): Omit<InspectedStyleProperty, "common"> {
   // Present by construction: the name came out of `stylePropertiesForSupports`,
   // which reads the same catalog. Asked again rather than threaded through so
   // this function takes a name, which is what makes it callable from a test
@@ -274,10 +462,15 @@ function inspectProperty(
     // told only the path would answer for whichever asked first.
     variantAt: path => options.variantAt?.(property, path),
   });
+  const short = SHORT_LABELS[property];
   return {
     property,
-    label: fieldLabel(property),
-    summary: entry.summary,
+    label: short ?? fieldLabel(property),
+    // A shortened label keeps the property's CSS name in its tooltip.
+    summary:
+      short === undefined
+        ? (SUMMARIES[property] ?? entry.summary)
+        : `${fieldLabel(property)}: ${SUMMARIES[property] ?? entry.summary}`,
     controls: set.controls,
     variants: set.variants,
     value,

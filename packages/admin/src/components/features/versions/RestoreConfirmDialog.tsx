@@ -38,6 +38,13 @@ export interface RestoreConfirmDialogProps {
    */
   unsavedChanges?: boolean;
   /**
+   * Whether the version held fields back from this reader. A restore never
+   * writes a field its restorer may not read, so those keep their current
+   * values, and the author is told so before confirming rather than taking
+   * the version on screen for everything that comes back.
+   */
+  hasWithheldFields?: boolean;
+  /**
    * A transient reason the confirm action is disabled — a refusal that
    * arrived after the dialog opened. The action stays visible so the
    * refusal's reason is still on screen behind it, but cannot be fired.
@@ -53,6 +60,7 @@ export function RestoreConfirmDialog({
   versionNo,
   isPublished = false,
   unsavedChanges = false,
+  hasWithheldFields = false,
   confirmDisabled = false,
   onConfirm,
   isRestoring = false,
@@ -78,6 +86,12 @@ export function RestoreConfirmDialog({
                 Values that were never stored in a version, such as passwords,
                 are left as they are.
               </p>
+              {hasWithheldFields ? (
+                <p>
+                  Fields you don&apos;t have access to in this version are not
+                  restored and keep their current values.
+                </p>
+              ) : null}
               {unsavedChanges ? (
                 <p className="font-medium text-foreground">
                   The editor has unsaved changes that this restore will discard.

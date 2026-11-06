@@ -113,17 +113,6 @@ export { LocalStorageAdapter } from "./adapters/local-adapter";
 export type { LocalStorageConfig } from "./adapters/local-types";
 
 // ============================================================
-// Image Size Generation
-// ============================================================
-
-export { generateImageSizes, deleteImageSizes } from "./image-sizes";
-export type {
-  ImageSizeConfig,
-  GenerateImageSizesOptions,
-  UploadFn,
-} from "./image-sizes";
-
-// ============================================================
 // Retry Utilities
 // ============================================================
 

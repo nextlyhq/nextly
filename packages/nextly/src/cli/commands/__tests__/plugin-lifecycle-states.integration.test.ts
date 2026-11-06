@@ -10,25 +10,44 @@
  * - an install, a full uninstall and a reinstall that reads and writes its
  *   table again;
  * - an uninstall keeping data, and a reinstall that finds the rows;
+ * - a full uninstall refused while the database still holds another owner's
+ *   earlier definitions, built by the production DDL, that use the plugin's
+ *   schema though their current declarations do not;
  * - a full uninstall stopped after its first committed drop, which the boot
  *   refuses until the uninstall is run again and finishes.
  */
+import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
+import { canPrompt } from "../../../domains/schema/migrate/can-prompt";
+import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import {
+  countDeletions,
+  NO_CONSENT,
+  resolveDataLossConsent,
+  type DataLossConsent,
+} from "../../../domains/schema/migrate/data-loss-consent";
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
+import type {
+  Operation,
+  TableSpec,
+} from "../../../domains/schema/pipeline/diff/types";
+import { MYSQL_MIGRATE_LOCK_NAME } from "../../../domains/schema/pipeline/locks";
+import { generateStatements } from "../../../domains/schema/pipeline/sql-templates";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
+import { pluginSettingsTables } from "../../../schemas/plugin-settings";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import {
@@ -46,6 +65,8 @@ const run = vi.hoisted(() => ({
     transaction: (...args: never[]) => Promise<unknown>;
   },
   plugin: undefined as unknown,
+  /** Plugins configured beside it. */
+  others: [] as unknown[],
   /** Runs after each adapter transaction commits, when set. */
   afterTransaction: undefined as (() => Promise<void>) | undefined,
 }));
@@ -54,7 +75,7 @@ vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => {
     const config = {
       db: { migrationsDir: "./migrations" },
-      plugins: [run.plugin],
+      plugins: [run.plugin, ...run.others],
     };
     return { config, appConfig: config, pluginConsent: undefined };
   },
@@ -79,7 +100,19 @@ vi.mock("../../utils/adapter", () => ({
     }),
 }));
 
+/** The data-loss consent given without targets, as `--accept-data-loss` alone gives it. */
+const EVERY_DELETION = resolveDataLossConsent({ flag: true, env: {} });
+
 const PLUGIN = "@acme/lc";
+
+/** What these tests need from a Drizzle handle to write and read settings. */
+interface SettingsInsertDb {
+  insert(table: unknown): {
+    values(row: Record<string, unknown>): Promise<unknown>;
+  };
+  select(): { from(table: unknown): Promise<unknown> };
+}
+
 const context = {
   logger: createLogger({ quiet: true }),
 } as unknown as CommandContext;
@@ -92,6 +125,60 @@ const tags = defineTable("tags", {
   id: col.id(),
   label: col.shortText({ nullable: true }),
 });
+
+const AU = "@acme/au";
+
+/**
+ * Another plugin's tables as its code declares them now: an index and a
+ * check on `title`, and a key into its own `au__targets`.
+ */
+const auPosts = defineTable(
+  "posts",
+  { id: col.id(), title: col.shortText({ nullable: true }) },
+  {
+    indexes: [{ columns: ["title"] }],
+    checks: [{ name: "lookup", sql: "title <> ''" }],
+  }
+);
+const auTargets = defineTable("targets", { id: col.id() });
+const auLinks = defineTable(
+  "links",
+  { id: col.id(), noteId: col.shortText({ nullable: true }) },
+  {
+    foreignKeys: [
+      {
+        columns: ["noteId"],
+        references: { table: "au__targets", columns: ["id"] },
+      },
+    ],
+  }
+);
+const auPlugin = {
+  name: AU,
+  version: "1.0.0",
+  contributes: {
+    schema: { prefix: "au", tables: [auPosts, auTargets, auLinks] },
+  },
+};
+
+/** One of au's tables compiled for `dialect` by the real builder. */
+async function auSpec(dialect: Dialect, name: string): Promise<TableSpec> {
+  const built = await buildExtensionSchema({
+    dialect,
+    coreTableNames: CORE_TABLE_NAMES,
+    entities: [],
+    pluginPrefixes: new Map([[AU, "au"]]),
+    plugins: [
+      {
+        owner: { kind: "plugin", id: AU },
+        tables: [auPosts, auTargets, auLinks],
+      },
+    ],
+  });
+  const spec = built.specs.find(candidate => candidate.name === name);
+  if (!spec) throw new Error(`${name} was not compiled`);
+  return spec;
+}
 
 /** The plugin's tables compiled for every dialect by the real builder. */
 async function tablesByDialect(tables: ReturnType<typeof defineTable>[]) {
@@ -153,6 +240,7 @@ describe.each(getConfiguredTestDialects())(
       run.dialect = dialect;
       run.adapter = handle.adapter as unknown as typeof run.adapter;
       run.afterTransaction = undefined;
+      run.others = [];
       run.plugin = {
         name: PLUGIN,
         version: "1.0.0",
@@ -168,7 +256,11 @@ describe.each(getConfiguredTestDialects())(
 
     const install = () => runPluginInstall(PLUGIN, {}, context);
     const uninstall = (keepData: boolean) =>
-      runPluginUninstall(PLUGIN, { keepData, yes: true }, context);
+      runPluginUninstall(
+        PLUGIN,
+        { keepData, yes: false, consent: EVERY_DELETION },
+        context
+      );
 
     /** The boot's gate over this database, as a production boot runs it. */
     const boot = () =>
@@ -195,9 +287,18 @@ describe.each(getConfiguredTestDialects())(
      */
     async function endStoppedProcess(): Promise<void> {
       if (dialect !== "mysql") return;
-      const [held] = (await handle.adapter.executeQuery(
-        "SELECT IS_USED_LOCK('nextly:migrate') AS holder"
-      )) as Array<{ holder: number | null }>;
+      const db = handle.adapter.getDrizzle<{
+        execute: (q: unknown) => Promise<unknown>;
+      }>();
+      const result = await db.execute(
+        sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS holder`
+      );
+      // mysql2 answers [rows, fields].
+      const [held] = (
+        Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result
+      ) as Array<{
+        holder: number | null;
+      }>;
       if (held?.holder) {
         await handle.adapter.executeQuery(`KILL ${String(held.holder)}`);
       }
@@ -205,6 +306,42 @@ describe.each(getConfiguredTestDialects())(
 
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    /** Runs the production DDL for `ops` against the test's database. */
+    async function applyDdl(
+      ops: Operation[],
+      tables: TableSpec[]
+    ): Promise<void> {
+      for (const statement of generateStatements(ops, dialect, tables)) {
+        for (const one of splitSqlStatements(statement, dialect)) {
+          await handle.adapter.executeQuery(one);
+        }
+      }
+    }
+
+    /** Records `rows` as owned, each by the plugin named. */
+    async function recordOwned(
+      rows: Array<{
+        owner: string;
+        table: string;
+        kind: "table" | "column" | "index" | "fk" | "check";
+        name: string;
+      }>
+    ): Promise<void> {
+      await new SchemaOwnersRepository(db(), dialect).upsert(
+        rows.map(row => ({
+          tableName: row.table,
+          elementKind: row.kind,
+          elementName: row.kind === "table" ? "" : row.name,
+          ownerKind: "plugin" as const,
+          ownerId: row.owner,
+          migratedBy: `plugin:${row.owner}`,
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active" as const,
+        }))
+      );
+    }
 
     async function writeNote(id: string): Promise<void> {
       await handle.adapter.executeQuery(
@@ -234,11 +371,38 @@ describe.each(getConfiguredTestDialects())(
     it("drops its tables on a full uninstall, refuses the boot, and reinstalls to tables it reads and writes", async () => {
       await install();
       await writeNote("before");
+      const { nextlyPluginSettings } = pluginSettingsTables(dialect);
+      await (db() as unknown as SettingsInsertDb)
+        .insert(nextlyPluginSettings)
+        .values({
+          owner: PLUGIN,
+          key: "apiKey",
+          value: '"secret"',
+          isSecret: true,
+          updatedAt: new Date(),
+        });
 
       await uninstall(false);
 
       expect(await exists("lc__notes")).toBe(false);
       expect(await exists("lc__tags")).toBe(false);
+      // Forgotten whole: no settings, owner rows or migration rows left, so
+      // the reinstall below applies every module from the first.
+      const settings = (await (db() as unknown as SettingsInsertDb)
+        .select()
+        .from(nextlyPluginSettings)) as Array<{ owner: string }>;
+      expect(settings.filter(row => row.owner === PLUGIN)).toEqual([]);
+      const owners = await new SchemaOwnersRepository(db(), dialect).read();
+      expect(owners.filter(row => row.ownerId === PLUGIN)).toEqual([]);
+      const applies = await new SchemaEventsRepository(
+        db(),
+        dialect
+      ).listFileApplies();
+      expect(
+        applies.filter(row =>
+          String(row.filename ?? "").startsWith(`plugin:${PLUGIN}/`)
+        )
+      ).toEqual([]);
       await expect(boot()).rejects.toMatchObject({
         code: "PLUGIN_SCHEMA_UNINSTALLED",
       });
@@ -249,6 +413,199 @@ describe.each(getConfiguredTestDialects())(
       await writeNote("after");
       expect(await noteIds()).toEqual(["after"]);
       await expect(boot()).resolves.toBeUndefined();
+    });
+
+    it("refuses a full uninstall while the app's index is on one of its tables, and drops nothing", async () => {
+      await install();
+      await new SchemaOwnersRepository(db(), dialect).upsert([
+        {
+          tableName: "lc__notes",
+          elementKind: "index",
+          elementName: "app_idx_on_notes",
+          ownerKind: "app",
+          ownerId: "app",
+          migratedBy: "app",
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active",
+        },
+      ]);
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+        publicMessage: expect.stringContaining("app_idx_on_notes"),
+      });
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
+      await expect(boot()).resolves.toBeUndefined();
+    });
+
+    it("refuses a full uninstall while a key nothing declares points into one of its tables, and drops nothing", async () => {
+      await install();
+      // The app's key into lc__notes, its declaration removed from code and
+      // never migrated away. Its column takes lc__notes.id's own type.
+      if (dialect === "sqlite") {
+        await handle.adapter.executeQuery(
+          `CREATE TABLE ${q("app_links")} (${q("note_id")} TEXT, CONSTRAINT ${q("fk_app_links_note")} FOREIGN KEY (${q("note_id")}) REFERENCES ${q("lc__notes")} (${q("id")}))`
+        );
+      } else {
+        await handle.adapter.executeQuery(
+          `CREATE TABLE ${q("app_links")} AS SELECT ${q("id")} AS ${q("note_id")} FROM ${q("lc__notes")} WHERE 1 = 0`
+        );
+        await handle.adapter.executeQuery(
+          `ALTER TABLE ${q("app_links")} ADD CONSTRAINT ${q("fk_app_links_note")} FOREIGN KEY (${q("note_id")}) REFERENCES ${q("lc__notes")} (${q("id")})`
+        );
+      }
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+        publicMessage: expect.stringContaining("fk_app_links_note"),
+      });
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
+      await expect(boot()).resolves.toBeUndefined();
+    });
+
+    it("refuses a full uninstall while the database's index and check on another owner's table still use a column it added, though their declarations do not", async () => {
+      await install();
+      const posts = await auSpec(dialect, "au__posts");
+      const title = posts.columns.find(column => column.name === "title");
+      const [index] = posts.indexes ?? [];
+      const [check] = posts.checks ?? [];
+      if (!title || !index || !check) throw new Error("au__posts incomplete");
+      // What the database holds: au's earlier index and check, over the
+      // column lc added to au's table, never migrated to the ones au's code
+      // declares now.
+      const live: TableSpec = {
+        ...posts,
+        columns: [...posts.columns, { ...title, name: "lc_flag" }],
+        indexes: [],
+        checks: [{ ...check, sql: check.sql.replace(/title/g, "lc_flag") }],
+      };
+      await applyDdl(
+        [
+          { type: "add_table", table: live },
+          {
+            type: "add_index",
+            tableName: live.name,
+            index: { ...index, columns: ["lc_flag"] },
+          },
+        ],
+        [{ ...live, indexes: [{ ...index, columns: ["lc_flag"] }] }]
+      );
+      await recordOwned([
+        { owner: AU, table: live.name, kind: "table", name: "" },
+        { owner: AU, table: live.name, kind: "index", name: index.name },
+        { owner: AU, table: live.name, kind: "check", name: check.name },
+        { owner: PLUGIN, table: live.name, kind: "column", name: "lc_flag" },
+      ]);
+      run.others = [auPlugin];
+
+      const refusal: unknown = await uninstall(false).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refusal).toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+      });
+      const drifted = `(plugin "${AU}", which in the database still uses column "lc_flag", though its declaration does not)`;
+      const { publicMessage } = refusal as { publicMessage: string };
+      expect(publicMessage).toContain(
+        `index "${index.name}" on au__posts ${drifted}`
+      );
+      expect(publicMessage).toContain(
+        `check "${check.name}" on au__posts ${drifted}`
+      );
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
+    });
+
+    it("refuses a full uninstall while a key declared by its name still points into one of its tables in the database, though its declaration points elsewhere", async () => {
+      await install();
+      const links = await auSpec(dialect, "au__links");
+      const [key] = links.foreignKeys ?? [];
+      if (!key) throw new Error("au__links has no key");
+      // What the database holds: au's key as it was before its declaration
+      // was retargeted to au__targets, never migrated.
+      const live: TableSpec = {
+        ...links,
+        foreignKeys: [
+          { ...key, referencesTable: "lc__notes", referencesColumns: ["id"] },
+        ],
+      };
+      await applyDdl([{ type: "add_table", table: live }], [live]);
+      await recordOwned([
+        { owner: AU, table: live.name, kind: "table", name: "" },
+      ]);
+      run.others = [auPlugin];
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+        publicMessage: expect.stringContaining(
+          `foreign key "${key.name}" on au__links (plugin "${AU}", declared to reference "au__targets" (id), while the key the database holds references "lc__notes" (id))`
+        ),
+      });
+
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await exists("lc__tags")).toBe(true);
+    });
+
+    it("keeps its records while an index it added to the app's table survives its DOWNs, and forgets it once that is dropped", async () => {
+      await install();
+      // An index on the app's table recorded as the plugin's, which none of
+      // its DOWNs drops.
+      await handle.adapter.executeQuery(
+        `CREATE TABLE ${q("app_posts")} (${q("id")} VARCHAR(36))`
+      );
+      await handle.adapter.executeQuery(
+        `CREATE INDEX ${q("lc_idx_on_posts")} ON ${q("app_posts")} (${q("id")})`
+      );
+      await new SchemaOwnersRepository(db(), dialect).upsert([
+        {
+          tableName: "app_posts",
+          elementKind: "index",
+          elementName: "lc_idx_on_posts",
+          ownerKind: "plugin",
+          ownerId: PLUGIN,
+          migratedBy: `plugin:${PLUGIN}`,
+          ownerVersion: null,
+          schemaVersion: null,
+          state: "active",
+        },
+      ]);
+      const pluginOwnerRows = async () =>
+        (await new SchemaOwnersRepository(db(), dialect).read()).filter(
+          row => row.ownerId === PLUGIN
+        );
+
+      await expect(uninstall(false)).rejects.toMatchObject({
+        code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+        logContext: expect.objectContaining({
+          reason: "elements-left-by-down",
+        }),
+      });
+      await endStoppedProcess();
+
+      // Its tables went; the record of the index it left did not.
+      expect(await exists("lc__notes")).toBe(false);
+      expect((await pluginOwnerRows()).map(row => row.elementName)).toContain(
+        "lc_idx_on_posts"
+      );
+
+      await handle.adapter.executeQuery(
+        dialect === "mysql"
+          ? `DROP INDEX ${q("lc_idx_on_posts")} ON ${q("app_posts")}`
+          : `DROP INDEX ${q("lc_idx_on_posts")}`
+      );
+      await uninstall(false);
+
+      expect(await pluginOwnerRows()).toEqual([]);
+      await expect(boot()).rejects.toMatchObject({
+        code: "PLUGIN_SCHEMA_UNINSTALLED",
+      });
     });
 
     it("keeps its tables and rows on an uninstall keeping data, refuses the boot, and reinstalls over them", async () => {
@@ -266,6 +623,102 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await noteIds()).toEqual(["kept"]);
       await expect(boot()).resolves.toBeUndefined();
+    });
+
+    describe("and the data-loss consent", () => {
+      const uninstallWith = (consent: DataLossConsent) =>
+        runPluginUninstall(
+          PLUGIN,
+          { keepData: false, yes: false, consent },
+          context
+        );
+      const refusalOf = (consent: DataLossConsent) =>
+        uninstallWith(consent).then(
+          () => {
+            throw new Error("the uninstall was not refused");
+          },
+          (error: unknown) => error as { code: string; publicMessage: string }
+        );
+
+      /** The database as an uninstall that changed nothing leaves it. */
+      async function expectUnchanged(notes: string[]): Promise<void> {
+        expect(await exists("lc__notes")).toBe(true);
+        expect(await exists("lc__tags")).toBe(true);
+        expect((await noteIds()).sort()).toEqual(notes);
+        // Still recorded installed: the boot's gate lets it through.
+        await expect(boot()).resolves.toBeUndefined();
+      }
+
+      it("with no terminal and no consent, changes nothing, names the tables with their rows, and ends promptly", async () => {
+        // The run has no terminal to ask, which is what is under test.
+        expect(canPrompt()).toBe(false);
+        await install();
+        await writeNote("a");
+        await writeNote("b");
+
+        const started = Date.now();
+        const refusal = await refusalOf(NO_CONSENT);
+        expect(Date.now() - started).toBeLessThan(10_000);
+
+        expect(refusal.code).toBe("PLUGIN_UNINSTALL_UNCONFIRMED");
+        expect(refusal.publicMessage).toContain("table lc__notes (2 rows)");
+        expect(refusal.publicMessage).toContain("table lc__tags (0 rows)");
+        expect(refusal.publicMessage).toMatch(
+          /--accept-data-loss=(lc__notes,lc__tags|lc__tags,lc__notes)/
+        );
+        await expectUnchanged(["a", "b"]);
+      });
+
+      it("applies nothing when the consent names one of its two tables, naming the other", async () => {
+        await install();
+        await writeNote("a");
+
+        const refusal = await refusalOf(
+          resolveDataLossConsent({ flag: "lc__notes", env: {} })
+        );
+
+        expect(refusal.code).toBe("PLUGIN_UNINSTALL_UNCONFIRMED");
+        expect(refusal.publicMessage).toMatch(
+          /does not cover 1 deletion:\n {2}- table lc__tags/
+        );
+        await expectUnchanged(["a"]);
+      });
+
+      it("removes both tables with consent naming them", async () => {
+        await install();
+        await writeNote("a");
+
+        await uninstallWith(
+          resolveDataLossConsent({ flag: "lc__notes,lc__tags", env: {} })
+        );
+
+        expect(await exists("lc__notes")).toBe(false);
+        expect(await exists("lc__tags")).toBe(false);
+      });
+
+      it("counts a table's rows and a column's non-empty values for the listing", async () => {
+        await install();
+        await writeNote("a");
+        await writeNote("b");
+        // A row with no body: counted among the table's rows, not the column's values.
+        await handle.adapter.executeQuery(
+          `INSERT INTO ${q("lc__notes")} (${q("id")}) VALUES ('c')`
+        );
+
+        const counted = await countDeletions(
+          [
+            { kind: "table", table: "lc__notes" },
+            { kind: "column", table: "lc__notes", column: "body" },
+            { kind: "rows", table: "lc__notes" },
+          ],
+          db(),
+          dialect
+        );
+
+        expect(counted.map(d => ("count" in d ? d.count : undefined))).toEqual([
+          3, 2, 3,
+        ]);
+      });
     });
 
     it("refuses the boot after an uninstall stopped at its first committed drop, and finishes when run again", async () => {

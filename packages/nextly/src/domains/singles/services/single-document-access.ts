@@ -34,8 +34,12 @@ import {
   withRuleLanguage,
 } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import { getService } from "../../../di";
-import { NextlyError } from "../../../errors/nextly-error";
+import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import type { UserContext } from "../types";
 
 import { checkSingleAccess } from "./single-query-service";
@@ -79,19 +83,24 @@ export interface SingleAccessSubject {
  * apart would report whether a Single exists to a caller who may not see it.
  * Anything else is the read FAILING rather than refusing, and returning `false`
  * for it would turn an outage into a permission denial that looks deliberate.
+ * It keeps the code the read answered with — a Single its database has not
+ * been migrated for says so — rebuilt by the shared converter, as the
+ * collection preview probe rebuilds its read's answer.
  */
 function readVerdict(result: {
   success: boolean;
   statusCode: number;
+  code?: string;
+  message?: string;
+  messageKey?: string;
+  publicData?: unknown;
 }): boolean {
   if (result.success) return true;
   if (result.statusCode === 403 || result.statusCode === 404) return false;
-  throw NextlyError.internal({
-    logContext: {
-      reason: "single-access-probe-failed",
-      statusCode: result.statusCode,
-    },
-  });
+  throw errorFromServiceEnvelope(
+    { ...result, message: result.message ?? "Single access read failed" },
+    { reason: "single-access-probe-failed" }
+  );
 }
 
 /**
@@ -196,11 +205,7 @@ async function storedSingleDocumentAllows(
   const record = await registry.getSingleBySlug(slug);
   if (!record?.tableName) return false;
 
-  const adapter = getService("adapter");
-  const document = await adapter.selectOne<Record<string, unknown>>(
-    record.tableName,
-    {}
-  );
+  const document = await storedRow(slug, record.tableName);
   if (!document) return false;
 
   // The gate reads no row, so where a language is named it is told that one,
@@ -247,7 +252,31 @@ export async function resolveSingleDocumentId(
   const record = await registry.getSingleBySlug(slug);
   if (!record?.tableName) return null;
 
-  const adapter = getService("adapter");
-  const row = await adapter.selectOne<{ id?: unknown }>(record.tableName, {});
+  const row = await storedRow(slug, record.tableName);
   return typeof row?.id === "string" ? row.id : null;
+}
+
+/**
+ * The Single's stored row, read through the adapter so asking creates nothing.
+ *
+ * A table or column its database has not been migrated for is answered as the
+ * Single's read answers it, naming the Single and the reason only: these
+ * checks serve version, preview and event routes, whose callers are not
+ * trusted with the schema's physical names.
+ */
+async function storedRow(
+  slug: string,
+  tableName: string
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await getService("adapter").selectOne<Record<string, unknown>>(
+      tableName,
+      {}
+    );
+  } catch (error) {
+    throw await asNotMigrated(
+      error,
+      singleNotMigrated(getService("singleRegistryService"), slug)
+    );
+  }
 }

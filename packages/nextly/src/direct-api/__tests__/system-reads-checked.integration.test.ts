@@ -6,7 +6,7 @@
  * as the REST routes judge its caller, read by read: `read-users`; `read-roles`
  * for roles and the permission list, and `read-roles` or `read-permissions`
  * for one permission and a role's permissions; `read-media`; and
- * `read-settings` or `manage-settings` for field groups. A refused read
+ * `read-settings` for field groups. A refused read
  * returns nothing, a call naming no user is refused as unauthenticated, and an
  * allowed one returns the rows REST returns that same person. A trusted
  * instance, the default, reads as it always has.
@@ -47,8 +47,8 @@ const PDF = pdfDocument("checked reads");
  * REST also accepts for one permission and a role's permissions: permissions
  * on `permissions` are hidden, so none is seeded or can be read back to grant.
  */
-type Person = "reader" | "settingsManager" | "lacker";
-const PEOPLE: readonly Person[] = ["reader", "settingsManager", "lacker"];
+type Person = "reader" | "lacker";
+const PEOPLE: readonly Person[] = ["reader", "lacker"];
 
 /** What a read needs in hand: the rows it names, made by trusted code. */
 interface Subjects {
@@ -210,7 +210,6 @@ describe.each(getConfiguredTestDialects())(
       const ownerId = await account(t, "owner@example.com");
       const grants: Record<Person, string[]> = {
         reader: ["read-users", "read-roles", "read-media", "read-settings"],
-        settingsManager: ["manage-settings"],
         // A role, so the refusal is for want of the grant, not of any role.
         lacker: ["read-api-keys"],
       };
@@ -404,9 +403,9 @@ describe.each(getConfiguredTestDialects())(
 
       it("lists the field groups REST lists", async () => {
         const viaRest = await allowedBody<{ items: { slug: string }[] }>(
-          rest("settingsManager", ["field-groups"])
+          rest("reader", ["field-groups"])
         );
-        const direct = await checkedAs("settingsManager").fieldGroups.find();
+        const direct = await checkedAs("reader").fieldGroups.find();
         expect(direct.items.map(g => g.slug).sort()).toEqual(
           viaRest.items.map(g => g.slug).sort()
         );

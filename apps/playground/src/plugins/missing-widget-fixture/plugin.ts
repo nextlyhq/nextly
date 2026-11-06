@@ -1,17 +1,18 @@
 /**
  * A fixture plugin that declares one dashboard widget drawn by a component the
  * playground's committed component map does not include, so the e2e suite can
- * prove the admin is refused, naming the plugin, the widget and the fix, while
- * the public site keeps serving.
+ * prove a missing component costs only its own card: that card draws its error
+ * state, naming the widget, its owner and the path in development, while every
+ * other card and the rest of the admin draw.
  *
- * Off unless `NEXTLY_E2E_MISSING_WIDGET=1`: with it on the admin cannot be
- * served at all, by design. The component is never built, and nothing imports
- * its module; the refusal happens before anything would try.
+ * Off unless `NEXTLY_E2E_MISSING_WIDGET=1`, so the committed map, which CI
+ * checks against the config, never has to hold it. The component is never
+ * built, and nothing imports its module.
  */
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { defineWidget } from "nextly";
 
-/** The component the map is missing, as the refusal names it. */
+/** The component the map is missing, as the card's error state names it. */
 export const MISSING_WIDGET_COMPONENT =
   "@nextly-e2e/missing-widget-fixture/admin#NeverBuilt";
 
@@ -27,10 +28,11 @@ export const missingWidgetFixturePlugin = definePlugin({
           title: "Never built",
           description: "Draws with a component the map does not include",
           category: "Fixtures",
-          widths: ["full"],
-          width: "full",
-          data: async () => ({ total: 0 }),
-          display: { component: MISSING_WIDGET_COMPONENT },
+          size: { default: { w: 12, h: 4 } },
+          load: async () => ({ total: 0 }),
+          view: { component: MISSING_WIDGET_COMPONENT },
+          // Never empty, so the card always reaches its missing component.
+          isEmpty: () => false,
         }),
       ],
     },

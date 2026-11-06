@@ -63,6 +63,9 @@ async function onlyId(t: TestNextly, collection: string): Promise<string> {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    // The checked reads here are a visitor's, judged by the Public role a real
+    // boot makes, which reads every collection below by its `true` read rule.
+    seedPublic: true,
     collections: [
       // Its only text field is denied, so the auto-selected display label is
       // built from a value the caller may not see — the setup for the label-copy

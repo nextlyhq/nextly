@@ -31,6 +31,8 @@ import { SchemaRegistry } from "../../../database/schema-registry";
 import { nextlyDeletedPrincipals as deletedPrincipalsSqlite } from "../../../schemas/deleted-principals/sqlite";
 import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
+import { emailQueueSqlite } from "../../../schemas/email-queue/sqlite";
+import { emailQueueRecipientsSqlite } from "../../../schemas/email-queue-recipients/sqlite";
 import { nextlyMeta as metaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import {
   ADMINISTRATOR_TABLES_SQLITE,
@@ -79,6 +81,10 @@ async function ddl(): Promise<string[]> {
       // table, which arrive with it.
       nextlyDeletedPrincipals: deletedPrincipalsSqlite,
       nextlyMeta: metaSqlite,
+      // A deletion cancels the queued email to the person and their address
+      // too, so it reads the queue's tables.
+      emailQueue: emailQueueSqlite,
+      emailQueueRecipients: emailQueueRecipientsSqlite,
     })
   );
   return splitStatements(statements);

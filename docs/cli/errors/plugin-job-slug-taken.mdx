@@ -1,0 +1,23 @@
+---
+title: PLUGIN_JOB_SLUG_TAKEN
+description: "A plugin declares a job slug that another plugin, a reserved namespace or a built-in job type already uses."
+---
+
+## Cause
+
+A plugin declares a job slug that another plugin, a reserved namespace or a built-in job type already uses.
+
+Jobs are queued and run by their slug. A plugin's job slug must not be one another plugin declares, one in a namespace Nextly reserves, or a built-in job type.
+
+## Fix
+
+Rename the plugin's job, or remove one of the two plugins that declare it. If both plugins are third-party, update them, or report it to their authors.
+
+## Example
+
+```text
+✗ Job slug "seo.sitemap" is declared by both "@acme/seo" and "@acme/sitemap". Job slugs must be unique.
+  Why:  Jobs are queued and run by their slug, so each slug names one job.
+  Next: Rename the plugin's job, or remove one of the two plugins that declare it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-job-slug-taken  (PLUGIN_JOB_SLUG_TAKEN)
+```

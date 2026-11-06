@@ -8,7 +8,8 @@
 // from the candidate pool so subsequent prompts only show options that
 // haven't been resolved yet.
 //
-// Non-TTY behavior: throws TTYRequiredError with actionable message.
+// Non-TTY behavior (no terminal, `--non-interactive` or `CI`, as
+// `canPrompt` answers): throws TTYRequiredError with actionable message.
 // The intentional v1 limitation per F4 Option E plan: code-first non-TTY
 // users get a clear error directing them to a TTY terminal.
 //
@@ -20,8 +21,20 @@
 
 import * as clack from "@clack/prompts";
 
+import { answered } from "../../../../cli/utils/prompt-cancelled";
+import { NextlyError } from "../../../../errors/nextly-error";
+import { consoleLogger } from "../../../../shared/types";
+import { cancelEndsRun, canPrompt } from "../../migrate/can-prompt";
+import {
+  deprecationNotices,
+  judgeDataLoss,
+  resolveDataLossConsent,
+  type Deletion,
+} from "../../migrate/data-loss-consent";
+import { nonEmptyValuesOf } from "../classifier/classifier";
 import type {
   ClassifierEvent,
+  DestructiveDropEvent,
   PromptDispatcher,
   PromptDispatchResult,
   RenameCandidate,
@@ -35,26 +48,163 @@ import { PromptCancelledError, TTYRequiredError } from "./errors";
 // dispatcher module they already depend on.
 export { PromptCancelledError, TTYRequiredError };
 
-function hasTTY(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+/**
+ * The drops the rename candidates leave in the plan: each candidate's source
+ * column that no confirmed rename consumed, once. `answered` are those the
+ * prompt asked about and was told "drop and add"; `unasked` are those it
+ * never showed, because a rename took every column they could have become.
+ * Only an answer agrees to a drop.
+ */
+function keptDrops(
+  candidates: readonly RenameCandidate[],
+  confirmed: readonly RenameCandidate[],
+  answeredKeys: ReadonlySet<string>
+): { answered: Deletion[]; unasked: Deletion[] } {
+  const renamed = new Set(
+    confirmed.map(c => `${c.tableName}::${c.fromColumn}`)
+  );
+  const kept = new Map<string, Deletion>();
+  for (const c of candidates) {
+    const key = `${c.tableName}::${c.fromColumn}`;
+    if (renamed.has(key) || kept.has(key)) continue;
+    kept.set(key, { kind: "column", table: c.tableName, column: c.fromColumn });
+  }
+  const answered: Deletion[] = [];
+  const unasked: Deletion[] = [];
+  for (const [key, deletion] of kept) {
+    (answeredKeys.has(key) ? answered : unasked).push(deletion);
+  }
+  return { answered, unasked };
 }
 
-// Power-user opt-out: skip the interactive destructive_drop prompt and
-// auto-confirm every drop. Useful for CI/CD or non-interactive workflows
-// where the operator already trusts the config edit and just wants the
-// columns gone. Matches Drizzle Kit's --force / Prisma's
-// --accept-data-loss pattern. Only affects destructive_drop events;
-// other event kinds (type_change, NOT NULL) still prompt.
-// Two spellings are honored: NEXTLY_ALLOW_CODE_FIRST_DROPS is the original
-// env opt-in, and NEXTLY_ACCEPT_DATA_LOSS is what `db:sync
-// --accept-data-loss` exports for the rest of the run.
-function shouldAutoConfirmDrops(): boolean {
-  const allowCodeFirstDrops = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS === "1";
-  const acceptDataLoss = process.env.NEXTLY_ACCEPT_DATA_LOSS === "1";
-  return allowCodeFirstDrops || acceptDataLoss;
+function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
+  return event.kind === "destructive_drop";
+}
+
+/** Whether an event makes a column NOT NULL over rows: made required, or added required. */
+function makesColumnRequired(event: ClassifierEvent): boolean {
+  return (
+    event.kind === "add_not_null_with_nulls" ||
+    event.kind === "add_required_field_no_default"
+  );
+}
+
+/**
+ * A prompt's answer. A cancel (Ctrl+C) is not a no: under a `nextly` command
+ * it ends the run with exit 130 (`answered`); inside the app's dev server
+ * (`next dev`), where nothing turns `cancelEndsRun` on, it stops only this
+ * apply and the server keeps running.
+ */
+async function answeredHere<T>(answer: T | symbol): Promise<T> {
+  if (clack.isCancel(answer) && !cancelEndsRun()) {
+    throw new PromptCancelledError();
+  }
+  return answered(answer);
+}
+
+/** Asks at the terminal, defaulting to no; a cancel as `answeredHere`. */
+async function askInTerminal(question: string): Promise<boolean> {
+  return answeredHere(
+    await clack.confirm({
+      message: question,
+      initialValue: false,
+    })
+  );
+}
+
+/**
+ * A prompt's answer, closing the prompt block first on a cancel, which then
+ * goes as `answeredHere`. A cancel is not the "Cancel everything" answer,
+ * which stops only the apply.
+ */
+async function answeredOrClosed<T>(answer: T | symbol): Promise<T> {
+  if (clack.isCancel(answer)) clack.outro("Cancelled");
+  return answeredHere(answer);
 }
 
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
+  /**
+   * `print` writes the data-loss listing and notices; a test collects them.
+   */
+  constructor(
+    private readonly print: (line: string) => void = line =>
+      consoleLogger.warn(line)
+  ) {}
+
+  /** Whether this dispatch has printed its consent notices yet. */
+  private noticed = false;
+
+  /**
+   * The column drops judged by the data-loss consent (`NEXTLY_ACCEPT_DATA_LOSS`,
+   * which `db:sync --accept-data-loss` sets for its run, or the earlier
+   * `NEXTLY_ALLOW_CODE_FIRST_DROPS`): their confirmations when covered or
+   * agreed to at the terminal, null when the terminal says no. A drop the
+   * consent does not cover is refused, naming it, before any DDL: with no
+   * terminal by a `TTYRequiredError` that names the consent covering it,
+   * and under a consent naming other targets by a refusal of its own.
+   *
+   * `kept` are the drops the rename candidates leave in the plan, which have
+   * no event of their own, so they are judged here too (`keptDrops`). One the
+   * prompt was answered "drop and add" for is agreed to by that answer, unless
+   * the consent names its targets, which then has to cover it like any other
+   * drop; one the prompt never showed is judged like any other drop. The
+   * rows a NOT NULL prompt was answered "delete" for come in as answered too.
+   */
+  private async judgeDrops(
+    drops: readonly DestructiveDropEvent[],
+    interactive: boolean,
+    kept: { answered: Deletion[]; unasked: Deletion[] } = {
+      answered: [],
+      unasked: [],
+    }
+  ): Promise<Resolution[] | null> {
+    const chosen = [...kept.answered, ...kept.unasked];
+    if (drops.length === 0 && chosen.length === 0) return [];
+    const consent = resolveDataLossConsent({
+      env: process.env,
+      honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
+    });
+    // Once per dispatch, however many times its deletions are judged.
+    if (!this.noticed) {
+      for (const notice of deprecationNotices(consent)) this.print(notice);
+      this.noticed = true;
+    }
+    const named = consent.given !== null && consent.given.targets !== "all";
+    const verdict = await judgeDataLoss({
+      deletions: [
+        ...drops.map(drop => ({
+          kind: "column" as const,
+          table: drop.tableName,
+          column: drop.columnName,
+          count: nonEmptyValuesOf(drop),
+        })),
+        ...chosen,
+      ],
+      consent,
+      approved: named ? [] : kept.answered,
+      interactive,
+      ask: askInTerminal,
+      print: this.print,
+      // A push from `next dev` has no command line to pass a flag on; the
+      // variable reaches both it and `db:sync`.
+      flag: false,
+    });
+    if (verdict.kind === "declined") return null;
+    if (verdict.kind === "refused") {
+      if (verdict.reason === "needs-consent") {
+        throw new TTYRequiredError(verdict.message);
+      }
+      throw NextlyError.invalidInput({
+        message: verdict.message,
+        logContext: { reason: "data-loss-not-covered" },
+      });
+    }
+    return drops.map(drop => ({
+      kind: "confirm_drop" as const,
+      eventId: drop.id,
+    }));
+  }
+
   async dispatch(args: {
     candidates: RenameCandidate[];
     events: ClassifierEvent[];
@@ -62,29 +212,33 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult> {
     const { candidates, events } = args;
+    this.noticed = false;
 
     // Fast path: nothing to ask, nothing to do.
     if (candidates.length === 0 && events.length === 0) {
       return { confirmedRenames: [], resolutions: [], proceed: true };
     }
 
-    if (!hasTTY()) {
-      // Honor the drop opt-in before refusing: a non-interactive run whose
-      // batch needs nothing but drop confirmations can proceed when the
-      // operator opted in (mirrors the TTY pre-scan in runEventPrompts).
-      // Anything needing a real decision — renames, type changes — still
-      // requires a terminal below.
+    // The CLI's one answer to whether anyone can be asked: no terminal,
+    // `--non-interactive` or `CI` all mean the prompts below are not shown.
+    if (!canPrompt()) {
+      // A batch of nothing but column drops is the data-loss consent's to
+      // judge: applied when covered, refused at once, naming the consent
+      // that covers it, when not. Anything needing a real decision —
+      // renames, type changes — still requires a terminal below.
+      //
+      // A column made required has no answer a run without a terminal could give, so it goes on
+      // unanswered: the push counts the rows in its way before anything runs and refuses naming
+      // the entity, the field and the count (`refuseRequiredColumnsOverNulls`), or goes ahead when
+      // no row is in the way any more. Refused here instead, it named none of them.
       if (
         candidates.length === 0 &&
-        shouldAutoConfirmDrops() &&
-        events.every(e => e.kind === "destructive_drop")
+        events.every(e => isDrop(e) || makesColumnRequired(e))
       ) {
         return {
           confirmedRenames: [],
-          resolutions: events.map(e => ({
-            kind: "confirm_drop" as const,
-            eventId: e.id,
-          })),
+          resolutions:
+            (await this.judgeDrops(events.filter(isDrop), false)) ?? [],
           proceed: true,
         };
       }
@@ -151,11 +305,19 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
             confirmedRenames: [],
             resolutions: [] as Resolution[],
             proceed: true,
+            answeredDrops: new Set<string>(),
           };
     if (!renameResult.proceed) return renameResult;
 
-    // Phase 2: F5/F6 events.
-    const eventResult = await this.runEventPrompts(events);
+    // Phase 2: F5/F6 events, with the drops the rename answers kept.
+    const eventResult = await this.runEventPrompts(
+      events,
+      keptDrops(
+        candidates,
+        renameResult.confirmedRenames,
+        renameResult.answeredDrops
+      )
+    );
 
     return {
       confirmedRenames: renameResult.confirmedRenames,
@@ -166,62 +328,36 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
   // Walk classifier events in order. NOT-NULL kinds get a multi-step
   // (select kind -> text value if provide_default -> next event); type_change
-  // gets a single warning + Y/N. Any abort or cancel returns proceed=false.
+  // gets a single warning + Y/N. An abort or a no returns proceed=false; a
+  // cancel (Ctrl+C) ends the run with exit 130.
   private async runEventPrompts(
-    events: ClassifierEvent[]
+    events: ClassifierEvent[],
+    kept: { answered: Deletion[]; unasked: Deletion[] } = {
+      answered: [],
+      unasked: [],
+    }
   ): Promise<{ resolutions: Resolution[]; proceed: boolean }> {
-    if (events.length === 0) {
+    if (
+      events.length === 0 &&
+      kept.answered.length === 0 &&
+      kept.unasked.length === 0
+    ) {
       return { resolutions: [], proceed: true };
     }
 
-    const resolutions: Resolution[] = [];
-
-    // Pre-scan: when the operator has opted in to auto-confirmed drops
-    // (shouldAutoConfirmDrops) AND every event in this batch is a
-    // destructive_drop, skip clack entirely and auto-confirm all of them.
-    // The intro/outro frame would be noise for a workflow that explicitly
-    // doesn't want prompts.
-    const autoConfirmDrops = shouldAutoConfirmDrops();
-    const allDestructiveDrops = events.every(
-      e => e.kind === "destructive_drop"
-    );
-    if (autoConfirmDrops && allDestructiveDrops) {
-      for (const event of events) {
-        if (event.kind !== "destructive_drop") continue;
-        resolutions.push({ kind: "confirm_drop", eventId: event.id });
-      }
-      return { resolutions, proceed: true };
-    }
+    // Every drop is listed, with what each column holds, and asked about
+    // once, before any other question: the operator sees all that would be
+    // lost before agreeing to any of it. Covered by consent, it is listed
+    // and confirmed without asking.
+    const drops = await this.judgeDrops(events.filter(isDrop), true, kept);
+    if (drops === null) return { resolutions: [], proceed: false };
+    const resolutions: Resolution[] = [...drops];
+    const others = events.filter(event => !isDrop(event));
+    if (others.length === 0) return { resolutions, proceed: true };
 
     clack.intro("Schema change requires confirmation");
 
-    for (const event of events) {
-      if (event.kind === "destructive_drop") {
-        // Mirrors Drizzle Kit's `push` destructive-confirm UX. The note
-        // surfaces column type and row count so the user sees the
-        // magnitude of the loss before answering.
-        clack.note(
-          `Type: ${event.columnType}\nRows affected: ${event.tableRowCount}`,
-          `Drop column "${event.tableName}.${event.columnName}"`
-        );
-        // Per-drop opt-out: power users can still set the flag mid-session
-        // (e.g. from .env, then HMR-restart) to skip every subsequent
-        // drop prompt without touching the rename/type-change UX.
-        if (autoConfirmDrops) {
-          resolutions.push({ kind: "confirm_drop", eventId: event.id });
-          continue;
-        }
-        const proceed = await clack.confirm({
-          message: `Drop "${event.columnName}" from "${event.tableName}"?`,
-          initialValue: false,
-        });
-        if (clack.isCancel(proceed) || proceed === false) {
-          clack.outro("Cancelled");
-          return { resolutions, proceed: false };
-        }
-        resolutions.push({ kind: "confirm_drop", eventId: event.id });
-        continue;
-      }
+    for (const event of others) {
       if (event.kind === "type_change") {
         // Render the per-dialect warning text and ask Y/N.
         clack.note(
@@ -232,11 +368,13 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           ].join("\n"),
           `Type change on ${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType}`
         );
-        const proceed = await clack.confirm({
-          message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
-          initialValue: false,
-        });
-        if (clack.isCancel(proceed) || proceed === false) {
+        const proceed = await answeredOrClosed(
+          await clack.confirm({
+            message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
+            initialValue: false,
+          })
+        );
+        if (!proceed) {
           clack.outro("Cancelled");
           return { resolutions, proceed: false };
         }
@@ -270,29 +408,24 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
         value: kind,
         label: labels[kind],
       }));
-      const choice = await clack.select({
-        message: "How do you want to handle this?",
-        options,
-      });
-      if (clack.isCancel(choice)) {
-        clack.outro("Cancelled");
-        return { resolutions, proceed: false };
-      }
-      const kind = choice;
+      const kind = await answeredOrClosed(
+        await clack.select({
+          message: "How do you want to handle this?",
+          options,
+        })
+      );
       if (kind === "abort") {
         clack.outro("Cancelled");
         return { resolutions, proceed: false };
       }
       if (kind === "provide_default") {
-        const value = await clack.text({
-          message: `Default value for "${event.columnName}":`,
-          validate: v =>
-            !v || v.trim().length === 0 ? "Cannot be empty" : undefined,
-        });
-        if (clack.isCancel(value)) {
-          clack.outro("Cancelled");
-          return { resolutions, proceed: false };
-        }
+        const value = await answeredOrClosed(
+          await clack.text({
+            message: `Default value for "${event.columnName}":`,
+            validate: v =>
+              !v || v.trim().length === 0 ? "Cannot be empty" : undefined,
+          })
+        );
         resolutions.push({
           kind: "provide_default",
           eventId: event.id,
@@ -301,6 +434,26 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       } else {
         resolutions.push({ kind, eventId: event.id });
       }
+    }
+
+    // Removing the rows a NOT NULL answer named is a deletion in their
+    // table, judged like a drop the prompt was answered for: the answer
+    // agrees to it, unless the consent names its targets, which then has to
+    // cover the table. Judged before the outro, so nothing has run.
+    const removedRows: Deletion[] = resolutions.flatMap(resolution => {
+      if (resolution.kind !== "delete_nonconforming") return [];
+      const event = others.find(e => e.id === resolution.eventId);
+      if (event === undefined) return [];
+      return [
+        {
+          kind: "rows" as const,
+          table: event.tableName,
+          count: "tableRowCount" in event ? event.tableRowCount : undefined,
+        },
+      ];
+    });
+    if (removedRows.length > 0) {
+      await this.judgeDrops([], true, { answered: removedRows, unasked: [] });
     }
 
     clack.outro("Resolutions confirmed");
@@ -316,8 +469,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   //   4. If user picks 'drop_and_add', drop survives as drop+add (no rename).
   private async runShrinkingPoolPrompts(
     candidates: RenameCandidate[]
-  ): Promise<PromptDispatchResult> {
+  ): Promise<PromptDispatchResult & { answeredDrops: ReadonlySet<string> }> {
     const consumedDrops = new Set<string>();
+    // The drops the operator was asked about and answered "drop and add":
+    // what agrees to them. A drop whose prompt was skipped is not among them.
+    const answeredDrops = new Set<string>();
     const consumedAdds = new Set<string>();
     const confirmed: RenameCandidate[] = [];
 
@@ -381,16 +537,13 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           ? `rename:${compatible.toColumn}`
           : "drop_and_add";
 
-      const choice = await clack.select({
-        message: `Column "${first.fromColumn}" was removed in ${first.tableName}. What should happen?`,
-        options: selectOptions,
-        initialValue,
-      });
-
-      if (clack.isCancel(choice)) {
-        clack.outro("Cancelled");
-        throw new PromptCancelledError();
-      }
+      const choice = await answeredOrClosed(
+        await clack.select({
+          message: `Column "${first.fromColumn}" was removed in ${first.tableName}. What should happen?`,
+          options: selectOptions,
+          initialValue,
+        })
+      );
 
       if (typeof choice === "string" && choice.startsWith("rename:")) {
         const targetColumn = choice.slice("rename:".length);
@@ -403,6 +556,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       }
       // 'drop_and_add' falls through: drop and adds remain as-is in the
       // operations list; no consumed marks added.
+      if (choice === "drop_and_add") answeredDrops.add(dropKey);
     }
 
     clack.outro("Schema renames confirmed");
@@ -411,6 +565,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       confirmedRenames: confirmed,
       resolutions: [],
       proceed: true,
+      answeredDrops,
     };
   }
 }
