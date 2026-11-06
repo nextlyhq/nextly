@@ -358,11 +358,11 @@ export default function EditUserPage(): ReactElement {
   }
 
   // What a plugin's block or tab on this page is told: who is looking, and
-  // at whom.
-  const placeContext = {
-    userId: signedInUser?.id ?? "",
-    shownUserId: user.id,
-  };
+  // at whom. Held while the viewer is not known yet, so no contribution is
+  // handed an id that is not theirs.
+  const placeContext = signedInUser
+    ? { userId: signedInUser.id, shownUserId: user.id }
+    : null;
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>

@@ -8,27 +8,31 @@
  * first tab, under the page's own label, and each contributed tab follows in
  * the order delivered, its component behind its own boundary.
  *
- * The page's content stays mounted while another tab is shown, only hidden:
- * it holds the page's form, so leaving it for a plugin's tab must keep what
- * was typed, and the page's own Save button must still find its form.
+ * The page's content keeps one place in the tree whether a tab is delivered
+ * or not, and is only hidden, never unmounted, while a plugin's tab is shown:
+ * it holds the page's form, so tabs arriving with the admin metadata, a tab
+ * being shown, or the last tab going away must all keep what was typed, and
+ * the page's own Save button must still find its form. `Activity` hides it
+ * without a wrapper, so a page with no tab has the same DOM as before.
+ *
+ * A shown tab that is no longer delivered gives the content back. Nothing
+ * contributed is drawn while the page's context is `null`.
  *
  * @module components/shared/target-slot/PlaceTabs
  */
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import type { AdminPlaceId } from "nextly/config";
-import { useState, type ReactNode } from "react";
+import { Activity, useState, type ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 
-import type { PlaceContributionProps } from "./TargetSlot";
+import type { PlaceContributionProps, PlaceProps } from "./TargetSlot";
 import { usePlaceContributions } from "./usePlaceContributions";
 
 /** The value the page's own content takes in the strip; ids always hold a dot. */
 const CONTENT_TAB = "content";
 
-export interface PlaceTabsProps<P extends AdminPlaceId>
-  extends PlaceContributionProps<P> {
-  place: P;
+export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
   /** The page's own content's tab label, in the interface language. */
   contentLabel: string;
   children: ReactNode;
@@ -41,40 +45,40 @@ export function PlaceTabs<P extends AdminPlaceId>({
   contentLabel,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const tabs = usePlaceContributions(place, "tab", entry).filter(
-    item => !("builtIn" in item) && item.kind === "tab"
-  );
-  const [shown, setShown] = useState(CONTENT_TAB);
-  if (tabs.length === 0) return children;
+  const delivered = usePlaceContributions(place, "tab", entry);
+  const [chosen, setChosen] = useState(CONTENT_TAB);
+  const tabs =
+    context === null
+      ? []
+      : delivered.flatMap(item =>
+          "builtIn" in item || item.kind !== "tab" ? [] : [item]
+        );
+  const shown = tabs.some(tab => tab.id === chosen) ? chosen : CONTENT_TAB;
   return (
-    <Tabs value={shown} onValueChange={setShown}>
-      <TabsList>
-        <TabsTrigger value={CONTENT_TAB}>{contentLabel}</TabsTrigger>
-        {tabs.map(tab =>
-          "builtIn" in tab || tab.kind !== "tab" ? null : (
-            <TabsTrigger key={tab.id} value={tab.id}>
-              {tab.label}
-            </TabsTrigger>
-          )
-        )}
-      </TabsList>
-      <TabsContent
-        value={CONTENT_TAB}
-        forceMount
-        hidden={shown !== CONTENT_TAB}
-      >
-        {children}
-      </TabsContent>
-      {tabs.map(tab =>
-        "builtIn" in tab || tab.kind !== "tab" ? null : (
-          <TabsContent key={tab.id} value={tab.id}>
-            <PluginSlot<PlaceContributionProps<P>>
-              path={tab.component}
-              props={{ context, ...(entry === undefined ? {} : { entry }) }}
-            />
-          </TabsContent>
-        )
+    <>
+      {context === null || tabs.length === 0 ? null : (
+        <Tabs value={shown} onValueChange={setChosen}>
+          <TabsList scrollable>
+            <TabsTrigger value={CONTENT_TAB}>{contentLabel}</TabsTrigger>
+            {tabs.map(tab => (
+              <TabsTrigger key={tab.id} value={tab.id}>
+                {tab.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {tabs.map(tab => (
+            <TabsContent key={tab.id} value={tab.id}>
+              <PluginSlot<PlaceContributionProps<P>>
+                path={tab.component}
+                props={{ context, ...(entry === undefined ? {} : { entry }) }}
+              />
+            </TabsContent>
+          ))}
+        </Tabs>
       )}
-    </Tabs>
+      <Activity mode={shown === CONTENT_TAB ? "visible" : "hidden"}>
+        {children}
+      </Activity>
+    </>
   );
 }

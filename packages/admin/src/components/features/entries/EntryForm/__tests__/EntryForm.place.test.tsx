@@ -24,9 +24,11 @@ import { registerComponent } from "@admin/lib/plugins/component-registry";
 
 const SIGNED_IN = "11111111-1111-4111-8111-111111111111";
 
-// What the admin metadata delivers to the form's place, set per case.
+// What the admin metadata delivers to the form's place, and who is signed in,
+// set per case.
 const meta = vi.hoisted(() => ({
   contributions: undefined as AdminContributionsMeta | undefined,
+  user: { id: "11111111-1111-4111-8111-111111111111" } as { id: string } | null,
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
@@ -36,7 +38,7 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   useBranding: () => ({ contributions: meta.contributions }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
-  useDashboardUser: () => ({ user: { id: SIGNED_IN } }),
+  useDashboardUser: () => ({ user: meta.user }),
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({
@@ -140,8 +142,12 @@ const entry = {
 } as never;
 
 const BLOCK = "@acme/a/admin#FormBlock";
-registerComponent(BLOCK, ((props: { context?: unknown }) => (
+registerComponent(BLOCK, ((props: { context?: unknown; entry?: unknown }) => (
   <pre data-testid="form-block">{JSON.stringify(props.context)}</pre>
+)) as never);
+const ENTRY_ECHO = "@acme/a/admin#FormEntry";
+registerComponent(ENTRY_ECHO, ((props: { entry?: { id?: unknown } }) => (
+  <p data-testid="form-entry">{String(props.entry?.id)}</p>
 )) as never);
 
 function block(id: string, extra: object = {}) {
@@ -163,6 +169,7 @@ function fields(): HTMLElement {
 
 beforeEach(() => {
   meta.contributions = undefined;
+  meta.user = { id: SIGNED_IN };
   window.localStorage.clear();
 });
 afterEach(() => {
@@ -202,25 +209,35 @@ describe("the entry form's place in the entry editor", () => {
     });
   });
 
-  it("draws a block only for an entry its rule matches", () => {
+  it("hands a block the entry the form edits", () => {
     meta.contributions = {
       "entry.form": {
         block: [
           { builtIn: "fields" },
-          block("acme-a.published-only", {
-            visibleWhen: { field: "status", equals: "published" },
-          }),
-          block("acme-a.drafts-only", {
-            visibleWhen: { field: "status", equals: "draft" },
-          }),
+          {
+            plugin: "@acme/a",
+            id: "acme-a.form-entry",
+            kind: "block",
+            component: ENTRY_ECHO,
+          },
         ],
       },
     } as AdminContributionsMeta;
     renderEditor();
 
-    // One drawn, for the draft on screen: the rule was checked against the
-    // entry, not skipped or refused for want of one.
-    expect(screen.getAllByTestId("form-block")).toHaveLength(1);
-    expect(fields().nextElementSibling).toBe(screen.getByTestId("form-block"));
+    expect(screen.getByTestId("form-entry").textContent).toBe("p1");
+  });
+
+  it("draws no block before the signed-in admin is known", () => {
+    meta.user = null;
+    meta.contributions = {
+      "entry.form": {
+        block: [{ builtIn: "fields" }, block("acme-a.form-block")],
+      },
+    } as AdminContributionsMeta;
+    renderEditor();
+
+    expect(screen.queryByTestId("form-block")).toBeNull();
+    expect(fields()).toBeTruthy();
   });
 });

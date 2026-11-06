@@ -587,13 +587,16 @@ export type { AdminChromeLayer } from "@nextlyhq/admin";
  *
  * For a place the plugin declared under `contributes.admin.places`, on one of
  * its own pages: other plugins' blocks and tabs added there arrive already
- * filtered for the signed-in reader, and a block with `visibleWhen` is drawn
- * only for an `entry` its rule matches. A plugin's place has no built-in
- * parts, so the page draws its own content beside the slot.
+ * filtered for the signed-in reader, and each receives the place's `context`
+ * and the page's `entry` when it passes one. Pass `context={null}` while the
+ * page does not know its ids yet; nothing contributed is drawn until it does.
+ * A plugin's place has no built-in parts, so the page draws its own content
+ * beside the slot.
  */
 export { PlaceTabs, TargetSlot } from "@nextlyhq/admin";
 export type {
   PlaceContributionProps,
+  PlaceProps,
   PlaceTabsProps,
   TargetSlotProps,
 } from "@nextlyhq/admin";

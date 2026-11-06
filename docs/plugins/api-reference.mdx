@@ -779,6 +779,8 @@ export function InvoicePage({ invoiceId }: { invoiceId: string }) {
 
 Each block and tab is drawn in the order sent, behind its own error boundary,
 and receives the place's `context` (and `entry`, where the page passes one).
+Pass `context={null}` while the page does not know its ids yet: nothing
+contributed is drawn until it does, so no contribution is handed a wrong id.
 With no tab sent, `PlaceTabs` draws its children alone; with one, they are the
 first tab, under `contentLabel`. A plugin's place has no built-in parts, so the
 page draws its own content beside the slot.

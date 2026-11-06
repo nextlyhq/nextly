@@ -3,8 +3,8 @@
 /**
  * The entry form's place, as both editors draw it: the form's own fields are
  * the `fields` built-in, and plugins' blocks stand around them in the order
- * the server sent, each told which document the form edits and drawn only for
- * an entry its rule matches.
+ * the server sent, each told which document the form edits, and handed the
+ * document as loaded.
  *
  * One component for both editors, so a collection entry's form and a Single's
  * cannot come to disagree about what a block is told.
@@ -23,7 +23,7 @@ export interface EntryFormPlaceProps {
   slug: string;
   /** The document's id, or `null` while it is being created. */
   entryId: string | null;
-  /** The document as loaded, which a block's `visibleWhen` is checked against. */
+  /** The document as loaded, handed to each block. */
   entry?: Record<string, unknown>;
   /** The form's own fields. */
   children: React.ReactNode;
@@ -40,7 +40,9 @@ export function EntryFormPlace({
   return (
     <TargetSlot
       place="entry.form"
-      context={{ userId: user?.id ?? "", kind, slug, entryId }}
+      // Held while the viewer is not known yet, so no block is handed an id
+      // that is not theirs.
+      context={user ? { userId: user.id, kind, slug, entryId } : null}
       {...(entry === undefined ? {} : { entry })}
       builtIns={{ fields: children }}
     />

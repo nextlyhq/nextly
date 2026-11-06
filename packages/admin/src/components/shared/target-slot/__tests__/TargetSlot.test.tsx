@@ -281,13 +281,117 @@ describe("PlaceTabs", () => {
     expect(await screen.findByText("plugin tab body")).toBeTruthy();
     // Still there for a Save button outside the strip, only hidden.
     const form = document.getElementById("page-form");
-    expect(form?.closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(
-      true
-    );
+    expect(form?.style.display).toBe("none");
 
     await user.click(screen.getByRole("tab", { name: "Profile" }));
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
       "Ada"
     );
   });
+
+  it("tabs arriving after the content was typed in keep what was typed", async () => {
+    // The signed-in metadata answers after the page has drawn: the strip
+    // appears around content the reader is already editing.
+    const user = userEvent.setup();
+    // A fresh element each time, as the page's own render makes one.
+    const page = () => (
+      <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">
+        <input aria-label="Name" />
+      </PlaceTabs>
+    );
+    const { rerender } = render(page());
+    await user.type(screen.getByLabelText("Name"), "Ada");
+
+    meta.contributions = { "user.detail": { tab: [billingTab()] } };
+    rerender(page());
+    expect(screen.getByRole("tablist")).toBeTruthy();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Ada"
+    );
+
+    // And the last tab going away again keeps it too.
+    meta.contributions = undefined;
+    rerender(page());
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Ada"
+    );
+  });
+
+  it("a shown tab that is no longer sent gives the content back", async () => {
+    meta.contributions = {
+      "user.detail": {
+        tab: [billingTab(), { ...billingTab(), id: "acme-a.usage", label: "Usage" }],
+      },
+    };
+    const user = userEvent.setup();
+    const page = () => (
+      <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">
+        <div data-testid="page-content">content</div>
+      </PlaceTabs>
+    );
+    const { rerender } = render(page());
+    await user.click(screen.getByRole("tab", { name: "Billing" }));
+    expect(screen.getByTestId("page-content").style.display).toBe("none");
+
+    meta.contributions = {
+      "user.detail": {
+        tab: [{ ...billingTab(), id: "acme-a.usage", label: "Usage" }],
+      },
+    };
+    rerender(page());
+    expect(screen.getByTestId("page-content").style.display).not.toBe("none");
+    expect(
+      screen.getByRole("tab", { name: "Profile" }).getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("draws no tab while the page's context is not known yet", () => {
+    meta.contributions = { "user.detail": { tab: [billingTab()] } };
+
+    render(
+      <PlaceTabs place="user.detail" context={null} contentLabel="Profile">
+        <div data-testid="page-content">content</div>
+      </PlaceTabs>
+    );
+
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByTestId("page-content")).toBeTruthy();
+  });
 });
+
+describe("TargetSlot while the page's context is not known yet", () => {
+  it("draws only the page's own parts", () => {
+    meta.contributions = {
+      "user.detail": {
+        block: [
+          block("acme-a.echo", ECHO),
+          { builtIn: "content" },
+          block("acme-a.first", FIRST),
+        ],
+      },
+    };
+
+    render(
+      <TargetSlot
+        place="user.detail"
+        context={null}
+        builtIns={{ content: <div data-testid="page-content">content</div> }}
+      />
+    );
+
+    expect(drawn()).toEqual(["content"]);
+    expect(screen.queryByTestId("echo")).toBeNull();
+  });
+});
+
+/** A tab contribution as the server delivers it. */
+function billingTab() {
+  return {
+    plugin: "@acme/a",
+    id: "acme-a.billing",
+    kind: "tab",
+    label: "Billing",
+    component: TAB,
+  } as const;
+}

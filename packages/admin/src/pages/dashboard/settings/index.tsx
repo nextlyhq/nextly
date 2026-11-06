@@ -247,8 +247,10 @@ const SettingsGeneralPage: React.FC = () => {
   const mayUpdate = settingsChangesAllowed(hasPermission).update;
   const { user } = useDashboardUser();
   const t = useT();
-  // What a plugin's block or tab on this page is told: who is looking.
-  const placeContext = { userId: user?.id ?? "" };
+  // What a plugin's block or tab on this page is told: who is looking. Held
+  // while the viewer is not known yet, so no contribution is handed an id
+  // that is not theirs.
+  const placeContext = user ? { userId: user.id } : null;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),

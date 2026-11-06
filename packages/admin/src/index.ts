@@ -529,6 +529,7 @@ export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
 export { PlaceTabs, TargetSlot } from "./components/shared/target-slot";
 export type {
   PlaceContributionProps,
+  PlaceProps,
   PlaceTabsProps,
   TargetSlotProps,
 } from "./components/shared/target-slot";
