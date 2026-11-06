@@ -98,4 +98,37 @@ describe("the sheet of a page decided by its entry", () => {
     expect(rules.get("outer")).not.toContain("#c02222");
     expect(rules.get("nested")).toContain("#c02222");
   });
+
+  it("leaves out the rules of a block inside it that draws nothing", () => {
+    const list = {
+      id: "l",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: {
+        children: [
+          {
+            ...coloured("outer", "#c04444", vip),
+            type: "core/box",
+            slots: {
+              children: [
+                coloured("drawless", "#c05555"),
+                coloured("drawn", "#c06666"),
+              ],
+            },
+          },
+        ],
+      },
+    };
+    const document = doc(list);
+    const styles = resolvePageStyles(document, undefined, context, resolver);
+    const rules = itemDecidedRules(
+      styles,
+      document,
+      node => node.id === "drawless"
+    );
+    // CONTROL: its drawn sibling's rules travel with the block around them.
+    expect(rules.get("outer")).toContain("#c06666");
+    expect(rules.get("outer")).not.toContain("#c05555");
+  });
 });
