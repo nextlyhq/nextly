@@ -25,7 +25,6 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { CLASS_USAGE_INDEX_SLUG } from "../collections/class-usage-index";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -33,6 +32,8 @@ import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
+/** Where the class usage index's rows live. */
+const CLASS_ROWS = "page_builder__class_usage";
 
 const card = {
   id: "c-card",
@@ -516,20 +517,12 @@ describe.each(getConfiguredTestDialects())(
       });
       await tick();
       // The row two interleaved saves can lose, lost here directly.
-      const rows = await t.nextly.find({
-        collection: CLASS_USAGE_INDEX_SLUG,
-        where: { classId: { equals: "c-spare" } },
-        limit: 100,
-        overrideAccess: true,
-      });
-      expect(rows.items.length).toBeGreaterThan(0);
-      for (const row of rows.items) {
-        await t.nextly.delete({
-          collection: CLASS_USAGE_INDEX_SLUG,
-          id: String((row as { id: unknown }).id),
-          overrideAccess: true,
-        });
-      }
+      const spareRows = {
+        and: [{ column: "classId", op: "=" as const, value: "c-spare" }],
+      };
+      const rows = await t.adapter.select(CLASS_ROWS, { where: spareRows });
+      expect(rows.length).toBeGreaterThan(0);
+      await t.adapter.delete(CLASS_ROWS, spareRows);
       const designer = await holding(t, ...DESIGN, "read-pages");
       // CONTROL: the index is whole and counts the style on nothing, so the
       // refusal below comes from the stored page and not from the index.

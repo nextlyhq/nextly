@@ -116,6 +116,9 @@ async function refusal(run: Promise<unknown>): Promise<unknown> {
   return undefined;
 }
 
+/** A Single reader for a listing that names no Single. */
+const NO_SINGLE = async (): Promise<string | null> => null;
+
 describe("the shared-style permission", () => {
   it("is the plugin's own, declared beside the site permission", () => {
     expect(LOCK_SHARED_STYLES_PERMISSION).toBe(
@@ -448,7 +451,8 @@ describe("the paths the browser asks on", () => {
     const response = await readSharedStyleUses(
       new Request(`http://local${sharedStyleWhereUsedPath("a&b", 2)}`),
       source,
-      async (_c, ids) => ids.map(id => ({ id, title: id }))
+      async (_c, ids) => ids.map(id => ({ id, title: id })),
+      NO_SINGLE
     );
     const body = (await response.json()) as {
       items: { id: string }[];
@@ -478,7 +482,7 @@ describe("where a shared style is used", () => {
           : ids.filter(id => id === "p1").map(id => ({ id, title: "Home" }))
     );
     const body = await (
-      await readSharedStyleUses(whereUsed, source, readNamed)
+      await readSharedStyleUses(whereUsed, source, readNamed, NO_SINGLE)
     ).json();
     expect(body).toEqual({
       items: [{ id: "p1", title: "Home", collection: "pages", kind: "pages" }],
@@ -492,6 +496,37 @@ describe("where a shared style is used", () => {
         hiddenCount: 2,
       },
     });
+  });
+
+  it("names a Single the caller may read, and counts one it may not", async () => {
+    const { source } = usageOf(WHOLE, {
+      "c-card": [
+        { collection: "home", documents: [""], single: true },
+        { collection: "footer", documents: [""], single: true },
+        { collection: "pages", documents: ["p1"] },
+      ],
+    });
+    const readSingle = vi.fn(async (slug: string) =>
+      slug === "home" ? "Home page" : null
+    );
+    const body = await (
+      await readSharedStyleUses(
+        whereUsed,
+        source,
+        async (_c, ids) => ids.map(id => ({ id, title: id })),
+        readSingle
+      )
+    ).json();
+    expect(body.items).toEqual([
+      { id: "", title: "Home page", collection: "home", kind: "pages" },
+      { id: "p1", title: "p1", collection: "pages", kind: "pages" },
+    ]);
+    expect(body.meta.hiddenCount).toBe(1);
+    // CONTROL: read through the Single reader, never as a collection entry.
+    expect(readSingle.mock.calls.map(([slug]) => slug).sort()).toEqual([
+      "footer",
+      "home",
+    ]);
   });
 
   describe("a style used on many documents", () => {
@@ -509,7 +544,8 @@ describe("where a shared style is used", () => {
       const response = await readSharedStyleUses(
         new Request(`http://local/shared-styles/where-used?id=c-card${query}`),
         source,
-        named
+        named,
+        NO_SINGLE
       );
       return (await response.json()) as {
         items: { id: string }[];
@@ -587,7 +623,8 @@ describe("where a shared style is used", () => {
               `http://local/shared-styles/where-used?id=c-card&page=${page}`
             ),
             source,
-            named
+            named,
+            NO_SINGLE
           )
         ).json()) as { items: { collection: string; id: string }[] }
       ).items.map(item => `${item.collection}:${item.id}`);
@@ -600,7 +637,7 @@ describe("where a shared style is used", () => {
   it("says the list may be short while the index is not whole", async () => {
     const { source } = usageOf(NOT_WHOLE);
     const body = (await (
-      await readSharedStyleUses(whereUsed, source, async () => [])
+      await readSharedStyleUses(whereUsed, source, async () => [], NO_SINGLE)
     ).json()) as { meta: Record<string, unknown> };
     expect(body.meta.notConsulted).toEqual(["uncounted-documents"]);
   });
@@ -645,7 +682,7 @@ describe("removing unused shared styles", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("refuses a used, a locked and a code-defined style, naming each", async () => {
+  it("refuses a used, a locked and a code-defined style as a conflict naming each", async () => {
     const { store, write } = storeOf([
       card,
       { ...hero, locked: true },
@@ -665,8 +702,32 @@ describe("removing unused shared styles", () => {
         )
       )
     ).toMatchObject({
-      // A style the index counts as used makes it the in-use refusal, its
-      // one issue naming every reason, as the rescan's refusal does.
+      // Not every reason is a use, so none carries the in-use code: the lock
+      // and the code's style would read as uses otherwise.
+      code: "CONFLICT",
+      publicMessage:
+        "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses styles all of whose reasons are uses as the in-use refusal, its one issue naming each", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE, {
+      "c-card": [{ collection: "pages", documents: ["p1", "p2"] }],
+      "c-hero": [{ collection: "pages", documents: ["p3"] }],
+    });
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card", "c-hero"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
       code: "VALIDATION_ERROR",
       publicData: {
         errors: [
@@ -674,7 +735,7 @@ describe("removing unused shared styles", () => {
             path: "",
             code: SHARED_STYLE_IN_USE_CODE,
             message:
-              "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+              "Nothing was removed. Card is used on 2 documents. Hero is used on 1 document.",
           },
         ],
       },

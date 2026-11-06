@@ -458,6 +458,23 @@ const saved = await nextly.findSingle({
 const siteName = saved === null ? "My site" : saved.siteName;
 ```
 
+**Experimental:** add `whenAbsent: "default"` beside `createIfMissing: false`
+to read, for a single that has no stored document yet, the default document a
+first read would create, without creating it. It goes through the same read:
+access rules, the draft and published filter, field rules and read hooks apply
+as they would to the stored document. Passing `whenAbsent` without
+`createIfMissing: false` is refused. A `defaultValue` written as a function is
+computed again for each such read, so one that is not deterministic may answer
+differently from what is later stored.
+
+```typescript
+const settings = await nextly.findSingle({
+  slug: "site-settings",
+  createIfMissing: false,
+  whenAbsent: "default",
+});
+```
+
 ### updateSingle
 
 Update a single's content by slug. Returns the same `{ message, item }` envelope
@@ -635,11 +652,13 @@ profile.user; // current user record (or null)
 
 const updated = await nextly.updateMe({
   user: { id: "user-123" },
-  data: { name: "New Display Name" },
+  data: { name: "New Display Name", interfaceLanguage: "fr" },
 });
 ```
 
 **Returns:** `AuthResult` — `{ user, permissions? }`. Throws `NextlyError` (`NOT_FOUND`) if the user does not exist.
+
+`interfaceLanguage` is the language this person wants the admin in, kept apart from any content language: a language tag spelled as browsers report it (`fr`, `pt-BR`), or `null` to follow the browser, then English. It is the person's own to set, through `updateMe` or `PATCH /admin/api/me`. `users.update` and `PATCH /admin/api/users/:id` refuse it with a `VALIDATION_ERROR` naming the field, and a malformed or non-canonical tag (`pt-br`) is refused the same way. `interfaceLanguage` is also a reserved name for a custom user field.
 
 ### changePassword
 

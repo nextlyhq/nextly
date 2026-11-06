@@ -280,9 +280,15 @@ function useCanvasRender({
   stylePolicy,
   editor,
   locale,
+  initialDocument,
 }: Pick<
   EditorMount,
-  "clientConfig" | "documentLimits" | "componentLibrary" | "editor" | "locale"
+  | "clientConfig"
+  | "documentLimits"
+  | "componentLibrary"
+  | "editor"
+  | "locale"
+  | "initialDocument"
 > &
   Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
   /*
@@ -355,6 +361,7 @@ function useCanvasRender({
   const canvasContext = useCanvasPageContext(
     editor.listsShowingEmpty,
     locale,
+    initialDocument,
     pagedList
   );
   const canvasRender = useMemo(

@@ -353,9 +353,12 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md).
+ *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   (`ctx.security.webhooks`), verifying a received webhook against a
+ *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
+ *   experimental too, until a first-party plugin receives webhooks with it.
  */
-export { PasswordTooLongError } from "nextly";
+export { PasswordTooLongError, standardWebhooks } from "nextly";
 export type {
   PluginSecurityApi,
   PasswordHelper,
@@ -366,6 +369,13 @@ export type {
   OneTimeSecrets,
   SecretData,
   TxOption,
+  PluginReceivedWebhooks,
+  InboundWebhookScheme,
+  InboundWebhookDelivery,
+  InboundWebhookReading,
+  VerifyWebhookOptions,
+  WebhookVerification,
+  WebhookRefusal,
 } from "nextly";
 
 /**
@@ -675,15 +685,29 @@ export type {
  *   language) of fields of a plugin field type stored as JSON, judged by the
  *   person's read access. `updateIfUnchanged` makes the ordinary update as
  *   that person, refused with a `CONFLICT` error when the field no longer
- *   hashes, under the write's own row lock, to what was read.
+ *   hashes, under the write's own row lock, to what was read. Either may be
+ *   made as the system (`{ overrideAccess: true }`), judged as the Direct
+ *   API's own `overrideAccess: true` call is, by no access rule or field
+ *   read rule; the system may read any field stored as JSON, and its read
+ *   also gives the live row's lifecycle (`PluginStoredLifecycle`). A
+ *   conditional write may also be made as a caller whose expectation the
+ *   system read (`PluginSystemCheckedWrite`): the update is the caller's,
+ *   under every rule their own update meets, and the expectation the
+ *   system's, so a job that reads as the system and writes as the person who
+ *   started it asks that person for no read access its write does not need.
  *   `storedValueHash` is the one hash both sides compare.
  */
 export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
 export type {
   PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";
 
@@ -725,6 +749,37 @@ export {
 } from "nextly";
 
 /**
+ * Entry-list filters a plugin declares (`contributes.admin.filters`): each
+ * option narrows the list by a `where` the list read applies with the
+ * caller's access, and the choice is kept in the page's URL.
+ * @experimental No first-party plugin declares a filter yet (see STABILITY.md).
+ */
+export type {
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
+} from "nextly";
+
+/**
+ * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
+ * blocks, tabs, list columns, row and bulk actions and side panel sections,
+ * each ordered at its place, with a declared visibility rule and permission.
+ * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ */
+export type {
+  AdminBlockContribution,
+  AdminBulkActionContribution,
+  AdminColumnContribution,
+  AdminContribution,
+  AdminContributionAction,
+  AdminRowActionContribution,
+  AdminSidebarSectionContribution,
+  AdminTabContribution,
+  AdminContributionKind,
+  RowPredicate,
+  RowPredicateValue,
+} from "nextly";
+
+/**
  * Hook types.
  * @public `HookContext` — exercised by `plugin-form-builder`'s collection hook.
  * @experimental `HookType`, `HookContextPhase`, `HookHandler` — the `ctx.hooks`
@@ -735,6 +790,11 @@ export {
  * `BeforeOperation*` types below are what `ctx.hooks.onBeforeOperation`/
  * `offBeforeOperation` accept, and are exported so a plugin can type a handler
  * it holds in a variable in order to unregister the same function later.
+ *
+ * @experimental `InTransactionHandler`, `InTransactionContext` — what
+ *   `ctx.hooks.onInTransaction`/`offInTransaction` accept: a handler run inside
+ *   a write's own transaction, and the write plus the plugin's database bound
+ *   to that transaction. New, and not yet exercised by a first-party plugin.
  */
 export type {
   BeforeOperationArgs,
@@ -744,6 +804,8 @@ export type {
   HookContextPhase,
   HookHandler,
   HookType,
+  InTransactionContext,
+  InTransactionHandler,
 } from "nextly";
 
 /**

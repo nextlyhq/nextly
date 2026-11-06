@@ -619,6 +619,31 @@ describe.each(getConfiguredTestDialects())(
         expect((await layoutRow(t, other))?.status).toBe("published");
       });
 
+      it("refuses unpublishing every language at once, the site's default included", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const fallback = String((await settingsOf(t)).defaultLayout);
+
+        // Core runs the Layout's hooks for a move of every language, so the
+        // guards that refuse a plain unpublish refuse this one too.
+        const unpublished = await allLanguages(cookie, other, "unpublish-all");
+        const defaultUnpublished = await allLanguages(
+          cookie,
+          fallback,
+          "unpublish-all"
+        );
+
+        expect(unpublished.status, JSON.stringify(unpublished.body)).toBe(409);
+        expect(told(unpublished)).toBe(REMOVE_LAYOUT_REFUSAL);
+        expect(
+          defaultUnpublished.status,
+          JSON.stringify(defaultUnpublished.body)
+        ).toBe(409);
+        expect((await layoutRow(t, other))?.status).toBe("published");
+        expect((await layoutRow(t, fallback))?.status).toBe("published");
+      });
+
       it("lets an edit that unpublishes nothing through", async () => {
         const t = await boot();
         const other = await layout(t, "Other", "other");
@@ -1532,12 +1557,13 @@ describe.each(getConfiguredTestDialects())(
         const { cookie } = await owner(t);
         const other = await layout(t, "Other", "other");
         expect((await remove(cookie, other, "unpublish")).status).toBe(200);
-        // Core's all-languages publish runs no collection hooks, so the
-        // Layout's own after-write never sees it.
+        // Core's all-languages publish runs the Layout's after-write, which
+        // drops the tombstone; the sweep after it finds nothing left.
         expect((await allLanguages(cookie, other, "publish-all")).status).toBe(
           200
         );
         expect((await layoutRow(t, other))?.status).toBe("published");
+        expect(await fence().removalOf(other)).toBeNull();
 
         await settleLayoutRemovals({
           nextly: t.nextly,

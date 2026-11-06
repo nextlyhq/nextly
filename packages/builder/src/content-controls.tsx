@@ -28,9 +28,11 @@ import {
   optionLabel,
   richTextToPlainText,
   type BlockDocument,
+  type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
+  IconField,
   Input,
   Label,
   Select,
@@ -45,16 +47,19 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { CollectionControl, SortControl } from "./collection-loop-controls";
-import type { QueryField } from "./list-query-model";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
 import { propLabel, type EditableProp } from "./inspector";
+import type { QueryField } from "./list-query-model";
+import { loadLucideIcons } from "./lucide-icon-source";
 import type { OpenPassages } from "./open-passages";
+import { useRecentIcons } from "./recent-icons";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
+import type { PreferenceStore } from "./shell-state";
 import { useStoredDraft } from "./stored-draft";
 import { fitsSideBySide, type SideBySideRoom } from "./style-numeric";
 import type { InlineRichTextEditorLoader } from "./use-inline-rich-text";
@@ -180,6 +185,10 @@ export interface LoopCollection {
     readonly type: string;
     readonly hasMany?: boolean;
     readonly relationTo?: string | readonly string[];
+    /** A time of day, which no list filters or sorts by. */
+    readonly timeOnly?: boolean;
+    /** The primitive a plugin's field type is stored as, which gives its kind. */
+    readonly storage?: FieldStoragePrimitive;
   }[];
 }
 
@@ -222,7 +231,7 @@ export interface ContentServices {
    */
   readonly listLoopCollections?: () => Promise<readonly LoopCollection[]>;
   /**
-   * How many entries a list's stored query matches as a visitor reads them,
+   * How many entries a list's stored query matches as the canvas reads them,
    * and how many of those its window shows, from one count read. Asked only
    * for the list selected in the editor. Undefined where one read cannot
    * count it, such as a list of an entry's related entries.
@@ -232,10 +241,12 @@ export interface ContentServices {
   ) => Promise<ListEntriesCount | undefined>;
   /**
    * The collection the document being edited is an entry of, so a list on
-   * it can show the entry's related entries. Absent where the document is
-   * not a collection's entry, such as a Single.
+   * it can show the entry's related entries. `null` where the document is
+   * known to be no collection's entry, such as a Single, so a list there
+   * showing the entry's related entries is refused as the save refuses it;
+   * absent where that is not known.
    */
-  readonly entryCollection?: string;
+  readonly entryCollection?: string | null;
   /**
    * A media item by its id, read with the signed-in author's own access, so a
    * stored file is shown by its picture and name rather than as "a file".
@@ -246,6 +257,12 @@ export interface ContentServices {
    * finishes it before the document is stored.
    */
   readonly openPassages?: OpenPassages;
+  /**
+   * Where the icons this author chose last are kept, for the Icon control's
+   * Recent row: the host's, so it is one per signed-in author. Absent, the
+   * picker offers no Recent row.
+   */
+  readonly recentIcons?: PreferenceStore;
 }
 
 /**
@@ -296,6 +313,16 @@ export interface ContentControlProps {
 /** A content control: a label and the field it names. */
 export type ContentControl = (props: ContentControlProps) => React.JSX.Element;
 
+/**
+ * The words a block gives a prop to explain it (`hint`), shown under its
+ * control and read as its description, or `undefined` for none.
+ */
+function propHint(prop: EditableProp): string | undefined {
+  return typeof prop.schema.hint === "string" && prop.schema.hint !== ""
+    ? prop.schema.hint
+    : undefined;
+}
+
 /** A prop's value as editable text, or empty when it is not representable. */
 function storedText(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -345,10 +372,12 @@ function TextishControl({
     onCommit(prop.name, draft);
   };
 
+  const hint = propHint(prop);
   const shared = {
     id,
     disabled,
     value: draft,
+    ...(hint === undefined ? {} : { "aria-describedby": `${id}-hint` }),
     onBlur: send,
     onChange: (
       event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -378,6 +407,11 @@ function TextishControl({
             }
           }}
         />
+      )}
+      {hint === undefined ? null : (
+        <p className="nx-inspector__note" id={`${id}-hint`}>
+          {hint}
+        </p>
       )}
     </div>
   );
@@ -470,10 +504,7 @@ function PairSwitch({
   pair: readonly [on: string, off: string];
   on: boolean;
 }): React.JSX.Element {
-  const hint =
-    typeof prop.schema.hint === "string" && prop.schema.hint !== ""
-      ? prop.schema.hint
-      : undefined;
+  const hint = propHint(prop);
   return (
     <div
       className="nx-inspector__field"
@@ -1418,6 +1449,50 @@ export function UnsupportedField({
   );
 }
 
+/**
+ * An `icon` prop: the chosen icon, drawn with its name and set, as one button
+ * that opens a search-first picker, and a clear button. The picker offers the
+ * author's recent icons first, from the host's store. The set loads when
+ * the control first draws an icon or opens its picker. A chosen icon commits
+ * at once, as one undo step; clearing removes the prop. An id the set no
+ * longer draws is shown with a warning and kept until another is chosen.
+ */
+function IconControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  label,
+  services,
+}: ContentControlProps): React.JSX.Element {
+  const name = label ?? propLabel(prop.name, prop.schema);
+  const store = services?.recentIcons;
+  // One list per store, which every Icon control on screen draws: a choice
+  // made in another is here too, at once.
+  const [recent, remember] = useRecentIcons(store);
+  return (
+    <div className="nx-inspector__field" data-content-control="icon">
+      <Label htmlFor={id}>{name}</Label>
+      <IconField
+        id={id}
+        label={name}
+        value={
+          typeof prop.value === "string" && prop.value !== ""
+            ? prop.value
+            : null
+        }
+        disabled={disabled}
+        loadIcons={loadLucideIcons}
+        {...(store === undefined ? {} : { recentIcons: recent })}
+        onChange={next => {
+          if (next !== null) remember(next);
+          onCommit(prop.name, next ?? undefined);
+        }}
+      />
+    </div>
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextControl,
@@ -1427,6 +1502,7 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   checkbox: CheckboxControl,
   select: SelectControl,
   media: MediaControl,
+  icon: IconControl,
   richText: RichTextControl,
   array: ArrayControl,
   relation: RelationControl,

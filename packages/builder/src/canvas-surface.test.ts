@@ -39,8 +39,16 @@ const CHROME = readFileSync(
 const STANDALONE_CANVAS =
   ":where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
 
-/** The token scopes' selector list: the shell's two, and a lone canvas. */
-const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS}`;
+/**
+ * The layer the editor draws over the canvas, mounted without the shell: it
+ * sits in the host's document beside the frame, so it needs the tokens of its
+ * own, on the same terms as the lone canvas.
+ */
+const STANDALONE_LAYER =
+  ":where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
+
+/** The token scopes' selector list: the shell's two, a lone canvas and a lone layer. */
+const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS},\n${STANDALONE_LAYER}`;
 
 /**
  * Every place a rule is written under exactly `selector` in `css`: at the
@@ -478,6 +486,7 @@ describe("a canvas mounted outside the editor shell", () => {
       "--nx-builder-region-opacity"
     );
     expect(scope).toContain(STANDALONE_CANVAS);
+    expect(scope).toContain(STANDALONE_LAYER);
   });
 
   it("takes the dark picks under the admin's dark theme, as the shell does", () => {
@@ -491,15 +500,12 @@ describe("a canvas mounted outside the editor shell", () => {
 
 describe("a Layout region drawn in the canvas frame", () => {
   it("is styled by the frame's own sheet, in the admin's tokens, at the admin's size", () => {
-    const badge = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__badge");
-    expect(declared(badge, "background")).toBe(
+    const lock = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__lock");
+    expect(declared(lock, "background")).toBe(
       "var(--nx-builder-surface-raised)"
     );
-    expect(declared(badge, "color")).toBe("var(--nx-builder-text-muted)");
-    const words = ruleIn(
-      CANVAS_FRAME_SHEET,
-      ".nx-canvas-region__badge,\n.nx-canvas-region__tag"
-    );
+    expect(declared(lock, "color")).toBe("var(--nx-builder-text-muted)");
+    const words = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__mark-body");
     expect(declared(words, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
     expect(declared(words, "font-family")).toBe(
       "var(--font-sans, system-ui), sans-serif"
@@ -567,11 +573,9 @@ describe("a collection list's notes and tag in the canvas frame", () => {
       "calc(0.8125rem / var(--nx-canvas-zoom, 1))"
     );
     // Each is the theme's own, so it follows light and dark.
-    expect(
-      ruleFor(
-        ".nx-builder-tokens,\n.nx-builder-chrome,\n:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))"
-      )
-    ).toContain("--nx-builder-warning: var(--nx-warning)");
+    expect(ruleFor(TOKENS)).toContain(
+      "--nx-builder-warning: var(--nx-warning)"
+    );
   });
 
   it("tags a list drawing its empty state with why, at the admin's size", () => {

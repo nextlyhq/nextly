@@ -25,7 +25,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, relationship, text } from "nextly/config";
+import { defineCollection, number, relationship, text } from "nextly/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -92,6 +92,8 @@ describe.each(getConfiguredTestDialects())(
                 relationTo: ARTICLES,
                 hasMany: true,
               }),
+              relationship({ name: "lead", relationTo: ARTICLES }),
+              number({ name: "rank" }),
             ],
           }),
           defineCollection({
@@ -306,6 +308,12 @@ describe.each(getConfiguredTestDialects())(
         "a filter on a relation holding several entries",
         { filters: [{ field: "featured", op: "in", value: ["x"] }] },
         "cannot filter by such a field",
+      ],
+      ["a sort on a related entry", { sort: "lead" }, "links to another entry"],
+      [
+        "a number filter compared with text",
+        { filters: [{ field: "rank", op: "equals", value: "5" }] },
+        'which holds a number, with "5"',
       ],
     ])(
       "refuses %s: the dry run says so, and the apply writes nothing",

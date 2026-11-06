@@ -50,6 +50,11 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import {
+  blockLookGroups,
+  sameLook,
+  type BlockLookRow,
+} from "./block-look-rows";
 import { CanvasPassageContext, type CanvasPassage } from "./canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
@@ -98,6 +103,7 @@ import {
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
+import { LookInspector, type LookEditing } from "./look-inspector";
 import { useCanvasTokenModeAt } from "./prefers-dark";
 import { propGroupsOf } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
@@ -181,6 +187,13 @@ export interface InspectorPanelProps {
    * @experimental Settles with the shared-styles editor.
    */
   sharedStyles?: SharedStylesHost;
+  /**
+   * A look edited on its own, chosen in the Design panel: while no block is
+   * selected the inspector edits it instead of saying to select a block.
+   *
+   * @experimental Settles with the Design panel's Block looks group.
+   */
+  lookEditing?: LookEditing;
   /**
    * The site's fonts, carried to the Style tab's Font control. See
    * {@link StyleInspectorPanelProps.fonts}.
@@ -562,6 +575,29 @@ export function InspectorPanel({
   canvasPassage = null,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
+  const look = editedLook(panel);
+  if (look !== undefined && panel.lookEditing !== undefined) {
+    return (
+      <LookInspector
+        editor={panel.editor}
+        look={look}
+        host={panel.sharedStyles}
+        onExit={panel.lookEditing.onExit}
+        library={panel.classLibrary ?? []}
+        canvasRoot={panel.canvasRoot}
+        state={editedStyleState(panel.styleState)}
+        policy={panel.policy}
+        breakpoint={panel.breakpoint}
+        cascade={panel.cascade}
+        breakpoints={panel.breakpoints}
+        previewContainer={panel.previewContainer}
+        liveBreakpoints={panel.liveBreakpoints}
+        onJumpToBreakpoint={panel.onJumpToBreakpoint}
+        tokens={panel.tokens}
+        fonts={panel.fonts}
+      />
+    );
+  }
   return (
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
       <ComponentVariantsContext.Provider value={componentVariants}>
@@ -571,6 +607,21 @@ export function InspectorPanel({
       </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
   );
+}
+
+/**
+ * The look the inspector edits on its own: the one the host names, while no
+ * block is selected and the look is still one the site renders or reads.
+ * Selecting a block edits the block, whatever look was chosen.
+ */
+function editedLook(
+  panel: Pick<InspectorPanelProps, "editor" | "classLibrary" | "lookEditing">
+): BlockLookRow | undefined {
+  const key = panel.lookEditing?.look;
+  if (key === undefined || panel.editor.selectedId !== null) return undefined;
+  return blockLookGroups(panel.classLibrary ?? [], new Set())
+    .flatMap(group => group.rows)
+    .find(row => sameLook(row, key));
 }
 
 function SelectionInspector({
