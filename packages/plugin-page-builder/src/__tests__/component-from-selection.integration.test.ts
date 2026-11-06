@@ -30,7 +30,6 @@ import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
-import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 
@@ -263,18 +262,15 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
       });
 
-      const hosts = await t.nextly.find({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        where: { componentId: { equals: item.component.id } },
-        overrideAccess: true,
-        limit: 50,
-        depth: 0,
-      });
-      expect(
-        (hosts.items as unknown as { entityKey: string }[]).map(
-          row => row.entityKey
-        )
-      ).toContain(pageId);
+      const hosts = await t.adapter.select<{ entityKey: string }>(
+        "page_builder__component_usage",
+        {
+          where: {
+            and: [{ column: "componentId", op: "=", value: item.component.id }],
+          },
+        }
+      );
+      expect(hosts.map(row => row.entityKey)).toContain(pageId);
     });
 
     it("leaves no component behind when the page's update is refused", async () => {
