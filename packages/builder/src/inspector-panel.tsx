@@ -50,6 +50,7 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import { CanvasPassageContext, type CanvasPassage } from "./canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
   ComponentFieldsContext,
@@ -140,6 +141,12 @@ export type BlockInspectorResolver = (
 ) => React.ComponentType<BlockInspectorProps> | undefined;
 
 export interface InspectorPanelProps {
+  /**
+   * The component placement's exposed passage the canvas is editing in place,
+   * whose field the inspector holds meanwhile; `null` or omitted while the
+   * canvas edits none.
+   */
+  canvasPassage?: CanvasPassage | null;
   /**
    * The canvas root, forwarded to the style tab.
    *
@@ -552,12 +559,15 @@ function surfaceFor(
 export function InspectorPanel({
   componentFields,
   componentVariants,
+  canvasPassage = null,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
   return (
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
       <ComponentVariantsContext.Provider value={componentVariants}>
-        <SelectionInspector {...panel} />
+        <CanvasPassageContext.Provider value={canvasPassage}>
+          <SelectionInspector {...panel} />
+        </CanvasPassageContext.Provider>
       </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
   );
