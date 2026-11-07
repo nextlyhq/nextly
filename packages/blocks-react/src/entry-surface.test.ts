@@ -645,6 +645,7 @@ describe("the blocks entry", () => {
       "HEADING_LEVELS",
       "IMAGE_LOADING",
       "LIST_KINDS",
+      "TABLE_OF_CONTENTS_DEPTHS",
       "accordion",
       "accordionItem",
       "box",
@@ -671,6 +672,7 @@ describe("the blocks entry", () => {
       "richText",
       "section",
       "spacer",
+      "tableOfContents",
     ]);
   });
 

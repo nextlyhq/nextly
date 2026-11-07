@@ -12,6 +12,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { CSSProperties, ReactNode } from "react";
 
+import {
+  anchorIds,
+  headingAnchors,
+  headingRank,
+} from "./blocks/heading-anchors";
 import { fetchableUrl, oneOf, relFor, text, url } from "./blocks/props";
 import type { BlockHostPolicy } from "./context";
 
@@ -239,6 +244,12 @@ function formatted(
 interface DrawSettings {
   readonly host: BlockHostPolicy | undefined;
   readonly spacingMode: SpacingMode | undefined;
+  /**
+   * The id each heading is drawn with, by its stored node, when the caller
+   * asked for anchors; read once per passage by `headingAnchors`, the reading
+   * a table of contents links by.
+   */
+  readonly anchors?: ReadonlyMap<RichTextNode, string>;
 }
 
 function children(
@@ -449,9 +460,6 @@ export function holdsBlockContent(
   return anyDescendant(nodes, node => BLOCK_LEVEL.has(node.type));
 }
 
-/** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
-const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
-
 /**
  * What a `summary` may hold besides phrasing content.
  *
@@ -652,20 +660,25 @@ function PhrasingOnly({
   tag: Tag,
   node,
   draw,
+  id,
 }: {
   tag: "h1" | "summary";
   node: RichTextNode;
   draw: DrawSettings;
+  /** The element's anchor, for a heading drawn with one. */
+  id?: string;
 }): ReactNode {
   const kids = Array.isArray(node.children) ? node.children : [];
-  if (!holdsBlockContent(kids)) return <Tag>{children(kids, draw)}</Tag>;
+  const anchor = id === undefined ? {} : { id };
+  if (!holdsBlockContent(kids))
+    return <Tag {...anchor}>{children(kids, draw)}</Tag>;
   const { keeps, moves } = partitionPhrasing(
     kids,
     Tag === "summary" ? SUMMARY_PERMITS : PERMITS_NOTHING
   );
   return (
     <>
-      <Tag>{children(keeps, draw)}</Tag>
+      <Tag {...anchor}>{children(keeps, draw)}</Tag>
       {children(moves, draw)}
     </>
   );
@@ -681,12 +694,17 @@ function HeadingView({
   // `h2` rather than `h1` when the tag is unrecognised: guessing `h1` invents a
   // second top-level heading and breaks the page outline, which is worse than
   // rendering one level too deep.
-  const tag =
-    typeof node.tag === "string" && HEADING_TAGS.has(node.tag)
-      ? node.tag
-      : "h2";
-  const Heading = tag as "h1";
-  return <PhrasingOnly tag={Heading} node={node} draw={draw} />;
+  // The level is read by the same rule a table of contents lists it by.
+  const Heading = `h${headingRank(node)}` as "h1";
+  const id = draw.anchors?.get(node);
+  return (
+    <PhrasingOnly
+      tag={Heading}
+      node={node}
+      draw={draw}
+      {...(id === undefined ? {} : { id })}
+    />
+  );
 }
 
 function LinkView({
@@ -1448,6 +1466,12 @@ export interface RichTextProps {
    * Absent is the engine's default, `gaps`.
    */
   spacingMode?: SpacingMode;
+  /**
+   * Whether each heading is drawn with an id, so a link (a table of contents
+   * among them) can reach it. Absent is none: a passage drawn somewhere other
+   * than a page, such as an email, keeps its markup as it was.
+   */
+  anchorHeadings?: boolean;
 }
 
 /**
@@ -1463,9 +1487,15 @@ export function RichText({
   value,
   hostPolicy,
   spacingMode,
+  anchorHeadings,
 }: RichTextProps): ReactNode {
   if (!isRichTextValue(value)) return null;
-  return (
-    <>{children(value.root.children, { host: hostPolicy, spacingMode })}</>
-  );
+  const draw: DrawSettings = {
+    host: hostPolicy,
+    spacingMode,
+    ...(anchorHeadings === true
+      ? { anchors: anchorIds(headingAnchors(value)) }
+      : {}),
+  };
+  return <>{children(value.root.children, draw)}</>;
 }

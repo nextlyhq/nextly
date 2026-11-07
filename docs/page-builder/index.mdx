@@ -14,10 +14,10 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## What you get
 
-- **21 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
-  accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
-  image, gallery, icon, button, embed, form), and one that reads from your content
-  ([Collection list](#reading-content-into-a-page)).
+- **22 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
+  accordion item, spacer, divider), content (heading, paragraph, rich text, table of
+  contents, list, quote, image, gallery, icon, button, embed, form), and one that reads
+  from your content ([Collection list](#reading-content-into-a-page)).
 - **Icons.** The Icon block draws one icon from the built-in [Lucide](https://lucide.dev)
   set as inline SVG, rendered on the server, so a published page ships no script for it.
   Its **Icon** control (Content tab) opens a search-first picker that offers the icons you
@@ -688,6 +688,30 @@ as `requireNextly` does.
   fields. See [Block document
   format](/docs/api-reference/block-document-format).
 </Callout>
+
+### A table of contents
+
+The **Table of contents** block (stored as `core/table-of-contents`) lists the headings
+of a passage of rich text, each linking to its heading. On a collection's template,
+bind its **Content** to the same field as the article's Rich text block, and every
+entry gets contents drawn from its own body:
+
+- **Headings listed**: H2 only, H2 and H3 (the default), or H2 to H4. An H1 is the
+  page's title and is never listed. Each heading sits inside the heading above it, in a
+  nested list, so a screen reader announces the structure as well as the words.
+- **Title**: the label above the list (On this page by default), which also names the
+  block's navigation landmark.
+- **Can be folded away**: on by default, so the list starts open under its title and a
+  reader can close it, with no script.
+
+Every heading a Rich text block draws carries an id, made from its words: lower-cased,
+punctuation dropped, spaces as hyphens (`Getting started` is `#getting-started`), with a
+repeated heading numbered (`#notes`, `#notes-2`). The ids are unique within one passage.
+Two Rich text blocks on one page that share a heading give it the same id, and a link to
+it reaches the first.
+
+A visitor sees nothing when there are no headings to list, so an entry without any shows
+no empty box. On the canvas the block keeps its frame and says why it is empty.
 
 ## Related
 

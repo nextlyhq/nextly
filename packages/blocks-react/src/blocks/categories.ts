@@ -87,6 +87,7 @@ export const CORE_PALETTE_ORDER: readonly string[] = [
   "core/list",
   "core/quote",
   "core/rich-text",
+  "core/table-of-contents",
   "core/collection-loop",
   // Media
   "core/image",
