@@ -379,22 +379,24 @@ function BindButton({
   );
 }
 
-/** What an unbind said: the reason, and whether it was refused. */
+/**
+ * What an unbind said, and how: kept as visitors saw it, kept in place of a
+ * field visitors can't read, or refused.
+ */
 interface UnbindNote {
   readonly text: string;
-  readonly refused: boolean;
+  readonly tone: "kept" | "private" | "refused";
 }
 
 /** The note an unbind leaves under its field. */
 function UnboundNote({ note }: { note: UnbindNote }): React.JSX.Element {
   return (
-    <p
-      className="nx-binding-note"
-      data-tone={note.refused ? "refused" : "kept"}
-      role="status"
-    >
-      {note.refused ? null : <Check aria-hidden="true" size={14} />}
-      <span>{note.refused ? note.text : `Unbound. ${note.text}`}</span>
+    <p className="nx-binding-note" data-tone={note.tone} role="status">
+      {note.tone === "kept" ? <Check aria-hidden="true" size={14} /> : null}
+      {note.tone === "private" ? <EyeOff aria-hidden="true" size={14} /> : null}
+      <span>
+        {note.tone === "refused" ? note.text : `Unbound. ${note.text}`}
+      </span>
     </p>
   );
 }
@@ -407,13 +409,23 @@ function UnboundNote({ note }: { note: UnbindNote }): React.JSX.Element {
 function noteFor(
   answer: UnbindAnswer,
   blockLabel: string,
-  propName: string
+  propName: string,
+  /** The bound field, named as the chip names it. */
+  fieldName: string
 ): string {
   const block = `The ${blockLabel.toLowerCase()}`;
   const value =
     typeof answer.value === "string" && answer.value !== ""
       ? `: “${answer.value}”`
       : "";
+  // A field visitors can't read: its value was never copied in, and the note
+  // says so before what was kept in its place.
+  if (answer.unreadable === true) {
+    const unread = `Visitors can't read “${fieldName}”, so its value wasn't copied in.`;
+    return answer.kept === "fallback"
+      ? `${unread} ${block} keeps the fallback${value}.`
+      : `${unread} ${block} keeps its own ${propName.toLowerCase()}.`;
+  }
   switch (answer.kept) {
     case "visitor":
       return answer.into === undefined
@@ -520,7 +532,10 @@ function BoundField({
     const op = unbindOp(document, nodeId, prop.name, plan.kept);
     if (op === null) return;
     onApply(op);
-    onUnbound({ text: noteFor(plan.answer, blockLabel, name), refused: false });
+    onUnbound({
+      text: noteFor(plan.answer, blockLabel, name, names.field),
+      tone: plan.answer.unreadable === true ? "private" : "kept",
+    });
   };
   const fallback =
     "fallback" in binding && typeof binding.fallback === "string"
@@ -625,7 +640,7 @@ function BoundField({
           />
         </div>
         {refusal === null ? null : (
-          <UnboundNote note={{ text: refusal, refused: true }} />
+          <UnboundNote note={{ text: refusal, tone: "refused" }} />
         )}
       </div>
     </div>
