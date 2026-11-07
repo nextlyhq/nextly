@@ -69,24 +69,36 @@ export function templateHolderReader(
 }
 
 /**
- * The collection a stored template draws, read as the system over the
- * plugin's own reads, every state of it: `undefined` where there is no such
- * template or it names none. What a template's lists are judged against
- * when its save does not carry the collection.
+ * The collections stored templates draw, by template id, read as the system
+ * over the plugin's own reads, every state of each, in ONE read however many
+ * ids are asked: a template missing from the answer is not stored or names
+ * none. What template lists are judged against when a save does not carry
+ * the collection, and when a component save judges the templates placing it.
  */
-export function templateTargetReader(
+export function templateTargetsReader(
   own: OwnTemplateReads,
   templatesCollection: string
-): (id: string) => Promise<string | undefined> {
-  return async id => {
+): (ids: readonly string[]) => Promise<ReadonlyMap<string, string>> {
+  return async ids => {
+    const targets = new Map<string, string>();
+    if (ids.length === 0) return targets;
     const found = await own.listEntries(templatesCollection, {
-      where: { id: { equals: id } },
-      pagination: { limit: 1 },
+      where: { id: { in: [...ids] } },
+      pagination: { limit: ids.length },
       depth: 0,
     });
-    const row = found.data[0] as Record<string, unknown> | undefined;
-    const target = row?.[TEMPLATE_COLLECTION_FIELD];
-    return typeof target === "string" && target !== "" ? target : undefined;
+    for (const value of found.data) {
+      const row = recordOf(value);
+      const target = row?.[TEMPLATE_COLLECTION_FIELD];
+      if (
+        typeof row?.id === "string" &&
+        typeof target === "string" &&
+        target !== ""
+      ) {
+        targets.set(row.id, target);
+      }
+    }
+    return targets;
   };
 }
 

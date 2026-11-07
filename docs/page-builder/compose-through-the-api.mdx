@@ -231,7 +231,9 @@ The answer holds the `template` as the write stored it.
 
 A template's lists and visibility conditions are judged against the collection it draws,
 not the `templates` collection, so a list of the entry's related entries names that
-collection's relations. In the editor a template is previewed with a real entry of its
+collection's relations. A template saved inside a batch or another write's transaction
+names its `collection` in the same write, or the save is refused, since its stored
+collection cannot be read there. In the editor a template is previewed with a real entry of its
 collection ([Editing a template](/docs/page-builder/editor#editing-a-template)). Which
 entry is previewed is the editor's own state and is not stored, so there is no action for
 it.

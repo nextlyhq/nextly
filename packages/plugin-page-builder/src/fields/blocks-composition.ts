@@ -103,7 +103,8 @@ import {
 import {
   composedConditionIssues,
   composedListQueryIssues,
-  templateTargetIn,
+  isStoredTemplate,
+  TEMPLATE_TARGET_UNKNOWN,
   writeSettingOf,
   type ComposedListIssue,
   type ListFieldsReader,
@@ -973,6 +974,10 @@ async function judgeComposedLists(args: {
     args.data,
     args.setup.templates
   );
+  // A template whose collection cannot be known is refused by the field's
+  // own judgement of its lists, which runs on the same write; judging its
+  // composed lists by their shape here would only weaken that refusal.
+  if (setting === TEMPLATE_TARGET_UNKNOWN) return;
   const found = [
     ...(await composedListQueryIssues(
       args.composed,
@@ -1338,6 +1343,8 @@ async function judgeHosts(args: {
   }
   // Every host's lists name the same few collections: each is read once.
   const listFields = onceEach(setup.listFields);
+  // And the collections the template hosts draw, in one read for them all.
+  const templateTargets = await templateHostTargets(listed.hosts, write, setup);
   for (const host of listed.hosts) {
     await judgeOneHost({
       host,
@@ -1351,8 +1358,33 @@ async function judgeHosts(args: {
       work,
       tally,
       listFields,
+      templateTargets,
     });
   }
+}
+
+/**
+ * The collections the hosts stored in the templates collection draw, by
+ * host id, read in ONE read for every such host rather than one per host.
+ * Nothing is read inside a caller's transaction, where a read on another
+ * connection can wait on the one the transaction holds: those hosts are
+ * then left unjudged (`hostSettingOf`).
+ */
+async function templateHostTargets(
+  hosts: readonly HostRef[],
+  write: PluginFieldWrite,
+  setup: CompositionSetup
+): Promise<ReadonlyMap<string, string>> {
+  const templates = setup.templates;
+  if (templates === undefined || write.inTransaction) return new Map();
+  const ids = [
+    ...new Set(
+      hosts
+        .filter(host => !host.single && host.slug === templates.collection)
+        .map(host => host.id)
+    ),
+  ];
+  return ids.length === 0 ? new Map() : templates.storedTargetsOf(ids);
 }
 
 /** The component as the store holds it in one form, where it holds a forest. */
@@ -1625,6 +1657,8 @@ async function judgeOneHost(args: {
   tally: Tally;
   /** The schema the host's lists are judged against, read once per save. */
   listFields: ListFieldsReader | undefined;
+  /** The collections the template hosts draw, read once per save. */
+  templateTargets: ReadonlyMap<string, string>;
 }): Promise<void> {
   const { host, self, document, draft, read, write, setup, work, tally } = args;
   // A localized field holds a document per language, and the read is refused
@@ -1674,6 +1708,7 @@ async function judgeOneHost(args: {
     setup,
     tally,
     listFields: args.listFields,
+    templateTargets: args.templateTargets,
   });
 }
 
@@ -1699,9 +1734,19 @@ async function reportListsBroken(args: {
   setup: CompositionSetup;
   tally: Tally;
   listFields: ListFieldsReader | undefined;
+  templateTargets: ReadonlyMap<string, string>;
 }): Promise<void> {
   const { host, stored, before, after, setup, tally, listFields } = args;
-  const setting = await hostSettingOf(host, stored, setup);
+  const setting = hostSettingOf(host, stored, setup, args.templateTargets);
+  if (setting === TEMPLATE_TARGET_UNKNOWN) {
+    // Never judged by shape instead: the operator is told which template
+    // went unjudged, as for any host this save could not vouch for.
+    tally.host(
+      host,
+      `${describeHost(host)} is a template whose collection could not be read`
+    );
+    return;
+  }
   const site = {
     ...(listFields === undefined ? {} : { fieldsOf: listFields }),
     ...(setup.namedQueries === undefined
@@ -1739,26 +1784,22 @@ async function reportListsBroken(args: {
  * template draws for a template (as its own save judges it, from the template
  * as stored), and the host's own collection for any other entry.
  */
-async function hostSettingOf(
+function hostSettingOf(
   host: HostRef,
   stored: BlockDocument,
-  setup: CompositionSetup
-): Promise<{ readonly entryCollection?: string | null }> {
+  setup: CompositionSetup,
+  templateTargets: ReadonlyMap<string, string>
+):
+  | { readonly entryCollection?: string | null }
+  | typeof TEMPLATE_TARGET_UNKNOWN {
   if (host.slug === setup.store.collection) return {};
-  if (!host.single) {
-    // Judged as a save of the template is, from the template as stored: no
-    // payload carries its collection here, so the stored one is read.
-    const template = await templateTargetIn(
-      { slug: host.slug, id: host.id, inTransaction: false },
-      stored,
-      undefined,
-      setup.templates
-    );
-    if (template !== null) {
-      return template.target === undefined
-        ? {}
-        : { entryCollection: template.target };
-    }
+  // Judged as a save of the template is: against the collection it draws,
+  // from the template as stored, read for every template host at once.
+  if (!host.single && isStoredTemplate(host.slug, stored, setup.templates)) {
+    const target = templateTargets.get(host.id);
+    return target === undefined
+      ? TEMPLATE_TARGET_UNKNOWN
+      : { entryCollection: target };
   }
   return { entryCollection: host.slug };
 }

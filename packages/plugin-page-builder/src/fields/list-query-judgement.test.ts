@@ -162,10 +162,17 @@ describe("a template's lists and conditions, judged against the collection it dr
   /** The templates collection, its stored targets read as the system. */
   const templates = (
     stored: Readonly<Record<string, string>> = {}
-  ): TemplateTargets & { storedTargetOf: ReturnType<typeof vi.fn> } => ({
+  ): TemplateTargets & { storedTargetsOf: ReturnType<typeof vi.fn> } => ({
     collection: "templates",
     field: "collection",
-    storedTargetOf: vi.fn(async (id: string) => stored[id]),
+    storedTargetsOf: vi.fn(
+      async (ids: readonly string[]) =>
+        new Map(
+          ids.flatMap(id =>
+            stored[id] === undefined ? [] : [[id, stored[id]]]
+          )
+        )
+    ),
   });
   /** A write to the templates collection, carrying `data`. */
   const templateWrite = (
@@ -216,16 +223,47 @@ describe("a template's lists and conditions, judged against the collection it dr
         { fieldsOf, templates: targets }
       )
     ).toEqual([]);
-    expect(targets.storedTargetOf).toHaveBeenCalledWith("t1");
-    // And a template stored elsewhere is judged with its entry unknown: by
-    // the list's shape alone, never against the templates collection.
-    const unknown = templates({});
+    expect(targets.storedTargetsOf).toHaveBeenCalledWith(["t1"]);
+  });
+
+  it("refuses a template whose collection is neither sent nor stored, rather than judging its lists by shape", async () => {
+    const found = await newListQueryIssues(
+      asTemplate,
+      templateWrite({}, { id: "t2" }),
+      "Template",
+      { fieldsOf, templates: templates({}) }
+    );
+    expect(found.map(issue => issue.code)).toEqual([
+      "TEMPLATE_COLLECTION_UNKNOWN",
+    ]);
+  });
+
+  it("refuses a template saved inside a batch without its collection, where the stored one cannot be read", async () => {
+    // The stored collection is there, but a read of it on another connection
+    // could wait on the batch's own: it is not read, and the save is refused.
+    const targets = templates({ t1: "posts" });
+    const found = await newListQueryIssues(
+      asTemplate,
+      templateWrite({}, { id: "t1", inTransaction: true }),
+      "Template",
+      { fieldsOf, templates: targets }
+    );
+    expect(found.map(issue => issue.code)).toEqual([
+      "TEMPLATE_COLLECTION_UNKNOWN",
+    ]);
+    expect(found[0]?.message).toContain("Send the template's collection");
+    expect(targets.storedTargetsOf).not.toHaveBeenCalled();
+    // The control: the same batch save carrying the collection is judged
+    // against it, and kept.
     expect(
       await newListQueryIssues(
         asTemplate,
-        templateWrite({}, { id: "t2" }),
+        templateWrite(
+          { collection: "posts" },
+          { id: "t1", inTransaction: true }
+        ),
         "Template",
-        { fieldsOf, templates: unknown }
+        { fieldsOf, templates: targets }
       )
     ).toEqual([]);
   });

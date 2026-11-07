@@ -297,7 +297,7 @@ import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
   templateHolderReader,
-  templateTargetReader,
+  templateTargetsReader,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
 import {
@@ -2073,7 +2073,7 @@ export const pageBuilder = (
         templates: {
           collection: templates,
           field: TEMPLATE_COLLECTION_FIELD,
-          storedTargetOf: templateTargetReader(
+          storedTargetsOf: templateTargetsReader(
             ctx.services.ownCollections,
             templates
           ),
@@ -2256,7 +2256,7 @@ export const pageBuilder = (
                 pagesSlug,
                 id
               );
-            return found as unknown as Readonly<Record<string, unknown>>;
+            return found;
           } catch (error) {
             if (NextlyError.isNotFound(error)) return null;
             throw error;
