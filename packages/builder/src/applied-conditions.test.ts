@@ -182,6 +182,35 @@ describe("the page with its conditions applied", () => {
     expect(drawn).toMatchObject({ id: "featured", type: "core/text" });
     expect(drawn?.visibility).toBeUndefined();
   });
+
+  it("keeps a list item's block's conditions for the renderer where the lists draw what a visitor reads", () => {
+    const featured = block("featured", {
+      visibility: { conditions: [[guides]], devices: { mobile: false } },
+    });
+    const intro = block("intro", { visibility: { conditions: [[guides]] } });
+    const list = block("list", {
+      type: COLLECTION_LIST_TYPE,
+      props: { collection: "posts" },
+      slots: { [LIST_ENTRY_SLOT]: [featured] },
+    });
+    const applied = appliedConditionsOf(
+      page(intro, list),
+      previewFor({ category: "Guides" }),
+      nameOf,
+      { itemsJudged: true }
+    );
+    // Judged for each item drawn, so nothing is left unjudged.
+    expect(applied.unjudged).toBe(false);
+    expect(applied.shown).toEqual(new Set(["intro"]));
+    // The page's own shown block is lifted, as before; the item's keeps its
+    // conditions, and its devices, for the renderer to judge per item.
+    expect(applied.document.nodes[0]?.visibility).toBeUndefined();
+    const drawn = applied.document.nodes[1]?.slots?.[LIST_ENTRY_SLOT]?.[0];
+    expect(drawn?.visibility).toEqual({
+      conditions: [[guides]],
+      devices: { mobile: false },
+    });
+  });
 });
 
 describe("the page with its conditions applied, as the canvas draws it", () => {
