@@ -118,9 +118,20 @@ export async function editorReaderAsCaller(
  * `WhereFilter` type, spelled for field conditions, does not describe. The
  * spelling is core's (`nextly/reserved-filter-keys`), so it is not restated.
  */
-function workflowWhere(key: string, ids: readonly string[]): WhereFilter {
-  const where: Record<string, unknown> = { id: { in: [...ids] }, [key]: true };
+function workflowWhere(key: string, ids?: readonly string[]): WhereFilter {
+  const where: Record<string, unknown> = {
+    ...(ids === undefined ? {} : { id: { in: [...ids] } }),
+    [key]: true,
+  };
   return where as WhereFilter;
+}
+
+/**
+ * Every entry core's workflow filter `key` keeps, as a where clause: for a
+ * read that lists them rather than asks about given ids.
+ */
+export function workflowKeyWhere(key: string): WhereFilter {
+  return workflowWhere(key);
 }
 
 /**

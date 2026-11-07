@@ -667,8 +667,11 @@ export async function readPagesSearch(
   return { items, meta: mergedMeta(request, sources, hits, merged.taken) };
 }
 
-/** `work` over `items`, at most `size` at a time, answers in `items` order. */
-async function inTurns<T, R>(
+/**
+ * `work` over `items`, at most `size` at a time, answers in `items` order.
+ * Shared with the template preview's list, which reads working drafts so.
+ */
+export async function inTurns<T, R>(
   items: readonly T[],
   size: number,
   work: (item: T) => Promise<R>

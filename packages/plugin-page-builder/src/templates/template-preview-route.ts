@@ -66,10 +66,11 @@ import {
   editorReaderAsCaller,
   findAsCaller,
   idsKeptByWorkflowKey,
+  workflowKeyWhere,
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "../entry-reads";
-import { pageStateOf } from "../pages-search-route";
+import { inTurns, pageStateOf } from "../pages-search-route";
 
 import {
   templateCollectionProblem,
@@ -135,6 +136,18 @@ export interface PreviewEntriesReads {
   find(args: AsCallerFindArgs): Promise<AsCallerPage>;
   /** Whether the caller may create an entry of `collection`. */
   mayCreate(collection: string): Promise<boolean>;
+  /**
+   * One entry as the caller reads it, its working draft in place of the
+   * live row where one waits, kept to `select` beside its id: the same
+   * draft-aware read the preview draws the entry with. `null` where the
+   * caller may not read it.
+   */
+  draft(request: {
+    readonly collection: string;
+    readonly id: string;
+    readonly locale?: string;
+    readonly select: readonly string[];
+  }): Promise<Record<string, unknown> | null>;
 }
 
 /** What the entry read reads with, injected so it is tested without a server. */
@@ -347,9 +360,130 @@ function itemOf(
   ];
 }
 
+/** How many entries waiting on a working draft one list reads them for. */
+const PENDING_MOST = TEMPLATE_PREVIEW_LIMIT;
+
+/** How many working drafts are read at once. */
+const DRAFTS_AT_ONCE = 5;
+
+/**
+ * Whether a row's title matches a search as the database's search on it
+ * does (`searchOn`): text by a case-insensitive contains, a number exactly,
+ * anything else not at all. For a working draft's title, which no list read
+ * can search.
+ */
+function titleMatches(
+  row: Record<string, unknown>,
+  search: string | undefined,
+  title: ReturnType<typeof titleFieldIn>
+): boolean {
+  if (search === undefined) return true;
+  if (title === undefined || title.kind === "other") return false;
+  const value = row[title.name];
+  if (title.kind === "number") {
+    return search.trim() !== "" && Number(search) === value;
+  }
+  return (
+    typeof value === "string" &&
+    value.toLocaleLowerCase().includes(search.toLocaleLowerCase())
+  );
+}
+
+/** A row's time to sort by: its last update, or none. */
+function updatedOf(row: Record<string, unknown>): string {
+  return timeOf(row[UPDATED_AT]) ?? "";
+}
+
+/**
+ * The working drafts of the entries the list shows and of those waiting on
+ * one, read as the caller through the draft-aware read the preview draws
+ * with, by id. A list read answers a published entry's live row and no
+ * list read overlays working drafts, so this is the one way the list can
+ * show, search and order what choosing a row draws. Bounded: the listed
+ * rows and the most recently updated entries waiting on a draft, each at
+ * most {@link TEMPLATE_PREVIEW_LIMIT}, read {@link DRAFTS_AT_ONCE} at a time.
+ */
+async function workingDrafts(
+  reads: PreviewEntriesReads,
+  request: PreviewEntriesRequest,
+  shape: ListShape,
+  listedIds: readonly string[]
+): Promise<ReadonlyMap<string, Record<string, unknown>>> {
+  const { collection, locale } = request;
+  const inLocale = locale === undefined ? {} : { locale };
+  const [listedPending, otherPending] = await Promise.all([
+    pendingIds(reads, collection, listedIds, locale),
+    // The entries waiting on a draft whose draft may match or sort where
+    // their live row does not, read as the caller by core's own filter.
+    reads
+      .find({
+        collection,
+        where: workflowKeyWhere(PENDING_CHANGE_KEY),
+        select: { id: true },
+        ...(shape.stamps ? { sort: [`-${UPDATED_AT}`, "id"] } : {}),
+        limit: PENDING_MOST,
+        ...inLocale,
+      })
+      .then(
+        page =>
+          page.items.flatMap(row => idOf(row as Record<string, unknown>) ?? []),
+        () => [] as string[]
+      ),
+  ]);
+  const ids = [...new Set([...listedPending, ...otherPending])];
+  const select = [
+    ...(shape.title === undefined ? [] : [shape.title]),
+    STATUS_COLUMN,
+    ...(shape.stamps ? [UPDATED_AT] : []),
+  ];
+  const drafts = await inTurns(ids, DRAFTS_AT_ONCE, async id =>
+    reads
+      .draft({ collection, id, select, ...inLocale })
+      .catch((error: unknown) => {
+        if (missedOrRefused(error)) return null;
+        throw error;
+      })
+  );
+  const byId = new Map<string, Record<string, unknown>>();
+  drafts.forEach((draft, at) => {
+    const id = ids[at];
+    if (draft !== null && id !== undefined) byId.set(id, draft);
+  });
+  return byId;
+}
+
+/**
+ * The rows the list shows, newest first: each listed row as its working
+ * draft has it where one waits, with the entries whose draft alone matches
+ * the search, less those whose draft no longer does, cut to the limit.
+ */
+function draftAwareRows(
+  live: readonly Record<string, unknown>[],
+  drafts: ReadonlyMap<string, Record<string, unknown>>,
+  search: string | undefined,
+  title: ReturnType<typeof titleFieldIn>
+): Record<string, unknown>[] {
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const row of live) {
+    const id = idOf(row);
+    if (id !== undefined) rows.set(id, { ...row, ...drafts.get(id), id });
+  }
+  for (const [id, draft] of drafts) {
+    if (!rows.has(id)) rows.set(id, { ...draft, id });
+  }
+  return [...rows.values()]
+    .filter(row => titleMatches(row, search, title))
+    .sort((a, b) => {
+      const byTime = updatedOf(b).localeCompare(updatedOf(a));
+      return byTime !== 0 ? byTime : String(a.id).localeCompare(String(b.id));
+    })
+    .slice(0, TEMPLATE_PREVIEW_LIMIT);
+}
+
 /**
  * Answer the list: the collection judged first, then its entries read as the
- * caller, most recently updated first, with whether each waits on a working
+ * caller, as choosing each would draw it (its working draft where one
+ * waits), most recently updated first, with whether each waits on a working
  * draft and whether the caller may create another.
  */
 export async function readPreviewEntries(
@@ -363,10 +497,9 @@ export async function readPreviewEntries(
     TEMPLATE_PREVIEW_ENTRIES_PATH
   );
   const shape = listShapeOf(record);
+  const title = titleFieldIn(record);
   const searched =
-    request.search === undefined
-      ? undefined
-      : searchOn(request.search, titleFieldIn(record));
+    request.search === undefined ? undefined : searchOn(request.search, title);
   const matchesNothing = searched === NO_MATCH;
   const read = await rowsAsCaller(
     reads,
@@ -378,15 +511,25 @@ export async function readPreviewEntries(
     )
   );
   const found = read === null || matchesNothing ? null : read;
-  const rows = found?.rows ?? [];
-  const ids = rows.flatMap(row => idOf(row) ?? []);
-  const none: ReadonlySet<string> = new Set();
-  const [pending, mayCreate] = await Promise.all([
-    shape.lifecycle ? pendingIds(reads, collection, ids, request.locale) : none,
+  const live = found?.rows ?? [];
+  const none: ReadonlyMap<string, Record<string, unknown>> = new Map();
+  const [drafts, mayCreate] = await Promise.all([
+    // A search nothing can match, or one on a title the caller may not
+    // filter by, matches no draft either.
+    shape.lifecycle && read !== null && !matchesNothing
+      ? workingDrafts(
+          reads,
+          request,
+          shape,
+          live.flatMap(row => idOf(row) ?? [])
+        )
+      : none,
     reads.mayCreate(collection),
   ]);
+  const rows = draftAwareRows(live, drafts, request.search, title);
+  const pending: ReadonlySet<string> = new Set(drafts.keys());
   const items = rows.flatMap(row => itemOf(row, shape, pending));
-  const total = found?.total ?? 0;
+  const total = Math.max(found?.total ?? 0, items.length);
   return {
     items,
     meta: {
@@ -484,6 +627,11 @@ function directEntriesReads(
   return {
     collections: guard(),
     find: args => findAsCaller(ctx, args),
+    // The editor reader as the caller, the read the preview draws with.
+    draft: async ({ collection, id, locale, select }) =>
+      await (
+        await editorReaderAsCaller(ctx, locale)
+      ).findById({ collection, id, select }),
     // The framework's own answer, the one a create is judged by; a caller
     // nobody identified may not create.
     mayCreate: async collection =>
