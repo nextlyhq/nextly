@@ -83,6 +83,7 @@ export interface CollectionMetadata {
     sidebarGroup?: string;
     isPlugin?: boolean;
     disableCreate?: boolean;
+    disableDelete?: boolean;
     pagination?: { defaultLimit?: number; limits?: number[] };
   };
   source?: "code" | "ui" | "built-in";

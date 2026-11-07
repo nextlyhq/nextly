@@ -21,3 +21,26 @@ export const BUILDER_VIEW_COMPONENT =
  */
 export const REMOVE_LAYOUT_ACTION_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot";
+
+/**
+ * The tools above the Components list: Import from file, and the dialog its
+ * row action "Delete component…" opens. Declared here for the same reason.
+ */
+export const COMPONENT_LIST_TOOLS_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#ComponentListTools";
+
+/**
+ * The delete tools for a host's own component store, drawn through the
+ * plugin's header slot: on every admin page, so on the store's list whatever
+ * the host draws above it, where they register the row action and draw its
+ * dialog.
+ */
+export const COMPONENT_STORE_DELETE_HOST_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#ComponentStoreDeleteHost";
+
+/**
+ * What the component store's own Delete opens in the document screen's menu:
+ * the Delete component dialog, in the built-in Delete's place.
+ */
+export const DELETE_COMPONENT_REPLACEMENT_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement";
