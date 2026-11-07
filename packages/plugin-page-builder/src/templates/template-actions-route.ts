@@ -36,6 +36,7 @@ import {
 } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
+  mayWriteEntry,
   NextlyError,
   readableTitleText,
   respondDoc,
@@ -73,12 +74,12 @@ import { parseRouteQuery } from "../route-query";
 
 import {
   TEMPLATE_ACTIONS_ROUTE_PATH,
-  TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH,
+  TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH,
   TEMPLATE_ROUTING_ROUTE_PATH,
   type TemplateAction,
   type TemplateActionRequest,
   type TemplateActionResult,
-  type TemplateCollectionExistence,
+  type TemplateCollectionRetarget,
   type TemplateRoutingAccess,
   type TemplateSummary,
 } from "./template-actions-contract";
@@ -86,7 +87,7 @@ import {
   addressCollectionProblem,
   addressHolderProblem,
   ASKED_BEFORE_CONTEXT,
-  collectionExists,
+  retargetVerdict,
   secondTemplateRefusal,
   templateCollectionProblem,
   type MayReadTemplate,
@@ -1264,64 +1265,112 @@ export function templateRoutingRoute(): {
 }
 
 /**
- * The collection question's query: one slug, bounded as a query's ids are
- * elsewhere in the plugin. Stated as a type so the parser's result is one.
+ * The retarget question's query: one template id, bounded as a query's ids
+ * are elsewhere in the plugin. Stated as a type so the parser's result is one.
  */
-const COLLECTION_EXISTS_QUERY: z.ZodType<
-  { collection: string },
+const COLLECTION_RETARGET_QUERY: z.ZodType<
+  { template: string },
   Record<string, string>
-> = z.object({ collection: z.string().trim().min(1).max(512) });
+> = z.object({ template: z.string().trim().min(1).max(512) });
 
-/** What the collection question reads with: the caller and the guard. */
-export interface TemplateCollectionExistsReads {
-  readonly caller: {
-    can(
-      action: string,
-      resource: string,
-      options?: { readonly anyEntry?: boolean }
-    ): Promise<boolean>;
-  } | null;
-  readonly guard: Pick<
-    TemplateGuardSetup,
-    "templatesCollection" | "readCollection"
-  >;
+/** What the retarget question reads with, each read made as the caller. */
+export interface TemplateRetargetReads {
+  /** Template `id` as the caller may read it, with its working draft, or null. */
+  readonly templateAsCaller: (
+    id: string
+  ) => Promise<Record<string, unknown> | null>;
+  /** Whether the caller may change template `id`'s collection, by the update's own gates. */
+  readonly mayChangeCollection: (id: string) => Promise<boolean>;
+  /** Whether the caller may set or clear a template address. */
+  readonly mayManageRouting: () => Promise<boolean>;
+  /** The guard's own lookup of a collection, as the system. */
+  readonly readCollection: TemplateGuardSetup["readCollection"];
 }
 
 /**
- * Whether a collection exists under `collection`, for a caller who may edit
- * templates. The collection list leaves out what the caller may not read, so
- * a saved template's collection missing from it may be unreadable or gone,
- * and the guard lets a template be pointed elsewhere only when it is gone.
- * This answers that, read as the system by the guard's own lookup, and says
- * nothing else about the collection. Refused, as forbidden, to a caller who
- * may not update templates: no one else has a template form to ask for.
+ * Whether saved template `id` may be pointed at another collection, by the
+ * guard's own rule over the collection and address it stores. The collection
+ * list leaves out what the caller may not read, so the template form cannot
+ * tell an unreadable collection from a removed one, and asks this.
+ *
+ * It names a template, not a collection, so it says nothing of a collection
+ * the caller could not already see on a template they may change: the row is
+ * read as the caller, and their right to change its collection asked, before
+ * the collection is looked up. One they may not read is not found; one they
+ * may read but not change is forbidden.
  */
-export async function readTemplateCollectionExists(
-  collection: string,
-  reads: TemplateCollectionExistsReads
-): Promise<TemplateCollectionExistence> {
-  const { caller, guard } = reads;
-  // The precondition first: nothing is read for a caller who may not edit a
-  // template. Any template, since the question names none.
-  const mayEdit =
-    caller !== null &&
-    (await caller.can("update", guard.templatesCollection, {
-      anyEntry: true,
-    }));
-  if (!mayEdit) {
-    throw NextlyError.forbidden({
-      logContext: { route: TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH },
+export async function readTemplateCollectionRetarget(
+  id: string,
+  reads: TemplateRetargetReads
+): Promise<TemplateCollectionRetarget> {
+  const row = await reads.templateAsCaller(id);
+  const collection = row?.[TEMPLATE_COLLECTION_FIELD];
+  // An own design draws no collection, so it has none to change.
+  if (typeof collection !== "string" || collection === "") {
+    throw NextlyError.notFound({
+      logContext: { reason: "template-retarget-missing-template" },
     });
   }
-  return { exists: await collectionExists(guard.readCollection, collection) };
+  if (!(await reads.mayChangeCollection(id))) {
+    throw NextlyError.forbidden({
+      logContext: { route: TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH },
+    });
+  }
+  const verdict = await retargetVerdict(
+    collection,
+    storedAddressOf(row?.[TEMPLATE_ADDRESS_FIELD]),
+    reads.readCollection
+  );
+  return verdict === "address-blocks"
+    ? { retarget: verdict, mayClearAddress: await reads.mayManageRouting() }
+    : { retarget: verdict };
+}
+
+/** The retarget question's reads for one request, as its caller. */
+function retargetReadsOf(
+  ctx: PluginRouteContext,
+  guard: TemplateGuardSetup
+): TemplateRetargetReads {
+  const templates = guard.templatesCollection;
+  const { caller } = ctx;
+  return {
+    templateAsCaller: async id =>
+      recordOf(
+        await readOrNull(async () =>
+          (await getCachedNextly()).findByID({
+            collection: templates,
+            id,
+            ...(await readingAsUser(ctx)),
+            status: "all",
+            // The form edits the working draft, so its stored collection
+            // and address are the draft's.
+            draft: true,
+            depth: 0,
+          })
+        )
+      ),
+    // Core's own update gate for this row and the collection field's rule,
+    // asked without writing; no person, no right.
+    mayChangeCollection: async id =>
+      ctx.user !== null &&
+      caller !== null &&
+      (await mayWriteEntry(await caller.identity(), {
+        collection: templates,
+        id,
+        fields: [TEMPLATE_COLLECTION_FIELD],
+      })),
+    mayManageRouting: async () =>
+      (await readTemplateRoutingAccess(ctx)).mayManageRouting,
+    readCollection: guard.readCollection,
+  };
 }
 
 /**
- * The collection question's route: what the template form asks before it
+ * The retarget question's route: what the template form asks before it
  * offers a saved template's collection for change. Authenticated, with its
- * right asked in the read above; the guard still judges the write.
+ * rights asked in the read above; the guard still judges the write.
  */
-export function templateCollectionExistsRoute(setup: {
+export function templateCollectionRetargetRoute(setup: {
   readonly guard: () => TemplateGuardSetup;
 }): {
   method: "GET";
@@ -1331,21 +1380,22 @@ export function templateCollectionExistsRoute(setup: {
 } {
   return {
     method: "GET",
-    path: TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH,
-    // A collection is added, renamed or removed at any time.
+    path: TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH,
+    // A collection is added, renamed or removed, and an address cleared, at
+    // any time.
     noStore: true,
     handler: async (req, ctx) => {
-      const { collection } = parseRouteQuery(
+      const { template } = parseRouteQuery(
         req.url,
-        ["collection"],
-        COLLECTION_EXISTS_QUERY,
-        "template collection route"
+        ["template"],
+        COLLECTION_RETARGET_QUERY,
+        "template collection retarget route"
       );
       return respondDoc(
-        await readTemplateCollectionExists(collection, {
-          caller: ctx.caller,
-          guard: setup.guard(),
-        })
+        await readTemplateCollectionRetarget(
+          template,
+          retargetReadsOf(ctx, setup.guard())
+        )
       );
     },
   };

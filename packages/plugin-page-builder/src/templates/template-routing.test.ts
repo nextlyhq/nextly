@@ -295,6 +295,36 @@ describe("pointing an addressed template at another collection", () => {
     expect(words).toBe(
       "This template serves its collection's entries at /gone. Remove its address before pointing it at another collection."
     );
+    expect(readCollection).toHaveBeenCalledWith("gone");
+  });
+
+  it("is refused for its collection, not its address, while that collection exists", async () => {
+    // Removing the address would not let this change through, so the
+    // refusal does not send the editor to take the address down.
+    const words = await refusalOf(() =>
+      guardWrite(setup({ readCollection: async slug => ({ slug }) }), {
+        operation: "update",
+        data: { collection: "events" },
+        originalData: { id: "t1", collection: "news", address: "/news" },
+      })
+    );
+    expect(words).toBe(
+      "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead."
+    );
+  });
+
+  it("is refused by its address alone inside a judged transaction, reading nothing", async () => {
+    const readCollection = vi.fn(async () => null);
+    const words = await refusalOf(() =>
+      guardWrite(setup({ readCollection }), {
+        operation: "update",
+        data: { collection: "events" },
+        originalData: { id: "t1", collection: "gone", address: "/gone" },
+        executor: {},
+        context: { [JUDGEMENT_CONTEXT]: true },
+      })
+    );
+    expect(words).toMatch(/Remove its address/);
     expect(readCollection).not.toHaveBeenCalled();
   });
 

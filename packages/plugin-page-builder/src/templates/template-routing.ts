@@ -23,6 +23,7 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import { templateAddressProblem } from "./template-addresses";
+import { TEMPLATE_ADDRESS_FIELD } from "./template-preview-contract";
 
 /** The permission that sets or changes a template address, in its parts. */
 const MANAGE_TEMPLATE_ROUTING = {
@@ -54,8 +55,12 @@ export const MANAGE_TEMPLATE_ROUTING_DECLARATION: {
     "Set or change the address a collection's entries are served at. A change moves every entry's live address.",
 };
 
-/** The template field holding a runtime collection's address. */
-export const TEMPLATE_ADDRESS_FIELD = "address";
+/**
+ * The template field holding a runtime collection's address, declared in the
+ * preview contract so the template form reads the same name without this
+ * module's runtime imports, and re-exported here beside its rules.
+ */
+export { TEMPLATE_ADDRESS_FIELD };
 
 /** The parts of a field rule's context the routing rule reads. */
 interface RuleCaller {

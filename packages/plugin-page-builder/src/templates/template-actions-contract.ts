@@ -30,24 +30,37 @@ export interface TemplateRoutingAccess {
 }
 
 /**
- * Where the template form asks whether the collection a saved template draws
- * still exists: `GET /templates/collection-exists?collection=<slug>`.
+ * Where the template form asks whether a saved template may be pointed at
+ * another collection: `GET /templates/collection-retarget?template=<id>`.
  */
-export const TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH =
-  "/templates/collection-exists";
+export const TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH =
+  "/templates/collection-retarget";
 
-/** What the collection question answers. */
-export interface TemplateCollectionExistence {
-  /**
-   * Whether a collection exists under the slug asked about, whoever may read
-   * it: the answer the template guard judges a change of collection by.
-   */
-  readonly exists: boolean;
-}
+/**
+ * What the template guard's rule says of pointing a saved template at
+ * another collection: allowed; refused while the collection it draws still
+ * exists; or refused until the address it stores is removed.
+ */
+export type TemplateRetargetVerdict =
+  | "allowed"
+  | "collection-exists"
+  | "address-blocks";
 
-/** The collection question's path for one slug. */
-export function templateCollectionExistsPath(collection: string): string {
-  return `${TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH}?collection=${encodeURIComponent(collection)}`;
+/** What the retarget question answers, from the template as stored. */
+export type TemplateCollectionRetarget =
+  | { readonly retarget: "allowed" | "collection-exists" }
+  | {
+      readonly retarget: "address-blocks";
+      /**
+       * Whether the caller may clear that address, which needs
+       * `manage-template-routing`, as the address field's own rule says.
+       */
+      readonly mayClearAddress: boolean;
+    };
+
+/** The retarget question's path for one template, by its id. */
+export function templateCollectionRetargetPath(template: string): string {
+  return `${TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH}?template=${encodeURIComponent(template)}`;
 }
 
 /** One template action request. */

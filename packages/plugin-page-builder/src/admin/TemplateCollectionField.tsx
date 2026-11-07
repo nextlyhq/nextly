@@ -8,11 +8,11 @@
  * does around every plugin field editor. A saved template keeps its
  * collection, so it is shown read-only there, as the name with the slug
  * beside it. A template being made chooses one from the collections the
- * author may read that have an address to serve an entry at. A saved
- * template whose collection is no longer listed is asked about by slug, since
- * the list leaves out what the author may not read: one that still exists
- * stays fixed, and one that was renamed or removed may be pointed at
- * another, so the choice is offered there too, with why.
+ * author may read that have an address to serve an entry at. For a saved
+ * template whose collection is no longer listed, the server is asked whether
+ * it may be pointed at another, by the guard's own rule, since the list
+ * leaves out what the author may not read: the choice is offered only where
+ * that rule would let the save through, and the note says why it is not.
  *
  * It decides nothing: the template guard judges every collection a write
  * names, whichever control wrote it, and refuses the rest in its own words.
@@ -33,7 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useId, type JSX } from "react";
+import { useEffect, useId, useRef, type JSX } from "react";
 import {
   get,
   useController,
@@ -55,10 +55,13 @@ import {
   type LoopCollectionsResponse,
 } from "../loop-collections-contract";
 import {
-  templateCollectionExistsPath,
-  type TemplateCollectionExistence,
+  templateCollectionRetargetPath,
+  type TemplateCollectionRetarget,
 } from "../templates/template-actions-contract";
-import { TEMPLATE_ENTRY_ADDRESS_FIELD } from "../templates/template-preview-contract";
+import {
+  TEMPLATE_ADDRESS_FIELD,
+  TEMPLATE_ENTRY_ADDRESS_FIELD,
+} from "../templates/template-preview-contract";
 
 import { loopCollectionsOf } from "./loop-collections-client";
 
@@ -96,10 +99,20 @@ export type CollectionChoices =
     };
 
 /**
- * Whether the collection a saved template draws exists, asked by slug where
- * the list does not name it: still being asked, unanswered, or answered.
+ * Whether a saved template the list leaves out may be pointed at another
+ * collection, as the server answers by the guard's rule: still being asked,
+ * unanswered, allowed, refused while its collection exists, or refused until
+ * its stored address is cleared, which this author may do
+ * (`clear-address`) or only someone who may manage addresses may
+ * (`address-held`).
  */
-export type CollectionExistence = "pending" | "failed" | "exists" | "gone";
+export type CollectionRetarget =
+  | "pending"
+  | "failed"
+  | "allowed"
+  | "collection-exists"
+  | "clear-address"
+  | "address-held";
 
 /** What the control draws. */
 export type CollectionFieldView =
@@ -130,6 +143,22 @@ export function removedNote(slug: string): string {
   return `The collection "${slug}" was removed or renamed. Choose the collection this template draws now.`;
 }
 
+/**
+ * Said where a saved template's collection is gone but its address holds it,
+ * to an author who may clear the address.
+ */
+export function clearAddressNote(slug: string): string {
+  return `The collection "${slug}" was removed or renamed. Clear the Address field and save, then choose the collection this template draws now.`;
+}
+
+/**
+ * Said where a saved template's collection is gone but its address holds it,
+ * to an author who may not clear the address.
+ */
+export function addressHeldNote(slug: string): string {
+  return `The collection "${slug}" was removed or renamed, but this template still has an address. Someone who can manage template addresses must clear it before another collection can be chosen.`;
+}
+
 /** Said where the collections could not be listed. */
 export const LIST_FAILED_NOTE =
   "Couldn't list the collections. Reload the page to try again.";
@@ -141,7 +170,7 @@ export const TYPE_SLUG_NOTE =
 /**
  * The control's state from the form's flags, whether the template is saved,
  * the value it holds, the value it was saved with, the list of collections and
- * whether the saved one exists. Its own function so the rule is pinned apart
+ * whether the saved one may be changed. Its own function so the rule is pinned apart
  * from the render.
  *
  * What is offered is decided by the SAVED value, not the one being edited, so
@@ -157,7 +186,7 @@ export function collectionFieldView(
     readonly stored: string;
   },
   choices: CollectionChoices,
-  existence: CollectionExistence
+  retarget: CollectionRetarget
 ): CollectionFieldView {
   const { value, stored } = flags;
   const name =
@@ -183,7 +212,7 @@ export function collectionFieldView(
         if (choices.named.has(stored)) {
           return { kind: "fixed", label: name, slug: value, note: null };
         }
-        return unlistedView(value, stored, choices.offered, existence);
+        return unlistedView(value, stored, choices.offered, retarget);
     }
   }
   switch (choices.state) {
@@ -203,20 +232,25 @@ export function collectionFieldView(
 
 /**
  * A saved template whose collection the list does not name. The list leaves
- * out collections this author may not read, so only the existence answer says
- * whether it is gone: the guard refuses a change of a collection that still
- * exists and allows one where it does not. Kept fixed by its slug until that
- * answer says gone, so a failed or slow answer offers nothing that cannot
- * save.
+ * out collections this author may not read, so only the retarget answer says
+ * whether it may be changed, by the rule the guard judges the save with. Kept
+ * fixed by its slug unless that answer allows it, so a failed or slow answer
+ * offers nothing that cannot save.
  */
 function unlistedView(
   value: string,
   stored: string,
   offered: readonly CollectionChoice[],
-  existence: CollectionExistence
+  retarget: CollectionRetarget
 ): CollectionFieldView {
-  switch (existence) {
-    case "gone":
+  const fixed = (note: string | null): CollectionFieldView => ({
+    kind: "fixed",
+    label: null,
+    slug: value,
+    note,
+  });
+  switch (retarget) {
+    case "allowed":
       return {
         kind: "choose",
         options: offered,
@@ -226,15 +260,16 @@ function unlistedView(
     // No note for the moment the answer takes, rather than one that changes
     // under the author's eyes.
     case "pending":
-      return { kind: "fixed", label: null, slug: value, note: null };
-    case "exists":
+      return fixed(null);
+    // Gone, but the save would be refused until the address is cleared, so
+    // nothing is offered that cannot save, and the note says who clears it.
+    case "clear-address":
+      return fixed(clearAddressNote(stored));
+    case "address-held":
+      return fixed(addressHeldNote(stored));
+    case "collection-exists":
     case "failed":
-      return {
-        kind: "fixed",
-        label: null,
-        slug: value,
-        note: unlistedNote(value),
-      };
+      return fixed(unlistedNote(value));
   }
 }
 
@@ -308,23 +343,57 @@ function useCollectionChoices(): CollectionChoices {
 }
 
 /**
- * Whether the collection `slug` exists, asked only where `ask` says the list
- * leaves it out. Asked again on every mount, as the list is.
+ * Whether template `template` may be pointed at another collection, asked
+ * only where `ask` says the list leaves its collection out. Asked again on
+ * every mount, as the list is, and again once the template is saved with
+ * another address, `savedAddress`: clearing it is what may let the change
+ * through.
  */
-function useCollectionExistence(
-  slug: string,
-  ask: boolean
-): CollectionExistence {
-  const read = usePluginRoute<TemplateCollectionExistence>({
+function useCollectionRetarget(
+  template: string,
+  ask: boolean,
+  savedAddress: string
+): CollectionRetarget {
+  const read = usePluginRoute<TemplateCollectionRetarget>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: templateCollectionExistsPath(slug),
+    path: templateCollectionRetargetPath(template),
     enabled: ask,
     staleTime: 0,
   });
+  useAskedAgainOn(savedAddress, ask, read.refetch);
   if (read.error !== null) return "failed";
   if (read.data === undefined) return "pending";
-  const exists = fieldOf(read.data, "exists");
-  return typeof exists === "boolean" ? (exists ? "exists" : "gone") : "failed";
+  return retargetOf(read.data);
+}
+
+/** The retarget answer as the control reads it; anything else is unanswered. */
+function retargetOf(answer: unknown): CollectionRetarget {
+  switch (fieldOf(answer, "retarget")) {
+    case "allowed":
+      return "allowed";
+    case "collection-exists":
+      return "collection-exists";
+    case "address-blocks":
+      return fieldOf(answer, "mayClearAddress") === true
+        ? "clear-address"
+        : "address-held";
+    default:
+      return "failed";
+  }
+}
+
+/**
+ * Ask a read again once `key` changes from the value it had when the control
+ * mounted, or last changed, while `ask` holds. The form's fields stay mounted
+ * across a save, so a mount-time read alone would keep its first answer.
+ */
+function useAskedAgainOn(key: string, ask: boolean, refetch: () => void): void {
+  const seen = useRef(key);
+  useEffect(() => {
+    if (seen.current === key) return;
+    seen.current = key;
+    if (ask) refetch();
+  }, [key, ask, refetch]);
 }
 
 /** One property of a route's answer, which may be any JSON a server sent. */
@@ -359,7 +428,13 @@ export function TemplateCollectionField<
   // that keeps no default for the field is read by its value, as before.
   const savedValue: unknown = get(formState.defaultValues, name);
   const stored = typeof savedValue === "string" ? savedValue : value;
-  const { view, busy } = useCollectionFieldState(readOnly, value, stored);
+  const savedAddress: unknown = get(
+    formState.defaultValues,
+    TEMPLATE_ADDRESS_FIELD
+  );
+  const { view, busy } = useCollectionFieldState(readOnly, value, stored, {
+    savedAddress: typeof savedAddress === "string" ? savedAddress : "",
+  });
   const noteId = useId();
   const handed: CollectionControlProps = {
     label: declaredLabel(declaration),
@@ -393,32 +468,37 @@ export function TemplateCollectionField<
 /**
  * The control's view and whether it is still waiting, from the template's
  * identity, the collection list and, for a saved collection the list does
- * not name, whether it still exists.
+ * not name, whether the template may be pointed at another.
  */
 function useCollectionFieldState(
   readOnly: boolean,
   value: string,
-  stored: string
+  stored: string,
+  saved: { readonly savedAddress: string }
 ): { view: CollectionFieldView; busy: boolean } {
   const identity = useDocumentIdentity();
   const choices = useCollectionChoices();
-  const saved =
-    typeof identity?.documentId === "string" && identity.documentId !== "";
-  const askExistence =
+  const template =
+    typeof identity?.documentId === "string" ? identity.documentId : "";
+  const askRetarget =
     !readOnly &&
-    saved &&
+    template !== "" &&
     stored !== "" &&
     choices.state === "answered" &&
     !choices.named.has(stored);
-  const existence = useCollectionExistence(stored, askExistence);
+  const retarget = useCollectionRetarget(
+    template,
+    askRetarget,
+    saved.savedAddress
+  );
   return {
     view: collectionFieldView(
-      { readOnly, saved, value, stored },
+      { readOnly, saved: template !== "", value, stored },
       choices,
-      existence
+      retarget
     ),
     busy:
-      choices.state === "pending" || (askExistence && existence === "pending"),
+      choices.state === "pending" || (askRetarget && retarget === "pending"),
   };
 }
 

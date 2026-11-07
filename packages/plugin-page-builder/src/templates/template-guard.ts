@@ -38,6 +38,7 @@ import {
   isEntryDesign,
   withoutEmptyEntryFields,
 } from "./entry-designs";
+import type { TemplateRetargetVerdict } from "./template-actions-contract";
 import {
   TEMPLATE_ENTRY_ADDRESS_FIELD,
   TEMPLATE_TARGET_FIELDS,
@@ -256,16 +257,35 @@ export type CollectionRecordRead = (
 ) => Promise<Record<string, unknown> | null>;
 
 /**
- * Whether a collection exists under `slug`, as the registry answers it to the
- * system. A template may be pointed at another collection only once this
- * says no for the one it draws, so the admin asks the same question, through
- * the template collection route, before it offers the change.
+ * The one rule for pointing a saved template at another collection, asked by
+ * the guard of every write that changes it and by the template form, through
+ * the retarget route, before it offers the change.
+ *
+ * A template keeps the collection it draws while that collection exists
+ * under its name: only a renamed or removed one may be replaced, so a rename
+ * never strands its design. And a template storing an address moves live
+ * addresses wherever it draws, so it is pointed elsewhere only once that
+ * address is removed, which needs the routing permission.
+ *
+ * The collection is asked first: while it exists, removing the address would
+ * not let the change through, so naming the address would send an editor to
+ * take a collection's addresses down for nothing. `read` is `null` where
+ * nothing may be read, inside a transaction whose dry run judged the write
+ * before, and the address alone is judged.
  */
-export async function collectionExists(
-  read: CollectionRecordRead,
-  slug: string
-): Promise<boolean> {
-  return (await read(slug)) !== null;
+export async function retargetVerdict(
+  collection: unknown,
+  address: string | null,
+  read: CollectionRecordRead | null
+): Promise<TemplateRetargetVerdict> {
+  if (
+    read !== null &&
+    typeof collection === "string" &&
+    (await read(collection)) !== null
+  ) {
+    return "collection-exists";
+  }
+  return address === null ? "allowed" : "address-blocks";
 }
 
 /** The field whose value is an entry's part of its address. */
@@ -573,24 +593,34 @@ export async function addressCollectionProblem(
 }
 
 /**
- * Refuse pointing a template at another collection while it stores an
- * address: it moves live addresses wherever it draws, so it is pointed
- * elsewhere only once its address is removed, which needs the routing
- * permission. The address is the write's own where it names one, else the
- * stored one.
+ * The address that holds a template to its collection: the write's own where
+ * it names one, else the stored one, so a write that removes it may also
+ * point the template elsewhere.
  */
-function refuseAddressedRetarget(
+function retargetAddressOf(
   data: Record<string, unknown>,
   original: Record<string, unknown> | null
-): void {
-  const addressed = storedAddressOf(
+): string | null {
+  return storedAddressOf(
     Object.prototype.hasOwnProperty.call(data, TEMPLATE_ADDRESS_FIELD)
       ? data[TEMPLATE_ADDRESS_FIELD]
       : original?.[TEMPLATE_ADDRESS_FIELD]
   );
-  if (addressed !== null) {
+}
+
+/** Refuse a change of collection the retarget rule does not allow, in its words. */
+function refuseRetarget(
+  verdict: TemplateRetargetVerdict,
+  address: string | null
+): void {
+  if (verdict === "collection-exists") {
+    throw templateCollectionRefusal(
+      "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead."
+    );
+  }
+  if (verdict === "address-blocks") {
     throw addressRefusal(
-      `This template serves its collection's entries at ${addressed}. Remove its address before pointing it at another collection.`
+      `This template serves its collection's entries at ${address ?? ""}. Remove its address before pointing it at another collection.`
     );
   }
 }
@@ -635,20 +665,12 @@ export async function guardWrite(
     ) {
       return;
     }
-    refuseAddressedRetarget(data, original);
-    if (skipsReads(context)) return;
-    // A template keeps the collection it draws. The one exception is a
-    // template whose collection no longer exists under its name, renamed or
-    // deleted: it may be pointed at another, judged as a new template's
-    // collection is, so a rename never strands its design.
-    if (
-      typeof before === "string" &&
-      (await collectionExists(setup.readCollection, before))
-    ) {
-      throw templateCollectionRefusal(
-        "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead."
-      );
-    }
+    // Allowed only as the retarget rule says, and then judged as a new
+    // template's collection is.
+    const reads = skipsReads(context) ? null : setup.readCollection;
+    const address = retargetAddressOf(data, original);
+    refuseRetarget(await retargetVerdict(before, address, reads), address);
+    if (reads === null) return;
     const id = original?.id;
     await judgeCollection(
       setup,

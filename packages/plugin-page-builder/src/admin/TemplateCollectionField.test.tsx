@@ -3,9 +3,9 @@
  * The template form's collection control: a saved template's collection by
  * its name and read-only; a choice of collections by name while one is made,
  * offered only once the pages slug is known; a saved template's collection
- * the list leaves out kept fixed unless it is answered gone, when the choice
- * is offered again; and typing the slug where the collections cannot be
- * listed.
+ * the list leaves out kept fixed unless the retarget answer allows a change,
+ * when the choice is offered again, with a note saying why where it does
+ * not; and typing the slug where the collections cannot be listed.
  */
 import {
   act,
@@ -14,7 +14,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { useForm, type FieldValues } from "react-hook-form";
+import { useForm, type FieldValues, type UseFormReset } from "react-hook-form";
 import {
   afterEach,
   beforeAll,
@@ -41,11 +41,13 @@ import {
   type LoopCollectionItem,
 } from "../loop-collections-contract";
 import {
-  TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH,
-  templateCollectionExistsPath,
+  TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH,
+  templateCollectionRetargetPath,
 } from "../templates/template-actions-contract";
 
 import {
+  addressHeldNote,
+  clearAddressNote,
   collectionFieldView,
   LIST_FAILED_NOTE,
   offeredCollections,
@@ -102,9 +104,15 @@ const PAGES_ANSWER: Answer = {
 let listed: Answer = LISTED_ANSWER;
 /** What the pages slug route answers. */
 let pages: Answer = PAGES_ANSWER;
-/** What the collection question answers, for any slug. */
-let existence: Answer = { data: { exists: true }, error: null };
+/** What the retarget question answers, for any template. */
+let retarget: Answer = {
+  data: { retarget: "collection-exists" },
+  error: null,
+};
 let values: () => FieldValues = () => ({});
+let reset: UseFormReset<FieldValues> = () => {};
+/** Each time the control asked a read again. */
+const refetch = vi.fn();
 
 beforeAll(() => {
   // Radix Select measures and captures the pointer; jsdom does neither.
@@ -118,7 +126,7 @@ beforeAll(() => {
 function answerFor(path: string, enabled: boolean): Answer {
   if (!enabled) return { data: undefined, error: null };
   if (path === PAGE_COLLECTION_ROUTE_PATH) return pages;
-  if (path.startsWith(TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH)) return existence;
+  if (path.startsWith(TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH)) return retarget;
   return listed;
 }
 
@@ -133,7 +141,7 @@ beforeEach(() => {
     ...answerFor(path, enabled),
     pending: false,
     fetching: false,
-    refetch: () => {},
+    refetch,
   })) as unknown as typeof usePluginRoute);
 });
 
@@ -141,18 +149,19 @@ afterEach(() => {
   cleanup();
   listed = LISTED_ANSWER;
   pages = PAGES_ANSWER;
-  existence = { data: { exists: true }, error: null };
+  retarget = { data: { retarget: "collection-exists" }, error: null };
+  refetch.mockReset();
   identity.mockReset();
   read.mockReset();
 });
 
-/** The collection question's reads the control made while enabled, by path. */
-function existenceAsked(): string[] {
+/** The retarget question's reads the control made while enabled, by path. */
+function retargetAsked(): string[] {
   return read.mock.calls
     .map(([options]) => options)
     .filter(
       options =>
-        options.path.startsWith(TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH) &&
+        options.path.startsWith(TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH) &&
         options.enabled !== false
     )
     .map(options => options.path);
@@ -161,6 +170,7 @@ function existenceAsked(): string[] {
 function Form({ defaults }: { defaults: FieldValues }) {
   const form = useForm({ defaultValues: defaults });
   values = form.getValues;
+  reset = form.reset;
   return (
     <TemplateCollectionField
       name="collection"
@@ -170,13 +180,17 @@ function Form({ defaults }: { defaults: FieldValues }) {
   );
 }
 
-function renderField(collection: string, documentId?: string) {
+function renderField(
+  collection: string,
+  documentId?: string,
+  address: string | null = null
+) {
   identity.mockReturnValue({
     kind: "collection",
     slug: "templates",
     ...(documentId === undefined ? {} : { documentId }),
   });
-  return render(<Form defaults={{ collection }} />);
+  return render(<Form defaults={{ collection, address }} />);
 }
 
 const answered: CollectionChoices = {
@@ -199,7 +213,7 @@ function savedAt(stored: string, value: string = stored) {
 const NEW = { saved: false, value: "", stored: "" };
 
 describe("collectionFieldView", () => {
-  it("shows a saved template's collection by its name, read-only, whatever existence says", () => {
+  it("shows a saved template's collection by its name, read-only, whatever the retarget answer says", () => {
     const named = {
       kind: "fixed",
       label: "Posts",
@@ -209,14 +223,14 @@ describe("collectionFieldView", () => {
     expect(collectionFieldView(savedAt("posts"), answered, "pending")).toEqual(
       named
     );
-    // Listed is listed: an existence answer is never asked for it, and a
+    // Listed is listed: a retarget answer is never asked for it, and a
     // stray one changes nothing.
-    expect(collectionFieldView(savedAt("posts"), answered, "gone")).toEqual(
+    expect(collectionFieldView(savedAt("posts"), answered, "allowed")).toEqual(
       named
     );
   });
 
-  it("keeps an unlisted collection fixed by its slug unless it is answered gone", () => {
+  it("keeps an unlisted collection fixed by its slug unless a change is allowed", () => {
     // The list leaves out collections the author may not read, so one missing
     // from it that still exists stays as saved: the guard refuses a change.
     const unlisted = {
@@ -226,9 +240,9 @@ describe("collectionFieldView", () => {
       note: unlistedNote("articles"),
     };
     expect(
-      collectionFieldView(savedAt("articles"), answered, "exists")
+      collectionFieldView(savedAt("articles"), answered, "collection-exists")
     ).toEqual(unlisted);
-    // Unanswered is not gone: nothing is offered that may not save.
+    // Unanswered is not allowed: nothing is offered that may not save.
     expect(
       collectionFieldView(savedAt("articles"), answered, "failed")
     ).toEqual(unlisted);
@@ -237,29 +251,50 @@ describe("collectionFieldView", () => {
     ).toEqual({ kind: "fixed", label: null, slug: "articles", note: null });
   });
 
-  it("offers the choice again, saying why, where the saved collection is gone", () => {
+  it("keeps a gone collection fixed while its address holds it, saying who clears it", () => {
+    // Gone, but the guard refuses the change until the stored address is
+    // removed: a choice here would offer only saves that fail.
+    expect(
+      collectionFieldView(savedAt("articles"), answered, "clear-address")
+    ).toEqual({
+      kind: "fixed",
+      label: null,
+      slug: "articles",
+      note: clearAddressNote("articles"),
+    });
+    expect(
+      collectionFieldView(savedAt("articles"), answered, "address-held")
+    ).toEqual({
+      kind: "fixed",
+      label: null,
+      slug: "articles",
+      note: addressHeldNote("articles"),
+    });
+  });
+
+  it("offers the choice again, saying why, where a change is allowed", () => {
     const reopened = {
       kind: "choose",
       options: answered.offered,
       loading: false,
       note: removedNote("articles"),
     };
-    expect(collectionFieldView(savedAt("articles"), answered, "gone")).toEqual(
-      reopened
-    );
+    expect(
+      collectionFieldView(savedAt("articles"), answered, "allowed")
+    ).toEqual(reopened);
     // Once another is chosen the choice stays open until the template is
     // saved: what is offered follows the saved value, not the edited one.
     expect(
-      collectionFieldView(savedAt("articles", "posts"), answered, "gone")
+      collectionFieldView(savedAt("articles", "posts"), answered, "allowed")
     ).toEqual(reopened);
   });
 
   it("keeps a saved template's slug read-only while the names load or fail", () => {
     expect(
-      collectionFieldView(savedAt("posts"), { state: "pending" }, "gone")
+      collectionFieldView(savedAt("posts"), { state: "pending" }, "allowed")
     ).toEqual({ kind: "fixed", label: null, slug: "posts", note: null });
     expect(
-      collectionFieldView(savedAt("posts"), { state: "failed" }, "gone")
+      collectionFieldView(savedAt("posts"), { state: "failed" }, "allowed")
     ).toEqual({
       kind: "fixed",
       label: null,
@@ -292,7 +327,7 @@ describe("collectionFieldView", () => {
       collectionFieldView(
         { readOnly: true, ...savedAt("articles") },
         answered,
-        "gone"
+        "allowed"
       )
     ).toEqual({ kind: "fixed", label: null, slug: "articles", note: null });
   });
@@ -412,19 +447,20 @@ describe("the collection control", () => {
     }
   });
 
-  it("asks whether a saved collection exists only where the list leaves it out", () => {
+  it("asks the retarget question by template, only where the list leaves its collection out", () => {
     renderField("posts", "t1");
-    expect(existenceAsked()).toEqual([]);
+    expect(retargetAsked()).toEqual([]);
     cleanup();
     read.mockClear();
     renderField("articles", "t1");
-    expect(existenceAsked()).toContain(
-      templateCollectionExistsPath("articles")
-    );
+    // By the template's id, never the collection's slug: the server reads
+    // the collection from the template the author may change.
+    expect(retargetAsked()).toContain(templateCollectionRetargetPath("t1"));
+    expect(retargetAsked().some(path => path.includes("articles"))).toBe(false);
   });
 
   it("keeps an unlisted collection that still exists fixed, saying why", () => {
-    existence = { data: { exists: true }, error: null };
+    retarget = { data: { retarget: "collection-exists" }, error: null };
     renderField("articles", "t1");
     const shown = screen.getByRole("textbox", { name: "Collection" });
     expect(shown.getAttribute("aria-readonly")).toBe("true");
@@ -433,16 +469,58 @@ describe("the collection control", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("keeps an unlisted collection fixed while its existence is asked", () => {
-    existence = { data: undefined, error: null };
+  it("keeps an unlisted collection fixed while the question is asked, or when its answer is not one", () => {
+    retarget = { data: undefined, error: null };
     renderField("articles", "t1");
     const shown = screen.getByRole("textbox", { name: "Collection" });
     expect(shown.getAttribute("aria-busy")).toBe("true");
     expect(screen.queryByRole("combobox")).toBeNull();
+    cleanup();
+    // An older server's answer to another question reads as unanswered.
+    retarget = { data: { exists: false }, error: null };
+    renderField("articles", "t1");
+    expect(screen.getByText(unlistedNote("articles"))).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("lets a template whose collection is gone be pointed at another, keeping the choice open", async () => {
-    existence = { data: { exists: false }, error: null };
+  it("keeps a gone collection fixed while its address holds it, by who may clear it", () => {
+    for (const [mayClearAddress, note] of [
+      [true, clearAddressNote("articles")],
+      [false, addressHeldNote("articles")],
+    ] as const) {
+      retarget = {
+        data: { retarget: "address-blocks", mayClearAddress },
+        error: null,
+      };
+      renderField("articles", "t1", "/blog");
+      const shown = screen.getByRole("textbox", { name: "Collection" });
+      expect(shown.getAttribute("aria-readonly")).toBe("true");
+      expect(screen.getByText(note)).toBeTruthy();
+      expect(screen.queryByRole("combobox")).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("asks again once the template is saved with its address cleared", async () => {
+    retarget = {
+      data: { retarget: "address-blocks", mayClearAddress: true },
+      error: null,
+    };
+    renderField("articles", "t1", "/blog");
+    expect(refetch).not.toHaveBeenCalled();
+    // A save that keeps the address asks nothing new.
+    await act(async () => {
+      reset({ collection: "articles", address: "/blog" });
+    });
+    expect(refetch).not.toHaveBeenCalled();
+    await act(async () => {
+      reset({ collection: "articles", address: null });
+    });
+    expect(refetch).toHaveBeenCalledOnce();
+  });
+
+  it("lets a template be pointed at another collection where a change is allowed, keeping the choice open", async () => {
+    retarget = { data: { retarget: "allowed" }, error: null };
     renderField("articles", "t1");
     expect(screen.getByText(removedNote("articles"))).toBeTruthy();
     const trigger = screen.getByRole("combobox", { name: "Collection" });

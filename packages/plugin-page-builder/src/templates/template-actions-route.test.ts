@@ -12,17 +12,18 @@ import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  templateCollectionExistsPath,
+  templateCollectionRetargetPath,
   type TemplateActionResult,
 } from "./template-actions-contract";
 import {
   cutToTitleLength,
-  readTemplateCollectionExists,
+  readTemplateCollectionRetarget,
   readTemplateRoutingAccess,
   runTemplateAction,
-  templateCollectionExistsRoute,
+  templateCollectionRetargetRoute,
   type TemplateActionsContext,
   type TemplateActionsSetup,
+  type TemplateRetargetReads,
 } from "./template-actions-route";
 import type { TemplateGuardSetup } from "./template-guard";
 
@@ -30,6 +31,9 @@ const stored = vi.hoisted(() => ({
   row: null as Record<string, unknown> | null,
   reads: 0,
   asked: [] as Record<string, unknown>[],
+  /** What core's write gate answers, and each check it was asked. */
+  mayWrite: true,
+  writeChecks: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
@@ -45,6 +49,10 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
         : { ...stored.row, _isWorkingDraft: undefined };
     },
   }),
+  mayWriteEntry: async (_identity: unknown, check: Record<string, unknown>) => {
+    stored.writeChecks.push(check);
+    return stored.mayWrite;
+  },
 }));
 
 beforeEach(() => {
@@ -57,6 +65,8 @@ beforeEach(() => {
   };
   stored.reads = 0;
   stored.asked = [];
+  stored.mayWrite = true;
+  stored.writeChecks = [];
 });
 
 /** A caller holding exactly `granted`, each as `<action>-<resource>`. */
@@ -278,90 +288,170 @@ describe("the routing question", () => {
   });
 });
 
-describe("the collection question", () => {
-  /** A guard whose registry holds `posts` alone, under a renamed templates slug. */
-  function existenceGuard() {
-    const readCollection = vi.fn((slug: string) =>
-      Promise.resolve(slug === "posts" ? { slug: "posts" } : null)
-    );
-    const guard: TemplateGuardSetup = {
-      templatesCollection: "site_templates",
-      ownCollections: () => new Set(["site_templates"]),
-      readCollection,
-      holderOf: () => Promise.resolve(null),
-      entryExists: () => Promise.resolve(true),
-      holdEntry: () => Promise.resolve(true),
-      declaredAddresses: new Map(),
-      addressHolderOf: () => Promise.resolve(null),
-    };
-    return { guard, readCollection };
-  }
-
-  /** A caller granted `update` on `granted` and nothing else. */
-  function callerFor(granted: string | null) {
-    const can = vi.fn((action: string, resource: string) =>
-      Promise.resolve(action === "update" && resource === granted)
-    );
-    return { can };
-  }
-
-  it("answers whether a collection exists, read by the guard's own lookup", async () => {
-    const { guard, readCollection } = existenceGuard();
-    const caller = callerFor("site_templates");
-    expect(
-      await readTemplateCollectionExists("posts", { caller, guard })
-    ).toEqual({ exists: true });
-    // Gone: what the guard lets a template be pointed away from.
-    expect(
-      await readTemplateCollectionExists("articles", { caller, guard })
-    ).toEqual({ exists: false });
-    expect(readCollection.mock.calls.map(([slug]) => slug)).toEqual([
-      "posts",
-      "articles",
-    ]);
-    // The right asked is updating the RESOLVED templates collection, as a
-    // type-level question, since the read names no template.
-    expect(caller.can).toHaveBeenCalledWith("update", "site_templates", {
-      anyEntry: true,
+describe("the retarget question", () => {
+  /**
+   * Reads over one stored template, recording their order: `posts` alone
+   * exists, and the caller may read and change the template unless told.
+   */
+  function retargetReads(
+    row: Record<string, unknown> | null,
+    rights: { change?: boolean; routing?: boolean } = {}
+  ) {
+    const order: string[] = [];
+    const readCollection = vi.fn(async (slug: string) => {
+      order.push(`collection ${slug}`);
+      return slug === "posts" ? { slug: "posts" } : null;
     });
+    const reads: TemplateRetargetReads = {
+      templateAsCaller: async id => {
+        order.push(`template ${id}`);
+        return row;
+      },
+      mayChangeCollection: async id => {
+        order.push(`may change ${id}`);
+        return rights.change ?? true;
+      },
+      mayManageRouting: async () => rights.routing ?? false,
+      readCollection,
+    };
+    return { reads, order, readCollection };
+  }
+
+  const template = (collection: string, address: string | null = null) => ({
+    id: "t1",
+    collection,
+    address,
   });
 
-  it("refuses a caller who may not update templates, before anything is read", async () => {
-    const { guard, readCollection } = existenceGuard();
-    for (const caller of [callerFor("templates"), callerFor(null), null]) {
-      await expect(
-        readTemplateCollectionExists("posts", { caller, guard })
-      ).rejects.toSatisfy(error => NextlyError.isForbidden(error));
+  it("answers the guard's rule over the template as stored", async () => {
+    // Its collection still exists: refused, whatever the address.
+    for (const address of [null, "/blog"]) {
+      const { reads } = retargetReads(template("posts", address));
+      expect(await readTemplateCollectionRetarget("t1", reads)).toEqual({
+        retarget: "collection-exists",
+      });
     }
+    // Gone, with no address: the change the guard lets through.
+    expect(
+      await readTemplateCollectionRetarget(
+        "t1",
+        retargetReads(template("articles")).reads
+      )
+    ).toEqual({ retarget: "allowed" });
+    // Gone, but an address holds it: refused until the address is cleared,
+    // saying whether this caller may clear it.
+    for (const routing of [true, false]) {
+      const { reads } = retargetReads(template("articles", "/blog"), {
+        routing,
+      });
+      expect(await readTemplateCollectionRetarget("t1", reads)).toEqual({
+        retarget: "address-blocks",
+        mayClearAddress: routing,
+      });
+    }
+  });
+
+  it("reads the template as the caller and asks its right to change it before looking up its collection", async () => {
+    const { reads, order } = retargetReads(template("articles"));
+    await readTemplateCollectionRetarget("t1", reads);
+    expect(order).toEqual([
+      "template t1",
+      "may change t1",
+      "collection articles",
+    ]);
+  });
+
+  it("looks up nothing for a template the caller may not read or may not change", async () => {
+    // Not readable as the caller, or an own design with no collection: not
+    // found, as a template that does not exist.
+    for (const row of [null, { id: "t1", collection: "", entry: "posts/p1" }]) {
+      const { reads, readCollection } = retargetReads(row);
+      await expect(
+        readTemplateCollectionRetarget("t1", reads)
+      ).rejects.toSatisfy(error => NextlyError.isNotFound(error));
+      expect(readCollection).not.toHaveBeenCalled();
+    }
+    // Readable but not the caller's to change: forbidden.
+    const { reads, readCollection } = retargetReads(template("articles"), {
+      change: false,
+    });
+    await expect(readTemplateCollectionRetarget("t1", reads)).rejects.toSatisfy(
+      error => NextlyError.isForbidden(error)
+    );
     expect(readCollection).not.toHaveBeenCalled();
   });
 
-  it("is served as a GET never stored, and refuses a query naming no collection", async () => {
-    const { guard, readCollection } = existenceGuard();
-    const route = templateCollectionExistsRoute({ guard: () => guard });
+  it("is served as a GET never stored, reading the row and the write gate as the caller", async () => {
+    stored.row = { id: "t1", collection: "articles", address: null };
+    const readCollection = vi.fn(async () => null);
+    const { setup } = setupWith({ readCollection });
+    const route = templateCollectionRetargetRoute({ guard: setup.guard });
     expect(route.method).toBe("GET");
     expect(route).not.toHaveProperty("public");
     expect(route.noStore).toBe(true);
-    const ctx = {
-      caller: callerFor("site_templates"),
-    } as unknown as PluginRouteContext;
+    const { ctx } = contextFor(EVERY_TEMPLATE_RIGHT);
     const get = (path: string) =>
-      route.handler(new Request(`http://nextly.test/x${path}`), ctx);
-    // The positive control: the refusals below would be met by a handler
-    // that refuses everything.
-    const answer = await get(templateCollectionExistsPath("posts"));
+      route.handler(
+        new Request(`http://nextly.test/x${path}`),
+        ctx as unknown as PluginRouteContext
+      );
+    const answer = await get(templateCollectionRetargetPath("t1"));
     expect(answer.status).toBe(200);
-    expect(await answer.json()).toEqual({ exists: true });
+    expect(await answer.json()).toEqual({ retarget: "allowed" });
+    // The row as the caller, never as the system, with its working draft.
+    expect(stored.asked).toEqual([
+      expect.objectContaining({
+        collection: "templates",
+        id: "t1",
+        overrideAccess: false,
+        user: { id: "u1" },
+        draft: true,
+      }),
+    ]);
+    expect(stored.writeChecks).toEqual([
+      { collection: "templates", id: "t1", fields: ["collection"] },
+    ]);
+    expect(readCollection).toHaveBeenCalledWith("articles");
+  });
+
+  it("refuses through the route a caller core's write gate refuses, before the lookup", async () => {
+    stored.row = { id: "t1", collection: "articles", address: null };
+    stored.mayWrite = false;
+    const readCollection = vi.fn(async () => null);
+    const { setup } = setupWith({ readCollection });
+    const route = templateCollectionRetargetRoute({ guard: setup.guard });
+    const { ctx } = contextFor(EVERY_TEMPLATE_RIGHT);
+    await expect(
+      route.handler(
+        new Request(
+          `http://nextly.test/x${templateCollectionRetargetPath("t1")}`
+        ),
+        ctx as unknown as PluginRouteContext
+      )
+    ).rejects.toSatisfy(error => NextlyError.isForbidden(error));
+    expect(readCollection).not.toHaveBeenCalled();
+  });
+
+  it("refuses a query naming no template, reading nothing", async () => {
+    const readCollection = vi.fn(async () => null);
+    const { setup } = setupWith({ readCollection });
+    const route = templateCollectionRetargetRoute({ guard: setup.guard });
+    const { ctx } = contextFor(EVERY_TEMPLATE_RIGHT);
     for (const path of [
       route.path,
-      `${route.path}?collection=`,
-      `${route.path}?collection=${"a".repeat(513)}`,
+      `${route.path}?template=`,
+      `${route.path}?collection=posts`,
+      `${route.path}?template=${"a".repeat(513)}`,
     ]) {
-      await expect(get(path)).rejects.toSatisfy(error =>
-        NextlyError.isValidation(error)
-      );
+      await expect(
+        route.handler(
+          new Request(`http://nextly.test/x${path}`),
+          ctx as unknown as PluginRouteContext
+        )
+      ).rejects.toSatisfy(error => NextlyError.isValidation(error));
     }
-    expect(readCollection).toHaveBeenCalledOnce();
+    expect(stored.reads).toBe(0);
+    expect(readCollection).not.toHaveBeenCalled();
   });
 });
 

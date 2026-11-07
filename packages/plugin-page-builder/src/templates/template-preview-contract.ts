@@ -57,6 +57,9 @@ export const TEMPLATE_TARGET_FIELDS: readonly string[] = [
  */
 export const TEMPLATE_ENTRY_ADDRESS_FIELD = "slug";
 
+/** The template field holding the address its collection's entries are served at. */
+export const TEMPLATE_ADDRESS_FIELD = "address";
+
 /** Where the entries a template may preview are listed. */
 export const TEMPLATE_PREVIEW_ENTRIES_PATH = "/template-preview/entries";
 
