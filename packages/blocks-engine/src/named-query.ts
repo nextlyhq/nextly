@@ -776,11 +776,15 @@ export interface NamedQueryKnown {
   readonly single: (slug: string) => boolean;
 }
 
-/** Whether a value is a list of non-empty strings. */
+/** Whether a value is a list of non-empty strings, with no holes. */
 function isSlugList(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) &&
-    value.every(each => typeof each === "string" && each !== "")
+    // `Array.from` reads every slot, so a hole is judged as undefined
+    // rather than skipped, as `every` alone would skip it.
+    Array.from(value as unknown[]).every(
+      each => typeof each === "string" && each !== ""
+    )
   );
 }
 
@@ -832,7 +836,9 @@ function choiceShapeProblem(
   if (
     !Array.isArray(options) ||
     options.length === 0 ||
-    !options.every(
+    // Every slot is read, so a hole (serialized as null) is refused rather
+    // than skipped, as `every` alone would skip it.
+    !Array.from(options as unknown[]).every(
       option =>
         isPlainRecord(option) &&
         typeof option.value === "string" &&
@@ -1038,15 +1044,25 @@ function readsProblem(reads: unknown): string | undefined {
   }
   // Each declared read tags the query's cached result, and a cache entry
   // keeps a bounded number of tags: past it, a write to a source left off
-  // would not refresh the page.
+  // would not refresh the page. The lists are counted as written, repeats
+  // included, since every element is served and expanded into tags.
   const count =
-    new Set(reads.collections ?? []).size +
-    new Set(reads.singles ?? []).size +
+    (reads.collections?.length ?? 0) +
+    (reads.singles?.length ?? 0) +
     (reads.site === true ? 1 : 0);
   if (count > NAMED_QUERY_MAX_READS) {
     return `it declares ${String(count)} reads; at most ${String(NAMED_QUERY_MAX_READS)} are allowed, so each can refresh the page`;
   }
   return undefined;
+}
+
+/** Why a declaration's `total` flag is not true or false, or nothing. */
+function totalProblem(total: unknown): string | undefined {
+  // Clients read the flag as `=== true`, so any other present value would be
+  // advertised as uncounted while the run still returned a count.
+  return total === undefined || typeof total === "boolean"
+    ? undefined
+    : "its total is not true or false";
 }
 
 /** Why a declaration's own words and numbers are out of bounds, or nothing. */
@@ -1138,6 +1154,7 @@ export function namedQueryProblem(
   const reads = readsProblem(definition.reads);
   const problem =
     headerProblem(definition) ??
+    totalProblem(definition.total) ??
     reads ??
     (() => {
       const collections = new Set(
