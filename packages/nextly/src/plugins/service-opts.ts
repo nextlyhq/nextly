@@ -24,6 +24,7 @@ import { holdsFieldOfType } from "../domains/versions/tag-component-types";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
 import type {
+  Collection,
   CollectionEntry,
   CollectionService,
 } from "../services/collections/collection-service";
@@ -37,6 +38,7 @@ import type { RequestContext } from "../services/shared";
 import { runReadsInTransaction } from "../shared/lib/read-transaction-scope";
 import type { AuthUser } from "../types/auth";
 
+import type { PluginSingleRecord } from "./plugin-singles";
 import { assertRunnableAsPrincipal } from "./principals/run-as";
 import type { Principal } from "./principals/types";
 import { methodFacade } from "./service-facade";
@@ -1012,6 +1014,49 @@ export interface PluginOwnCollectionReads {
     slug: string,
     opts?: OwnCollectionReadOpts
   ): Promise<SingleDocument>;
+  /**
+   * @experimental Which collections and Singles hold a field of a type this
+   * plugin registered, at any depth, read on the transaction `tx` stands
+   * for: the content the host reads above would accept, found without
+   * naming it first.
+   *
+   * Each kind is listed whole, from the listings
+   * `services.collections.listCollections` and `services.singles.list`
+   * answer, and each entry is judged by the rule the host reads judge a
+   * slug by, so a host read of any slug listed here is not refused on the
+   * same transaction. Those listings take a pooled connection, which on a
+   * pool of one waits for the connection the transaction holds; this reads
+   * on that connection, one query at a time, so it sees the schema as the
+   * transaction does. It reads schemas only, never content rows, so it
+   * takes none of the row locks the reads above take.
+   *
+   * The plugin's own collections and Singles are judged like any other, as
+   * the host reads judge them: one is listed only when it holds such a
+   * field itself. A plugin that registered no field type is answered empty
+   * without reading anything. A settled token is refused before anything
+   * is read.
+   */
+  listHostTypesInTransaction(
+    tx: PluginCollectionTransaction
+  ): Promise<PluginHostTypes>;
+}
+
+/**
+ * @experimental What {@link PluginOwnCollectionReads.listHostTypesInTransaction}
+ * answers: the content holding a field of a type the plugin registered.
+ */
+export interface PluginHostTypes {
+  /**
+   * Each collection holding one, as `services.collections.listCollections`
+   * lists it, in slug order.
+   */
+  readonly collections: readonly Collection[];
+  /**
+   * Each Single holding one, as `services.singles.list` lists it, in the
+   * order it lists them. A code-first Single's row that outlived its config
+   * is included, as it is there, and says so with `source: "code"`.
+   */
+  readonly singles: readonly PluginSingleRecord[];
 }
 
 /**
@@ -1038,6 +1083,43 @@ export interface HostSchemaSource {
   ): Promise<readonly unknown[] | null>;
   /** A component's own fields, or null where there is none. */
   componentFields(slug: string): Promise<FieldConfig[] | null>;
+  /**
+   * Page `page` (counting from 1) of the collections, `limit` to a page, as
+   * `services.collections.listCollections` lists them sorted by slug. A
+   * page shorter than `limit` is the last.
+   */
+  listCollections(page: number, limit: number): Promise<readonly Collection[]>;
+  /**
+   * Every Single, as `services.singles.list` lists them, in one read.
+   *
+   * Not paged: that listing orders by creation time alone, which two Singles
+   * registered in one boot can share, so pages of it taken by offset could
+   * skip one or answer it twice. Collections are paged in slug order, which
+   * is unique.
+   */
+  listSingles(): Promise<readonly PluginSingleRecord[]>;
+}
+
+/** How many collections one page of the host-types walk asks for. */
+export const HOST_TYPES_PAGE_SIZE = 100;
+
+/**
+ * Whether the collection or Single `slug` holds a field of a type the plugin
+ * registered, at any depth: its declared fields as `source` answers them,
+ * walked by `holdsFieldOfType` with `componentFields` answering each
+ * component it names. False for one with no schema.
+ */
+async function holdsOwnFieldType(
+  source: HostSchemaSource,
+  kind: "collection" | "Single",
+  slug: string,
+  componentFields: (slug: string) => Promise<FieldConfig[] | null>
+): Promise<boolean> {
+  const fields = await source.fieldsOf(kind, slug);
+  return (
+    fields !== null &&
+    (await holdsFieldOfType(fields, source.fieldTypes, componentFields))
+  );
 }
 
 /**
@@ -1101,20 +1183,73 @@ export function ownCollectionReads(
    * read as the transaction sees it, on its connection.
    */
   const hostGrant = async (kind: Kind, slug: string): Promise<ReadGrant> => {
-    let eligible = false;
     const source = host;
-    if (source !== undefined && source.fieldTypes.length > 0) {
-      const fields = await source.fieldsOf(kind, slug);
-      eligible =
-        fields !== null &&
-        (await holdsFieldOfType(fields, source.fieldTypes, componentSlug =>
-          source.componentFields(componentSlug)
-        ));
-    }
+    const eligible =
+      source !== undefined &&
+      source.fieldTypes.length > 0 &&
+      (await holdsOwnFieldType(source, kind, slug, componentSlug =>
+        source.componentFields(componentSlug)
+      ));
     return {
       grant: issueHookExemptRead(eligible ? [slug] : []),
       refuse: holdsNoOwnField(kind),
     };
+  };
+
+  /**
+   * The content a host read would accept, kind by kind: each collection and
+   * each Single the listings name, kept when {@link holdsOwnFieldType} says
+   * it holds a field of a type this plugin registered, the question
+   * `hostGrant` asks, so the two cannot disagree about a slug.
+   *
+   * One query at a time, because every one of them runs on the one
+   * connection the transaction holds. Each entry's schema is asked by slug,
+   * as `hostGrant` asks it, rather than read off the listing: a Single's
+   * listed fields drop the component a field names, which the rule follows.
+   * A component's fields are asked once for the whole walk, since many
+   * collections name the same few.
+   */
+  const listHostTypes = async (): Promise<PluginHostTypes> => {
+    const source = host;
+    if (source === undefined || source.fieldTypes.length === 0) {
+      return { collections: [], singles: [] };
+    }
+    const components = new Map<string, Promise<FieldConfig[] | null>>();
+    // Lookups wait on the one before, so a schema naming several components
+    // never sends them to the transaction's connection together.
+    let previous: Promise<unknown> = Promise.resolve();
+    const componentFields = (slug: string): Promise<FieldConfig[] | null> => {
+      let fields = components.get(slug);
+      if (fields === undefined) {
+        fields = previous.then(() => source.componentFields(slug));
+        components.set(slug, fields);
+        previous = fields.catch(() => undefined);
+      }
+      return fields;
+    };
+    const holds = (kind: Kind, slug: string): Promise<boolean> =>
+      holdsOwnFieldType(source, kind, slug, componentFields);
+
+    const collections: Collection[] = [];
+    for (let page = 1; ; page++) {
+      const listed = await source.listCollections(page, HOST_TYPES_PAGE_SIZE);
+      for (const listedCollection of listed) {
+        // `name` is the slug: the listing answers it under the name the
+        // admin reads.
+        if (await holds("collection", listedCollection.name)) {
+          collections.push(listedCollection);
+        }
+      }
+      // A short page is the last, as the own reads' docs advise: the
+      // listing's total is a count, which holds no lock.
+      if (listed.length < HOST_TYPES_PAGE_SIZE) break;
+    }
+
+    const singles: PluginSingleRecord[] = [];
+    for (const listedSingle of await source.listSingles()) {
+      if (await holds("Single", listedSingle.slug)) singles.push(listedSingle);
+    }
+    return { collections, singles };
   };
 
   const read = async <T>(
@@ -1269,5 +1404,8 @@ export function ownCollectionReads(
       onTransaction(tx, async () =>
         getSingleUnder(await hostGrant("Single", slug), slug, opts)
       ),
+    // Listings and schemas only: no content row is read, so no grant is
+    // issued, and the token is checked and the work tracked as above.
+    listHostTypesInTransaction: tx => onTransaction(tx, listHostTypes),
   } satisfies PluginOwnCollectionReads);
 }

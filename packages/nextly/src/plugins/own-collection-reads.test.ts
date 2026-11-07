@@ -10,11 +10,16 @@ import { describe, expect, it, vi } from "vitest";
 import { currentPrincipal, runAsPrincipal } from "../auth/principal-scope";
 import type { FieldConfig } from "../collections/fields/types";
 import type { GetSingleOptions } from "../domains/singles/types";
-import type { CollectionService } from "../services/collections/collection-service";
+import type {
+  Collection,
+  CollectionService,
+} from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
 import { readHooksWaived } from "../services/collections/trust-grant";
 
+import type { PluginSingleRecord } from "./plugin-singles";
 import {
+  HOST_TYPES_PAGE_SIZE,
   type HostSchemaSource,
   ownCollectionReads,
   type OwnCollectionReadOpts,
@@ -206,13 +211,70 @@ describe("ctx.services.ownCollections", () => {
   });
 
   describe("host reads", () => {
+    /** What a host schema was asked, beside the schema. */
+    interface Asked {
+      /** Each schema asked for, as `kind:slug`. */
+      asked: string[];
+      /** Each component whose fields were asked for. */
+      components: string[];
+      /** Each page of the collection listing asked for. */
+      pages: number[];
+      /** How many times the Singles were listed. */
+      singleListings: number;
+      /** The most questions ever outstanding at once. */
+      mostAtOnce: number;
+    }
+
+    /** A listed collection, as the collection listing answers one. */
+    function listedCollection(slug: string): Collection {
+      return {
+        id: `id-${slug}`,
+        name: slug,
+        label: slug,
+        tableName: `dc_${slug}`,
+        schemaDefinition: { fields: [] },
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      };
+    }
+
+    /** A listed Single, as the Singles listing answers one. */
+    function listedSingle(slug: string): PluginSingleRecord {
+      return {
+        id: `id-${slug}`,
+        slug,
+        label: slug,
+        fields: [],
+        source: "code",
+      };
+    }
+
     /**
      * A host schema: `pages` holds the plugin's `doc` type inside a repeater's
-     * group, `promo` holds it inside a component, `posts` and the Single
-     * `footer` hold none, and `home` is a Single holding it at the top level.
+     * group, `promo` and `banner` hold it inside the component `hero`,
+     * `addons` names `cta` (holding none) and `hero` side by side, `posts`
+     * and the Single `footer` hold none, `home` is a Single holding it at the
+     * top level, and `ledger` is listed with no schema at all.
+     *
+     * Every question answers after a timer, so two asked together are
+     * outstanding together, and `mostAtOnce` says whether any were.
      */
-    function hostSchema(): HostSchemaSource & { asked: string[] } {
-      const asked: string[] = [];
+    function hostSchema(): HostSchemaSource & Asked {
+      const state: Asked = {
+        asked: [],
+        components: [],
+        pages: [],
+        singleListings: 0,
+        mostAtOnce: 0,
+      };
+      let outstanding = 0;
+      const later = async <T>(value: T): Promise<T> => {
+        outstanding++;
+        state.mostAtOnce = Math.max(state.mostAtOnce, outstanding);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        outstanding--;
+        return value;
+      };
       const fields: Record<string, readonly unknown[]> = {
         "collection:pages": [
           {
@@ -230,25 +292,51 @@ describe("ctx.services.ownCollections", () => {
         "collection:promo": [
           { name: "hero", type: "component", component: "hero" },
         ],
+        "collection:banner": [
+          { name: "lead", type: "component", component: "hero" },
+        ],
+        "collection:addons": [
+          { name: "action", type: "component", component: "cta" },
+          { name: "hero", type: "component", component: "hero" },
+        ],
         "collection:posts": [{ name: "title", type: "text" }],
         "Single:home": [{ name: "body", type: "doc" }],
         "Single:footer": [{ name: "note", type: "text" }],
       };
-      return {
-        asked,
-        fieldTypes: ["doc"],
-        fieldsOf: (kind, slug) => {
-          asked.push(`${kind}:${slug}`);
-          return Promise.resolve(fields[`${kind}:${slug}`] ?? null);
-        },
-        // A contributed type is not in the built-in field union.
-        componentFields: slug =>
-          Promise.resolve(
-            slug === "hero"
-              ? ([{ name: "intro", type: "doc" }] as unknown as FieldConfig[])
-              : null
-          ),
+      // A contributed type is not in the built-in field union.
+      const components: Record<string, FieldConfig[]> = {
+        hero: [{ name: "intro", type: "doc" }] as unknown as FieldConfig[],
+        cta: [{ name: "label", type: "text" }] as FieldConfig[],
       };
+      const collectionSlugs = [
+        ...Object.keys(fields)
+          .filter(key => key.startsWith("collection:"))
+          .map(key => key.slice("collection:".length)),
+        "ledger",
+      ].sort();
+      return Object.assign(state, {
+        fieldTypes: ["doc"],
+        fieldsOf: (kind: "collection" | "Single", slug: string) => {
+          state.asked.push(`${kind}:${slug}`);
+          return later(fields[`${kind}:${slug}`] ?? null);
+        },
+        componentFields: (slug: string) => {
+          state.components.push(slug);
+          return later(components[slug] ?? null);
+        },
+        listCollections: (page: number, limit: number) => {
+          state.pages.push(page);
+          return later(
+            collectionSlugs
+              .slice((page - 1) * limit, page * limit)
+              .map(listedCollection)
+          );
+        },
+        listSingles: () => {
+          state.singleListings++;
+          return later(["home", "footer"].map(listedSingle));
+        },
+      });
     }
 
     it("reads a host collection holding the plugin's field type at any depth, under a grant for that slug alone", async () => {
@@ -394,6 +482,170 @@ describe("ctx.services.ownCollections", () => {
       expect(readHooksWaived(grant, "home")).toBe(true);
       expect(readHooksWaived(grant, "footer")).toBe(false);
       expect(asked[0]?.options?.createIfMissing).toBe(false);
+    });
+
+    describe("listHostTypesInTransaction", () => {
+      it("lists each collection and Single holding the plugin's type at any depth, the plugin's own judged like the rest", async () => {
+        const { service, facade } = standIn();
+        const schema = hostSchema();
+        // `pages` is the plugin's own and holds the type; `ledger` is its
+        // own and holds nothing.
+        const reads = ownCollectionReads(
+          facade,
+          ["ledger", "pages"],
+          undefined,
+          schema
+        );
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          async tx => {
+            const types = await reads.listHostTypesInTransaction(tx);
+            // Every slug it lists is one a host read on the same
+            // transaction accepts.
+            for (const listed of types.collections) {
+              await reads.listHostEntriesInTransaction(tx, listed.name);
+            }
+            return types;
+          }
+        );
+
+        // In the listing's slug order: inside a component named beside
+        // another, inside a component, inside a repeater's group, and inside
+        // a component again.
+        expect(found.collections.map(listed => listed.name)).toEqual([
+          "addons",
+          "banner",
+          "pages",
+          "promo",
+        ]);
+        // Answered as the listing answered them, not rebuilt.
+        expect(found.collections[0]).toEqual(listedCollection("addons"));
+        expect(found.singles).toEqual([listedSingle("home")]);
+        expect(service.listEntries).toHaveBeenCalledTimes(4);
+        // Each listed entry judged by its schema, as a host read judges it.
+        expect(schema.asked).toEqual([
+          "collection:addons",
+          "collection:banner",
+          "collection:ledger",
+          "collection:pages",
+          "collection:posts",
+          "collection:promo",
+          "Single:home",
+          "Single:footer",
+          // The host reads above, each judging its own slug again.
+          "collection:addons",
+          "collection:banner",
+          "collection:pages",
+          "collection:promo",
+        ]);
+      });
+
+      it("asks each component once per walk, and never two questions at once", async () => {
+        const { facade } = standIn();
+        const schema = hostSchema();
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+
+        await withWriteTransactionToken({} as TransactionContext, tx =>
+          reads.listHostTypesInTransaction(tx)
+        );
+
+        // `hero` is named by three collections and asked for once; `addons`
+        // names `cta` and `hero` together, the first time either is asked.
+        expect(schema.components).toEqual(["cta", "hero"]);
+        expect(schema.mostAtOnce).toBe(1);
+        expect(schema.pages).toEqual([1]);
+        expect(schema.singleListings).toBe(1);
+      });
+
+      it("pages through the collections until a short page", async () => {
+        const { facade } = standIn();
+        const pages: number[] = [];
+        // One more collection than a page holds; the first and the last
+        // hold the type, so the last is found only on the second page.
+        const slugs = Array.from(
+          { length: HOST_TYPES_PAGE_SIZE + 1 },
+          (_, index) => `c${String(index).padStart(4, "0")}`
+        );
+        const first = slugs[0];
+        const last = slugs[slugs.length - 1];
+        const reads = ownCollectionReads(facade, [], undefined, {
+          fieldTypes: ["doc"],
+          fieldsOf: (_kind, slug) =>
+            Promise.resolve([
+              {
+                name: "body",
+                type: slug === first || slug === last ? "doc" : "text",
+              },
+            ]),
+          componentFields: () => Promise.resolve(null),
+          listCollections: (page, limit) => {
+            pages.push(page);
+            return Promise.resolve(
+              slugs
+                .slice((page - 1) * limit, page * limit)
+                .map(listedCollection)
+            );
+          },
+          listSingles: () => Promise.resolve([]),
+        });
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          tx => reads.listHostTypesInTransaction(tx)
+        );
+
+        expect(pages).toEqual([1, 2]);
+        expect(found.collections.map(listed => listed.name)).toEqual([
+          first,
+          last,
+        ]);
+      });
+
+      it("answers empty for a plugin that registered no field type, reading nothing", async () => {
+        const { facade } = standIn();
+        const schema = { ...hostSchema(), fieldTypes: [] };
+        const reads = ownCollectionReads(facade, ["ledger"], undefined, schema);
+        const noSource = ownCollectionReads(facade, ["ledger"]);
+
+        await withWriteTransactionToken({} as TransactionContext, async tx => {
+          expect(await reads.listHostTypesInTransaction(tx)).toEqual({
+            collections: [],
+            singles: [],
+          });
+          expect(await noSource.listHostTypesInTransaction(tx)).toEqual({
+            collections: [],
+            singles: [],
+          });
+        });
+
+        // The spread shares the fixture's arrays, so these see every call.
+        expect(schema.pages).toEqual([]);
+        expect(schema.asked).toEqual([]);
+        expect(schema.components).toEqual([]);
+      });
+
+      it("refuses a settled token before listing anything", async () => {
+        const { facade } = standIn();
+        const schema = hostSchema();
+        const reads = ownCollectionReads(facade, [], undefined, schema);
+        let kept: PluginCollectionTransaction | undefined;
+        await withWriteTransactionToken({} as TransactionContext, async tx => {
+          kept = tx;
+        });
+        if (!kept) throw new Error("the transaction's work never ran");
+        const settled = kept;
+
+        await expect(
+          reads.listHostTypesInTransaction(settled)
+        ).rejects.toMatchObject({
+          code: "VALIDATION_ERROR",
+          logContext: { reason: "plugin-transaction-finished" },
+        });
+        expect(schema.pages).toEqual([]);
+        expect(schema.singleListings).toBe(0);
+        expect(schema.asked).toEqual([]);
+      });
     });
   });
 

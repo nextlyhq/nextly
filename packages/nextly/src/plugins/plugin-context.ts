@@ -2572,6 +2572,22 @@ export function createPluginContext(
                 "fieldGroupRegistryService"
               ).getComponentBySlug(slug)
             )?.fields ?? null,
+          // The listings a plugin reads through `services.collections` and
+          // `services.singles`, so the host-types walk answers what those
+          // answer. The collection listing ignores its request context.
+          listCollections: async (page, limit) =>
+            (
+              await collectionService.listCollections(
+                { page, limit, sortBy: "slug", sortOrder: "asc" },
+                {}
+              )
+            ).data,
+          listSingles: async () =>
+            (
+              await wrapSinglesForPlugin(
+                getServiceFn("singleRegistryService")
+              ).list()
+            ).data,
         }
       ),
       // The plugin view, refusing the writes that decide who administers the
