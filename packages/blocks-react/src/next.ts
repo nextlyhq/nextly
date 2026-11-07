@@ -1431,6 +1431,13 @@ interface MediaReader {
     id: string;
     disableErrors?: boolean;
   }): Promise<Record<string, unknown> | null>;
+  /**
+   * Several by id, in one read, judged as `findByID` is. Optional, so an
+   * instance from before it existed still reads one at a time.
+   */
+  findByIDs?(args: {
+    ids: readonly string[];
+  }): Promise<readonly Record<string, unknown>[]>;
 }
 
 /**
@@ -1929,6 +1936,15 @@ interface MediaReads {
     id: string,
     claim?: ReadClaim
   ) => Promise<ResolvedMedia | null>;
+  /**
+   * Read many images ahead, as a list's entries draw them: one read per
+   * batch, through the same reader and posture as `resolve`, filling the
+   * answers it then gives without a read of its own.
+   */
+  readonly ahead: (
+    ids: readonly string[],
+    claim: ReadClaim
+  ) => Promise<boolean>;
 }
 
 function mediaResolver(
@@ -1953,7 +1969,82 @@ function mediaResolver(
       known.set(id, reading);
       return reading;
     },
+    ahead: async (ids, claim) => {
+      const readMany = mediaReadMany(config, reader);
+      if (readMany === undefined) return true;
+      const wanted = usableIds(ids).filter(id => !known.has(id));
+      for (let at = 0; at < wanted.length; at += AHEAD_BATCH_SIZE) {
+        const chunk = wanted.slice(at, at + AHEAD_BATCH_SIZE);
+        // A batch that fails leaves each image to its own read, so it is
+        // asked only where the allowance covers it and each image's own
+        // read after it: a batch never costs an image its picture.
+        if ((budget.remaining?.() ?? Infinity) < chunk.length + 1) return false;
+        if (!budget.take({ ...claim, kind: "image" })) return false;
+        const found = await readMany(chunk).catch(() => undefined);
+        if (found === undefined) continue;
+        for (const id of chunk) {
+          known.set(id, Promise.resolve(found.get(id) ?? null));
+        }
+      }
+      return true;
+    },
   };
+}
+
+/**
+ * Many images' reads in one, where the route's images can be read so: a
+ * named media collection by `id in`, under the per-id read's posture; the
+ * media library through its `findByIDs`, which judges a caller as its
+ * `findByID` does. `undefined` where neither is there (a host's own
+ * resolver takes one id), and each image is read as it is drawn. An answer
+ * holds every id asked, `null` for one with no usable picture; `undefined`
+ * for an answer that cannot be matched to the ids with certainty.
+ */
+function mediaReadMany(
+  config: BlocksPageConfig,
+  reader: NextlyContentReader
+):
+  | ((
+      ids: readonly string[]
+    ) => Promise<ReadonlyMap<string, ResolvedMedia | null> | undefined>)
+  | undefined {
+  if (config.resolveMedia !== undefined) return undefined;
+  const collection = config.mediaCollection;
+  if (collection !== undefined) {
+    return async ids => {
+      const found = await reader.find({
+        collection,
+        where: { id: { in: [...ids] } },
+        limit: ids.length,
+        ...mediaPosture(config),
+      });
+      const rows = rowsById(found, ids);
+      return rows === undefined ? undefined : drawnEach(ids, rows);
+    };
+  }
+  const library = mediaNamespaceOf(reader);
+  const findByIDs = library?.findByIDs?.bind(library);
+  if (findByIDs === undefined) return undefined;
+  return async ids => {
+    const rows = new Map<string, Record<string, unknown>>();
+    for (const row of await findByIDs({ ids })) {
+      if (typeof row.id === "string") rows.set(row.id, row);
+    }
+    return drawnEach(ids, rows);
+  };
+}
+
+/** Each id's picture from the rows read for it, `null` for none. */
+function drawnEach(
+  ids: readonly string[],
+  rows: ReadonlyMap<string, Record<string, unknown>>
+): Map<string, ResolvedMedia | null> {
+  return new Map(
+    ids.map(id => {
+      const row = rows.get(id);
+      return [id, row === undefined ? null : drawnMedia(row)] as const;
+    })
+  );
 }
 
 /** How many ids one read ahead asks for: the readers' own page cap. */
@@ -2107,7 +2198,7 @@ interface EntryPathReads {
   readonly ahead: (
     refs: readonly { readonly collection: string; readonly id: string }[],
     claim: ReadClaim
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }
 
 /** A filter as the route's trusted reader takes it. */
@@ -2153,7 +2244,7 @@ function entryPathResolver(
         if (!budget.take({ ...claim, kind: "link" })) return null;
         return custom(collection, id);
       },
-      ahead: () => Promise.resolve(),
+      ahead: () => Promise.resolve(true),
     };
   }
   const slugField = config.slugField ?? "slug";
@@ -2516,10 +2607,13 @@ function entryPathResolver(
       const take = () => budget.take({ ...claim, kind: "link" });
       for (const [collection, ids] of unsettledByCollection(refs)) {
         for (const chunk of chunked([...ids], AHEAD_BATCH_SIZE)) {
-          if (!affordsBatch(collection, chunk.length)) return;
-          if ((await batch(collection, chunk, take, known)) === "spent") return;
+          if (!affordsBatch(collection, chunk.length)) return false;
+          if ((await batch(collection, chunk, take, known)) === "spent") {
+            return false;
+          }
         }
       }
+      return true;
     },
   };
 }
@@ -3599,7 +3693,9 @@ function decideConditions(
 function overrunLog(
   context: RenderContext,
   /** Which page of its list the render draws, once that is known. */
-  listPage: () => number | undefined
+  listPage: () => number | undefined,
+  /** The route's cache scope: two sites served by one process count apart. */
+  cacheScope: string | undefined
 ): {
   refused(budget: QueryBudget): void;
 } {
@@ -3613,8 +3709,9 @@ function overrunLog(
         timer = undefined;
         said = true;
         const report = budget.report?.();
-        // Each language and each page of a list said apart: they read apart.
+        // Each scope, language and page of a list said apart: they read apart.
         const page = [
+          cacheScope ?? "",
           context.collection,
           context.slug,
           context.locale ?? "",
@@ -3705,6 +3802,7 @@ function listBatchReads(args: {
   readonly shapes: BlocksFieldShapes | undefined;
   readonly budget: QueryBudget;
   readonly entryPaths: EntryPathReads;
+  readonly media: MediaReads;
 }): ListBatchReads {
   const { data, shapes, budget } = args;
   return {
@@ -3745,6 +3843,7 @@ function listBatchReads(args: {
       return found;
     },
     entryPaths: args.entryPaths.ahead,
+    media: args.media.ahead,
   };
 }
 
@@ -4056,7 +4155,11 @@ function blocksRouteConfig(
       // Which page of its list this render draws is known only once the
       // list's first read is claimed, below.
       const drawnPage: { number?: number | undefined } = {};
-      const overrun = overrunLog(context, () => drawnPage.number);
+      const overrun = overrunLog(
+        context,
+        () => drawnPage.number,
+        config.cacheScope
+      );
       const budget = createQueryBudget(
         config.maxQueries ?? DEFAULT_MAX_QUERIES,
         { onRefused: () => overrun.refused(budget) }
@@ -4197,6 +4300,7 @@ function blocksRouteConfig(
         shapes: bindings?.fieldShapes,
         budget,
         entryPaths,
+        media,
       });
       const shared: SharedRendererProps = {
         context: {

@@ -33,12 +33,14 @@ import type {
   DeleteMediaArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   ListFoldersArgs,
   ListResult,
   MutationResult,
   UpdateMediaArgs,
   UploadMediaArgs,
 } from "../types/index";
+import { MEDIA_IDS_PER_READ } from "../types/media";
 
 import type { NextlyContext } from "./context";
 import {
@@ -77,6 +79,14 @@ export interface MediaNamespace {
   upload(args: UploadMediaArgs): Promise<MediaFile>;
   find(args?: FindMediaArgs): Promise<ListResult<MediaFile>>;
   findByID(args: FindMediaByIDArgs): Promise<MediaFile | null>;
+  /**
+   * Several media files by id, in one read, judged exactly as `findByID`
+   * judges one: the files found, each once, in the order their ids were first
+   * asked for; an id with no file has none.
+   *
+   * @experimental
+   */
+  findByIDs(args: FindMediaByIDsArgs): Promise<MediaFile[]>;
   update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>>;
   delete(args: DeleteMediaArgs): Promise<MutationResult<{ id: string }>>;
   bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult>;
@@ -234,6 +244,30 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           }
           throw error;
         }
+      });
+    },
+
+    async findByIDs(args: FindMediaByIDsArgs): Promise<MediaFile[]> {
+      return asChecked(args, async () => {
+        // Refused before the lookup, as `findByID` refuses one: the same
+        // check, so a caller who may not read one file reads none of many.
+        await checkMediaRead(ctx.defaultConfig, args);
+        const ids = args.ids;
+        if (
+          !Array.isArray(ids) ||
+          ids.some(id => typeof id !== "string") ||
+          ids.length > MEDIA_IDS_PER_READ
+        ) {
+          throw new NextlyError({
+            code: "INVALID_INPUT",
+            publicMessage: `'ids' must be a list of at most ${String(MEDIA_IDS_PER_READ)} media ids for media.findByIDs()`,
+            statusCode: 400,
+          });
+        }
+        return await ctx.mediaService.findByIds(
+          ids,
+          createRequestContext(args)
+        );
       });
     },
 

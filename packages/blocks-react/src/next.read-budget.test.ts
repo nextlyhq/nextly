@@ -161,6 +161,10 @@ function site(
   });
   const findByID = vi.fn(async () => null);
   const mediaById = vi.fn(async () => null);
+  // The media library's batch read, answering from the same images.
+  const mediaByIds = vi.fn(async (args: { ids: readonly string[] }) =>
+    (stored.images ?? []).filter(row => args.ids.includes(String(row.id)))
+  );
   const publicSiteSettings = vi.fn(async () => ({
     siteName: "Journal",
     timezone: "UTC",
@@ -169,7 +173,7 @@ function site(
     find,
     findByID,
     publicSiteSettings,
-    media: { findByID: mediaById },
+    media: { findByID: mediaById, findByIDs: mediaByIds },
     stored,
   };
 }
@@ -180,7 +184,8 @@ function readsSoFar(nextly: Site): number {
     nextly.find.mock.calls.length +
     nextly.findByID.mock.calls.length +
     nextly.publicSiteSettings.mock.calls.length +
-    nextly.media.findByID.mock.calls.length
+    nextly.media.findByID.mock.calls.length +
+    nextly.media.findByIDs.mock.calls.length
   );
 }
 
@@ -296,6 +301,8 @@ async function journal(
     timeZone?: string;
     /** The address visited, `/journal` by default. */
     path?: string[];
+    mediaLibrary?: boolean;
+    cacheScope?: string;
   } = {}
 ): Promise<{ html: string; reads: Row[]; total: number }> {
   return await rendered(nextly, {
@@ -323,14 +330,17 @@ async function rendered(
     namedQueries?: NamedQueryLookup;
     timeZone?: string;
     path?: string[];
+    /** Read images from the media library, not a named collection. */
+    mediaLibrary?: boolean;
+    cacheScope?: string;
     /** Draw without the lists' read-ahead, as each entry read one by one. */
     oneByOne?: boolean;
   }
 ): Promise<{ html: string; reads: Row[]; total: number }> {
-  const { slug, oneByOne, path, ...route } = config;
+  const { slug, oneByOne, path, mediaLibrary, ...route } = config;
   const page = createPublicBlocksPage({
     blocks,
-    mediaCollection: "images",
+    ...(mediaLibrary === true ? {} : { mediaCollection: "images" }),
     ...route,
     nextly: nextly as never,
   });
@@ -423,17 +433,18 @@ describe("a list's reads", () => {
     expect(html.split("/media/1.jpg")).toHaveLength(51);
     expect(html).toContain("Writer 3");
     expect(html).not.toContain("None");
-    // The list's entries; its authors by id; its links: their rows by id,
-    // then the three ownership checks as counts over all of them (the pair
-    // stored, no lower id, no earlier collection); then its one image.
+    // In page order: the list's entries; its authors by id; its image by
+    // id; its links: their rows by id, then the three ownership checks as
+    // counts over all of them (the pair stored, no lower id, no earlier
+    // collection).
     expect(described(reads)).toEqual([
       "posts: query",
       "authors: by ids",
+      "images: by ids",
       "posts: by ids",
       "posts: count of pairs",
       "posts: count of pairs",
       "pages: by slugs",
-      "images: query",
     ]);
     expect(fifty.media.findByID).not.toHaveBeenCalled();
     expect(total).toBe(7);
@@ -879,6 +890,53 @@ describe("a list's read-ahead, in the order the page draws", () => {
   });
 });
 
+describe("a list's images, read ahead", () => {
+  it("reads a hundred entries' own images in one read through the media library", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // The posts' picture is an upload to the media library, the collection
+    // a route without a media collection of its own reads images from.
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "featuredImage", type: "upload", relationTo: "media" },
+    ]);
+    const nextly = site(100, listing(100, { boundImage: true }));
+    const { html, total } = await journal(nextly, { mediaLibrary: true });
+    expect(html).toContain("/media/1.jpg");
+    expect(html).toContain("/media/100.jpg");
+    expect(nextly.media.findByIDs).toHaveBeenCalledOnce();
+    expect(nextly.media.findByID).not.toHaveBeenCalled();
+    // The entries, the authors, the images and the links' four.
+    expect(total).toBe(7);
+  });
+
+  it("keeps the first block's link its address when the cap covers exactly that link", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("list", 1, [
+          {
+            id: "more",
+            type: "core/button",
+            version: 1,
+            props: { label: "Read", entryCollection: "posts" },
+            bindings: { entryId: { $bind: "id", source: "item" } },
+          },
+          // After the link on the page: its relation is not read first.
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ])
+    );
+    // The entries, then exactly the link's own reads: its row, the two
+    // checks in its collection and one for the collection before it.
+    const { html } = await journal(nextly, { maxQueries: 1 + 4 });
+    expect(html).toContain('href="/post-1"');
+    expect(html).toContain(">No author<");
+  });
+});
+
 describe("a page drawn inside its Layout", () => {
   it("hands each region the blocks kept for its own conditions, not the page's", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -952,6 +1010,18 @@ describe("the overrun line", () => {
     await quiet();
     expect(warn).toHaveBeenCalledTimes(2);
     expect(String(warn.mock.calls[1]?.[0])).toContain('"pages" page "journal"');
+  });
+
+  it("says each cache scope of a page apart", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, listing(5));
+    await journal(nextly, { maxQueries: 0, cacheScope: "site-a" });
+    await quiet();
+    await journal(nextly, { maxQueries: 0, cacheScope: "site-b" });
+    await quiet();
+    await journal(nextly, { maxQueries: 0, cacheScope: "site-b" });
+    await quiet();
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 
   it("says each language of a page apart", async () => {
@@ -1058,11 +1128,11 @@ describe("what a page costs to read, measured", () => {
     expect(post.html).toContain("reads");
 
     const ahead = await journal(site(100, listing(100)));
-    // Each entry's own picture, bound: one read per distinct image.
+    // Each entry's own picture, bound: read in one batch, with the others.
     const bound = await journal(site(100, listing(100, { boundImage: true })));
     expect(bound.html).toContain("/media/100.jpg");
-    // The six fixed reads, then one per distinct image.
-    expect(bound.total).toBe(106);
+    // The same seven reads as one image: the hundred are one batch.
+    expect(bound.total).toBe(7);
     const oneByOne = await rendered(site(100, listing(100)), {
       collections: ["pages", "posts"],
       field: "content",
