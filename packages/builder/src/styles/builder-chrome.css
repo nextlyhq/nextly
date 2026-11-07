@@ -3912,15 +3912,14 @@
   box-shadow: none;
 }
 
-/* Selected, the selection ring outlines the block, and the dash steps back. */
-.nx-canvas-mark[data-mark="conditioned"][data-condition-selected] {
-  border-color: transparent;
+.nx-canvas-mark[data-mark="conditioned"][data-condition="unchecked"] {
+  border-color: color-mix(in oklch, var(--nx-destructive) 70%, transparent);
 }
 
-.nx-canvas-mark[data-mark="conditioned"][data-condition="unchecked"]:not(
-    [data-condition-selected]
-  ) {
-  border-color: color-mix(in oklch, var(--nx-destructive) 70%, transparent);
+/* Selected, the selection ring outlines the block, and the dash steps back:
+   after the red rule, so it wins on order at the same specificity. */
+.nx-canvas-mark[data-mark="conditioned"][data-condition-selected] {
+  border-color: transparent;
 }
 
 /* The badge: a tab on the outline's top edge, its foot on the dash, so it
