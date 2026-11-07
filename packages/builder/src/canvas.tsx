@@ -2270,12 +2270,10 @@ function useDrawnPage({
   const drawn = useLayoutParts(regions, rendered, sheet);
   // Every conditioned block drawn, whoever the page would show it to, so the
   // author can see and select it; the marks say it isn't shown to everyone.
-  // While conditions are applied, a block hidden for the previewed entry is
-  // drawn as its marker instead.
-  const drawable = useMemo(
-    () => applied?.document ?? revealConditioned(document),
-    [applied, document]
-  );
+  // While conditions are applied, `document` is already the page as they
+  // leave it (a hidden block as its marker), with the previewed entry's
+  // blocks composed in, which are revealed as they are without conditions.
+  const drawable = useMemo(() => revealConditioned(document), [document]);
   // A placed component's definition too: its conditioned blocks are drawn,
   // as the page's are. While conditions are applied, the renderer also knows
   // the marker a hidden block is drawn as.
@@ -2349,9 +2347,14 @@ export function Canvas({
   const canvasScale = useCanvasFrame().scale;
 
   const environment = useCanvasEnvironment(root);
+  // The page as the conditions leave it while they are applied for the
+  // previewed entry (a hidden block as its marker), else the page itself.
+  const shownDocument = conditionsApplied?.document ?? document;
   // A template draws its previewed entry's own blocks in its Entry content
   // block; only the drawn page carries them, never the document edited.
-  const entryDrawing = useEntryContentDrawing(document, render);
+  // Composed into the page as the conditions leave it, so a shown Entry
+  // content block keeps the entry's blocks and a hidden one is its marker.
+  const entryDrawing = useEntryContentDrawing(shownDocument, render);
   const { drawn, page } = useDrawnPage({
     regions,
     rendered: entryDrawing.render,
@@ -2390,16 +2393,18 @@ export function Canvas({
     ]
   );
 
-  // Each Entry content block's words, named by the template's collection.
+  // Each Entry content block's words, named by the template's collection:
+  // of the blocks drawn, so one the conditions hide, drawn as its marker,
+  // says only that it is hidden, as a hidden block's badge does.
   const previewedCollection = usePreviewedCollection();
   const entryContentMarks = useMemo(
     () =>
       entryContentMarksOf(
-        document,
+        shownDocument,
         previewedCollection,
         render?.limits?.maxNodes
       ),
-    [document, previewedCollection, render?.limits]
+    [shownDocument, previewedCollection, render?.limits]
   );
 
   useCanvasMarkers(
