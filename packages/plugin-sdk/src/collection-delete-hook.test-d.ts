@@ -42,6 +42,18 @@ expectTypeOf<
   (tx: PluginCollectionTransaction, collectionName: string) => Promise<boolean>
 >();
 
+// A write that names an entry holds the entry's row the same way, and is told
+// whether the entry is still there.
+expectTypeOf<
+  PluginContext["services"]["collections"]["holdEntryInTransaction"]
+>().toEqualTypeOf<
+  (
+    tx: PluginCollectionTransaction,
+    collectionName: string,
+    entryId: string
+  ) => Promise<boolean>
+>();
+
 function register(ctx: PluginContext): void {
   ctx.hooks.onCollectionDelete({
     impact: async slug => [{ label: `${slug} design`, kind: "design" }],

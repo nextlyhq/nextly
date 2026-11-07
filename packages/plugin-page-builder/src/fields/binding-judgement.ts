@@ -22,6 +22,7 @@ import {
   bindingSchemaIssues,
   isErrorIssue,
   registryBlockSource,
+  SITE_SETTING_FIELD_SHAPES,
   walkNodes,
   type BlockNode,
   type ResolvedBlockNode,
@@ -30,6 +31,7 @@ import {
   type BindingSchemaRef,
   type BindingSchemaSource,
   type BlockDocument,
+  type NamedQuerySource,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldIssue,
@@ -61,6 +63,11 @@ export interface BindingJudging {
   readonly maxNodes?: number;
   /** Told how many problems were kept unjudged for an unreadable store. */
   readonly onUnjudged?: (kept: number) => void;
+  /**
+   * The site's named queries, so a list's item bindings are judged against
+   * the rows its query declares; absent, a named query's rows are unknown.
+   */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /** A collection's or a Single's ref: the sources whose fields are read. */
@@ -125,13 +132,18 @@ interface SchemaReads {
   overflowed: boolean;
   /** Whether a source's fields could not be read, leaving it unknown. */
   failed?: boolean;
+  /** The named queries, whose declared rows a list's items bind against. */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /**
  * The schema as read so far. A collection or a Single not read yet answers
- * unknown, and is noted in `wanted` when one is given; the site settings and
- * a named query's rows are never read here: their fields are a fixed set, or
- * declared by the query.
+ * unknown, and is noted in `wanted` when one is given; the site settings are
+ * the engine's fixed table, the one the renderer reads, so a binding to a
+ * setting a page is never handed is refused here as the page would fall it
+ * back; and a named query's rows are its
+ * declaration's own fields (a query whose rows are a collection's entries is
+ * judged as that collection, by the walk).
  */
 function schemaSoFar(
   reads: SchemaReads,
@@ -140,6 +152,11 @@ function schemaSoFar(
   return {
     listsTimestamps: true,
     fieldsOf: ref => {
+      if ("site" in ref) return SITE_SETTING_FIELD_SHAPES;
+      if ("query" in ref) {
+        const rows = reads.namedQueries?.declarationOf(ref.query)?.rows;
+        return rows !== undefined && "fields" in rows ? rows.fields : undefined;
+      }
       if (!("collection" in ref || "single" in ref)) return undefined;
       const key = keyOf(ref);
       if (reads.known.has(key)) return reads.known.get(key);
@@ -201,6 +218,9 @@ async function bindingErrors(
       definitions: registryBlockSource(),
       ...(judging.stored.length === 0 ? {} : { stored: judging.stored }),
       ...(judging.maxNodes === undefined ? {} : { maxNodes: judging.maxNodes }),
+      ...(judging.reads.namedQueries === undefined
+        ? {}
+        : { namedQueries: judging.reads.namedQueries }),
     }).filter(isErrorIssue);
     if (wanted === undefined || wanted.size === 0) return issues;
     await readSources(judging.reads, wanted);
@@ -228,6 +248,9 @@ async function judgedErrors(
     shapesOf: site.shapesOf,
     known: new Map(),
     overflowed: false,
+    ...(site.namedQueries === undefined
+      ? {}
+      : { namedQueries: site.namedQueries }),
   };
   const judging = { reads, entry, maxNodes: site.maxNodes };
   const found = (
@@ -274,12 +297,19 @@ export interface CurrentBindingProblems {
 export async function currentBindingProblems(
   document: BindingDocument,
   entry: BindingSchemaRef | undefined,
-  site: { readonly shapesOf: DeclaredShapesReader; readonly maxNodes?: number }
+  site: {
+    readonly shapesOf: DeclaredShapesReader;
+    readonly maxNodes?: number;
+    readonly namedQueries?: NamedQuerySource;
+  }
 ): Promise<CurrentBindingProblems> {
   const reads: SchemaReads = {
     shapesOf: site.shapesOf,
     known: new Map(),
     overflowed: false,
+    ...(site.namedQueries === undefined
+      ? {}
+      : { namedQueries: site.namedQueries }),
   };
   const found = await bindingErrors(document, {
     reads,

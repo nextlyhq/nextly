@@ -1,9 +1,12 @@
 /**
  * An entry's own design on a PostgreSQL pool of ONE connection, the usual
- * serverless setting: deleting an entry that has one deletes the design in
- * the same transaction, read and written on the delete's own connection, so
- * the delete completes rather than waiting for a second connection that
- * never comes free until the pool's wait runs out.
+ * serverless setting. Creating one holds its entry in the create's own
+ * transaction (`ctx.services.collections.holdEntryInTransaction`), reading
+ * the collection's registry row and the entry's row on that transaction's
+ * connection; and deleting an entry that has one deletes the design in the
+ * same transaction, read and written on the delete's own connection. So both
+ * complete rather than waiting for a second connection that never comes free
+ * until the pool's wait runs out.
  *
  * PostgreSQL only: SQLite has no pool, and MySQL's takes the same path.
  *
@@ -99,7 +102,7 @@ describe.skipIf(!POSTGRES_URL)(
       await withTimeout(t.destroy(), 15_000);
     }, 30_000);
 
-    it("deletes an entry with its own design, within the pool's wait", async () => {
+    it("creates an own design and deletes its entry with it, within the pool's wait", async () => {
       if (!t) throw new Error("the instance never started");
       const base = await t.nextly.create({
         collection: TEMPLATES_SLUG,
@@ -113,16 +116,19 @@ describe.skipIf(!POSTGRES_URL)(
         overrideAccess: true,
       });
       const entry = String((made as { item: { id: unknown } }).item.id);
-      const design = await t.nextly.create({
-        collection: TEMPLATES_SLUG,
-        data: {
-          title: "Hello",
-          entry: entryDesignKey(HOST, entry),
-          entryCollection: HOST,
-          entryId: entry,
-        },
-        overrideAccess: true,
-      });
+      const design = await withTimeout(
+        t.nextly.create({
+          collection: TEMPLATES_SLUG,
+          data: {
+            title: "Hello",
+            entry: entryDesignKey(HOST, entry),
+            entryCollection: HOST,
+            entryId: entry,
+          },
+          overrideAccess: true,
+        }),
+        POOL_WAIT_MS * 2
+      );
       templates.push(String((design as { item: { id: unknown } }).item.id));
 
       await withTimeout(

@@ -3,8 +3,8 @@
  * every Single's and every field group's fields, as the registry's schema hash
  * for each says (a field group's fields are judged where a collection or a
  * Single places it), whether
- * a collection's entries carry timestamps, and every registered block's
- * props.
+ * a collection's entries carry timestamps, every registered block's
+ * props, and the site settings a page may bind.
  *
  * Nothing tells a plugin that one of these changed, so the check of every
  * document compares this with the one the last complete check was made
@@ -15,7 +15,11 @@
  *
  * @module bindings-report/fingerprint
  */
-import { hashId } from "@nextlyhq/blocks-engine";
+import {
+  hashId,
+  SITE_SETTING_FIELD_SHAPES,
+  type BindingFieldShape,
+} from "@nextlyhq/blocks-engine";
 
 /** One registry record, as far as the fingerprint reads it. */
 interface RegistryRow {
@@ -37,6 +41,15 @@ export interface FingerprintSources {
   readonly singles: () => Promise<readonly unknown[]>;
   /** Every field group, whose fields a binding reaches where one is placed. */
   readonly fieldGroups?: () => Promise<readonly unknown[]>;
+  /**
+   * Every named query's declared rows, by name: a list's item bindings are
+   * judged against them, so a change to a query's rows is judged on every
+   * page listing it.
+   */
+  readonly namedQueries?: () => readonly {
+    readonly name: string;
+    readonly rows: unknown;
+  }[];
   readonly blocks: () => readonly BlockRow[];
   /**
    * When a component or a Layout was last saved: a placed component's, or a
@@ -44,6 +57,12 @@ export interface FingerprintSources {
    * change to one is judged on every page.
    */
   readonly designs?: () => Promise<string>;
+  /**
+   * The site settings a page may bind; the engine's table when absent. Part
+   * of the fingerprint, so a release that changes the table, or the first one
+   * to judge site bindings at all, checks every document again.
+   */
+  readonly siteSettings?: () => readonly BindingFieldShape[];
 }
 
 /** One record's part: its slug and what says its fields changed. */
@@ -79,10 +98,14 @@ export async function schemaFingerprint(
     ...collections.map(row => recordPart("c", row)),
     ...singles.map(row => recordPart("s", row)),
     ...fieldGroups.map(row => recordPart("g", row)),
+    ...(sources.namedQueries?.() ?? []).map(
+      query => `q:${query.name}:${JSON.stringify(query.rows)}`
+    ),
     ...sources
       .blocks()
       .map(block => `b:${block.name}:${JSON.stringify(block.props ?? {})}`),
     `d:${designs}`,
+    `site:${JSON.stringify(sources.siteSettings?.() ?? SITE_SETTING_FIELD_SHAPES)}`,
   ].sort();
   return hashId(parts.join("\n"));
 }

@@ -37,6 +37,7 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { SHARED_STYLE_IN_USE_CODE } from "./library-contract";
 import { walkPages } from "./paged-walk";
 import type { BuilderDocumentType } from "./site-style-route";
 import { storedValuesAt } from "./stored-blocks-values";
@@ -94,6 +95,35 @@ export interface StoredDocuments {
    * the site's languages.
    */
   singleForms(type: BuilderDocumentType): Promise<readonly unknown[]>;
+}
+
+/**
+ * The same stored documents, read only until `signal` is aborted: every read
+ * asked after that throws instead of reaching the database. A walk whose
+ * answer nobody waits for any more (its time ran out) stops at its next read,
+ * rather than going on through every page of every collection.
+ */
+export function stoppedBy(
+  documents: StoredDocuments,
+  signal: AbortSignal
+): StoredDocuments {
+  const reading = <T>(read: () => Promise<T>): Promise<T> => {
+    if (signal.aborted) {
+      return Promise.reject(
+        NextlyError.internal({
+          logContext: { reason: "stored-document-walk-stopped" },
+        })
+      );
+    }
+    return read();
+  };
+  return {
+    collections: () => reading(() => documents.collections()),
+    singles: () => reading(() => documents.singles()),
+    rowsAfter: (type, after) => reading(() => documents.rowsAfter(type, after)),
+    rowForms: (type, id) => reading(() => documents.rowForms(type, id)),
+    singleForms: type => reading(() => documents.singleForms(type)),
+  };
 }
 
 /**
@@ -248,4 +278,66 @@ export function stillUsedMessage(
   const more = count > 1 ? ` and ${count - 1} more` : "";
   const those = count === 1 ? "that page" : "those pages";
   return `Still used on ${firstReadable}${more}. Remove ${it} from ${those} first.`;
+}
+
+/**
+ * The refusal's words for references still stored on `count` documents: the
+ * first one the caller may open named where the check can ask a caller
+ * (`canName`), else the documents only counted, as for a write whose author
+ * cannot be asked.
+ */
+function stillUsedWords(
+  count: number,
+  first: string | undefined,
+  removing: number,
+  canName: boolean
+): string {
+  if (canName) return stillUsedMessage(count, first, removing);
+  // Counted in pages, as the named refusal counts what it can't open, so the
+  // two read alike whichever one the author meets.
+  const it = removing === 1 ? "it" : "them";
+  const pages = count === 1 ? "1 page" : `${count} pages`;
+  const those = count === 1 ? "that page" : "those pages";
+  return `Still used on ${pages}. Remove ${it} from ${those} first.`;
+}
+
+/**
+ * The stored documents' own answer to whether some shared styles or
+ * variables are still referenced, and how the first use the caller may open
+ * is named; without `firstReadable`, no document is named.
+ */
+export interface StillUsed {
+  /** Every stored document still referencing any of the ids, read past access. */
+  uses(ids: readonly string[]): Promise<readonly StoredUse[]>;
+  /** The title of the first of these the caller may open, if any. */
+  firstReadable?(uses: readonly StoredUse[]): Promise<string | undefined>;
+}
+
+/**
+ * Refuse, with the in-use refusal, when a stored document still references
+ * any of the ids: the stored documents' own answer, read past the index,
+ * which every removal of a shared style or a variable asks. One
+ * implementation for both, so the two refusals cannot drift. `logKey` names
+ * what the ids are in the server log (`classIds`, `variableIds`).
+ */
+export async function refuseStoredUses(
+  ids: readonly string[],
+  stillUsed: StillUsed,
+  logKey: string
+): Promise<void> {
+  const uses = await stillUsed.uses(ids);
+  if (uses.length === 0) return;
+  const message = stillUsedWords(
+    uses.length,
+    await stillUsed.firstReadable?.(uses),
+    ids.length,
+    stillUsed.firstReadable !== undefined
+  );
+  throw NextlyError.validation({
+    errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
+    logContext: {
+      [logKey]: ids,
+      uses: uses.map(use => `${use.kind}:${use.slug}:${use.id}`),
+    },
+  });
 }

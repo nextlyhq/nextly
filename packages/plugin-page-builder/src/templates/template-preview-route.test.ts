@@ -463,9 +463,12 @@ describe("the list route reads AS THE CALLER", () => {
       guard: () => ({
         templatesCollection: "templates",
         holderOf: async () => null,
-        // An own design's lookups, which the preview's list never makes.
+        // An own design's lookups and the address reads, which the
+        // preview's list never makes.
         entryExists: async () => true,
-        lockEntry: async () => undefined,
+        holdEntry: async () => true,
+        declaredAddresses: new Map(),
+        addressHolderOf: async () => null,
         ...collections,
       }),
     }).handler(

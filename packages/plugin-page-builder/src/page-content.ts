@@ -17,8 +17,10 @@ import {
   type ContentAddressService,
 } from "./address-claims/content-addresses";
 import {
+  entryDesignKey,
   TEMPLATE_COLLECTION_FIELD,
   TEMPLATE_CONTENT_FIELD,
+  TEMPLATE_ENTRY_FIELD,
   TEMPLATES_SLUG,
 } from "./collections/templates";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -50,7 +52,10 @@ export interface PageBuilderContentOptions {
   readonly templatesCollection?: string;
 }
 
-/** A collection's published template, as the route draws an entry with it. */
+/**
+ * A published template the route draws an entry with: its collection's, or
+ * the entry's own design.
+ */
 export interface PageBuilderContentTemplate {
   readonly id: string;
   /** The template's block document. */
@@ -89,11 +94,39 @@ export interface PageBuilderContentProvider {
       collection: string,
       locale: string | undefined
     ) => Promise<PageBuilderContentTemplate | null>;
+    /**
+     * The entry's own published design, else its collection's published
+     * template, else null, as the public reads them.
+     *
+     * @experimental Settles with entries' own designs.
+     */
+    readonly readFor: (
+      collection: string,
+      id: string,
+      locale: string | undefined
+    ) => Promise<PageBuilderContentTemplate | null>;
   };
 }
 
 /** How many addresses one read of the store takes while pre-rendering. */
 const ADDRESS_PAGE = 500;
+
+/**
+ * The columns `readFor` reads: which rows they are, and the design. The
+ * template's other fields (its title, its address, its lineage) never reach
+ * an entry's page.
+ */
+const DESIGN_SELECT = {
+  id: true,
+  [TEMPLATE_COLLECTION_FIELD]: true,
+  [TEMPLATE_ENTRY_FIELD]: true,
+  [TEMPLATE_CONTENT_FIELD]: true,
+};
+
+/** A templates row as the route draws an entry with it. */
+function drawnWith(row: Record<string, unknown>): PageBuilderContentTemplate {
+  return { id: String(row.id), document: row[TEMPLATE_CONTENT_FIELD] ?? null };
+}
 
 /**
  * Serve the site's pages and collections' entries from the address store.
@@ -111,7 +144,8 @@ const ADDRESS_PAGE = 500;
  * The holder of a path is read as last committed, as the system: the store
  * holds only published documents' addresses, and a visitor has no right to
  * read it otherwise. A template is read as the public reads it, published
- * only.
+ * only, and so is an entry's own design: a draft one never reaches the
+ * public page, which keeps the collection's template until it is published.
  *
  * @experimental New public surface: its names and shape may change before it
  * is marked stable.
@@ -174,10 +208,36 @@ export function pageBuilderContent(
         if (row === undefined) return null;
         // Compared again exactly: a database may compare the text loosely.
         if (row[TEMPLATE_COLLECTION_FIELD] !== collection) return null;
-        return {
-          id: String(row.id),
-          document: row[TEMPLATE_CONTENT_FIELD] ?? null,
-        };
+        return drawnWith(row);
+      },
+      readFor: async (collection, id, locale) => {
+        const key = entryDesignKey(collection, id);
+        // The own design and the collection's template in one read: each
+        // field is unique, so at most one row answers each, even where the
+        // database compares text loosely, and two rows are all there are.
+        const { items } = await (
+          await nextly()
+        ).find({
+          collection: templates,
+          where: {
+            or: [
+              { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
+              { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
+            ],
+          },
+          status: "published",
+          overrideAccess: false,
+          select: DESIGN_SELECT,
+          limit: 2,
+          depth: 0,
+          ...(locale === undefined ? {} : { locale }),
+        });
+        const rows = items as readonly Record<string, unknown>[];
+        // Compared again exactly, as `read` compares, the own design first.
+        const row =
+          rows.find(found => found[TEMPLATE_ENTRY_FIELD] === key) ??
+          rows.find(found => found[TEMPLATE_COLLECTION_FIELD] === collection);
+        return row === undefined ? null : drawnWith(row);
       },
     },
   };

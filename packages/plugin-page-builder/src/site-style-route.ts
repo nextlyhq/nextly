@@ -153,7 +153,7 @@ function isLiveSingle(
 }
 
 /** The live Singles on one page of the listing that the builder opens. */
-function builderSinglesIn(
+export function builderSinglesIn(
   rows: readonly unknown[],
   declared: ReadonlySet<string> | undefined
 ): BuilderDocumentType[] {
@@ -187,7 +187,18 @@ export async function singlesTheBuilderOpens(
 export async function collectionsTheBuilderOpens(
   ctx: PageCollectionsContext
 ): Promise<BuilderDocumentType[]> {
-  return (await registryRecords(ctx))
+  return builderCollectionsIn(await registryRecords(ctx));
+}
+
+/**
+ * The collections among registry records that declare a blocks field the
+ * builder opens: one reading for the pooled listing above and for a read of
+ * the registry on a write's transaction, so both name the same documents.
+ */
+export function builderCollectionsIn(
+  records: readonly unknown[]
+): BuilderDocumentType[] {
+  return records
     .map(builderTypeOf)
     .filter((type): type is BuilderDocumentType => type !== undefined);
 }

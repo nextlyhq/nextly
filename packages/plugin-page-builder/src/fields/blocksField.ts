@@ -111,9 +111,14 @@ export const BLOCKS_FIELD_COMPONENT =
 /**
  * `read`, asked at most once: every caller shares the first call's answer,
  * so the checks judging one write see one read. Nothing when there is no
- * `read`.
+ * `read`. Exported for the same checks made again inside the write's
+ * transaction (`composition-rejudge`), which share their reads the same way.
  */
-function onceAsked<T>(
+export function onceAsked<T>(read: () => Promise<T>): () => Promise<T>;
+export function onceAsked<T>(
+  read: (() => Promise<T>) | undefined
+): (() => Promise<T>) | undefined;
+export function onceAsked<T>(
   read: (() => Promise<T>) | undefined
 ): (() => Promise<T>) | undefined {
   if (read === undefined) return undefined;
@@ -306,6 +311,7 @@ export function blocksFieldType(
       const lists = async (): Promise<readonly PluginFieldIssue[]> => {
         if (emptied || args.write === undefined) return [];
         const maxNodes = composition?.()?.limits.maxNodes;
+        const namedQueries = composition?.()?.namedQueries;
         const bound =
           bindingShapes === undefined
             ? []
@@ -313,6 +319,8 @@ export function blocksFieldType(
                 shapesOf: bindingShapes,
                 storedForms,
                 ...(maxNodes === undefined ? {} : { maxNodes }),
+                // A list's item bindings, against its query's rows.
+                ...(namedQueries === undefined ? {} : { namedQueries }),
                 onUnjudged: bindings =>
                   composition?.()?.onBindingsUnjudged?.({
                     field: args.path,
@@ -321,7 +329,6 @@ export function blocksFieldType(
                   }),
               });
         if (listFields === undefined) return bound;
-        const namedQueries = composition?.()?.namedQueries;
         // Where templates are stored, so a template's lists are judged
         // against the collection it draws.
         const templates = composition?.()?.templates;
