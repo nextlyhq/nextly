@@ -27,6 +27,7 @@ import {
 import { BUILDER_VIEW_PATH } from "../builder-view";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
+  entryDesignPath,
   entryDesignsPath,
   entryDesignsPathForTemplate,
   type EntryDesignItem,
@@ -52,6 +53,22 @@ export function useEntryDesigns(
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: entryDesignsPath(collection ?? ""),
     enabled: collection !== undefined && collection !== "",
+    staleTime: 0,
+  });
+}
+
+/**
+ * One entry's own design, or none, with the same `meta`: answered by the
+ * entry's key, so whether it has one never rests on the capped list.
+ */
+export function useEntryDesign(
+  collection: string,
+  entryId: string
+): PluginRouteRead<EntryDesignsResponse> {
+  return usePluginRoute<EntryDesignsResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: entryDesignPath(collection, entryId),
+    enabled: collection !== "" && entryId !== "",
     staleTime: 0,
   });
 }
@@ -222,10 +239,13 @@ export const OWN_DESIGN_WORDS = {
     `No ${inSentence(singular)} has its own design.`,
   noneHaveMore: (singular: string): string =>
     `Every ${inSentence(singular)} is shown with this template.`,
+  noneHaveUnpublished: (plural: string): string =>
+    `This template isn't published, so ${inSentence(plural)} aren't shown as pages until it is.`,
   copiedSays:
     "They were copied from this template and are edited on their own. Changes here don't reach them.",
   rowPublished: (edited: string | null): string =>
     edited === null ? "Published" : `Published · edited ${edited}`,
   rowUnpublished: "Not published · visitors see this template",
+  rowUnpublishedNoTemplate: "Not published · not shown as a page",
   open: "Open",
 } as const;

@@ -3,8 +3,12 @@
  * collection's entries, with the collection's template and names, for the
  * admin surfaces that show them (the entry's Design section, the entry list's
  * Design column, the template's own designs and its delete dialog). Asked
- * with `?template=<id>` instead, it answers for the collection that template
- * is about, which is how a template's own screens find it.
+ * with `&entry=<id>` beside the collection, it answers that entry's own
+ * design alone, which is how a surface asks whether an entry has one: the
+ * list is capped, so its absence from the list says nothing. Asked with
+ * `?template=<id>` instead, it answers for the collection that template is
+ * about, or, for an entry's own design, for that entry alone, which is how a
+ * template's own screens find it.
  *
  * ## Read as the caller
  *
@@ -12,15 +16,21 @@
  * only the templates they may read. Two questions come first, before anything
  * is read: whether the caller may read the collection, and whether they may
  * read templates. A caller refused either is answered an empty list and no
- * template, which says nothing of what is stored: an own design names its
- * entry, and its title is that entry's title when it was given.
+ * template, with `templateReadable` false, which says nothing of what is
+ * stored. Those are questions about the collection and the templates, not
+ * about entries: a collection whose read rule filters its rows lets a caller
+ * read some entries and not others, and an own design names its entry, its
+ * title that entry's title when it was given. So the own designs found are
+ * kept only where the caller may read their entries, asked of the collection
+ * in one read as the caller.
  *
- * ## Two queries
+ * ## Three queries
  *
  * The collection's template is the one row naming the collection; its own
  * designs are the rows naming it as their entry's collection, an indexed
- * field, newest edit first and capped at {@link ENTRY_DESIGNS_MAX}. Both
- * select only the columns the surfaces show.
+ * field, newest edit first and capped at {@link ENTRY_DESIGNS_MAX}, or the
+ * one row holding an entry's unique key; and the entries those name that the
+ * caller may read, by id. Each selects only the columns it needs.
  *
  * @experimental Settles when collection templates ship.
  * @module templates/entry-designs-route
@@ -31,8 +41,10 @@ import { z } from "nextly/zod";
 
 import { labelOf, pluralLabelOf } from "../collection-labels";
 import {
+  entryDesignKey,
   TEMPLATE_COLLECTION_FIELD,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_FIELD,
   TEMPLATE_ENTRY_ID_FIELD,
 } from "../collections/templates";
 import { readOrNull } from "../composition-route-kit";
@@ -57,12 +69,15 @@ import {
 const QUERY_ID = z.string().trim().min(1).max(512);
 
 /**
- * The route's query: the collection whose own designs are listed, or a
- * template whose collection is meant. Exactly one of the two.
+ * The route's query: the collection whose own designs are listed, with one
+ * of its entries to answer for alone, or a template whose collection is
+ * meant. A collection or a template, never both; an entry only with a
+ * collection.
  */
 const ENTRY_DESIGNS_QUERY = z
   .object({
     [ENTRY_DESIGNS_PARAMS.collection]: QUERY_ID.optional(),
+    [ENTRY_DESIGNS_PARAMS.entry]: QUERY_ID.optional(),
     [ENTRY_DESIGNS_PARAMS.template]: QUERY_ID.optional(),
   })
   .refine(
@@ -70,6 +85,12 @@ const ENTRY_DESIGNS_QUERY = z
       (query[ENTRY_DESIGNS_PARAMS.collection] === undefined) !==
       (query[ENTRY_DESIGNS_PARAMS.template] === undefined),
     { message: "Name a collection or a template, and only one." }
+  )
+  .refine(
+    query =>
+      query[ENTRY_DESIGNS_PARAMS.entry] === undefined ||
+      query[ENTRY_DESIGNS_PARAMS.collection] !== undefined,
+    { message: "Name an entry only with its collection." }
   );
 
 /** What the read is built with: the template guard's own lookups. */
@@ -78,7 +99,14 @@ export interface EntryDesignsSetup {
 }
 
 /** The slice of the route context the read uses. */
-export type EntryDesignsContext = Pick<PluginRouteContext, "caller">;
+type EntryDesignsContext = Pick<PluginRouteContext, "caller">;
+
+/** What one read is about: a collection, and perhaps one entry of it. */
+export interface EntryDesignsAsk {
+  readonly collection: string;
+  /** One entry to answer for alone; the collection's list when absent. */
+  readonly entry?: string;
+}
 
 /** What the read needs to find templates, injected so it is tested alone. */
 export interface EntryDesignsReads {
@@ -93,6 +121,11 @@ export interface EntryDesignsReads {
     select: Record<string, true>;
     sort?: string[];
   }): Promise<{ rows: Record<string, unknown>[]; hasNext: boolean }>;
+  /** Which of `ids` the caller may read in `collection`, in one read. */
+  readableEntries(
+    collection: string,
+    ids: readonly string[]
+  ): Promise<ReadonlySet<string>>;
 }
 
 /** A row's id as text, or undefined. */
@@ -142,13 +175,15 @@ function namesOf(
   return { singular, plural: pluralLabelOf(record).pluralLabel ?? singular };
 }
 
-/** The answer of a read that lists nothing: its meta, with nothing in it. */
-function emptyAnswer(
-  collection: string,
+/**
+ * The answer of a read that withheld the collection's templates: nothing
+ * listed, no template, and nothing offered.
+ */
+function withheldAnswer(
+  ask: EntryDesignsAsk,
   templatesCollection: string,
   names: { singular: string; plural: string },
-  templateAllowed: boolean,
-  mayCreateTemplate: boolean
+  templateAllowed: boolean
 ): EntryDesignsResponse {
   return {
     items: [],
@@ -160,41 +195,109 @@ function emptyAnswer(
       hasNext: false,
       hasPrev: false,
       template: null,
+      templateReadable: false,
       templateAllowed,
-      mayCreateTemplate,
+      mayCreateTemplate: false,
+      mayGiveDesign: false,
+      entry: ask.entry ?? null,
       templatesCollection,
       names,
-      collection,
+      collection: ask.collection,
     },
   };
 }
 
 /**
- * The collection a template is about: the one it draws, or the one whose
- * entry it serves. Read as the caller, so a template they may not read names
- * nothing; `""` then, which every read answers empty.
+ * What a template is about: the collection it draws, or, for an entry's own
+ * design, that entry and its collection. Read as the caller, so a template
+ * they may not read names nothing; an empty collection then, which every
+ * read answers withheld.
  */
-export async function collectionOfTemplate(
+export async function askOfTemplate(
   id: string,
   reads: EntryDesignsReads
-): Promise<string> {
+): Promise<EntryDesignsAsk> {
   const row = await reads.template(id);
-  const named =
-    row?.[TEMPLATE_COLLECTION_FIELD] ?? row?.[TEMPLATE_ENTRY_COLLECTION_FIELD];
-  return typeof named === "string" ? named : "";
+  const base = row?.[TEMPLATE_COLLECTION_FIELD];
+  if (typeof base === "string" && base !== "") return { collection: base };
+  const collection = row?.[TEMPLATE_ENTRY_COLLECTION_FIELD];
+  const entry = row?.[TEMPLATE_ENTRY_ID_FIELD];
+  return typeof collection === "string" && typeof entry === "string"
+    ? { collection, entry }
+    : { collection: "" };
 }
 
-/** Answer one read for `collection`, as the module docblock describes. */
+/** The own design rows `ask` is about, from the indexed field or the key. */
+function designsQuery(
+  ask: EntryDesignsAsk
+): Parameters<EntryDesignsReads["templates"]>[0] {
+  const select: Record<string, true> = {
+    id: true,
+    title: true,
+    status: true,
+    updatedAt: true,
+    [TEMPLATE_ENTRY_ID_FIELD]: true,
+  };
+  return ask.entry === undefined
+    ? {
+        where: {
+          [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: ask.collection },
+        },
+        limit: ENTRY_DESIGNS_MAX,
+        select,
+        sort: ["-updatedAt", "id"],
+      }
+    : {
+        where: {
+          [TEMPLATE_ENTRY_FIELD]: {
+            equals: entryDesignKey(ask.collection, ask.entry),
+          },
+        },
+        limit: 1,
+        select,
+      };
+}
+
+/** An own design row as the surfaces read it, or nothing for a malformed one. */
+function designItemOf(row: Record<string, unknown>): EntryDesignItem[] {
+  const id = idOf(row);
+  const entryId = row[TEMPLATE_ENTRY_ID_FIELD];
+  if (id === undefined || typeof entryId !== "string" || entryId === "") {
+    return [];
+  }
+  return [
+    {
+      id,
+      entryId,
+      title: titleOf(row, id),
+      status: stateOf(row),
+      updatedAt: updatedOf(row),
+    },
+  ];
+}
+
+/** The collection's template row as the surfaces name it, or null. */
+function templateOf(
+  row: Record<string, unknown> | undefined
+): CollectionTemplate | null {
+  const id = row === undefined ? undefined : idOf(row);
+  return row === undefined || id === undefined
+    ? null
+    : { id, title: titleOf(row, id), status: stateOf(row) };
+}
+
+/** Answer one read for `ask`, as the module docblock describes. */
 export async function readEntryDesigns(
-  collection: string,
+  ask: EntryDesignsAsk,
   guard: TemplateGuardSetup,
   reads: EntryDesignsReads
 ): Promise<EntryDesignsResponse> {
   const templates = guard.templatesCollection;
+  const { collection } = ask;
   const unknown = { singular: collection, plural: collection };
   // A template the caller may not read names no collection.
   if (collection === "") {
-    return emptyAnswer(collection, templates, unknown, false, false);
+    return withheldAnswer(ask, templates, unknown, false);
   }
   // Preconditions first, asked together: nothing about the collection is
   // read for a caller who may not read it.
@@ -203,11 +306,11 @@ export async function readEntryDesigns(
     reads.can("read", templates),
   ]);
   if (!mayReadCollection) {
-    return emptyAnswer(collection, templates, unknown, false, false);
+    return withheldAnswer(ask, templates, unknown, false);
   }
   const record = await guard.readCollection(collection);
   const names = namesOf(record, collection);
-  const [problem, mayCreateTemplate] = await Promise.all([
+  const [problem, mayCreate] = await Promise.all([
     templateCollectionProblem(
       collection,
       () => Promise.resolve(record),
@@ -217,7 +320,7 @@ export async function readEntryDesigns(
   ]);
   const templateAllowed = problem === null;
   if (!mayReadTemplates) {
-    return emptyAnswer(collection, templates, names, templateAllowed, false);
+    return withheldAnswer(ask, templates, names, templateAllowed);
   }
 
   const [base, designs] = await Promise.all([
@@ -226,47 +329,17 @@ export async function readEntryDesigns(
       limit: 1,
       select: { id: true, title: true, status: true },
     }),
-    reads.templates({
-      where: { [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection } },
-      limit: ENTRY_DESIGNS_MAX,
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        updatedAt: true,
-        [TEMPLATE_ENTRY_ID_FIELD]: true,
-      },
-      sort: ["-updatedAt", "id"],
-    }),
+    reads.templates(designsQuery(ask)),
   ]);
-
-  const baseRow = base.rows[0];
-  const baseId = baseRow === undefined ? undefined : idOf(baseRow);
-  const template: CollectionTemplate | null =
-    baseRow === undefined || baseId === undefined
-      ? null
-      : {
-          id: baseId,
-          title: titleOf(baseRow, baseId),
-          status: stateOf(baseRow),
-        };
-
-  const items = designs.rows.flatMap((row): EntryDesignItem[] => {
-    const id = idOf(row);
-    const entryId = row[TEMPLATE_ENTRY_ID_FIELD];
-    if (id === undefined || typeof entryId !== "string" || entryId === "") {
-      return [];
-    }
-    return [
-      {
-        id,
-        entryId,
-        title: titleOf(row, id),
-        status: stateOf(row),
-        updatedAt: updatedOf(row),
-      },
-    ];
-  });
+  const template = templateOf(base.rows[0]);
+  const found = designs.rows.flatMap(designItemOf);
+  // Only the own designs of entries the caller may read: one read of the
+  // collection, as the caller, for the ids found.
+  const readable = await reads.readableEntries(
+    collection,
+    found.map(item => item.entryId)
+  );
+  const items = found.filter(item => readable.has(item.entryId));
 
   return {
     items,
@@ -278,14 +351,34 @@ export async function readEntryDesigns(
       hasNext: designs.hasNext,
       hasPrev: false,
       template,
+      templateReadable: true,
       templateAllowed,
-      // Offered only where there is no template yet and one may be made.
-      mayCreateTemplate: mayCreateTemplate && templateAllowed,
+      mayCreateTemplate: mayCreate && templateAllowed && template === null,
+      mayGiveDesign: mayCreate && template?.status === "published",
+      entry: ask.entry ?? null,
       templatesCollection: templates,
       names,
       collection,
     },
   };
+}
+
+/** Rows a caller-scoped find answered, or none. */
+function rowsOf(found: unknown): {
+  rows: Record<string, unknown>[];
+  hasNext: boolean;
+} {
+  const answer =
+    typeof found === "object" && found !== null
+      ? (found as { items?: unknown; meta?: { hasNext?: unknown } })
+      : {};
+  const rows = Array.isArray(answer.items)
+    ? answer.items.filter(
+        (row): row is Record<string, unknown> =>
+          typeof row === "object" && row !== null
+      )
+    : [];
+  return { rows, hasNext: answer.meta?.hasNext === true };
 }
 
 /** The reads the route binds: the caller's rights, and core's find as them. */
@@ -312,6 +405,7 @@ function directEntryDesignsReads(
             id: true,
             [TEMPLATE_COLLECTION_FIELD]: true,
             [TEMPLATE_ENTRY_COLLECTION_FIELD]: true,
+            [TEMPLATE_ENTRY_ID_FIELD]: true,
           },
         })
       );
@@ -319,38 +413,47 @@ function directEntryDesignsReads(
         ? (found as Record<string, unknown>)
         : null;
     },
-    templates: async ({ where, limit, select, sort }) => {
-      const found = await readOrNull(async () =>
-        (await getCachedNextly()).find({
-          collection: templates,
-          where,
-          limit,
-          select,
-          ...(sort === undefined ? {} : { sort }),
-          ...(await readingAsUser(ctx)),
-          status: "all",
-          depth: 0,
-        })
+    templates: async ({ where, limit, select, sort }) =>
+      rowsOf(
+        await readOrNull(async () =>
+          (await getCachedNextly()).find({
+            collection: templates,
+            where,
+            limit,
+            select,
+            ...(sort === undefined ? {} : { sort }),
+            ...(await readingAsUser(ctx)),
+            status: "all",
+            depth: 0,
+          })
+        )
+      ),
+    // The collection's own read, as the caller: its read rule, a filter
+    // included, decides which of the entries come back.
+    readableEntries: async (collection, ids) => {
+      if (ids.length === 0) return new Set<string>();
+      const { rows } = rowsOf(
+        await readOrNull(async () =>
+          (await getCachedNextly()).find({
+            collection,
+            where: { id: { in: [...ids] } },
+            limit: ids.length,
+            select: { id: true },
+            ...(await readingAsUser(ctx)),
+            status: "all",
+            depth: 0,
+          })
+        )
       );
-      const answer =
-        typeof found === "object" && found !== null
-          ? (found as { items?: unknown; meta?: { hasNext?: unknown } })
-          : {};
-      const rows = Array.isArray(answer.items)
-        ? answer.items.filter(
-            (row): row is Record<string, unknown> =>
-              typeof row === "object" && row !== null
-          )
-        : [];
-      return { rows, hasNext: answer.meta?.hasNext === true };
+      return new Set(rows.flatMap(row => idOf(row) ?? []));
     },
   };
 }
 
 /**
  * The route declaration. Authenticated (no `public: true`) with no permission
- * of its own: what it lists is asked of the caller above, collection and
- * templates alike.
+ * of its own: what it lists is asked of the caller above, collection,
+ * templates and entries alike.
  */
 export function entryDesignsRoute(setup: EntryDesignsSetup): {
   method: "GET";
@@ -369,14 +472,16 @@ export function entryDesignsRoute(setup: EntryDesignsSetup): {
       );
       const guard = setup.guard();
       const reads = directEntryDesignsReads(ctx, guard.templatesCollection);
-      const named = query[ENTRY_DESIGNS_PARAMS.collection];
+      const collection = query[ENTRY_DESIGNS_PARAMS.collection];
+      const entry = query[ENTRY_DESIGNS_PARAMS.entry];
       const template = query[ENTRY_DESIGNS_PARAMS.template];
-      const collection =
-        named ??
-        (template === undefined
-          ? ""
-          : await collectionOfTemplate(template, reads));
-      const answer = await readEntryDesigns(collection, guard, reads);
+      const ask: EntryDesignsAsk =
+        collection !== undefined
+          ? { collection, ...(entry === undefined ? {} : { entry }) }
+          : template === undefined
+            ? { collection: "" }
+            : await askOfTemplate(template, reads);
+      const answer = await readEntryDesigns(ask, guard, reads);
       return respondList([...answer.items], answer.meta);
     },
   };

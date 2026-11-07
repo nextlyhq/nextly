@@ -45,11 +45,12 @@ import {
   reasonOf,
   runTemplateAction,
   useTemplateDesigns,
+  type EntryDesignItem,
   type EntryDesignsResponse,
 } from "./entry-designs-client";
 
 /** The dialog's words, beside the ones every own-design surface shares. */
-export const TEMPLATE_DELETE_WORDS = {
+const TEMPLATE_DELETE_WORDS = {
   checking: "Checking what this template draws…",
   checkFailed: "What this template draws couldn't be checked.",
   deleteTitle: (template: string): string => `Delete the ${template} template?`,
@@ -60,6 +61,7 @@ export const TEMPLATE_DELETE_WORDS = {
   stillShown: "Still shown",
   notShown: "Not shown until its design is published",
   keptSays: "Their own designs are kept, and serve them once published.",
+  keptMore: "And more not listed here.",
   deleteConfirm: "Delete template",
   deleting: "Deleting…",
   plainTitle: "Delete this template?",
@@ -70,7 +72,7 @@ export const TEMPLATE_DELETE_WORDS = {
 } as const;
 
 /** What the document is, as far as the read can tell. */
-export type TemplateDeleteSubject =
+type TemplateDeleteSubject =
   | { readonly kind: "checking" }
   | { readonly kind: "failed" }
   | {
@@ -86,7 +88,7 @@ export type TemplateDeleteSubject =
   | { readonly kind: "plain" };
 
 /** The document `id` as the read answers it. */
-export function templateDeleteSubjectOf(
+function templateDeleteSubjectOf(
   answer: EntryDesignsResponse | undefined,
   failed: boolean,
   id: string
@@ -96,7 +98,12 @@ export function templateDeleteSubjectOf(
   if (answer.meta.template?.id === id) {
     return { kind: "collection-template", answer };
   }
-  const design = answer.items.find(item => item.id === id);
+  // Asked about an entry's own design, the read answers for that entry
+  // alone, by its key: whether this is one never rests on the capped list.
+  const design =
+    answer.meta.entry === null
+      ? undefined
+      : answer.items.find(item => item.id === id);
   if (design !== undefined) {
     return { kind: "own-design", answer, title: design.title };
   }
@@ -196,6 +203,22 @@ function confirmLabel(
   }
 }
 
+/** A title and its sentence, as every state of the dialog opens. */
+function Heading({
+  title,
+  says,
+}: {
+  title: string;
+  says: string;
+}): JSX.Element {
+  return (
+    <AlertDialogHeader>
+      <AlertDialogTitle>{title}</AlertDialogTitle>
+      <AlertDialogDescription>{says}</AlertDialogDescription>
+    </AlertDialogHeader>
+  );
+}
+
 /** The dialog's title, its sentence and, for a template, what it keeps. */
 function DialogWords({
   subject,
@@ -204,108 +227,123 @@ function DialogWords({
 }): JSX.Element {
   switch (subject.kind) {
     case "checking":
+      return (
+        <Heading
+          title={TEMPLATE_DELETE_WORDS.plainTitle}
+          says={TEMPLATE_DELETE_WORDS.checking}
+        />
+      );
     case "failed":
       return (
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {TEMPLATE_DELETE_WORDS.plainTitle}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {subject.kind === "checking"
-              ? TEMPLATE_DELETE_WORDS.checking
-              : TEMPLATE_DELETE_WORDS.checkFailed}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+        <Heading
+          title={TEMPLATE_DELETE_WORDS.plainTitle}
+          says={TEMPLATE_DELETE_WORDS.checkFailed}
+        />
       );
     case "plain":
       return (
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {TEMPLATE_DELETE_WORDS.plainTitle}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {TEMPLATE_DELETE_WORDS.plainSays}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+        <Heading
+          title={TEMPLATE_DELETE_WORDS.plainTitle}
+          says={TEMPLATE_DELETE_WORDS.plainSays}
+        />
       );
-    case "own-design": {
-      const { meta } = subject.answer;
-      const template =
-        meta.template?.status === "published" ? meta.template.title : null;
-      return (
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {OWN_DESIGN_WORDS.removeTitle(meta.names.singular)}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {OWN_DESIGN_WORDS.removeSays(
-              subject.title,
-              template,
-              meta.names.plural
-            )}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-      );
-    }
-    case "collection-template": {
-      const { meta, items } = subject.answer;
-      const title = meta.template?.title ?? "";
-      return (
-        <>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {TEMPLATE_DELETE_WORDS.deleteTitle(title)}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {TEMPLATE_DELETE_WORDS.stopShown(meta.names.plural)}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {items.length === 0 ? null : (
-            <div className="space-y-2 text-sm">
-              <div className="overflow-hidden rounded-md border border-border">
-                <p className="flex justify-between gap-3 bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">
-                  <span>
-                    {TEMPLATE_DELETE_WORDS.keptHeading(meta.names.plural)}
-                  </span>
-                  <span>{TEMPLATE_DELETE_WORDS.kept(items.length)}</span>
-                </p>
-                <ul
-                  className="max-h-48 divide-y divide-border overflow-y-auto"
-                  aria-label={TEMPLATE_DELETE_WORDS.keptHeading(
-                    meta.names.plural
-                  )}
-                >
-                  {items.map(item => (
-                    <li
-                      key={item.id}
-                      className="flex items-center justify-between gap-3 px-3 py-2"
-                    >
-                      <span className="min-w-0 truncate font-medium text-foreground">
-                        {item.title}
-                      </span>
-                      <span
-                        className={[
-                          "shrink-0 text-xs",
-                          item.status === "published"
-                            ? "font-semibold text-foreground"
-                            : "text-muted-foreground",
-                        ].join(" ")}
-                      >
-                        {item.status === "published"
-                          ? TEMPLATE_DELETE_WORDS.stillShown
-                          : TEMPLATE_DELETE_WORDS.notShown}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <p className="text-muted-foreground">
-                {TEMPLATE_DELETE_WORDS.keptSays}
-              </p>
-            </div>
-          )}
-        </>
-      );
-    }
+    case "own-design":
+      return <OwnDesignWords answer={subject.answer} title={subject.title} />;
+    case "collection-template":
+      return <CollectionTemplateWords answer={subject.answer} />;
   }
+}
+
+/** Removing an entry's own design, said as its Design section says it. */
+function OwnDesignWords({
+  answer,
+  title,
+}: {
+  answer: EntryDesignsResponse;
+  title: string;
+}): JSX.Element {
+  const { meta } = answer;
+  const template =
+    meta.template?.status === "published" ? meta.template.title : null;
+  return (
+    <Heading
+      title={OWN_DESIGN_WORDS.removeTitle(meta.names.singular)}
+      says={OWN_DESIGN_WORDS.removeSays(title, template, meta.names.plural)}
+    />
+  );
+}
+
+/** Deleting a collection's template: what stops, and what is kept. */
+function CollectionTemplateWords({
+  answer,
+}: {
+  answer: EntryDesignsResponse;
+}): JSX.Element {
+  const { meta, items } = answer;
+  return (
+    <>
+      <Heading
+        title={TEMPLATE_DELETE_WORDS.deleteTitle(meta.template?.title ?? "")}
+        says={TEMPLATE_DELETE_WORDS.stopShown(meta.names.plural)}
+      />
+      {items.length === 0 ? null : <KeptDesigns answer={answer} />}
+    </>
+  );
+}
+
+/** The own designs a template's delete keeps, each saying if it is shown. */
+function KeptDesigns({
+  answer,
+}: {
+  answer: EntryDesignsResponse;
+}): JSX.Element {
+  const { meta, items } = answer;
+  const heading = TEMPLATE_DELETE_WORDS.keptHeading(meta.names.plural);
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="overflow-hidden rounded-md border border-border">
+        <p className="flex justify-between gap-3 bg-muted px-3 py-2 text-xs font-semibold text-muted-foreground">
+          <span>{heading}</span>
+          <span>{TEMPLATE_DELETE_WORDS.kept(items.length)}</span>
+        </p>
+        <ul
+          className="max-h-48 divide-y divide-border overflow-y-auto"
+          aria-label={heading}
+        >
+          {items.map(item => (
+            <KeptDesign key={item.id} item={item} />
+          ))}
+        </ul>
+      </div>
+      {/* The list is capped; past it, the count above is a floor. */}
+      {meta.hasNext ? (
+        <p className="text-muted-foreground">
+          {TEMPLATE_DELETE_WORDS.keptMore}
+        </p>
+      ) : null}
+      <p className="text-muted-foreground">{TEMPLATE_DELETE_WORDS.keptSays}</p>
+    </div>
+  );
+}
+
+/** One kept own design: its entry's title, and whether visitors see it. */
+function KeptDesign({ item }: { item: EntryDesignItem }): JSX.Element {
+  const shown = item.status === "published";
+  return (
+    <li className="flex items-center justify-between gap-3 px-3 py-2">
+      <span className="min-w-0 truncate font-medium text-foreground">
+        {item.title}
+      </span>
+      <span
+        className={[
+          "shrink-0 text-xs",
+          shown ? "font-semibold text-foreground" : "text-muted-foreground",
+        ].join(" ")}
+      >
+        {shown
+          ? TEMPLATE_DELETE_WORDS.stillShown
+          : TEMPLATE_DELETE_WORDS.notShown}
+      </span>
+    </li>
+  );
 }

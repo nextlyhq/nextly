@@ -41,7 +41,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 const { TemplateDeleteAction } = await import("./TemplateDeleteAction");
 
-function answer(): EntryDesignsResponse {
+function answer(
+  options: { entry?: string | null; hasNext?: boolean } = {}
+): EntryDesignsResponse {
   const items: EntryDesignsResponse["items"] = [
     {
       id: "d1",
@@ -65,11 +67,14 @@ function answer(): EntryDesignsResponse {
       page: 1,
       limit: 500,
       totalPages: 1,
-      hasNext: false,
+      hasNext: options.hasNext ?? false,
       hasPrev: false,
       template: { id: "t1", title: "Blog post", status: "published" },
+      templateReadable: true,
       templateAllowed: true,
-      mayCreateTemplate: true,
+      mayCreateTemplate: false,
+      mayGiveDesign: true,
+      entry: options.entry ?? null,
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },
       collection: "posts",
@@ -129,8 +134,15 @@ describe("deleting a template", () => {
     expect(writes).toEqual([{ action: { kind: "delete-template", id: "t1" } }]);
   });
 
+  it("says when the list of kept own designs was cut", () => {
+    designs = answer({ hasNext: true });
+    open("t1");
+    expect(screen.getByText("And more not listed here.")).toBeTruthy();
+  });
+
   it("asks about an own design as the entry's Design section does", () => {
-    designs = answer();
+    // Asked about an own design, the read answers for its entry alone.
+    designs = answer({ entry: "p2" });
     open("d2");
     expect(
       screen.getByRole("alertdialog", {
@@ -145,6 +157,16 @@ describe("deleting a template", () => {
     expect(screen.getByRole("button", { name: "Keep it" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Remove own design" })
+    ).toBeTruthy();
+  });
+
+  it("does not take an own design from the collection's capped list", () => {
+    // A collection-wide answer that happens to list d2 is not the entry's
+    // own lookup, so the dialog does not call it an own design.
+    designs = answer();
+    open("d2");
+    expect(
+      screen.getByRole("alertdialog", { name: "Delete this template?" })
     ).toBeTruthy();
   });
 

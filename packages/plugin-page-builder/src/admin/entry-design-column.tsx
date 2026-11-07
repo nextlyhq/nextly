@@ -7,10 +7,10 @@
  *
  * A column is registered for a list by its key, synchronously, before the
  * plugin can know whether that collection has a template. So a provider on
- * every list (`"*"`) adds nothing itself: the first time a list asks for its
- * columns, it reads that collection's own designs once, and only when the
- * collection has a template registers the column for that list, which the
- * open list then draws. A list key that is not a collection (users, media)
+ * every list (`"*"`) adds nothing itself: when a list asks for its columns,
+ * it reads that collection's own designs, and only when the collection has a
+ * template registers the column for that list, which the open list then
+ * draws. Only that answer is kept for good. A list key that is not a collection (users, media)
  * is answered with no template and gets no column.
  *
  * Each cell reads the same cached answer (`useEntryDesigns`), so a page of
@@ -30,10 +30,21 @@ import {
 import { OwnDesignPill } from "./OwnDesignPill";
 
 /** The column's name, out of the way of any field's. */
-export const DESIGN_COLUMN_NAME = "__pageBuilderOwnDesign";
+const DESIGN_COLUMN_NAME = "__pageBuilderOwnDesign";
 
-/** The list keys asked about, so each collection is read once a session. */
-const asked = new Set<string>();
+/** The lists given the column, which keep it for the session. */
+const columned = new Set<string>();
+/** The lists whose read is out, so a redraw meanwhile asks nothing more. */
+const pending = new Set<string>();
+/**
+ * When each list last answered that its collection has no template. Kept
+ * only a short while: a collection given a template later in the session
+ * gets its column the next time its list is opened, while the redraws of
+ * one list view ask nothing more.
+ */
+const noTemplateAt = new Map<string, number>();
+/** How long an answer of "no template" stands. */
+const NO_TEMPLATE_FOR_MS = 30_000;
 /** Whether the provider on every list is registered. */
 let registered = false;
 
@@ -51,25 +62,39 @@ export function registerEntryDesignColumn(): void {
 }
 
 /**
- * Read whether `target` has a template, once, and register its column when
- * it has. A read that fails is asked again the next time the list opens.
+ * Read whether `target` has a template, and register its column when it has.
+ * Only that answer is kept for good; "no template", or a read that failed,
+ * is asked again when the list is next drawn after a while.
  */
 function askAbout(target: string): void {
-  if (target === "*" || asked.has(target)) return;
-  asked.add(target);
+  if (target === "*" || columned.has(target) || pending.has(target)) return;
+  const answeredAt = noTemplateAt.get(target);
+  if (
+    answeredAt !== undefined &&
+    Date.now() - answeredAt < NO_TEMPLATE_FOR_MS
+  ) {
+    return;
+  }
+  pending.add(target);
   readCollectionDesigns(target).then(
     answer => {
-      if (answer === undefined || answer.meta.template === null) return;
+      pending.delete(target);
+      if (answer === undefined || answer.meta.template === null) {
+        noTemplateAt.set(target, Date.now());
+        return;
+      }
+      noTemplateAt.delete(target);
+      columned.add(target);
       registerColumns(target, () => [designColumn(target)]);
     },
     () => {
-      asked.delete(target);
+      pending.delete(target);
     }
   );
 }
 
 /** The Design column of `collection`'s list. */
-export function designColumn(collection: string): NextlyColumn {
+function designColumn(collection: string): NextlyColumn {
   return {
     name: DESIGN_COLUMN_NAME,
     header: "Design",

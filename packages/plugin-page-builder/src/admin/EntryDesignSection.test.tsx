@@ -33,8 +33,13 @@ const refetch = vi.fn();
 const navigated: string[] = [];
 const toasts = { success: vi.fn(), error: vi.fn() };
 
+const asked: string[] = [];
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  usePluginRoute: () => ({ ...read, pending: false, fetching: false, refetch }),
+  usePluginRoute: ({ path }: { path: string }) => {
+    asked.push(path);
+    return { ...read, pending: false, fetching: false, refetch };
+  },
   writePluginRoute: (args: { body: { action: Record<string, unknown> } }) => {
     writes.push(args.body);
     return writeAnswer();
@@ -62,10 +67,16 @@ function answer(
     template?: EntryDesignsResponse["meta"]["template"];
     items?: EntryDesignItem[];
     templateAllowed?: boolean;
+    templateReadable?: boolean;
     mayCreateTemplate?: boolean;
+    mayGiveDesign?: boolean;
   } = {}
 ): EntryDesignsResponse {
   const items = overrides.items ?? [];
+  const template =
+    overrides.template === undefined
+      ? ({ id: "t1", title: "Blog post", status: "published" } as const)
+      : overrides.template;
   return {
     items,
     meta: {
@@ -75,12 +86,15 @@ function answer(
       totalPages: items.length === 0 ? 0 : 1,
       hasNext: false,
       hasPrev: false,
-      template:
-        overrides.template === undefined
-          ? { id: "t1", title: "Blog post", status: "published" }
-          : overrides.template,
+      template,
+      templateReadable: overrides.templateReadable ?? true,
       templateAllowed: overrides.templateAllowed ?? true,
-      mayCreateTemplate: overrides.mayCreateTemplate ?? true,
+      // As the route answers them: a template to create only where there is
+      // none, an own design to give only from a published one.
+      mayCreateTemplate: overrides.mayCreateTemplate ?? template === null,
+      mayGiveDesign:
+        overrides.mayGiveDesign ?? template?.status === "published",
+      entry: "p1",
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },
       collection: "posts",
@@ -111,6 +125,7 @@ function section(actionsDisabled = false) {
 }
 
 beforeEach(() => {
+  asked.length = 0;
   writes.length = 0;
   navigated.length = 0;
   refetch.mockReset();
@@ -173,8 +188,26 @@ describe("the entry's Design section", () => {
     expect(navigated).toEqual(["/admin/collections/templates/t1/builder"]);
   });
 
-  it("offers no own design to an author who may not create templates", () => {
-    read = { data: answer({ mayCreateTemplate: false }), error: null };
+  it("draws nothing where the templates were withheld from the reader", () => {
+    // Not "no published template": the read could not say what is stored.
+    read = {
+      data: answer({ template: null, templateReadable: false }),
+      error: null,
+    };
+    const { container } = section();
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("asks about this entry alone, never the collection's capped list", () => {
+    read = { data: answer(), error: null };
+    section();
+    expect([...new Set(asked)]).toEqual([
+      "/templates/entry-designs?collection=posts&entry=p1",
+    ]);
+  });
+
+  it("offers no own design to an author who may not give one", () => {
+    read = { data: answer({ mayGiveDesign: false }), error: null };
     section();
     expect(
       screen.queryByRole("button", { name: "Give this post its own design" })

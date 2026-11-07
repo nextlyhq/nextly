@@ -499,6 +499,22 @@ async function deleteTemplate(
       logContext: { reason: "template-action-missing-template" },
     });
   }
+  // An own design names its entry, so it is deleted only by a caller who may
+  // read that entry, as `remove-entry-design` asks: one who may not is told
+  // nothing of the design, the dry run included.
+  const entryCollection = row[TEMPLATE_ENTRY_COLLECTION_FIELD];
+  const entryId = row[TEMPLATE_ENTRY_ID_FIELD];
+  if (
+    typeof entryCollection === "string" &&
+    entryCollection !== "" &&
+    typeof entryId === "string" &&
+    entryId !== "" &&
+    (await entryAsCaller(ctx, entryCollection, entryId, null)) === null
+  ) {
+    throw NextlyError.notFound({
+      logContext: { reason: "template-action-missing-template" },
+    });
+  }
   const asked = summaryOf(row, {
     id: action.id,
     title: "",

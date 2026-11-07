@@ -61,7 +61,7 @@ function isCollectionTemplate(
 }
 
 /** The count, said as a heading would say it. */
-export function ownDesignsSummary(answer: EntryDesignsResponse): string {
+function ownDesignsSummary(answer: EntryDesignsResponse): string {
   const { names } = answer.meta;
   return answer.items.length === 0
     ? WORDS.noneHave(names.singular)
@@ -72,17 +72,24 @@ export function ownDesignsSummary(answer: EntryDesignsResponse): string {
 function OwnDesignRow({
   collection,
   item,
+  templatePublished,
   now,
 }: {
   collection: string;
   item: EntryDesignItem;
+  /** Whether the collection's template is published, so visitors see it. */
+  templatePublished: boolean;
   now: Date;
 }): JSX.Element {
   const href = entryHref(collection, item.entryId);
+  // A draft own design's entry is shown with the template while that is
+  // published, and not shown as a page at all while it is not.
   const says =
     item.status === "published"
       ? WORDS.rowPublished(editedWhen(item.updatedAt, now))
-      : WORDS.rowUnpublished;
+      : templatePublished
+        ? WORDS.rowUnpublished
+        : WORDS.rowUnpublishedNoTemplate;
   return (
     <li>
       <a
@@ -114,7 +121,7 @@ function OwnDesignRow({
 }
 
 /** The list of own designs, or what it means that there are none. */
-export function OwnDesignsList({
+function OwnDesignsList({
   answer,
   now = new Date(),
 }: {
@@ -122,6 +129,7 @@ export function OwnDesignsList({
   now?: Date;
 }): JSX.Element {
   const { meta, items } = answer;
+  const templatePublished = meta.template?.status === "published";
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center gap-1 px-2 py-5 text-center text-sm text-muted-foreground">
@@ -134,7 +142,11 @@ export function OwnDesignsList({
         <p className="font-medium text-foreground">
           {WORDS.noneHave(meta.names.singular)}
         </p>
-        <p>{WORDS.noneHaveMore(meta.names.singular)}</p>
+        <p>
+          {templatePublished
+            ? WORDS.noneHaveMore(meta.names.singular)
+            : WORDS.noneHaveUnpublished(meta.names.plural)}
+        </p>
       </div>
     );
   }
@@ -145,6 +157,7 @@ export function OwnDesignsList({
           key={item.id}
           collection={meta.collection}
           item={item}
+          templatePublished={templatePublished}
           now={now}
         />
       ))}

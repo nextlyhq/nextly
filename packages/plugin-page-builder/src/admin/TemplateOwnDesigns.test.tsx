@@ -49,7 +49,8 @@ const { OwnDesignsChip, TemplateOwnDesigns } = await import(
 
 function answer(
   items: EntryDesignsResponse["items"],
-  templateId = "t1"
+  templateId = "t1",
+  templateStatus: "draft" | "published" = "published"
 ): EntryDesignsResponse {
   return {
     items,
@@ -60,9 +61,12 @@ function answer(
       totalPages: 1,
       hasNext: false,
       hasPrev: false,
-      template: { id: templateId, title: "Blog post", status: "published" },
+      template: { id: templateId, title: "Blog post", status: templateStatus },
+      templateReadable: true,
       templateAllowed: true,
-      mayCreateTemplate: true,
+      mayCreateTemplate: false,
+      mayGiveDesign: templateStatus === "published",
+      entry: null,
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },
       collection: "posts",
@@ -135,6 +139,31 @@ describe("a template's own designs, in its document panel", () => {
       screen.getByText("Every post is shown with this template.")
     ).toBeTruthy();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("says a draft own design's entry is not a page while the template is not published", () => {
+    designs = answer(TWO, "t1", "draft");
+    panelSection();
+    expect(
+      screen.getByRole("link", { name: /Our spring catalogue/ }).textContent
+    ).toContain("Not published · not shown as a page");
+    // A published own design is shown whatever the template's state.
+    expect(
+      screen.getByRole("link", { name: /Ten years of field notes/ }).textContent
+    ).toContain("Published · edited today");
+  });
+
+  it("says no entry is a page while the template is not published and none has its own design", () => {
+    designs = answer([], "t1", "draft");
+    panelSection();
+    expect(
+      screen.getByText(
+        "This template isn't published, so posts aren't shown as pages until it is."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Every post is shown with this template.")
+    ).toBeNull();
   });
 
   it("draws nothing on an entry's own design, which is not its collection's template", () => {

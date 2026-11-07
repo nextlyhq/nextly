@@ -61,8 +61,11 @@ function answer(
       hasNext,
       hasPrev: false,
       template,
+      templateReadable: true,
       templateAllowed: true,
       mayCreateTemplate: false,
+      mayGiveDesign: false,
+      entry: null,
       templatesCollection: "templates",
       names: { singular: "Post", plural: "Posts" },
       collection: "posts",
@@ -110,6 +113,34 @@ describe("the Design column", () => {
 
     expect(columnsOf("posts").map(column => column.header)).toEqual(["Design"]);
     expect(columnsOf("users")).toEqual([]);
+  });
+
+  it("adds the column to a collection given a template later, on a later list view", async () => {
+    // Continues from the case above: "users" answered no template.
+    answers = {
+      ...answers,
+      users: answer({ id: "t2", title: "Profile", status: "published" }),
+    };
+    // A redraw of the same list view asks nothing more.
+    expect(columnsOf("users")).toEqual([]);
+    expect(reads.filter(path => path.endsWith("=users"))).toHaveLength(1);
+
+    // Opened again a while later, it asks again, and gets the column.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 31_000);
+      columnsOf("users");
+      await vi.waitFor(() =>
+        expect(providers.some(each => each.target === "users")).toBe(true)
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(reads.filter(path => path.endsWith("=users"))).toHaveLength(2);
+    expect(columnsOf("users").map(column => column.header)).toEqual(["Design"]);
+    // A list with its column is not asked about again.
+    columnsOf("posts");
+    expect(reads.filter(path => path.endsWith("=posts"))).toHaveLength(1);
   });
 
   it("marks an own design with the one pill, dashed while not published", () => {

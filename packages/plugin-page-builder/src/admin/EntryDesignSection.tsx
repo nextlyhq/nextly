@@ -21,7 +21,9 @@
  * - **No published template yet**: the entry is not a page on the site;
  *   the template to open, or one to create where the author may.
  *
- * Nothing is drawn until the read has answered once: the section applies to
+ * Whether the entry has its own design is asked of the entry's own lookup
+ * (`?entry=`), answered by its key, never read off the collection's list,
+ * which is capped. Nothing is drawn until it has answered once: the section applies to
  * some collections and not others, and a placeholder would put a heading on
  * every entry of the ones it does not. The read is cached by collection, so
  * the next entry opens with it in hand.
@@ -52,7 +54,7 @@ import {
   openInAdmin,
   reasonOf,
   runTemplateAction,
-  useEntryDesigns,
+  useEntryDesign,
   type EntryDesignItem,
   type EntryDesignsResponse,
 } from "./entry-designs-client";
@@ -66,15 +68,18 @@ export type EntryDesignState =
   | { readonly kind: "not-drawn" };
 
 /**
- * The section's state for `entryId` from the read's answer. An own design
- * stands whatever the template's state; without one, a published template
- * draws the entry, a draft one or none leaves it off the site, and a
- * collection that may not have a template gets no section.
+ * The section's state for `entryId` from the entry's own lookup, never the
+ * collection's capped list. Where the templates were withheld from the
+ * reader, it says nothing: "no template" would be a claim about what is
+ * stored. An own design stands whatever the template's state; without one,
+ * a published template draws the entry, a draft one or none leaves it off
+ * the site, and a collection that may not have a template gets no section.
  */
 export function entryDesignStateOf(
   answer: EntryDesignsResponse,
   entryId: string
 ): EntryDesignState {
+  if (!answer.meta.templateReadable) return { kind: "not-drawn" };
   const design = designOf(answer, entryId);
   if (design !== undefined) return { kind: "own", design };
   const { template, templateAllowed } = answer.meta;
@@ -97,7 +102,7 @@ export function EntryDesignSection({
   entryId,
   documentLock,
 }: DocumentPanelSectionProps): JSX.Element | null {
-  const read = useEntryDesigns(collectionSlug);
+  const read = useEntryDesign(collectionSlug, entryId);
   if (read.error !== null && read.data === undefined) {
     return (
       <div role="alert" className="space-y-2 text-sm">
@@ -238,7 +243,7 @@ function UsesTemplate({
       <p className="text-xs leading-relaxed text-muted-foreground">
         {WORDS.usesTemplate(meta.names.singular, title)}
       </p>
-      {meta.mayCreateTemplate ? (
+      {meta.mayGiveDesign ? (
         <>
           <Button
             type="button"
