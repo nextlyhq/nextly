@@ -44,6 +44,7 @@ import {
   useContext,
   useMemo,
   useSyncExternalStore,
+  type Context,
   type KeyboardEvent,
   type JSX,
 } from "react";
@@ -165,10 +166,12 @@ const DEFAULT_GET_ROW_ID = (row: object): string => {
  * the bar and the view read one snapshot and redraw together when a plugin
  * registers while the list is on screen. Internal: not part of the view's
  * props, so it is no surface a plugin could hand a stale value through.
+ * Typed explicitly, as an exported value must be for the package's isolated
+ * declarations.
  */
-export const HeldPluginRegistrations = createContext<
+export const HeldPluginRegistrations: Context<
   DataTablePluginRegistrations | undefined
->(undefined);
+> = createContext<DataTablePluginRegistrations | undefined>(undefined);
 
 /** A subscription that is never told anything, for a snapshot held above. */
 function noSubscription(): () => void {
