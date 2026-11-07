@@ -171,6 +171,55 @@ describe("the loader, in order and kept out of the admin", () => {
     ]);
   });
 
+  it("still waits on a module script that says nomodule, which is fetched", async () => {
+    // The module bundle never answers, so whatever follows must wait.
+    class NeverForModule extends ResourceLoader {
+      override fetch(
+        url: string,
+        options: Parameters<ResourceLoader["fetch"]>[1]
+      ) {
+        if (url.includes("bundle")) {
+          return Object.assign(new Promise<Buffer>(() => undefined), {
+            abort: () => undefined,
+          });
+        }
+        return super.fetch(url, options);
+      }
+    }
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {
+            src: "https://cdn.example/bundle.js",
+            type: "module",
+            nomodule: "",
+          },
+        },
+        { tag: "script", attrs: {}, text: "window.ran = ['after']" },
+      ],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body></body></html>`,
+      {
+        url: "https://acme.example/",
+        runScripts: "dangerously",
+        resources: new NeverForModule(),
+        beforeParse: window => {
+          Object.defineProperty(
+            window.HTMLScriptElement.prototype,
+            "noModule",
+            { configurable: true, get: () => false }
+          );
+        },
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect((dom.window as unknown as { ran?: string[] }).ran).toBeUndefined();
+  });
+
   it("waits on no nomodule script where modules run, which is never fetched there", async () => {
     // A loader that never answers for the legacy bundle, as a module-capable
     // browser never fetches it: no load or error ever comes.

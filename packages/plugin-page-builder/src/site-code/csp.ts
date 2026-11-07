@@ -624,9 +624,10 @@ export async function siteCodeFacts(
     }
     for (const load of parts.loads) {
       // Keyed by what can allow it too: the same URL from a nonced element
-      // and from a stylesheet's import are two loads, judged apart.
+      // and from a stylesheet's import are two loads, judged apart, as are a
+      // script the loader builds and a preload of it the page writes.
       loads.set(
-        `${load.kind} ${load.url} ${load.integrity ?? ""} ${load.nonceable === true}`,
+        `${load.kind} ${load.url} ${load.integrity ?? ""} ${load.nonceable === true} ${load.built === true}`,
         load
       );
     }

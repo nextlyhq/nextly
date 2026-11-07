@@ -815,6 +815,32 @@ describe("adding what site code needs to a policy", () => {
     expect(await blockedBy(merged, [loaded("/analytics.js")])).toEqual([]);
   });
 
+  it("keeps a preload apart from the script it loads, so its hash is still added", async () => {
+    // The usual order: the page preloads what the loader then builds.
+    const facts = await siteCodeFacts(
+      [
+        {
+          tag: "link",
+          attrs: {
+            rel: "preload",
+            as: "script",
+            href: GTAG,
+            integrity: "sha384-abc",
+          },
+        },
+        // No nonce can reach it, so only being built tells the two apart.
+        loaded(GTAG, { integrity: "sha384-abc", "data-note": "<script>" }),
+      ],
+      ORIGIN
+    );
+    expect(
+      siteCodePolicyAdditions(
+        "script-src 'strict-dynamic' 'nonce-x'",
+        facts
+      ).flatMap(addition => addition.sources)
+    ).toContain("'sha384-abc'");
+  });
+
   it("adds a preloaded script's integrity hashes under 'strict-dynamic'", async () => {
     // A preload is written by the page, so no loader vouches for it.
     const facts = await siteCodeFacts(

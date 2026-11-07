@@ -153,9 +153,11 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
         var entry = entries[index];
         var attrs = entry.attrs || {};
         var element = build(entry);
-        // A nomodule script is never fetched where modules run, so no load or
-        // error ever comes for it there, and nothing waits on it.
-        var notFetched = attrs.nomodule !== undefined && "noModule" in element;
+        // A classic nomodule script is never fetched where modules run, so no
+        // load or error ever comes for it there, and nothing waits on it. A
+        // module script is fetched whatever nomodule says.
+        var isModule = (attrs.type || "").trim().toLowerCase() === "module";
+        var notFetched = attrs.nomodule !== undefined && !isModule && "noModule" in element;
         var waits = entry.tag === "script" && attrs.src !== undefined && attrs.async === undefined && !notFetched;
         if (waits) {
           element.async = false;
