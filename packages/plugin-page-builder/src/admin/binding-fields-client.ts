@@ -97,6 +97,9 @@ export function bindingFieldsReader(
           }),
       ...(locale === undefined ? {} : { locale }),
     };
+    // While the person signed in is not known yet, nothing is kept: an
+    // answer kept under no one could be handed to whoever signs in next.
+    if (userId === null) return ask(request);
     const key = JSON.stringify(request);
     const hit = kept.get(key);
     if (hit !== undefined && now() - hit.at < BINDING_FIELDS_KEPT_MS) {

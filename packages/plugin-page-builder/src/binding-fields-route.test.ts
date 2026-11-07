@@ -206,6 +206,57 @@ describe("the picker's fields", () => {
     });
   });
 
+  it("carries the relation's visibility into a group's fields, every level down", async () => {
+    const base = reads();
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      {
+        ...base,
+        // The reviewer's user has a profile group; visitors could read it,
+        // but not through the reviewer.
+        declared: async ref =>
+          "collection" in ref && ref.collection === "users"
+            ? [
+                { name: "name", type: "text" },
+                {
+                  name: "profile",
+                  type: "group",
+                  fields: [{ name: "bio", type: "text" }],
+                },
+              ]
+            : base.declared(ref),
+        publicShapes: async ref =>
+          "collection" in ref && ref.collection === "users"
+            ? [
+                { name: "name", type: "text" },
+                {
+                  name: "profile",
+                  type: "group",
+                  fields: [{ name: "bio", type: "text" }],
+                },
+              ]
+            : base.publicShapes(ref),
+        asEditor: async (ref, select) =>
+          "collection" in ref && ref.collection === "users"
+            ? { name: "Ada Lovelace", profile: { bio: "Mathematician" } }
+            : base.asEditor(ref, select),
+        published: async (ref, select) =>
+          "collection" in ref && ref.collection === "users"
+            ? { name: "Ada Lovelace", profile: { bio: "Mathematician" } }
+            : base.published(ref, select),
+      }
+    );
+    const profile = named(
+      named(fieldsOf(answer, "Post"), "reviewer")?.fields ?? [],
+      "profile"
+    );
+    expect(named(profile?.fields ?? [], "bio")).toEqual({
+      name: "bio",
+      type: "text",
+      public: false,
+    });
+  });
+
   it("marks a relation's fields a draft's where the relation names another entry", async () => {
     const answer = await readBindingFields(
       { source: { kind: "collection", slug: "posts", id: "p1" } },

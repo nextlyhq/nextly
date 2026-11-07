@@ -272,11 +272,16 @@ function throughRelation(
   const { draft: ownDraft, ...rest } = withoutPreview;
   const isPublic = inner.public && relation.public;
   const draft = relation.draft === true || ownDraft === true;
+  // A group's fields are reached through the same relation, every level down.
+  const { fields: inside, ...withoutInside } = rest;
   return {
-    ...rest,
+    ...withoutInside,
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
     ...(isPublic && !draft && preview !== undefined ? { preview } : {}),
+    ...(inside === undefined
+      ? {}
+      : { fields: inside.map(field => throughRelation(field, relation)) }),
   };
 }
 
