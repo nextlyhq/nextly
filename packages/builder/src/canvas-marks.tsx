@@ -18,6 +18,7 @@
 
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { AlertCircle, Split } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -29,6 +30,7 @@ import {
 import { deviceLabel } from "./breakpoint-switcher";
 import {
   CANVAS_ROOT_CLASS,
+  CONDITIONED_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   isOutermostForAddress,
@@ -87,7 +89,8 @@ interface Mark {
     | "exposed"
     | "look-reach"
     | "drop-parent"
-    | "drop-refused";
+    | "drop-refused"
+    | "conditioned";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
   readonly secondary: boolean;
   /** A component placement, drawn in the component colour. */
@@ -145,6 +148,12 @@ interface Mark {
    * too close to the top of what is on screen for a tag above it to show.
    */
   readonly hoverTagInside?: boolean;
+  /** A conditioned block's badge: conditional, or conditions it can't check. */
+  readonly condition?: "conditional" | "unchecked";
+  /** Where its badge goes: above the block, below it, or inside its top. */
+  readonly conditionTag?: "above" | "below" | "inside";
+  /** Whether the block is selected, so its ring stands for the outline. */
+  readonly conditionSelected?: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -229,6 +238,9 @@ function markKey(mark: Mark): string {
     placementTagInside,
     hoveredAddress,
     hoverTagInside,
+    condition,
+    conditionTag,
+    conditionSelected,
     radius,
     rect,
   } = mark;
@@ -250,6 +262,9 @@ function markKey(mark: Mark): string {
     placementTagInside,
     hoveredAddress,
     hoverTagInside,
+    condition,
+    conditionTag,
+    conditionSelected === true,
     radius,
     rect.x,
     rect.y,
@@ -279,8 +294,9 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
-  if (mark.kind === "hovered") {
-    // The hovered block's name tag moves in from the side the screen cuts.
+  if (mark.kind === "hovered" || mark.kind === "conditioned") {
+    // The hovered block's name tag, and a conditioned block's tab, move in
+    // from the side the screen cuts.
     return {
       ...box,
       "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
@@ -502,13 +518,7 @@ function gatherPlacement(
   part: Outline,
   look: RingLook
 ): void {
-  const parent = marked.parentElement;
-  let copy = copies.get(parent);
-  if (copy === undefined) {
-    copy = copies.size;
-    copies.set(parent, copy);
-  }
-  const key = `${String(copy)}\u0000${placement}`;
+  const key = `${String(copyOf(copies, marked))}\u0000${placement}`;
   const gathered = placements.get(key);
   if (gathered === undefined) {
     placements.set(key, { placement, parts: [part], ...look });
@@ -713,7 +723,149 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
+  found.push(...conditionedMarks(root, space, onScreen));
   return dimmedBesideEditing(found);
+}
+
+/**
+ * A badge on every conditioned block, whether or not it is selected: the
+ * canvas draws such a block whoever the page would show it to, so the badge
+ * is what says it isn't shown to everyone. Placed outside the block, above it
+ * where there's room and below it where there isn't, so it never covers what
+ * the block draws.
+ */
+function conditionedMarks(
+  root: HTMLElement,
+  space: OverlaySpace,
+  onScreen: Rect
+): Mark[] {
+  const badges = new Map<
+    string,
+    {
+      condition: "conditional" | "unchecked";
+      parts: Outline[];
+      selected: boolean;
+      placement: boolean;
+    }
+  >();
+  const copies = new Map<Element | null, number>();
+  root.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`).forEach(element => {
+    if (element.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
+    const condition = element.getAttribute(CONDITIONED_ATTRIBUTE);
+    if (condition !== "conditional" && condition !== "unchecked") return;
+    const outline = outlineOf(element, root, space);
+    if (outline === null) return;
+    // One badge per copy of a placement, as one frame is drawn round a
+    // selected one: each of a definition's roots is outermost for the
+    // placement's address, and they are one block on the page.
+    const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
+    const key =
+      placement === ""
+        ? `block\u0000${String(badges.size)}`
+        : `${String(copyOf(copies, element))}\u0000${placement}`;
+    const selected = element.hasAttribute(SELECTED_ATTRIBUTE);
+    const gathered = badges.get(key);
+    if (gathered === undefined) {
+      badges.set(key, {
+        condition,
+        parts: [outline],
+        selected,
+        placement: placement !== "",
+      });
+    } else {
+      gathered.parts.push(outline);
+      gathered.selected ||= selected;
+    }
+  });
+  return [...badges.values()].map(
+    ({ condition, parts, selected, placement }) => {
+      const outline = placementOutline(parts);
+      // A selected placement's frame names it in a tab on the same corner, so
+      // the condition tab takes the bottom edge instead of covering the name.
+      const tag = conditionTagOf(outline.rect, onScreen, selected && placement);
+      return {
+        ...outline,
+        kind: "conditioned",
+        secondary: false,
+        component: false,
+        locked: false,
+        hidden: false,
+        tag: "below",
+        tagEdge: "right",
+        // Moved in from the right when the screen cuts the block's right edge,
+        // so the tab stays on what's seen.
+        tagInset: {
+          bottom: 0,
+          side: Math.max(
+            0,
+            outline.rect.x + outline.rect.width - (onScreen.x + onScreen.width)
+          ),
+        },
+        condition,
+        conditionTag: tag,
+        ...(selected ? { conditionSelected: true } : {}),
+      };
+    }
+  );
+}
+
+/** Which copy of a placement an element is part of: its parent, numbered. */
+function copyOf(copies: Map<Element | null, number>, element: Element): number {
+  const parent = element.parentElement;
+  let copy = copies.get(parent);
+  if (copy === undefined) {
+    copy = copies.size;
+    copies.set(parent, copy);
+  }
+  return copy;
+}
+
+/**
+ * Where a conditioned block's badge goes: above it where there's room on
+ * screen and nothing else takes that corner, else below it, else, for a
+ * block taller than what's on screen, inside its top edge, so the badge is
+ * always seen.
+ */
+function conditionTagOf(
+  rect: Rect,
+  onScreen: Rect,
+  topTaken: boolean
+): "above" | "below" | "inside" {
+  if (!topTaken && rect.y - onScreen.y >= MARK_TAG_HEIGHT) return "above";
+  if (rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height) {
+    return "below";
+  }
+  return "inside";
+}
+
+/** A conditioned block's badge: what the canvas says about who sees it. */
+function ConditionBadge({
+  condition,
+}: {
+  condition: "conditional" | "unchecked";
+}): React.JSX.Element {
+  const Icon = condition === "unchecked" ? AlertCircle : Split;
+  return (
+    <span className="nx-canvas-mark__condition">
+      <Icon aria-hidden="true" size={12} />
+      {condition === "unchecked" ? "Can’t be checked" : "Conditional"}
+    </span>
+  );
+}
+
+/** A conditioned block's badge state, as the stylesheet reads it. */
+function conditionAttributes(mark: Mark): Record<string, string> {
+  return {
+    ...(mark.condition === undefined
+      ? {}
+      : { "data-condition": mark.condition }),
+    ...(mark.conditionTag === undefined
+      ? {}
+      : { "data-condition-tag": mark.conditionTag }),
+    ...(mark.conditionSelected === true
+      ? { "data-condition-selected": "" }
+      : {}),
+  };
 }
 
 /** An exposed part's editing state, as the stylesheet reads it. */
@@ -848,8 +1000,13 @@ export function CanvasMarks({
               : nameOf?.(mark.hoveredAddress)?.trim() || undefined
           }
           data-hover-tag-inside={mark.hoverTagInside === true ? "" : undefined}
+          {...conditionAttributes(mark)}
           style={markStyle(mark)}
-        />
+        >
+          {mark.condition === undefined ? null : (
+            <ConditionBadge condition={mark.condition} />
+          )}
+        </div>
       ))}
     </div>
   );

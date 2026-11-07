@@ -145,14 +145,19 @@ is bounded like nested lists are.
 
 Named queries run as your app's code. The reader keeps them to what visitors may read; it isn't a sandbox for untrusted code.
 
-`run` gets no other handle: no instance, request or user. While it runs, the Direct API
-and the services plugins contribute refuse every call made beside the reader, a visitor's
-read included, so a query that reaches for them by mistake fails rather than reading more
-than visitors may: everything it reads is declared, counted and refreshes the page when it
-changes. This is a guardrail against mistakes in your own code, not a boundary against code
-written to get round it. Rows are then cut to the fields the
-query declares, or to the public fields of the collection its rows are entries of, and
-each row's key must be present and unique.
+`run` gets no other handle: no instance, request or user. While it runs, the ways into the
+server refuse: every Direct API method (a visitor's read included), the Nextly instance's
+own services, and reaching a service a plugin contributes. A query that calls one of them
+by mistake fails rather than reading more than visitors may, so everything it reads is
+declared, counted and refreshes the page when it changes.
+
+The guard sits at those entry points, not on what they hand out. An object your code took
+before the run, such as a service kept in a module, and calls during it is not refused: that
+is code written to get round the guard, which your own code can always do. Keep a named
+query to its reader.
+
+Rows are then cut to the fields the query declares, or to the public fields of the
+collection its rows are entries of, and each row's key must be present and unique.
 
 ## Set it on a list
 

@@ -29,8 +29,9 @@
  * save before it is found: the check reads the usage index and then the
  * stored documents themselves, just before the write. The site-style write is
  * made with the version of the read the check judged, so a change to the
- * shared styles or the variables in between refuses the removal rather than
- * being overwritten.
+ * shared styles or the variables in between refuses the write rather than
+ * being overwritten; the removal then reads again, judges again on what is
+ * stored now, and removes only its variables from that ({@link stale-retry}).
  *
  * ## What isn't closed
  *
@@ -109,6 +110,7 @@ import {
   type NamedVariable,
   type VariablesInUseCheck,
 } from "./site-style-storage";
+import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import {
   blockDefaultsUsing,
@@ -483,15 +485,13 @@ function withVariablesBack(
   return { ...written, tokens: entries };
 }
 
-/** How many times the restore is written before its own failure is reported. */
-const RESTORE_ATTEMPTS = 3;
-
 /**
  * Put the removed variables back, a page having been saved using one while
  * the removal ran. Written from the read the removal's write produced, so an
  * unrelated save of the Single since is never overwritten: when the write is
- * refused, the Single is read again and the variables are put back into what
- * it holds now, a bounded number of times.
+ * refused as made from a replaced version, the Single is read again and the
+ * variables are put back into what it holds now, a bounded number of times.
+ * Any other failure is reported as it is.
  */
 async function restoreRemoved(
   store: VariableStore,
@@ -499,16 +499,11 @@ async function restoreRemoved(
   gone: ReadonlySet<string>,
   after: VariableRead
 ): Promise<void> {
-  let from = after;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await store.write(withVariablesBack(from.section, original, gone), from);
-      return;
-    } catch (error) {
-      if (attempt >= RESTORE_ATTEMPTS) throw error;
-      from = await store.read();
-    }
-  }
+  await retryOnStale(
+    () => store.read(),
+    from => store.write(withVariablesBack(from.section, original, gone), from),
+    { read: after }
+  );
 }
 
 /** A stored entry's identity, read by the Single's own token rules. */
@@ -558,6 +553,11 @@ function storedRefusals(
  * the variables, puts every removed entry back where it was, and the removal
  * is refused as that rescan refuses. A rescan that cannot finish puts them
  * back too, since nothing then says no page uses them.
+ *
+ * A write refused because the Single was saved meanwhile is made again on
+ * what is stored then: the stored section and the in-use check are judged
+ * again, a shared style saved meanwhile that names a variable included, and
+ * only these variables are taken out of the newest section.
  */
 export async function removeVariables(
   req: Request,
@@ -574,18 +574,29 @@ export async function removeVariables(
   const ids = [
     ...new Set(parsed.data.ids),
   ] satisfies VariableRemoveRequest["ids"];
-  const read = await store.read();
-  const { reasons, removable } = storedRefusals(ids, read.section, supplied);
-  if (reasons.length > 0) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message: `Nothing was removed. ${reasons.join(" ")}`,
-      logContext: { variableIds: ids },
-    });
-  }
-  await checks.inUse(removable, read.classes);
   const gone = new Set(ids);
-  const written = await store.write(withoutVariables(read.section, gone), read);
+  const { read, written } = await retryOnStale(
+    () => store.read(),
+    async read => {
+      const { reasons, removable } = storedRefusals(
+        ids,
+        read.section,
+        supplied
+      );
+      if (reasons.length > 0) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: `Nothing was removed. ${reasons.join(" ")}`,
+          logContext: { variableIds: ids },
+        });
+      }
+      await checks.inUse(removable, read.classes);
+      return {
+        read,
+        written: await store.write(withoutVariables(read.section, gone), read),
+      };
+    }
+  );
   try {
     await refuseStoredVariableUses(ids, checks.stillUsed);
   } catch (refusal) {

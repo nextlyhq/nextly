@@ -37,6 +37,7 @@ import {
 } from "../../domains/schema/events/ledger-scope";
 import {
   attemptUnfinished,
+  removedOnPurpose,
   standingsByFilename,
 } from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
@@ -164,6 +165,8 @@ interface MigrationRecord {
   durationMs: number | null;
   errorJson: MigrationErrorJson | null;
   appliedAt: Date;
+  /** An applied migration whose file's removal `migrate:resolve --removed` recorded. */
+  removed?: boolean;
 }
 
 /**
@@ -172,6 +175,8 @@ interface MigrationRecord {
  * F11 adds two new states:
  * - `applied (modified)`: hash mismatch — file edited after apply.
  * - `applied (file missing)`: DB row exists but `.sql` file is gone.
+ * - `applied (file removed)`: the same, but its removal was recorded on
+ *   purpose (`migrate:resolve --removed`): information, not a problem.
  */
 interface MigrationStatus {
   filename: string;
@@ -179,6 +184,7 @@ interface MigrationStatus {
     | "applied"
     | "applied (modified)"
     | "applied (file missing)"
+    | "applied (file removed)"
     | "pending"
     | "failed"
     | "unfinished";
@@ -374,7 +380,8 @@ export async function runMigrateStatus(
         m =>
           m.status === "applied" ||
           m.status === "applied (modified)" ||
-          m.status === "applied (file missing)"
+          m.status === "applied (file missing)" ||
+          m.status === "applied (file removed)"
       ).length,
       pending: migrationStatuses.filter(m => m.status === "pending").length,
       failed: migrationStatuses.filter(m => m.status === "failed").length,
@@ -497,7 +504,11 @@ export async function readStatusLedger(
   }
   const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
   return {
-    applied: ledgerRecords(await repo.listFileApplies(), plugin),
+    applied: ledgerRecords(
+      await repo.listFileApplies(),
+      plugin,
+      await repo.listFileRemovals()
+    ),
     rollbacks: await repo.listFailedRollbacks(),
   };
 }
@@ -600,8 +611,14 @@ function displayFailedRollbacks(
  */
 export function ledgerRecords(
   rows: SchemaEventRow[],
-  plugin?: string
+  plugin?: string,
+  /** The recorded removals (`listFileRemovals`): an applied migration among them is marked `removed`. */
+  removals: readonly SchemaEventRow[] = []
 ): MigrationRecord[] {
+  // A removal stands for the applied outcome it was recorded after.
+  const removed = removedOnPurpose(scopeLedgerRows(rows, plugin), [
+    ...removals,
+  ]);
   const records: MigrationRecord[] = [];
   for (const standing of standingsByFilename(
     scopeLedgerRows(rows, plugin)
@@ -614,23 +631,31 @@ export function ledgerRecords(
         ? standing.outcome
         : standing.unresolvedAttempt;
     if (r === undefined) continue;
-    records.push({
-      id: r.id,
-      filename: r.filename ?? "",
-      sha256: r.sha256 ?? "",
-      status:
-        r.status === "applied"
-          ? "applied"
-          : r.status === "failed"
-            ? "failed"
-            : "unfinished",
-      appliedBy: null,
-      durationMs: r.durationMs ?? null,
-      errorJson: null,
-      appliedAt: r.startedAt,
-    });
+    records.push(
+      recordOf(r, standing.state === "applied" && removed.has(r.filename))
+    );
   }
   return records;
+}
+
+/** A ledger row as the listing records it; `removed` for an applied migration whose removal was recorded. */
+function recordOf(r: SchemaEventRow, removed: boolean): MigrationRecord {
+  return {
+    id: r.id,
+    filename: r.filename ?? "",
+    sha256: r.sha256 ?? "",
+    status:
+      r.status === "applied"
+        ? "applied"
+        : r.status === "failed"
+          ? "failed"
+          : "unfinished",
+    appliedBy: null,
+    durationMs: r.durationMs ?? null,
+    errorJson: null,
+    appliedAt: r.startedAt,
+    ...(removed ? { removed: true } : {}),
+  };
 }
 
 // F11: small coercion helpers for adapter-returned `Record<string, unknown>`.
@@ -731,6 +756,14 @@ export function pluginModuleEntries(
   }));
 }
 
+/** An applied record whose file the folder lacks: removed on purpose when recorded so, else missing. */
+function missingFileStatus(record: MigrationRecord): MigrationStatus["status"] {
+  if (record.status !== "applied") return record.status;
+  return record.removed === true
+    ? "applied (file removed)"
+    : "applied (file missing)";
+}
+
 export function buildMigrationStatuses(
   files: readonly MigrationEntry[],
   applied: MigrationRecord[]
@@ -788,8 +821,7 @@ export function buildMigrationStatuses(
   for (const [filename, record] of appliedMap) {
     statuses.push({
       filename,
-      status:
-        record.status === "applied" ? "applied (file missing)" : record.status,
+      status: missingFileStatus(record),
       appliedAt: record.appliedAt,
       durationMs: record.durationMs,
       errorJson: record.errorJson,
@@ -970,6 +1002,8 @@ function formatStatusForDisplay(status: MigrationStatus["status"]): string {
       return "Applied (modified)";
     case "applied (file missing)":
       return "Applied (file missing)";
+    case "applied (file removed)":
+      return "Applied (file removed)";
     case "pending":
       return "Pending";
     case "failed":

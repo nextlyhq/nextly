@@ -28,7 +28,13 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  NextlyError,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
+import { eq } from "@nextlyhq/plugin-sdk/db";
+import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 import { ServiceContainer } from "nextly";
 import { createMediaHandlers } from "nextly/api/media-handlers";
 import { buildClaims, signAccessToken } from "nextly/auth";
@@ -37,6 +43,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { siteOptions } from "../schema/tables";
+import { FONTS_FOLDER_OPTION } from "../site-fonts/folder";
 import { resolveFontOptions } from "../site-fonts/options";
 import { siteFontRoutes, type SiteFontsDirectApi } from "../site-fonts/routes";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -151,12 +159,36 @@ const LORA_400_700 = {
   subsets: ["latin"],
 };
 
+/**
+ * A plugin depending on the page builder, so its `ctx.db` reaches the page
+ * builder's tables: what a route handler called directly is handed, as the
+ * dispatcher hands the page builder's own.
+ */
+interface Probe {
+  db?: PluginDatabase;
+  services?: { media: { deleteFolder(folderId: string): Promise<unknown> } };
+}
+
+function probePlugin(holder: Probe): PluginDefinition {
+  return definePlugin({
+    name: "@test/site-fonts-probe",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    init(ctx) {
+      holder.db = ctx.db;
+      holder.services = ctx.services;
+    },
+  });
+}
+
 describe.each(getConfiguredTestDialects())(
   "adding a catalogue font (%s)",
   (dialect: TestDialect) => {
     const catalogue = new FakeCatalogue();
     const elsewhere = new FakeCatalogue();
     let current: TestNextly | undefined;
+    const probe: Probe = {};
 
     /*
      * The harness stores media with the local adapter, which writes
@@ -199,6 +231,7 @@ describe.each(getConfiguredTestDialects())(
               limits: { timeoutMs: 1500, ...limits },
             },
           }),
+          probePlugin(probe),
         ],
         seedPublic: true,
       });
@@ -291,6 +324,23 @@ describe.each(getConfiguredTestDialects())(
       ...PAGE_BUILDER_PLUGIN_NAME.split("/"),
       ...sub,
     ];
+
+    /** What a route handler is handed, as the dispatcher builds it. */
+    function routeContext(user: { id: string } | null = null) {
+      const { db, services } = probe;
+      if (db === undefined || services === undefined) {
+        throw new Error("the probe did not boot");
+      }
+      return {
+        self: { collections: {}, singles: {} },
+        user,
+        caller: { can: async () => true },
+        fetch: (input: string, init?: RequestInit) => fetch(input, init),
+        db,
+        dialect,
+        services,
+      };
+    }
 
     const add = (cookie: string, body: unknown = LORA_400_700) =>
       call("POST", plugin("site", "fonts"), cookie, body);
@@ -517,12 +567,7 @@ describe.each(getConfiguredTestDialects())(
           method: "POST",
           body: JSON.stringify(LORA_400_700),
         }),
-        {
-          self: { collections: {}, singles: {} },
-          user: null,
-          caller: { can: async () => true },
-          fetch: (input, init) => fetch(input, init),
-        }
+        routeContext()
       );
       const refusal: unknown = await added?.then(
         () => undefined,
@@ -582,12 +627,7 @@ describe.each(getConfiguredTestDialects())(
             method: "POST",
             body: JSON.stringify({ ...LORA_400_700, id }),
           }),
-          {
-            self: { collections: {}, singles: {} },
-            user: null,
-            caller: { can: async () => true },
-            fetch: (input, init) => fetch(input, init),
-          }
+          routeContext()
         );
       const answers = await Promise.all([
         request("lora"),
@@ -634,12 +674,7 @@ describe.each(getConfiguredTestDialects())(
           method: "POST",
           body: JSON.stringify(LORA_400_700),
         }),
-        {
-          self: { collections: {}, singles: {} },
-          user: null,
-          caller: { can: async () => true },
-          fetch: (input, init) => fetch(input, init),
-        }
+        routeContext()
       );
 
       expect(answer?.status).toBe(200);
@@ -708,16 +743,253 @@ describe.each(getConfiguredTestDialects())(
             method: "POST",
             body: JSON.stringify({ ...LORA_400_700, id }),
           }),
-          {
-            self: { collections: {}, singles: {} },
-            user: { id: maker.item.id },
-            caller: { can: async () => true },
-            fetch: (input, init) => fetch(input, init),
-          }
+          routeContext({ id: maker.item.id })
         );
       await Promise.all([request("lora"), request("merriweather")]);
       const folders = await real.media.folders.list({ overrideAccess: true });
       expect(folders.filter(folder => folder.name === "Fonts")).toHaveLength(1);
+    });
+
+    /** The catalogue's options, as the routes are built from them. */
+    function fontOptions() {
+      const fonts = resolveFontOptions({
+        catalogue: { api: catalogue.origin, files: catalogue.origin },
+      });
+      if (fonts === false) throw new Error("the catalogue is on");
+      return fonts;
+    }
+
+    /** Merriweather in the catalogue, beside Lora, with its two files. */
+    function offerMerriweather(): void {
+      catalogue.json("/v1/fonts/merriweather", {
+        ...LORA,
+        id: "merriweather",
+        family: "Merriweather",
+      });
+      for (const weight of [400, 700]) {
+        catalogue.font(
+          `/fontsource/fonts/merriweather@5.2.1/latin-${String(weight)}-normal.woff2`
+        );
+      }
+    }
+
+    /**
+     * A point two calls wait at until both are there, or half a second
+     * passes: two adds that both read before either writes are then made to
+     * write together, the overlap a busy site meets by chance.
+     */
+    function meetingPoint(): () => Promise<void> {
+      const waiting: Array<() => void> = [];
+      return () =>
+        new Promise<void>(resolve => {
+          waiting.push(resolve);
+          if (waiting.length === 2) for (const go of waiting) go();
+          else setTimeout(resolve, 500).unref();
+        });
+    }
+
+    /**
+     * The add route of a route set of its own, as each server process builds
+     * one: its own turn for writes and its own count of adds in flight.
+     */
+    function processAdd(api: SiteFontsDirectApi) {
+      const [, addRoute] = siteFontRoutes({
+        fonts: fontOptions(),
+        nextly: async () => api,
+      });
+      if (addRoute === undefined) throw new Error("no add route");
+      return (id: string, user: { id: string } | null = null) =>
+        addRoute.handler(
+          new Request(`${ORIGIN}/x`, {
+            method: "POST",
+            body: JSON.stringify({ ...LORA_400_700, id }),
+          }),
+          routeContext(user)
+        );
+    }
+
+    /** The Direct API with every write of the Single held at `meet`, counted. */
+    function writingAt(real: SiteFontsDirectApi, meet: () => Promise<void>) {
+      const writes = { count: 0 };
+      const api: SiteFontsDirectApi = {
+        ...real,
+        findSingle: args => real.findSingle(args),
+        media: real.media,
+        updateSingle: async args => {
+          writes.count += 1;
+          await meet();
+          return real.updateSingle(args);
+        },
+      };
+      return { api, writes };
+    }
+
+    /** Every claim row on the site's fonts folder, read past the routes. */
+    async function claimRows(): Promise<{ value: string }[]> {
+      const db = probe.db;
+      if (db === undefined) throw new Error("the probe did not boot");
+      const rows = await db
+        .select(siteOptions)
+        .where(eq(db.table(siteOptions).name, FONTS_FOLDER_OPTION))
+        .all();
+      return rows as unknown as { value: string }[];
+    }
+
+    /** The site's root "Fonts" folders. */
+    async function fontsFolders(t: TestNextly): Promise<{ id: string }[]> {
+      const folders = await t.nextly.media.folders.list({
+        overrideAccess: true,
+      });
+      return folders.filter(folder => folder.name === "Fonts");
+    }
+
+    it("keeps both families when two server processes add them together, in one Fonts folder", async () => {
+      const t = await boot();
+      offerMerriweather();
+      const real = t.nextly as unknown as SiteFontsDirectApi;
+      const { api, writes } = writingAt(real, meetingPoint());
+      const [lora, merriweather] = [processAdd(api), processAdd(api)];
+
+      const answers = await Promise.all([
+        lora("lora"),
+        merriweather("merriweather"),
+      ]);
+      expect(answers.map(answer => answer.status)).toEqual([200, 200]);
+      // CONTROL: one of the two writes was refused and made again, so the
+      // two adds did read the same version before either wrote.
+      expect(writes.count).toBe(3);
+      const families = (
+        (await storedFonts(t)) as Array<{ family: string }>
+      ).map(face => face.family);
+      expect(families.filter(name => name === "Lora")).toHaveLength(2);
+      expect(families.filter(name => name === "Merriweather")).toHaveLength(2);
+
+      const folders = await fontsFolders(t);
+      expect(folders).toHaveLength(1);
+      expect((await claimRows()).map(row => row.value)).toEqual([
+        folders[0]?.id,
+      ]);
+      const media = await t.nextly.media.find({
+        overrideAccess: true,
+        limit: 100,
+      });
+      expect(media.items).toHaveLength(4);
+      for (const item of media.items) {
+        expect(item.folderId).toBe(folders[0]?.id);
+      }
+    });
+
+    it("stores a family once when two server processes add it together, and deletes the second one's files", async () => {
+      const t = await boot();
+      const real = t.nextly as unknown as SiteFontsDirectApi;
+      const { api, writes } = writingAt(real, meetingPoint());
+      const [first, second] = [processAdd(api), processAdd(api)];
+
+      const answers = await Promise.all([first("lora"), second("lora")]);
+      expect(answers.map(answer => answer.status)).toEqual([200, 200]);
+      const messages = await Promise.all(
+        answers.map(
+          async answer => ((await answer.json()) as { message: string }).message
+        )
+      );
+      expect([...messages].sort()).toEqual([
+        "Lora is already on this site.",
+        "Lora was added to this site.",
+      ]);
+      // The refused add read again, found every face stored, and wrote
+      // nothing more.
+      expect(writes.count).toBe(2);
+      const fonts = (await storedFonts(t)) as Array<{
+        family: string;
+        weight: string;
+      }>;
+      expect(fonts.map(face => `${face.family} ${face.weight}`)).toEqual([
+        "Lora 400",
+        "Lora 700",
+      ]);
+      expect(await mediaCount(t)).toBe(2);
+    });
+
+    it("makes one Fonts folder when two server processes add their first fonts together", async () => {
+      const t = await boot();
+      offerMerriweather();
+      // Each look for the folder waits until a second one is looking too, or
+      // half a second passes: two processes that look before either makes it
+      // then both make one, and the claim keeps one of them.
+      const real = t.nextly as unknown as SiteFontsDirectApi;
+      const meet = meetingPoint();
+      const looking: SiteFontsDirectApi = {
+        ...real,
+        findSingle: args => real.findSingle(args),
+        updateSingle: args => real.updateSingle(args),
+        media: {
+          ...real.media,
+          upload: args => real.media.upload(args),
+          delete: args => real.media.delete(args),
+          folders: {
+            ...real.media.folders,
+            create: args => real.media.folders.create(args),
+            list: async args => {
+              await meet();
+              return real.media.folders.list(args);
+            },
+          },
+        },
+      };
+      // A folder records who made it, so the adds run as a real person.
+      const maker = await t.nextly.users.create({
+        email: "folder-maker@example.com",
+        password: "Password123!",
+        data: { name: "Folder Maker", isActive: true },
+      });
+      const [lora, merriweather] = [processAdd(looking), processAdd(looking)];
+      const answers = await Promise.all([
+        lora("lora", { id: maker.item.id }),
+        merriweather("merriweather", { id: maker.item.id }),
+      ]);
+      expect(answers.map(answer => answer.status)).toEqual([200, 200]);
+
+      const folders = await fontsFolders(t);
+      expect(folders).toHaveLength(1);
+      expect((await claimRows()).map(row => row.value)).toEqual([
+        folders[0]?.id,
+      ]);
+      const media = await t.nextly.media.find({
+        overrideAccess: true,
+        limit: 100,
+      });
+      expect(media.items).toHaveLength(4);
+      for (const item of media.items) {
+        expect(item.folderId).toBe(folders[0]?.id);
+      }
+    });
+
+    it("makes and claims a new Fonts folder when the claimed one was deleted", async () => {
+      const t = await boot();
+      const db = probe.db;
+      if (db === undefined) throw new Error("the probe did not boot");
+      // A claim naming a folder no longer in the library.
+      await db.insert(siteOptions, {
+        name: FONTS_FOLDER_OPTION,
+        value: "a-deleted-folder",
+      });
+      // CONTROL: no Fonts folder exists, so the one below is the add's.
+      expect(await fontsFolders(t)).toEqual([]);
+
+      const answer = await add(await designer(t));
+      expect(answer.status).toBe(200);
+      const folders = await fontsFolders(t);
+      expect(folders).toHaveLength(1);
+      expect((await claimRows()).map(row => row.value)).toEqual([
+        folders[0]?.id,
+      ]);
+      const media = await t.nextly.media.find({
+        overrideAccess: true,
+        limit: 100,
+      });
+      for (const item of media.items) {
+        expect(item.folderId).toBe(folders[0]?.id);
+      }
     });
 
     it("refuses a request body past what an add can be, without waiting for the rest", async () => {
@@ -745,12 +1017,7 @@ describe.each(getConfiguredTestDialects())(
       // Copied first, as a boundary in front of a route may: the copy's half
       // of the body is never read, so waiting on a cancel would wait forever.
       void request.clone();
-      const answer = addRoute?.handler(request, {
-        self: { collections: {}, singles: {} },
-        user: null,
-        caller: { can: async () => true },
-        fetch: (input, init) => fetch(input, init),
-      });
+      const answer = addRoute?.handler(request, routeContext());
       const refusal: unknown = await Promise.race([
         answer?.then(
           () => "answered",
@@ -835,12 +1102,7 @@ describe.each(getConfiguredTestDialects())(
             method: "POST",
             body: JSON.stringify({ ...LORA_400_700, weights: [400, 500, 700] }),
           }),
-          {
-            self: { collections: {}, singles: {} },
-            user: null,
-            caller: { can: async () => true },
-            fetch: (input, init) => fetch(input, init),
-          }
+          routeContext()
         )
       ).rejects.toThrow("storage refused the file");
       expect(uploads).toBe(2);
@@ -928,12 +1190,7 @@ describe.each(getConfiguredTestDialects())(
         now: () => clock,
         nextly: async () => t.nextly as unknown as SiteFontsDirectApi,
       });
-      const ctx = {
-        self: { collections: {}, singles: {} },
-        user: null,
-        caller: { can: async () => true },
-        fetch: (input: string, init?: RequestInit) => fetch(input, init),
-      };
+      const ctx = routeContext();
       const families = async () =>
         (
           (await (

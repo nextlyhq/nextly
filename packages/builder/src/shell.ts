@@ -99,6 +99,13 @@ export {
 } from "./canvas";
 
 /**
+ * @experimental Which blocks' visibility conditions the page can't check, for
+ * a host to hand the canvas so it badges them in red: judged as the save
+ * judges them, with the collections the editor's services list.
+ */
+export { useConditionsUnchecked } from "./condition-checks";
+
+/**
  * @experimental The frame the canvas is drawn in, and how the code around the
  * canvas learns about it.
  *
@@ -378,6 +385,13 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  */
 export { EmptyContainerAppenders } from "./empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+/**
+ * The badge on a block whose bound value a visitor will not see, drawn in the
+ * canvas's overlay from the host's `visitorUnreadableBindings` answer.
+ */
+export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
+export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
+export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";
 

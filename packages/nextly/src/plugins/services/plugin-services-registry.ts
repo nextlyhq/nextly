@@ -15,10 +15,7 @@
  * @module plugins/services/plugin-services-registry
  */
 
-import {
-  refusedInsideNamedQuery,
-  refusingInsideNamedQuery,
-} from "../../auth/named-query-scope";
+import { refusedInsideNamedQuery } from "../../auth/named-query-scope";
 
 interface ServiceEntry {
   factory: () => unknown;
@@ -105,15 +102,13 @@ export function buildPluginServicesNamespace(): Record<
               // reached at all, as the Direct API is not: a query reads only
               // through the reader it is given. Refused BEFORE it resolves,
               // since resolving a service the first time runs its factory,
-              // with its plugin's context. Every method it hands out refuses
-              // too, for a service resolved outside the frame and called in it.
-              const path = `plugins.${pluginName}.${svcName}`;
-              const refused = refusedInsideNamedQuery(path);
-              if (refused !== undefined) throw refused;
-              return refusingInsideNamedQuery(
-                resolve(pluginName, svcName),
-                path
+              // with its plugin's context. What resolves is the service
+              // itself, never wrapped, so it behaves exactly as it always has.
+              const refused = refusedInsideNamedQuery(
+                `plugins.${pluginName}.${svcName}`
               );
+              if (refused !== undefined) throw refused;
+              return resolve(pluginName, svcName);
             },
             has(_t, svcName) {
               return (

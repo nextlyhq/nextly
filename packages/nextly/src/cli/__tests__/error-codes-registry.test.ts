@@ -228,6 +228,11 @@ describe("the errors a command can end with", () => {
         join("cli", "commands", "create-admin.ts"),
         join("cli", "commands", "create-admin.ts"),
       ],
+      // Its code comes from its columns' outcomes; a run that could not run prints the shape first.
+      [
+        join("cli", "commands", "repair-columns.ts"),
+        join("cli", "commands", "repair-columns.ts"),
+      ],
     ]);
     const found: string[] = [];
     for (const file of sourceFiles(join(SRC, "cli"))) {

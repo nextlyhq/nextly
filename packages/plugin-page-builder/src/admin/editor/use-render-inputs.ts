@@ -14,17 +14,23 @@ import {
   registryNestingSource,
   getBlock,
   paginatedList,
+  visitorUnreadableBindings,
   type BlockDocument,
   type BreakpointId,
   type StyleState,
   type StyleCompileContext,
   type RemotePattern,
   type BreakpointSet,
+  type BindingSchemaRef,
   type DefinitionsById,
+  type VisitorUnreadableBinding,
 } from "@nextlyhq/blocks-engine";
 import {
+  noPublicFields,
   prepareDocumentForRead,
   registeredBlocks,
+  type BlocksFieldShapes,
+  type PageBindings,
   type PageStyleCascade,
 } from "@nextlyhq/blocks-react";
 import {
@@ -270,6 +276,12 @@ type CanvasRender = {
   canvasRender: PageRenderInputs;
   classSummaryContext: StyleCompileContext;
 };
+
+/** Nothing marked: no sources read yet, or none of their shapes known. */
+const NONE_UNREADABLE: ReadonlyMap<
+  string,
+  readonly VisitorUnreadableBinding[]
+> = new Map();
 
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
@@ -896,6 +908,32 @@ export function useCanvasInputs(
   };
 }
 
+/**
+ * Whether a source is one of which the public may read no field, so the
+ * published page reads none of it. The page's entry and a Single count only
+ * when the person editing read them (no such source is not a private one); a
+ * collection a path's relation leads into counts when its lookup found none.
+ */
+function sourceHiddenFromVisitors(
+  bindings: PageBindings,
+  shapes: BlocksFieldShapes,
+  ref: BindingSchemaRef
+): boolean {
+  // A custom source's rows are read as visitors read them and cut to the
+  // fields its query declares, so they are never a source visitors can't see.
+  if ("query" in ref) return false;
+  if ("site" in ref || !noPublicFields(shapes, ref)) return false;
+  if ("single" in ref) {
+    return (bindings.singles?.get(ref.single) ?? null) !== null;
+  }
+  const entryRef = bindings.entryRef;
+  const isEntry =
+    entryRef !== undefined &&
+    "collection" in entryRef &&
+    entryRef.collection === ref.collection;
+  return isEntry ? (bindings.entry ?? null) !== null : true;
+}
+
 /** No region: what a page with no Layout draws around it. */
 const NO_DEFINITIONS: DefinitionsById = new Map();
 
@@ -938,12 +976,27 @@ export function useBoundCanvasRender(
   locale: string | undefined,
   /** Whether the document is a component's own, which has no entry. */
   component: boolean
-): PageRenderInputs {
+): {
+  readonly canvasRender: PageRenderInputs;
+  /**
+   * The bound props on the page a visitor will not see filled, by node id:
+   * the published page's own binding check, asked with the field shapes a
+   * visitor may read, which the canvas's sources carry.
+   */
+  readonly visitorUnreadable: ReadonlyMap<
+    string,
+    readonly VisitorUnreadableBinding[]
+  >;
+} {
   const { document, regions } = drawn;
+  const pageTree = useMemo(
+    () => drawnTree(document, canvasRender.definitions, canvasRender),
+    [document, canvasRender]
+  );
   const trees = useMemo(
     () =>
       [
-        drawnTree(document, canvasRender.definitions, canvasRender),
+        pageTree,
         ...regions.map(region =>
           drawnTree(
             region.document,
@@ -952,13 +1005,29 @@ export function useBoundCanvasRender(
           )
         ),
       ].filter((tree): tree is BlockDocument => tree !== null),
-    [document, regions, canvasRender]
+    [pageTree, regions, canvasRender]
   );
   const bindings = useCanvasBindings(trees, locale, component);
-  return useMemo(
+  const bound = useMemo(
     () => ({ ...canvasRender, bindings }),
     [canvasRender, bindings]
   );
+  // Judged on the page's tree as the canvas draws it (repaired, composed and
+  // gated by the renderer's own pipeline), so a mark lands on the block that
+  // is drawn; a Layout region's bindings are its own editor's to say.
+  const visitorUnreadable = useMemo(() => {
+    const shapes = bindings.fieldShapes;
+    if (shapes === undefined || pageTree === null) return NONE_UNREADABLE;
+    return visitorUnreadableBindings(pageTree, {
+      schema: shapes,
+      ...(bindings.entryRef === undefined
+        ? {}
+        : { entryRef: bindings.entryRef }),
+      props: { get: getBlock },
+      unreadableSource: ref => sourceHiddenFromVisitors(bindings, shapes, ref),
+    });
+  }, [pageTree, bindings]);
+  return { canvasRender: bound, visitorUnreadable };
 }
 
 /**
