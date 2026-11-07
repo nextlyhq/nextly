@@ -120,8 +120,12 @@ async function composedWith(
 ): Promise<{
   readonly document: BlockDocument;
   readonly placedBy: ReadonlyMap<string, string>;
+  /** Whether a component could not be read, or a limit ended the expansion. */
+  readonly incomplete: boolean;
 }> {
-  if (components === undefined) return { document, placedBy: new Map() };
+  if (components === undefined) {
+    return { document, placedBy: new Map(), incomplete: false };
+  }
   const limits = deps.limits();
   const composed = await composeWithReads({
     host: document,
@@ -140,7 +144,11 @@ async function composedWith(
     },
     { maxNodes: limits.maxNodes }
   );
-  return { document: expanded, placedBy };
+  return {
+    document: expanded,
+    placedBy,
+    incomplete: composed.incomplete || composed.stoppedShort,
+  };
 }
 
 /**
@@ -159,7 +167,8 @@ async function valueRows(
 }> {
   const stored = asDocument(value);
   if (stored === null) return { rows: [], incomplete: false };
-  const { document, placedBy } = await composedWith(stored, deps, components);
+  const composed = await composedWith(stored, deps, components);
+  const { document, placedBy } = composed;
   const report = await documentBindingReport(
     { nodes: document.nodes, settings: stored.settings },
     entryRef(entryOf, stored),
@@ -176,7 +185,9 @@ async function valueRows(
       ...(component === undefined ? {} : { component }),
     };
   });
-  return { rows, incomplete: report.incomplete };
+  // A composition read in part may lack a placed component's problem, so it
+  // is judged again rather than recorded as whole.
+  return { rows, incomplete: report.incomplete || composed.incomplete };
 }
 
 /** A read's value, or nothing for an absent one. */
@@ -309,6 +320,21 @@ function hookedDocument(context: unknown):
     : { collection: fields.collection, data: fields.data, at };
 }
 
+/**
+ * Whether a written document may hold a blocks value: one at its top level,
+ * or any blocks field its declaration has, nested ones included, as the walk
+ * lists them.
+ */
+async function mayHoldBlocks(
+  written: NonNullable<ReturnType<typeof hookedDocument>>,
+  deps: BindingReportDeps
+): Promise<boolean> {
+  if (holdsBlocks(written.data)) return true;
+  const reading = deps.reading();
+  if (reading === null) return false;
+  return (await reading.hostsOf(written.at)).length > 0;
+}
+
 /** Whether a write's data holds a blocks value at its top level. */
 function holdsBlocks(data: Record<string, unknown>): boolean {
   return Object.values(data).some(value => asDocument(value) !== null);
@@ -316,10 +342,8 @@ function holdsBlocks(data: Record<string, unknown>): boolean {
 
 /**
  * Mark each written or deleted document to be judged again, and start the
- * sweep that judges it. A write holding no blocks value marks its document
- * only when the document already has a row: it may have cleared the field
- * that held the broken binding, and most writes, to documents with no blocks,
- * then read one row and nothing else. After commit; a failure is logged,
+ * sweep that judges it. A write to a document whose declaration holds no
+ * blocks field marks nothing. After commit; a failure is logged,
  * never thrown, since the write has committed.
  */
 export function registerBindingReportOnWrite(
@@ -332,13 +356,7 @@ export function registerBindingReportOnWrite(
     if (written === undefined || store === null) return;
     const document = reported(written.at, deps);
     try {
-      if (
-        !always &&
-        !holdsBlocks(written.data) &&
-        (await store.get(document.documentKey)) === undefined
-      ) {
-        return;
-      }
+      if (!always && !(await mayHoldBlocks(written, deps))) return;
       await store.markDirty(document);
       deps.kick?.();
     } catch (error) {

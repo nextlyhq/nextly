@@ -142,6 +142,7 @@ import {
   PAGE_BUILDER_SETTINGS_SLUG,
   pageBuilderSettingsSingle,
 } from "./default-layout/settings-single";
+import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
 import { entriesRoute } from "./entries-route";
 import type {
@@ -1634,11 +1635,22 @@ export const pageBuilder = (
             collections: () => collectionRegistryRows(ctx),
             singles: () => singleRegistryRows(ctx),
             blocks: () => allBlocks(),
-            designs: () =>
-              latestSave([
+            designs: async () => {
+              const saves = await latestSave([
                 rewriteInstall?.store.collection ?? COMPONENTS_SLUG,
                 defaultLayoutSetup?.slugs.layouts ?? LAYOUTS_SLUG,
-              ]),
+              ]);
+              // And the site's default Layout, which every page naming none
+              // is drawn in.
+              const setup = defaultLayoutSetup;
+              if (setup === null) return saves;
+              const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+              const settings = await readLayoutSettings(
+                await getCachedNextly(),
+                setup.slugs
+              );
+              return `${saves}|default:${settings.defaultLayout ?? ""}`;
+            },
           }),
       },
       bindingReportDeps,
