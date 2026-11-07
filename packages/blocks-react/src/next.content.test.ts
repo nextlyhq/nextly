@@ -356,6 +356,7 @@ describe("the content route", () => {
     it.each([
       ["a fault", () => new Error("database unreachable")],
       ["a credential to fix", () => NextlyError.tokenExpired()],
+      ["a 403 that is not a denial", () => NextlyError.emailNotVerified()],
     ] as const)(
       "throws %s rather than answering not found",
       async (_why, error) => {

@@ -124,6 +124,63 @@ describe("a cached read refused by access", () => {
     await expect(applyCache(cache, reader, options)).resolves.toBe("answer");
   });
 
+  it("keeps the refusal's public data and message key", async () => {
+    const { cache } = nextLikeCache();
+    const reader = vi.fn(async () => {
+      throw new NextlyError({
+        code: "FORBIDDEN",
+        publicMessage: "You need the read-posts permission.",
+        publicData: { reason: "no-permission", permission: "read-posts" },
+        messageKey: "errors.forbidden.permission",
+      });
+    });
+
+    for (let read = 0; read < 2; read += 1) {
+      await expect(applyCache(cache, reader, options)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicMessage: "You need the read-posts permission.",
+        publicData: { reason: "no-permission", permission: "read-posts" },
+        messageKey: "errors.forbidden.permission",
+      });
+    }
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an answer shaped like a kept refusal as the answer", async () => {
+    const { cache } = nextLikeCache();
+    const lookalike = {
+      kept: "refusal",
+      refusal: { code: "FORBIDDEN", statusCode: 403, publicMessage: "no" },
+      __nextlyKeptRefusal: { code: "FORBIDDEN" },
+    };
+    const reader = vi.fn(async () => lookalike);
+
+    await expect(applyCache(cache, reader, options)).resolves.toEqual(
+      lookalike
+    );
+    await expect(applyCache(cache, reader, options)).resolves.toEqual(
+      lookalike
+    );
+  });
+
+  it.each([
+    ["an unverified email", () => NextlyError.emailNotVerified()],
+    ["a failed CSRF check", () => NextlyError.csrfFailed()],
+  ])("keeps no 403 that is not a denial: %s", async (_what, failure) => {
+    const { cache } = nextLikeCache();
+    const reader = vi.fn(async () => {
+      throw failure();
+    });
+
+    await expect(applyCache(cache, reader, options)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await expect(applyCache(cache, reader, options)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(reader).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps no credential failure: an expired session is the caller's to fix", async () => {
     const { cache } = nextLikeCache();
     const reader = vi.fn(async () => {

@@ -3,18 +3,21 @@
  *
  * A cached public read holds what the Public role let a visitor read when it
  * ran, and taking a read away from Public writes no content, so no content
- * write expires it. Through the role screen's writer, against a real database:
- * the change flushes the tags every collection's and Single's writes flush,
- * leaves out one that opts out of revalidation, and an unchanged set flushes
- * nothing.
+ * write expires it. Against a real database, through the role screen's writer
+ * and through a sweep of permission-row writes such as boot's seeding makes,
+ * which names no role: the change flushes the tags every
+ * collection's and Single's writes flush, leaves out one that opts out of
+ * revalidation, and an unchanged set flushes nothing.
  *
  * SQLite needs no URL, and the flush is post-commit bookkeeping that no
  * dialect changes.
  */
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
 import {
   createTestNextly,
@@ -24,6 +27,10 @@ import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../../../revalidation/types";
+import {
+  inPermissionSweep,
+  writingPermissions,
+} from "../../../services/lib/permissions";
 import { PUBLIC_ROLE_SLUG } from "../services/public-role";
 
 /** Every intent flushed to it, so a test sees exactly which tags expired. */
@@ -125,6 +132,37 @@ describe("a change to a role's grants and the cached content reads (sqlite)", ()
       expect.arrayContaining(["nextly:posts", "nextly:single:header"])
     );
     expect(spy.tags.some(tag => tag.includes("unrevalidated"))).toBe(false);
+  });
+
+  it("expires them once after a sweep of permission-row writes, as boot's seeding makes", async () => {
+    const nextly = await boot();
+    const { held } = await publicRole(nextly);
+    const readPosts = held.find(permission => permission.slug === "read-posts");
+    if (!readPosts) throw new Error("boot granted Public no read-posts");
+    const { permissions } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      update(table: unknown): {
+        set(values: Record<string, unknown>): {
+          where(condition: unknown): Promise<unknown>;
+        };
+      };
+    };
+    spy.flushed.length = 0;
+
+    // Two writes to a row Public holds, as the seeder writes them: each through
+    // the permission rows' own gate, the sweep around them both.
+    await inPermissionSweep(async () => {
+      for (const name of ["Read posts (renamed)", "Read posts"]) {
+        await writingPermissions(permissions, table =>
+          db.update(table).set({ name }).where(eq(permissions.id, readPosts.id))
+        );
+      }
+    });
+
+    expect(spy.flushed).toHaveLength(1);
+    expect(spy.tags).toEqual(
+      expect.arrayContaining(["nextly:posts", "nextly:single:header"])
+    );
   });
 
   it("expires nothing when the role is set to what it already holds", async () => {

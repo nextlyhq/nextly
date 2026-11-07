@@ -20,7 +20,6 @@ import { nextlyTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
 import { deferToRequest } from "./defer-to-request";
-import { isReadRefusal } from "./miss-or-denied";
 
 /** A resolved content entry (loose by design — shape is the app's collection). */
 export type ContentEntry = Record<string, unknown>;
@@ -541,8 +540,13 @@ export async function resolveContent(
       // caller — treat it as absent (→ notFound), never as a transient error.
       // Any other error still rethrows (retryable, not a permanently-cached
       // 404), other 401s included: an invalid or expired credential is the
-      // caller's to fix, not a missing page.
-      if (isReadRefusal(error)) {
+      // caller's to fix, not a missing page. `NextlyError.is` matches across
+      // bundled package copies where a plain `instanceof` would miss a
+      // differently-realmed error class.
+      if (
+        (NextlyError.is(error) && error.statusCode === 403) ||
+        NextlyError.isCode(error, "AUTH_REQUIRED")
+      ) {
         return null;
       }
       throw error;

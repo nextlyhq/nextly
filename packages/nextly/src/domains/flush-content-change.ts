@@ -107,3 +107,43 @@ export async function flushEveryContentScope(
   if (tags.size === 0) return;
   await revalidator.flush([{ tags: [...tags] }]);
 }
+
+/**
+ * Expires every collection's and Single's cached reads after a change to what some role grants:
+ * a role's permissions, its inheritance or slug, the role deleted, or a permission row written.
+ *
+ * A cached public read holds what the Public role let a visitor read when it ran, and a read
+ * cached for a role holds what that role let it read; a change to grants writes no content, so no
+ * content write expires either. Every scope rather than the ones the change names: whichever role
+ * changed may be Public, a read embeds the collections it relates to as its reader may read them,
+ * and a role's inherited grants change with its parents'.
+ *
+ * The change has committed, so this never throws. A tag the revalidator cannot expire in the
+ * request is handed off as every write's is. Reading which collections and Singles there are is
+ * the part with no hand-off, so a failed read is tried once more before it is logged as an error:
+ * until then a cached page may keep content the change took away from its reader.
+ */
+export async function expireContentAfterGrantsChange(): Promise<void> {
+  // Loaded here rather than at the top, for the reason `flushContentChange` gives: the permission
+  // writers that call this are reached from CLI paths that never load the service registry.
+  const [{ languageChangeContentCache }, { getNextlyLogger }] =
+    await Promise.all([
+      import("../di/registrations/language-change-content-cache"),
+      import("../observability/logger"),
+    ]);
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await flushEveryContentScope(languageChangeContentCache());
+      return;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  getNextlyLogger().error({
+    kind: "grants-change-content-expiry-failed",
+    message: `What a role grants changed, but cached pages could not be expired: ${
+      failure instanceof Error ? failure.message : String(failure)
+    }. A page cached with no time limit keeps what it showed until its content is written again.`,
+  });
+}
