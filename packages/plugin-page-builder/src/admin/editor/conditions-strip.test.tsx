@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   conditionsCountWords,
+  PageConditionsStrip,
   PlacedConditionsStrip,
   TemplateConditionsPart,
   type TemplateConditions,
@@ -124,6 +125,44 @@ describe("the strip a component or a Layout gets", () => {
     );
     expect(why?.textContent).toBe(
       "No entry to check here. The published page checks them where it’s placed."
+    );
+  });
+});
+
+describe("the strip a page gets", () => {
+  it("holds the switch and its count, and no entry to name", () => {
+    render(
+      <PageConditionsStrip
+        conditions={conditions({
+          on: true,
+          applied: appliedHiding("a"),
+          noun: "page",
+        })}
+      />
+    );
+    const button = screen.getByRole("switch", { name: "Apply conditions" });
+    expect(button.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("status").textContent).toBe(
+      "1 block hidden for this page"
+    );
+    // The page is its own: no chip naming an entry, nothing to choose.
+    expect(screen.queryByText("Previewing")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Previewing/ })).toBeNull();
+  });
+
+  it("is disabled until the page is saved, described by why", () => {
+    render(
+      <PageConditionsStrip
+        conditions={conditions({ available: false, noun: "page" })}
+      />
+    );
+    const button = screen.getByRole("switch", { name: "Apply conditions" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    const why = document.getElementById(
+      button.getAttribute("aria-describedby") ?? ""
+    );
+    expect(why?.textContent).toBe(
+      "Save the page first. Its conditions are checked against what visitors read of it."
     );
   });
 });

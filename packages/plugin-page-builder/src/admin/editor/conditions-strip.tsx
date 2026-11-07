@@ -93,21 +93,70 @@ export function TemplateConditionsPart({
 }: {
   readonly conditions: TemplateConditions;
 }): React.JSX.Element {
+  return (
+    <>
+      <span className="nx-preview-strip__sep" aria-hidden="true" />
+      <ConditionsControls conditions={conditions} />
+    </>
+  );
+}
+
+/**
+ * The switch and what the conditions did, as both strips hold them: a
+ * template's after its entry, a page's alone.
+ */
+function ConditionsControls({
+  conditions,
+  describedBy,
+}: {
+  readonly conditions: TemplateConditions;
+  readonly describedBy?: string;
+}): React.JSX.Element {
   const said = conditions.on
     ? conditionsCountWords(conditions.applied, conditions.noun)
     : "";
   return (
     <>
-      <span className="nx-preview-strip__sep" aria-hidden="true" />
       <ConditionsSwitch
         on={conditions.on && conditions.available}
         disabled={!conditions.available}
         onToggle={conditions.toggle}
+        {...(describedBy === undefined ? {} : { describedBy })}
       />
       <span className="nx-preview-strip__count" role="status" title={said}>
         {said}
       </span>
     </>
+  );
+}
+
+/** Why the switch can't apply a page's conditions before it is saved. */
+const UNSAVED_WHY =
+  "Save the page first. Its conditions are checked against what visitors read of it.";
+
+/**
+ * The strip a page gets while it holds a block whose conditions read the
+ * page: the switch and what the conditions did, and no entry to name, since
+ * the page is its own. Disabled, with why, until the page is saved.
+ */
+export function PageConditionsStrip({
+  conditions,
+}: {
+  readonly conditions: TemplateConditions;
+}): React.JSX.Element {
+  const why = useId();
+  return (
+    <div className="nx-preview-strip">
+      <ConditionsControls
+        conditions={conditions}
+        {...(conditions.available ? {} : { describedBy: why })}
+      />
+      {conditions.available ? null : (
+        <span className="nx-preview-strip__why" id={why} title={UNSAVED_WHY}>
+          {UNSAVED_WHY}
+        </span>
+      )}
+    </div>
   );
 }
 
