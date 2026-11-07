@@ -80,7 +80,7 @@ import {
 } from "react-hook-form";
 
 import {
-  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_TARGET_FIELDS,
   type PreviewCollectionLabels,
   type PreviewEntryItem,
 } from "../../templates/template-preview-contract";
@@ -113,17 +113,22 @@ export function useTemplatePreviewState(): TemplatePreview | undefined {
   return useContext(TemplatePreviewState);
 }
 
-/** The form's value of the template's collection field, where it is text. */
+/**
+ * The collection the template draws, as its form holds it now: a
+ * collection's template names it as `collection`, an entry's own design
+ * (whose `collection` is empty) as `entryCollection`.
+ */
 function useTemplateCollection<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
 ): string | undefined {
-  const value: unknown = useWatch({
+  const values: unknown[] = useWatch({
     control,
-    name: TEMPLATE_COLLECTION_FIELD as Path<TFieldValues>,
+    name: [...TEMPLATE_TARGET_FIELDS] as Path<TFieldValues>[],
   });
-  return typeof value === "string" && value.trim() !== ""
-    ? value.trim()
-    : undefined;
+  const found = values.find(
+    value => typeof value === "string" && value.trim() !== ""
+  );
+  return typeof found === "string" ? found.trim() : undefined;
 }
 
 /**

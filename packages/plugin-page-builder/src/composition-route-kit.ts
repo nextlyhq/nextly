@@ -29,7 +29,10 @@ import { COMPONENTS_SLUG } from "./collections/components";
 import type { ActionBy } from "./component-actions-contract";
 import { documentVersionOf } from "./document-version";
 import { asServiceCaller, type ComponentStore } from "./library-route";
-import { templateTargetOf } from "./templates/template-target";
+import {
+  templateTargetOf,
+  type TemplateTarget,
+} from "./templates/template-target";
 
 /** The capabilities the composition routes use, named rather than imported whole. */
 export type CompositionRouteContext = Pick<
@@ -251,7 +254,7 @@ export interface StoredPageRead {
    * write of its blocks (`carryingTemplateTarget`), so the write is judged
    * against it. Absent for any row naming none.
    */
-  readonly templateTarget?: string;
+  readonly templateTarget?: TemplateTarget;
 }
 
 /** A row's blocks field with the row's version, or `null` when it holds none. */

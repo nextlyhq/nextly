@@ -93,6 +93,7 @@ import { readingAsUser, type ComponentStore } from "./library-route";
 import {
   carryingTemplateTarget,
   templateTargetOf,
+  type TemplateTarget,
 } from "./templates/template-target";
 
 /** The blocks field a page action edits when the address names none. */
@@ -175,7 +176,7 @@ interface ReadPage {
   readonly page: StoredPage;
   readonly version: unknown;
   /** The collection the row names, where it is a template's. */
-  readonly templateTarget: string | undefined;
+  readonly templateTarget: TemplateTarget | undefined;
 }
 
 /** What an action plans: the write it makes, and what it answers with. */

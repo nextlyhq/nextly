@@ -167,8 +167,12 @@ function listSettingOf(
 export interface TemplateTargets {
   /** The RESOLVED templates collection: a host may rename it. */
   readonly collection: string;
-  /** The field a template names its collection in. */
-  readonly field: string;
+  /**
+   * The fields a template names the collection it draws in, in order: a
+   * collection's template by `collection`, an entry's own design by
+   * `entryCollection`.
+   */
+  readonly fields: readonly string[];
   /**
    * The collections stored templates draw, by template id, read as the
    * system in ONE read whatever the number of ids: a template missing from
@@ -233,8 +237,10 @@ async function templateSettingOf(
   if (write.kind !== "collection") return undefined;
   if (!isStoredTemplate(write.slug, document, templates)) return undefined;
   const locale = write.locale === undefined ? {} : { locale: write.locale };
-  const carried = data[templates.field];
-  if (typeof carried === "string" && carried !== "") {
+  const carried = templates.fields
+    .map(field => data[field])
+    .find(value => typeof value === "string" && value !== "");
+  if (typeof carried === "string") {
     return { ...locale, entryCollection: carried };
   }
   if (write.id === undefined || write.inTransaction) {

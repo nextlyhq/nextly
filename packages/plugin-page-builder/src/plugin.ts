@@ -122,7 +122,6 @@ import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import {
-  TEMPLATE_COLLECTION_FIELD,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
   TEMPLATE_FORKED_FROM_FIELD,
   templatesCollection,
@@ -332,6 +331,7 @@ import {
   templateTargetsReader,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
+import { TEMPLATE_TARGET_FIELDS } from "./templates/template-preview-contract";
 import {
   templatePreviewEntriesRoute,
   templatePreviewEntryRoute,
@@ -2273,7 +2273,7 @@ export const pageBuilder = (
         // it draws, read from the template itself.
         templates: {
           collection: templates,
-          field: TEMPLATE_COLLECTION_FIELD,
+          fields: TEMPLATE_TARGET_FIELDS,
           storedTargetsOf: templateTargetsReader(
             ctx.services.ownCollections,
             templates

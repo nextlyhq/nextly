@@ -36,6 +36,7 @@ import {
   designShapeRefusal,
   isEntryDesign,
 } from "./entry-designs";
+import { templateTargetOf } from "./template-target";
 
 /** The template drawing a collection, as a refusal names it. */
 export interface TemplateHolder {
@@ -102,13 +103,11 @@ export function templateTargetsReader(
     });
     for (const value of found.data) {
       const row = recordOf(value);
-      const target = row?.[TEMPLATE_COLLECTION_FIELD];
-      if (
-        typeof row?.id === "string" &&
-        typeof target === "string" &&
-        target !== ""
-      ) {
-        targets.set(row.id, target);
+      // A collection's template names it as `collection`, an entry's own
+      // design as `entryCollection`: the one rule `templateTargetOf` keeps.
+      const target = templateTargetOf(row);
+      if (typeof row?.id === "string" && target !== undefined) {
+        targets.set(row.id, target.collection);
       }
     }
     return targets;

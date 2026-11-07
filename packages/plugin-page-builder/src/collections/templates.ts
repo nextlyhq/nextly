@@ -14,7 +14,10 @@
 import { defineCollection, text, type CollectionConfig } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
-import { TEMPLATE_COLLECTION_FIELD } from "../templates/template-preview-contract";
+import {
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+} from "../templates/template-preview-contract";
 
 /** The slug templates are stored under, before any rename a host applies. */
 export const TEMPLATES_SLUG = "templates";
@@ -42,7 +45,7 @@ export const TEMPLATE_CONTENT_FIELD = "content";
  * template it was copied from, emptied when that template is deleted.
  */
 export const TEMPLATE_ENTRY_FIELD = "entry";
-export const TEMPLATE_ENTRY_COLLECTION_FIELD = "entryCollection";
+export { TEMPLATE_ENTRY_COLLECTION_FIELD };
 export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
 export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
 
