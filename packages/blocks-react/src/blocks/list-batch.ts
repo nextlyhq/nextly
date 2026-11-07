@@ -24,7 +24,11 @@ import {
   LIST_ENTRY_SLOT,
   isBindPath,
   isPlainRecord,
+  resolveNodeBindings,
+  type BindingIssue,
+  type BindingRun,
   type BlockNode,
+  type BoundValues,
 } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
@@ -43,11 +47,8 @@ type ValueSource =
 export interface ItemReadDemand {
   /** Each to-one relation an item binding follows, with the fields read there. */
   readonly follows: ReadonlyMap<string, ReadonlySet<string>>;
-  /** Where each link's entry comes from. */
-  readonly links: readonly {
-    readonly collection: ValueSource;
-    readonly id: ValueSource;
-  }[];
+  /** The blocks that link to an entry, by a prop set or bound, in page order. */
+  readonly links: readonly BlockNode[];
 }
 
 /** The props a linking block names its entry by (`LINK_PROPS`). */
@@ -99,8 +100,10 @@ export function itemReadDemand(
   drawn: (node: BlockNode) => boolean = () => true
 ): ItemReadDemand {
   const follows = new Map<string, Set<string>>();
-  const links: { collection: ValueSource; id: ValueSource }[] = [];
-  const stack: BlockNode[] = [...template];
+  const links: BlockNode[] = [];
+  // Last first, so each pop is the next block in page order: what is read
+  // ahead is asked in the order the page draws it.
+  const stack: BlockNode[] = [...template].reverse();
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     // A list inside the template draws entries of its own, and a block the
     // entry's conditions leave out draws nothing to read for.
@@ -112,9 +115,8 @@ export function itemReadDemand(
       continue;
     }
     addFollows(node, follows);
-    const link = linkOf(node);
-    if (link !== undefined) links.push(link);
-    stack.push(...childrenOf(node));
+    if (linksToAnEntry(node)) links.push(node);
+    stack.push(...childrenOf(node).reverse());
   }
   return { follows, links };
 }
@@ -142,21 +144,36 @@ const DRAWS_BEFORE_LINKING: Readonly<
   [ICON_TYPE]: iconMayDraw,
 };
 
-/** Where a node's link to an entry comes from, when it links to one. */
-function linkOf(
-  node: BlockNode
-): { collection: ValueSource; id: ValueSource } | undefined {
+/** Whether a node names an entry to link to, by props set or bound. */
+function linksToAnEntry(node: BlockNode): boolean {
+  return (
+    valueSource(node, LINK_COLLECTION_PROP) !== undefined &&
+    valueSource(node, LINK_ID_PROP) !== undefined
+  );
+}
+
+/**
+ * The entry a block links to as one entry draws it: from its props as the
+ * render fills them (`fillItemBindings`, the pass `BlockBoundary` renders
+ * with, fallbacks included), and only where the block's own check says it
+ * draws what its link wraps. Its stored props where no binding pass runs.
+ */
+function linkedEntry(
+  node: BlockNode,
+  context: PageContext
+): { collection: string; id: string } | undefined {
+  const run = context.itemBindingRun;
+  const filled =
+    run === undefined ? undefined : fillItemBindings(node, context, run);
+  const props: Readonly<Record<string, unknown>> = filled?.props ?? node.props;
   const draws = Object.hasOwn(DRAWS_BEFORE_LINKING, node.type)
     ? DRAWS_BEFORE_LINKING[node.type]
     : undefined;
-  if (
-    draws !== undefined &&
-    !draws(prop => valueSource(node, prop) !== undefined)
-  ) {
-    return undefined;
-  }
-  const collection = valueSource(node, LINK_COLLECTION_PROP);
-  const id = valueSource(node, LINK_ID_PROP);
+  const has = (prop: string) =>
+    textOf(props[prop]) !== undefined || filled?.bound?.[prop] !== undefined;
+  if (draws !== undefined && !draws(has)) return undefined;
+  const collection = textOf(props[LINK_COLLECTION_PROP]);
+  const id = textOf(props[LINK_ID_PROP]);
   return collection === undefined || id === undefined
     ? undefined
     : { collection, id };
@@ -167,36 +184,6 @@ function childrenOf(node: BlockNode): BlockNode[] {
   return Object.values(node.slots ?? {}).flatMap(children =>
     Array.isArray(children) ? children : []
   );
-}
-
-/**
- * A value as a source gives it for one item: text, or nothing. A path of one
- * field reads the item as stored; a path through a relation reads the entry
- * read for it, where there is one.
- */
-function valueFor(
-  source: ValueSource,
-  item: Readonly<Record<string, unknown>>,
-  followed?: FollowedRows
-): string | undefined {
-  if ("value" in source) return source.value;
-  const from =
-    source.path.length > 1 && followed !== undefined
-      ? { ...item, ...followed }
-      : item;
-  return textOf(pathIn(from, source.path));
-}
-
-/** What a path reads in a record, through nested records only. */
-function pathIn(record: unknown, path: readonly string[]): unknown {
-  let value = record;
-  for (const segment of path) {
-    value =
-      isPlainRecord(value) && Object.hasOwn(value, segment)
-        ? value[segment]
-        : undefined;
-  }
-  return value;
 }
 
 /** A value as text an id or a collection can be: a number, or a non-blank string. */
@@ -295,7 +282,12 @@ export async function readListAhead(
           collection: list.collection,
           claim,
         });
-  const refs = linkRefs(items, demands, followed);
+  const refs = linkRefs(items, demands, item => {
+    // Drawn with the rows read for it, as the list draws it.
+    const { itemFollowed: _outer, ...drawn } = list.contextOf(item);
+    const rows = followed.get(item);
+    return rows === undefined ? drawn : { ...drawn, itemFollowed: rows };
+  });
   if (refs.length > 0) await reads.entryPaths(refs, claim);
   return followed;
 }
@@ -391,7 +383,7 @@ function readsThrough(binding: unknown, followed: FollowedRows): boolean {
  * is stored, then those through a relation against the item with each read
  * entry in place of its id. One pass, the stored item, otherwise.
  */
-export function itemBindingPasses<N extends BlockNode>(
+function itemBindingPasses<N extends BlockNode>(
   node: N,
   item: Readonly<Record<string, unknown>> | undefined,
   followed: FollowedRows | undefined
@@ -424,19 +416,68 @@ export function itemBindingPasses<N extends BlockNode>(
 function linkRefs(
   items: readonly Record<string, unknown>[],
   demands: readonly ItemReadDemand[],
-  followed: ReadonlyMap<Record<string, unknown>, FollowedRows>
+  drawnWith: (item: Record<string, unknown>) => PageContext
 ): { collection: string; id: string }[] {
   const refs = new Map<string, { collection: string; id: string }>();
   for (const [index, item] of items.entries()) {
-    const rows = followed.get(item);
-    for (const link of demands[index]?.links ?? []) {
-      const collection = valueFor(link.collection, item, rows);
-      const id = valueFor(link.id, item, rows);
-      if (collection === undefined || id === undefined) continue;
-      refs.set(`${collection}\u0000${id}`, { collection, id });
+    const context = drawnWith(item);
+    for (const node of demands[index]?.links ?? []) {
+      const entry = linkedEntry(node, context);
+      if (entry === undefined) continue;
+      refs.set(`${entry.collection}\u0000${entry.id}`, entry);
     }
   }
   return [...refs.values()];
+}
+
+/** The schema the item being drawn binds against, where one is known. */
+function itemRefOf(context: PageContext): {
+  readonly itemRef?: { collection: string } | { query: string };
+} {
+  const itemSource = context.itemSource;
+  return typeof itemSource === "string" && itemSource !== ""
+    ? { itemRef: { collection: itemSource } }
+    : // A named query's rows with their own schema bind as the query's.
+      typeof context.itemQuery === "string"
+      ? { itemRef: { query: context.itemQuery } }
+      : {};
+}
+
+/**
+ * A node's list-item bindings filled, as `BlockBoundary` draws the node and
+ * as a list reads ahead for it: one pass against the item as stored, unless
+ * its list read relations ahead, when a binding through one reads the entry
+ * read for it while a binding to the field itself reads the stored id.
+ */
+export function fillItemBindings<N extends BlockNode>(
+  node: N,
+  context: PageContext,
+  run: BindingRun
+): {
+  readonly props: N["props"];
+  readonly bound: BoundValues | undefined;
+  readonly issues: readonly BindingIssue[];
+} {
+  const itemRef = itemRefOf(context);
+  let props = node.props;
+  let bound: BoundValues | undefined;
+  const issues: BindingIssue[] = [];
+  for (const pass of itemBindingPasses(
+    node,
+    context.item,
+    context.itemFollowed
+  )) {
+    const result = resolveNodeBindings({ ...pass.node, props }, run, {
+      phase: "item",
+      ...(pass.item === undefined ? {} : { item: pass.item }),
+      ...itemRef,
+    });
+    issues.push(...result.issues);
+    if (result.bound === undefined) continue;
+    props = result.props;
+    bound = { ...bound, ...result.bound };
+  }
+  return { props, bound, issues };
 }
 
 /**

@@ -3669,6 +3669,24 @@ function overrunMayBeSaid(page: string, now: number): boolean {
 }
 
 /**
+ * The binding pass the renderer fills list items' bindings with, built by
+ * the renderer's own function from the renderer's own inputs (the page's
+ * bindings, language, blocks and named queries), so a list reads ahead for
+ * the props each entry is drawn with. None for a page with no bindings,
+ * whose items' bindings are not filled.
+ */
+function itemBindingRunFor(
+  bindings: PageBindings | undefined,
+  locale: string | undefined,
+  resolver: BlockResolver,
+  namedQueries: NamedQueryHost | undefined
+): BindingRun | undefined {
+  return bindings === undefined
+    ? undefined
+    : pageBindingRun(bindings, locale, resolver, namedQueries);
+}
+
+/**
  * What a page's lists read ahead for their entries:
  * - relations through the page's own data provider, the one its lists read
  *   their entries through, so whatever the provider refuses a list (a
@@ -4189,6 +4207,12 @@ function blocksRouteConfig(
           // ahead for exactly the blocks it draws. Each Layout region gets
           // its own (`drawWithRegions`).
           heldConditions: heldConditionsOf(page.prepared ?? undefined),
+          itemBindingRun: itemBindingRunFor(
+            bindings,
+            context.locale,
+            resolver,
+            pageContext.namedQueries
+          ),
         },
         blocks: resolver,
         styleContext,

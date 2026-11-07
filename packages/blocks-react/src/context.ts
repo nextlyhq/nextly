@@ -1,6 +1,7 @@
 import type {
   BindingFieldShape,
   BindingIssue,
+  BindingRun,
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
   ConditionIssue,
@@ -745,6 +746,14 @@ export interface PageContext {
    */
   heldConditions?: ReadonlySet<string>;
   /**
+   * The binding pass the renderer fills list items' bindings with: what a
+   * list reads ahead by, so it reads for the props each entry is drawn with,
+   * fallbacks included. Absent, no item binding is filled.
+   *
+   * @experimental
+   */
+  itemBindingRun?: BindingRun;
+  /**
    * The entry the surrounding repeater is currently on.
    *
    * Distinct from `entry`, which is the record the PAGE renders: a loop over
@@ -1067,7 +1076,14 @@ export function createQueryBudget(
   // `remaining <= 0` never fires and the budget silently becomes unlimited.
   // That is the failure this exists to prevent, reached by a configuration
   // mistake rather than by a document.
-  const cap = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
+  // A count of reads is a whole number, not below zero, so `take`,
+  // `remaining` and `report` agree on what a fractional or negative cap
+  // allows: 2.7 allows 2, and -1 none. Unlimited stays unlimited.
+  const cap = Number.isNaN(max)
+    ? DEFAULT_MAX_QUERIES
+    : max === Infinity
+      ? Infinity
+      : Math.max(0, Math.floor(max));
   let remaining = cap;
   // What was counted, for the editor's meter and the overrun warning. The
   // count is the sum of the kinds, every granted claim adding to one, so the

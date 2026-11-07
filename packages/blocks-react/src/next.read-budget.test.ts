@@ -797,6 +797,88 @@ describe("a list's read-ahead, at its edges", () => {
   });
 });
 
+describe("a list's read-ahead, in the order the page draws", () => {
+  const button = (id: string, collection: string, entryId: unknown) => ({
+    id,
+    type: "core/button",
+    version: 1,
+    props: {
+      label: id,
+      entryCollection: collection,
+      ...(typeof entryId === "string" ? { entryId } : {}),
+    },
+    ...(typeof entryId === "object" ? { bindings: { entryId } } : {}),
+  });
+
+  it("reads its links ahead in page order, so under a tight cap the earlier block keeps its address", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("list", 1, [
+          // First on the page: a link to the page itself.
+          button("first", "pages", "p1"),
+          button("second", "posts", { $bind: "id", source: "item" }),
+        ]),
+      ])
+    );
+    // The entries, then room for the first link's batch and nothing past it.
+    const { html, reads } = await journal(nextly, { maxQueries: 1 + 6 });
+    expect(html).toContain('href="/journal"');
+    const order = described(reads);
+    expect(order.indexOf("pages: by ids")).toBeGreaterThan(-1);
+    expect(order).not.toContain("posts: by ids");
+  });
+
+  it("reads ahead for the entry a link's binding falls back to", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("list", 2, [
+          button("more", "posts", {
+            $bind: "noSuchField",
+            source: "item",
+            fallback: "post-3",
+          }),
+        ]),
+      ])
+    );
+    const { html, reads } = await journal(nextly);
+    expect(html).toContain('href="/post-3"');
+    // The fallback's entry read ahead, in the batch: the only plain query of
+    // posts is the list's own.
+    expect(
+      described(reads).filter(read => read === "posts: query")
+    ).toHaveLength(1);
+    expect(described(reads)).toContain("posts: by ids");
+  });
+
+  it("draws a refused inner list's empty state with no item, not the outer list's", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const inner = {
+      ...postsList("inner", 1, []),
+      slots: {
+        children: [],
+        empty: [itemHeading("inner-empty", "title", "No title")],
+      },
+    };
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("outer", 1, [
+          itemHeading("outer-title", "title", "None"),
+          inner,
+        ]),
+      ])
+    );
+    // The outer list's entries, and nothing for the inner list.
+    const { html } = await journal(nextly, { maxQueries: 1 });
+    expect(html).toContain(">No title<");
+    expect(html.split("Post number 1<")).toHaveLength(2);
+  });
+});
+
 describe("a page drawn inside its Layout", () => {
   it("hands each region the blocks kept for its own conditions, not the page's", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -979,6 +1061,8 @@ describe("what a page costs to read, measured", () => {
     // Each entry's own picture, bound: one read per distinct image.
     const bound = await journal(site(100, listing(100, { boundImage: true })));
     expect(bound.html).toContain("/media/100.jpg");
+    // The six fixed reads, then one per distinct image.
+    expect(bound.total).toBe(106);
     const oneByOne = await rendered(site(100, listing(100)), {
       collections: ["pages", "posts"],
       field: "content",

@@ -32,6 +32,21 @@ describe("createQueryBudget's count", () => {
     expect(budget.remaining()).toBe(0);
   });
 
+  it("takes a fractional cap as the whole reads it allows, in take, remaining and report alike", () => {
+    const half = createQueryBudget(0.5);
+    expect(half.take()).toBe(false);
+    expect(half.remaining()).toBe(0);
+    expect(half.report()).toMatchObject({ cap: 0, used: 0, refused: 1 });
+    const almostThree = createQueryBudget(2.7);
+    expect([
+      almostThree.take(),
+      almostThree.take(),
+      almostThree.take(),
+    ]).toEqual([true, true, false]);
+    expect(almostThree.remaining()).toBe(0);
+    expect(almostThree.report()).toMatchObject({ cap: 2, used: 2, refused: 1 });
+  });
+
   it("an unlimited budget still counts what it granted", () => {
     const budget = createQueryBudget(Infinity);
     for (let index = 0; index < 5; index += 1) budget.take({ kind: "related" });

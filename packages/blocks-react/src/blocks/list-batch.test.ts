@@ -112,9 +112,9 @@ describe("a list's read-ahead", () => {
   it("reads what the template asks: its item relations and its links, not a nested list's", () => {
     const demand = itemReadDemand(TEMPLATE);
     expect([...demand.follows]).toEqual([["author", new Set(["name"])]]);
-    expect(demand.links).toEqual([
-      { collection: { value: "posts" }, id: { path: ["id"] } },
-    ]);
+    // The one block that links to an entry, by a set collection and a
+    // bound id; the nested list's are its own.
+    expect(demand.links.map(node => node.id)).toEqual(["go"]);
   });
 
   it("asks once per kind for all the entries, and draws each item with its relation read", async () => {
@@ -152,14 +152,9 @@ describe("a list's read-ahead", () => {
       undefined,
     ]);
     expect(items.map(item => item.author)).toEqual(["a1", "a1", "gone"]);
-    expect(reads.entryPaths).toHaveBeenCalledOnce();
-    expect(reads.entryPaths).toHaveBeenCalledWith(
-      [
-        { collection: "posts", id: "p1" },
-        { collection: "posts", id: "p2" },
-        { collection: "posts", id: "p3" },
-      ],
-      { nodeId: "list" }
-    );
+    // No binding pass on this context, so no item binding is filled, in
+    // the render or here: the bound link has no entry to read ahead. A
+    // routed page, which has the pass, reads it (`next.read-budget.test.ts`).
+    expect(reads.entryPaths).not.toHaveBeenCalled();
   });
 });

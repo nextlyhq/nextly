@@ -237,6 +237,7 @@ function withoutItem(ctx: PageContext): PageContext {
     item: _outerItem,
     itemSource: _outerSource,
     itemQuery: _outerQuery,
+    itemFollowed: _outerRows,
     ...rest
   } = ctx;
   return rest;
@@ -441,7 +442,8 @@ export async function renderCollectionLoop({
   // The list a route pages had its first read claimed for it before any
   // block was drawn, so it does not claim again.
   // Past the allowance the list draws what visitors see when nothing
-  // matches, its designed empty state, as a list whose data is missing does.
+  // matches, its designed empty state, as a list whose data is missing does,
+  // with no item: not the item of a list around this one.
   const claim = { ...readClaimOf(node), kind: "entries" } as const;
   if (paging?.claimed !== true && ctx.queries?.take(claim) === false) {
     return (
@@ -450,7 +452,7 @@ export async function renderCollectionLoop({
         {...emptyMarks(ctx, "none")}
         {...stillMarks(ctx, node.id)}
       >
-        {renderSlot("empty")}
+        {renderSlot("empty", withoutItem(ctx))}
       </div>
     );
   }
