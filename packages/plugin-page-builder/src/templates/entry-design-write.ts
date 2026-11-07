@@ -38,6 +38,7 @@ import {
   designShapeProblem,
   designShapeRefusal,
   isEntryDesign,
+  type DesignShapeProblem,
 } from "./entry-designs";
 import {
   GUARDED_COLLECTIONS_CONTEXT,
@@ -123,6 +124,48 @@ function refuseUnguardedCollection(
   }
 }
 
+/** Refuse a write whose shape has `problem`, when it has one. */
+function refuseShape(problem: DesignShapeProblem | null): void {
+  if (problem !== null) throw designShapeRefusal(problem);
+}
+
+/**
+ * Judge an update on what it moves, as the guard judged its patch. Without
+ * the stored row there is nothing to tell a move from, and an update cannot
+ * make an own design, so such an update is let through.
+ */
+function judgeUpdate(
+  context: Readonly<Record<string, unknown>> | undefined,
+  data: Readonly<Record<string, unknown>>,
+  original: Readonly<Record<string, unknown>> | null
+): void {
+  if (original === null) return;
+  refuseShape(designShapeProblem(original, changedShape(original, data)));
+  refuseUnguardedCollection(context, data, original);
+}
+
+/**
+ * Hold a new own design's entry on the write's transaction, and refuse the
+ * design once the entry is gone. A collection's template names no entry and
+ * holds nothing.
+ */
+async function holdNewDesignEntry<Tx>(
+  holdEntry: (tx: Tx, collection: string, id: string) => Promise<boolean>,
+  tx: Tx,
+  data: Readonly<Record<string, unknown>>
+): Promise<void> {
+  if (!isEntryDesign(data)) return;
+  const collection = data[TEMPLATE_ENTRY_COLLECTION_FIELD];
+  const id = data[TEMPLATE_ENTRY_ID_FIELD];
+  // Both are text here: the shape check refused anything else.
+  if (typeof collection !== "string" || typeof id !== "string") return;
+  if (await holdEntry(tx, collection, id)) return;
+  throw designShapeRefusal({
+    path: TEMPLATE_ENTRY_ID_FIELD,
+    message: `The collection "${collection}" has no entry "${id}" to give its own design.`,
+  });
+}
+
 /**
  * The in-transaction handler for the templates collection: the shape of
  * every create and update judged again, the collections it newly names
@@ -136,29 +179,12 @@ export function judgeTemplateInTransaction<Tx>(
   return async write => {
     if (write.operation === "delete") return;
     const data = write.data ?? {};
-    const original = write.originalData ?? null;
     if (write.operation === "update") {
-      // Without the stored row there is nothing to tell a move from, and an
-      // update cannot make an own design, so only a create goes on.
-      if (original === null) return;
-      const shape = designShapeProblem(original, changedShape(original, data));
-      if (shape !== null) throw designShapeRefusal(shape);
-      refuseUnguardedCollection(write.context, data, original);
+      judgeUpdate(write.context, data, write.originalData ?? null);
       return;
     }
-    const shape = designShapeProblem(null, data);
-    if (shape !== null) throw designShapeRefusal(shape);
+    refuseShape(designShapeProblem(null, data));
     refuseUnguardedCollection(write.context, data, null);
-    if (!isEntryDesign(data)) return;
-    const collection = data[TEMPLATE_ENTRY_COLLECTION_FIELD];
-    const id = data[TEMPLATE_ENTRY_ID_FIELD];
-    // Both are text here: the shape check refused anything else.
-    if (typeof collection !== "string" || typeof id !== "string") return;
-    if (!(await holdEntry(write.transaction, collection, id))) {
-      throw designShapeRefusal({
-        path: TEMPLATE_ENTRY_ID_FIELD,
-        message: `The collection "${collection}" has no entry "${id}" to give its own design.`,
-      });
-    }
+    await holdNewDesignEntry(holdEntry, write.transaction, data);
   };
 }

@@ -198,6 +198,20 @@ describe("an update, in its transaction", () => {
     expect(held).toEqual([]);
   });
 
+  it("lets an update that carries no stored row through, judging and holding nothing", async () => {
+    const { handler, held } = judging(false);
+
+    // Naming both a collection and an entry, which a create is refused for:
+    // without the stored row there is nothing to tell a move from.
+    await handler({
+      operation: "update",
+      data: design({ collection: "posts" }),
+      transaction: TX,
+    });
+
+    expect(held).toEqual([]);
+  });
+
   it("asks nothing of a delete", async () => {
     const { handler, held } = judging(false);
 
