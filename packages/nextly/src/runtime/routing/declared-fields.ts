@@ -37,11 +37,11 @@ export interface SourceEntity {
 interface Declaration {
   readonly fields: readonly FieldConfig[];
   /**
-   * Whether its entries carry `createdAt` and `updatedAt`: a collection's
-   * unless it turns timestamps off, as its type and schema are generated; a
-   * Single's always, since its row is built with them.
+   * The timestamps a read of it returns: a collection's entries carry
+   * `createdAt` and `updatedAt` unless it turns timestamps off, as its type
+   * and schema are generated; a Single's document carries `updatedAt` alone.
    */
-  readonly timestamps: boolean;
+  readonly timestamps: readonly ("createdAt" | "updatedAt")[];
 }
 
 /** What the registry holds for the source, or `undefined` when it has no such source. */
@@ -54,14 +54,18 @@ async function declarationOf(
     ).getCollectionBySlug(source.slug);
     return record === null
       ? undefined
-      : { fields: record.fields, timestamps: record.timestamps !== false };
+      : {
+          fields: record.fields,
+          timestamps:
+            record.timestamps === false ? [] : ["createdAt", "updatedAt"],
+        };
   }
   const record = await getService("singleRegistryService").getSingleBySlug(
     source.slug
   );
   return record === null
     ? undefined
-    : { fields: record.fields, timestamps: true };
+    : { fields: record.fields, timestamps: ["updatedAt"] };
 }
 
 /**
@@ -83,7 +87,7 @@ export async function expandedFields(
 export async function expandedDeclaration(source: SourceEntity): Promise<
   | {
       readonly fields: readonly SensitiveFieldSource[];
-      readonly timestamps: boolean;
+      readonly timestamps: readonly ("createdAt" | "updatedAt")[];
     }
   | undefined
 > {

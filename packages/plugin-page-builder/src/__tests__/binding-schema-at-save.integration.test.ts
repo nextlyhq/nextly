@@ -286,5 +286,31 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toEqual(["binding-field-missing"]);
     });
+
+    it("judges timestamps as a read returns them", async () => {
+      const create = (binding: Node) =>
+        refusalCodes(
+          t.nextly.create({
+            collection: ARTICLES,
+            data: {
+              title: "Stamped",
+              content: pageOf([heading("h", binding)]),
+            },
+            overrideAccess: true,
+          })
+        );
+      // An entry carries both; a Single's document carries `updatedAt` only.
+      // Only whether the field is there is asked: how a date fills a text
+      // prop is the type check's.
+      expect(await create({ $bind: "createdAt" })).not.toContain(
+        "binding-field-missing"
+      );
+      expect(
+        await create({ $bind: "updatedAt", source: "single", sourceKey: BRAND })
+      ).not.toContain("binding-field-missing");
+      expect(
+        await create({ $bind: "createdAt", source: "single", sourceKey: BRAND })
+      ).toContain("binding-field-missing");
+    });
   }
 );

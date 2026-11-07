@@ -20,8 +20,13 @@
  */
 import {
   bindingSchemaIssues,
+  componentPlacementsIn,
   isErrorIssue,
+  isPlainRecord,
   registryBlockSource,
+  walkNodes,
+  type BlockNode,
+  type ResolvedBlockNode,
   type BindingDocument,
   type BindingFieldShape,
   type BindingSchemaRef,
@@ -67,12 +72,17 @@ function keyOf(ref: ReadRef): string {
 }
 
 /**
- * The most sources one save reads the fields of. Past it, a source is left
- * unknown, and its bindings are judged by their shape alone, as an unreadable
- * source's are: a write naming more is refused nothing it would not be
- * refused for anyway, and costs no more reads.
+ * The most sources one save reads the fields of. A document binding more is
+ * refused, since past it a binding could not be judged: one left unknown
+ * would be let through by its shape alone.
  */
 const MAX_SOURCES = 32;
+
+/** The issue a document binding more sources than one save reads gets. */
+const OVER_LIMIT = {
+  code: "binding-sources-over-limit",
+  message: `This document binds more than ${String(MAX_SOURCES)} collections and Singles, more than one save can check. Bind fewer sources, or split the page.`,
+} as const;
 
 /**
  * How many times the walk is asked which sources it reached unread: the
@@ -107,6 +117,8 @@ interface SchemaReads {
   readonly shapesOf: DeclaredShapesReader;
   /** Every source read so far, `undefined` for one that could not be. */
   readonly known: Map<string, readonly BindingFieldShape[] | undefined>;
+  /** Whether the walk reached more sources than one save reads. */
+  overflowed: boolean;
 }
 
 /**
@@ -125,12 +137,9 @@ function schemaSoFar(
       if (!("collection" in ref || "single" in ref)) return undefined;
       const key = keyOf(ref);
       if (reads.known.has(key)) return reads.known.get(key);
-      if (
-        wanted !== undefined &&
-        reads.known.size + wanted.size < MAX_SOURCES
-      ) {
-        wanted.set(key, ref);
-      }
+      if (wanted === undefined) return undefined;
+      if (reads.known.size + wanted.size < MAX_SOURCES) wanted.set(key, ref);
+      else reads.overflowed = true;
       return undefined;
     },
   };
@@ -145,9 +154,13 @@ async function readSources(
     [...wanted].map(async ([key, ref]) => {
       let shapes: readonly BindingFieldShape[] | undefined;
       try {
-        // A source that does not exist has no fields, so a path into it is
-        // missing, not unknown.
-        shapes = (await reads.shapesOf(ref)) ?? [];
+        // A Single the binding names that does not exist has no fields, so
+        // a path into it is missing. A collection is only ever the page's
+        // own or one a relation leads into, which the schema names; one the
+        // registry does not hold is a built-in such as `media` or `users`,
+        // whose fields are kept apart, so it is left unknown.
+        const read = await reads.shapesOf(ref);
+        shapes = read ?? ("single" in ref ? [] : undefined);
       } catch {
         // A read that failed leaves it unknown, so nothing is judged
         // against it.
@@ -187,6 +200,66 @@ async function bindingErrors(
   }
 }
 
+/** One binding error, as the engine names it. */
+type BindingError = Awaited<ReturnType<typeof bindingErrors>>[number];
+
+/**
+ * The binding errors in `document` that `keep` counts, against the declared
+ * schema: a problem a stored form already held is kept rather than refused, so
+ * the stored forms are read only once a problem is found; where they cannot be
+ * read, every problem is kept.
+ */
+async function judgedErrors(
+  document: BindingDocument,
+  entry: BindingSchemaRef | undefined,
+  site: BindingJudging & { readonly shapesOf: DeclaredShapesReader },
+  keep: (issue: BindingError) => boolean
+): Promise<{ readonly found: BindingError[]; readonly overflowed: boolean }> {
+  // One read of each source, for the write and its stored forms alike, so
+  // both verdicts are against the same schema.
+  const reads: SchemaReads = {
+    shapesOf: site.shapesOf,
+    known: new Map(),
+    overflowed: false,
+  };
+  const judging = { reads, entry, maxNodes: site.maxNodes };
+  const found = (
+    await bindingErrors(document, { ...judging, stored: [] })
+  ).filter(keep);
+  // Past the cap nothing more is read, so no verdict can be given.
+  if (reads.overflowed) return { found: [], overflowed: true };
+  if (found.length === 0 || site.storedForms === undefined) {
+    return { found, overflowed: false };
+  }
+  const snapshot = await site.storedForms();
+  // A stored page this cannot read may already hold every problem found, so
+  // none is refused: nothing can tell a new one from one the page held.
+  if (!snapshot.readable) {
+    site.onUnjudged?.(found.length);
+    return { found: [], overflowed: false };
+  }
+  // Nothing stored (a create) holds no problem, so every one is the write's.
+  if (snapshot.forms.length === 0) return { found, overflowed: false };
+  const held = (
+    await bindingErrors(document, { ...judging, stored: snapshot.forms })
+  ).filter(keep);
+  return { found: held, overflowed: reads.overflowed };
+}
+
+/**
+ * Whether a write's bindings are judged at all: the schema is read through
+ * the pool, which inside a transaction is another connection. It can wait
+ * behind the one the transaction holds, and nothing a validation is handed
+ * reads the registry on the transaction's own. So a write in a transaction (an
+ * action route, a batch, an import) is not judged here, as its breakpoints
+ * are not; the page still falls back by the same rule where it renders.
+ */
+function judges(
+  write: PluginFieldWrite | undefined
+): write is PluginFieldWrite {
+  return write !== undefined && !write.inTransaction;
+}
+
 /**
  * The issues a write is refused with for its bindings; empty when every
  * binding fits, or when nothing can tell a new problem from one the page
@@ -200,49 +273,93 @@ export async function newBindingIssues(
 ): Promise<PluginFieldIssue[]> {
   const nodes = nodesOf(value);
   const shapesOf = site.shapesOf;
-  // The schema is read through the pool, which inside a transaction is
-  // another connection: it can wait behind the one the transaction holds,
-  // and nothing a validation is handed reads the registry on the
-  // transaction's own. So a write in a transaction (an action route, a
-  // batch, an import) is not judged here, as its breakpoints are not; the
-  // page still falls back by the same rule where it renders.
-  if (
-    nodes === undefined ||
-    args.write === undefined ||
-    args.write.inTransaction ||
-    shapesOf === undefined
-  ) {
+  if (nodes === undefined || !judges(args.write) || shapesOf === undefined) {
     return [];
   }
   const document: BindingDocument = {
     nodes,
     settings: (value as { settings?: unknown }).settings,
   };
-  // One read of each source, for the write and its stored forms alike, so
-  // both verdicts are against the same schema.
-  const reads: SchemaReads = { shapesOf, known: new Map() };
-  const judging = {
-    reads,
-    entry: entryOf(args.write, value),
-    maxNodes: site.maxNodes,
-  };
-  const found = await bindingErrors(document, { ...judging, stored: [] });
-  if (found.length === 0 || site.storedForms === undefined) {
-    return asFieldIssues(found, args, label);
+  const judged = await judgedErrors(
+    document,
+    entryOf(args.write, value),
+    { ...site, shapesOf },
+    () => true
+  );
+  if (judged.overflowed) {
+    return [
+      {
+        path: args.path,
+        code: OVER_LIMIT.code,
+        message: `${label}: ${OVER_LIMIT.message}`,
+      },
+    ];
   }
-  const snapshot = await site.storedForms();
-  // A stored page this cannot read may already hold every problem found, so
-  // none is refused: nothing can tell a new one from one the page held.
-  if (!snapshot.readable) {
-    site.onUnjudged?.(found.length);
+  return asFieldIssues(judged.found, args, label);
+}
+
+/** A binding problem a placed component brings to a page. */
+export interface ComposedBindingIssue {
+  readonly code: string;
+  readonly message: string;
+}
+
+/**
+ * The binding problems of the blocks a page's placed components put on it,
+ * as the page composes them, against the page's own entry. A component's own
+ * save judges no binding to the entry, which is each placing page's; so a
+ * binding the page's entry cannot fill is refused where the page places it,
+ * named by the component it comes through. The page's own blocks and
+ * metadata are {@link newBindingIssues}'s. A problem the stored page already
+ * composed to is kept, as for the page's own bindings.
+ */
+export async function composedBindingIssues(
+  composed: unknown,
+  host: BlockDocument,
+  write: PluginFieldWrite,
+  site: BindingJudging
+): Promise<ComposedBindingIssue[]> {
+  const nodes = nodesOf(composed);
+  const shapesOf = site.shapesOf;
+  const entry = entryOf(write, host);
+  if (
+    nodes === undefined ||
+    !judges(write) ||
+    shapesOf === undefined ||
+    entry === undefined
+  ) {
     return [];
   }
-  // Nothing stored (a create) holds no problem, so every one is the write's.
-  return asFieldIssues(
-    snapshot.forms.length > 0
-      ? await bindingErrors(document, { ...judging, stored: snapshot.forms })
-      : found,
-    args,
-    label
+  // Each composed node a definition put here, by the host's own placement.
+  const placedNodes = new Map<string, string>();
+  walkNodes(
+    nodes as BlockNode[],
+    node => {
+      const through = (node as ResolvedBlockNode).instanceOf;
+      if (typeof through === "string") placedNodes.set(node.id, through);
+    },
+    site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }
   );
+  if (placedNodes.size === 0) return [];
+  const { found, overflowed } = await judgedErrors(
+    { nodes },
+    entry,
+    { ...site, shapesOf },
+    issue => placedNodes.has(issue.nodeId)
+  );
+  if (overflowed) return [OVER_LIMIT];
+  if (found.length === 0) return [];
+  const componentOf = new Map<string, string>();
+  for (const placement of componentPlacementsIn(host, site.maxNodes)
+    .placements) {
+    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
+    if (typeof id === "string") componentOf.set(id, placement.target);
+  }
+  return found.map(issue => {
+    const component = componentOf.get(placedNodes.get(issue.nodeId) ?? "");
+    return {
+      code: issue.code,
+      message: `${component === undefined ? "A component" : `Component "${component}"`}, as this page places it, holds a binding this page can't fill. ${issue.message}`,
+    };
+  });
 }

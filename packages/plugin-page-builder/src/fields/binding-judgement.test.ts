@@ -3,7 +3,10 @@
  * against each source's declared fields, reading only the sources it binds,
  * and keeping a break the stored page already held.
  */
-import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  type BindingFieldShape,
+} from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldValidateArgs,
   PluginFieldWrite,
@@ -11,6 +14,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  composedBindingIssues,
   newBindingIssues,
   type DeclaredShapesReader,
 } from "./binding-judgement";
@@ -21,6 +25,8 @@ const DECLARED: Readonly<Record<string, readonly BindingFieldShape[]>> = {
     { name: "title", type: "text" },
     { name: "internalNote", type: "text" },
     { name: "author", type: "relationship", relationTo: "users" },
+    // Into a built-in collection, whose fields the registry does not hold.
+    { name: "photo", type: "upload", relationTo: "media" },
     {
       name: "meta",
       type: "group",
@@ -251,5 +257,68 @@ describe("a write's bindings judged against the declared schema", () => {
     );
     expect(issues).toEqual([]);
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it("refuses a document binding more sources than one save reads", async () => {
+    const many = Array.from({ length: 33 }, (_unused, index) =>
+      heading(`h${String(index)}`, {
+        $bind: "tagline",
+        source: "single",
+        sourceKey: `s${String(index)}`,
+      })
+    );
+    const issues = await newBindingIssues(page(...many), args(), "Content", {
+      shapesOf,
+    });
+    expect(issues.map(issue => issue.code)).toEqual([
+      "binding-sources-over-limit",
+    ]);
+  });
+
+  it("lets a path into a built-in collection through, its fields kept apart", async () => {
+    const issues = await newBindingIssues(
+      page(heading("h", { $bind: "photo.url" })),
+      args(),
+      "Content",
+      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+    );
+    expect(issues).toEqual([]);
+  });
+});
+
+describe("the bindings a page's placed components bring", () => {
+  // As the page composes: the placed component's heading, marked with the
+  // placement it came through.
+  const composed = (path: string) =>
+    page(heading("own", { $bind: "headline" }), {
+      ...heading("placed", { $bind: path }),
+      instanceOf: "i1",
+    });
+  const host = page({
+    id: "i1",
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId: "card" },
+  }) as never;
+
+  it("judges them against the page's entry, naming the component", async () => {
+    const issues = await composedBindingIssues(
+      composed("headline"),
+      host,
+      args().write!,
+      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+    );
+    // The page's own heading is the page's own check's.
+    expect(issues).toEqual([
+      {
+        code: "binding-field-missing",
+        message: expect.stringContaining('Component "card"'),
+      },
+    ]);
+    expect(
+      await composedBindingIssues(composed("title"), host, args().write!, {
+        shapesOf,
+      })
+    ).toEqual([]);
   });
 });

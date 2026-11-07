@@ -94,7 +94,10 @@ import {
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import type { StoredForms } from "./added-undefined-ids";
-import type { DeclaredShapesReader } from "./binding-judgement";
+import {
+  composedBindingIssues,
+  type DeclaredShapesReader,
+} from "./binding-judgement";
 import { isForest } from "./blocks-document";
 import {
   LAYERS_LOCK_CHANGED,
@@ -986,6 +989,22 @@ async function judgeComposedLists(args: {
     )),
   ];
   for (const issue of found) args.report.add(issue.code, issue.message);
+  // And the bindings its placed components bring, against this page's entry.
+  const bindingShapes = args.setup.bindingShapes;
+  if (bindingShapes === undefined) return;
+  const bound = await composedBindingIssues(
+    args.composed,
+    args.document,
+    args.write,
+    {
+      shapesOf: bindingShapes,
+      storedForms: site.storedForms,
+      maxNodes: site.maxNodes,
+      onUnjudged: (bindings: number) =>
+        args.setup.onBindingsUnjudged?.({ ...args.unjudged, bindings }),
+    }
+  );
+  for (const issue of bound) args.report.add(issue.code, issue.message);
 }
 
 /**
