@@ -18,6 +18,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   TransactionContext,
+  TransactionOptions,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
 import {
@@ -428,12 +429,14 @@ import {
   collectionFields,
   collectionTableName,
   generateSlug,
+  normalizeSlugPath,
 } from "./collection-utils";
 import {
   entryWriteContext,
   fieldAccessPass,
   holdStoredExpectation,
   refuseUnlessWhole,
+  refuseUnstoredKeys,
 } from "./stored-field-read";
 import {
   prepareWriteMatch,
@@ -3862,7 +3865,13 @@ export class CollectionMutationService extends BaseService {
 
     if (shouldHandleSlug && data.slug !== undefined) {
       if (typeof data.slug === "string" && data.slug.trim()) {
-        data.slug = generateSlug(data.slug);
+        // The collection's own slug rule: one segment, or a path where it
+        // stores paths, refused here when it cannot be one.
+        const name = (collection as { slug?: unknown }).slug;
+        data.slug =
+          typeof name === "string"
+            ? this.slugAsStored(name, data.slug, true)
+            : generateSlug(data.slug);
       } else {
         // If slug is empty/null, remove it from update to keep existing value
         delete data.slug;
@@ -6900,13 +6909,22 @@ export class CollectionMutationService extends BaseService {
    */
   private async applyGeneratedSlugAndTitle(
     finalData: Record<string, unknown>,
-    isSlugTaken: (slug: string) => Promise<boolean>
+    isSlugTaken: (slug: string) => Promise<boolean>,
+    collectionName: string
   ): Promise<void> {
     const provided =
       typeof finalData.slug === "string" && finalData.slug.trim() !== "";
     if (provided) {
       // Explicit slug: sanitize only, never dedupe — respect the caller's value.
-      const sanitized = generateSlug(finalData.slug as string);
+      // Not refused here: this runs before field write access, and a caller
+      // whose slug write is denied must not be told what was wrong with it.
+      // A path that cannot be stored is kept as given and refused by
+      // `reSanitizeSlug`, after access.
+      const sanitized = this.slugAsStored(
+        collectionName,
+        finalData.slug as string,
+        false
+      );
       // generateSlug strips everything outside [\w-], so an explicit slug of
       // only non-ASCII/punctuation (e.g. "你好") sanitizes to empty. Treat that
       // as unset and derive a valid, unique slug instead of persisting "".
@@ -6964,7 +6982,8 @@ export class CollectionMutationService extends BaseService {
    */
   private async reSanitizeSlug(
     finalData: Record<string, unknown>,
-    isSlugTaken: (slug: string) => Promise<boolean>
+    isSlugTaken: (slug: string) => Promise<boolean>,
+    collectionName: string
   ): Promise<void> {
     // Respect an ABSENT slug. Field-level write access deletes the key when it
     // denies the write, so `undefined` means "stripped by access" (or never
@@ -6980,11 +6999,38 @@ export class CollectionMutationService extends BaseService {
     // strings, so it would not catch it, and this mirrors the empty fallback in
     // applyGeneratedSlugAndTitle.
     const current = finalData.slug;
-    const sanitized = typeof current === "string" ? generateSlug(current) : "";
+    const sanitized =
+      typeof current === "string"
+        ? this.slugAsStored(collectionName, current, true)
+        : "";
     finalData.slug =
       sanitized !== ""
         ? sanitized
         : await this.deriveSlug(finalData, isSlugTaken);
+  }
+
+  /**
+   * `raw` as `collectionName` stores a slug: one segment, normalised by
+   * {@link generateSlug}, or, where the collection's `db.slugPaths` is on, a
+   * path of several, each normalised alike ({@link normalizeSlugPath}). A
+   * path that cannot be stored is refused as a validation error on `slug`
+   * when `refuse` is set, in words an author can act on, and is otherwise
+   * returned as given for a later pass to refuse.
+   */
+  private slugAsStored(
+    collectionName: string,
+    raw: string,
+    refuse: boolean
+  ): string {
+    if (collectionDbOptions(collectionName).slugPaths !== true) {
+      return generateSlug(raw);
+    }
+    const read = normalizeSlugPath(raw);
+    if ("slug" in read) return read.slug;
+    if (!refuse) return raw;
+    throw NextlyError.validation({
+      errors: [{ path: "slug", code: "INVALID_FORMAT", message: read.problem }],
+    });
   }
 
   /**
@@ -7249,7 +7295,11 @@ export class CollectionMutationService extends BaseService {
       // the shared connection (a plain, non-transactional create).
       const isSlugTaken = (slug: string) =>
         this.checkFieldUniqueness(params.collectionName, "slug", slug);
-      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
+      await this.applyGeneratedSlugAndTitle(
+        finalData,
+        isSlugTaken,
+        params.collectionName
+      );
 
       // Field-level access: fields the caller may not create are stripped
       // silently (Payload parity); overrideAccess bypasses.
@@ -7276,7 +7326,7 @@ export class CollectionMutationService extends BaseService {
 
       // A beforeValidate hook can set `slug` after generation ran; re-sanitize
       // so the validated and stored value stays URL-safe.
-      await this.reSanitizeSlug(finalData, isSlugTaken);
+      await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
       {
         // i18n M5b: `required` on a localized field is enforced only for the default-locale write;
@@ -7329,7 +7379,7 @@ export class CollectionMutationService extends BaseService {
 
       // A beforeChange hook runs after validation and can also set `slug`;
       // re-sanitize once more so the stored value stays URL-safe.
-      await this.reSanitizeSlug(finalData, isSlugTaken);
+      await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(finalData, fields);
@@ -7545,6 +7595,10 @@ export class CollectionMutationService extends BaseService {
       // The in-transaction handlers, asked once for this write.
       const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
+      );
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers
       );
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
@@ -7879,7 +7933,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
-      });
+      }, transactionOptions);
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
       // there; from here a post-commit hook failure must not hide the delivery.
@@ -9306,6 +9360,11 @@ export class CollectionMutationService extends BaseService {
         inTransactionHandlers.length > 0;
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers,
+        versionConflictRetries()
+      );
       await this.adapter.transaction(async tx => {
         // Lock the main row up front. One read serves three needs: it is the
         // liveness check (a row deleted between the pre-transaction read and
@@ -10294,7 +10353,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: {},
         });
-      }, versionConflictRetries());
+      }, transactionOptions);
 
       // The entry was deleted out from under the publish: nothing was written or
       // recorded, so answer not-found rather than a success for absent content.
@@ -11182,6 +11241,50 @@ export class CollectionMutationService extends BaseService {
         routeAuthorized: params.routeAuthorized,
         // A scoped API key is judged on its own update grant, so the session
         // super-admin bypass does not apply to a super-admin-owned key here.
+        authenticatedScope: params.authenticatedScope,
+      },
+      params.locale
+    );
+    return denied === null;
+  }
+
+  /**
+   * Whether this user may publish the entry, decided without writing: the
+   * gate an update that puts it live asks (`publish`, a rule's filter matched
+   * against this entry), with no hook run. A collection with no lifecycle has
+   * no publish gate, so the answer there is yes; an entry that is not there
+   * answers as a refusal, as {@link canUpdateEntry} does.
+   *
+   * @experimental
+   */
+  async canPublishEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    /** The language the publish acts in, which a rule's filter is matched in. */
+    locale?: string;
+  }): Promise<boolean> {
+    const existingEntry = await this.storedEntry(
+      params.collectionName,
+      params.entryId
+    );
+    if (!existingEntry) return false;
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    // As `resolveTransitionAuthorization` reads it: no lifecycle, no gate.
+    if ((collection as { status?: boolean }).status !== true) return true;
+    const denied = await this.refusalOfStoredUpdate(
+      {
+        collectionName: params.collectionName,
+        operation: "publish",
+        entryId: params.entryId,
+        user: params.user,
+        // Never overridden, and never route-authorized: a route attests
+        // update, never publish.
+        overrideAccess: false,
+        routeAuthorized: false,
         authenticatedScope: params.authenticatedScope,
       },
       params.locale
@@ -13605,6 +13708,18 @@ export class CollectionMutationService extends BaseService {
       }
 
       const tableName = collectionTableName(collection, params.collectionName);
+      // A conditional write naming a key no update stores is refused here: its
+      // access has been judged, so a caller who may not update is refused
+      // alike whatever it names, and no hook has run.
+      refuseUnstoredKeys(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        { tableName, fields }
+      );
 
       // A version below the one the entry already held when it was read is
       // certainly out of date, since a counter only goes up: refused here,
@@ -13652,13 +13767,13 @@ export class CollectionMutationService extends BaseService {
       // For a conditional write made whole, what this pass takes out or keeps
       // is recorded, and refuses it once every hook has run.
       const storedForAccess = await this.storedForCarryForward({
-          row: existingEntry as Record<string, unknown>,
-          fields,
-          tableName,
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          locale: params.locale,
-          overrideAccess: params.overrideAccess,
+        row: existingEntry as Record<string, unknown>,
+        fields,
+        tableName,
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        locale: params.locale,
+        overrideAccess: params.overrideAccess,
       });
       await fieldAccessPass(
         params.context,
@@ -13674,9 +13789,9 @@ export class CollectionMutationService extends BaseService {
             storedId: String(existingEntry.id),
             collectionName: params.collectionName,
             stored: storedForAccess,
-        tableName,
-        fields,
-        params,
+            tableName,
+            fields,
+            params,
           })
       );
 
@@ -14265,6 +14380,11 @@ export class CollectionMutationService extends BaseService {
       // retried attempt runs the same set.
       const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
+      );
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers,
+        versionConflictRetries()
       );
       await this.adapter.transaction(async tx => {
         recorded = false;
@@ -15759,7 +15879,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
-      }, versionConflictRetries());
+      }, transactionOptions);
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
       eventRecorded = recorded;
@@ -17837,6 +17957,10 @@ export class CollectionMutationService extends BaseService {
       const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
       );
+      // Read committed when a handler runs; see `writeTransactionOptions`.
+      const transactionOptions = this.writeTransactionOptions(
+        inTransactionHandlers
+      );
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -17981,7 +18105,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
-      });
+      }, transactionOptions);
       // Set only after the transaction resolves: `deletedRow` is true exactly
       // when the delete committed, so a commit failure never flags a durable
       // event that isn't there; a later hook failure must not hide it. `recorded`
@@ -18330,7 +18454,11 @@ export class CollectionMutationService extends BaseService {
         );
         return existing != null;
       };
-      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
+      await this.applyGeneratedSlugAndTitle(
+        finalData,
+        isSlugTaken,
+        params.collectionName
+      );
 
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
@@ -18366,7 +18494,11 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
-        await this.reSanitizeSlug(finalData, isSlugTaken);
+        await this.reSanitizeSlug(
+          finalData,
+          isSlugTaken,
+          params.collectionName
+        );
       }
 
       {
@@ -18408,10 +18540,12 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
-        // A beforeChange hook can also set `slug`, so re-sanitize before
-        // storage.
-        await this.reSanitizeSlug(finalData, isSlugTaken);
       }
+      // A beforeChange hook can also set `slug`, so re-sanitize before
+      // storage. Outside the hooks' gate: a write that skips hooks still
+      // stores only a slug its collection can hold, since an early pass
+      // leaves an unstorable slug path as given for this one to refuse.
+      await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(
@@ -18769,6 +18903,24 @@ export class CollectionMutationService extends BaseService {
     collection: string
   ): InTransactionHandlerSet {
     return inTransactionHandlersFor(this.hookService.hookRegistry, collection);
+  }
+
+  /**
+   * The options a write's own transaction opens with, given the
+   * in-transaction handlers it runs: with any, it reads committed on every
+   * dialect. A handler may serialize writes with a row lock and then judge
+   * what other writes stored; under MySQL's default, REPEATABLE READ, its
+   * reads would answer from the snapshot the transaction's first read took,
+   * before the writer it waited for committed. PostgreSQL reads committed
+   * already, and SQLite runs one writer at a time. A write running none keeps
+   * the dialect's default.
+   */
+  private writeTransactionOptions(
+    handlers: InTransactionHandlerSet,
+    options?: TransactionOptions
+  ): TransactionOptions | undefined {
+    if (handlers.length === 0) return options;
+    return { ...options, isolationLevel: "read committed" };
   }
 
   /**
@@ -19203,6 +19355,22 @@ export class CollectionMutationService extends BaseService {
           operation: "update",
           user: params.user,
         });
+      }
+
+      // A collection storing slug paths has its slug held to them here too,
+      // after every hook that may set it: a transactional update must not
+      // store an address (`../admin`) its plain update would refuse. Other
+      // collections keep this path as it was.
+      if (
+        collectionDbOptions(params.collectionName).slugPaths === true &&
+        typeof finalData.slug === "string" &&
+        finalData.slug.trim() !== ""
+      ) {
+        finalData.slug = this.slugAsStored(
+          params.collectionName,
+          finalData.slug,
+          true
+        );
       }
 
       // Read AFTER every hook that may decide it: a `beforeChange` hook can

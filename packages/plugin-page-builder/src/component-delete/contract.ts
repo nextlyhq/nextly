@@ -27,7 +27,9 @@
  * - `counting`: the slices so far found no use, and the plan is not complete
  *   yet ("Counting…"); ask for the next slice.
  * - `refused`: it cannot be deleted as things stand: a Layout uses it
- *   (`layouts`), or a host cannot be converted (`left`). Nothing changed.
+ *   (`layouts`), a host cannot be converted, or the caller may not make one of
+ *   the writes the delete needs (update, publish, or a field's own rule, for
+ *   that document): `left`. Nothing changed.
  * - `preflight`, `running`: the delete is under way (`run.yours` false: it
  *   is somebody else's). `preflight` is the check before anything changes,
  *   which may take several calls on a large site.
@@ -127,11 +129,6 @@ export interface DeletePlan {
    * publishes or discards the changes, so the component is kept until then.
    */
   readonly drafts: DocumentList;
-  /**
-   * How many of those the caller may not be allowed to change: their rights
-   * there depend on the document. The save tells which.
-   */
-  readonly mayBeRefused: number;
 }
 
 /** How far the open delete has come. */
@@ -157,7 +154,12 @@ export interface ComponentDeleteResult {
   readonly plan?: DeletePlan;
   /** The Layouts that use it, by the titles the caller may read. */
   readonly layouts?: DocumentList;
-  /** The documents that stop it, or that were left. */
+  /**
+   * The documents that stop it, or that were left: at most 50 of them, the
+   * rest counted in `leftMore`.
+   */
   readonly left?: readonly LeftDocument[];
+  /** How many more documents stop it, or were left, than `left` lists. */
+  readonly leftMore?: number;
   readonly progress?: DeleteProgress;
 }

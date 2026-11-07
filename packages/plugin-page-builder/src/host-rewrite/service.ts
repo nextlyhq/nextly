@@ -43,7 +43,11 @@ import {
   type DeletionRun,
   type RunPurpose,
 } from "./fence";
-import { progressStore, type HostProgress } from "./progress";
+import {
+  progressStore,
+  type HostProgress,
+  type ProgressCounts,
+} from "./progress";
 import { rewriteHosts, type HostSource, type RunStore } from "./rewrite";
 import {
   siteHostReader,
@@ -105,6 +109,16 @@ export interface ComponentDeleteRewriteService {
   progress(
     componentId: string,
     purpose?: RunPurpose
+  ): Promise<readonly HostProgress[]>;
+  /**
+   * How many documents of each state the component's `delete` run recorded,
+   * counted in the database; all zero when none is open.
+   */
+  counts(componentId: string): Promise<ProgressCounts>;
+  /** The first `limit` documents its `delete` run left; none when none is open. */
+  leftPage(
+    componentId: string,
+    limit: number
   ): Promise<readonly HostProgress[]>;
   /** Close a run, which lifts a `delete` run's fence. */
   close(componentId: string, purpose?: RunPurpose): Promise<void>;
@@ -208,6 +222,14 @@ export function componentDeleteRewriteService(
       const run = await fence().runFor(componentId, purpose);
       return run === null ? [] : progress().all(run.id);
     },
+    counts: async componentId => {
+      const run = await fence().runFor(componentId, "delete");
+      return run === null ? NO_PROGRESS : progress().counts(run.id);
+    },
+    leftPage: async (componentId, limit) => {
+      const run = await fence().runFor(componentId, "delete");
+      return run === null ? [] : progress().leftPage(run.id, limit);
+    },
     rewrite: async args => {
       const run = await fence().runFor(args.componentId, "delete");
       if (run === null) {
@@ -299,6 +321,14 @@ function slicedSource(
     outside: () => (slice.ended ? source.outside() : Promise.resolve([])),
   };
 }
+
+/** The counts of a component with no run open. */
+const NO_PROGRESS: ProgressCounts = {
+  rewritten: 0,
+  unchanged: 0,
+  left: 0,
+  pending: 0,
+};
 
 /** The id a plan's stand-in run answers to; no stored run has it. */
 const PLAN_RUN_ID = "plan";

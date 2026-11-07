@@ -324,8 +324,12 @@ describe("the fields a list may name", () => {
     // Rich text and a has-many relation are not offered, and are readable.
     expect(names).toEqual(expect.arrayContaining(["id", "body", "categories"]));
     expect(names).not.toContain("internalScore");
+    // CONTROL: a declared label is the one sent.
+    expect(readable.find(field => field.name === "title")?.label).toBe("Title");
     expect(readable.find(field => field.name === "categories")).toEqual({
       name: "categories",
+      // Named as an offered field is, for a menu that offers it.
+      label: "Categories",
       type: "relationship",
       hasMany: true,
       relationTo: "categories",

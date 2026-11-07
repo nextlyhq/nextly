@@ -182,6 +182,21 @@ export async function singleDocumentEditable(
  * A Single with no row is not readable here, as it is not editable, since
  * there is no document to judge.
  */
+/**
+ * Whether the caller may publish the Single's document, asked WITHOUT writing:
+ * nothing is created and no hook runs. The gate a Single's publish asks
+ * (`checkSingleAccess` for `publish`), applied to the stored row; a Single
+ * with no row is not publishable here, as it is not editable.
+ *
+ * @experimental
+ */
+export async function singleDocumentPublishable(
+  slug: string,
+  subject: SingleAccessSubject
+): Promise<boolean> {
+  return storedSingleDocumentAllows(slug, "publish", subject);
+}
+
 export async function singleStoredDocumentReadable(
   slug: string,
   subject: SingleAccessSubject
@@ -198,7 +213,7 @@ export async function singleStoredDocumentReadable(
  */
 async function storedSingleDocumentAllows(
   slug: string,
-  operation: "read" | "update",
+  operation: "read" | "update" | "publish",
   { user, actor, routeAuthorized, locale }: SingleAccessSubject
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");

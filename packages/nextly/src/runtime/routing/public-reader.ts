@@ -583,7 +583,7 @@ export function toPublicFindSingle(
  * returns the whole document, so the selection is kept here; a field the
  * read left out stays out.
  */
-function selectedFrom(
+export function selectedFrom(
   document: Record<string, unknown>,
   select: readonly string[] | undefined
 ): Record<string, unknown> {

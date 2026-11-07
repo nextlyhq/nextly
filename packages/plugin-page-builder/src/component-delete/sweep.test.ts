@@ -29,7 +29,7 @@ function sweep(runs: DeletionRun[], existing: readonly string[] = []) {
       sweepComponentDeletes({
         deleting: () => Promise.resolve(runs),
         store: () => ({
-          advance: async (...args) => {
+          markDeleted: async (...args) => {
             moves.push(args);
             return true;
           },
@@ -49,7 +49,7 @@ describe("the component delete sweep", () => {
 
     await s.pass();
 
-    expect(s.moves).toEqual([["r", "deleting", "deleted", NOW.toISOString()]]);
+    expect(s.moves).toEqual([["r", NOW.toISOString()]]);
   });
 
   it("touches no tombstone, however old, no run still converting, and no retired-field run", async () => {

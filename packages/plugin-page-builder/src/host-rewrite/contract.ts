@@ -140,6 +140,12 @@ export interface RewriteReport {
    * on a run whose converting walk did its job.
    */
   readonly caughtByFinalWalk: readonly HostAddress[];
+  /**
+   * Hosts whose rewrite puts the value live: a public live row with no pending
+   * draft, written by publishing it again. In a dry run, the ones a real run
+   * would publish, so a caller can ask before it starts whether it may.
+   */
+  readonly publishing?: readonly HostAddress[];
   /** Whether the run has walked every host to the end, twice. */
   readonly finished: boolean;
 }

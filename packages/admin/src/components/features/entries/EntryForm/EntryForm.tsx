@@ -136,6 +136,7 @@ import {
   type EntryFormMode,
 } from "./useEntryForm";
 import { useLockWithHeldChange } from "./useHeldDocumentChange";
+import { usePluginDocumentSurfaces } from "./usePluginDocumentSurfaces";
 import {
   heldLocaleChange,
   heldWhileRecovering,
@@ -394,6 +395,9 @@ export function EntryForm({
   // and the version on screen are known. Read by the form when a refused
   // publish's recovery runs, which writes like the handlers below do.
   const writesHeldNow = useRef(false);
+  // Read when a plugin asks whether it may write, which can be long after the
+  // render that drew it: a dialog stays open while the document changes hands.
+  const pluginWritesHeldNow = useRef(false);
   // The entry's Save that never publishes, handed up from inside its
   // document's actions, where the Save lives.
   const saveWithoutPublishing = useRef<
@@ -419,6 +423,7 @@ export function EntryForm({
     holdForVersionChange,
     releaseVersionHold,
     stopAwaitingCurrentVersion,
+    expectOwnChange,
   } = useEntryForm({
     collection,
     entry,
@@ -873,6 +878,13 @@ export function EntryForm({
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
+  // What a plugin's own write is held by at this instant: a colleague's claim,
+  // a past version on screen or a recovery, as the built-in Delete is, and a
+  // collection removed from code, where the server refuses every write and
+  // the editor offers none. A reader's page is not among them: like Delete, a
+  // plugin's action follows its own permission, which its route judges.
+  const pluginWritesHeld = writesHeld || recovering || removedFromCode;
+  pluginWritesHeldNow.current = pluginWritesHeld;
 
   /*
    * The one gate every write passes through.
@@ -1100,6 +1112,23 @@ export function EntryForm({
     pendingOfferAt: recovery.offer?.savedAt ?? null,
   };
 
+  // What plugins change on this collection's document screen: the actions
+  // they hide or replace, and the sections they add to the panel. A section
+  // is told what holds the document as the fields and the writes are held.
+  const pluginSurfaces = usePluginDocumentSurfaces({
+    collectionSlug: collection.name,
+    entryId: savedEntryId,
+    documentLock: {
+      readOnly: contentHeld,
+      // The same hold `mayWrite` reads, so the two cannot disagree.
+      actionsDisabled: pluginWritesHeld,
+    },
+    mayWrite: () => !pluginWritesHeldNow.current,
+    onDeleted: onDelete,
+    onOwnChange: expectOwnChange,
+    locale,
+  });
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1117,6 +1146,7 @@ export function EntryForm({
     canEdit: mayEdit,
     writesRefused: removedFromCode,
     contributedActions: documentActions,
+    actionOverrides: pluginSurfaces.actionOverrides,
     // Read when a contribution is chosen: the page above holds only the
     // saved entry, and a schedule says when edits are not saved yet.
     currentValues: () => form.getValues(),
@@ -1251,6 +1281,7 @@ export function EntryForm({
             />
           </div>
           {conflictDialog}
+          {pluginSurfaces.replacement}
         </EntryFormProvider>
       </EntryFormContextProvider>
     );
@@ -1370,6 +1401,11 @@ export function EntryForm({
                       hasUnsavedWork={hasUnsavedWork}
                       isSubmitting={isSubmitting}
                     />
+                    {/* A plugin's replacement for a document action, drawn
+                      inside the document's providers so it reads the
+                      language being edited and the document's actions as
+                      any surface of the editor does. */}
+                    {pluginSurfaces.replacement}
                     {documentView ? (
                       <DocumentViewBody
                         view={documentView}
@@ -1658,6 +1694,14 @@ export function EntryForm({
                                     }
                                     // A reader may still open the other languages.
                                     navigationDisabled={navigationHeld}
+                                    pluginSections={pluginSurfaces.sections}
+                                    {...(pluginSurfaces.sectionProps ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          pluginSectionProps:
+                                            pluginSurfaces.sectionProps,
+                                        })}
                                   />
                                 </DocumentSidePanel>
                               ) : null}

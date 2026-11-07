@@ -950,6 +950,40 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_DOCUMENT_SURFACE_COLLISION: {
+    cause: "Two plugins override the same document action on one collection.",
+    from: [
+      {
+        code: "NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID",
+        when: error => typeof error.logContext?.other === "string",
+        describe: error => {
+          const parts = cut(
+            detail(error),
+            ". One action can be drawn one way: "
+          );
+          return {
+            what: asSentence(parts?.[0] ?? detail(error)),
+            why: "One action can be drawn one way.",
+            next: asSentence(parts?.[1] ?? "Drop one of the two overrides"),
+          };
+        },
+      },
+    ],
+  },
+  PLUGIN_DOCUMENT_SURFACE_INVALID: {
+    cause:
+      "A plugin overrides a document action it may not override, or declares a document action override or panel section with nothing to draw.",
+    from: [
+      {
+        code: "NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID",
+        describe: error => ({
+          what: asSentence(detail(error)),
+          why: "A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.",
+          next: "Correct the override or section the message names in the plugin's `contributes.admin.views`.",
+        }),
+      },
+    ],
+  },
   BLOCK_SCHEMA_DERIVATION_FAILED: {
     cause:
       "The block document schema could not be derived, because something in the process extended `Object.prototype`.",

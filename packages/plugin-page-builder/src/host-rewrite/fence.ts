@@ -24,7 +24,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
-import { and, eq, inArray } from "@nextlyhq/plugin-sdk/db";
+import { and, eq, inArray, isNull } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -132,6 +132,23 @@ export interface FenceStore {
    * `among` alone when named, read by the run table's index.
    */
   fenced(among?: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Move a run at `phase` whose cursor is still `cursor` (as read) to
+   * `toPhase` and `toCursor`, by compare-and-set on both: a write that reset
+   * the cursor meanwhile (`preflight` restarted) makes the move change
+   * nothing. Answers whether it moved.
+   */
+  advanceFrom(
+    runId: string,
+    at: { readonly phase: StoredPhase; readonly cursor: string | null },
+    to: { readonly phase: StoredPhase; readonly cursor: string | null }
+  ): Promise<boolean>;
+  /**
+   * Move a run from `deleting` to `deleted`, its tombstone, and drop its
+   * progress, in one transaction: a tombstone keeps no rows but its own.
+   * Answers whether it moved.
+   */
+  markDeleted(runId: string, deletedAt: string): Promise<boolean>;
   /**
    * Every run at `phase`, of every purpose. The phase is not indexed, so this
    * reads the table, tombstones included; it is asked by a sweep pass, never
@@ -325,6 +342,28 @@ export function fenceStore(
       if (run !== null) await closeRun(run.id, CLOSABLE_PHASES);
     },
     closeRun,
+    advanceFrom: async (runId, at, to) => {
+      const r = columns();
+      const cursorIs =
+        at.cursor === null ? isNull(r.cursor) : eq(r.cursor, at.cursor);
+      // Every move writes a cursor or a phase it did not hold, so the count
+      // is the rows matched on MySQL too.
+      const moved = await db
+        .update(componentDeletions, { phase: to.phase, cursor: to.cursor })
+        .where(both(both(eq(r.id, runId), eq(r.phase, at.phase)), cursorIs));
+      return moved > 0;
+    },
+    markDeleted: (runId, deletedAt) =>
+      db.transaction(async tx => {
+        const t = tx.table(componentDeletions);
+        const moved = await tx
+          .update(componentDeletions, { phase: "deleted", cursor: deletedAt })
+          .where(both(eq(t.id, runId), eq(t.phase, "deleting")));
+        if (moved === 0) return false;
+        const h = tx.table(componentDeletionHosts);
+        await tx.delete(componentDeletionHosts).where(eq(h.deletionId, runId));
+        return true;
+      }),
   };
 }
 

@@ -37,9 +37,10 @@ import {
   toastMutationResult,
   type MutationResult,
 } from "@admin/lib/mutation-warnings";
-import { entryApi, entryKeys } from "@admin/services/entryApi";
+import { entryApi } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
+import { refreshAfterEntryDelete } from "./entry-cache";
 import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
@@ -176,23 +177,9 @@ export function useDeleteEntry<T = Entry>({
 
     onSuccess: (result, entryId) => {
       const data = result.item;
-      // Invalidate entry list queries for this collection
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.listsByCollection(collectionSlug),
-      });
-
-      // Invalidate count queries
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.counts(),
-      });
-
-      // Remove the specific entry from cache
-      queryClient.removeQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-
-      // Invalidate dashboard caches so stats/recent-entries refresh immediately
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Its lists, counts and dashboard refetch and its own read is dropped,
+      // as after every deletion of an entry.
+      refreshAfterEntryDelete(queryClient, collectionSlug, entryId);
 
       if (showToast) {
         // The row IS written even when a post-commit hook failed, so this stays

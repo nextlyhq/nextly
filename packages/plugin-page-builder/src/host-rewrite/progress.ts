@@ -10,7 +10,7 @@
  *
  * @module host-rewrite/progress
  */
-import { and, eq } from "@nextlyhq/plugin-sdk/db";
+import { and, asc, eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -30,10 +30,30 @@ export interface HostProgress {
   readonly reason: string | null;
 }
 
+/** How many documents of each state a run recorded. */
+export type ProgressCounts = Readonly<Record<HostState, number>>;
+
 /** The progress table's operations. */
 export interface ProgressStore {
   /** Every document a run recorded, in no particular order. */
   all(runId: string): Promise<readonly HostProgress[]>;
+  /**
+   * Which of these documents the converting walk need not visit again: those
+   * recorded `rewritten`, `unchanged` or `left`. A left document is settled for
+   * that walk because visiting it again changes nothing until its author acts,
+   * and a budgeted run that kept revisiting one would never get past it. Only
+   * `pending`, a document a write re-queued, is visited again. The final walk
+   * reads every document regardless, left ones included. Read by the keys
+   * named, so a step reads the rows of the documents it passes.
+   */
+  settledAmong(
+    runId: string,
+    documentKeys: readonly string[]
+  ): Promise<ReadonlySet<string>>;
+  /** How many documents of each state a run recorded, counted in the database. */
+  counts(runId: string): Promise<ProgressCounts>;
+  /** The first `limit` documents a run left, by key. */
+  leftPage(runId: string, limit: number): Promise<readonly HostProgress[]>;
   /** Record one document's state, replacing what was recorded. */
   record(
     runId: string,
@@ -186,8 +206,64 @@ export function progressStore(
     }
   };
 
+  const states: readonly HostState[] = [
+    "rewritten",
+    "unchanged",
+    "left",
+    "pending",
+  ];
   return {
     all,
+    settledAmong: async (runId, documentKeys) => {
+      const settled = new Set<string>();
+      if (documentKeys.length === 0) return settled;
+      const h = db.table(componentDeletionHosts);
+      const where = and(
+        eq(h.deletionId, runId),
+        inArray(h.hostKey, [...documentKeys])
+      );
+      if (where === undefined) return settled;
+      for (const row of await db
+        .select(componentDeletionHosts)
+        .where(where)
+        .all()) {
+        if (stateOf(row.state) !== "pending") settled.add(row.hostKey);
+      }
+      return settled;
+    },
+    counts: async runId => {
+      const h = db.table(componentDeletionHosts);
+      const counted = await Promise.all(
+        states.map(async state => {
+          const where = and(eq(h.deletionId, runId), eq(h.state, state));
+          return where === undefined
+            ? 0
+            : db.select(componentDeletionHosts).where(where).count();
+        })
+      );
+      return {
+        rewritten: counted[0] ?? 0,
+        unchanged: counted[1] ?? 0,
+        left: counted[2] ?? 0,
+        pending: counted[3] ?? 0,
+      };
+    },
+    leftPage: async (runId, limit) => {
+      const h = db.table(componentDeletionHosts);
+      const where = and(eq(h.deletionId, runId), eq(h.state, "left"));
+      if (where === undefined) return [];
+      const rows = await db
+        .select(componentDeletionHosts)
+        .where(where)
+        .orderBy(asc(h.hostKey))
+        .limit(limit)
+        .all();
+      return rows.map(row => ({
+        documentKey: row.hostKey,
+        state: stateOf(row.state),
+        reason: row.reason,
+      }));
+    },
     record,
     reopenLeft: runId =>
       db.transaction(async tx => {

@@ -266,6 +266,84 @@ describe("the list", () => {
     ).toMatch(/3 pages/);
   });
 
+  it("counts a worn look's blocks on the open page with its documents, as a shared style's", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    const { access } = accessOf({
+      styles: {
+        [CARD.id]: reach({ pages: 4 }),
+        [outline.id]: reach({ pages: 3 }),
+      },
+    });
+    await panel({
+      library: [CARD, outline],
+      access,
+      // The open page's unsaved blocks: two wear the look, one the style.
+      pageBlocks: {
+        counts: new Map([
+          [outline.id, 2],
+          [CARD.id, 1],
+        ]),
+        complete: true,
+      },
+      looks: { onEdit: () => {}, editing: null },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    const look = within(looks).getByRole("button", { name: /^Outline, / });
+    expect(look.getAttribute("aria-label")).toBe(
+      "Outline, .nx-l-button-outline, 2 blocks on this page · on 3 pages"
+    );
+    expect(look.getAttribute("title")).toBe(
+      "2 blocks on this page · on 3 pages"
+    );
+    // The control: the shared style beside it says its page blocks the same way.
+    expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+      "Card, .nx-c-card, 1 block on this page · on 4 pages"
+    );
+  });
+
+  it("finds each of two block types' own looks that share an id by its own text", async () => {
+    const primary: NamedClass = {
+      id: "look:shared",
+      slug: "button-primary",
+      label: "Primary",
+      orderIndex: 0,
+      blockType: "core/button",
+      isDefault: true,
+      styles: {},
+    };
+    const square: NamedClass = {
+      id: "look:shared",
+      slug: "image-square",
+      label: "Square",
+      orderIndex: 1,
+      blockType: "core/image",
+      isDefault: true,
+      styles: {},
+    };
+    await panel({
+      library: [CARD, primary, square],
+      looks: { onEdit: () => {}, editing: null },
+    });
+    const search = screen.getByRole("searchbox", { name: /Search/ });
+    const lookNames = () =>
+      within(screen.getByRole("region", { name: "Block looks" }))
+        .getAllByRole("button")
+        .map(each => each.getAttribute("aria-label"));
+    // The control: with no search, both are listed.
+    expect(lookNames()).toEqual(["Primary, own look", "Square, own look"]);
+    fireEvent.change(search, { target: { value: "Square" } });
+    expect(lookNames()).toEqual(["Square, own look"]);
+    fireEvent.change(search, { target: { value: "Primary" } });
+    expect(lookNames()).toEqual(["Primary, own look"]);
+  });
+
   it("finds a look by a value it sets, as it finds a shared style", async () => {
     const outline: NamedClass = {
       id: "look:core/button:outline",

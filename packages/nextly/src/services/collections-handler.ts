@@ -375,6 +375,23 @@ export class CollectionsHandler {
   }
 
   /**
+   * Whether this caller may publish the entry, judged by the publish gate an
+   * update asks, without writing, on the instance that serves collection
+   * writes.
+   *
+   * @experimental
+   */
+  async canPublishEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    locale?: string;
+  }): Promise<boolean> {
+    return this.entryService.canPublishEntry(params);
+  }
+
+  /**
    * Whether this caller may delete the entry, judged by the delete's own gate
    * without deleting it or running a hook, on the instance that serves
    * collection writes, so the decision is the one the delete would take.

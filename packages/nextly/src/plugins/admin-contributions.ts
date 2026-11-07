@@ -192,6 +192,68 @@ export interface PluginCollectionView {
    * `/admin/singles/<slug>/<path>` for a Single.
    */
   documentViews?: PluginDocumentView[];
+  /**
+   * @experimental Hide or replace a built-in action in this collection's
+   * document screen ("…" menu), for this collection only: see
+   * `PluginDocumentActionOverride`. Two plugins overriding one action on one
+   * collection are refused at boot.
+   */
+  documentActions?: PluginDocumentActionOverrides;
+  /**
+   * @experimental Sections added to this collection's document panel, after
+   * Details, in the order given: see `PluginPanelSection`.
+   */
+  panelSections?: PluginPanelSection[];
+}
+
+/**
+ * The built-in document actions a plugin may hide or replace, as the one list
+ * the boot check, the admin and the type below all read. More may join here,
+ * and only here: the union is derived from this list, so a plugin cannot
+ * compile against an action the boot check would refuse.
+ */
+export const OVERRIDABLE_DOCUMENT_ACTIONS = ["delete", "unpublish"] as const;
+
+/**
+ * @experimental The built-in document actions a plugin may hide or replace.
+ * More may join; a plugin naming one this version does not know is refused
+ * at boot rather than silently ignored.
+ */
+export type OverridableDocumentAction =
+  (typeof OVERRIDABLE_DOCUMENT_ACTIONS)[number];
+
+/**
+ * @experimental What a plugin does with one built-in document action.
+ *
+ * - `"hidden"`: the action is not offered on this collection's documents,
+ *   from the menu or from `useDocumentActions().run`.
+ * - `{ component }`: the action keeps its row — its place, the permission it
+ *   needs, and every reason it can't run (a colleague's lock, a past version
+ *   on screen) — and choosing it opens the plugin's component instead of the
+ *   built-in write. The component receives `DocumentActionReplacementProps`.
+ *   `label` renames the row ("Remove layout…").
+ */
+export type PluginDocumentActionOverride =
+  | "hidden"
+  | { component: ComponentPath; label?: string };
+
+/** @experimental A plugin's overrides for one collection, by action. */
+export type PluginDocumentActionOverrides = Partial<
+  Record<OverridableDocumentAction, PluginDocumentActionOverride>
+>;
+
+/**
+ * @experimental A section a plugin adds to a collection's document panel,
+ * drawn after Details. The admin draws the heading and the section's frame,
+ * as it does the built-in sections, so it reads as part of the panel in
+ * light and dark; the component draws the body and receives
+ * `DocumentPanelSectionProps`. Not drawn while a document is being created.
+ */
+export interface PluginPanelSection {
+  /** The section's heading. */
+  title: string;
+  /** What the section shows under it. */
+  component: ComponentPath;
 }
 
 /**

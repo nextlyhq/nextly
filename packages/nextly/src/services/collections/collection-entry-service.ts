@@ -757,6 +757,22 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Whether this caller may publish the entry, judged by the publish gate an
+   * update asks, without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async canPublishEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    locale?: string;
+  }): Promise<boolean> {
+    return this.mutationService.canPublishEntry(params);
+  }
+
+  /**
    * Whether this caller may delete the entry, judged by the delete's own gate
    * in every language it holds, without deleting it or running a hook. See
    * the mutation service.
