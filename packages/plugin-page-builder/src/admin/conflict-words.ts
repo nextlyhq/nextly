@@ -97,7 +97,7 @@ function labelsByKind(
         ? "changed"
         : entry.kind;
     const labels = out.get(kind) ?? [];
-    const label = entryLabel(section, entry);
+    const label = entryNamed(section, entry);
     if (!labels.includes(label)) labels.push(label);
     out.set(kind, labels);
   }
@@ -121,6 +121,23 @@ export function entryLabel(
     if (label !== undefined) return label;
   }
   return entry.key;
+}
+
+/**
+ * An entry as a sentence names it: {@link entryLabel}, and, when the value
+ * kept carries another name now (a rename made on either side), that name
+ * after it, so the author can find the entry as it is stored:
+ * "Highlight card (now Spotlight card)". Nothing is added where the kept
+ * side removed the entry or names it the same.
+ */
+function entryNamed(section: MergeableSection, entry: EntryConflict): string {
+  const given = entryLabel(section, entry);
+  if (entry.setting) return given;
+  const now = sideLabel(
+    section,
+    entry.kept === "mine" ? entry.mine : entry.theirs
+  );
+  return now === undefined || now === given ? given : `${given} (now ${now})`;
 }
 
 /** One side's name for an entry, or `undefined` when it states none. */

@@ -293,6 +293,63 @@ describe("naming an entry", () => {
   });
 });
 
+describe("an entry renamed on either side", () => {
+  const style = (label: string) => ({
+    id: "c1",
+    slug: "card",
+    label,
+    styles: {},
+  });
+  /** A rename both made: mine kept, as a forward save keeps it. */
+  const renamed: EntryConflict = {
+    key: "c1",
+    setting: false,
+    kind: "changed",
+    kept: "mine",
+    base: style("Highlight card"),
+    mine: style("Spotlight card"),
+    theirs: style("Feature card"),
+  };
+
+  it("adds the name the kept value carries now", () => {
+    expect(conflictWords("classes", bySam(renamed))).toBe(
+      "Sam changed Highlight card (now Spotlight card) while you were editing. Your value was kept. Undo puts theirs back."
+    );
+  });
+
+  it("adds nothing where the name did not change", () => {
+    const padded: EntryConflict = {
+      ...renamed,
+      mine: { ...style("Highlight card"), styles: { base: { base: {} } } },
+      theirs: { ...style("Highlight card"), styles: { hover: {} } },
+    };
+    expect(conflictWords("classes", bySam(padded))).toBe(
+      "Sam changed Highlight card while you were editing. Your value was kept. Undo puts theirs back."
+    );
+  });
+
+  it("names each entry of a list as it is now, only the renamed one with a suffix", () => {
+    const other: EntryConflict = {
+      ...renamed,
+      key: "c2",
+      base: { ...style("Promo tile"), id: "c2" },
+      mine: { ...style("Promo tile"), id: "c2", styles: { base: {} } },
+      theirs: { ...style("Promo tile"), id: "c2", styles: { hover: {} } },
+    };
+    expect(conflictWords("classes", { entries: [renamed, other] })).toBe(
+      "Someone changed Highlight card (now Spotlight card) and Promo tile while you were editing. Your values were kept. Undo puts theirs back."
+    );
+  });
+
+  it("names the value an undo kept, which is theirs", () => {
+    expect(
+      conflictWords("classes", bySam({ ...renamed, kept: "theirs" }), "undone")
+    ).toBe(
+      "Sam changed Highlight card (now Feature card) since, so your change to it could not be undone."
+    );
+  });
+});
+
 describe("a save that never landed", () => {
   it("says the design kept changing", () => {
     expect(KEPT_CHANGING_WORDS).toBe(
