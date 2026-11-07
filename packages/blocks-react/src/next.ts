@@ -96,7 +96,11 @@ import {
   listWillRead,
   namedListBase,
 } from "./blocks/list-read";
-import { namedQueryFailureLine, readNamedList } from "./blocks/named-read";
+import {
+  namedQueryFailureLine,
+  queryRowFields,
+  readNamedList,
+} from "./blocks/named-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -132,6 +136,7 @@ import type {
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
 import {
+  anyListWhere,
   listCollections,
   listCollectionsWhere,
   listPropsAsBound,
@@ -982,9 +987,9 @@ function namedQueryHostFor(args: {
  * kept serves both, and its reads are claimed from `budget` as the render
  * claims them, as they are made or replayed. A run that fails, or returns
  * no total, gives one page: the list draws its empty state, so no later
- * page exists, and no count is guessed. The render that draws the list
- * reports its failure; this count only says how many pages there are, so
- * it logs nothing of its own.
+ * page exists, and no count is guessed. The failure is logged here, through
+ * the host's own report: the later page asked for is then not found, so no
+ * render follows that would log it.
  */
 async function namedListPages(
   list: PaginatedList,
@@ -995,13 +1000,12 @@ async function namedListPages(
   const base = namedListBase(list.props);
   if (base === undefined) return undefined;
   if ("blocking" in base) return 1;
-  const { report: _report, ...quiet } = host;
   const outcome = await readNamedList(
     base.named,
     { limit: base.limit, offset: base.offset },
     {
       ...createStandaloneContext({ locale, queries: budget }),
-      namedQueries: quiet,
+      namedQueries: host,
     },
     list.id,
     { counted: true }
@@ -2510,6 +2514,37 @@ function listsNeedZone(
   );
 }
 
+/**
+ * Whether a list whose source is a named query with rows of its own schema
+ * orders a date in its item conditions, and so needs the site's zone: such a
+ * list draws no collection, so the collections' walk never asks about it.
+ * Its fields are the ones its conditions are judged by (`queryRowFields`).
+ */
+function customRowsNeedZone(
+  documents: readonly BlockDocument[],
+  run: BindingRun | undefined,
+  namedQueries: NamedQueryLookup | undefined
+): boolean {
+  if (namedQueries === undefined) return false;
+  return anyListWhere(
+    documents,
+    (query, list) => {
+      const name = query.namedQuery?.name;
+      const rows =
+        name === undefined ? undefined : namedQueries.definitionOf(name)?.rows;
+      if (name === undefined || rows === undefined || !("fields" in rows)) {
+        return false;
+      }
+      return ordersADay(
+        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
+          new Set(),
+        queryRowFields(namedQueries, name, () => undefined)
+      );
+    },
+    run
+  );
+}
+
 /** Whether any of `fields` is a date in `shapes`, as a condition reads it. */
 function ordersADay(
   fields: ReadonlySet<string>,
@@ -2545,7 +2580,8 @@ async function listDayInputs(args: {
   // A custom source's items are read as its rows' collection's.
   const namedQueries = args.config.namedQueries;
   const collections = listsComparingDays(args.documents, run, namedQueries);
-  if (collections.size === 0) return {};
+  const customDays = customRowsNeedZone(args.documents, run, namedQueries);
+  if (collections.size === 0 && !customDays) return {};
   const cache: ReadCache = {
     scope: args.config.cacheScope ?? "",
     locale: args.context.locale,
@@ -2560,14 +2596,16 @@ async function listDayInputs(args: {
     }
   }
   // Asked once the shapes are known, so only a date compared needs the zone.
-  const timeZone = listsNeedZone(
-    args.documents,
-    run,
-    collection => known.get(collection),
-    namedQueries
-  )
-    ? await listZone(args)
-    : undefined;
+  const timeZone =
+    customDays ||
+    listsNeedZone(
+      args.documents,
+      run,
+      collection => known.get(collection),
+      namedQueries
+    )
+      ? await listZone(args)
+      : undefined;
   return {
     ...(timeZone === undefined ? {} : { timeZone }),
     fieldShapes: {

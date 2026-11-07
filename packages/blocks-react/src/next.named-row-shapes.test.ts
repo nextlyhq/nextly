@@ -135,3 +135,89 @@ describe("a routed custom source whose rows are a collection's entries", () => {
     expect(shapes.asked).not.toContainEqual({ collection: "posts" });
   });
 });
+
+describe("a routed custom source whose rows are a schema of their own", () => {
+  /** A page whose one list's items hide by `condition`, on `events.soon`. */
+  const eventsPage = (condition: Record<string, unknown>): BlockDocument =>
+    // Through JSON, as stored: a condition is read from what a page holds.
+    JSON.parse(
+      JSON.stringify({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { namedQuery: { name: "events.soon", params: {} } },
+          slots: {
+            children: [
+              {
+                id: "badge",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Soon", level: "h3" },
+                visibility: { conditions: [[condition]] },
+              },
+            ],
+            empty: [],
+          },
+        },
+      ],
+      })
+    ) as BlockDocument;
+
+  /** Events as rows of the query's own fields, one of them a date. */
+  const soon = defineNamedQuery({
+    name: "events.soon",
+    label: "Events soon",
+    reads: {},
+    rows: {
+      key: "id",
+      fields: [
+        { name: "id", type: "text" },
+        { name: "startsAt", type: "date" },
+      ],
+    },
+    run: () => Promise.resolve({ rows: [] }),
+  });
+
+  /** The zone the route renders `content` in. */
+  async function zoneFor(content: BlockDocument) {
+    const nextly = instance();
+    nextly.find.mockImplementation(async () => ({
+      items: [{ id: "p1", slug: "news", content }],
+      meta: { total: 1 },
+    }));
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      timeZone: "Asia/Karachi",
+      namedQueries: {
+        definitionOf: name => (name === soon.name ? soon : undefined),
+      },
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { slug: ["news"] } })
+    );
+    return element.props.context?.timeZone;
+  }
+
+  it("compares its rows' dates in the route's zone", async () => {
+    // The list draws no collection, so only the query's own fields say
+    // its condition orders a date.
+    await expect(
+      zoneFor(
+        eventsPage({ field: "startsAt", op: "greater_than", value: "2026-11-01" })
+      )
+    ).resolves.toBe("Asia/Karachi");
+  });
+
+  it("needs no zone where its conditions order no date", async () => {
+    // The control: the same list, its condition matching text.
+    await expect(
+      zoneFor(eventsPage({ field: "id", op: "equals", value: "e1" }))
+    ).resolves.toBeUndefined();
+  });
+});

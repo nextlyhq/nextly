@@ -53,20 +53,49 @@ export function listCollectionsWhere(
   namedQueries?: NamedQueryLookup
 ): Set<string> {
   const found = new Set<string>();
+  eachList(documents, run, (query, node) => {
+    const collection = drawnCollection(query, namedQueries);
+    if (collection !== undefined && wanted(query, node, collection)) {
+      found.add(collection);
+    }
+  });
+  return found;
+}
+
+/**
+ * Whether any list on the page, its query read as the engine reads it, is
+ * one `wanted` keeps: a list that draws no collection included, such as a
+ * custom source whose rows are a schema of their own.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function anyListWhere(
+  documents: readonly BlockDocument[],
+  wanted: (query: ListQuery, list: BlockNode) => boolean,
+  run?: BindingRun
+): boolean {
+  let any = false;
+  eachList(documents, run, (query, node) => {
+    if (!any && wanted(query, node)) any = true;
+  });
+  return any;
+}
+
+/** Each list on the page with its query, read from its props as bound. */
+function eachList(
+  documents: readonly BlockDocument[],
+  run: BindingRun | undefined,
+  visit: (query: ListQuery, list: BlockNode) => void
+): void {
   const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     if (node.type === collectionLoop.name) {
-      const { query } = readListQuery(listPropsAsBound(node, run));
-      const collection = drawnCollection(query, namedQueries);
-      if (collection !== undefined && wanted(query, node, collection)) {
-        found.add(collection);
-      }
+      visit(readListQuery(listPropsAsBound(node, run)).query, node);
     }
     for (const children of Object.values(node.slots ?? {})) {
       stack.push(...children);
     }
   }
-  return found;
 }
 
 /**

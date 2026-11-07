@@ -143,4 +143,24 @@ describe("a routed named query's list split into pages", () => {
     // The run was made, and its missing total, not a skipped run, is why.
     expect(windows).toHaveLength(1);
   });
+
+  it("logs the count's failure, since no render follows a page it cannot serve", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { lookup } = query(false);
+      await expect(
+        served(["news", "page", "2"], lookup)
+      ).rejects.toMatchObject(NOT_FOUND);
+      // One line naming the query and the page, under a reference.
+      const lines = warn.mock.calls.map(call => String(call[0]));
+      expect(lines.filter(line => line.includes("posts.counted"))).toHaveLength(
+        1
+      );
+      expect(lines.join("\n")).toMatch(/NQ-[0-9A-F]{6}/);
+      expect(lines.join("\n")).toContain('"news"');
+      expect(lines.join("\n")).toContain("failed: uncounted");
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
