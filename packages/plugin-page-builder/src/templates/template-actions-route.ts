@@ -7,6 +7,9 @@
  *   cannot have one, or already has one, naming it.
  * - **publish-template** publishes a template, its working draft included,
  *   as the editor's Publish does.
+ * - **delete-template** deletes a template by id, a collection's or an
+ *   entry's own design; its dry run answers which, so the admin can say what
+ *   the delete means before it is confirmed.
  *
  * Each is checked and written as the caller. Nothing here decides what the
  * site accepts that its own write path decides already: the write is judged
@@ -138,6 +141,8 @@ export async function runTemplateAction(
       return giveEntryDesign(ctx, action, dryRun, guard);
     case "remove-entry-design":
       return removeEntryDesign(ctx, action, dryRun, guard);
+    case "delete-template":
+      return deleteTemplate(ctx, action, dryRun, guard);
   }
 }
 
@@ -369,6 +374,77 @@ async function removeEntryDesign(
     item: {
       dryRun: false,
       kind: "remove-entry-design",
+      template: asked,
+      refusals: [],
+      by,
+    },
+  };
+}
+
+/**
+ * `delete-template`: delete one template, as the caller. A collection's
+ * template takes its collection's entries off the site, but for those with
+ * their own design; an own design returns its entry to the template. The row
+ * is read as the caller first, so a caller who may not see it learns nothing
+ * of it, and its summary says which it is.
+ */
+async function deleteTemplate(
+  ctx: TemplateActionsContext,
+  action: Extract<TemplateAction, { kind: "delete-template" }>,
+  dryRun: boolean,
+  guard: TemplateGuardSetup
+): Promise<ActionAnswer<TemplateActionResult>> {
+  const templates = guard.templatesCollection;
+  // Preconditions first: the right to delete templates at all, then whether
+  // the caller may read this one.
+  const by = await actingCaller(ctx, [["delete", templates]], {
+    anyEntry: true,
+  });
+  const row = recordOf(
+    await readOrNull(async () =>
+      (await getCachedNextly()).findByID({
+        collection: templates,
+        id: action.id,
+        ...(await readingAsUser(ctx)),
+        status: "all",
+        depth: 0,
+      })
+    )
+  );
+  if (row === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "template-action-missing-template" },
+    });
+  }
+  const asked = summaryOf(row, {
+    id: action.id,
+    title: "",
+    collection: "",
+    status: "draft",
+  });
+  const collections = ctx.services.collections;
+  if (dryRun) {
+    const judged = await judgeInTransaction(
+      run => collections.withTransaction(run),
+      (tx: PluginCollectionTransaction) =>
+        collections.deleteEntryInTransaction(tx, templates, action.id, {
+          ...asCaller(ctx),
+          context: { [JUDGEMENT_CONTEXT]: true },
+        })
+    );
+    return dryRunAnswer(
+      "delete-template",
+      asked,
+      judged.refusal === null ? [] : judged.refusal.messages,
+      by
+    );
+  }
+  await collections.deleteEntry(templates, action.id, asCaller(ctx));
+  return {
+    message: "The template was deleted.",
+    item: {
+      dryRun: false,
+      kind: "delete-template",
       template: asked,
       refusals: [],
       by,

@@ -32,7 +32,10 @@ import {
 
 import {
   BUILDER_VIEW_COMPONENT,
+  ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
 import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 /*
@@ -54,7 +57,11 @@ import "../styles/editor.css";
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
 import { PageBuilderView } from "./editor/PageBuilderView";
+import { registerEntryDesignColumn } from "./entry-design-column";
+import { EntryDesignSection } from "./EntryDesignSection";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
+import { TemplateDeleteAction } from "./TemplateDeleteAction";
+import { TemplateOwnDesigns } from "./TemplateOwnDesigns";
 import { registerExportActions } from "./transfer-export-action";
 import { TransferImport } from "./transfer-import";
 
@@ -88,25 +95,36 @@ const COMPONENTS = {
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
+  // An entry's own design: the Design section of every entry's side panel,
+  // a template's own designs, and the delete that says what it means.
+  [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
+  [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
+  [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
 };
 
 // Eager registration on module load.
 registerComponents(COMPONENTS);
 // "Export" on the Components, Patterns and Layouts lists.
 registerExportActions();
+// The Design column on the lists of collections that have a template.
+registerEntryDesignColumn();
 
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   registerComponents(COMPONENTS);
   registerExportActions();
+  registerEntryDesignColumn();
   return Promise.resolve();
 });
 
 export {
   BlocksField,
   BlocksSummary,
+  EntryDesignSection,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
+  TemplateDeleteAction,
+  TemplateOwnDesigns,
   TransferImport,
 };
 /**

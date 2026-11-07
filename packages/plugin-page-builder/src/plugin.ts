@@ -71,7 +71,10 @@ import {
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
+  ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
 import { canvasPathOption } from "./canvas-path";
@@ -292,6 +295,7 @@ import {
   designUnderWhere,
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
+import { entryDesignsRoute } from "./templates/entry-designs-route";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
@@ -2719,8 +2723,13 @@ export const pageBuilder = (
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           readRetired: readRetiredFor,
         }),
-        // Give a collection its template and publish it, each with a dry run.
+        // Give a collection its template, publish or delete it, and give an
+        // entry its own design or take it away, each with a dry run.
         templateActionsRoute({ guard: requireTemplateGuard }),
+        // A collection's own designs, its template and its names, read as
+        // the caller: what the admin's Design section, Design column and the
+        // template's own designs list draw from.
+        entryDesignsRoute({ guard: requireTemplateGuard }),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.
@@ -2970,6 +2979,40 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // An entry's own design, where an author meets it.
+        //
+        // The Design section of an entry's side panel, first, before Status:
+        // which design the entry is shown with, and its own design. Declared
+        // at the `collection.edit` place with no collections named, so it is
+        // offered on every collection's entries, a collection the Schema
+        // Builder adds later included; it draws nothing for an entry whose
+        // collection cannot have a template, which leaves no section.
+        contributions: [
+          {
+            id: "nextlyhq-plugin-page-builder.entry-design",
+            kind: "sidebarSection",
+            place: "collection.edit",
+            label: "Design",
+            component: ENTRY_DESIGN_SECTION_COMPONENT,
+            before: "status",
+          },
+        ],
+        // On a template's own document screen: the entries with their own
+        // design, in its panel, and a Delete that says what deleting the
+        // template, or an own design, does to the site before it happens.
+        views: {
+          [TEMPLATES_SLUG]: {
+            documentActions: {
+              delete: { component: TEMPLATE_DELETE_COMPONENT },
+            },
+            panelSections: [
+              {
+                title: "Own designs",
+                component: TEMPLATE_OWN_DESIGNS_COMPONENT,
+              },
+            ],
+          },
+        },
         menu: [
           {
             label: "Patterns",
