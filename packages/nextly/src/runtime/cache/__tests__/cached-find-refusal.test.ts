@@ -163,6 +163,20 @@ describe("a cached read refused by access", () => {
     );
   });
 
+  it("files what it keeps apart from an earlier release's bare answers", async () => {
+    const keys: string[][] = [];
+    const recording: UnstableCache = (read, keyParts) => {
+      keys.push(keyParts);
+      return read;
+    };
+    await applyCache(recording, async () => "answer", options);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]?.slice(0, options.keyParts.length)).toEqual(
+      options.keyParts
+    );
+    expect(keys[0]).not.toEqual(options.keyParts);
+  });
+
   it.each([
     ["an unverified email", () => NextlyError.emailNotVerified()],
     ["a failed CSRF check", () => NextlyError.csrfFailed()],

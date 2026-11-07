@@ -162,10 +162,11 @@ export function applyCache<T>(
   // and a page read right after a write can be served its previous entry once.
   const cachedRead = registeredCachedRead();
   const read = afterLanguagesRead(keepingRefusal(reader));
+  const keyParts = [...options.keyParts, KEPT_KEY_PART];
   if (cachedRead) {
     return readThroughRegistered(
       cachedRead,
-      JSON.stringify(options.keyParts),
+      JSON.stringify(keyParts),
       read,
       readTags(options.tags),
       publicReadLifetime(options.revalidate ?? false, true),
@@ -174,7 +175,7 @@ export function applyCache<T>(
   }
   reportUnregisteredUnderCacheComponents();
   if (!unstableCache) return reader();
-  const cached = unstableCache(read, options.keyParts, {
+  const cached = unstableCache(read, keyParts, {
     // Each once, none longer than Next.js accepts, and no more than it keeps,
     // in the order given: the routes put their own collection's or Single's
     // tag first, and a caller's own `cachedFind` keeps its order.
@@ -183,6 +184,14 @@ export function applyCache<T>(
   });
   return runCachedOrDirect(cached, reader, () => noteCachedRead(false));
 }
+
+/**
+ * The key part every entry is filed under after the caller's: what an entry
+ * holds is a {@link Kept} envelope, where an earlier release filed the bare
+ * answer under the caller's parts alone. Kept apart, so neither release reads
+ * the other's shape from a cache two releases share during a deployment.
+ */
+const KEPT_KEY_PART = "nextly:kept-v1";
 
 /**
  * A read as either cache keeps it: its answer, or the refusal it met, in an envelope the reader's
