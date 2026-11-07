@@ -14,11 +14,37 @@ import {
   resolveSiteTokens,
   tokenIdentity,
 } from "@nextlyhq/blocks-engine";
+import type {
+  PluginCollectionTransaction,
+  PluginContext,
+} from "@nextlyhq/plugin-sdk";
 
+import { UNLOCKED_READ } from "./composition-graph-lock";
 import type { SiteDefinitions } from "./fields/blocks-composition";
 import { siteBreakpoints, type SiteStyleData } from "./site-style";
 import { referableClassIds } from "./site-style-record";
 import { siteStyleOfDocument } from "./site-style-storage";
+
+/**
+ * The Site Style Single `slug` as stored, read on a write's own transaction
+ * by the plugin's own read of a Single it declared: on the transaction's
+ * connection, so a write holding the pool's last connection never waits for
+ * a second one. A plain read (`UNLOCKED_READ`), as a page write reads it
+ * under the composition graph lock, where a row lock would wait for a
+ * removal holding the Single's row while that removal waits for the graph
+ * lock (`composition-rejudge` says what the read sees, per dialect). A
+ * removal reads its own Single with it too, whose row its UPDATE holds.
+ */
+export function siteStyleDocumentOn(
+  reads: Pick<
+    PluginContext["services"]["ownCollections"],
+    "getSingleInTransaction"
+  >,
+  slug: string
+): (transaction: PluginCollectionTransaction) => Promise<unknown> {
+  return transaction =>
+    reads.getSingleInTransaction(transaction, slug, UNLOCKED_READ);
+}
 
 /**
  * The classes, breakpoints and variables a page may name, from the Single's

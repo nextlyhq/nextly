@@ -3,9 +3,12 @@
  * the one reading the validation and the judgement under the composition
  * graph lock both resolve the record by, whichever connection read it.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { siteDefinitionsOfDocument } from "./site-definitions";
+import {
+  siteDefinitionsOfDocument,
+  siteStyleDocumentOn,
+} from "./site-definitions";
 import type { SiteStyleData } from "./site-style";
 import { withProvisionalVariables } from "./transfer/provisional-variables";
 
@@ -88,5 +91,24 @@ describe("the site's definitions from a stored record", () => {
     // CONTROL: the same record outside one counts none.
     const outside = await siteDefinitionsOfDocument(stored, defaults);
     expect(outside.tokenIds).not.toContain("t-incoming");
+  });
+});
+
+describe("the Site Style Single, read on a write's transaction", () => {
+  it("reads it plainly, with no row lock, on the transaction it is handed", async () => {
+    const getSingleInTransaction = vi.fn(async () => stored);
+    const transaction = { transaction: "the write's own" } as never;
+    const read = siteStyleDocumentOn(
+      { getSingleInTransaction } as never,
+      "site-style"
+    );
+
+    expect(await read(transaction)).toBe(stored);
+    // Exactly the plain read: a share lock here would wait for a removal
+    // holding the Single's row while that removal waits for the graph lock
+    // this write holds.
+    expect(getSingleInTransaction.mock.calls).toEqual([
+      [transaction, "site-style", { lock: "none" }],
+    ]);
   });
 });

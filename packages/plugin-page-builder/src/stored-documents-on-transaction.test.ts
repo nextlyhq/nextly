@@ -35,6 +35,13 @@ const HOME: BuilderDocumentType = {
   paths: ["content"],
 };
 
+/**
+ * A plain read's option: no row lock. A read under the graph lock that took
+ * one would wait for a page save's row while that save waits for the graph
+ * lock (`composition-graph-lock`).
+ */
+const PLAIN = { lock: "none" };
+
 /** `count` rows, ids `r000` up, each placing nothing. */
 const rows = (count: number, from = 0) =>
   Array.from({ length: count }, (_, index) => ({
@@ -106,13 +113,15 @@ describe("the stored documents, read on the write's transaction", () => {
         sort: { field: "id", direction: "asc" },
         pagination: { limit: RESCAN_PAGE_SIZE, page: 1 },
         depth: 0,
-      }
+      },
+      PLAIN
     );
     expect(reads.listEntriesInTransaction).toHaveBeenNthCalledWith(
       2,
       TRANSACTION,
       "pages",
-      expect.objectContaining({ where: { id: { greater_than: "r099" } } })
+      expect.objectContaining({ where: { id: { greater_than: "r099" } } }),
+      PLAIN
     );
   });
 
@@ -123,7 +132,8 @@ describe("the stored documents, read on the write's transaction", () => {
     expect(reads.listHostEntriesInTransaction).toHaveBeenCalledWith(
       TRANSACTION,
       "posts",
-      expect.objectContaining({ select: { id: true, hero: true } })
+      expect.objectContaining({ select: { id: true, hero: true } }),
+      PLAIN
     );
     expect(reads.listEntriesInTransaction).not.toHaveBeenCalled();
   });
@@ -147,8 +157,18 @@ describe("the stored documents, read on the write's transaction", () => {
 
     // Every language as stored, the listed one (no language) excepted.
     expect(reads.findHostEntryByIdInTransaction.mock.calls).toEqual([
-      [TRANSACTION, "posts", "p1", { locale: "en", fallbackLocale: false }],
-      [TRANSACTION, "posts", "p1", { locale: "fr", fallbackLocale: false }],
+      [
+        TRANSACTION,
+        "posts",
+        "p1",
+        { locale: "en", fallbackLocale: false, ...PLAIN },
+      ],
+      [
+        TRANSACTION,
+        "posts",
+        "p1",
+        { locale: "fr", fallbackLocale: false, ...PLAIN },
+      ],
     ]);
     // The draft in each language, field by field.
     expect(readStored.mock.calls).toEqual([
@@ -193,7 +213,7 @@ describe("the stored documents, read on the write's transaction", () => {
     expect(reads.getSingleInTransaction).toHaveBeenCalledWith(
       TRANSACTION,
       "home",
-      {}
+      PLAIN
     );
     expect(reads.getHostSingleInTransaction).not.toHaveBeenCalled();
     expect(readStored).toHaveBeenCalledWith({
@@ -202,6 +222,37 @@ describe("the stored documents, read on the write's transaction", () => {
       form: "draft",
     });
     expect(forms).toEqual([{}, { content: "draft value" }]);
+  });
+
+  it("reads every row, language and Single of a walk plainly, own and host alike", async () => {
+    const reads = readsAnswering();
+    reads.listEntriesInTransaction.mockResolvedValueOnce(
+      listed([{ id: "p1", content: null }])
+    );
+    reads.listHostEntriesInTransaction.mockResolvedValueOnce(
+      listed([{ id: "q1", hero: { body: null } }])
+    );
+    const documents = storedDocumentsOnTransaction(
+      sourceOf(reads, {
+        locales: () => ["en", "fr"],
+        collections: async () => [PAGES, POSTS],
+        singles: async () => [HOME, { ...HOME, slug: "about" }],
+        ownSingles: new Set(["home"]),
+      })
+    );
+
+    await storedUsesOf(["t-spare"], documents, () => []);
+
+    // Every read the walk made, of each kind, was made, and each with the
+    // plain read's option as its last argument: a share or update lock on
+    // any of them would wait against a page save holding its row.
+    const calls = Object.values(reads).flatMap(read => read.mock.calls);
+    for (const read of Object.values(reads)) {
+      expect(read.mock.calls.length).toBeGreaterThan(0);
+    }
+    for (const call of calls) {
+      expect(call.at(-1)).toEqual(expect.objectContaining(PLAIN));
+    }
   });
 
   it("lets the walk find a use only a row's working draft holds", async () => {

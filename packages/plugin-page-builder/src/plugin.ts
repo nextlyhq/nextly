@@ -299,7 +299,10 @@ import {
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
-import { siteDefinitionsOfDocument } from "./site-definitions";
+import {
+  siteDefinitionsOfDocument,
+  siteStyleDocumentOn,
+} from "./site-definitions";
 import {
   resolveFontOptions,
   type PageBuilderFontOptions,
@@ -1400,9 +1403,8 @@ function siteStyleReads(
     return nextly.findSingle({ slug });
   };
   // On the transaction's own connection, so the read takes no second one
-  // from the pool while the write holds one.
-  const documentOn = (transaction: PluginCollectionTransaction) =>
-    ctx.services.ownCollections.getSingleInTransaction(transaction, slug);
+  // from the pool while the write holds one, and with no row lock.
+  const documentOn = siteStyleDocumentOn(ctx.services.ownCollections, slug);
   return {
     documentOn,
     styleNow: async () => siteStyleOfDocument(await documentNow(), defaults),
@@ -3200,7 +3202,7 @@ export const pageBuilder = (
               depth: 0,
             }
           );
-          return found.data as readonly Readonly<Record<string, unknown>>[];
+          return found.data;
         },
         storedAddresses: async () =>
           new Map(

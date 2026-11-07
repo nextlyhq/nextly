@@ -49,25 +49,31 @@
  * The stored documents are read on this write's transaction, by the same
  * walk the routes' rescan makes (`stored-documents-on-transaction`), so on a
  * pool of one connection the read takes none of its own while the write
- * holds the only one. Per dialect:
+ * holds the only one. Which collections and Singles hold a blocks field is
+ * read from the registry on the same transaction.
  *
- * - PostgreSQL and MySQL. Each page of rows, and each row and Single in each
- *   language, is read with a shared lock (`FOR SHARE`): the latest committed
- *   rows whatever the transaction's isolation, MySQL's REPEATABLE READ (which
- *   a Single's write keeps) included, held until this write ends, so a page
- *   cannot change them before it commits. The working drafts are read without
- *   a lock, at the transaction's isolation; a draft committed after a
- *   snapshot this transaction took was written by a page write holding the
- *   graph lock, so the lock's compare-and-set has refused this write before
- *   it reads (`composition-graph-lock`).
+ * No read under the graph lock takes a row lock (`UNLOCKED_READ`). This
+ * write holds the Single's row, from its UPDATE, before it asks for the graph
+ * lock, as a page save holds its page's row before it does. A row-locking
+ * read of a page under the graph lock would wait for that save's row while
+ * the save waits for the graph lock, and the two would wait on each other
+ * until the database refused one. So every read is a plain one, and what it
+ * sees is this write's isolation. Per dialect:
+ *
+ * - PostgreSQL. The read is at READ COMMITTED, as the page writes are: each
+ *   read sees the latest commit and waits on no row lock. A page write that
+ *   held the graph lock before this one committed before it was granted, so
+ *   its page is seen.
+ * - MySQL. A Single's write keeps REPEATABLE READ, so the reads answer from
+ *   the transaction's snapshot. A page write that committed after that
+ *   snapshot changed a blocks value, so it took the graph lock and wrote the
+ *   lock row, and the lock's compare-and-set refuses this write before it
+ *   reads (`holdCompositionGraph`): refused as {@link DESIGN_CHANGED}, with
+ *   the cause the remove routes read the Single again and retry on
+ *   (`isGraphSnapshotRefusal`), and the retry finds the page.
  * - SQLite. One connection, on which every read runs inside this write's
  *   open transaction, which `BEGIN IMMEDIATE` let in only once every other
  *   writer had finished: everything committed is seen.
- *
- * Which collections and Singles hold a blocks field is read from the
- * registry through the Direct API, since core reads the registry on no
- * transaction: on a pool of one connection that read waits for the
- * connection this write holds, and the bound below refuses the removal.
  *
  * ## How long the lock is held
  *

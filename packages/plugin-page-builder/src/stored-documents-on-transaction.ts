@@ -11,33 +11,41 @@
  *
  * ## How each part is read
  *
+ * Every read here is a plain one (`UNLOCKED_READ`): it takes no row lock and
+ * waits for none, so the removal, holding the graph lock, never waits for a
+ * row a page save holds while that save waits for the graph lock
+ * (`composition-graph-lock` says why the order matters).
+ *
  * - The rows of a collection, a page at a time in id order: the plugin's own
  *   read of a collection it declared (`listEntriesInTransaction`), or of a
  *   host collection holding a blocks field (`listHostEntriesInTransaction`).
- *   On PostgreSQL and MySQL each page is read with a shared lock (`FOR
- *   SHARE`): the latest committed rows whatever the transaction's isolation,
- *   held until the removal ends. The page's total is a plain count, taken
- *   with no lock, so the walk pages with a limit and stops on a short page.
+ *   The page's total is a count no reader should trust, so the walk pages
+ *   with a limit and stops on a short page.
  * - A row in another language, and a Single in each: the by-id and Single
- *   reads beside them, in that language with its fallback off, likewise
- *   locked. A Single nobody has saved answers the default document its first
- *   read would store, as the rescan reads it.
+ *   reads beside them, in that language with its fallback off. A Single
+ *   nobody has saved answers the default document its first read would
+ *   store, as the rescan reads it.
  * - The working draft of each, in each language: the plugin's stored read of
- *   its own field type (`readStored`, form `draft`), on the transaction, which
- *   answers the pending draft where one is shown, else the live row, by the
- *   rule the preview reads by. It takes no lock and reads at the
- *   transaction's isolation; a draft another write committed after a
- *   snapshot this transaction took was written by a page write holding the
- *   graph lock, which the lock's compare-and-set refuses before this reads
- *   (`composition-graph-lock`). A field it cannot read (a blocks field in a
- *   group kept per language) is refused, and the removal with it.
- * - On SQLite every read runs on the one connection, inside the removal's
- *   open transaction, which `BEGIN IMMEDIATE` let in once every other writer
- *   had finished: everything committed is seen.
+ *   its own field type (`readStored`, form `draft`), on the transaction,
+ *   which answers the pending draft where one is shown, else the live row, by
+ *   the rule the preview reads by. A field it cannot read (a blocks field in
+ *   a group kept per language) is refused, and the removal with it.
  *
- * Which collections and Singles hold such a field is handed in: core has no
- * read of the registry on a transaction, so that listing is read through the
- * Direct API, the one read of the walk that takes a pooled connection.
+ * What a plain read sees is the removal's isolation, a Single's write's:
+ *
+ * - PostgreSQL. READ COMMITTED: each read sees the latest commit.
+ * - MySQL. A Single's write keeps REPEATABLE READ, so each read answers from
+ *   the transaction's snapshot. A page write that committed after that
+ *   snapshot changed a blocks value, so it took the graph lock and wrote the
+ *   lock row, and the lock's compare-and-set has refused this removal before
+ *   it reads (`holdCompositionGraph`, `isGraphSnapshotRefusal`), a refusal
+ *   the remove routes read again and write once more on (`stale-retry`).
+ * - SQLite. Every read runs on the one connection, inside the removal's open
+ *   transaction, which `BEGIN IMMEDIATE` let in once every other writer had
+ *   finished: everything committed is seen.
+ *
+ * Which collections and Singles hold such a field is handed in, read from
+ * the registry on the same transaction by the caller.
  *
  * @module stored-documents-on-transaction
  */
@@ -49,6 +57,7 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import type { StoredDocumentForm } from "./class-usage-runtime";
+import { UNLOCKED_READ } from "./composition-graph-lock";
 import { RESCAN_PAGE_SIZE, type StoredDocuments } from "./shared-style-rescan";
 import {
   isListedForm,
@@ -157,18 +166,23 @@ export function storedDocumentsOnTransaction(
       const list = source.ownCollections.has(type.slug)
         ? reads.listEntriesInTransaction
         : reads.listHostEntriesInTransaction;
-      const page = await list(tx, type.slug, {
-        // Always the first page of what is left past the cursor.
-        ...(after === undefined
-          ? {}
-          : { where: { id: { greater_than: after } } }),
-        select: rescanSelect(type.paths),
-        sort: { field: "id", direction: "asc" },
-        pagination: { limit: RESCAN_PAGE_SIZE, page: 1 },
-        depth: 0,
-      });
-      // A short page ends the walk: the total beside it is an unlocked
-      // count, which rows committed meanwhile may already have outgrown.
+      const page = await list(
+        tx,
+        type.slug,
+        {
+          // Always the first page of what is left past the cursor.
+          ...(after === undefined
+            ? {}
+            : { where: { id: { greater_than: after } } }),
+          select: rescanSelect(type.paths),
+          sort: { field: "id", direction: "asc" },
+          pagination: { limit: RESCAN_PAGE_SIZE, page: 1 },
+          depth: 0,
+        },
+        UNLOCKED_READ
+      );
+      // A short page ends the walk: the total beside it is a count, which
+      // rows committed meanwhile may already have outgrown.
       return {
         items: page.data,
         hasNext: page.data.length >= RESCAN_PAGE_SIZE,
@@ -190,7 +204,9 @@ export function storedDocumentsOnTransaction(
         const read = own
           ? reads.findEntryByIdInTransaction
           : reads.findHostEntryByIdInTransaction;
-        found.push(await read(tx, type.slug, id, localeOf(form)));
+        found.push(
+          await read(tx, type.slug, id, { ...localeOf(form), ...UNLOCKED_READ })
+        );
       }
       return found;
     },
@@ -209,7 +225,9 @@ export function storedDocumentsOnTransaction(
         const read = own
           ? reads.getSingleInTransaction
           : reads.getHostSingleInTransaction;
-        found.push(await read(tx, type.slug, localeOf(form)));
+        found.push(
+          await read(tx, type.slug, { ...localeOf(form), ...UNLOCKED_READ })
+        );
       }
       return found;
     },

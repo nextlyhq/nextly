@@ -251,14 +251,25 @@ async function addedReferenceIssues(
  * resolved over the code's defaults by the same reading the validation uses
  * (`site-definitions`). On the transaction's connection, so on a pool of one
  * connection the read takes none of its own while the write holds the only
- * one. Per dialect:
+ * one.
  *
- * - PostgreSQL and MySQL. The Single's row is read with a shared lock
- *   (`FOR SHARE`), which answers the latest committed row whatever the
- *   transaction's isolation, MySQL's REPEATABLE READ included, and holds it
- *   until this write ends. A removal that held the lock before this write
+ * A plain read, taking no row lock (`UNLOCKED_READ`). A removal holds the
+ * Single's row, from its UPDATE, before it asks for the graph lock; this
+ * write holds the graph lock, so a row-locking read of the Single here would
+ * wait for the removal's row while the removal waits for the graph lock, and
+ * the two would wait on each other until the database refused one. What the
+ * plain read sees is this write's isolation. Per dialect:
+ *
+ * - PostgreSQL. READ COMMITTED: the read sees the latest commit and waits on
+ *   no row lock. A removal that held the graph lock before this write
  *   committed before the lock was granted, so what it removed is gone here;
  *   one that comes after waits at the lock, and then finds this page.
+ * - MySQL. A collection's write opens at READ COMMITTED, so its read is as
+ *   fresh as PostgreSQL's. A Single's write keeps REPEATABLE READ, so its
+ *   read answers from the transaction's snapshot: a removal that committed
+ *   after that snapshot took the graph lock and wrote the lock row, and the
+ *   lock's compare-and-set has refused this write, to save again, before the
+ *   read is made (`holdCompositionGraph`).
  * - SQLite. One connection, on which the read runs inside this write's open
  *   transaction. It sees everything committed before the transaction began,
  *   which `BEGIN IMMEDIATE` lets in only once every other writer has

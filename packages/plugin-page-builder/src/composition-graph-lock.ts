@@ -85,6 +85,24 @@ export function isGraphSnapshotRefusal(error: unknown): boolean {
   return false;
 }
 
+/**
+ * The lock a read of a stored document takes on a write's transaction once
+ * the write holds the graph lock, or is about to take it: none. A plain read
+ * on the transaction's connection, which waits for no row lock and holds
+ * none.
+ *
+ * Lock order is why. A write of a page or a Single takes its own row first,
+ * as it stores it, and the graph lock after. A read under the graph lock that
+ * took a row lock would take them the other way round: a removal holding the
+ * graph lock would wait for a page's row while that page's save, holding its
+ * row, waits for the graph lock, and a page save holding the graph lock would
+ * wait for the Site Style Single's row while a removal, holding that row,
+ * waits for the graph lock. Each pair waits on the other until the database
+ * refuses one. What a plain read sees, per dialect, is the reader's to say
+ * (`composition-rejudge`, `site-style-removal-lock`).
+ */
+export const UNLOCKED_READ = { lock: "none" } as const;
+
 /** The dialect, as `ctx.dialect` names it. */
 type Dialect = Parameters<typeof isUniqueViolation>[0];
 
