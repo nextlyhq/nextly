@@ -41,6 +41,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
+import { layoutRegionsOf } from "./bindings-report/layout-regions";
 import { readableAsCaller } from "./bindings-report/readable";
 import { bindingsToFixRoute } from "./bindings-report/route";
 import {
@@ -1507,6 +1508,18 @@ export const pageBuilder = (
       return {
         hostsOf: at => documentHosts(site, at),
         read,
+        // A page's Layout, as visitors are served it: its regions' components
+        // placed, so their bindings are judged against the page's entry.
+        layoutOf: at => {
+          const ctx = bindingReportCtx;
+          const setup = defaultLayoutSetup;
+          return ctx === null || setup === null
+            ? Promise.resolve(undefined)
+            : layoutRegionsOf(at, {
+                pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                slugs: setup.slugs,
+              });
+        },
         components: async (id, draft) => {
           try {
             const found = await read({
@@ -1528,6 +1541,24 @@ export const pageBuilder = (
         },
       };
     },
+    // The sweep, started as soon as a write marks a document, at most once a
+    // second; the jobs pass runs it where nothing starts it.
+    kick: () => {
+      const ctx = bindingReportCtx;
+      const now = Date.now();
+      if (ctx === null || now - bindingsKickedAt < 1000) return;
+      bindingsKickedAt = now;
+      ctx.services.jobs
+        .runSweepNow(BINDINGS_REPORT_JOB, {
+          maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+        })
+        .catch((error: unknown) =>
+          ctx.logger.warn(
+            "[page-builder] the bindings report's judgement could not start; the next jobs pass runs it.",
+            { error }
+          )
+        );
+    },
     limits: () => opts.limits ?? DEFAULT_LIMITS,
     placeOf: at => {
       if (at.kind === "single") return "singles";
@@ -1539,6 +1570,29 @@ export const pageBuilder = (
       if (at.slug === named(LAYOUTS_SLUG)) return "layouts";
       return "entries";
     },
+  };
+  let bindingsKickedAt = 0;
+  /** The latest save among the documents named, for the fingerprint. */
+  const latestSave = async (collections: readonly string[]) => {
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const nextly = await getCachedNextly();
+    const parts: string[] = [];
+    for (const collection of collections) {
+      const found = await nextly.find({
+        collection,
+        sort: "-updatedAt",
+        limit: 1,
+        depth: 0,
+        status: "all",
+        overrideAccess: true,
+      });
+      const latest = (found.items[0] as { updatedAt?: unknown } | undefined)
+        ?.updatedAt;
+      parts.push(
+        `${collection}:${String(found.meta.total)}:${JSON.stringify(latest ?? null)}`
+      );
+    }
+    return parts.join("|");
   };
   /** One pass of the report's check of every document, until `deadline`. */
   const bindingReportPass = async (deadline: Date) => {
@@ -1555,6 +1609,11 @@ export const pageBuilder = (
             collections: () => collectionRegistryRows(ctx),
             singles: () => singleRegistryRows(ctx),
             blocks: () => allBlocks(),
+            designs: () =>
+              latestSave([
+                rewriteInstall?.store.collection ?? COMPONENTS_SLUG,
+                defaultLayoutSetup?.slugs.layouts ?? LAYOUTS_SLUG,
+              ]),
           }),
       },
       bindingReportDeps,

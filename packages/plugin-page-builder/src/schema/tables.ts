@@ -551,6 +551,7 @@ type BindingIssuesColumns = {
   readonly documentId: ColumnBuilder<string, true, false>;
   readonly place: ColumnBuilder<string, false, false>;
   readonly issues: ColumnBuilder<unknown, false, false>;
+  readonly dirty: ColumnBuilder<string, true, false>;
   readonly createdAt: ColumnBuilder<Date, false, true>;
   readonly updatedAt: ColumnBuilder<Date, false, true>;
 };
@@ -570,6 +571,10 @@ type BindingIssuesColumns = {
  * - `issues` is the list of the document's broken bindings, each with what
  *   the report shows; empty for a document judged and found whole, a row kept
  *   so a slower check of every document cannot write over a newer save.
+ * - `dirty` is set, to a fresh token, by each write to the document, and
+ *   cleared by the judgement that settles it only while the token is the one
+ *   it read: a write made meanwhile, or a judgement that failed, leaves the
+ *   row to be judged again.
  * - `updatedAt` is when the document was last judged.
  */
 export const bindingIssues: TableDefinition<
@@ -585,9 +590,15 @@ export const bindingIssues: TableDefinition<
     documentId: col.varchar(255, { nullable: true }),
     place: col.varchar(16),
     issues: col.json(),
+    dirty: col.char(36, { nullable: true }),
     ...col.timestamps(),
   },
-  { indexes: [{ columns: ["documentKey"], unique: true }] }
+  {
+    indexes: [
+      { columns: ["documentKey"], unique: true },
+      { columns: ["dirty"] },
+    ],
+  }
 );
 
 /** The columns of {@link bindingReportRuns}. */

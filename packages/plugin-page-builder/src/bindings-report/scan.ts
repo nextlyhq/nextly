@@ -17,6 +17,13 @@
  * a save judged since is never replaced by what the check read before it. A
  * document deleted since is dropped when a complete check finds it gone.
  *
+ * A write does not judge its document there and then: it marks the document's
+ * row dirty and starts the sweep, which judges dirty documents one at a time
+ * and settles each only while its mark is the one it read. Two writes close
+ * together, a judgement that failed, or a source whose fields could not be
+ * read, each leave the row dirty to be judged again on the next pass, rather
+ * than an older answer kept.
+ *
  * Judged as the system: the report says what is broken; who may see each row
  * is the route's question.
  *
@@ -50,7 +57,11 @@ import type {
 } from "../host-rewrite/rewrite";
 
 import { documentBindingReport, type BindingReportRow } from "./rows";
-import type { BindingReportStore, ReportedDocument } from "./store";
+import type {
+  BindingReportStore,
+  DirtyDocument,
+  ReportedDocument,
+} from "./store";
 
 /** How the report reads a document as stored. */
 export interface DocumentReading {
@@ -61,6 +72,13 @@ export interface DocumentReading {
   readonly read: HostReader;
   /** The components a document places, as visitors are served them. */
   readonly components?: ComponentSource;
+  /**
+   * The Layout a page is drawn in, as visitors are served it, whose regions'
+   * bindings read the page's entry; `undefined` for a document drawn in none.
+   */
+  readonly layoutOf?: (
+    at: Pick<HostAddress, "kind" | "slug" | "id">
+  ) => Promise<{ readonly id: string; readonly value: unknown } | undefined>;
 }
 
 /** What keeping the report needs of the installed plugin. */
@@ -73,6 +91,8 @@ export interface BindingReportDeps {
   readonly limits: () => DocumentLimits;
   /** Where a document lives: pages, components, patterns, layouts, entries or singles. */
   readonly placeOf: (at: Pick<HostAddress, "kind" | "slug">) => string;
+  /** Start the sweep, without waiting for it; nothing where none can run. */
+  readonly kick?: () => void;
 }
 
 /** A document's entry, as its bindings read it; none for a component's own. */
@@ -129,21 +149,24 @@ async function composedWith(
  * by the placement it came through and the component placed there.
  */
 async function valueRows(
-  at: Pick<HostAddress, "kind" | "slug">,
+  entryOf: Pick<HostAddress, "kind" | "slug">,
   value: unknown,
   deps: Pick<BindingReportDeps, "shapesOf" | "limits">,
   components: ComponentSource | undefined
-): Promise<BindingReportRow[]> {
+): Promise<{
+  readonly rows: BindingReportRow[];
+  readonly incomplete: boolean;
+}> {
   const stored = asDocument(value);
-  if (stored === null) return [];
+  if (stored === null) return { rows: [], incomplete: false };
   const { document, placedBy } = await composedWith(stored, deps, components);
   const report = await documentBindingReport(
     { nodes: document.nodes, settings: stored.settings },
-    entryRef(at, stored),
+    entryRef(entryOf, stored),
     { shapesOf: deps.shapesOf, maxNodes: deps.limits().maxNodes }
   );
   const componentOf = placedComponents(stored, deps.limits().maxNodes);
-  return report.rows.map(row => {
+  const rows = report.rows.map(row => {
     const placement = placedBy.get(row.nodeId);
     if (placement === undefined) return row;
     const component = componentOf.get(placement);
@@ -153,6 +176,7 @@ async function valueRows(
       ...(component === undefined ? {} : { component }),
     };
   });
+  return { rows, incomplete: report.incomplete };
 }
 
 /** A read's value, or nothing for an absent one. */
@@ -163,27 +187,72 @@ function valueOf(read: ReadValue | null): unknown {
 /**
  * The report's rows for one document as stored: each host's working form
  * (the draft where there is one, which an author fixes, else the live value),
- * each row naming the field and language it is in.
+ * each row naming the field and language it is in, and the regions of the
+ * Layout a page is drawn in, judged against the page's entry. A value read
+ * once per language because which fields store per language is unknown is
+ * judged once.
  */
 async function documentRows(
+  at: Pick<HostAddress, "kind" | "slug" | "id">,
   hosts: readonly HostCandidate[],
   deps: Pick<BindingReportDeps, "shapesOf" | "limits">,
   reading: DocumentReading
-): Promise<BindingReportRow[]> {
+): Promise<{
+  readonly rows: BindingReportRow[];
+  readonly incomplete: boolean;
+}> {
   const rows: BindingReportRow[] = [];
-  for (const { host } of hosts) {
-    const read = await reading.read(host);
-    const value = valueOf(read.draft) ?? valueOf(read.published);
-    if (value === undefined) continue;
-    for (const row of await valueRows(host, value, deps, reading.components)) {
-      rows.push({
-        ...row,
-        blocksField: host.path.join("."),
-        ...(host.locale === undefined ? {} : { locale: host.locale }),
-      });
+  let incomplete = false;
+  const shared = new Set<string>();
+  for (const candidate of hosts) {
+    const judged = await hostRows(candidate, shared, deps, reading);
+    incomplete ||= judged.incomplete;
+    rows.push(...judged.rows);
+  }
+  const layout = await reading.layoutOf?.(at);
+  if (layout !== undefined) {
+    const judged = await valueRows(at, layout.value, deps, reading.components);
+    incomplete ||= judged.incomplete;
+    for (const row of judged.rows) {
+      rows.push({ ...row, layout: layout.id, blocksField: "layout" });
     }
   }
-  return rows;
+  return { rows, incomplete };
+}
+
+/**
+ * One host's rows, named by its field and language. A value read once per
+ * language because which fields store per language is unknown is judged the
+ * first time only (`shared` holds those judged).
+ */
+async function hostRows(
+  { host, maybeShared }: HostCandidate,
+  shared: Set<string>,
+  deps: Pick<BindingReportDeps, "shapesOf" | "limits">,
+  reading: DocumentReading
+): Promise<{
+  readonly rows: BindingReportRow[];
+  readonly incomplete: boolean;
+}> {
+  const read = await reading.read(host);
+  const value = valueOf(read.draft) ?? valueOf(read.published);
+  if (value === undefined) return { rows: [], incomplete: false };
+  const field = host.path.join(".");
+  if (maybeShared === true) {
+    const seen = `${field}\u0000${JSON.stringify(value)}`;
+    if (shared.has(seen)) return { rows: [], incomplete: false };
+    shared.add(seen);
+  }
+  const perLanguage = host.locale !== undefined && maybeShared !== true;
+  const judged = await valueRows(host, value, deps, reading.components);
+  return {
+    incomplete: judged.incomplete,
+    rows: judged.rows.map(row => ({
+      ...row,
+      blocksField: field,
+      ...(perLanguage ? { locale: host.locale } : {}),
+    })),
+  };
 }
 
 /** Which document a key names, and where it lives, for its row. */
@@ -236,59 +305,93 @@ function holdsBlocks(data: Record<string, unknown>): boolean {
 }
 
 /**
- * Judge each written document again, as stored, and record its rows. A write
- * holding no blocks value is judged only when the document already has a row:
- * it may have cleared the field that held the broken binding, and most
- * writes, to documents with no blocks, then read one row and nothing else.
- * After commit, so the row says what is stored; a failure is logged, never
- * thrown, since the write has committed and the next complete check reads it.
+ * Mark each written or deleted document to be judged again, and start the
+ * sweep that judges it. A write holding no blocks value marks its document
+ * only when the document already has a row: it may have cleared the field
+ * that held the broken binding, and most writes, to documents with no blocks,
+ * then read one row and nothing else. After commit; a failure is logged,
+ * never thrown, since the write has committed.
  */
 export function registerBindingReportOnWrite(
   ctx: BindingReportHooksContext,
   deps: BindingReportDeps
 ): void {
-  const onWrite = async (context: unknown): Promise<void> => {
+  const mark = async (context: unknown, always: boolean): Promise<void> => {
     const written = hookedDocument(context);
     const store = deps.store();
-    const reading = deps.reading();
-    if (written === undefined || store === null || reading === null) return;
-    const { at, collection } = written;
+    if (written === undefined || store === null) return;
+    const document = reported(written.at, deps);
     try {
-      const document = reported(at, deps);
       if (
+        !always &&
         !holdsBlocks(written.data) &&
         (await store.get(document.documentKey)) === undefined
       ) {
         return;
       }
-      const hosts = await reading.hostsOf(at);
-      await store.record(document, await documentRows(hosts, deps, reading));
+      await store.markDirty(document);
+      deps.kick?.();
     } catch (error) {
       ctx.logger.error(
-        `[page-builder] the bindings report was not updated for a write to "${collection}"; the next check of every document reads it again.`,
-        { collection, error }
-      );
-    }
-  };
-  const onDelete = async (context: unknown): Promise<void> => {
-    const deleted = hookedDocument(context);
-    const store = deps.store();
-    if (deleted === undefined || store === null) return;
-    const { at, collection } = deleted;
-    try {
-      // No rows: a deleted document has nothing to fix.
-      await store.record(reported(at, deps), []);
-    } catch (error) {
-      ctx.logger.error(
-        `[page-builder] a deleted document's row in the bindings report was not removed; the next check of every document drops it.`,
-        { collection, error }
+        `[page-builder] a write to "${written.collection}" was not marked for the bindings report; it is judged again when the schema next changes.`,
+        { collection: written.collection, error }
       );
     }
   };
   for (const phase of ["afterCreate", "afterUpdate"] as const) {
-    ctx.hooks.on(phase, "*", onWrite);
+    ctx.hooks.on(phase, "*", context => mark(context, false));
   }
-  ctx.hooks.on("afterDelete", "*", onDelete);
+  ctx.hooks.on("afterDelete", "*", context => mark(context, true));
+}
+
+/** How many marked documents one read of them takes. */
+const DIRTY_BATCH = 50;
+
+/**
+ * Judge the documents writes marked, until none is left or `deadline`. Each
+ * is settled only while its mark is the one read; one whose judgement could
+ * not read a source is left marked, and not asked again this pass.
+ */
+async function settleDirty(
+  store: BindingReportStore,
+  deps: BindingReportDeps,
+  reading: DocumentReading,
+  deadline: Date
+): Promise<boolean> {
+  const tried = new Set<string>();
+  for (;;) {
+    const batch = (await store.dirty(DIRTY_BATCH + tried.size)).filter(
+      marked => !tried.has(marked.document.documentKey)
+    );
+    if (batch.length === 0) return true;
+    for (const marked of batch) {
+      if (Date.now() >= deadline.getTime()) return false;
+      tried.add(marked.document.documentKey);
+      await settleOne(marked, store, deps, reading);
+    }
+  }
+}
+
+/** Judge one marked document as stored, and settle it if the judgement is whole. */
+async function settleOne(
+  marked: DirtyDocument,
+  store: BindingReportStore,
+  deps: BindingReportDeps,
+  reading: DocumentReading
+): Promise<void> {
+  const { kind, slug, documentId } = marked.document;
+  const at = {
+    kind,
+    slug,
+    ...(documentId === undefined ? {} : { id: documentId }),
+  };
+  const hosts = await reading.hostsOf(at);
+  // A document gone, or holding no blocks field any more, has nothing.
+  const judged =
+    hosts.length === 0
+      ? { rows: [], incomplete: false }
+      : await documentRows(at, hosts, deps, reading);
+  if (!judged.incomplete) await store.settle(marked, judged.rows);
 }
 
 /** What the check of every document walks the site with. */
@@ -303,7 +406,10 @@ export interface FullCheckSite {
 /** How a pass of the check of every document ended. */
 export type FullCheckOutcome = "current" | "paused" | "complete";
 
-/** One document judged and recorded, fenced by when it was read. */
+/**
+ * One document judged and recorded; one whose judgement could not read a
+ * source is marked to be judged again instead of recorded as it was found.
+ */
 async function checkDocument(
   document: HostDocument,
   store: BindingReportStore,
@@ -312,14 +418,15 @@ async function checkDocument(
 ): Promise<void> {
   const first = document.hosts[0]?.host;
   if (first === undefined) return;
-  const readAt = new Date();
-  const rows = await documentRows(document.hosts, deps, reading);
-  await store.record(reported(first, deps), rows, readAt);
+  const judged = await documentRows(first, document.hosts, deps, reading);
+  if (judged.incomplete) await store.markDirty(reported(first, deps));
+  else await store.record(reported(first, deps), judged.rows);
 }
 
 /**
- * One pass of the check of every document: nothing when the schema has not
- * changed since the last complete check; else it judges documents from where
+ * One pass of the sweep: first the documents writes marked; then, the check
+ * of every document: nothing when the schema has not changed since the last
+ * complete check; else it judges documents from where
  * the last pass stopped until `deadline`, and records where it stopped. A
  * complete check records the fingerprint it was made against, and when, and
  * drops the rows of documents it no longer found.
@@ -332,6 +439,7 @@ export async function runFullCheck(
   const store = deps.store();
   const reading = deps.reading();
   if (store === null || reading === null) return "paused";
+  if (!(await settleDirty(store, deps, reading, deadline))) return "paused";
   const fingerprint = await site.fingerprint();
   const state = await store.fullCheck();
   if (state.checked === fingerprint && state.checking === null) {

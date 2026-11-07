@@ -53,6 +53,8 @@ export interface BindingReportRow {
   readonly reaches?: { readonly name: string; readonly type: string };
   /** The component the block came from, when a placement put it on the page. */
   readonly component?: string;
+  /** The Layout the block is in, when it is in the page's Layout's regions. */
+  readonly layout?: string;
   /** The blocks field the binding is in, as a dotted path. */
   readonly blocksField?: string;
   /** The language of the value it is in, for a field stored per language. */
@@ -64,6 +66,8 @@ export interface BindingReportRow {
 export interface DocumentBindingReport {
   readonly rows: readonly BindingReportRow[];
   readonly overflowed: boolean;
+  /** Whether a source's fields could not be read, so the rows may miss some. */
+  readonly incomplete: boolean;
 }
 
 /** A JSON pointer's segments, unescaped. */
@@ -235,7 +239,9 @@ export async function documentBindingReport(
   site: { readonly shapesOf: DeclaredShapesReader; readonly maxNodes?: number }
 ): Promise<DocumentBindingReport> {
   const problems = await currentBindingProblems(document, entry, site);
-  if (problems.overflowed) return { rows: [], overflowed: true };
+  if (problems.overflowed) {
+    return { rows: [], overflowed: true, incomplete: false };
+  }
   // One row per binding, its codes in the order they were found.
   const byPath = new Map<string, { nodeId: string; codes: string[] }>();
   for (const issue of problems.found) {
@@ -254,5 +260,5 @@ export async function documentBindingReport(
     });
     if (row !== undefined) rows.push(row);
   }
-  return { rows, overflowed: false };
+  return { rows, overflowed: false, incomplete: problems.incomplete };
 }

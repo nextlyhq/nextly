@@ -5,13 +5,13 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261107_173111_717_create_binding_report_tables",
+  name: "20261107_174750_902_create_binding_report_tables",
   schemaVersion: 10,
-  checksum: "ce749b8400f78ccb6a724f7dcb288c6a8989d65432d441005bb7949fc089357f",
+  checksum: "ea204e324914661b2d4e6fc1ad4fc62781a6ce8dd81add103beed79a74d89e05",
   dialects: {
     postgresql: {
       up: [
-        'CREATE TABLE "page_builder__binding_issues" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "issues" jsonb NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__binding_issues_document_key" ON "page_builder__binding_issues" ("document_key")',
+        'CREATE TABLE "page_builder__binding_issues" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "issues" jsonb NOT NULL,\n  "dirty" bpchar(36),\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__binding_issues_document_key" ON "page_builder__binding_issues" ("document_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_issues_dirty" ON "page_builder__binding_issues" ("dirty")',
         'CREATE TABLE "page_builder__binding_report_runs" (\n  "id" text PRIMARY KEY NOT NULL,\n  "name" text NOT NULL,\n  "checked" text,\n  "checking" text,\n  "cursor" jsonb,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__binding_report_runs_name" ON "page_builder__binding_report_runs" ("name")',
       ],
       down: [
@@ -21,7 +21,7 @@ export default {
     },
     mysql: {
       up: [
-        "CREATE TABLE `page_builder__binding_issues` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `document_key` varchar(512) NOT NULL,\n  `kind` varchar(16) NOT NULL,\n  `slug` varchar(255) NOT NULL,\n  `document_id` varchar(255),\n  `place` varchar(16) NOT NULL,\n  `issues` json NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE UNIQUE INDEX `uq_page_builder__binding_issues_document_key` ON `page_builder__binding_issues` (`document_key`)",
+        "CREATE TABLE `page_builder__binding_issues` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `document_key` varchar(512) NOT NULL,\n  `kind` varchar(16) NOT NULL,\n  `slug` varchar(255) NOT NULL,\n  `document_id` varchar(255),\n  `place` varchar(16) NOT NULL,\n  `issues` json NOT NULL,\n  `dirty` char(36),\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE UNIQUE INDEX `uq_page_builder__binding_issues_document_key` ON `page_builder__binding_issues` (`document_key`);\nCREATE INDEX `idx_page_builder__binding_issues_dirty` ON `page_builder__binding_issues` (`dirty`)",
         "CREATE TABLE `page_builder__binding_report_runs` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `name` varchar(32) NOT NULL,\n  `checked` varchar(64),\n  `checking` varchar(64),\n  `cursor` json,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE UNIQUE INDEX `uq_page_builder__binding_report_runs_name` ON `page_builder__binding_report_runs` (`name`)",
       ],
       down: [
@@ -31,7 +31,7 @@ export default {
     },
     sqlite: {
       up: [
-        'CREATE TABLE "page_builder__binding_issues" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "issues" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__binding_issues_document_key" ON "page_builder__binding_issues" ("document_key")',
+        'CREATE TABLE "page_builder__binding_issues" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "issues" text NOT NULL,\n  "dirty" text,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__binding_issues_document_key" ON "page_builder__binding_issues" ("document_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_issues_dirty" ON "page_builder__binding_issues" ("dirty")',
         'CREATE TABLE "page_builder__binding_report_runs" (\n  "id" text PRIMARY KEY NOT NULL,\n  "name" text NOT NULL,\n  "checked" text,\n  "checking" text,\n  "cursor" text,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_page_builder__binding_report_runs_name" ON "page_builder__binding_report_runs" ("name")',
       ],
       down: [
@@ -684,6 +684,12 @@ export default {
               nullable: false,
             },
             {
+              name: "dirty",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: true,
+            },
+            {
               name: "created_at",
               type: "timestamp",
               nullable: false,
@@ -701,6 +707,11 @@ export default {
               name: "uq_page_builder__binding_issues_document_key",
               columns: ["document_key"],
               unique: true,
+            },
+            {
+              name: "idx_page_builder__binding_issues_dirty",
+              columns: ["dirty"],
+              unique: false,
             },
           ],
           foreignKeys: [],
@@ -1397,6 +1408,11 @@ export default {
               nullable: false,
             },
             {
+              name: "dirty",
+              type: "char(36)",
+              nullable: true,
+            },
+            {
               name: "created_at",
               type: "timestamp",
               nullable: false,
@@ -1414,6 +1430,11 @@ export default {
               name: "uq_page_builder__binding_issues_document_key",
               columns: ["document_key"],
               unique: true,
+            },
+            {
+              name: "idx_page_builder__binding_issues_dirty",
+              columns: ["dirty"],
+              unique: false,
             },
           ],
           foreignKeys: [],
@@ -2110,6 +2131,11 @@ export default {
               nullable: false,
             },
             {
+              name: "dirty",
+              type: "text",
+              nullable: true,
+            },
+            {
               name: "created_at",
               type: "integer",
               nullable: false,
@@ -2127,6 +2153,11 @@ export default {
               name: "uq_page_builder__binding_issues_document_key",
               columns: ["document_key"],
               unique: true,
+            },
+            {
+              name: "idx_page_builder__binding_issues_dirty",
+              columns: ["dirty"],
+              unique: false,
             },
           ],
           foreignKeys: [],

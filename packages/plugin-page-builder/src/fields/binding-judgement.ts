@@ -123,6 +123,8 @@ interface SchemaReads {
   readonly known: Map<string, readonly BindingFieldShape[] | undefined>;
   /** Whether the walk reached more sources than one save reads. */
   overflowed: boolean;
+  /** Whether a source's fields could not be read, leaving it unknown. */
+  failed?: boolean;
 }
 
 /**
@@ -167,8 +169,9 @@ async function readSources(
         shapes = read ?? ("single" in ref ? [] : undefined);
       } catch {
         // A read that failed leaves it unknown, so nothing is judged
-        // against it.
+        // against it, and the judgement says it is not complete.
         shapes = undefined;
+        reads.failed = true;
       }
       reads.known.set(key, shapes);
     })
@@ -256,6 +259,8 @@ export interface CurrentBindingProblems {
   readonly found: readonly BindingError[];
   /** Whether it binds more sources than one judgement reads; then `found` is empty. */
   readonly overflowed: boolean;
+  /** Whether a source's fields could not be read, so `found` may miss some. */
+  readonly incomplete: boolean;
   /** The declared fields of each source read, or `undefined` for one unknown. */
   readonly fieldsOf: (ref: ReadRef) => readonly BindingFieldShape[] | undefined;
 }
@@ -285,6 +290,7 @@ export async function currentBindingProblems(
   return {
     found: reads.overflowed ? [] : found,
     overflowed: reads.overflowed,
+    incomplete: reads.failed === true,
     fieldsOf: ref => reads.known.get(keyOf(ref)),
   };
 }
