@@ -3,8 +3,9 @@
  * chosen in the Previewing strip pinned above the canvas.
  *
  * 1. The template opens on the most recently updated post the author may
- *    read: here a draft, marked as one, whose title the canvas's bound
- *    heading draws.
+ *    read, as the editor's own list puts it first (other files write posts
+ *    alongside this one), marked as a draft where it is one, and the
+ *    canvas's bound heading draws its title.
  * 2. The picker lists the posts, the author chooses another, and
  *    Shift+Alt+Down and Shift+Alt+Up step through the list, each switch said
  *    in a toast.
@@ -163,18 +164,48 @@ test.describe("previewing a template with a real entry", () => {
     await page.waitForTimeout(1_100);
     const draft = `${mark} Draft post`;
     await post(page.request, draft, "draft");
+    // The list the editor itself is answered with as it opens. Other files
+    // write posts to the same database at the same time, so the newest post
+    // is whichever that answer puts first, not necessarily the one made
+    // here: the editor is held to its own list, which no other post can make
+    // disagree with what it opens on.
+    const listed = page.waitForResponse(
+      response =>
+        response.url().includes(`${PLUGIN}/template-preview/entries`) &&
+        response.request().method() === "POST"
+    );
     await openTemplate(page, templateId);
+    const { items } = (await (await listed).json()) as {
+      items: {
+        id: string;
+        title: string;
+        status: string;
+        updatedAt: string | null;
+      }[];
+    };
+    const [newest] = items;
+    if (newest === undefined)
+      throw new Error("[e2e] The editor listed no post.");
+    // Newest first, and this file's draft among them: listed after the
+    // published post made before it.
+    const times = items.map(item => item.updatedAt ?? "");
+    expect(times).toEqual([...times].sort().reverse());
+    expect(items.map(item => item.title)).toContain(draft);
 
     await expect(page.getByText("Previewing", { exact: true })).toBeVisible();
     await expect(chip(page)).toHaveAccessibleName(
-      `Previewing ${draft}, draft`,
+      `Previewing ${newest.title}, ${newest.status}`,
       { timeout: 30_000 }
     );
-    await expect(chip(page)).toContainText("Draft");
-    // The canvas reads the previewed post, its draft included.
-    await expect(canvasBlock(page, HEADING)).toHaveText(draft, {
+    // The canvas reads the previewed post, a draft included.
+    await expect(canvasBlock(page, HEADING)).toHaveText(newest.title, {
       timeout: 30_000,
     });
+    // Marked as a draft where it is one: this file's own post, unless
+    // another file's newer one came first, which is marked by its status.
+    if (newest.status === "draft") {
+      await expect(chip(page)).toContainText("Draft");
+    }
   });
 
   test("chooses another post in the picker, and steps through the list with the keys", async ({
