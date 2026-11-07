@@ -1213,9 +1213,26 @@ function storedAnswersReadElsewhere(): boolean {
   return setting !== "false" && setting !== "0";
 }
 
+/**
+ * Retire everything derived from permission rows, after one was written: the caches here, and
+ * the cached content reads (`expireContentAfterGrantsChange`), since a permission's rows decide
+ * what every role holding it, the Public role among them, may read.
+ */
 async function flushPermissionCaches(): Promise<void> {
   clearInMemoryTiers();
   await publishRetirement();
+  await expireContentReads();
+}
+
+/**
+ * The cached content reads expired after a change to grants. Loaded when it runs, so this module,
+ * which most of the package imports, does not import the content cache's.
+ */
+async function expireContentReads(): Promise<void> {
+  const { expireContentAfterGrantsChange } = await import(
+    "../../domains/flush-content-change"
+  );
+  await expireContentAfterGrantsChange();
 }
 
 export async function invalidatePermissionCache(
@@ -1238,6 +1255,9 @@ export async function invalidatePermissionCache(
   }
 
   await publishRetirement();
+  // What a role grants changed, so the cached content reads go too. A user's roles changing
+  // expires none: a read cached for a user is keyed by the roles it was read under.
+  if (roleId) await expireContentReads();
 }
 
 /**
