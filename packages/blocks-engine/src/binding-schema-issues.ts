@@ -24,6 +24,13 @@ import type { PropSchema } from "./block";
 import { DEFAULT_BINDING_SOURCE, MAX_SEO_SEGMENTS } from "./document";
 import { withHeldSeverityOf } from "./held-findings";
 import { pointer } from "./issue-text";
+import {
+  COLLECTION_LIST_TYPE,
+  LIST_ENTRY_SLOT,
+  listItemRef,
+  readListQuery,
+} from "./list-query";
+import type { NamedQuerySource } from "./named-query";
 import { isPlainRecord } from "./plain-record";
 import { ownEntry, ownKeys } from "./safe-record";
 import { checkSeoBinding, type SeoBindingPlace } from "./seo-binding-check";
@@ -56,6 +63,11 @@ export interface BindingSchemaJudgement {
   readonly stored?: readonly unknown[];
   /** The most nodes judged, as the validator's survey caps them. */
   readonly maxNodes?: number;
+  /**
+   * The site's named queries, so a list over one binds its items as the
+   * query's rows are declared: a collection's entries, or fields of their own.
+   */
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /** One binding problem, where it sits and on which block. */
@@ -107,7 +119,8 @@ function bindingIdentity(binding: unknown): string {
 function nodeFindings(
   node: Readonly<Record<string, unknown>>,
   path: string,
-  judgement: BindingSchemaJudgement
+  judgement: BindingSchemaJudgement,
+  item: BindingSchemaRef | undefined
 ): BindingFinding[] {
   const bindings = node.bindings;
   const id = node.id;
@@ -119,7 +132,8 @@ function nodeFindings(
       ...propFindings(
         { id, prop, binding: ownEntry(bindings, prop), props },
         pointer(pointer(path, "bindings"), prop),
-        judgement
+        judgement,
+        item
       )
     );
   }
@@ -141,16 +155,27 @@ function declaredProps(
   return definition === undefined ? undefined : (definition.props ?? {});
 }
 
-/** The schema and the entry's ref a check of one binding is given. */
-function schemaOf(judgement: BindingSchemaJudgement): {
+/**
+ * The schema and the refs a check of one binding is given: the entry's, and
+ * the item's of the list the binding is drawn in, when there is one.
+ */
+function schemaOf(
+  judgement: BindingSchemaJudgement,
+  item?: BindingSchemaRef
+): {
   readonly schema: BindingSchemaSource;
-  readonly refs?: { readonly entry: BindingSchemaRef };
+  readonly refs?: {
+    readonly entry?: BindingSchemaRef;
+    readonly item?: BindingSchemaRef;
+  };
 } {
+  const refs = {
+    ...(judgement.entry === undefined ? {} : { entry: judgement.entry }),
+    ...(item === undefined ? {} : { item }),
+  };
   return {
     schema: judgement.schema,
-    ...(judgement.entry === undefined
-      ? {}
-      : { refs: { entry: judgement.entry } }),
+    ...(Object.keys(refs).length === 0 ? {} : { refs }),
   };
 }
 
@@ -184,14 +209,15 @@ function propFindings(
     readonly props: Partial<Record<string, PropSchema>> | undefined;
   },
   path: string,
-  judgement: BindingSchemaJudgement
+  judgement: BindingSchemaJudgement,
+  item: BindingSchemaRef | undefined
 ): BindingFinding[] {
   const check = checkBinding({
     nodeId: bound.id,
     prop: bound.prop,
     binding: bound.binding,
     ...(bound.props === undefined ? {} : { props: bound.props }),
-    ...schemaOf(judgement),
+    ...schemaOf(judgement, item),
   });
   return findingsOf(
     check.issues,
@@ -210,6 +236,37 @@ interface Frame {
   readonly nodes: readonly unknown[];
   next: number;
   readonly at: (index: number) => string;
+  /** The item its nodes are drawn with: the nearest list's, if any. */
+  readonly item: BindingSchemaRef | undefined;
+}
+
+/**
+ * The item a node's slot draws its children with: a list's entries slot draws
+ * each of its entries ({@link listItemRef}), its other slots (the empty state)
+ * none; any other node's slots draw the item it is drawn with.
+ */
+function slotItem(
+  node: Readonly<Record<string, unknown>>,
+  slot: string,
+  item: BindingSchemaRef | undefined,
+  namedQueries: NamedQuerySource | undefined
+): BindingSchemaRef | undefined {
+  if (node.type !== COLLECTION_LIST_TYPE) return item;
+  if (slot !== LIST_ENTRY_SLOT) return undefined;
+  const { query } = readListQuery(node.props);
+  const name = query.namedQuery?.name;
+  // A named query's rows that are a collection's entries bind as that
+  // collection's, as the render draws them.
+  const rows =
+    name === undefined ? undefined : namedQueries?.declarationOf(name)?.rows;
+  return listItemRef({
+    collection:
+      query.collection ??
+      (rows !== undefined && "collection" in rows
+        ? rows.collection
+        : undefined),
+    query: name,
+  });
 }
 
 /**
@@ -218,7 +275,9 @@ interface Frame {
  */
 function slotFrames(
   node: Readonly<Record<string, unknown>>,
-  path: string
+  path: string,
+  item: BindingSchemaRef | undefined,
+  namedQueries: NamedQuerySource | undefined
 ): Frame[] {
   const slots = node.slots;
   if (!isPlainRecord(slots)) return [];
@@ -231,6 +290,7 @@ function slotFrames(
       nodes: children,
       next: 0,
       at: index => pointer(slotPath, index),
+      item: slotItem(node, name, item, namedQueries),
     });
   }
   return frames;
@@ -248,7 +308,7 @@ function walkBindingFindings(
   const findings: BindingFinding[] = [];
   let left = judgement.maxNodes ?? Number.MAX_SAFE_INTEGER;
   const stack: Frame[] = [
-    { nodes, next: 0, at: index => pointer("/nodes", index) },
+    { nodes, next: 0, at: index => pointer("/nodes", index), item: undefined },
   ];
   while (left > 0) {
     const frame = stack[stack.length - 1];
@@ -263,8 +323,14 @@ function walkBindingFindings(
     const node: unknown = frame.nodes[index];
     if (!isPlainRecord(node)) continue;
     const path = frame.at(index);
-    findings.push(...nodeFindings(node, path, judgement));
-    for (const slot of slotFrames(node, path)) stack.push(slot);
+    findings.push(...nodeFindings(node, path, judgement, frame.item));
+    for (const slot of slotFrames(
+      node,
+      path,
+      frame.item,
+      judgement.namedQueries
+    ))
+      stack.push(slot);
   }
   return findings;
 }

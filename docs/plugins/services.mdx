@@ -362,6 +362,25 @@ ctx.hooks.onInTransaction("*", async write => {
 });
 ```
 
+`listEntries` reads through the pool too, and waits the same way.
+`listEntriesInTransaction(tx, slug, options, opts)` (`@experimental`) is `listEntries` on the
+transaction's own connection: the same options and `ServiceOpts`, the same access check and
+read hooks, and the same answer, so it sees what the transaction wrote. Under `as: "user"`
+the caller's roles are read on the transaction too. The page's rows are read with a shared
+lock on PostgreSQL and MySQL, held until the transaction ends. It grants nothing
+`listEntries` does not.
+
+```ts
+ctx.hooks.onInTransaction("*", async write => {
+  const { data } = await ctx.services.collections.listEntriesInTransaction(
+    write.transaction,
+    "posts",
+    { where: { id: { in: ["p1", "p2"] } }, select: { id: true, slug: true } }
+  );
+  // ...
+});
+```
+
 `ctx.services.users` may create and update accounts, but not decide who administers the
 site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
 account (core makes that one super-admin), to give a role that reaches `super-admin`
