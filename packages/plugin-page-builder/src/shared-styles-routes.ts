@@ -42,6 +42,7 @@
  *
  * @module shared-styles-routes
  */
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import {
   getCachedNextly,
   NextlyError,
@@ -930,12 +931,19 @@ export function storedDocumentsOf(
  * Every stored document still referencing any of the shared styles, walked
  * as the class index records, so the two agree. The one walk both the remove
  * route and the site style's own write (`site-style-removal-lock`) ask.
+ *
+ * `limits` are the site's document limits (`pageBuilder({ limits })`), the
+ * bounds the index, the validator and the renderer read a document under:
+ * walked under the defaults instead, a site that raised them would miss a
+ * use held past the default node count or depth, and remove a style a page
+ * still renders. Required, so no caller falls back to the defaults unseen.
  */
 export function storedSharedStyleUses(
-  documents: StoredDocuments
+  documents: StoredDocuments,
+  limits: DocumentLimits
 ): (ids: readonly string[]) => Promise<StoredUse[]> {
   return ids =>
-    storedUsesOf(ids, documents, stored => classUsageOf(stored).ids);
+    storedUsesOf(ids, documents, stored => classUsageOf(stored, limits).ids);
 }
 
 /**
@@ -1073,6 +1081,8 @@ export interface SharedStyleRouteSetup {
   readonly configClassIds: ReadonlySet<string>;
   /** The usage index for this request. */
   readonly usage: (ctx: PluginRouteContext) => SharedStyleUsageSource;
+  /** The site's document limits, the bounds the stored documents are walked under. */
+  readonly limits: DocumentLimits;
 }
 
 /** The read and update permissions on the RESOLVED site-style Single. */
@@ -1150,7 +1160,10 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
           setup.usage(ctx),
           setup.configClassIds,
           {
-            uses: storedSharedStyleUses(storedDocumentsOf(ctx, nextly)),
+            uses: storedSharedStyleUses(
+              storedDocumentsOf(ctx, nextly),
+              setup.limits
+            ),
             firstReadable: uses =>
               firstReadableTitle(
                 uses,

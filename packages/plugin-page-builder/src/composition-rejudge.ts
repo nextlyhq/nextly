@@ -90,16 +90,20 @@ const SINGLE_PREFIX = "single:";
 /**
  * Judge every write that changes a blocks value again in its transaction,
  * under the graph lock. `setup` is read per write: it exists once the plugin is
- * installed.
+ * installed. `locales` are the site's configured languages, by code (empty
+ * for none), read per write as every reader of them reads them: the live
+ * forms a held working draft keeps a reference by are read in each
+ * (`formsBeforeWrite`).
  */
 export function registerCompositionRejudge(
   ctx: Pick<PluginContext, "hooks" | "dialect">,
-  setup: () => CompositionSetup | undefined
+  setup: () => CompositionSetup | undefined,
+  locales: () => readonly string[]
 ): void {
   ctx.hooks.onInTransaction("*", async write => {
     const judging = setup();
     if (judging === undefined) return;
-    const issues = await rejudgedIssues(write, judging, ctx.dialect);
+    const issues = await rejudgedIssues(write, judging, ctx.dialect, locales);
     if (issues.length > 0) throw NextlyError.validation({ errors: issues });
   });
 }
@@ -108,7 +112,8 @@ export function registerCompositionRejudge(
 async function rejudgedIssues(
   write: InTransactionContext,
   setup: CompositionSetup,
-  dialect: PluginContext["dialect"]
+  dialect: PluginContext["dialect"],
+  locales: () => readonly string[]
 ): Promise<Issue[]> {
   if (write.operation === "delete" || write.data === undefined) return [];
   const data = write.data;
@@ -174,7 +179,7 @@ async function rejudgedIssues(
   // Under the lock too, and only now: the site's definitions are never read
   // in this path before the lock is held.
   issues.push(
-    ...(await addedReferenceIssues(write, fieldWrite, changed, setup))
+    ...(await addedReferenceIssues(write, fieldWrite, changed, setup, locales))
   );
   return issues;
 }
@@ -198,7 +203,8 @@ async function addedReferenceIssues(
   write: InTransactionContext,
   fieldWrite: PluginFieldWrite,
   paths: readonly string[],
-  setup: CompositionSetup
+  setup: CompositionSetup,
+  locales: () => readonly string[]
 ): Promise<Issue[]> {
   const read = setup.siteDefinitions;
   // Where the site's definitions cannot be read at all, the validation judges
@@ -213,7 +219,7 @@ async function addedReferenceIssues(
     const value = readStoredJson(valueAt(write.data, path));
     const field: JudgedField = { path, write: fieldWrite };
     const storedForms = onceAsked(() =>
-      formsBeforeWrite(write, fieldWrite, path)
+      formsBeforeWrite(write, fieldWrite, path, locales())
     );
     const site = { limits: setup.limits, storedForms };
     issues.push(
@@ -295,15 +301,27 @@ function siteStylesChanged(why: UnreadReason, error?: unknown): NextlyError {
  * draft had dropped it then reads as added, which refuses more, never less.
  * A create replaced nothing.
  *
- * The live form is read in the default language, since a write's language is
- * not part of this phase: for a field kept per language that can only hold
- * more, and no reference to something a removal just took out is held there,
- * since the removal finds a use in any language and is then refused.
+ * The live form is read in every one of the site's languages, as well as in
+ * the default one a target naming none reads: this phase is told neither the
+ * write's language nor whether the field is kept per language, and a draft
+ * written in one language, judged against another's live form alone, would
+ * read a reference its own live form holds as added and refuse a valid save.
+ * A field not kept per language has one value, which each language reads.
+ *
+ * Counting a reference any language's live form holds as held never lets a
+ * first use through. The removal's walk under the same lock reads every
+ * stored form in every language (`stored-documents-on-transaction`), so a
+ * reference held in any of them is a use the removal already sees, and is
+ * refused for: a removal committed before this write took the lock found it
+ * and was refused; one coming after waits, then finds it. So reading more
+ * languages can only keep a save that holds the reference already, never
+ * keep one bringing it for the first time.
  */
 async function formsBeforeWrite(
   write: InTransactionContext,
   fieldWrite: PluginFieldWrite,
-  path: string
+  path: string,
+  locales: readonly string[]
 ): Promise<StoredForms> {
   if (write.operation === "create" || write.originalData === undefined) {
     return { forms: [], readable: true };
@@ -313,8 +331,35 @@ async function formsBeforeWrite(
     ? [replaced as BlockDocument]
     : [];
   if (write.data?._isWorkingDraft !== true) return { forms, readable: true };
-  const live = await readStoredForms(fieldWrite, path, [false]);
+  const live = await liveFormsInEveryLocale(fieldWrite, path, locales);
   return { forms: [...forms, ...live.forms], readable: live.readable };
+}
+
+/**
+ * The field's live form in the default language, then in each of `locales`.
+ * The default language's read is the one it always was: a failure there
+ * fails the write. A language whose store is not ready yet holds no form
+ * this can read, and is left out, which only reads fewer references as held
+ * and refuses more, never less; its unreadable answer is never the whole
+ * answer, which would judge no reference at all.
+ */
+async function liveFormsInEveryLocale(
+  fieldWrite: PluginFieldWrite,
+  path: string,
+  locales: readonly string[]
+): Promise<StoredForms> {
+  const base = await readStoredForms(fieldWrite, path, [false]);
+  const forms = [...base.forms];
+  for (const locale of locales) {
+    const read = await readStoredForms(
+      { ...fieldWrite, locale },
+      path,
+      [false],
+      true
+    );
+    if (read.readable) forms.push(...read.forms);
+  }
+  return { forms, readable: base.readable };
 }
 
 /** The value at a dotted path, or undefined where the path holds none. */

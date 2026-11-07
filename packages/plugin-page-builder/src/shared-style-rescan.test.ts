@@ -18,7 +18,10 @@ import {
   storedUsesOf,
   type StoredDocuments,
 } from "./shared-style-rescan";
-import { storedDocumentsOf } from "./shared-styles-routes";
+import {
+  storedDocumentsOf,
+  storedSharedStyleUses,
+} from "./shared-styles-routes";
 import type { BuilderDocumentType } from "./site-style-route";
 import { tokenUsageOf } from "./token-usage";
 
@@ -362,6 +365,43 @@ describe("the stored documents, as the rescan reads them on a real site", () => 
         classes
       )
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+});
+
+describe("the shared styles' walk under the site's document limits", () => {
+  // One flat page one node past the default node limit, whose only use of
+  // the style is that last node: read under the defaults it is past the
+  // walk, read under the site's raised limits it is the page's own node.
+  const past = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: Array.from({ length: DEFAULT_LIMITS.maxNodes + 1 }, (_, at) => ({
+      id: `n${at}`,
+      type: "core/heading",
+      version: 1,
+      props: { text: "n", level: 2 },
+      classes: at === DEFAULT_LIMITS.maxNodes ? ["c-card"] : [],
+    })),
+  };
+  const raised = {
+    ...DEFAULT_LIMITS,
+    maxNodes: DEFAULT_LIMITS.maxNodes * 2,
+  };
+
+  it("finds a use held past the default node limit when the site raised it", async () => {
+    const { documents } = storedOf([{ id: "a", content: past }]);
+    expect(await storedSharedStyleUses(documents, raised)(["c-card"])).toEqual([
+      { kind: "collection", slug: "pages", id: "a" },
+    ]);
+  });
+
+  it("reads under the limits it is handed: the defaults stop short of that use", async () => {
+    // The control: the same page under the defaults finds nothing, so the
+    // use above is found by the limits passed and by nothing else.
+    const { documents } = storedOf([{ id: "a", content: past }]);
+    expect(
+      await storedSharedStyleUses(documents, DEFAULT_LIMITS)(["c-card"])
+    ).toEqual([]);
   });
 });
 

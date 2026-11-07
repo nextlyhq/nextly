@@ -2803,7 +2803,13 @@ export const pageBuilder = (
       // Every write changing a blocks value is judged again in its own
       // transaction under the graph lock, so two saves made at once cannot
       // each pass against the graph as it stood before the other.
-      registerCompositionRejudge(ctx, () => composition);
+      // The site's languages, read per write: a held working draft keeps a
+      // reference its live form holds in any of them.
+      registerCompositionRejudge(
+        ctx,
+        () => composition,
+        () => siteLocalesOf(ctx.config)
+      );
       // What a variable's in-use check reads: the variable index, the block
       // types the pages are rendered with (read per check), and the stored
       // documents. It names no document, since the write's author is not a
@@ -2833,7 +2839,7 @@ export const pageBuilder = (
             documents: () => Promise.resolve(documents),
           }).stillUsed.uses(ids),
         sharedStyleUses: (ids, documents) =>
-          storedSharedStyleUses(documents)(ids),
+          storedSharedStyleUses(documents, opts.limits ?? DEFAULT_LIMITS)(ids),
       });
       seedGraphLock = () =>
         seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
@@ -3922,6 +3928,8 @@ export const pageBuilder = (
         ...sharedStyleRoutes({
           configClassIds,
           usage: ctx => usageSourceOf(ctx.self.collections, classUsageIndex),
+          // The bounds the class index and the renderer read a page under.
+          limits: opts.limits ?? DEFAULT_LIMITS,
         }),
         // The Variables panel: how widely each variable is used and where,
         // from the variable usage index and the site's shared styles, and

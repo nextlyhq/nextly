@@ -85,14 +85,16 @@ const setupReading = (
   ...(definitions === undefined ? {} : { siteDefinitions: definitions }),
 });
 
-/** The handler the rejudge registers, over `setup`. */
+/** The handler the rejudge registers, over `setup`, on a site in `locales`. */
 function rejudge(
-  setup: CompositionSetup
+  setup: CompositionSetup,
+  locales: readonly string[] = []
 ): (write: InTransactionContext) => Promise<void> {
   const onInTransaction = vi.fn();
   registerCompositionRejudge(
     { hooks: { onInTransaction } as never, dialect: "postgresql" },
-    () => setup
+    () => setup,
+    () => locales
   );
   const handler = onInTransaction.mock.calls[0]?.[1] as
     | ((write: InTransactionContext) => Promise<void>)
@@ -105,22 +107,30 @@ function rejudge(
  * An update of a page's `content`, as the in-transaction phase hands it. Its
  * stored read answers what the write itself stored, for every form, as a read
  * on the write's own transaction does, unless `live` names the live form.
+ * `liveIn` names the live form a read in one language answers, by its code,
+ * over `live`; a language it does not name answers `live` (or the write's).
  */
 function pageWrite(args: {
   data: unknown;
   original?: unknown;
   draft?: boolean;
   live?: unknown;
+  liveIn?: Readonly<Record<string, unknown>>;
   operation?: "create" | "update";
 }): InTransactionContext & { readStored: ReturnType<typeof vi.fn> } {
   const readStored = vi.fn(
-    async (_type: string, target: { form?: string }) => ({
-      kind: "value" as const,
-      value:
-        target.form === "published" && args.live !== undefined
-          ? args.live
-          : args.data,
-    })
+    async (_type: string, target: { form?: string; locale?: string }) => {
+      const inLocale =
+        target.locale !== undefined && args.liveIn !== undefined
+          ? args.liveIn[target.locale]
+          : undefined;
+      const live = inLocale ?? args.live;
+      return {
+        kind: "value" as const,
+        value:
+          target.form === "published" && live !== undefined ? live : args.data,
+      };
+    }
   );
   return {
     collection: "pages",
@@ -253,6 +263,48 @@ describe("the references a write adds, judged under the lock", () => {
       "blocks",
       expect.objectContaining({ field: "content", form: "published" })
     );
+  });
+
+  it("keeps a reference only a non-default language's live form holds, for a held working draft", async () => {
+    // The default language's live form holds no use of the variable; the
+    // French one does. This phase is not told the draft's language, so the
+    // French live form is read too, and the draft keeps the reference.
+    const handler = rejudge(
+      setupReading(async () => defining()),
+      ["en", "fr"]
+    );
+    const write = pageWrite({
+      data: page({ token: "t-gone" }),
+      original: page(),
+      draft: true,
+      live: page(),
+      liveIn: { fr: page({ token: "t-gone" }) },
+    });
+    expect(await codesOf(handler(write))).toEqual([]);
+    expect(write.readStored).toHaveBeenCalledWith(
+      "blocks",
+      expect.objectContaining({
+        field: "content",
+        form: "published",
+        locale: "fr",
+      })
+    );
+  });
+
+  it("still refuses a reference no language's live form holds, for a held working draft", async () => {
+    // The control: the same draft on the same site, with no language's live
+    // form holding the variable, brings a first use and is refused.
+    const handler = rejudge(
+      setupReading(async () => defining()),
+      ["en", "fr"]
+    );
+    const write = pageWrite({
+      data: page({ token: "t-gone" }),
+      original: page(),
+      draft: true,
+      live: page(),
+    });
+    expect(await codesOf(handler(write))).toEqual(["unknown-token"]);
   });
 
   it("refuses every undefined reference a create brings, reading nothing stored", async () => {
