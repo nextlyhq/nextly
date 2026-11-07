@@ -61,7 +61,10 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
-import { panelOrderFor } from "@admin/lib/plugins/document-surfaces";
+import {
+  panelOrderFor,
+  placePanelParts,
+} from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -117,6 +120,7 @@ import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { PanelSectionsAboveForm } from "./panels";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
 import type { RecoveryPointState } from "./SaveStateIndicator";
@@ -1134,9 +1138,16 @@ export function EntryForm({
   // panel sections plugins declared for this collection's entries among them,
   // each judged on the entry as this reader's read returned it.
   const { contributions } = useBranding();
-  const panelOrder = useMemo(
-    () => panelOrderFor(contributions, collection.name, entry),
-    [contributions, collection.name, entry]
+  // On a phone the panel is a sheet opened only from the document's menu, so
+  // a section declared to sit above the form there moves out of the panel
+  // and above the fields, where the author meets it first.
+  const { panel: panelOrder, aboveForm: sectionsAboveForm } = useMemo(
+    () =>
+      placePanelParts(
+        panelOrderFor(contributions, collection.name, entry),
+        panel.mode === "sheet"
+      ),
+    [contributions, collection.name, entry, panel.mode]
   );
 
   const documentActionsInput: DocumentActionBindingsInput = {
@@ -1585,6 +1596,22 @@ export function EntryForm({
                                   panelCarriesId={panelDocked}
                                   documentId={entry?.id}
                                 />
+                                {/* A plugin's section that asks to be met
+                                  first, above the fields on a phone rather
+                                  than in the sheet. */}
+                                {mode === "edit" ? (
+                                  <PanelSectionsAboveForm
+                                    sections={sectionsAboveForm}
+                                    className={DOCUMENT_COLUMN_INSET}
+                                    {...(pluginSurfaces.sectionProps ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          pluginSectionProps:
+                                            pluginSurfaces.sectionProps,
+                                        })}
+                                  />
+                                ) : null}
 
                                 {/* The language panel, inline: the exact
                         complement of the docked panel, shown wherever that

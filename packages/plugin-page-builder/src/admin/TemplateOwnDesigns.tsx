@@ -103,11 +103,19 @@ function OwnDesignRow({
         >
           <Brush className="h-3.5 w-3.5" />
         </span>
+        {/* Each line is cut to the panel's width, so its full text is
+          offered on hover; the link's name is still the whole text. */}
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-foreground">
+          <span
+            className="block truncate text-sm font-semibold text-foreground"
+            title={item.title}
+          >
             {item.title}
           </span>
-          <span className="block truncate text-xs text-muted-foreground">
+          <span
+            className="block truncate text-xs text-muted-foreground"
+            title={says}
+          >
             {says}
           </span>
         </span>

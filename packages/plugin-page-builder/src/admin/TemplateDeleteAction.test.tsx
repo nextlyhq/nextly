@@ -134,6 +134,19 @@ describe("deleting a template", () => {
     expect(writes).toEqual([{ action: { kind: "delete-template", id: "t1" } }]);
   });
 
+  it("offers each kept entry's whole title where the list cuts it to one line", () => {
+    designs = answer();
+    open("t1");
+    const kept = screen.getByRole("list", {
+      name: "Posts with their own design",
+    });
+    for (const title of ["Ten years of field notes", "Our spring catalogue"]) {
+      const cut = within(kept).getByText(title);
+      expect(cut.className).toContain("truncate");
+      expect(cut.getAttribute("title")).toBe(title);
+    }
+  });
+
   it("says when the list of kept own designs was cut", () => {
     designs = answer({ hasNext: true });
     open("t1");

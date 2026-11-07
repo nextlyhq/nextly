@@ -11,8 +11,10 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import type { DocumentPanelSectionProps } from "@admin/lib/plugins/component-registry";
 import type {
   PanelOrderEntry,
+  PlacedPanelSection,
   PluginPanelSectionEntry,
 } from "@admin/lib/plugins/document-surfaces";
+import { cn } from "@admin/lib/utils";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import { useEntryLocale } from "../../EntryLocaleContext";
@@ -163,16 +165,11 @@ export function DocumentPanel({
             {builtIn(part.name)}
           </Fragment>
         ) : pluginSectionProps === undefined ? null : (
-          // A placed section is the panel's own, framed as the built-in
-          // ones are; it applies to some documents and not others, so it
-          // leaves no heading behind where its component draws nothing.
-          <PanelSection
+          <PlacedSection
             key={`placed:${part.id}`}
-            title={part.title}
-            collapsesWhenEmpty
-          >
-            <PluginSlot path={part.component} props={pluginSectionProps} />
-          </PanelSection>
+            part={part}
+            props={pluginSectionProps}
+          />
         )
       )}
       {pluginSectionProps === undefined
@@ -202,6 +199,62 @@ export function DocumentPanel({
               )}
             </PanelSection>
           ))}
+    </div>
+  );
+}
+
+/**
+ * A section a plugin placed: the panel's own frame, the plugin's body. It
+ * applies to some documents and not others, so it leaves no heading behind
+ * where its component draws nothing. `flush` draws it above the fields
+ * rather than in the panel.
+ */
+function PlacedSection({
+  part,
+  props,
+  flush = false,
+}: {
+  part: PlacedPanelSection;
+  props: DocumentPanelSectionProps;
+  flush?: boolean;
+}): React.ReactElement {
+  return (
+    <PanelSection title={part.title} collapsesWhenEmpty flush={flush}>
+      <PluginSlot path={part.component} props={props} />
+    </PanelSection>
+  );
+}
+
+/**
+ * The placed sections drawn above the fields where the editor is too narrow
+ * to keep the panel beside them (`placePanelParts`), so a section an author
+ * should meet first is on screen without opening the panel. Each keeps its
+ * heading and its landmark, and draws nothing until there is a document.
+ */
+export function PanelSectionsAboveForm({
+  sections,
+  pluginSectionProps,
+  className,
+}: {
+  sections: readonly PlacedPanelSection[];
+  /** What each section is handed. Absent, none is drawn. */
+  pluginSectionProps?: DocumentPanelSectionProps;
+  className?: string;
+}): React.ReactElement | null {
+  if (sections.length === 0 || pluginSectionProps === undefined) return null;
+  return (
+    <div
+      className={cn("flex flex-col", className)}
+      data-testid="document-panel-above-form"
+    >
+      {sections.map(part => (
+        <PlacedSection
+          key={`placed:${part.id}`}
+          part={part}
+          props={pluginSectionProps}
+          flush
+        />
+      ))}
     </div>
   );
 }

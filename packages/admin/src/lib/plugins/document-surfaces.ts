@@ -88,6 +88,11 @@ export type PanelOrderEntry =
       plugin: string;
       title: string;
       component: string;
+      /**
+       * `"above-form"` when the section is drawn above the fields, not in the
+       * panel, where the editor is too narrow to keep the panel beside them.
+       */
+      narrow?: "above-form";
     };
 
 /** Whether a delivered entry is a declared panel section, not a built-in. */
@@ -137,7 +142,40 @@ export function panelOrderFor(
         plugin: part.plugin,
         title: part.label,
         component: part.component,
+        ...(part.narrow === undefined ? {} : { narrow: part.narrow }),
       },
     ];
   });
+}
+
+/** A placed section, as `panelOrderFor` answers one. */
+export type PlacedPanelSection = Extract<PanelOrderEntry, { kind: "section" }>;
+
+/** Where the panel's parts go on an editor of one width. */
+interface PanelPlacement {
+  /** The panel's parts, in the server's order; `undefined` as given. */
+  panel: PanelOrderEntry[] | undefined;
+  /** The sections drawn above the fields instead, in the same order. */
+  aboveForm: PlacedPanelSection[];
+}
+
+/**
+ * Splits the panel's parts for an editor that is `narrow` (too narrow to keep
+ * the panel beside the fields, where it opens only when asked for): a section
+ * declared `narrow: "above-form"` moves above the fields and out of the
+ * panel, so it is on screen without opening the panel and is drawn once. On
+ * a wider editor, or when nothing asks to move, the order is kept whole.
+ */
+export function placePanelParts(
+  order: PanelOrderEntry[] | undefined,
+  narrow: boolean
+): PanelPlacement {
+  if (order === undefined || !narrow) return { panel: order, aboveForm: [] };
+  const aboveForm = order.filter(
+    (part): part is PlacedPanelSection =>
+      part.kind === "section" && part.narrow === "above-form"
+  );
+  if (aboveForm.length === 0) return { panel: order, aboveForm };
+  const moved = new Set<PanelOrderEntry>(aboveForm);
+  return { panel: order.filter(part => !moved.has(part)), aboveForm };
 }

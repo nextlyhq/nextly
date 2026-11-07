@@ -6,7 +6,13 @@
  * design; and the builder's chip, only on a collection's template that has
  * own designs.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntryDesignsResponse } from "../templates/entry-designs-contract";
@@ -129,6 +135,24 @@ describe("a template's own designs, in its document panel", () => {
 
     fireEvent.click(first);
     expect(navigated).toEqual(["/admin/collections/posts/p1"]);
+  });
+
+  it("offers each row's whole title and status line where the panel cuts them", () => {
+    designs = answer(TWO);
+    panelSection();
+    const link = screen.getByRole("link", {
+      name: /Our spring catalogue/,
+    });
+    const title = within(link).getByText("Our spring catalogue");
+    expect(title.className).toContain("truncate");
+    expect(title.getAttribute("title")).toBe("Our spring catalogue");
+    const status = within(link).getByText(
+      "Not published · visitors see this template"
+    );
+    expect(status.className).toContain("truncate");
+    expect(status.getAttribute("title")).toBe(
+      "Not published · visitors see this template"
+    );
   });
 
   it("says no entry has one", () => {

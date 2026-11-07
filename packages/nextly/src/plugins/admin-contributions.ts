@@ -441,6 +441,15 @@ export interface AdminSidebarSectionContribution extends AdminContributionBase {
   kind: "sidebarSection";
   label: string;
   component: ComponentPath;
+  /**
+   * @experimental Where the section is drawn when the editor is too narrow
+   * to keep the panel beside the fields (a phone), and the panel opens only
+   * when asked for. `"above-form"` draws it in the field column, under the
+   * title and above the fields, and leaves it out of the panel there, so a
+   * section an author should meet first stays on screen. Absent, it stays in
+   * the panel at every width.
+   */
+  narrow?: "above-form";
 }
 
 /**

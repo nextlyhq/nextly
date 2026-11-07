@@ -15,7 +15,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EntryDesignsResponse } from "../templates/entry-designs-contract";
 
 type Provider = (ctx: { target: string }) => unknown[];
+type Transform = (columns: { name: string }[]) => { name: string }[];
 const providers: { target: string; provider: Provider }[] = [];
+const transforms: { target: string; transform: Transform }[] = [];
 const reads: string[] = [];
 let answers: Record<string, EntryDesignsResponse | undefined> = {};
 let cellRead: {
@@ -26,6 +28,9 @@ let cellRead: {
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   registerColumns: (target: string, provider: Provider) => {
     providers.push({ target, provider });
+  },
+  transformColumns: (target: string, transform: Transform) => {
+    transforms.push({ target, transform });
   },
   readPluginRoute: ({ path }: { path: string }) => {
     reads.push(path);
@@ -42,9 +47,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   }),
 }));
 
-const { DesignCell, registerEntryDesignColumn } = await import(
-  "./entry-design-column"
-);
+const { DesignCell, designAfterStatus, registerEntryDesignColumn } =
+  await import("./entry-design-column");
 
 function answer(
   template: EntryDesignsResponse["meta"]["template"],
@@ -113,6 +117,20 @@ describe("the Design column", () => {
 
     expect(columnsOf("posts").map(column => column.header)).toEqual(["Design"]);
     expect(columnsOf("users")).toEqual([]);
+
+    // Moved to right after Status on the list given it, and only there: the
+    // list's own columns, with the provider's appended after every field.
+    expect(transforms.map(each => each.target)).toEqual(["posts"]);
+    const listed = [
+      { name: "title" },
+      { name: "status" },
+      { name: "excerpt" },
+      { name: "metaTitle" },
+      ...(columnsOf("posts") as { name: string }[]),
+    ];
+    expect(transforms[0]!.transform(listed).map(column => column.name)).toEqual(
+      ["title", "status", "__pageBuilderOwnDesign", "excerpt", "metaTitle"]
+    );
   });
 
   it("adds the column to a collection given a template later, on a later list view", async () => {
@@ -196,5 +214,37 @@ describe("the Design column", () => {
     );
     expect(container.querySelector("[aria-hidden='true']")).not.toBeNull();
     expect(container.textContent).toBe("");
+  });
+});
+
+describe("the Design column's place", () => {
+  const design = { name: "__pageBuilderOwnDesign" };
+
+  it("sits right after Status, whatever came between them", () => {
+    expect(
+      designAfterStatus([
+        { name: "title" },
+        { name: "status" },
+        { name: "excerpt" },
+        { name: "updatedAt" },
+        design,
+      ]).map(column => column.name)
+    ).toEqual([
+      "title",
+      "status",
+      "__pageBuilderOwnDesign",
+      "excerpt",
+      "updatedAt",
+    ]);
+  });
+
+  it("stays where it was on a list with no Status column", () => {
+    const columns = [{ name: "title" }, { name: "excerpt" }, design];
+    expect(designAfterStatus(columns)).toEqual(columns);
+  });
+
+  it("leaves a list without the Design column as it came", () => {
+    const columns = [{ name: "status" }, { name: "title" }];
+    expect(designAfterStatus(columns)).toEqual(columns);
   });
 });

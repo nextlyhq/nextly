@@ -3475,6 +3475,10 @@ export const pageBuilder = (
             label: "Design",
             component: ENTRY_DESIGN_SECTION_COMPONENT,
             before: "status",
+            // On a phone the panel opens only from the document's menu, so
+            // the section sits above the form there, where an author meets
+            // which design the entry is shown with before its fields.
+            narrow: "above-form",
           },
         ],
         // Delete component on the component store, wherever it is: the

@@ -6,7 +6,9 @@
  * that design or take it away.
  *
  * Declared as a side panel section at the `collection.edit` place, before
- * Status, so it is offered on every collection's entries, including a
+ * Status, and above the form on a phone (`narrow: "above-form"`), where the
+ * panel opens only from the document's menu. It is offered on every
+ * collection's entries, including a
  * collection the Schema Builder adds later, which no list of slugs could
  * name. It applies to an entry whose collection has a template or may have
  * one, and draws nothing for any other, which leaves no section behind.
@@ -348,11 +350,14 @@ function OwnDesign({
         <Brush className="h-4 w-4" aria-hidden="true" />
         {WORDS.edit}
       </Button>
+      {/* The admin's destructive text pairing: the base red is lighter
+        than the 4.5:1 text minimum on a light card, so light mode reads its
+        darker shade and dark mode the base, which passes there. */}
       <Button
         type="button"
         variant="link"
         size="sm"
-        className="h-auto self-start px-0 text-xs text-destructive"
+        className="h-auto self-start px-0 text-xs text-destructive-700 dark:text-destructive"
         disabled={held}
         {...(held ? { title: HELD_REASON } : {})}
         onClick={() => setConfirming(true)}

@@ -44,8 +44,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The list actions and the import bar the entry also registers; their own
   // behaviour is tested beside them.
   registerRowAction: () => undefined,
-  // The Design column's provider on every list.
+  // The Design column's provider on every list, and its place after Status.
   registerColumns: () => undefined,
+  transformColumns: () => undefined,
   writePluginRoute: () => Promise.resolve(undefined),
   isApiError: () => false,
   navigateTo: () => undefined,

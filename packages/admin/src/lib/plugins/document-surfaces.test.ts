@@ -7,7 +7,12 @@ import type { AdminContributionsMeta } from "nextly/config";
 
 import type { PluginMetadata } from "@admin/types/branding";
 
-import { documentSurfacesFor, panelOrderFor } from "./document-surfaces";
+import {
+  documentSurfacesFor,
+  panelOrderFor,
+  placePanelParts,
+  type PanelOrderEntry,
+} from "./document-surfaces";
 
 const plugins = [
   {
@@ -130,5 +135,91 @@ describe("panelOrderFor", () => {
   it("answers nothing when the place has no list, so the panel keeps its own order", () => {
     expect(panelOrderFor({}, "posts", {})).toBeUndefined();
     expect(panelOrderFor(undefined, "posts", {})).toBeUndefined();
+  });
+});
+
+describe("placePanelParts", () => {
+  const design: PanelOrderEntry = {
+    kind: "section",
+    id: "acme.design",
+    plugin: "@acme/designs",
+    title: "Design",
+    component: "a#Design",
+    narrow: "above-form",
+  };
+  const seo: PanelOrderEntry = {
+    kind: "section",
+    id: "acme.seo",
+    plugin: "@acme/seo",
+    title: "SEO",
+    component: "s#Seo",
+  };
+  const order: PanelOrderEntry[] = [
+    design,
+    { kind: "builtIn", name: "status" },
+    seo,
+    { kind: "builtIn", name: "details" },
+  ];
+
+  it("moves a section declared above-form out of the panel on a narrow editor", () => {
+    expect(placePanelParts(order, true)).toEqual({
+      panel: [
+        { kind: "builtIn", name: "status" },
+        seo,
+        { kind: "builtIn", name: "details" },
+      ],
+      aboveForm: [design],
+    });
+  });
+
+  it("keeps the whole order in the panel on a wide editor", () => {
+    expect(placePanelParts(order, false)).toEqual({
+      panel: order,
+      aboveForm: [],
+    });
+  });
+
+  it("keeps a section that did not ask to move in the panel at every width", () => {
+    const without = order.filter(part => part !== design);
+    expect(placePanelParts(without, true)).toEqual({
+      panel: without,
+      aboveForm: [],
+    });
+  });
+
+  it("answers no order as no order, so the panel keeps its own", () => {
+    expect(placePanelParts(undefined, true)).toEqual({
+      panel: undefined,
+      aboveForm: [],
+    });
+  });
+
+  it("carries the declared narrow placement from the server's list", () => {
+    const parts = panelOrderFor(
+      {
+        "collection.edit": {
+          sidebarSection: [
+            {
+              id: "acme.design",
+              kind: "sidebarSection",
+              plugin: "@acme/designs",
+              label: "Design",
+              component: "a#Design",
+              narrow: "above-form",
+            },
+            { builtIn: "details" },
+          ],
+        },
+      } as unknown as AdminContributionsMeta,
+      "posts",
+      {}
+    );
+    expect(parts?.[0]).toMatchObject({
+      id: "acme.design",
+      narrow: "above-form",
+    });
+    expect(placePanelParts(parts, true).aboveForm.map(part => part.id)).toEqual(
+      ["acme.design"]
+    );
   });
 });

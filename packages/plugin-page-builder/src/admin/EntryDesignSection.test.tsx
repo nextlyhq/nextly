@@ -270,6 +270,19 @@ describe("the entry's Design section", () => {
     ).toBeTruthy();
   });
 
+  it("draws Remove own design… in the destructive text pairing that passes AA in both schemes", () => {
+    read = { data: answer({ items: [design("published")] }), error: null };
+    section();
+    const classes = screen
+      .getByRole("button", { name: "Remove own design…" })
+      .className.split(/\s+/);
+    // The base red alone is under 4.5:1 on the light card; light mode reads
+    // the darker shade, and dark mode the base, which passes on dark.
+    expect(classes).toContain("text-destructive-700");
+    expect(classes).toContain("dark:text-destructive");
+    expect(classes).not.toContain("text-destructive");
+  });
+
   it("confirms before removing the own design, and keeps it on Keep it", async () => {
     read = { data: answer({ items: [design("published")] }), error: null };
     section();

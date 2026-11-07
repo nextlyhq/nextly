@@ -22,6 +22,7 @@ export function PanelSection({
   titleHidden = false,
   collapsesWhenEmpty = false,
   focusTarget,
+  flush = false,
   children,
 }: {
   title: string;
@@ -40,6 +41,11 @@ export function PanelSection({
    * work, so focus lands on the section rather than the top of the page.
    */
   focusTarget?: `data-${string}`;
+  /**
+   * Drawn in the field column rather than the panel: no inset or rule of its
+   * own, so it lines up with the title and the fields it sits above.
+   */
+  flush?: boolean;
   children: ReactNode;
 }): JSX.Element {
   const headingId = useId();
@@ -50,7 +56,8 @@ export function PanelSection({
       aria-labelledby={headingId}
       data-panel-section={title}
       className={cn(
-        "border-b border-border px-5 py-4 outline-none last:border-b-0",
+        "outline-none",
+        flush ? "pt-4" : "border-b border-border px-5 py-4 last:border-b-0",
         // A section handed focus shows it with the ring the editor's controls
         // use, drawn inside so the panel's edges do not clip it.
         focusTarget !== undefined &&

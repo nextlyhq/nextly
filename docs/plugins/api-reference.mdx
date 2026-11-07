@@ -863,6 +863,13 @@ built-in part's place with `replaces`. The edit page's side panel names its
 four built-in sections, in order: `status`, `publishing`, `language` and
 `details`.
 
+**On a phone.** Where a collection entry's editor is too narrow to keep the
+side panel beside the fields, the panel opens only when asked for. A side
+panel section declared with `narrow: "above-form"` (`@experimental`) is drawn
+there under the title, above the fields, and left out of the panel, so an
+author meets it without opening the panel. Without it, the section stays in
+the panel at every width.
+
 **Who sees one.** Contributions are sent only in the signed-in workspace
 metadata, the login page's alone in the public one, and each reader receives
 only what they may see:

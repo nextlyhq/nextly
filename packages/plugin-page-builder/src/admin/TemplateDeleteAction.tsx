@@ -331,7 +331,12 @@ function KeptDesign({ item }: { item: EntryDesignItem }): JSX.Element {
   const shown = item.status === "published";
   return (
     <li className="flex items-center justify-between gap-3 px-3 py-2">
-      <span className="min-w-0 truncate font-medium text-foreground">
+      {/* Cut to one line in the dialog's narrow list, so the full title is
+        offered on hover; the text itself stays whole for a screen reader. */}
+      <span
+        className="min-w-0 truncate font-medium text-foreground"
+        title={item.title}
+      >
         {item.title}
       </span>
       <span

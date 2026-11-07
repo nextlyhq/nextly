@@ -15,11 +15,18 @@
  *
  * Each cell reads the same cached answer (`useEntryDesigns`), so a page of
  * rows asks the server once, not once per row. On a narrow list the column
- * rides on each card, as every list column does.
+ * rides on each card, as every list column does. A provider's column is
+ * appended after every field's, off screen on a wide collection, so the
+ * column is moved to sit right after Status, beside the lifecycle it reads
+ * with.
  *
  * @module admin/entry-design-column
  */
-import { registerColumns, type NextlyColumn } from "@nextlyhq/plugin-sdk/admin";
+import {
+  registerColumns,
+  transformColumns,
+  type NextlyColumn,
+} from "@nextlyhq/plugin-sdk/admin";
 import type { JSX } from "react";
 
 import {
@@ -86,6 +93,7 @@ function askAbout(target: string): void {
       noTemplateAt.delete(target);
       columned.add(target);
       registerColumns(target, () => [designColumn(target)]);
+      transformColumns(target, designAfterStatus);
     },
     () => {
       pending.delete(target);
@@ -102,6 +110,25 @@ function designColumn(collection: string): NextlyColumn {
     searchable: false,
     cell: ({ row }) => <DesignCell collection={collection} row={row} />,
   };
+}
+
+/** The entry list's lifecycle column, a collection with drafts' `status`. */
+const STATUS_COLUMN_NAME = "status";
+
+/**
+ * `columns` with the Design column moved to right after Status, so it is on
+ * screen beside the lifecycle rather than after every field. A list without
+ * a Status column, or without the Design column, is returned as it came.
+ */
+export function designAfterStatus<Column extends { name: string }>(
+  columns: Column[]
+): Column[] {
+  const design = columns.find(column => column.name === DESIGN_COLUMN_NAME);
+  if (design === undefined) return columns;
+  const rest = columns.filter(column => column !== design);
+  const status = rest.findIndex(column => column.name === STATUS_COLUMN_NAME);
+  if (status === -1) return columns;
+  return [...rest.slice(0, status + 1), design, ...rest.slice(status + 1)];
 }
 
 /** A listed row's id, as text. */
