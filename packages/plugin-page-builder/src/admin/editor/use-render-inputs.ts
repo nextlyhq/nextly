@@ -14,6 +14,7 @@ import {
   registryNestingSource,
   getBlock,
   paginatedList,
+  revealConditioned,
   visitorUnreadableBindings,
   walkNodes,
   type BlockDocument,
@@ -964,7 +965,7 @@ const NO_DEFINITIONS: DefinitionsById = new Map();
 function drawnTree(
   document: BlockDocument,
   definitions: DefinitionsById,
-  render: PageRenderInputs
+  render: Pick<PageRenderInputs, "styleContext" | "limits">
 ): BlockDocument | null {
   return prepareDocumentForRead(document, {
     resolver: registeredBlocks(),
@@ -972,6 +973,27 @@ function drawnTree(
     definitions,
     ...(render.limits === undefined ? {} : { limits: render.limits }),
   });
+}
+
+/**
+ * The page's tree as the canvas's bindings are asked of it: its conditioned
+ * blocks lifted first, as the canvas draws them whoever the page would show
+ * them to (and, while conditions are applied, a shown one as itself), so a
+ * bound prop inside one is read with the rest: an Entry content block's
+ * composed blocks among them, under conditions of its own. The renderer's
+ * pipeline otherwise holds a conditioned block back, as a visitor's page
+ * does, and the canvas would draw its bound props' fallbacks. `gated`, the
+ * page as that pipeline prepares it, stands in where nothing is conditioned.
+ */
+export function askedPageTree(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  render: Pick<PageRenderInputs, "styleContext" | "limits">,
+  gated?: BlockDocument | null
+): BlockDocument | null {
+  const revealed = revealConditioned(document);
+  if (revealed === document && gated !== undefined) return gated;
+  return drawnTree(revealed, definitions, render);
 }
 
 /**
@@ -1030,10 +1052,17 @@ export function useBoundCanvasRender(
     () => drawnTree(document, canvasRender.definitions, canvasRender),
     [document, canvasRender]
   );
+  // The page's tree as its bindings are asked of it: with its conditioned
+  // blocks, which the canvas draws whoever the page would show them to.
+  const askedTree = useMemo(
+    () =>
+      askedPageTree(document, canvasRender.definitions, canvasRender, pageTree),
+    [document, canvasRender, pageTree]
+  );
   const trees = useMemo(
     () =>
       [
-        pageTree,
+        askedTree,
         ...regions.map(region =>
           drawnTree(
             region.document,
@@ -1042,7 +1071,7 @@ export function useBoundCanvasRender(
           )
         ),
       ].filter((tree): tree is BlockDocument => tree !== null),
-    [pageTree, regions, canvasRender]
+    [askedTree, regions, canvasRender]
   );
   // A custom source's row collection is asked for with the page's own, so
   // its item bindings draw with that collection's field shapes.
