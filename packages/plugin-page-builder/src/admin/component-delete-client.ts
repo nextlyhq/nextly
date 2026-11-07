@@ -24,6 +24,7 @@ import {
   type LeftDocument,
   type NamedDocument,
 } from "../component-delete/contract";
+import { SOMEONE_ELSE_IS_DELETING } from "../component-delete/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import { refusalMessage } from "./save-pattern-client";
@@ -37,8 +38,8 @@ interface Envelope {
 /** What one call came to. */
 export type DeleteCall =
   | { readonly kind: "answer"; readonly result: ComponentDeleteResult }
-  /** Someone else's delete is open (409), or a step lost a race. */
-  | { readonly kind: "conflict"; readonly message: string }
+  /** Someone else's delete is open: the route's own busy refusal (409). */
+  | { readonly kind: "busy"; readonly message: string }
   /** The caller may not delete this component (403). */
   | { readonly kind: "forbidden" }
   | { readonly kind: "failed"; readonly message: string };
@@ -79,8 +80,17 @@ async function call(
     if (isApiError(error) && error.status === 403) return { kind: "forbidden" };
     const message =
       error instanceof Error ? refusalMessage(error, unexplained) : unexplained;
-    if (isApiError(error) && error.status === 409) {
-      return { kind: "conflict", message };
+    // Only the route's busy refusal is someone else's delete. It is told
+    // by its words, the shared constant the route refuses with, since the
+    // refusal carries no public code of its own. Any other conflict, such as
+    // the component's own delete refusing, is a failure to retry, in its own
+    // words.
+    if (
+      isApiError(error) &&
+      error.status === 409 &&
+      error.message === SOMEONE_ELSE_IS_DELETING
+    ) {
+      return { kind: "busy", message };
     }
     return { kind: "failed", message };
   }

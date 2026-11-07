@@ -816,7 +816,7 @@ function viewOfRefusal(
   converted = 0
 ): View {
   switch (call.kind) {
-    case "conflict":
+    case "busy":
       return { kind: "someone-else", message: call.message };
     case "forbidden":
       return { kind: "forbidden", converted };

@@ -22,6 +22,10 @@ interface RowAction {
 const rowActions: { target: string; action: RowAction }[] = [];
 const navigated: string[] = [];
 let identity: { kind: string; slug: string; documentId?: string } | null = null;
+/** The editor's own actions, as `useDocumentActions` answers them. */
+let editorActions: { actions: { id: string; disabledReason?: string }[] } = {
+  actions: [{ id: "publish" }],
+};
 const resolved = {
   pagesCollection: "pages",
   layoutsCollection: "layouts",
@@ -56,7 +60,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useDocumentIdentity: () => identity,
   useDocumentStatus: () => null,
-  useDocumentActions: () => ({ actions: [] }),
+  useDocumentActions: () => editorActions,
   usePluginRoute: ({ enabled }: { enabled?: boolean }) => ({
     data: enabled === false ? undefined : resolved,
     error: null,
@@ -74,6 +78,7 @@ const { RemoveLayoutToolbarSlot } = await import("./RemoveLayoutAction");
 beforeEach(() => {
   navigated.length = 0;
   identity = null;
+  editorActions = { actions: [{ id: "publish" }] };
 });
 
 describe("in the document bar", () => {
@@ -87,6 +92,44 @@ describe("in the document bar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete component…" }));
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Remove Layout…" })).toBeNull();
+  });
+
+  it("is held while the form's writes are, saying why in the form's own words", () => {
+    const history =
+      "You are viewing a past version. Return to the current one to make changes.";
+    editorActions = {
+      actions: [
+        { id: "publish", disabledReason: history },
+        { id: "unpublish", disabledReason: history },
+      ],
+    };
+    identity = {
+      kind: "collection",
+      slug: "site-components",
+      documentId: "c1",
+    };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    const button = screen.getByRole("button", { name: "Delete component…" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute("title")).toBe(history);
+  });
+
+  it("is free while one of the form's publication writes may run", () => {
+    editorActions = {
+      actions: [
+        { id: "publish" },
+        { id: "unpublish", disabledReason: "Not published." },
+      ],
+    };
+    identity = {
+      kind: "collection",
+      slug: "site-components",
+      documentId: "c1",
+    };
+    render(<RemoveLayoutToolbarSlot context="collection" />);
+    const button = screen.getByRole("button", { name: "Delete component…" });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    expect(button.getAttribute("title")).toBeNull();
   });
 
   it("is not offered on a component not saved yet", () => {
@@ -140,6 +183,23 @@ describe("on the Components list", () => {
     expect(rowActions[0]?.action.destructive).toBe(true);
     expect(rowActions[0]?.action.isVisible?.({ id: "c1" })).toBe(true);
     expect(rowActions[0]?.action.isVisible?.({})).toBe(false);
+  });
+
+  it("opens no dialog when the list is left and opened again", async () => {
+    const first = render(
+      <ComponentListTools collectionSlug="site-components" />
+    );
+    const action = rowActions.find(
+      entry => entry.action.id === "page-builder-delete-component"
+    )?.action;
+    act(() => {
+      action?.onSelect({ id: "c1", title: "Hero banner" });
+    });
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    first.unmount();
+    render(<ComponentListTools collectionSlug="site-components" />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByText("Hero banner")).toBeNull();
   });
 
   it("opens the dialog for the row chosen, naming it", async () => {

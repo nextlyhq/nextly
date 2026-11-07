@@ -611,6 +611,26 @@ describe("the delete", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
+  it("treats any other 409 as a failure to retry, in its own words", async () => {
+    const refusal =
+      "Components are deleted with Delete component, which turns their copies into plain blocks first. Use it instead.";
+    answer = body =>
+      body.dryRun === true
+        ? envelope(USED)
+        : Promise.reject(new ApiError(refusal, 409));
+    show();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Turn each copy into plain blocks, then delete",
+      })
+    );
+    await shown(refusal);
+    expect(
+      screen.queryByRole("heading", { name: "Delete in progress" })
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
   it("says someone else is deleting it when the start is refused with 409", async () => {
     answer = body =>
       body.dryRun === true

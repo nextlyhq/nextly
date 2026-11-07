@@ -116,17 +116,23 @@ function reasonOf(error: unknown, fallback: string): string {
 }
 
 /**
- * Why the editor holds this document's writes, or `undefined` when Remove
- * Layout may run. Read from the editor's own Delete and Unpublish: a past
- * version on screen, a colleague's claim or a read-only form gives both a
- * reason, and where every write is refused the editor offers neither. One of
- * the two able to run is enough, since the dialog offers whichever applies.
+ * Why the editor holds this document's writes, or `undefined` when an action
+ * that writes it may run. Read from the editor's own actions named in `ids`:
+ * a past version on screen, a colleague's claim or a read-only form gives
+ * each a reason, and where every write is refused the editor offers none of
+ * them. One of them able to run is enough.
+ *
+ * Remove Layout reads Delete and Unpublish, the two it offers in their
+ * place. Delete component reads Publish and Unpublish: a component's own
+ * Delete is never offered (`admin.disableDelete`), and one of the two always
+ * is to an author who may change its publication, whichever way it stands.
  */
 function heldReason(
-  actions: Pick<DocumentActions, "actions"> | null
+  actions: Pick<DocumentActions, "actions"> | null,
+  ids: readonly string[]
 ): string | undefined {
-  const removals = (actions?.actions ?? []).filter(
-    action => action.id === "delete" || action.id === "unpublish"
+  const removals = (actions?.actions ?? []).filter(action =>
+    ids.includes(action.id)
   );
   if (removals.length === 0) return "This document's changes are on hold.";
   if (removals.some(action => action.disabledReason === undefined)) {
@@ -166,12 +172,14 @@ export function RemoveLayoutToolbarSlot(_props: {
     identity.documentId !== "" &&
     identity.documentId !== "create"
   ) {
-    // Delete component is its own action, with its own checks and fence on
-    // the server, so the form's holds on its own writes do not hold it.
+    // Held as the form's own writes are: a past version on screen, or a
+    // colleague's claim on the document, holds Delete component too, with
+    // the same words.
     return (
       <DeleteComponentAction
         componentId={identity.documentId}
         onDeleted={() => navigateTo(`/admin/collections/${components}`)}
+        heldBecause={heldReason(actions, ["publish", "unpublish"])}
       />
     );
   }
@@ -188,7 +196,7 @@ export function RemoveLayoutToolbarSlot(_props: {
       collectionSlug={identity.slug}
       entryId={identity.documentId}
       published={status?.status === "published"}
-      heldBecause={heldReason(actions)}
+      heldBecause={heldReason(actions, ["delete", "unpublish"])}
     />
   );
 }

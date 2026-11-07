@@ -32,7 +32,7 @@
 import { registerRowAction } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { Trash2 } from "lucide-react";
-import { useState, useSyncExternalStore, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
 import { DeleteComponentDialog } from "./DeleteComponentDialog";
 import { TransferImport } from "./transfer-import";
@@ -44,15 +44,27 @@ const DELETE_ROW_ACTION_ID = "page-builder-delete-component";
 export function DeleteComponentAction({
   componentId,
   onDeleted,
+  heldBecause,
 }: {
   readonly componentId: string;
   /** Where the author goes once the component is gone. */
   readonly onDeleted: () => void;
+  /**
+   * Why the document's writes are held (a past version on screen, a
+   * colleague's claim), which holds this action too; absent when it may run.
+   */
+  readonly heldBecause?: string | undefined;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={heldBecause !== undefined}
+        {...(heldBecause === undefined ? {} : { title: heldBecause })}
+        onClick={() => setOpen(true)}
+      >
         Delete component…
       </Button>
       {open ? (
@@ -77,22 +89,15 @@ interface Asked {
 }
 
 /**
- * The row asked for, shared by the row action and the list's tools: the
- * action runs outside React, and the tools draw the dialog for it.
+ * The mounted lists' tools, each told when its row action is chosen. The
+ * action runs outside React, so it reaches the tools through this; the row
+ * chosen is the tools' own state, so it goes with them when the list is left
+ * and a list opened again starts with no dialog.
  */
-let asked: Asked | null = null;
-const listeners = new Set<() => void>();
+const openers = new Set<(asked: Asked) => void>();
 
-function ask(next: Asked | null): void {
-  asked = next;
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+function ask(next: Asked): void {
+  for (const open of openers) open(next);
 }
 
 /** A row's non-empty string field, or null. */
@@ -139,11 +144,13 @@ export function ComponentListTools({
   readonly collectionSlug?: string;
 }): JSX.Element {
   registerDeleteComponentAction(collectionSlug ?? "");
-  const current = useSyncExternalStore(
-    subscribe,
-    () => asked,
-    () => null
-  );
+  const [current, setCurrent] = useState<Asked | null>(null);
+  useEffect(() => {
+    openers.add(setCurrent);
+    return () => {
+      openers.delete(setCurrent);
+    };
+  }, []);
   return (
     <>
       <TransferImport />
@@ -154,9 +161,9 @@ export function ComponentListTools({
           componentId={current.id}
           name={current.title}
           open
-          onClose={() => ask(null)}
+          onClose={() => setCurrent(null)}
           onDeleted={() => {
-            ask(null);
+            setCurrent(null);
             // The list holds the deleted row until it is read again.
             window.location.reload();
           }}
