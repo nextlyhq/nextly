@@ -191,7 +191,7 @@ describe("backfillPageClaims", () => {
     expect(reconciledPaths()).toEqual([["/about"], ["/contact"]]);
   });
 
-  it("gives up a clashing page's stale claims and waits before it records its current ones", async () => {
+  it("gives up a clashing page's stale claims and waits after it records its current ones", async () => {
     vi.mocked(reconcileHolder).mockRejectedValueOnce(
       NextlyError.conflict({ reason: "state" })
     );
@@ -201,8 +201,9 @@ describe("backfillPageClaims", () => {
     expect(dropped.calls[0]?.[3].addresses.map(at => at.segments)).toEqual([
       ["about"],
     ]);
-    expect(dropped.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(claimOrWait).mock.invocationCallOrder[0] ?? 0
+    // After the current claims are taken, as reconciling orders it.
+    expect(dropped.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(claimOrWait).mock.invocationCallOrder[0] ?? Infinity
     );
   });
 

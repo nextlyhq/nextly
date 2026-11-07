@@ -856,7 +856,8 @@ function heldBy(claims: Claims, tx: Tx, holder: Holder): Promise<ClaimRow[]> {
  * Give up what `holder` has and `desired` no longer holds, in `tx`: drop its
  * stale waits and release its stale claims, handing each released one on.
  * For a holder that waits rather than reconciles (one refused at start-up),
- * before its current waits are recorded.
+ * after its current claims and waits are taken, as reconciling claims before
+ * it releases.
  *
  * Read twice: once to find the locks to take, and again under them. A
  * release that hands a stale wait over takes the same locks, so by the

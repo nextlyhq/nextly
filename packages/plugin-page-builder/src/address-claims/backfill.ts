@@ -253,13 +253,16 @@ async function waitForAddresses(
     await deps.withTransaction(async tx => {
       const wanted = await wantedNow(deps, tx, holder);
       if (wanted === null) return;
-      await dropStaleClaims(deps.claims, tx, holder, wanted);
+      // What it should hold first, then what it should not, as reconciling
+      // does: releasing a stale address first could hand another list a
+      // space over the page's new address before the page claims it.
       for (const address of wanted.addresses) {
         await claimOrWait(deps.claims, tx, { address, holder });
       }
       for (const list of wanted.spaces) {
         await claimSpaceOrWait(deps.claims, tx, { list, holder });
       }
+      await dropStaleClaims(deps.claims, tx, holder, wanted);
     });
     return true;
   } catch (error) {
