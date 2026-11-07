@@ -16,8 +16,10 @@
 import {
   bindablePropKind,
   canBindFieldToProp,
+  fieldFitsProp,
   findNode,
   getBlock,
+  sameJsonValue,
   type Binding,
   type BindingFieldShape,
   type BindingFormat,
@@ -51,6 +53,7 @@ import { bindOp, unbindOp } from "./binding-ops";
 import type {
   BindingFieldChoice,
   BindingFieldSource,
+  UnbindPlanAnswer,
 } from "./binding-services";
 import { ChoiceList, type ListedChoice } from "./choice-list";
 import type { UnbindAnswer } from "./composition-actions";
@@ -96,6 +99,17 @@ function withFallback(binding: Binding, fallback: string): Binding {
   return (fallback === "" ? rest : { ...rest, fallback }) as Binding;
 }
 
+/** Whether `option` is the field and source `binding` reads. */
+function isBoundTo(option: FieldOption, binding: Binding): boolean {
+  if (option.path !== binding.$bind) return false;
+  const source = option.source.binding;
+  if (source.source !== (binding.source ?? "entry")) return false;
+  return (
+    source.source !== "single" ||
+    ("sourceKey" in binding && binding.sourceKey === source.sourceKey)
+  );
+}
+
 /** The binding with `format` as its format, through the same write as a fallback. */
 function withFormat(binding: Binding, format: BindingFormat): Binding {
   return { ...binding, format };
@@ -122,11 +136,11 @@ function fittingOptions(
     const group = String(index);
     for (const field of source.fields) {
       const label = choiceLabel(field);
-      if (canBindFieldToProp(field, prop.schema)) {
+      if (fits(field, prop)) {
         options.push(option(source, group, field, field.name, label));
       }
       for (const inner of field.fields ?? []) {
-        if (!canBindFieldToProp(inner, prop.schema)) continue;
+        if (!fits(inner, prop)) continue;
         options.push(
           option(
             source,
@@ -141,6 +155,17 @@ function fittingOptions(
     }
   });
   return options;
+}
+
+/**
+ * Whether a field fills the prop as it is: one that needs a format to (a
+ * date or a number into text) waits for the Format control, since a binding
+ * without one shows its fallback.
+ */
+function fits(field: BindingFieldChoice, prop: EditableProp): boolean {
+  return (
+    canBindFieldToProp(field, prop.schema) && fieldFitsProp(field, prop.schema)
+  );
 }
 
 /** One option, with its text as the list searches it and a reader hears it. */
@@ -230,7 +255,8 @@ function BindingPicker({
   prop: EditableProp;
   blockLabel: string;
   services: ContentServices | undefined;
-  current: string | undefined;
+  /** The prop's binding when it has one, marked in the list. */
+  current: Binding | undefined;
   onPick: (option: FieldOption) => void;
 }): React.JSX.Element {
   const sources = useBindingSources(services, true);
@@ -255,7 +281,11 @@ function BindingPicker({
     <div className="nx-binding-picker">
       <ChoiceList
         choices={options}
-        currentKey={current}
+        currentKey={
+          current === undefined
+            ? undefined
+            : options.find(option => isBoundTo(option, current))?.key
+        }
         onPick={onPick}
         label={`Fields for ${name}`}
         searchLabel="Find a field"
@@ -351,10 +381,15 @@ function BindButton({
 }: BindingControlProps & { onBound: () => void }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const name = propLabel(prop.name, prop.schema);
+  const trigger = React.useRef<HTMLButtonElement>(null);
+  // The inspector's fields, taken from the button before a pick replaces it
+  // with the chip: the picker is drawn in a portal, outside them.
+  const pickedIn = React.useRef<Element | null>(null);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          ref={trigger}
           type="button"
           className="nx-binding-row__bind"
           aria-label={`Bind ${name} to a field`}
@@ -371,15 +406,17 @@ function BindButton({
         // The bound chip replaces this button, so focus is handed to it once
         // the pick has drawn it.
         onCloseAutoFocus={event => {
-          const row = (event.target as HTMLElement | null)?.closest(
-            ".nx-inspector__fields"
-          );
-          const chip = row?.querySelector<HTMLElement>(
-            `[data-binding-chip="${CSS.escape(`${nodeId}:${prop.name}`)}"]`
-          );
-          if (chip === null || chip === undefined) return;
+          const fields = pickedIn.current;
+          pickedIn.current = null;
+          if (fields === null) return;
           event.preventDefault();
-          chip.focus();
+          requestAnimationFrame(() => {
+            fields
+              .querySelector<HTMLElement>(
+                `[data-binding-chip="${CSS.escape(`${nodeId}:${prop.name}`)}"]`
+              )
+              ?.focus();
+          });
         }}
       >
         <BindingPicker
@@ -388,6 +425,8 @@ function BindButton({
           services={services}
           current={undefined}
           onPick={picked => {
+            pickedIn.current =
+              trigger.current?.closest(".nx-inspector__fields") ?? null;
             const op = bindOp(
               document,
               nodeId,
@@ -404,6 +443,9 @@ function BindButton({
     </Popover>
   );
 }
+
+/** The kinds of prop whose value, and so whose fallback, is plain text. */
+const TEXT_KINDS: ReadonlySet<string> = new Set(["text", "url"]);
 
 /**
  * What an unbind said, and how: kept as visitors saw it, kept in place of a
@@ -647,6 +689,10 @@ function BoundValueRows({
   onRebind: (next: Binding) => void;
 }): React.JSX.Element {
   const kind = bindablePropKind(prop.schema);
+  const fallback =
+    "fallback" in binding && typeof binding.fallback === "string"
+      ? binding.fallback
+      : "";
   return (
     <>
       {kind === "image" ? (
@@ -658,14 +704,17 @@ function BoundValueRows({
           describedBy={labelId}
           onFallback={next => onRebind(withFallback(binding, next))}
         />
-      ) : (
-        <TextFallback
-          binding={binding}
+      ) : TEXT_KINDS.has(kind ?? "") ? (
+        // A text input writes text: offered for a prop whose value is text
+        // alone, so a number's, a choice's or a passage's fallback is never
+        // rewritten.
+        <FallbackInput
+          describedBy={labelId}
+          fallback={fallback}
           disabled={disabled}
-          labelId={labelId}
-          onFallback={next => onRebind(withFallback(binding, next))}
+          onCommit={next => onRebind(withFallback(binding, next))}
         />
-      )}
+      ) : null}
       {offersFormat(kind, field) ? (
         <BindingFormatField
           stored={binding.format}
@@ -680,41 +729,179 @@ function BoundValueRows({
   );
 }
 
-/** A bound prop's Fallback as text, committed when the field is left. */
-function TextFallback({
-  binding,
+/**
+ * The unbind of a bound prop: planned by the host against the document the
+ * editor holds, then applied to the document as it is when the plan comes
+ * back, so an edit made meanwhile stays; refused where the binding changed
+ * meanwhile, and said where the plan could not be read.
+ */
+function useUnbind(args: {
+  readonly nodeId: string;
+  readonly prop: EditableProp;
+  readonly binding: Binding;
+  readonly document: BlockDocument;
+  readonly services: ContentServices | undefined;
+  readonly onApply: (op: BuilderOp) => void;
+  readonly onUnbound: (note: UnbindNote) => void;
+  readonly onRefused: (reason: string) => void;
+  readonly note: (answer: UnbindAnswer) => string;
+}): () => Promise<void> {
+  // The document as the editor holds it now, read when a plan comes back.
+  const latest = React.useRef(args.document);
+  latest.current = args.document;
+  const { nodeId, prop, binding, services } = args;
+  return async () => {
+    let plan: UnbindPlanAnswer | undefined;
+    try {
+      plan = await services?.planUnbind?.({
+        document: latest.current,
+        nodeId,
+        prop: prop.name,
+      });
+    } catch {
+      args.onRefused("The unbind could not be planned. Try again.");
+      return;
+    }
+    if (plan === undefined) return;
+    if ("refusal" in plan) {
+      args.onRefused(plan.refusal);
+      return;
+    }
+    const now = latest.current;
+    const still = findNode(now.nodes, nodeId)?.bindings?.[prop.name];
+    if (!sameJsonValue(still, binding)) {
+      args.onRefused(
+        "The binding changed while the unbind was planned. Unbind it again."
+      );
+      return;
+    }
+    const op = unbindOp(now, nodeId, prop.name, plan.kept);
+    if (op === null) return;
+    args.onApply(op);
+    args.onUnbound({
+      text: args.note(plan.answer),
+      tone: plan.answer.unreadable === true ? "private" : "kept",
+    });
+  };
+}
+
+/** A bound text prop's fallback, written when the field is left. */
+function FallbackInput({
+  describedBy,
+  fallback,
   disabled,
-  labelId,
-  onFallback,
+  onCommit,
 }: {
-  binding: Binding;
+  describedBy: string;
+  fallback: string;
   disabled: boolean;
-  labelId: string;
-  onFallback: (next: string) => void;
+  onCommit: (next: string) => void;
 }): React.JSX.Element {
-  const fallbackId = React.useId();
-  const fallback =
-    "fallback" in binding && typeof binding.fallback === "string"
-      ? binding.fallback
-      : "";
+  const id = React.useId();
   return (
     <div className="nx-binding__fallback">
-      <label className="nx-binding__fallback-label" htmlFor={fallbackId}>
+      <label className="nx-binding__fallback-label" htmlFor={id}>
         Fallback
       </label>
       <Input
-        id={fallbackId}
+        id={id}
         key={fallback}
         defaultValue={fallback}
         disabled={disabled}
         title={fallback === "" ? undefined : `Fallback: ${fallback}`}
-        aria-describedby={labelId}
+        aria-describedby={describedBy}
         onBlur={event => {
           const next = event.currentTarget.value;
-          if (next !== fallback) onFallback(next);
+          if (next !== fallback) onCommit(next);
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The bound chip: the field, then its source, cut source first where the
+ * panel is narrow; the whole of both on its tooltip and in its name.
+ */
+const BoundChip = React.forwardRef<
+  HTMLButtonElement,
+  {
+    id: string;
+    label: string;
+    whole: string;
+    field: string;
+    source: string | undefined;
+    disabled: boolean;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(function BoundChip(
+  { id, label, whole, field, source, disabled, ...trigger },
+  ref
+) {
+  return (
+    <button
+      {...trigger}
+      ref={ref}
+      type="button"
+      className="nx-binding-chip"
+      data-binding-chip={id}
+      aria-label={label}
+      title={whole}
+      disabled={disabled}
+    >
+      <Database aria-hidden="true" size={14} />
+      <span className="nx-binding-chip__text">
+        <span className="nx-binding-chip__field">{field}</span>
+        {source === undefined ? null : (
+          <span className="nx-binding-chip__source">
+            {/* A no-break space: a flex item drops a leading plain one. */}
+            {"\u00a0· "}
+            {source}
+          </span>
+        )}
+      </span>
+      <ChevronDown aria-hidden="true" size={14} />
+    </button>
+  );
+});
+
+/** The chip's menu: change the field, where fields can be listed; unbind, where it can be planned. */
+function ChipMenuItems({
+  canChange,
+  canUnbind,
+  propName,
+  source,
+  onChange,
+  onUnbind,
+}: {
+  canChange: boolean;
+  canUnbind: boolean;
+  propName: string;
+  /** Where the field's source is edited, where the host has a screen for it. */
+  source: { readonly href: string; readonly field: string } | undefined;
+  onChange: () => void;
+  onUnbind: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      {canChange ? (
+        <DropdownMenuItem onSelect={onChange}>
+          <Database aria-hidden="true" size={14} />
+          Change field…
+        </DropdownMenuItem>
+      ) : null}
+      {source === undefined ? null : (
+        <OpenSourceItem href={source.href} field={source.field} />
+      )}
+      {canUnbind ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={onUnbind}>
+            <Unlink aria-hidden="true" size={14} />
+            Unbind, keep the {propName.toLowerCase()}
+          </DropdownMenuItem>
+        </>
+      ) : null}
+    </>
   );
 }
 
@@ -750,26 +937,26 @@ function BoundField({
     names.source === undefined
       ? names.field
       : `${names.field} of ${names.source.replace(/^(This|Each) /, word => word.toLowerCase())}`;
-  const unbind = async (): Promise<void> => {
-    const plan = await services?.planUnbind?.({
-      document,
-      nodeId,
-      prop: prop.name,
-    });
-    if (plan === undefined) return;
-    if ("refusal" in plan) {
-      setRefusal(plan.refusal);
-      return;
-    }
-    const op = unbindOp(document, nodeId, prop.name, plan.kept);
-    if (op === null) return;
-    onApply(op);
-    const into = blockPropLabel(document, nodeId, plan.answer.into);
-    onUnbound({
-      text: noteFor(plan.answer, blockLabel, name, names.field, into),
-      tone: plan.answer.unreadable === true ? "private" : "kept",
-    });
-  };
+  const unbind = useUnbind({
+    nodeId,
+    prop,
+    binding,
+    document,
+    services,
+    onApply,
+    onUnbound,
+    onRefused: setRefusal,
+    // An image kept by its address names the prop the address went into,
+    // as the block labels it.
+    note: answer =>
+      noteFor(
+        answer,
+        blockLabel,
+        name,
+        names.field,
+        blockPropLabel(document, nodeId, answer.into)
+      ),
+  });
   return (
     <div className="nx-inspector__field nx-binding" data-bound="">
       <p className="nx-inspector__field-name" id={labelId}>
@@ -783,49 +970,29 @@ function BoundField({
           <DropdownMenu modal={false}>
             <PopoverAnchor asChild>
               <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="nx-binding-chip"
-                  data-binding-chip={`${nodeId}:${prop.name}`}
-                  aria-label={`${name}: bound to ${whole}`}
-                  title={whole}
+                <BoundChip
+                  id={`${nodeId}:${prop.name}`}
+                  label={`${name}: bound to ${whole}`}
+                  whole={whole}
+                  field={names.field}
+                  source={names.source}
                   disabled={disabled}
-                >
-                  <Database aria-hidden="true" size={14} />
-                  <span className="nx-binding-chip__text">
-                    <span className="nx-binding-chip__field">
-                      {names.field}
-                    </span>
-                    {names.source === undefined ? null : (
-                      <span className="nx-binding-chip__source">
-                        {/* A no-break space: a flex item drops a
-                            leading plain one. */}
-                        {"\u00a0· "}
-                        {names.source}
-                      </span>
-                    )}
-                  </span>
-                  <ChevronDown aria-hidden="true" size={14} />
-                </button>
+                />
               </DropdownMenuTrigger>
             </PopoverAnchor>
             <DropdownMenuContent align="end" className="nx-binding-menu">
-              <DropdownMenuItem onSelect={() => setChanging(true)}>
-                <Database aria-hidden="true" size={14} />
-                Change field…
-              </DropdownMenuItem>
-              {sourceHref === undefined ? null : (
-                <OpenSourceItem href={sourceHref} field={names.field} />
-              )}
-              {services?.planUnbind === undefined ? null : (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => void unbind()}>
-                    <Unlink aria-hidden="true" size={14} />
-                    Unbind, keep the {name.toLowerCase()}
-                  </DropdownMenuItem>
-                </>
-              )}
+              <ChipMenuItems
+                canChange={services?.listBindingFields !== undefined}
+                canUnbind={services?.planUnbind !== undefined}
+                propName={name}
+                source={
+                  sourceHref === undefined
+                    ? undefined
+                    : { href: sourceHref, field: names.field }
+                }
+                onChange={() => setChanging(true)}
+                onUnbind={() => void unbind()}
+              />
             </DropdownMenuContent>
           </DropdownMenu>
           <PopoverContent align="end" className="nx-binding-popover">
@@ -833,7 +1000,7 @@ function BoundField({
               prop={prop}
               blockLabel={blockLabel}
               services={services}
-              current={undefined}
+              current={binding}
               onPick={picked => {
                 const op = bindOp(
                   document,
@@ -843,6 +1010,8 @@ function BoundField({
                   clearsOnBind
                 );
                 if (op !== null) onApply(op);
+                // A refusal said of the earlier field is no longer true.
+                setRefusal(null);
                 setChanging(false);
               }}
             />
