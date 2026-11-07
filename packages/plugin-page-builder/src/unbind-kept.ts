@@ -51,6 +51,12 @@ export interface VisitorView {
   readonly bound: BoundValue | undefined;
   /** Set when the binding reads a field the public may not read. */
   readonly unreadable?: { readonly fallback?: { readonly value: unknown } };
+  /**
+   * `false` when the bound image is a library id a visitor's read of the
+   * media library finds no image for: the renderer then draws the binding's
+   * fallback, or nothing.
+   */
+  readonly drawn?: false;
 }
 
 /** The unbind's plan: the props kept, and the answer, or why it is refused. */
@@ -118,7 +124,11 @@ export function unbindPlan(
       },
     };
   }
-  if (bound.kind === "image") return imagePlan(prop, value, bound, declared);
+  if (bound.kind === "image") {
+    return view.drawn === false
+      ? undrawnImagePlan(prop, bound, declared)
+      : imagePlan(prop, value, bound, declared);
+  }
   const kept = bound.kind === "fallback" ? "fallback" : "visitor";
   return {
     kept: { set: { [prop]: value } },
@@ -163,6 +173,52 @@ function imagePlan(
     declared,
     "Visitors saw an image address, not a library image, so it's kept in the image's address."
   );
+}
+
+/**
+ * A bound library image visitors are drawn none of: they see the binding's
+ * fallback, an address, or no image, and the block keeps the same.
+ */
+function undrawnImagePlan(
+  prop: string,
+  bound: Extract<BoundValue, { kind: "image" }>,
+  declared: DeclaredProps
+): UnbindPlan {
+  const fallback = bound.fallback;
+  if (fallback !== undefined) {
+    return fallback.holds === "address"
+      ? addressPlan(
+          prop,
+          fallback.value,
+          "fallback",
+          declared,
+          "The bound image can't be found, so visitors see the fallback; it's kept in the image's address."
+        )
+      : {
+          kept: {
+            set: { [prop]: fallback.value },
+            ...typedAddressEmptied(prop, declared),
+          },
+          answer: {
+            kept: "fallback",
+            value: fallback.value,
+            reason:
+              "The bound image can't be found, so visitors see the fallback; it's kept.",
+          },
+        };
+  }
+  const address = addressPropOf(declared, prop);
+  return {
+    kept: {
+      set: {},
+      empty: [prop, ...(address === undefined ? [] : [address])],
+    },
+    answer: {
+      kept: "visitor",
+      reason:
+        "The bound image can't be found, so visitors see no image here; the image is left empty.",
+    },
+  };
 }
 
 /** The block's own image kept, the typed address a bound image never drew emptied. */
@@ -312,6 +368,27 @@ function unreadableOf(
   return marked.fallback === undefined ? {} : { fallback: marked.fallback };
 }
 
+/**
+ * Whether a visitor is drawn the bound image: a library id the default
+ * renderer's read of the media library finds, as it resolves one. Anything
+ * else the binding filled is drawn, as far as this route can tell.
+ */
+async function drawnFor(
+  bound: BoundValue | undefined,
+  value: unknown
+): Promise<boolean> {
+  if (bound?.kind !== "image" || bound.from !== "value") return true;
+  if (bound.holds !== "media") return true;
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  const nextly = await getCachedNextly();
+  const record: unknown = await nextly.media
+    .findByID({ id: String(value), disableErrors: true })
+    .catch(() => null);
+  return (
+    isPlainRecord(record) && typeof record.url === "string" && record.url !== ""
+  );
+}
+
 /** Where a node's bindings read, as {@link readsOf} names it. */
 type NodeReads = Exclude<ReturnType<typeof readsOf>, UnbindNeeds>;
 
@@ -392,10 +469,13 @@ async function visitorViewOf(
   if (unreachable !== undefined) return unreachable;
   const result = resolveNodeBindings(node, run, scope);
   const unreadable = unreadableOf(alone, run, nodeId, prop);
+  const bound = result.bound?.[prop];
+  const drawn = await drawnFor(bound, result.props[prop]);
   return {
     filled: result.props,
-    bound: result.bound?.[prop],
+    bound,
     ...(unreadable === undefined ? {} : { unreadable }),
+    ...(drawn ? {} : { drawn: false as const }),
   };
 }
 
