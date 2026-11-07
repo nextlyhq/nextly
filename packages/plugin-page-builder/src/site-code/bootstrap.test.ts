@@ -6,7 +6,7 @@
  *
  * @module site-code/bootstrap.test
  */
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
 import { describe, expect, it } from "vitest";
 
 import { CANVAS_MOUNT_ATTRIBUTE } from "../canvas/attributes";
@@ -88,6 +88,65 @@ describe("the site code loader", () => {
       `<div ${CANVAS_MOUNT_ATTRIBUTE}></div>`
     );
     expect(window.ran).toBeUndefined();
+  });
+});
+
+describe("the loader, in order and kept out of the admin", () => {
+  /** A page at `url` starting `entries`, loading what they name. */
+  async function pageWith(
+    url: string,
+    entries: SiteCodeEntry[],
+    virtualConsole?: VirtualConsole
+  ): Promise<JSDOM["window"] & { ran?: string[] }> {
+    const data = JSON.stringify({ slot: "head", skip: ["/admin"], entries });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${data}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body></body></html>`,
+      {
+        url,
+        runScripts: "dangerously",
+        resources: "usable",
+        ...(virtualConsole === undefined ? {} : { virtualConsole }),
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    return dom.window as JSDOM["window"] & { ran?: string[] };
+  }
+
+  it("waits for an external script before starting what follows it", async () => {
+    const window = await pageWith("https://acme.example/", [
+      {
+        tag: "script",
+        attrs: {
+          src: "data:text/javascript,window.ran=(window.ran||[]).concat('library')",
+        },
+      },
+      {
+        tag: "script",
+        attrs: {},
+        text: "window.ran = (window.ran || []).concat(typeof window.ran)",
+      },
+    ]);
+    // The inline script ran after the library, and saw what it set.
+    expect(window.ran).toEqual(["library", "object"]);
+  });
+
+  it("loads the admin afresh when the page moves into it within the app", async () => {
+    const errors: string[] = [];
+    const virtualConsole = new VirtualConsole();
+    // jsdom can't navigate, and says so: that is the reload being asked for.
+    virtualConsole.on("jsdomError", error => errors.push(error.message));
+    const window = await pageWith(
+      "https://acme.example/pricing",
+      [{ tag: "script", attrs: {}, text: "window.ran = ['site']" }],
+      virtualConsole
+    );
+    expect(window.ran).toEqual(["site"]);
+    window.history.pushState({}, "", "/blog");
+    expect(errors.filter(message => message.includes("navigation"))).toEqual(
+      []
+    );
+    window.history.pushState({}, "", "/admin/collections/pages");
+    expect(errors.some(message => message.includes("navigation"))).toBe(true);
   });
 });
 

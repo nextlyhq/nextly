@@ -21,8 +21,15 @@
  * changes, so a hash-based policy allows it by one fixed hash.
  *
  * Scripts it builds run in order, as the page finishes parsing, rather than
- * as the parser reaches them: a script that writes into the page as it loads
- * (`document.write`) can't be site code.
+ * as the parser reaches them: each external script that isn't `async` is
+ * loaded before anything after it starts, as the parser would, but a script
+ * that writes into the page as it loads (`document.write`) can't be site code.
+ *
+ * Once code has started, the page never takes the visitor into the admin
+ * without a new document: a navigation within the app (a `<Link>` into
+ * `/admin`, Back into it) to a path the loader skips loads that page afresh,
+ * where the loader starts nothing, so code that ran never shares a document
+ * with the admin.
  *
  * @module site-code/bootstrap
  * @experimental
@@ -79,21 +86,57 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
       return location.pathname === path || location.pathname.indexOf(path + "/") === 0;
     });
   }
+  function guardNavigation() {
+    var root = document.documentElement;
+    if (root.hasAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard")) return;
+    root.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard", "");
+    function leaveIfSkipped() {
+      if (skipped()) location.reload();
+    }
+    ["pushState", "replaceState"].forEach(function (name) {
+      var original = history[name];
+      history[name] = function () {
+        var result = original.apply(history, arguments);
+        leaveIfSkipped();
+        return result;
+      };
+    });
+    window.addEventListener("popstate", leaveIfSkipped);
+  }
+  function build(entry) {
+    var element = document.createElement(entry.tag);
+    var attrs = entry.attrs || {};
+    Object.keys(attrs).forEach(function (name) {
+      element.setAttribute(name, attrs[name]);
+    });
+    if (nonce) element.nonce = nonce;
+    if (typeof entry.text === "string") element.textContent = entry.text;
+    return element;
+  }
   function start() {
     if (framedBySite() || skipped() || document.querySelector("[${CANVAS_MOUNT_ATTRIBUTE}]")) return;
-    var into = data.slot === "head" ? document.head : document.body;
-    (data.entries || []).forEach(function (entry) {
-      var element = document.createElement(entry.tag);
-      var attrs = entry.attrs || {};
-      Object.keys(attrs).forEach(function (name) {
-        element.setAttribute(name, attrs[name]);
-      });
-      if (nonce) element.nonce = nonce;
-      if (entry.tag === "script" && attrs.src !== undefined && attrs.async === undefined) element.async = false;
-      if (typeof entry.text === "string") element.textContent = entry.text;
-      into.appendChild(element);
-    });
+    guardNavigation();
     document.documentElement.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-" + data.slot, "started");
+    var into = data.slot === "head" ? document.head : document.body;
+    var entries = data.entries || [];
+    function next(index) {
+      if (index >= entries.length) return;
+      var entry = entries[index];
+      var attrs = entry.attrs || {};
+      var element = build(entry);
+      var waits = entry.tag === "script" && attrs.src !== undefined && attrs.async === undefined;
+      if (waits) {
+        element.async = false;
+        var go = function () {
+          next(index + 1);
+        };
+        element.addEventListener("load", go);
+        element.addEventListener("error", go);
+      }
+      into.appendChild(element);
+      if (!waits) next(index + 1);
+    }
+    next(0);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();

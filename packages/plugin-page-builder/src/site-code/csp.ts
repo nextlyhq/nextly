@@ -662,14 +662,17 @@ interface Blocked {
 }
 
 /** Why a policy blocks inline code of `kind`, in words. */
-const INLINE_BLOCKED: Readonly<Record<SiteCodeInlineKind, string>> = {
-  script:
-    "this inline script is blocked: add its hash, or 'unsafe-inline' where no hash or nonce is used",
-  style:
-    "this inline style is blocked: add its hash, or 'unsafe-inline' where no hash or nonce is used",
-  "style-attr":
-    "this no-script fallback's style attribute is blocked when scripting is off: add 'unsafe-hashes' and its hash",
-};
+function inlineBlocked(kind: SiteCodeInlineKind, hash: string): string {
+  // The hash is named, so a hash-based policy can be given exactly it.
+  switch (kind) {
+    case "script":
+      return `this inline script is blocked: add its hash ('${hash}'), or 'unsafe-inline' where no hash or nonce is used`;
+    case "style":
+      return `this inline style is blocked: add its hash ('${hash}'), or 'unsafe-inline' where no hash or nonce is used`;
+    case "style-attr":
+      return `this no-script fallback's style attribute is blocked when scripting is off: add 'unsafe-hashes' and its hash ('${hash}')`;
+  }
+}
 
 /** The inline code a policy would block. */
 async function inlineFindings(
@@ -686,7 +689,7 @@ async function inlineFindings(
     if (allowsInline(rule.sources, hash, elementNonce, code.kind)) continue;
     findings.push({
       directive: rule.directive,
-      message: INLINE_BLOCKED[code.kind],
+      message: inlineBlocked(code.kind, hash),
     });
   }
   return findings;

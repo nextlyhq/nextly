@@ -200,6 +200,52 @@ describe("saving site code", () => {
   });
 });
 
+describe("the version a save is made from", () => {
+  it("lets the first save of a site with none stored name no version", async () => {
+    const { nextly, updates } = store();
+    const { ctx } = contextFor("session");
+    await call(
+      routeOf("POST", nextly),
+      post({ head: "<script>a()</script>", body: "" }),
+      ctx
+    );
+    expect(updates[0]?.data).toMatchObject({ _overwrite: true });
+    expect(updates[0]?.data).not.toHaveProperty("_rev");
+  });
+
+  it("refuses a save naming no version once code is stored, writing nothing", async () => {
+    const { nextly, updates } = store({ headSource: "", _rev: "rev-7" });
+    const { ctx } = contextFor("session");
+    await expect(
+      call(
+        routeOf("POST", nextly),
+        post({ head: "<script>a()</script>", body: "" }),
+        ctx
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(updates).toEqual([]);
+  });
+
+  it("answers the version its own write made, not a later read's", async () => {
+    const { nextly } = store({ headSource: "", _rev: "rev-7" });
+    // Someone else's save lands right after this one: a read now would see it.
+    const write = nextly.updateSingle.bind(nextly);
+    nextly.updateSingle = async args => {
+      const mine = await write(args);
+      await write({ ...args, data: { headSource: "theirs", _rev: "x" } });
+      return mine;
+    };
+    const { ctx } = contextFor("session");
+    const answer = await call(
+      routeOf("POST", nextly),
+      post({ head: "<script>a()</script>", body: "", version: "rev-7" }),
+      ctx
+    );
+    const { item } = (await answer.json()) as { item: { version: string } };
+    expect(item.version).toBe("rev-1");
+  });
+});
+
 describe("reading site code", () => {
   it("answers what was written, its version, and whether a policy is declared", async () => {
     const { nextly } = store({

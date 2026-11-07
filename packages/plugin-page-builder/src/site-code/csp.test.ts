@@ -615,6 +615,16 @@ describe("what site code loads", () => {
     ).toEqual([]);
   });
 
+  it("names the hash a blocked inline script needs", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      { policy: "script-src 'self'", siteOrigin: ORIGIN },
+      { head: [inline("a()")], body: [] }
+    );
+    expect(entryFindingsOf(check)[0]?.message).toContain(
+      `'${await cspHash("a()")}'`
+    );
+  });
+
   it("warns rather than errs under a Report-Only policy", async () => {
     const check = await checkSiteCodeAgainstCsp(
       { policy: "script-src 'self'", reportOnly: true, siteOrigin: ORIGIN },

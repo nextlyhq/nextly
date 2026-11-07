@@ -44,8 +44,11 @@ async function saveSiteCode(
   // A plugin route checks a cookie-authenticated write's origin, which a
   // browser sends and an API request does not: named here as the site's own.
   const origin = new URL(csrf.url()).origin;
+  // A save names the version it read, so it never replaces one it didn't see.
+  const read = await request.get(ROUTE);
+  const { version } = (await read.json()) as { version: string | null };
   const saved = await request.post(ROUTE, {
-    data: { head, body: "" },
+    data: { head, body: "", ...(version === null ? {} : { version }) },
     headers: { "x-csrf-token": token, origin },
   });
   expect(
@@ -117,6 +120,16 @@ test("site code runs on a public page, and never in the admin, the canvas or a p
       "data-nx-site-code-head",
       "started"
     );
+
+    // Into the admin through the site's own link, without a document load:
+    // the page loads the admin afresh, so the code that ran is gone.
+    await page.goto("/e2e-site");
+    await expect.poll(() => ran(page)).toBe(1);
+    await page.getByRole("link", { name: "Open the admin" }).click();
+    await expect(
+      page.getByRole("navigation").getByRole("link", { name: "Dashboard" })
+    ).toBeVisible({ timeout: 30_000 });
+    expect(await ran(page)).toBeUndefined();
 
     // The admin, which shares the layout carrying it: never.
     await gotoAdmin(page, "/");

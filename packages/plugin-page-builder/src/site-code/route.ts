@@ -25,8 +25,11 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
-import { documentVersionOf, withVersionFrom } from "../document-version";
-import { sha256Hex } from "../sha256-hex";
+import {
+  asOverwrite,
+  documentVersionOf,
+  withVersionFrom,
+} from "../document-version";
 import {
   SITE_CODE_ROUTE_PATH,
   type SiteCodeChecked,
@@ -35,6 +38,7 @@ import {
   type SiteCodeSaved,
   type SiteCodeSlotJudged,
 } from "../library-contract";
+import { sha256Hex } from "../sha256-hex";
 
 import { checkSiteCodeAgainstCsp, cspHash, siteCodeFacts } from "./csp";
 import {
@@ -367,6 +371,33 @@ async function auditMetadata(
   };
 }
 
+/**
+ * The write's data with the version it was made from. A save names the
+ * version it read; one that names none is the first save of a site that has
+ * none stored yet (nothing to overwrite but an empty document), and is
+ * refused once code is stored, so it can't replace a save it never saw.
+ */
+function versionedWrite(
+  data: Record<string, unknown>,
+  version: string | undefined,
+  before: Record<string, unknown> | null
+): Record<string, unknown> {
+  if (version !== undefined) return withVersionFrom(data, version);
+  if (before === null || documentVersionOf(before) === undefined) {
+    return asOverwrite(data);
+  }
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "version",
+        code: "VERSION_REQUIRED",
+        message:
+          "Site code is already saved: read it again, and save naming the version you read.",
+      },
+    ],
+  });
+}
+
 /** Parse a request's body, refusing one that is not a site code request. */
 async function bodyOf(req: Request): Promise<SiteCodeBodyValue> {
   const parsed = SiteCodeBody.safeParse(await req.json().catch(() => null));
@@ -409,9 +440,9 @@ async function changeSiteCode(
   refuseUnsaveable(judged, body);
   const nextly = await deps.nextly();
   const before = await readStored(nextly, ctx);
-  await nextly.updateSingle({
+  const saved = await nextly.updateSingle({
     slug: slugOf(ctx),
-    data: withVersionFrom(
+    data: versionedWrite(
       {
         headSource: body.head,
         bodySource: body.body,
@@ -419,13 +450,13 @@ async function changeSiteCode(
         body: judged.entries.body,
         changedBy: `user:${userId}`,
       },
-      body.version
+      body.version,
+      before
     ),
     overrideAccess: true,
     context: { ...SITE_CODE_WRITE_CONTEXT },
     user: { id: userId },
   });
-  const after = await readStored(nextly, ctx);
   await ctx.audit?.write({
     kind: SITE_CODE_SAVED_AUDIT,
     actorUserId: userId,
@@ -434,7 +465,9 @@ async function changeSiteCode(
   });
   return respondMutation<SiteCodeSaved>(
     "The site code was saved. It runs on every published page.",
-    { ...judged.checked, version: documentVersionOf(after) ?? null }
+    // The version this write made, from its own answer: a read made after it
+    // could already be someone else's save.
+    { ...judged.checked, version: documentVersionOf(saved) ?? null }
   );
 }
 
