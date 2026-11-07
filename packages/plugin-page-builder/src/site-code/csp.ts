@@ -49,7 +49,7 @@ export function parseCsp(header: string): CspPolicy {
  * Every policy a header carries: a header may hold several, separated by
  * commas, and a browser enforces each.
  */
-function parsePolicies(header: string): CspPolicy[] {
+export function parsePolicies(header: string): CspPolicy[] {
   return header
     .split(",")
     .filter(policy => policy.trim() !== "")

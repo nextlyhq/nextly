@@ -28,11 +28,15 @@ the head and one for the end of the body.
   blocks it and the policy that does. The section shows what to add to your policy,
   with a **Copy** button. **Save anyway** is enabled once you tick that you understand
   the blocked code won't run until the policy allows it.
-- With no policy known, the section says so before saving, rather than reading as a
-  pass.
+- Before saving, the section also shows what won't be kept (an HTML comment, say)
+  and what a Report-Only policy would report. With no policy known, it says so
+  rather than reading as a pass.
 
-The check reads the policy your home page is sent with, as a visitor gets it, as well
-as the one you declare (below). Leaving Settings with unsaved code asks first.
+The check reads the policy your home page is sent with, as a visitor gets it, from the
+address the admin is open on: `<SiteCode>` renders in the same app as the admin, so
+that is where your pages are served. It is checked as well as the policy you declare
+(below), which is the one to rely on if a proxy sends a different policy on another
+domain. Leaving Settings with unsaved code asks first.
 
 ## Who can add it
 

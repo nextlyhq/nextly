@@ -71,6 +71,7 @@ const unchecked: SiteCodeChecked = {
       source: "declared",
       check: { checked: false, reason: "No policy." },
       additions: [],
+      policies: 0,
     },
   ],
   cspKey: null,
@@ -262,6 +263,7 @@ describe("the site's code in Settings", () => {
               sources: ["'self'", "https://www.googletagmanager.com/gtag/js"],
             },
           ],
+          policies: 1,
         },
         {
           source: "live",
@@ -279,6 +281,7 @@ describe("the site's code in Settings", () => {
             ],
           },
           additions: [],
+          policies: 1,
         },
       ],
       cspKey: "sha256-findings",
@@ -363,6 +366,7 @@ describe("the site's code in Settings", () => {
           source: "declared",
           check: { checked: true, findings: [] },
           additions: [],
+          policies: 1,
         },
       ],
     };
@@ -381,6 +385,7 @@ describe("the site's code in Settings", () => {
           source: "declared",
           check: { checked: true, findings: [] },
           additions: [],
+          policies: 1,
         },
       ],
     };
@@ -437,6 +442,7 @@ describe("the site's code in Settings", () => {
         ],
       },
       additions: [{ policy: 0, directive: "script-src-elem", sources }],
+      policies: 1,
     });
     checkAnswer = {
       head: judged(1),
@@ -481,5 +487,96 @@ describe("the site's code in Settings", () => {
     expect(
       screen.getAllByRole("button", { name: /^Copy what to add/ })
     ).toHaveLength(1);
+  });
+
+  it("shows what won't be kept, and what a report-only policy reports, before saving", async () => {
+    checkAnswer = {
+      head: {
+        refusals: [],
+        notes: ["1 HTML comment was left out."],
+        elements: 1,
+      },
+      body: judged(0),
+      csp: [
+        {
+          source: "declared",
+          check: {
+            checked: true,
+            findings: [
+              {
+                slot: "head",
+                index: 0,
+                directive: "script-src",
+                message: "this inline script is blocked",
+                level: "warning",
+              },
+            ],
+          },
+          additions: [],
+          policies: 1,
+        },
+      ],
+      cspKey: null,
+    };
+    show();
+    editHead("<!-- tag --><script>a()</script>");
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    expect(
+      await screen.findByText("Head: 1 HTML comment was left out.")
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The site's report-only policy would report some of this code"
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText("This inline script is blocked (reported only)")
+    ).toBeTruthy();
+    // Nothing saved until the person goes on from what they were shown.
+    expect(writes).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await screen.findByText("Site code saved");
+    expect(writes[1]).not.toHaveProperty("acknowledgeCsp");
+  });
+
+  it("names which of a header's policies needs the addition, even when only one does", async () => {
+    checkAnswer = {
+      head: judged(1),
+      body: judged(0),
+      csp: [
+        {
+          source: "live",
+          check: {
+            checked: true,
+            findings: [
+              {
+                slot: "head",
+                index: 0,
+                directive: "script-src",
+                message: "https://cdn.example is blocked for scripts",
+                level: "error",
+              },
+            ],
+          },
+          additions: [
+            {
+              policy: 1,
+              directive: "script-src-elem",
+              sources: ["https://cdn.example/a.js"],
+            },
+          ],
+          policies: 2,
+        },
+      ],
+      cspKey: "sha256-k",
+    };
+    show();
+    editHead('<script src="https://cdn.example/a.js"></script>');
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    expect(
+      await screen.findByRole("button", {
+        name: "Copy what to add to the policy the site sends, the 2nd in its header",
+      })
+    ).toBeTruthy();
   });
 });

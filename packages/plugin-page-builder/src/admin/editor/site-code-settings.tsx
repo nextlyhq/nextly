@@ -67,7 +67,9 @@ type Step =
       readonly draft: SiteCodeDraft;
     }
   | {
-      readonly kind: "no-policy";
+      // Saveable, with something to see first: what won't be kept, what a
+      // Report-Only policy reports, or that no policy is known.
+      readonly kind: "review";
       readonly checked: SiteCodeChecked;
       readonly draft: SiteCodeDraft;
     };
@@ -82,9 +84,23 @@ export interface SiteCodeSectionProps {
   readonly onOpenChange: (open: boolean) => void;
 }
 
+/** Whether no policy was known to check the code against. */
+function noPolicyKnown(checked: SiteCodeChecked): boolean {
+  return checked.csp.every(policy => !policy.check.checked);
+}
+
+/** Whether a check has anything to show before a save it allows. */
+function worthAReview(checked: SiteCodeChecked): boolean {
+  return (
+    noPolicyKnown(checked) ||
+    notesOf(checked).length > 0 ||
+    findingsOf(checked).length > 0
+  );
+}
+
 /**
  * Where a check leads: back to the code with what it refused, to what a
- * policy blocks, to the word that no policy is known, or straight to a save.
+ * policy blocks, to what is worth seeing before saving, or straight to a save.
  */
 function stepAfter(
   checked: SiteCodeChecked,
@@ -94,10 +110,7 @@ function stepAfter(
     return { kind: "edit", refused: checked };
   }
   if (checked.cspKey !== null) return { kind: "csp", checked, draft };
-  if (checked.csp.every(policy => !policy.check.checked)) {
-    return { kind: "no-policy", checked, draft };
-  }
-  return "save";
+  return worthAReview(checked) ? { kind: "review", checked, draft } : "save";
 }
 
 /** Why a check or a save failed, in words. */
@@ -216,8 +229,21 @@ type SiteCodeFlow = ReturnType<typeof useSiteCodeFlow>;
 /** The site's code, in Settings → Site. */
 export function SiteCodeSection(props: SiteCodeSectionProps): JSX.Element {
   const flow = useSiteCodeFlow(props);
+  const sectionRef = useRef<HTMLElement>(null);
+  const open = flow.step.kind !== "view";
+  // Opened, the other sections step aside: the tab starts again from its
+  // top, the banner whole above the code, rather than where it was scrolled.
+  useEffect(() => {
+    if (!open) return;
+    const tab = sectionRef.current?.closest('[role="tabpanel"]');
+    if (tab instanceof HTMLElement) tab.scrollTop = 0;
+  }, [open]);
   return (
-    <section aria-labelledby="settings-code-title" className="space-y-2">
+    <section
+      ref={sectionRef}
+      aria-labelledby="settings-code-title"
+      className="space-y-2"
+    >
       <h3 id="settings-code-title" className="text-sm font-semibold">
         Code
       </h3>
@@ -276,9 +302,10 @@ function StepView({
           onSave={() => flow.save(step.draft, step.checked.cspKey)}
         />
       );
-    case "no-policy":
+    case "review":
       return (
-        <NoPolicy
+        <Review
+          checked={step.checked}
           working={working}
           problem={problem}
           onBack={flow.back}
@@ -598,35 +625,52 @@ function lineOf({ directive, sources }: CspAddition): string {
   return `${directive} ${sources.join(" ")}`;
 }
 
+/** A group of advice, with the part of its header it names, if any. */
+interface PartGroup extends AllowGroup {
+  readonly part: string;
+}
+
+/**
+ * One check's additions, grouped by the header's policy they are for, and
+ * named by its place wherever the header carries several, even when only
+ * one of them needs anything.
+ */
+function groupsOfCheck({
+  source,
+  additions,
+  policies,
+}: SiteCodeChecked["csp"][number]): PartGroup[] {
+  const byPolicy = new Map<number, string[]>();
+  for (const addition of additions) {
+    byPolicy.set(addition.policy, [
+      ...(byPolicy.get(addition.policy) ?? []),
+      lineOf(addition),
+    ]);
+  }
+  return [...byPolicy].map(([policy, lines]) => {
+    const part = policies > 1 ? `, the ${ordinal(policy)} in its header` : "";
+    return { label: `${POLICY_WORDS[source]}${part}`, part, lines };
+  });
+}
+
 /**
  * What to add, kept with the policy it is for: the declared and the sent
  * policy, and each policy of a header carrying several, are given apart,
  * since one's needs added to another would widen it for nothing. Advice the
- * same for both is given once, for the site's policy.
+ * same for both, to the same part, is given once, for the site's policy.
  */
 function allowGroupsOf(checked: SiteCodeChecked): AllowGroup[] {
-  const groups: AllowGroup[] = [];
-  for (const { source, additions } of checked.csp) {
-    const byPolicy = new Map<number, string[]>();
-    for (const addition of additions) {
-      byPolicy.set(addition.policy, [
-        ...(byPolicy.get(addition.policy) ?? []),
-        lineOf(addition),
-      ]);
-    }
-    for (const [policy, lines] of byPolicy) {
-      const part =
-        byPolicy.size > 1 ? `, the ${ordinal(policy)} in its header` : "";
-      groups.push({ label: `${POLICY_WORDS[source]}${part}`, lines });
-    }
-  }
+  const groups = checked.csp.flatMap(groupsOfCheck);
   const [first, second, ...rest] = groups;
+  if (first === undefined || second === undefined || rest.length > 0) {
+    return groups;
+  }
   const same =
-    first !== undefined &&
-    second !== undefined &&
-    rest.length === 0 &&
+    first.part === second.part &&
     first.lines.join("\n") === second.lines.join("\n");
-  return same ? [{ label: "the site's policy", lines: first.lines }] : groups;
+  return same
+    ? [{ label: `the site's policy${first.part}`, lines: first.lines }]
+    : groups;
 }
 
 /**
@@ -636,6 +680,63 @@ function allowGroupsOf(checked: SiteCodeChecked): AllowGroup[] {
 function sentence(message: string): string {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(message)) return message;
   return message.charAt(0).toUpperCase() + message.slice(1);
+}
+
+/** Each block or report once: where, why, and which policy makes it. */
+function FindingsList({
+  findings,
+}: {
+  findings: readonly Seen[];
+}): JSX.Element {
+  return (
+    <ul className="mb-3 divide-y border-y text-sm">
+      {findings.map(({ finding, sources }) => (
+        <li
+          key={`${finding.slot}-${finding.index}-${finding.directive}-${finding.message}`}
+          className="flex flex-wrap gap-x-3 gap-y-0.5 py-2"
+        >
+          <span className="w-40 shrink-0 text-muted-foreground">
+            {finding.slot === "head" ? "Head" : "End of body"},{" "}
+            {ordinal(finding.index)} element
+          </span>
+          <span className="min-w-0 flex-1 break-words">
+            {sentence(finding.message)}
+            {finding.level === "warning" ? " (reported only)" : ""}
+          </span>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">
+            {finding.directive} · {sources.join(", ")}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** What the sanitiser left out of each place, as "Head: …" lines. */
+function notesOf(checked: SiteCodeChecked): string[] {
+  return PLACES.flatMap(place =>
+    checked[place.slot].notes.map(note => `${place.label}: ${note}`)
+  );
+}
+
+/** What won't be kept, said before the save rather than after it. */
+function NotesRow({
+  checked,
+}: {
+  checked: SiteCodeChecked;
+}): JSX.Element | null {
+  const notes = notesOf(checked);
+  if (notes.length === 0) return null;
+  return (
+    <StatusRow
+      icon={
+        <Info className="size-4 text-muted-foreground" aria-hidden="true" />
+      }
+      title="Some of what you wrote won't be kept"
+    >
+      {notes.join(" ")}
+    </StatusRow>
+  );
 }
 
 /** What the site's policy would block, and the choice to save anyway. */
@@ -658,6 +759,7 @@ function PolicyFindings({
   const allow = allowGroupsOf(checked);
   return (
     <div className="space-y-3">
+      <NotesRow checked={checked} />
       <div className="rounded-lg border border-l-4 border-l-warning p-4">
         <h4 className="mb-1.5 text-base font-semibold">
           {"The site's security policy would block some of this code"}
@@ -667,26 +769,7 @@ function PolicyFindings({
             "Pages keep loading, but these parts won't run until the policy allows them."
           }
         </p>
-        <ul className="mb-3 divide-y border-y text-sm">
-          {findings.map(({ finding, sources }) => (
-            <li
-              key={`${finding.slot}-${finding.index}-${finding.directive}-${finding.message}`}
-              className="flex flex-wrap gap-x-3 gap-y-0.5 py-2"
-            >
-              <span className="w-40 shrink-0 text-muted-foreground">
-                {finding.slot === "head" ? "Head" : "End of body"},{" "}
-                {ordinal(finding.index)} element
-              </span>
-              <span className="min-w-0 flex-1 break-words">
-                {sentence(finding.message)}
-                {finding.level === "warning" ? " (reported only)" : ""}
-              </span>
-              <span className="whitespace-nowrap text-xs text-muted-foreground">
-                {finding.directive} · {sources.join(", ")}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <FindingsList findings={findings} />
         {allow.length === 0 ? null : (
           <div className="mb-3 space-y-2 rounded-md bg-muted p-3 text-sm text-muted-foreground">
             {allow.map(group => (
@@ -782,30 +865,51 @@ function ToAllow({ group }: { group: AllowGroup }): JSX.Element {
   );
 }
 
-/** No policy is known, said plainly rather than shown as a pass. */
-function NoPolicy({
+/**
+ * What is worth seeing before a save the check allows: what won't be kept,
+ * what a Report-Only policy would report, and, said plainly rather than
+ * shown as a pass, that no policy is known.
+ */
+function Review({
+  checked,
   working,
   problem,
   onBack,
   onSave,
 }: {
+  checked: SiteCodeChecked;
   working: boolean;
   problem: string | null;
   onBack: () => void;
   onSave: () => void;
 }): JSX.Element {
+  const reported = findingsOf(checked);
   return (
     <div className="space-y-3">
-      <StatusRow
-        icon={
-          <Info className="size-4 text-muted-foreground" aria-hidden="true" />
-        }
-        title="No security policy is known for this site, so nothing was checked against one"
-      >
-        {
-          "The code is otherwise ready to save. If your site sends a Content Security Policy, declare it in the page builder's settings so code is checked against it."
-        }
-      </StatusRow>
+      <NotesRow checked={checked} />
+      {reported.length === 0 ? null : (
+        <div className="rounded-lg border p-4">
+          <h4 className="mb-1.5 text-base font-semibold">
+            {"The site's report-only policy would report some of this code"}
+          </h4>
+          <p className="mb-3 text-sm text-muted-foreground">
+            It blocks nothing, but reports these parts each time they run.
+          </p>
+          <FindingsList findings={reported} />
+        </div>
+      )}
+      {noPolicyKnown(checked) ? (
+        <StatusRow
+          icon={
+            <Info className="size-4 text-muted-foreground" aria-hidden="true" />
+          }
+          title="No security policy is known for this site, so nothing was checked against one"
+        >
+          {
+            "The code is otherwise ready to save. If your site sends a Content Security Policy, declare it in the page builder's settings so code is checked against it."
+          }
+        </StatusRow>
+      ) : null}
       <Actions working={working} problem={problem}>
         <Button
           type="button"
@@ -846,7 +950,12 @@ function StatusRow({
   );
 }
 
-/** The buttons, with a hint before them and why a save failed. */
+/**
+ * The buttons, with a hint before them and why a save failed: a footer held to
+ * the bottom of the tab as its content scrolls, so a long check never leaves
+ * Save out of view or apart from what it saves. It spans the tab's padding,
+ * with the dialog's own spacing below it.
+ */
 function Actions({
   hint,
   working,
@@ -859,7 +968,7 @@ function Actions({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div className="space-y-2">
+    <div className="sticky bottom-0 z-10 -mx-6 -mb-6 space-y-2 border-t bg-background px-6 pb-6 pt-4">
       {/* The hint takes what room is left and wraps; the buttons stay
           together on its line. */}
       <div className="flex items-center gap-4">

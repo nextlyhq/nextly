@@ -43,6 +43,7 @@ import { sha256Hex } from "../sha256-hex";
 import {
   checkSiteCodeAgainstCsp,
   cspHash,
+  parsePolicies,
   siteCodeFacts,
   siteCodePolicyAdditions,
   type CspCheck,
@@ -289,6 +290,8 @@ async function policyChecked(
     additions: blocks
       ? siteCodePolicyAdditions(known.policy ?? "", facts, { siteNonce })
       : [],
+    policies:
+      known.policy === undefined ? 0 : parsePolicies(known.policy).length,
   };
 }
 

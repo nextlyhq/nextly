@@ -1410,6 +1410,11 @@ export interface SiteCodePolicyChecked {
    * Empty when nothing is blocked or nothing was checked.
    */
   readonly additions: readonly CspAddition[];
+  /**
+   * How many policies the checked header carries, comma-separated: an
+   * addition names which by its `policy`. `0` when no policy was known.
+   */
+  readonly policies: number;
 }
 
 /** What checking the site's code answers, and what a save answers too. */
