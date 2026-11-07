@@ -114,7 +114,7 @@ describe("readTemplateCollectionChoices", () => {
   });
 
   it("leaves out whatever the caller may not read, eligible or not", async () => {
-    const { reads } = readsWith({ unreadable: ["posts", "agenda"] });
+    const { reads } = readsWith({ unreadable: ["posts", "agenda", "secret"] });
     expect(await readTemplateCollectionChoices(reads)).toEqual([
       { slug: "events", label: "Events" },
     ]);
