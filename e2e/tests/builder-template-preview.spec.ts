@@ -157,7 +157,10 @@ test.describe("previewing a template with a real entry", () => {
     await gotoAdmin(page, "/");
     const mark = `TP${Date.now().toString(36)}`;
     await post(page.request, `${mark} Published post`, "published");
-    // Made last, so it is the most recently updated.
+    // Made last, and more than a second later, so it is the most recently
+    // updated: SQLite keeps `updatedAt` to the second, and two posts made in
+    // one second tie, which the id would then order either way.
+    await page.waitForTimeout(1_100);
     const draft = `${mark} Draft post`;
     await post(page.request, draft, "draft");
     await openTemplate(page, templateId);
@@ -192,7 +195,10 @@ test.describe("previewing a template with a real entry", () => {
     await page.getByPlaceholder("Search posts").fill(mark);
     const options = page.getByRole("option");
     await expect(options).toHaveCount(2, { timeout: 30_000 });
-    await expect(options.first()).toContainText("Draft");
+    // Found by title rather than place: the two may share `updatedAt`.
+    await expect(options.filter({ hasText: "Newer post" })).toContainText(
+      "Draft"
+    );
     await options.filter({ hasText: older }).click();
     await expect(chip(page)).toHaveAccessibleName(
       `Previewing ${older}, published`
