@@ -25,6 +25,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ADDRESS_CLAIMS_SLUG } from "../collections/address-claims";
+import { asOverwrite } from "../document-version";
 import { pageBuilder } from "../plugin";
 
 /** A page document holding one collection list, split into pages or not. */
@@ -101,11 +102,14 @@ describe.each(getConfiguredTestDialects())(
       return String((created as { item: { id: unknown } }).item.id);
     }
 
+    // A save of the live page: one naming no status over a published page is
+    // held as a working draft, which leaves its claims alone. These tests are
+    // about claims, not stale writes, so each replaces whatever is stored.
     function update(t: TestNextly, id: string, data: Record<string, unknown>) {
       return t.nextly.update({
         collection: "pages",
         id,
-        data,
+        data: asOverwrite({ status: "published", ...data }),
         overrideAccess: true,
       });
     }
