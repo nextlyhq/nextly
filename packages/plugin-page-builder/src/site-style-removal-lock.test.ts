@@ -129,7 +129,7 @@ describe("a site style write dropping a variable or a shared style", () => {
           {
             path: "",
             code: "IN_USE",
-            message: "Still used on 1 document. Remove it from it first.",
+            message: "Still used on 1 page. Remove it from that page first.",
           },
         ],
       },

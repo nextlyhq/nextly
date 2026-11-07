@@ -274,9 +274,12 @@ function stillUsedWords(
   canName: boolean
 ): string {
   if (canName) return stillUsedMessage(count, first, removing);
+  // Counted in pages, as the named refusal counts what it can't open, so the
+  // two read alike whichever one the author meets.
   const it = removing === 1 ? "it" : "them";
-  const documents = count === 1 ? "1 document" : `${count} documents`;
-  return `Still used on ${documents}. Remove ${it} from ${count === 1 ? "it" : "them"} first.`;
+  const pages = count === 1 ? "1 page" : `${count} pages`;
+  const those = count === 1 ? "that page" : "those pages";
+  return `Still used on ${pages}. Remove ${it} from ${those} first.`;
 }
 
 /**

@@ -698,7 +698,7 @@ describe("the in-use check every removal makes", () => {
           {
             path: "",
             code: "IN_USE",
-            message: "Still used on 1 document. Remove them from it first.",
+            message: "Still used on 1 page. Remove them from that page first.",
           },
         ],
       },
