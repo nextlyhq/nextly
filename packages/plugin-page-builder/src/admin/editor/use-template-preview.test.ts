@@ -27,7 +27,7 @@ vi.mock("../template-preview-client", () => ({
   readPreviewEntry,
 }));
 
-const { steppedEntry, useTemplatePreview } = await import(
+const { followingCanvas, steppedEntry, useTemplatePreview } = await import(
   "./use-template-preview"
 );
 const { rememberEntry, rememberedEntry, templatePreviewStore } = await import(
@@ -147,6 +147,27 @@ describe("the entry a template opens on", () => {
     // Another person, and another template, remember nothing of it.
     expect(rememberedEntry(templatePreviewStore("u2"), "t1")).toBeUndefined();
     expect(rememberedEntry(templatePreviewStore("u1"), "t2")).toBeUndefined();
+  });
+
+  it("is the remembered one once the person is known, on a load that learns who they are late", async () => {
+    rememberEntry(templatePreviewStore("u1"), "t1", "p1");
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    // Signed in, but not known yet: the admin is still asking who they are.
+    const { result, rerender } = renderHook(
+      ({ userId }: { userId: string | null }) =>
+        useTemplatePreview({ ...ARGS, userId }),
+      { initialProps: { userId: null as string | null } }
+    );
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p2" })
+    );
+    rerender({ userId: "u1" });
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p1" })
+    );
+    // What they left the template on is still theirs, not the newest.
+    expect(rememberedEntry(templatePreviewStore("u1"), "t1")).toBe("p1");
   });
 
   it("is none, with the reason empty, where the author may read no entry", async () => {
@@ -291,5 +312,79 @@ describe("stepping through the list", () => {
     expect(steppedEntry([NEWEST], "p2", 1)).toBeUndefined();
     expect(steppedEntry(items, "elsewhere", 1)?.id).toBe("p2");
     expect(steppedEntry(items, "elsewhere", -1)?.id).toBe("p9");
+  });
+});
+
+describe("what the strip says, following the canvas's own read", () => {
+  /** A preview whose entry read answered for p2. */
+  function answered() {
+    return {
+      collection: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      language: undefined,
+      list: { state: "ready" as const, items: [NEWEST], mayCreate: true },
+      chip: {
+        id: "p2",
+        title: NEWEST.title,
+        status: "published" as const,
+        unavailable: false,
+        loading: false,
+      },
+      previewed: {
+        kind: "entry" as const,
+        collection: "posts",
+        id: "p2",
+        title: NEWEST.title,
+        editorValues: {},
+        publicValues: null,
+        fields: [],
+      },
+      choose: vi.fn(),
+      step: vi.fn(),
+      refresh: vi.fn(),
+    };
+  }
+
+  it("names the entry previewed once the canvas's read of it has answered", () => {
+    const shown = followingCanvas(
+      answered(),
+      { entryId: "p2", state: "answered" },
+      vi.fn()
+    );
+    expect(shown.previewed).toMatchObject({ kind: "entry", id: "p2" });
+    expect(shown.chip).toMatchObject({ unavailable: false, loading: false });
+    // A canvas with nothing bound reads nothing, and counts as answered.
+    expect(
+      followingCanvas(answered(), { entryId: "p2", state: "none" }, vi.fn())
+        .previewed
+    ).toMatchObject({ kind: "entry" });
+  });
+
+  it("marks the entry unavailable when the canvas's read failed, and retries both reads", () => {
+    const preview = answered();
+    const retry = vi.fn();
+    const shown = followingCanvas(
+      preview,
+      { entryId: "p2", state: "failed" },
+      retry
+    );
+    expect(shown.chip).toMatchObject({ id: "p2", unavailable: true });
+    expect(shown.previewed).toEqual({ kind: "none", reason: "unavailable" });
+    shown.refresh();
+    expect(preview.refresh).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("names no entry previewed while the canvas still reads it, or reads another", () => {
+    for (const canvas of [
+      { entryId: "p2", state: "pending" as const },
+      // The canvas's last answer is another entry's.
+      { entryId: "p1", state: "answered" as const },
+      undefined,
+    ]) {
+      const shown = followingCanvas(answered(), canvas, vi.fn());
+      expect(shown.previewed).toEqual({ kind: "none", reason: "loading" });
+      expect(shown.chip).toMatchObject({ loading: true, unavailable: false });
+    }
   });
 });

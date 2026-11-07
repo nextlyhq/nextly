@@ -29,6 +29,9 @@ const { canvasBindingsFor, canvasBindingsRequest, useCanvasBindings } =
   await import("./canvas-bindings-client");
 const { CanvasEntryProvider } = await import("./editor/canvas-entry");
 
+/** The retries the editor has asked for, which a wrapper hands the canvas. */
+let retries = 0;
+
 const page = (bindings?: Record<string, unknown>): BlockDocument =>
   ({
     formatVersion: 1,
@@ -369,6 +372,45 @@ describe("the canvas's entry, for a template", () => {
       slug: "posts",
       id: "p1",
     });
+    editing.identity = null;
+  });
+});
+
+describe("the canvas's read, as the template's strip hears it", () => {
+  it("says the read failed, and asks again when the editor retries", async () => {
+    editing.identity = {
+      kind: "collection",
+      slug: "templates",
+      documentId: "t1",
+    };
+    writePluginRoute.mockReset();
+    writePluginRoute.mockRejectedValueOnce(new Error("offline"));
+    const heard: { entryId: string | undefined; state: string }[] = [];
+    const onRead = (read: { entryId: string | undefined; state: string }) =>
+      heard.push(read);
+    const drawn = [page({ text: { $bind: "title" } })];
+    const { rerender } = renderHook(() => useCanvasBindings(drawn, "da"), {
+      wrapper: ({ children }) =>
+        CanvasEntryProvider({
+          identity: { kind: "collection", slug: "posts", documentId: "p7" },
+          retry: retries,
+          onRead,
+          children,
+        }),
+    });
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p7", state: "failed" })
+    );
+    // Nothing asks again on its own: the same ask is not remade.
+    expect(writePluginRoute).toHaveBeenCalledTimes(1);
+
+    writePluginRoute.mockResolvedValueOnce(answer("A post"));
+    retries = 1;
+    rerender();
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p7", state: "answered" })
+    );
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
     editing.identity = null;
   });
 });

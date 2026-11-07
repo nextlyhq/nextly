@@ -88,8 +88,9 @@ import { StatusPill } from "../status-pill";
 import { listPreviewEntries } from "../template-preview-client";
 
 import { entryCreatePath } from "./builder-address";
-import { CanvasEntryProvider } from "./canvas-entry";
+import { CanvasEntryProvider, type CanvasEntryRead } from "./canvas-entry";
 import {
+  followingCanvas,
   useTemplatePreview,
   type TemplatePreview,
 } from "./use-template-preview";
@@ -148,17 +149,29 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   const userId = useCurrentUserId();
   // The language the editor edits, as the editor's own reads take it.
   const locale = useDocumentLocale()?.code ?? undefined;
-  const preview = useTemplatePreview({
+  const read = useTemplatePreview({
     collection,
     templateId:
       identity?.kind === "collection" ? identity.documentId : undefined,
     userId,
     locale,
   });
+  // The canvas's own read of the entry, heard here and asked again with a
+  // retry, so the strip and the seam name an entry only once both the entry
+  // and the canvas's read of it have answered.
+  const [canvasRead, setCanvasRead] = useState<CanvasEntryRead | undefined>(
+    undefined
+  );
+  const [retry, setRetry] = useState(0);
+  const preview = useMemo(
+    () => followingCanvas(read, canvasRead, () => setRetry(count => count + 1)),
+    [read, canvasRead]
+  );
   // The entry the strip names, read by the canvas from the moment it is
-  // chosen, so the two never name different entries; none where it could
-  // not be read, so bound text draws its fallback as the strip says.
-  const chip = preview.chip;
+  // chosen, so the two never name different entries; none where its own
+  // read failed, so bound text draws its fallback as the strip says. Taken
+  // from the entry's read alone: the canvas's read follows from it.
+  const chip = read.chip;
   const previewedId =
     chip === undefined || chip.unavailable ? undefined : chip.id;
   const canvasIdentity = useMemo(
@@ -174,7 +187,11 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   );
   return (
     <TemplatePreviewState.Provider value={preview}>
-      <CanvasEntryProvider identity={canvasIdentity}>
+      <CanvasEntryProvider
+        identity={canvasIdentity}
+        retry={retry}
+        onRead={setCanvasRead}
+      >
         <PreviewedEntryProvider value={preview.previewed}>
           {children}
         </PreviewedEntryProvider>
@@ -326,7 +343,9 @@ function chipWords(preview: TemplatePreview): {
     return {
       name: chip.unavailable
         ? `Previewing ${chip.title}, couldn’t be read`
-        : `Previewing ${chip.title}, ${chip.status}`,
+        : chip.loading
+          ? `Previewing ${chip.title}, loading`
+          : `Previewing ${chip.title}, ${chip.status}`,
       shown: chip.title,
     };
   }
@@ -388,6 +407,9 @@ function EntryPicker({
                       <AlertTriangle aria-hidden="true" size={12} />
                       Couldn’t be read
                     </span>
+                  ) : chip.loading ? (
+                    // Not drawn yet: no status is claimed for it.
+                    <span className="nx-preview-strip__none">Loading…</span>
                   ) : (
                     <StatusPill state={chip.status} size="sm" />
                   )}

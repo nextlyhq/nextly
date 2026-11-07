@@ -117,6 +117,7 @@ function previewOf(
             title: current.title,
             status: current.status,
             unavailable: false,
+            loading: false,
           },
     previewed,
     choose: vi.fn(),
@@ -225,6 +226,19 @@ describe("the chip", () => {
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       LONG_TITLE
     );
+  });
+
+  it("claims no status for an entry still being read", () => {
+    const preview = previewOf();
+    renderStrip({
+      ...preview,
+      chip: { ...preview.chip!, loading: true },
+      previewed: { kind: "none", reason: "loading" },
+    });
+    expect(
+      screen.getByRole("button", { name: `Previewing ${LONG_TITLE}, loading` })
+    ).toBeTruthy();
+    expect(screen.queryByText("Published")).toBeNull();
   });
 
   it("names an entry that could not be read as such, never as the entry previewed", () => {

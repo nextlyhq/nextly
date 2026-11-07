@@ -32,6 +32,7 @@ import {
   readPreviewEntry,
 } from "../template-preview-client";
 
+import type { CanvasEntryRead } from "./canvas-entry";
 import {
   rememberedEntry,
   rememberEntry,
@@ -57,6 +58,11 @@ export interface PreviewChip {
    * rather than claiming an entry the canvas does not show.
    */
   readonly unavailable: boolean;
+  /**
+   * Whether the entry is still being read, by its own read or the canvas's:
+   * the chip names the entry chosen, and says it is not drawn yet.
+   */
+  readonly loading: boolean;
 }
 
 /** A template's preview, as the strip, the picker and the canvas read it. */
@@ -274,6 +280,47 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
   };
 }
 
+/**
+ * The preview as the strip and the seam say it: an entry is named as the
+ * one previewed only once both its own read and the canvas's read of it
+ * have answered, so neither claims an entry the canvas is not drawing. A
+ * canvas read that failed marks the entry unavailable, as a failed entry
+ * read does, and Try again then asks both again (`retryCanvas`). A canvas
+ * with nothing bound needs no read, and counts as answered.
+ */
+export function followingCanvas(
+  preview: TemplatePreview,
+  canvas: CanvasEntryRead | undefined,
+  retryCanvas: () => void
+): TemplatePreview {
+  const refresh = () => {
+    preview.refresh();
+    retryCanvas();
+  };
+  const { chip } = preview;
+  if (chip === undefined || chip.unavailable) return { ...preview, refresh };
+  const state = canvas?.entryId === chip.id ? canvas.state : "pending";
+  if (state === "failed") {
+    return {
+      ...preview,
+      chip: { ...chip, unavailable: true },
+      previewed: { kind: "none", reason: "unavailable" },
+      refresh,
+    };
+  }
+  if (state === "pending") {
+    return {
+      ...preview,
+      chip: { ...chip, loading: true },
+      ...(preview.previewed.kind === "entry"
+        ? { previewed: { kind: "none", reason: "loading" } as const }
+        : {}),
+      refresh,
+    };
+  }
+  return { ...preview, refresh };
+}
+
 /** A count bumped whenever the window regains focus, and a way to bump it. */
 function useFocusRefresh(): { round: number; refresh: () => void } {
   const [round, setRound] = useState(0);
@@ -299,17 +346,32 @@ interface PreviewMemory {
 function usePreviewMemory(args: TemplatePreviewArgs): PreviewMemory {
   const { templateId, userId } = args;
   const store = useMemo(() => templatePreviewStore(userId), [userId]);
-  const [remembered, setRemembered] = useState<string | undefined>(() =>
-    templateId === undefined ? undefined : rememberedEntry(store, templateId)
-  );
+  // Whose memory, of which template: none until both are known. On a cold
+  // load the person is known only once the admin has asked who they are, so
+  // the memory is read again then, never kept from the read made before.
+  const whose =
+    userId === null || templateId === undefined
+      ? null
+      : JSON.stringify([userId, templateId]);
+  const read = (): string | undefined =>
+    whose === null || templateId === undefined
+      ? undefined
+      : rememberedEntry(store, templateId);
+  const [held, setHeld] = useState(() => ({ whose, remembered: read() }));
+  // Read again, in this render, whenever the person or the template changes.
+  const current = held.whose === whose ? held : { whose, remembered: read() };
+  if (current !== held) setHeld(current);
   const keep = useCallback(
     (entry: string | null) => {
-      setRemembered(entry ?? undefined);
-      if (templateId !== undefined) rememberEntry(store, templateId, entry);
+      // Nothing is kept for a person not known yet: a choice made then would
+      // be written over theirs once they are.
+      if (whose === null || templateId === undefined) return;
+      setHeld({ whose, remembered: entry ?? undefined });
+      rememberEntry(store, templateId, entry);
     },
-    [store, templateId]
+    [store, templateId, whose]
   );
-  return { remembered, keep };
+  return { remembered: current.remembered, keep };
 }
 
 /**
@@ -390,12 +452,18 @@ function chipFrom(
   if (selected === undefined) return undefined;
   if (read !== undefined && "answer" in read && read.answer.id === selected) {
     const { id, title, status } = read.answer;
-    return { id, title, status, unavailable: false };
+    return { id, title, status, unavailable: false, loading: false };
   }
   const row = rows.find(item => item.id === selected);
   // Named from its row while it is read; marked when that read failed.
   const failed = read !== undefined && "failed" in read && read.id === selected;
   return row === undefined
     ? undefined
-    : { id: row.id, title: row.title, status: row.status, unavailable: failed };
+    : {
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        unavailable: failed,
+        loading: !failed,
+      };
 }
