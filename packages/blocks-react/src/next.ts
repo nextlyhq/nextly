@@ -156,6 +156,7 @@ import {
   pagedListOf,
   readPageInputs,
   readPageStages,
+  readsMediaInBatches,
   stagedContext,
   drawWithRegions,
   type EntrySource,
@@ -1697,7 +1698,10 @@ async function readDraftDefinitions(
       ...rest,
       // Each id's own read, refused, names the placements asking for it and
       // every later id's, since a refusal ends the reads.
-      claimAt: at => ({ nodeIds: placementsOf(wanted.slice(at), placements) }),
+      claimAt: at => ({
+        ...COMPONENT_CLAIM,
+        nodeIds: placementsOf(wanted.slice(at), placements),
+      }),
     }),
     field
   );
@@ -1910,7 +1914,10 @@ function mediaResolver(
         if ((budget.remaining?.() ?? Infinity) < chunk.length + 1) return false;
         if (!budget.take({ ...claim, kind: "image" })) return false;
         const found = await readMany(chunk).catch(() => undefined);
-        if (found === undefined) continue;
+        // An unusable batch (refused, or rows it cannot match) stops the
+        // reads ahead, so the allowance kept for each image's own read is
+        // not spent by a later step first.
+        if (found === undefined) return false;
         for (const id of chunk) {
           known.set(id, Promise.resolve(found.get(id) ?? null));
         }
@@ -1937,7 +1944,19 @@ function mediaReadMany(
       ids: readonly string[]
     ) => Promise<ReadonlyMap<string, ResolvedMedia | null> | undefined>)
   | undefined {
-  if (config.resolveMedia !== undefined) return undefined;
+  const library = mediaNamespaceOf(reader);
+  const findByIDs = library?.findByIDs?.bind(library);
+  // The one answer to whether this route batches, which the editor's read
+  // count asks too.
+  if (
+    !readsMediaInBatches({
+      ownResolver: config.resolveMedia !== undefined,
+      mediaCollection: config.mediaCollection,
+      libraryReadsMany: findByIDs !== undefined,
+    })
+  ) {
+    return undefined;
+  }
   const collection = config.mediaCollection;
   if (collection !== undefined) {
     return async ids => {
@@ -1951,8 +1970,7 @@ function mediaReadMany(
       return rows === undefined ? undefined : drawnEach(ids, rows);
     };
   }
-  const library = mediaNamespaceOf(reader);
-  const findByIDs = library?.findByIDs?.bind(library);
+  // Narrowed for the type: the check above already required it.
   if (findByIDs === undefined) return undefined;
   return async ids => {
     const rows = new Map<string, Record<string, unknown>>();

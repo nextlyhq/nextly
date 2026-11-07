@@ -26,6 +26,7 @@ import type {
   MediaFile,
   MediaFolder,
 } from "../../services/media/media-service";
+import { z } from "../../zod";
 import type {
   BulkDeleteMediaArgs,
   BulkOperationResult,
@@ -54,6 +55,13 @@ import {
   mergeConfig,
   toListResult,
 } from "./helpers";
+
+/**
+ * What `media.findByIDs` takes as `ids`: a list of strings, at most a read's
+ * worth. Every element is checked, so a hole in a sparse array is refused
+ * rather than reaching the query as `undefined`.
+ */
+const MEDIA_IDS = z.array(z.string()).max(MEDIA_IDS_PER_READ);
 
 /**
  * Media MIME type enum accepted by `MediaService.listMedia()`.
@@ -252,20 +260,16 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         // Refused before the lookup, as `findByID` refuses one: the same
         // check, so a caller who may not read one file reads none of many.
         await checkMediaRead(ctx.defaultConfig, args);
-        const ids = args.ids;
-        if (
-          !Array.isArray(ids) ||
-          ids.some(id => typeof id !== "string") ||
-          ids.length > MEDIA_IDS_PER_READ
-        ) {
-          throw new NextlyError({
-            code: "INVALID_INPUT",
-            publicMessage: `'ids' must be a list of at most ${String(MEDIA_IDS_PER_READ)} media ids for media.findByIDs()`,
-            statusCode: 400,
+        // Parsed at the boundary, every element visited (a sparse array's
+        // holes too), and refused before any lookup.
+        const parsed = MEDIA_IDS.safeParse(args.ids);
+        if (!parsed.success) {
+          throw NextlyError.invalidInput({
+            message: `'ids' must be a list of at most ${String(MEDIA_IDS_PER_READ)} media ids for media.findByIDs()`,
           });
         }
         return await ctx.mediaService.findByIds(
-          ids,
+          parsed.data,
           createRequestContext(args)
         );
       });

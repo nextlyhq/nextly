@@ -53,7 +53,8 @@ import {
   type PageReadReport,
 } from "./context";
 import { createPublicBlocksPage, readBindingSources } from "./next";
-import { countPageReads } from "./page-read-count";
+import { countPageReads, type CountedRegion } from "./page-read-count";
+import type { RouteMedia } from "./page-read-stages";
 import type { PageRendererProps } from "./page-renderer";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
@@ -1276,6 +1277,77 @@ function reportIn(element: unknown): PageReadReport | undefined {
 }
 
 /**
+ * The editor's count of the page at `/journal`, made from the same site the
+ * route reads: lists through the public's reader, the bindings and
+ * conditions read as the route reads them under the reads left (as the
+ * canvas bindings route does), images from the stored rows.
+ */
+async function editorCount(
+  nextly: Site,
+  options: {
+    readonly cap: number;
+    readonly media: RouteMedia;
+    readonly definitions?: Map<string, BlockDocument>;
+    readonly regions?: CountedRegion[];
+  }
+): Promise<PageReadReport> {
+  const reader = createPublicReader(
+    { find: async args => (await nextly.find({ ...args })) as never },
+    {}
+  );
+  const images = nextly.stored.images ?? [];
+  return await countPageReads({
+    drawnWith: {
+      blocks,
+      definitions: options.definitions ?? new Map(),
+      context: createStandaloneContext({
+        entry: { id: "p1" },
+        entryCollection: "pages",
+        data: createDefaultDataProvider(reader as never),
+        resolveMedia: id => {
+          const image = images.find(row => row.id === id);
+          return Promise.resolve(
+            image === undefined ? null : { url: String(image.url) }
+          );
+        },
+      }),
+    },
+    document: (nextly.stored.pages?.[0]?.content ??
+      pageOf([])) as BlockDocument,
+    regions: options.regions ?? [],
+    entrySource: "collection",
+    where: {
+      collection: "pages",
+      slug: "journal",
+      page: 1,
+      listPagePath: page => `/journal/page/${String(page)}`,
+    },
+    readBindings: async (ask, allowance) => {
+      const budget = createQueryBudget(allowance);
+      const bindings = await readBindingSources({
+        documents: ask.documents,
+        ...(ask.conditions === undefined ? {} : { conditions: ask.conditions }),
+        entrySource: "collection",
+        slug: "pages",
+        entryId: "p1",
+        page: "journal",
+        reader: reader as never,
+        budget,
+        siteSettings: nextly as never,
+      });
+      return bindings === undefined
+        ? undefined
+        : { bindings, reads: budget.report() };
+    },
+    draw: async element => {
+      await renderToHtml(element);
+    },
+    cap: options.cap,
+    media: options.media,
+  });
+}
+
+/**
  * What a count reports, as two counts are compared: the reads made, by kind,
  * the blocks named unread, and whether any read was refused. How many were
  * refused is a lower bound on what the page needs (a read refused never asks
@@ -1323,30 +1395,9 @@ describe("the editor's count of a page's reads", () => {
     };
     const counted = async (cap: number) => {
       const { nextly, definitions } = everyStage();
-      // The public's reader, as the route's lists and bindings read.
-      const reader = createPublicReader(
-        { find: async args => (await nextly.find({ ...args })) as never },
-        {}
-      );
-      const images = nextly.stored.images ?? [];
-      return await countPageReads({
-        drawnWith: {
-          blocks,
-          definitions,
-          context: createStandaloneContext({
-            entry: { id: "p1" },
-            entryCollection: "pages",
-            data: createDefaultDataProvider(reader as never),
-            resolveMedia: id => {
-              const image = images.find(row => row.id === id);
-              return Promise.resolve(
-                image === undefined ? null : { url: String(image.url) }
-              );
-            },
-          }),
-        },
-        document: (nextly.stored.pages?.[0]?.content ??
-          pageOf([])) as BlockDocument,
+      return await editorCount(nextly, {
+        cap,
+        definitions,
         regions: [
           {
             area: "header",
@@ -1361,39 +1412,7 @@ describe("the editor's count of a page's reads", () => {
             definitions,
           },
         ],
-        entrySource: "collection",
-        where: {
-          collection: "pages",
-          slug: "journal",
-          page: 1,
-          listPagePath: page => `/journal/page/${String(page)}`,
-        },
-        // The bindings and conditions read as the route reads them, under
-        // the reads the page has left, as the canvas bindings route does.
-        readBindings: async (ask, allowance) => {
-          const budget = createQueryBudget(allowance);
-          const bindings = await readBindingSources({
-            documents: ask.documents,
-            ...(ask.conditions === undefined
-              ? {}
-              : { conditions: ask.conditions }),
-            entrySource: "collection",
-            slug: "pages",
-            entryId: "p1",
-            page: "journal",
-            reader: reader as never,
-            budget,
-            siteSettings: nextly as never,
-          });
-          return bindings === undefined
-            ? undefined
-            : { bindings, reads: budget.report() };
-        },
-        draw: async element => {
-          await renderToHtml(element);
-        },
-        cap,
-        mediaCollection: "images",
+        media: { mediaCollection: "images" },
       });
     };
     const full = await published(500);
@@ -1444,5 +1463,120 @@ describe("a component read refused for want of reads", () => {
       nodeId: "outer-placed",
       what: "component",
     });
+  });
+});
+
+describe("a list's images, counted as the route reads them", () => {
+  it("counts one read per batch where the route batches, and one per image where it cannot", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const imagesRead = async (route: {
+      readonly media: RouteMedia;
+      readonly config: Record<string, unknown>;
+    }) => {
+      const nextly = site(3, listing(3, { boundImage: true }));
+      const page = createPublicBlocksPage({
+        collections: ["pages", "posts"],
+        field: "content",
+        blocks,
+        mediaCollection: "images",
+        ...route.config,
+        nextly: nextly as never,
+      });
+      const element = await throughBoundary<{ children?: unknown }>(
+        page.ContentPage({ params: { slug: ["journal"] } })
+      );
+      await renderToHtml(element);
+      const counted = await editorCount(
+        site(3, listing(3, { boundImage: true })),
+        {
+          cap: 500,
+          media: route.media,
+        }
+      );
+      return {
+        route: reportIn(element)?.byKind.image,
+        count: counted.byKind.image,
+      };
+    };
+    // A named media collection: one read for the list's three images.
+    expect(
+      await imagesRead({ media: { mediaCollection: "images" }, config: {} })
+    ).toEqual({ route: 1, count: 1 });
+    // The site's own resolver takes one id: one read per image, both ways.
+    expect(
+      await imagesRead({
+        media: { mediaCollection: "images", ownResolver: true },
+        config: {
+          resolveMedia: (id: string) =>
+            Promise.resolve({ url: `/media/${id.slice(6)}.jpg` }),
+        },
+      })
+    ).toEqual({ route: 3, count: 3 });
+  });
+
+  it("counts one read per image for a media library that reads one id at a time", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // The posts' pictures are uploads to the media library.
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "slug", type: "text" },
+      { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "featuredImage", type: "upload", relationTo: "media" },
+    ]);
+    const nextly = site(3, listing(3, { boundImage: true }));
+    // A media library with no read of many ids.
+    Reflect.deleteProperty(nextly.media, "findByIDs");
+    const page = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      page.ContentPage({ params: { slug: ["journal"] } })
+    );
+    await renderToHtml(element);
+    const counted = await editorCount(
+      site(3, listing(3, { boundImage: true })),
+      { cap: 500, media: { libraryReadsMany: false } }
+    );
+    expect({
+      route: reportIn(element)?.byKind.image,
+      count: counted.byKind.image,
+    }).toEqual({ route: 3, count: 3 });
+    // CONTROL: the same count, for a library that reads many, batches.
+    const batched = await editorCount(
+      site(3, listing(3, { boundImage: true })),
+      { cap: 500, media: {} }
+    );
+    expect(batched.byKind.image).toBe(1);
+  });
+});
+
+describe("a list's image batch that cannot be used", () => {
+  it("stops the reads ahead, so the images it fell back to keep their reads", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Each entry's own picture, then its author through a relation.
+    const nextly = site(
+      2,
+      pageOf([
+        postsList("list", 2, [
+          {
+            id: "cover",
+            type: "core/image",
+            version: 1,
+            props: { alt: "" },
+            bindings: { mediaId: { $bind: "featuredImage", source: "item" } },
+          },
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ]),
+      // A batch read by `id in` whose count the route cannot trust.
+      { distrustBatches: true }
+    );
+    // The entries, the batch it could not use, and each image's own read.
+    const { html } = await journal(nextly, { maxQueries: 1 + 1 + 2 });
+    expect(html).toContain("/media/1.jpg");
+    expect(html).toContain("/media/2.jpg");
   });
 });

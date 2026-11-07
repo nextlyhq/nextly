@@ -64,6 +64,7 @@ import {
 import {
   drawWithRegions,
   readPageStages,
+  readsMediaInBatches,
   stagedContext,
   type BindingsAsk,
   type EntrySource,
@@ -71,6 +72,7 @@ import {
   type PageReadSources,
   type PageReadTerms,
   type PageWhere,
+  type RouteMedia,
 } from "./page-read-stages";
 import type { PageRendererProps } from "./page-renderer";
 import { registeredBlocks } from "./resolver";
@@ -136,11 +138,13 @@ export interface PageReadCountArgs {
   /** The allowance counted against: the default a published page has. */
   readonly cap?: number;
   /**
-   * The collection the route reads media from, where it names one: a bound
-   * image is filled only from an upload field pointing there. The media
-   * library's, when absent.
+   * How the route reads media: the collection it reads from, where it names
+   * one (a bound image is filled only from an upload field pointing there),
+   * and whether it can read a list's images in batches
+   * (`readsMediaInBatches`). The default route's, when absent: the media
+   * library, read in batches.
    */
-  readonly mediaCollection?: string;
+  readonly media?: RouteMedia;
 }
 
 /** What one link to an entry costs a published page: its row, two checks. */
@@ -169,7 +173,9 @@ function claimEach(
  */
 function countedMedia(
   base: PageContext,
-  budget: QueryBudget
+  budget: QueryBudget,
+  /** Whether the route reads a list's images in batches at all. */
+  batches: boolean
 ): {
   resolve: PageContext["resolveMedia"];
   ahead: NonNullable<ListBatchReads["media"]>;
@@ -187,6 +193,9 @@ function countedMedia(
         ? drawn(id)
         : Promise.resolve(null)),
     ahead: (ids, claim) => {
+      // A route that reads each image by its own id reads none ahead, as
+      // the route's own resolver answers.
+      if (!batches) return Promise.resolve(true);
       const wanted = [...new Set(ids)].filter(id => !known.has(id));
       for (let at = 0; at < wanted.length; at += BATCH_SIZE) {
         const batch = wanted.slice(at, at + BATCH_SIZE);
@@ -401,7 +410,7 @@ export async function countPageReads(
     limits: drawing.limits,
     styleContext: drawing.styleContext,
     namedQueries: drawnContext?.namedQueries,
-    mediaCollection: args.mediaCollection,
+    mediaCollection: args.media?.mediaCollection,
   };
   const staged = await readPageStages({
     terms,
@@ -423,7 +432,11 @@ export async function countPageReads(
     ...base
   } = drawnContext ?? createStandaloneContext();
   const links = countedLinks(budget);
-  const media = countedMedia(base, budget);
+  const media = countedMedia(
+    base,
+    budget,
+    readsMediaInBatches(args.media ?? {})
+  );
   const counting: PageContext = {
     ...base,
     queries: budget,

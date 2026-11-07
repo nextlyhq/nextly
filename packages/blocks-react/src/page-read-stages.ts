@@ -149,6 +149,38 @@ export interface PageReadSources {
   site(): Promise<BlocksSiteSettings | undefined>;
 }
 
+/**
+ * What decides whether a route reads a list's images in batches.
+ *
+ * @experimental
+ */
+export interface RouteMedia {
+  /** The site resolves media itself (`resolveMedia`), one id at a time. */
+  readonly ownResolver?: boolean;
+  /** The collection the route reads media from, by `id in`. */
+  readonly mediaCollection?: string | undefined;
+  /**
+   * Whether the media library offers a read of many ids (`findByIDs`), as
+   * Nextly's does; a reader without it reads each image by its own id.
+   */
+  readonly libraryReadsMany?: boolean;
+}
+
+/**
+ * Whether a route reads a list's images in batches: not where the site
+ * resolves media itself; by `id in` where it names a media collection;
+ * through the media library's `findByIDs` where it has one. The route and
+ * the editor's read count both ask this one question.
+ *
+ * @experimental
+ */
+export function readsMediaInBatches(media: RouteMedia): boolean {
+  if (media.ownResolver === true) return false;
+  return (
+    media.mediaCollection !== undefined || media.libraryReadsMany !== false
+  );
+}
+
 /** No Layout: what a page drawn alone reads for one. */
 const NO_REGIONS: LayoutRead = {
   regions: [],

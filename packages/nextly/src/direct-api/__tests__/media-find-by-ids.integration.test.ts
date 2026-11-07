@@ -10,7 +10,15 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { resetSessionStandingForTests } from "../../auth/session/session-standing";
 import {
@@ -19,6 +27,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import { MediaService } from "../../domains/media/services/media-service";
 import { pdfDocument } from "../../services/upload-validation/__tests__/format-fixtures";
 import { Nextly } from "../nextly";
 
@@ -138,16 +147,34 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
     it("refuses more ids than one read takes, reading nothing", async () => {
+      const lookup = vi.spyOn(MediaService.prototype, "findByIds");
+      // CONTROL: the spy sees the lookup a read within the limit makes.
+      await trusted.media.findByIDs({ ids: [ids[0] ?? ""] });
+      expect(lookup).toHaveBeenCalledTimes(1);
+      lookup.mockClear();
       const many = Array.from(
         { length: 101 },
         (_, index) => `id-${String(index)}`
       );
+      const refused = trusted.media.findByIDs({ ids: many });
+      await expect(refused).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
+    it("refuses a list with holes, reading nothing", async () => {
+      const lookup = vi.spyOn(MediaService.prototype, "findByIds");
+      // Two holes, which a check that skips them would take for no ids.
+      const sparse: string[] = [];
+      sparse.length = 2;
       await expect(
-        trusted.media.findByIDs({ ids: many })
-      ).rejects.toMatchObject({
-        code: "INVALID_INPUT",
-      });
+        trusted.media.findByIDs({ ids: sparse })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(lookup).not.toHaveBeenCalled();
     });
   }
 );
