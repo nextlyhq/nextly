@@ -1,13 +1,19 @@
 /**
  * Variables in the Design panel, end to end: an author creates a variable with
  * a dark value, it is in the panel after a reload, and the compiled sheet
- * applies its dark value when the device prefers dark — and only then.
+ * applies its dark value when the device prefers dark — and only then. A role
+ * that may read Design but not change it sees the variables read-only and is
+ * refused their changes; and each action an author takes on a variable is
+ * kept across a reload.
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { openEditorWith } from "./canvas/editor-driver";
+import { uniqueTag } from "./support/accounts";
+import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
+import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
@@ -384,6 +390,501 @@ test("a mode picked in the Design panel draws the canvas in it, on a device that
     expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
       true
     );
+  }
+});
+
+const PAGES = "/admin/api/collections/pages/entries";
+const PLUGIN = "/admin/api/plugins/@nextlyhq/plugin-page-builder";
+
+/**
+ * One stored variable, as the site style holds it. A type alias, so it is a
+ * record `toMatchObject` takes.
+ */
+type StoredVariable = {
+  name: string;
+  label?: string;
+  kind: string;
+  values: { light: string; dark?: string };
+};
+
+/** The variables of a stored tokens section, as text or as JSON. */
+function variablesOf(section: unknown): StoredVariable[] {
+  const parsed: unknown =
+    typeof section === "string" ? JSON.parse(section) : section;
+  if (parsed === null || typeof parsed !== "object") return [];
+  const list = (parsed as { tokens?: unknown }).tokens;
+  return Array.isArray(list) ? (list as StoredVariable[]) : [];
+}
+
+/** The stored variable of that name, read as the super-admin. */
+async function storedVariable(
+  page: Page,
+  name: string
+): Promise<StoredVariable | undefined> {
+  return variablesOf(await storedTokens(page)).find(
+    variable => variable.name === name
+  );
+}
+
+/**
+ * Store these variables beside the ones the site holds, as the super-admin.
+ * Added rather than replacing the set, so no variable another spec left in
+ * use is dropped and refused.
+ */
+async function seedVariables(
+  page: Page,
+  before: unknown,
+  added: readonly StoredVariable[]
+): Promise<void> {
+  const parsed: unknown =
+    typeof before === "string" ? JSON.parse(before) : before;
+  const section =
+    parsed !== null && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const kept = variablesOf(before).filter(
+    variable => !added.some(entry => entry.name === variable.name)
+  );
+  const seeded = await page.request.patch(SITE_STYLE, {
+    data: { tokens: { ...section, tokens: [...kept, ...added] } },
+  });
+  expect(
+    seeded.ok(),
+    `seeding the variables: ${seeded.status()} ${await seeded.text()}`
+  ).toBe(true);
+}
+
+/** The CSRF token and origin a cookie-signed write to a plugin route needs. */
+async function writeHeaders(
+  api: APIRequestContext
+): Promise<Record<string, string>> {
+  const csrf = await api.get("/admin/api/auth/csrf");
+  const { token } = (await csrf.json()) as { token: string };
+  // A plugin route checks a cookie-authenticated write's origin, which a
+  // browser sends and an API request does not: named here as the site's own.
+  return { "x-csrf-token": token, origin: new URL(csrf.url()).origin };
+}
+
+/** A draft page holding these nodes, made by the super-admin; answers its id. */
+async function seedPage(
+  api: APIRequestContext,
+  title: string,
+  nodes: readonly unknown[]
+): Promise<string> {
+  const created = await api.post(PAGES, {
+    data: {
+      title,
+      slug: `variables-${uniqueTag()}`,
+      content: { formatVersion: 1, kind: "page", nodes },
+    },
+  });
+  expect(
+    created.ok(),
+    `seeding the page: ${created.status()} ${await created.text()}`
+  ).toBe(true);
+  return ((await created.json()) as { item: { id: string } }).item.id;
+}
+
+/** Open a page's builder and wait for its canvas. */
+async function openPageBuilder(page: Page, pageId: string): Promise<void> {
+  await gotoAdmin(page, `/collections/pages/${pageId}/builder?field=content`);
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+    timeout: 30_000,
+  });
+}
+
+/** Reload the open builder and show the Design panel again. */
+async function reloadDesign(page: Page): Promise<void> {
+  await page.reload();
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await openDesign(page);
+}
+
+/**
+ * Every write this page sends to the site style or the variable routes, as
+ * "METHOD path", recorded from now on. A read is not one.
+ */
+function watchVariableWrites(page: Page): string[] {
+  const writes: string[] = [];
+  page.on("request", request => {
+    const path = new URL(request.url()).pathname;
+    const variables =
+      path === SITE_STYLE || path.startsWith(`${PLUGIN}/variables/`);
+    if (variables && request.method() !== "GET") {
+      writes.push(`${request.method()} ${path}`);
+    }
+  });
+  return writes;
+}
+
+/**
+ * Count every page into the usage index, so Remove answers on whole counts:
+ * "free" or "in use", never "not counted yet". A count stops at its time
+ * budget, so it is asked again until the index says it is whole.
+ */
+async function countEveryPage(api: APIRequestContext): Promise<void> {
+  const headers = await writeHeaders(api);
+  await expect
+    .poll(
+      async () => {
+        const counted = await api.post(`${PLUGIN}/shared-styles/count`, {
+          headers,
+          data: {},
+        });
+        expect(counted.ok(), await counted.text()).toBe(true);
+        const body = (await counted.json()) as { item: { whole: boolean } };
+        return body.item.whole;
+      },
+      { timeout: 60_000 }
+    )
+    .toBe(true);
+}
+
+/** The value a site variable's custom property resolves to on the canvas root. */
+function canvasValue(page: Page, property: string): Promise<string> {
+  return canvasFrame(page)
+    .locator("html")
+    .evaluate(
+      (root, name) => getComputedStyle(root).getPropertyValue(name).trim(),
+      property
+    );
+}
+
+/** The "+" labels of the Variables groups, every way to add a variable. */
+const ADD_LABELS = [
+  "Add colour",
+  "Add type size",
+  "Add spacing, radius or shadow",
+  "Add another variable",
+];
+
+/**
+ * The design permission (`update-site-style`) withheld: Variables shows
+ * read-only, and the writes it would make are refused. The author may edit
+ * pages and read Design, so the editor and the Variables panel both open;
+ * what is missing is the right to change the site's design.
+ */
+test("a role that may read Design but not change it sees the variables read-only, and is refused their changes", async ({
+  browser,
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const baseURL = test.info().project.use.baseURL ?? "";
+  const before = await storedTokens(page);
+  const harbour: StoredVariable = {
+    name: "color.harbour",
+    label: "Harbour",
+    kind: "color",
+    values: { light: "#1d4ed8", dark: "#93c5fd" },
+  };
+  // One limited author for this file: signing in spends the auth budget.
+  const reader = await signInAsLimitedUser(browser, page.request, baseURL, [
+    "read-pages",
+    "update-pages",
+    "read-components",
+    "read-site-style",
+  ]);
+  let pageId: string | undefined;
+  try {
+    await seedVariables(page, before, [harbour]);
+    pageId = await seedPage(page.request, "Variables read-only", NODES);
+    const view = await reader.context.newPage();
+    await view.setViewportSize({ width: 1440, height: 900 });
+    await useBlankCanvasPage(view);
+    const writes = watchVariableWrites(view);
+    await openPageBuilder(view, pageId);
+    await openDesign(view);
+
+    // The variables show, said to be read-only, with no way to add one.
+    const row = view.getByRole("button", {
+      name: `Harbour, light ${harbour.values.light}, dark ${harbour.values.dark ?? ""}`,
+    });
+    await expect(row).toBeVisible();
+    await expect(
+      view.getByText(/You can view the site.s variables but not change them\./)
+    ).toBeVisible();
+    // The first test here clicks "Add colour" as the super-admin, so these
+    // are the panel's real labels and their absence is the read-only mode's.
+    for (const label of ADD_LABELS) {
+      await expect(view.getByRole("button", { name: label })).toHaveCount(0);
+    }
+
+    // The row opens read-only: named without "Edit", its fields read-only
+    // but not disabled, so a value can still be selected, and no action.
+    await row.click();
+    const editor = view.getByRole("dialog", { name: "Harbour", exact: true });
+    await expect(editor).toBeVisible();
+    const name = editor.getByLabel("Name", { exact: true });
+    const light = editor.getByLabel("Light", { exact: true });
+    const dark = editor.getByLabel("Dark", { exact: true });
+    await expect(name).toHaveValue("Harbour");
+    await expect(light).toHaveValue(harbour.values.light);
+    await expect(dark).toHaveValue(harbour.values.dark ?? "");
+    for (const field of [name, light, dark]) {
+      await expect(field).toBeEnabled();
+      await expect(field).not.toBeEditable();
+    }
+    // No Reset, Remove, "Use light value" or colour picker: no button at all.
+    await expect(editor.getByRole("button")).toHaveCount(0);
+    await name.selectText();
+    expect(
+      await name.evaluate(field => {
+        const input = field as HTMLInputElement;
+        return input.value.slice(
+          input.selectionStart ?? 0,
+          input.selectionEnd ?? 0
+        );
+      })
+    ).toBe("Harbour");
+    // Typing and Enter change nothing and send nothing.
+    await name.press("End");
+    await view.keyboard.type(" changed");
+    await name.press("Enter");
+    await expect(name).toHaveValue("Harbour");
+    await view.keyboard.press("Escape");
+    await expect(view.getByRole("dialog")).toHaveCount(0);
+    // The next test's writes are recorded by this same watcher, so an empty
+    // list here is the panel sending none, not a watcher that sees none.
+    expect(writes).toEqual([]);
+
+    // The writes themselves are refused, and nothing is stored.
+    const stored = JSON.stringify(await storedTokens(page));
+    const headers = await writeHeaders(reader.context.request);
+    const changed = await reader.context.request.patch(SITE_STYLE, {
+      headers,
+      data: {
+        tokens: {
+          tokens: [
+            ...variablesOf(before),
+            { ...harbour, values: { light: "#000000" } },
+          ],
+        },
+      },
+    });
+    expect(changed.status(), await changed.text()).toBe(403);
+    const removed = await reader.context.request.post(
+      `${PLUGIN}/variables/remove`,
+      { headers, data: { ids: [harbour.name] } }
+    );
+    expect(removed.status(), await removed.text()).toBe(403);
+    expect(JSON.stringify(await storedTokens(page))).toBe(stored);
+    expect(await storedVariable(page, harbour.name)).toMatchObject(harbour);
+  } finally {
+    await reader.context.close();
+    if (pageId !== undefined) {
+      const deleted = await page.request.delete(`${PAGES}/${pageId}`);
+      expect(deleted.ok(), `deleting the page: ${deleted.status()}`).toBe(true);
+    }
+    const restored = await page.request.patch(SITE_STYLE, {
+      data: { tokens: before },
+    });
+    expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
+      true
+    );
+  }
+});
+
+/**
+ * Each action an author takes on a variable, kept across a reload: the panel
+ * reads it back from the store, and the stored set and the canvas say so too.
+ * One site, seeded once, and the actions in order.
+ */
+test("each variable action is kept across a reload: rename, value, dark value, reset, remove, and a refused removal", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const before = await storedTokens(page);
+  const tide: StoredVariable = {
+    name: "color.tide",
+    label: "Tide",
+    kind: "color",
+    values: { light: "#0f766e", dark: "#5eead4" },
+  };
+  // A stored override of a variable the site's code supplies: the engine's
+  // own `color.primary`, light #2563eb and dark #60a5fa, which this site's
+  // config takes whole.
+  const primary: StoredVariable = {
+    name: "color.primary",
+    kind: "color",
+    values: { light: "#be123c", dark: "#60a5fa" },
+  };
+  const spare: StoredVariable = {
+    name: "color.spare",
+    label: "Spare",
+    kind: "color",
+    values: { light: "#a16207" },
+  };
+  const violet: StoredVariable = {
+    name: "color.violet",
+    label: "Violet",
+    kind: "color",
+    values: { light: "#7c3aed" },
+  };
+  const title = `Uses violet ${uniqueTag()}`;
+  const usingViolet = (styled: boolean) => [
+    {
+      id: "variables-heading",
+      type: "core/heading",
+      version: 1,
+      props: { text: "A heading in violet", level: 2 },
+      ...(styled
+        ? { styles: { base: { base: { color: { $token: violet.name } } } } }
+        : {}),
+    },
+  ];
+  let pageId: string | undefined;
+  try {
+    await seedVariables(page, before, [tide, primary, spare, violet]);
+    pageId = await seedPage(page.request, title, usingViolet(true));
+    await countEveryPage(page.request);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.emulateMedia({ colorScheme: "light" });
+    await useBlankCanvasPage(page);
+    const writes = watchVariableWrites(page);
+    await openPageBuilder(page, pageId);
+    await openDesign(page);
+    const editor = page.getByRole("dialog");
+    const rowNamed = (name: string) => page.getByRole("button", { name });
+
+    // Rename: the label changes, the code name stays.
+    await rowNamed("Tide, light").click();
+    await expect(page.getByRole("dialog", { name: "Edit Tide" })).toBeVisible();
+    await commit(page, editor.getByLabel("Name", { exact: true }), "Lagoon");
+    // CONTROL for the watcher the read-only test relies on: it sees a write.
+    expect(writes.length).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await reloadDesign(page);
+    await expect(rowNamed("Lagoon, light #0f766e, dark #5eead4")).toBeVisible();
+    await expect(rowNamed("Tide, light")).toHaveCount(0);
+    expect(await storedVariable(page, tide.name)).toMatchObject({
+      label: "Lagoon",
+    });
+
+    // Edit its value.
+    await rowNamed("Lagoon, light").click();
+    await commit(page, editor.getByLabel("Light", { exact: true }), "#0e7490");
+    await page.keyboard.press("Escape");
+    await reloadDesign(page);
+    await expect(rowNamed("Lagoon, light #0e7490, dark #5eead4")).toBeVisible();
+    expect((await storedVariable(page, tide.name))?.values.light).toBe(
+      "#0e7490"
+    );
+    await expect
+      .poll(() => canvasValue(page, "--site-color-tide"))
+      .toBe("#0e7490");
+
+    // Clear its dark value: it follows light again.
+    await rowNamed("Lagoon, light").click();
+    const cleared = styleWrite(page);
+    await editor.getByRole("button", { name: "Use light value" }).click();
+    await cleared;
+    await page.keyboard.press("Escape");
+    await reloadDesign(page);
+    await expect(
+      rowNamed("Lagoon, light #0e7490, dark same as light")
+    ).toBeVisible();
+    expect((await storedVariable(page, tide.name))?.values).toEqual({
+      light: "#0e7490",
+    });
+    // On a dark device the canvas resolves it to its light value now.
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect
+      .poll(() => canvasValue(page, "--site-color-tide"))
+      .toBe("#0e7490");
+    await page.emulateMedia({ colorScheme: "light" });
+
+    // Reset a variable the site's code supplies to the code's value.
+    await rowNamed("Primary, light #be123c").click();
+    const reset = styleWrite(page);
+    await editor.getByRole("button", { name: "Reset", exact: true }).click();
+    await reset;
+    await page.keyboard.press("Escape");
+    await reloadDesign(page);
+    await expect(
+      rowNamed("Primary, light #2563eb, dark #60a5fa")
+    ).toBeVisible();
+    // Nothing of it is stored any more: the code's own value applies.
+    expect(await storedVariable(page, primary.name)).toBeUndefined();
+    await expect
+      .poll(() => canvasValue(page, "--site-color-primary"))
+      .toBe("#2563eb");
+    // And it offers no Reset, having nothing left to reset.
+    await rowNamed("Primary, light").click();
+    await expect(
+      page.getByRole("dialog", { name: "Edit Primary" })
+    ).toBeVisible();
+    await expect(
+      editor.getByRole("button", { name: "Reset", exact: true })
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    // Remove a variable nothing uses: gone after the reload.
+    await rowNamed("Spare, light").click();
+    // Counted as unused first, so Remove's confirm is the count's answer.
+    await expect(editor.getByText("Not used anywhere")).toBeVisible();
+    await editor.getByRole("button", { name: "Remove", exact: true }).click();
+    const removed = styleWrite(page);
+    await editor
+      .getByRole("group", { name: "Remove Spare" })
+      .getByRole("button", { name: "Remove Spare" })
+      .click();
+    await removed;
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await reloadDesign(page);
+    await expect(rowNamed("Lagoon, light")).toBeVisible();
+    await expect(rowNamed("Spare, light")).toHaveCount(0);
+    expect(await storedVariable(page, spare.name)).toBeUndefined();
+
+    // Remove one a page uses: refused in place, naming the page, and nothing
+    // is written.
+    await rowNamed("Violet, light").click();
+    // Counted as used before Remove is pressed, so Remove answers on the
+    // count rather than confirming while the count is still being read.
+    await expect(editor.getByText(/^Used in /)).toBeVisible();
+    const sent = writes.length;
+    await editor.getByRole("button", { name: "Remove", exact: true }).click();
+    const refusal = editor.getByRole("region", {
+      name: "Violet can't be removed while it's in use.",
+    });
+    await expect(refusal).toBeVisible();
+    await expect(refusal.getByText(title)).toBeVisible();
+    await expect(
+      editor.getByRole("button", { name: "Remove Violet" })
+    ).toHaveCount(0);
+    expect(writes.length).toBe(sent);
+    await page.keyboard.press("Escape");
+    await reloadDesign(page);
+    await expect(rowNamed("Violet, light #7c3aed")).toBeVisible();
+    expect(await storedVariable(page, violet.name)).toMatchObject(violet);
+  } finally {
+    // Off the page before it is changed, so no open editor holds it.
+    await page.goto("about:blank");
+    if (pageId !== undefined) {
+      // The page stops using the variable first, so the restore below may
+      // drop it; its save updates the usage index.
+      const freed = await page.request.patch(`${PAGES}/${pageId}`, {
+        data: {
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: usingViolet(false),
+          },
+        },
+      });
+      expect(freed.ok(), `freeing the page: ${freed.status()}`).toBe(true);
+    }
+    const restored = await page.request.patch(SITE_STYLE, {
+      data: { tokens: before },
+    });
+    expect(restored.ok(), `restoring the variables: ${restored.status()}`).toBe(
+      true
+    );
+    if (pageId !== undefined) {
+      const deleted = await page.request.delete(`${PAGES}/${pageId}`);
+      expect(deleted.ok(), `deleting the page: ${deleted.status()}`).toBe(true);
+    }
   }
 });
 

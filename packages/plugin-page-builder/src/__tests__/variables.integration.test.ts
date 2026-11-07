@@ -3,8 +3,10 @@
  * shared styles naming a variable, and says when it is a floor; a variable in
  * use is refused removal on the remove route and on a whole-section write of
  * the site style alike; the stored pages are read again rather than an index
- * zero trusted; once nothing uses it, it is removed; and a page may not add a
- * reference to a variable the site does not define.
+ * zero trusted; once nothing uses it, it is removed; a page may not add a
+ * reference to a variable the site does not define; and a role that may read
+ * Design but not change it is refused every variable change, on the Single's
+ * write and the remove route alike, while it can still read them.
  */
 
 import { randomUUID } from "node:crypto";
@@ -57,6 +59,10 @@ const variable = (id: string, label: string) => ({
   kind: "color",
   values: { light: "#123456" },
 });
+/** A stored variable, with or without a dark value. */
+type StoredVariable = Omit<ReturnType<typeof variable>, "values"> & {
+  values: { light: string; dark?: string };
+};
 const accent = variable("t-accent", "Accent");
 const styled = variable("t-styled", "Styled");
 const spare = variable("t-spare", "Spare");
@@ -419,6 +425,107 @@ describe.each(getConfiguredTestDialects())(
       const gone = await remove(["t-accent", "t-spare"]);
       expect(gone.status).toBe(200);
       expect(await storedIds(t)).toEqual(["t-styled"]);
+    });
+
+    /** The stored tokens section, read as the system, as JSON to compare. */
+    async function storedSection(t: TestNextly): Promise<string> {
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.tokens;
+      return JSON.stringify(typeof raw === "string" ? JSON.parse(raw) : raw);
+    }
+
+    it("refuses every variable change to a role that may read Design but not change it, and lets it read", async () => {
+      const { t, tick } = await boot();
+      // Whole, so a removal below is judged on who asks and not refused as
+      // not counted yet.
+      await tick();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+
+      // The Variables panel's whole-section save, as each action makes it,
+      // each built from the set as the previous accepted step left it.
+      let shown: StoredVariable[] = [accent, styled, spare];
+      const added = variable("t-added", "Added");
+      const steps: [string, StoredVariable[]][] = [];
+      const step = (name: string, next: StoredVariable[]) => {
+        steps.push([name, next]);
+        shown = next;
+      };
+      step("adds a variable", [...shown, added]);
+      step(
+        "changes a value",
+        shown.map(entry =>
+          entry.id === "t-accent"
+            ? { ...entry, values: { light: "#654321" } }
+            : entry
+        )
+      );
+      step(
+        "sets a dark value",
+        shown.map(entry =>
+          entry.id === "t-spare"
+            ? { ...entry, values: { light: "#123456", dark: "#abcdef" } }
+            : entry
+        )
+      );
+      step(
+        "clears the dark value",
+        shown.map(entry =>
+          entry.id === "t-spare"
+            ? { ...entry, values: { light: "#123456" } }
+            : entry
+        )
+      );
+      step(
+        "removes a variable nothing uses",
+        shown.filter(entry => entry.id !== "t-added")
+      );
+
+      for (const [name, tokens] of steps) {
+        const before = await storedSection(t);
+        const body = { tokens: { tokens }, _overwrite: true };
+        const refused = await call("PATCH", SINGLE, reader, body);
+        expect(refused.status, `the reader ${name}`).toBe(403);
+        expect(await storedSection(t), `the reader ${name}`).toBe(before);
+        // CONTROL: the same save by a Design manager is stored, so the
+        // refusal above is about who asked and not about the save.
+        const accepted = await call("PATCH", SINGLE, designer, body);
+        expect(accepted.status, `the designer ${name}`).toBe(200);
+        expect(
+          JSON.parse(await storedSection(t)),
+          `the designer ${name}`
+        ).toMatchObject({ tokens });
+      }
+
+      // The remove route declares Design's update: refused before its write.
+      const removal = { ids: ["t-spare"] };
+      const routeRefused = await call("POST", route("remove"), reader, removal);
+      expect(routeRefused.status).toBe(403);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-spare"]);
+      // CONTROL: the same removal by a Design manager goes ahead.
+      const routeRemoved = await call(
+        "POST",
+        route("remove"),
+        designer,
+        removal
+      );
+      expect(routeRemoved.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+
+      // Still read, so the panel can show the variables read-only: the
+      // Single itself and how widely each is used.
+      const read = await call("GET", SINGLE, reader);
+      expect(read.status).toBe(200);
+      // SQLite hands the section back as text, so it is matched as text.
+      expect(JSON.stringify(read.body)).toContain("t-styled");
+      const usage = await call("GET", `${route("usage")}?id=t-styled`, reader);
+      expect(usage.status).toBe(200);
+      expect(usage.body).toMatchObject({
+        variables: { "t-styled": { sharedStyles: ["c-card"] } },
+      });
     });
 
     it("refuses removing a variable a stored page still uses though the index counts none", async () => {
