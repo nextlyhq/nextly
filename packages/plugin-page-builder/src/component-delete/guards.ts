@@ -120,11 +120,45 @@ export interface ComponentGuardArgs {
   /** Every document read as stored, within a budget: who places it. */
   readonly confirmUnused: (componentId: string) => Promise<UseCheck>;
   /**
-   * Whether the store has the Draft/Published lifecycle, read as it stands.
-   * Without one, `status` is an ordinary field of the host's, and no save
-   * unpublishes a component.
+   * Whether the store has the Draft/Published lifecycle (see
+   * {@link storeLifecycle}), told whether the save runs inside a caller's
+   * transaction. Without one, `status` is an ordinary field of the host's,
+   * and no save unpublishes a component.
    */
-  readonly lifecycle: () => Promise<boolean>;
+  readonly lifecycle: (inATransaction: boolean) => Promise<boolean>;
+}
+
+/**
+ * Whether the component store has the Draft/Published lifecycle, as its
+ * registry record says.
+ *
+ * A save made on its own runs its `beforeChange` hooks before its
+ * transaction opens, so there the record is read afresh, on the pool, with
+ * no connection of the write's held. A save inside a caller's transaction
+ * holds one, and a read on the pool could wait behind it for ever on a pool
+ * of one, so there nothing is read: the last answer read stands, first read
+ * once the site is ready (`prime`). With none yet, or a read that fails, the
+ * store counts as having a lifecycle, so the check runs.
+ */
+export function storeLifecycle(read: () => Promise<boolean>): {
+  readonly prime: () => Promise<void>;
+  readonly has: (inATransaction: boolean) => Promise<boolean>;
+} {
+  let last: boolean | undefined;
+  const fresh = async (): Promise<boolean> => {
+    try {
+      last = await read();
+      return last;
+    } catch {
+      return true;
+    }
+  };
+  return {
+    prime: async () => {
+      await fresh();
+    },
+    has: async inATransaction => (inATransaction ? (last ?? true) : fresh()),
+  };
 }
 
 /** What reading every document as stored found. */
@@ -161,8 +195,9 @@ export function registerComponentGuards(args: ComponentGuardArgs): void {
   // hook, so a status another hook sets is the status judged.
   args.ctx.hooks.on("beforeChange", args.components, async context => {
     if (!unpublishes(context)) return;
-    if (!(await hasLifecycle(args))) return;
-    await refuseUnpublishWhileUsed(args, context as GuardHookContext);
+    const hook = context as GuardHookContext;
+    if (!(await hasLifecycle(args, hook.executor !== undefined))) return;
+    await refuseUnpublishWhileUsed(args, hook);
   });
 }
 
@@ -170,9 +205,12 @@ export function registerComponentGuards(args: ComponentGuardArgs): void {
  * Whether the store has a lifecycle, asked only of a save that would
  * unpublish. One that can't be read counts as having one, so the check runs.
  */
-async function hasLifecycle(args: ComponentGuardArgs): Promise<boolean> {
+async function hasLifecycle(
+  args: ComponentGuardArgs,
+  inATransaction: boolean
+): Promise<boolean> {
   try {
-    return await args.lifecycle();
+    return await args.lifecycle(inATransaction);
   } catch {
     return true;
   }

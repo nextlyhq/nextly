@@ -94,6 +94,7 @@ export async function judge(
     caller: deps.caller,
     after,
     maxDocuments: STEP_DOCUMENTS,
+    plannedWrites: true,
     deadline: new Date(deps.now().getTime() + STEP_MS),
   });
   const { report } = slice;
@@ -101,7 +102,7 @@ export async function judge(
     .filter(left => left.reason === "pending-draft")
     .map(left => left.host);
   const stopping = stoppingDocuments(report);
-  for (const key of await writesRefused(deps, report, drafted)) {
+  for (const key of await writesRefused(deps, report)) {
     if (!stopping.has(key)) stopping.set(key, "not-permitted");
   }
   const layoutKeys = [...stopping]
@@ -143,26 +144,22 @@ function stoppingDocuments(report: RewriteReport): Map<string, LeftReason> {
 
 /**
  * The documents the person may not write as the conversion will, each write
- * asked as it would be sent: the field it sets with the value it sets there,
- * and the status it names. A write the dry run did not report, or a check
+ * the dry run reported asked as it would be sent: the field it sets with the
+ * value it sets there, and the status it names. Only those writes are asked:
+ * a host left for its pending draft makes none, and keeps its own reason. A
+ * dry run that reported no writes at all while it rewrote hosts, or a check
  * that cannot be asked, counts as refused.
  */
 async function writesRefused(
   deps: JudgeDeps,
-  report: RewriteReport,
-  drafted: readonly HostAddress[]
+  report: RewriteReport
 ): Promise<string[]> {
-  const planned = new Map(
-    (report.writes ?? []).map(write => [hostKeyOf(write.host), write])
-  );
+  if (report.writes === undefined) return keysOf(report.rewritten);
   const refused = new Set<string>();
-  for (const host of [...report.rewritten, ...drafted]) {
-    const key = documentKeyOf(host);
+  for (const write of report.writes) {
+    const key = documentKeyOf(write.host);
     if (refused.has(key)) continue;
-    const write = planned.get(hostKeyOf(host));
-    if (write === undefined || !(await mayMake(deps.mayWrite, write))) {
-      refused.add(key);
-    }
+    if (!(await mayMake(deps.mayWrite, write))) refused.add(key);
   }
   return [...refused];
 }
@@ -193,11 +190,6 @@ export async function mayMake(
   } catch {
     return false;
   }
-}
-
-/** One host: its document, language and the field path it is at. */
-function hostKeyOf(host: HostAddress): string {
-  return [documentKeyOf(host), host.locale ?? "", ...host.path].join("\u001F");
 }
 
 /** The documents the hosts belong to, once each, in the order found. */

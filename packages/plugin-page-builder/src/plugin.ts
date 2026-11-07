@@ -107,6 +107,7 @@ import { componentActionRoutes } from "./component-actions-route";
 import {
   registerComponentGuards,
   storedUseCheck,
+  storeLifecycle,
 } from "./component-delete/guards";
 import { componentDeleteRoutes } from "./component-delete/route";
 import { componentDeleteJob } from "./component-delete/sweep";
@@ -1460,6 +1461,13 @@ export const pageBuilder = (
    */
   let seedGraphLock: (() => Promise<void>) | null = null;
 
+  /**
+   * Whether the component store has a lifecycle, read once the site is
+   * ready and again by each save made on its own. Published by `init` for
+   * the reason `defaultLayoutSetup` is.
+   */
+  let componentStoreLifecycle: ReturnType<typeof storeLifecycle> | null = null;
+
   /** The installed spacing-model store, or a refusal naming why it is missing. */
   const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
     if (spacingSetup === null) {
@@ -2270,6 +2278,17 @@ export const pageBuilder = (
       {
         const placing = composition.hostsOf;
         const store = composition.store.collection;
+        // The registry's record of the collection, which a store made in the
+        // admin changes there; never read inside a caller's transaction.
+        const lifecycle = storeLifecycle(
+          async () =>
+            (
+              (await ctx.services.collections.getCollection(store, {})) as {
+                status?: unknown;
+              } | null
+            )?.status === true
+        );
+        componentStoreLifecycle = lifecycle;
         registerComponentGuards({
           ctx,
           components: store,
@@ -2278,14 +2297,7 @@ export const pageBuilder = (
           confirmUnused: storedUseCheck(() =>
             componentDeleteRewriteService(requireRewriteInstall)
           ),
-          // Read at the save, as the store stands: the registry's record of
-          // the collection, which a store made in the admin changes there.
-          lifecycle: async () =>
-            (
-              (await ctx.services.collections.getCollection(store, {})) as {
-                status?: unknown;
-              } | null
-            )?.status === true,
+          lifecycle: lifecycle.has,
         });
       }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
@@ -2337,6 +2349,7 @@ export const pageBuilder = (
       const backfill = pageClaimsBackfill;
       if (backfill !== null) void backfill().catch(() => undefined);
       void seedGraphLock?.();
+      void componentStoreLifecycle?.prime();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
       const seeded =

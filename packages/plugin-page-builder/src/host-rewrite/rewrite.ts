@@ -199,6 +199,12 @@ export interface RewriteArgs {
    * rewrite and leave. Progress and phase are untouched.
    */
   readonly dryRun?: boolean;
+  /**
+   * With `dryRun`, report each write with the body it sends
+   * (`RewriteReport.writes`). Off by default: every body is held until the
+   * call ends, so only a caller walking a few documents a call asks.
+   */
+  readonly plannedWrites?: boolean;
 }
 
 /** How many times a host changing under the rewrite is read again by default. */
@@ -275,7 +281,9 @@ function report(walk: Walk, finished: boolean): RewriteReport {
     unchanged: walk.tally.unchanged,
     left: walk.tally.left,
     caughtByFinalWalk: walk.tally.caught,
-    ...(walk.args.dryRun === true ? { writes: walk.tally.writes } : {}),
+    ...(walk.args.dryRun === true && walk.args.plannedWrites === true
+      ? { writes: walk.tally.writes }
+      : {}),
     finished,
   };
 }
@@ -470,18 +478,28 @@ async function attemptHost(
     return { kind: "left", reason: "unaddressable" };
   }
   if (!writes) {
-    // Kept only in a dry run, which writes nothing: the values a real run
-    // writes are not held past their write.
-    walk.tally.writes.push({
-      host: candidate.host,
-      value: decision.write.value,
-      ...(decision.write.publishAs === undefined
-        ? {}
-        : { status: decision.write.publishAs }),
-    });
+    // Kept only in a dry run that asks for them: a real run's values are
+    // not held past their write, and a long dry walk holds none.
+    if (walk.args.plannedWrites === true)
+      recordWrite(walk, candidate, decision);
     return written(decision);
   }
   return writtenBy(await walk.deps.write(decision.write), decision);
+}
+
+/** Hold one write a dry run would make, with the body it sends. */
+function recordWrite(
+  walk: Walk,
+  candidate: HostCandidate,
+  decision: Extract<Decision, { kind: "write" }>
+): void {
+  walk.tally.writes.push({
+    host: candidate.host,
+    value: decision.write.value,
+    ...(decision.write.publishAs === undefined
+      ? {}
+      : { status: decision.write.publishAs }),
+  });
 }
 
 /** What a write's result comes to for its host. */

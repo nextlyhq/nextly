@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { registerComponentGuards } from "./guards";
+import { registerComponentGuards, storeLifecycle } from "./guards";
 import { COMPONENT_DELETE_CONTEXT_KEY } from "./job";
 
 /** The guards as registered, by hook phase. */
@@ -126,5 +126,87 @@ describe("the unpublish guard on a store without a lifecycle", () => {
     await expect(handlers.get("beforeChange")?.(save)).rejects.toMatchObject({
       code: "CONFLICT",
     });
+  });
+});
+
+/**
+ * The store's lifecycle is never read inside a caller's transaction: that
+ * read would take a second connection from the pool while the transaction
+ * holds one. The answer last read stands there, and none counts as a
+ * lifecycle.
+ */
+describe("the component store's lifecycle, as the guard reads it", () => {
+  /** A registry read that counts its calls, answering `answers` in turn. */
+  function registry(...answers: (boolean | Error)[]) {
+    let reads = 0;
+    const read = async () => {
+      const answer = answers[Math.min(reads, answers.length - 1)];
+      reads += 1;
+      if (answer instanceof Error) throw answer;
+      return answer ?? true;
+    };
+    return { read, reads: () => reads };
+  }
+
+  it("reads nothing inside a transaction, counting a store never read as having one", async () => {
+    const r = registry(false);
+    const lifecycle = storeLifecycle(r.read);
+
+    await expect(lifecycle.has(true)).resolves.toBe(true);
+    expect(r.reads()).toBe(0);
+  });
+
+  it("answers inside a transaction with what was read when the site was ready", async () => {
+    const r = registry(false);
+    const lifecycle = storeLifecycle(r.read);
+    await lifecycle.prime();
+
+    await expect(lifecycle.has(true)).resolves.toBe(false);
+    expect(r.reads()).toBe(1);
+  });
+
+  it("reads afresh for a save made on its own, and keeps that answer", async () => {
+    const r = registry(false, true);
+    const lifecycle = storeLifecycle(r.read);
+    await lifecycle.prime();
+
+    await expect(lifecycle.has(false)).resolves.toBe(true);
+    await expect(lifecycle.has(true)).resolves.toBe(true);
+    expect(r.reads()).toBe(2);
+  });
+
+  it("counts a read that fails as a lifecycle", async () => {
+    const r = registry(new Error("down"));
+    const lifecycle = storeLifecycle(r.read);
+
+    await expect(lifecycle.has(false)).resolves.toBe(true);
+  });
+
+  it("asks the lifecycle as inside a transaction when the save carries the caller's executor", async () => {
+    const asked: boolean[] = [];
+    const handlers = new Map<string, (context: unknown) => unknown>();
+    registerComponentGuards({
+      ctx: {
+        hooks: {
+          on: (type, _collection, handler) => handlers.set(type, handler),
+        },
+      },
+      components: "components",
+      runs: () => ({ runFor: async () => null }),
+      confirmUnused: async () => ({ kind: "unused" as const }),
+      lifecycle: async inATransaction => {
+        asked.push(inATransaction);
+        return false;
+      },
+    });
+
+    await handlers.get("beforeChange")?.({
+      operation: "update",
+      originalData: { id: 7, status: "published" },
+      data: { status: "draft" },
+      executor: {},
+    });
+
+    expect(asked).toEqual([true]);
   });
 });
