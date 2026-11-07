@@ -148,6 +148,29 @@ export function addressWithoutSection(href: string): string {
 }
 
 /**
+ * The query key naming a block, at any depth, the builder opens at: what a
+ * report of a page's broken bindings links each binding's block by.
+ */
+const BLOCK_PARAM = "block";
+
+/** The builder's address `href`, opened at the block `blockId`. */
+export function blockAddress(href: string, blockId: string): string {
+  const [path = "", query = ""] = href.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.set(BLOCK_PARAM, blockId);
+  return `${path}?${params.toString()}`;
+}
+
+/**
+ * The block an address opens the builder at: the section it names, else the
+ * block; `undefined` where it names neither.
+ */
+export function openAtFromSearch(search: string): string | undefined {
+  const block = new URLSearchParams(search).get(BLOCK_PARAM);
+  return sectionFromSearch(search) ?? (block === null || block === "" ? undefined : block);
+}
+
+/**
  * The section an address's query names, or `undefined` where it names none.
  *
  * An empty value names none: there is no block with an empty id to open at.

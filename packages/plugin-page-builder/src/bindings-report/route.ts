@@ -23,39 +23,24 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 
+import { getBlock } from "@nextlyhq/blocks-engine";
+
+import { labelOf, pluralLabelOf } from "../collection-labels";
 import { PAGES_SLUG } from "../collections/pages";
 import type { HostAddress } from "../host-rewrite/contract";
 
+import {
+  BINDINGS_TO_FIX_ROUTE_PATH,
+  type BindingsToFixItem,
+  type BindingsToFixMeta,
+  type BindingsToFixRow,
+} from "./contract";
 import type { BindingReportRow } from "./rows";
 import { MAX_REPORTED_DOCUMENTS, type BindingReportStore } from "./store";
 
-/** Where the route is mounted under the plugin. */
-const BINDINGS_TO_FIX_ROUTE_PATH = "/bindings-to-fix";
 
-/** One document in the answer. */
-interface BindingsToFixItem {
-  readonly documentKey: string;
-  readonly kind: "collection" | "single";
-  readonly slug: string;
-  readonly documentId?: string;
-  readonly place: string;
-  /** The document as the caller knows it: an entry's title, a Single's slug. */
-  readonly title: string;
-  readonly rows: readonly BindingReportRow[];
-  readonly checkedAt: string;
-}
 
-/** What the answer's `meta` says besides the page. */
-interface BindingsToFixMeta {
-  /** How many broken bindings each place holds, of the documents listed. */
-  readonly byPlace: Readonly<Record<string, number>>;
-  /** How many broken bindings the listed documents hold in all. */
-  readonly bindings: number;
-  /** When every document was last checked completely, if ever. */
-  readonly checkedAt: string | null;
-  /** Whether a check of every document is under way. */
-  readonly checking: boolean;
-}
+
 
 /** What the route needs of the installed plugin. */
 export interface BindingsToFixDeps {
@@ -70,6 +55,57 @@ export interface BindingsToFixDeps {
    * caller's request; never waits for it.
    */
   readonly refresh: (ctx: PluginRouteContext) => void;
+}
+
+/** A capital first letter, for a name read off a key. */
+function named(key: string): string {
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+/**
+ * A row with the names the editor gives its block and prop, read from the
+ * running registry when the answer is made, so a renamed label shows at once
+ * and none is stored. A block no longer registered is named by its type.
+ */
+function withLabels(row: BindingReportRow): BindingsToFixRow {
+  if (row.blockType === "") {
+    // The document's own metadata: `seo.title` is the page's Title.
+    return { ...row, blockLabel: "", propLabel: named(row.prop.slice(4)) };
+  }
+  const definition = getBlock(row.blockType) as
+    | {
+        readonly editor?: { readonly label?: unknown };
+        readonly props?: Readonly<Record<string, { readonly label?: unknown }>>;
+      }
+    | undefined;
+  const blockLabel = definition?.editor?.label;
+  const propLabel = definition?.props?.[row.prop]?.label;
+  return {
+    ...row,
+    blockLabel: typeof blockLabel === "string" ? blockLabel : row.blockType,
+    propLabel: typeof propLabel === "string" ? propLabel : named(row.prop),
+  };
+}
+
+/** Each collection's name as the admin shows it, read once per answer. */
+function collectionLabels(
+  ctx: PluginRouteContext
+): (slug: string) => Promise<string> {
+  const known = new Map<string, Promise<string>>();
+  return slug => {
+    let held = known.get(slug);
+    if (held === undefined) {
+      held = ctx.services.collections
+        .getCollection(slug, undefined as never)
+        .then(record => {
+          const fields = record as unknown as Record<string, unknown>;
+          return pluralLabelOf(fields).pluralLabel ?? labelOf(fields, slug);
+        })
+        .catch(() => slug);
+      known.set(slug, held);
+    }
+    return held;
+  };
 }
 
 /** The query, read as given; anything else is ignored. */
@@ -111,14 +147,24 @@ async function readBindingsToFix(
       path: [],
     }))
   );
+  const labelOfCollection = collectionLabels(ctx);
   // Only documents the caller may read; the place filter after the counts,
   // so each tab's count stays whatever tab is open.
-  const readable: BindingsToFixItem[] = wanted.flatMap(entry => {
-    const title = names.get(entry.documentKey);
+  const labelled = await Promise.all(
+    wanted.map(async entry => ({
+      entry,
+      title: names.get(entry.documentKey),
+      collectionLabel:
+        entry.kind === "single" ? entry.slug : await labelOfCollection(entry.slug),
+    }))
+  );
+  const readable: BindingsToFixItem[] = labelled.flatMap(
+    ({ entry, title, collectionLabel }) => {
     return title === undefined
       ? []
       : [
           {
+            collectionLabel,
             documentKey: entry.documentKey,
             kind: entry.kind,
             slug: entry.slug,
@@ -127,11 +173,12 @@ async function readBindingsToFix(
               : { documentId: entry.documentId }),
             place: entry.place,
             title,
-            rows: entry.rows,
+            rows: entry.rows.map(withLabels),
             checkedAt: entry.checkedAt.toISOString(),
           },
         ];
-  });
+    }
+  );
   const byPlace: Record<string, number> = {};
   for (const item of readable) {
     byPlace[item.place] = (byPlace[item.place] ?? 0) + item.rows.length;

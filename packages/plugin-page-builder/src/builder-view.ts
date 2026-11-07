@@ -21,3 +21,11 @@ export const BUILDER_VIEW_COMPONENT =
  */
 export const REMOVE_LAYOUT_ACTION_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot";
+
+/** The "Bindings to fix" page, an admin page of this plugin's own. */
+export const BINDINGS_TO_FIX_PAGE_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixPage";
+
+/** The "Bindings to fix" dashboard card. */
+export const BINDINGS_TO_FIX_CARD_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard";

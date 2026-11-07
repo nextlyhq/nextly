@@ -28,7 +28,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-open-at-section
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { walkNodes, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { revealNode, type LeftPanel } from "@nextlyhq/builder";
 import type { EditorState } from "@nextlyhq/builder/shell";
 import { useEffect, useRef } from "react";
@@ -45,6 +45,19 @@ export interface OpenAtSectionArgs {
   canvas: HTMLElement | null;
   /** Opens one of the editor's left panels. */
   requestPanel: (panel: LeftPanel) => void;
+}
+
+/**
+ * Whether the document holds a block of this id, at any depth: a section is a
+ * top-level block, and a report's link names the block holding a binding,
+ * wherever it sits.
+ */
+function holds(document: Pick<BlockDocument, "nodes">, id: string): boolean {
+  let found = false;
+  walkNodes(document.nodes, node => {
+    if (node.id === id) found = true;
+  });
+  return found;
 }
 
 export function useOpenAtSection({
@@ -73,7 +86,7 @@ export function useOpenAtSection({
     } = opened.current;
     // A section is a block at the top of the page; an id naming anything else
     // names no section the entry screen offered.
-    if (id === undefined || !atOpen.document.nodes.some(n => n.id === id)) {
+    if (id === undefined || !holds(atOpen.document, id)) {
       pending.current = null;
       return;
     }

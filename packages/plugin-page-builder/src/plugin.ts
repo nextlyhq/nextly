@@ -49,6 +49,10 @@ import {
 } from "./bindings-report/scan";
 import { bindingReportStore } from "./bindings-report/store";
 import {
+  bindingsToFixWidget,
+  EDIT_PAGES_PERMISSION,
+} from "./bindings-report/widget";
+import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
   registerCoreBlocks,
@@ -68,6 +72,7 @@ import {
   nameDocumentsOnSite,
 } from "./breakpoint-removal/site-counter";
 import {
+  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
   REMOVE_LAYOUT_ACTION_COMPONENT,
@@ -2809,6 +2814,9 @@ export const pageBuilder = (
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
+      // The "Bindings to fix" card, for those who edit pages, hidden while
+      // they may see no broken binding.
+      dashboard: { widgets: [bindingsToFixWidget(bindingReportDeps.store)] },
       admin: {
         // What the editor in the browser needs of the options: see
         // `adminClientConfig`.
@@ -2817,6 +2825,16 @@ export const pageBuilder = (
           canvasPath,
           fontsOff: fonts.off,
         }),
+        // The "Bindings to fix" page, at
+        // `/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`,
+        // reached from its dashboard card and the editor's notice.
+        pages: [
+          {
+            path: "/bindings-to-fix",
+            component: BINDINGS_TO_FIX_PAGE_COMPONENT,
+            requiredPermission: EDIT_PAGES_PERMISSION,
+          },
+        ],
         // The three LIBRARIES, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
