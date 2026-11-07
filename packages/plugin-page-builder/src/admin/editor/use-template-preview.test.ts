@@ -27,9 +27,8 @@ vi.mock("../template-preview-client", () => ({
   readPreviewEntry,
 }));
 
-const { followingCanvas, steppedEntry, useTemplatePreview } = await import(
-  "./use-template-preview"
-);
+const { followingCanvas, steppedEntry, useRefreshOnFocus, useTemplatePreview } =
+  await import("./use-template-preview");
 const { rememberEntry, rememberedEntry, templatePreviewStore } = await import(
   "./template-preview-memory"
 );
@@ -332,11 +331,27 @@ describe("an entry's own design", () => {
   });
 });
 
+/**
+ * The preview as the strip wires it: following the canvas's read, and asked
+ * again whole when the window regains focus. `retryCanvas` is the canvas's
+ * read being asked again.
+ */
+function useStripPreview(retryCanvas: () => void) {
+  const preview = followingCanvas(
+    useTemplatePreview(ARGS),
+    undefined,
+    retryCanvas
+  );
+  useRefreshOnFocus(preview.refresh);
+  return preview;
+}
+
 describe("a window that regains focus", () => {
   it("asks for the list again, so an entry made in another tab can be previewed", async () => {
     listPreviewEntries.mockResolvedValueOnce(listed([NEWEST, OLDER]));
     entriesReadable(["p1", "p2", "p9"]);
-    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    const retryCanvas = vi.fn();
+    const { result } = renderHook(() => useStripPreview(retryCanvas));
     await waitFor(() => expect(result.current.list.items).toHaveLength(2));
     listPreviewEntries.mockResolvedValueOnce(
       listed([MADE_ELSEWHERE, NEWEST, OLDER])
@@ -354,13 +369,53 @@ describe("a window that regains focus", () => {
     expect(listPreviewEntries).toHaveBeenCalledTimes(2);
   });
 
+  it("asks the canvas's read again with the entry's, so a new title never sits over kept canvas text", async () => {
+    // The canvas keeps an answer for the same ask for a while; only a retry
+    // reads it afresh. So focus has to ask the canvas too, not only the
+    // list and the entry, or the chip names the new title over old text.
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    const retryCanvas = vi.fn();
+    const { result } = renderHook(() => useStripPreview(retryCanvas));
+    await waitFor(() =>
+      expect(result.current.chip).toMatchObject({ id: "p2" })
+    );
+    const entryReads = readPreviewEntry.mock.calls.length;
+    expect(retryCanvas).not.toHaveBeenCalled();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(retryCanvas).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(readPreviewEntry.mock.calls.length).toBeGreaterThan(entryReads)
+    );
+  });
+
   it("asks nothing more while the window keeps its focus (the control)", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    const retryCanvas = vi.fn();
+    const { result } = renderHook(() => useStripPreview(retryCanvas));
+    await waitFor(() =>
+      expect(result.current.chip).toMatchObject({ id: "p2" })
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(listPreviewEntries).toHaveBeenCalledTimes(1);
+    expect(retryCanvas).not.toHaveBeenCalled();
+  });
+
+  it("is not asked by the preview alone, so nothing refreshes the list without the canvas", async () => {
+    // The hook on its own no longer listens: only the strip's whole refresh
+    // does, so a focus can never read the entry without the canvas.
     listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
     entriesReadable(["p1", "p2"]);
     const { result } = renderHook(() => useTemplatePreview(ARGS));
     await waitFor(() =>
       expect(result.current.previewed).toMatchObject({ id: "p2" })
     );
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(listPreviewEntries).toHaveBeenCalledTimes(1);
   });

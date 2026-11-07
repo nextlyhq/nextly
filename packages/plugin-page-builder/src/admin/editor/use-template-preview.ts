@@ -12,14 +12,15 @@
  * public read it, for the canvas and for anything that marks what a visitor
  * would see.
  *
- * Asked again whenever the window regains focus, so an entry made in
- * another tab (the strip's New opens one there) is listed without a reload,
- * and the previewed entry's own changes are drawn.
+ * Asked again whenever the window regains focus (`useRefreshOnFocus`, with
+ * the canvas's read of the entry), so an entry made in another tab (the
+ * strip's New opens one there) is listed without a reload, and the previewed
+ * entry's own changes are drawn, its title and its canvas alike.
  *
  * @module use-template-preview
  */
 import type { PreviewedEntry } from "@nextlyhq/builder/shell";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   PreviewBlocksField,
@@ -375,15 +376,32 @@ function useChoosing(
   return { choose, step };
 }
 
-/** A count bumped whenever the window regains focus, and a way to bump it. */
+/**
+ * A count bumped to read the list and the entry again, and a way to bump it.
+ * The window regaining focus does not bump it here: the editor asks the
+ * preview's whole refresh then (`useRefreshOnFocus`), so the canvas's read
+ * is asked again with them, never left on what it kept.
+ */
 function useFocusRefresh(): { round: number; refresh: () => void } {
   const [round, setRound] = useState(0);
   const refresh = useCallback(() => setRound(value => value + 1), []);
-  useEffect(() => {
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [refresh]);
   return { round, refresh };
+}
+
+/**
+ * Call `refresh` whenever the window regains focus: an entry made or changed
+ * in another tab (the strip's New opens one there) is listed and drawn
+ * without a reload. The latest `refresh` is called, so a caller may hand a
+ * new one on every render.
+ */
+export function useRefreshOnFocus(refresh: () => void): void {
+  const latest = useRef(refresh);
+  latest.current = refresh;
+  useEffect(() => {
+    const onFocus = () => latest.current();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 }
 
 /** The entry remembered for the template this session, and how to change it. */

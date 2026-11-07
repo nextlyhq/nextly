@@ -236,6 +236,26 @@ describe("the canvas's binding sources", () => {
     expect(first.entry).toEqual({ id: "p1", title: "A's draft" });
   });
 
+  it("asks afresh for a read the editor asks again, whatever was kept", async () => {
+    const request = canvasBindingsRequest(
+      [page({ text: { $bind: "title" } })],
+      identity,
+      "de"
+    );
+    if (request === undefined) throw new Error("no ask");
+    const ask = vi.fn(async () => answer("Old title"));
+    await canvasBindingsFor(request, "author-f", ask);
+    // The control: the same ask again is answered from what was kept.
+    await canvasBindingsFor(request, "author-f", ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    // Asked again, as a retry or the window back in focus asks it: read
+    // afresh, and the new answer is the one handed back.
+    ask.mockImplementationOnce(async () => answer("New title"));
+    const fresh = await canvasBindingsFor(request, "author-f", ask, true);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(fresh.entry).toEqual({ id: "p1", title: "New title" });
+  });
+
   it("drops the earlier answer when a changed ask fails", async () => {
     editing.identity = identity;
     const bound = [page({ text: { $bind: "title" } })];
@@ -411,6 +431,14 @@ describe("the canvas's read, as the template's strip hears it", () => {
       expect(heard.at(-1)).toEqual({ entryId: "p7", state: "answered" })
     );
     expect(writePluginRoute).toHaveBeenCalledTimes(2);
+
+    // Answered and kept, a retry still reads afresh: the window back in
+    // focus asks one, and the canvas must not answer it from what it kept.
+    writePluginRoute.mockResolvedValueOnce(answer("A post, retitled"));
+    retries = 2;
+    rerender();
+    await waitFor(() => expect(writePluginRoute).toHaveBeenCalledTimes(3));
+    retries = 0;
     editing.identity = null;
   });
 });

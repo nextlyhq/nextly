@@ -33,7 +33,7 @@ import {
   writePluginRoute,
   type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CANVAS_BINDINGS_ROUTE_PATH,
@@ -141,13 +141,16 @@ async function askRoute(
 /**
  * The sources an ask names, for `userId`: from the answers kept for that
  * person, or asked afresh. Another person's answers are dropped first.
+ * `fresh` asks afresh whatever is kept, for a read the editor asks again
+ * (a retry, the window back in focus), so what was kept never answers it.
  */
 export function canvasBindingsFor(
   request: CanvasBindingsRequest,
   userId: string,
   ask: (
     request: CanvasBindingsRequest
-  ) => Promise<CanvasBindingsResponse> = askRoute
+  ) => Promise<CanvasBindingsResponse> = askRoute,
+  fresh = false
 ): Promise<PageBindings> {
   if (keptFor !== userId) {
     KEPT.clear();
@@ -155,7 +158,7 @@ export function canvasBindingsFor(
   }
   const key = JSON.stringify(request);
   const kept = KEPT.get(key);
-  if (kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
+  if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
     return kept.read;
   }
   const reading = ask(request).then(bindingsFromWire);
@@ -228,10 +231,15 @@ export function useCanvasBindings(
   // again: a source can change while what the page asks stays the same (a
   // saved title, an updated Single).
   const [round, setRound] = useState(0);
+  // The retry this read last answered, so a retry the editor asks for reads
+  // afresh rather than from what was kept for the same ask.
+  const answeredRetry = useRef(retry);
   useEffect(() => {
     // The route answers whoever the session cookie names, so an answer is
     // only asked for, and kept, under a person known by id.
     if (key === "" || userId === null) return;
+    const fresh = answeredRetry.current !== retry;
+    answeredRetry.current = retry;
     let current = true;
     let stale: ReturnType<typeof setTimeout> | undefined;
     // Asked again, so an earlier failure of this ask is no longer the answer.
@@ -250,7 +258,12 @@ export function useCanvasBindings(
       }
       setRound(value => value + 1);
     };
-    canvasBindingsFor(JSON.parse(key) as CanvasBindingsRequest, userId).then(
+    canvasBindingsFor(
+      JSON.parse(key) as CanvasBindingsRequest,
+      userId,
+      askRoute,
+      fresh
+    ).then(
       bindings => {
         if (!current) return;
         setAnswer({ key, userId, bindings });

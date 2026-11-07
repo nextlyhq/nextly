@@ -93,6 +93,7 @@ import { entryCreatePath, entryEditPath } from "./builder-address";
 import { CanvasEntryProvider, type CanvasEntryRead } from "./canvas-entry";
 import {
   followingCanvas,
+  useRefreshOnFocus,
   useTemplatePreview,
   type TemplatePreview,
 } from "./use-template-preview";
@@ -184,10 +185,7 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
     undefined
   );
   const [retry, setRetry] = useState(0);
-  const preview = useMemo(
-    () => followingCanvas(read, canvasRead, () => setRetry(count => count + 1)),
-    [read, canvasRead]
-  );
+  const preview = useFollowedPreview(read, canvasRead, setRetry);
   // The entry the strip names, read by the canvas from the moment it is
   // chosen, so the two never name different entries; none where its own
   // read failed, so bound text draws its fallback as the strip says. Taken
@@ -225,6 +223,25 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
       </CanvasEntryProvider>
     </TemplatePreviewState.Provider>
   );
+}
+
+/**
+ * The preview as the strip says it, following the canvas's read
+ * (`followingCanvas`), and asked again whole whenever the window regains
+ * focus: the list, the entry and the canvas's read of it together, so the
+ * chip never names a new title over the canvas's kept, older one.
+ */
+function useFollowedPreview(
+  read: TemplatePreview,
+  canvasRead: CanvasEntryRead | undefined,
+  setRetry: (next: (count: number) => number) => void
+): TemplatePreview {
+  const preview = useMemo(
+    () => followingCanvas(read, canvasRead, () => setRetry(count => count + 1)),
+    [read, canvasRead, setRetry]
+  );
+  useRefreshOnFocus(preview.refresh);
+  return preview;
 }
 
 /**
