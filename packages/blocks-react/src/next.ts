@@ -1911,6 +1911,26 @@ function mediaResolver(
     return reading;
   };
   /**
+   * Whether every batch another list has on its way for any of `ids` was
+   * usable, each awaited: `false` once one was not, so a list sharing it
+   * stops where its owner does.
+   */
+  const sharedBatchesHold = async (
+    ids: readonly string[]
+  ): Promise<boolean> => {
+    const pending = new Set(
+      ids.flatMap(id => {
+        const reading = inFlight.get(id);
+        return reading === undefined ? [] : [reading];
+      })
+    );
+    for (const reading of pending) {
+      if ((await reading) === undefined) return false;
+    }
+    return true;
+  };
+
+  /**
    * One batch of images read ahead, `false` where it stopped short. A batch
    * that fails leaves each image to its own read, so it is asked only where
    * the allowance covers it and each image's own read after it: a batch
@@ -1960,16 +1980,23 @@ function mediaResolver(
       // stops the reads ahead here, so each image's own read, made as it is
       // drawn, comes before a later step's.
       if (readMany === undefined) return false;
-      // Neither read already nor in flight: another list's batch on its way
-      // answers its ids for this one too.
-      const wanted = usableIds(ids).filter(
-        id => !known.has(id) && !inFlight.has(id)
-      );
-      for (let at = 0; at < wanted.length; at += AHEAD_BATCH_SIZE) {
-        const chunk = wanted.slice(at, at + AHEAD_BATCH_SIZE);
+      let rest = usableIds(ids).filter(id => !known.has(id));
+      for (;;) {
+        // Asked of the ids as they stand now, chunk by chunk, with nothing
+        // awaited between the asking and the batch's claim and reservation:
+        // one read or reserved meanwhile is not read again.
+        const chunk = rest
+          .filter(id => !known.has(id) && !inFlight.has(id))
+          .slice(0, AHEAD_BATCH_SIZE);
+        if (chunk.length === 0) {
+          // What is left is on its way in another list's batch, which
+          // answers it for this list too: awaited, and its outcome is this
+          // list's, so an unusable one stops the reads ahead here as well.
+          return await sharedBatchesHold(rest);
+        }
         if (!(await readChunk(readMany, chunk, claim))) return false;
+        rest = rest.filter(id => !known.has(id));
       }
-      return true;
     },
   };
 }
