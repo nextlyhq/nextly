@@ -55,7 +55,11 @@ import {
   type ActionAnswer,
   type CompositionRouteContext,
 } from "../composition-route-kit";
-import { documentVersionOf, withVersionFrom } from "../document-version";
+import {
+  asOverwrite,
+  documentVersionOf,
+  withVersionFrom,
+} from "../document-version";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
 import { readingAsUser } from "../library-route";
@@ -338,7 +342,37 @@ async function createDesign(
       logContext: { reason: "entry-design-entry-deleted" },
     });
   }
+  await unlinkIfSourceGone(ctx, data, created.item, guard);
   return created.item;
+}
+
+/**
+ * Empty the new design's link to the template it was copied from when that
+ * template was deleted while the copy was being made: the delete emptied the
+ * link of every copy it found, and this one was not yet there to find.
+ */
+async function unlinkIfSourceGone(
+  ctx: TemplateActionsContext,
+  data: Record<string, unknown>,
+  item: unknown,
+  guard: TemplateGuardSetup
+): Promise<void> {
+  const source = data[TEMPLATE_FORKED_FROM_FIELD];
+  const id = idOf(item);
+  if (typeof source !== "string" || id === undefined) return;
+  const templates = guard.templatesCollection;
+  const stillThere = await templateWhere(
+    templates,
+    { id: { equals: source } },
+    "all"
+  );
+  if (stillThere !== null) return;
+  await ctx.services.collections.updateEntry(
+    templates,
+    id,
+    asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null }),
+    { as: "system" }
+  );
 }
 
 /** The refusal of a second own design for an entry, naming the first by id. */
