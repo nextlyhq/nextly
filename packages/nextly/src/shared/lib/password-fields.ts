@@ -765,22 +765,25 @@ function forEachPairedRow(
 ): void {
   if (!Array.isArray(value) || !Array.isArray(previous)) return;
   const pairOf = rowPairing(value, previous);
-  // Where rows carry ids, a row without one is new and takes no stored
-  // password: pairing it by position could hand it another record's. Only a
-  // list whose rows carry none at all pairs by position. A repeater's are
-  // asked of the sent rows alone: every write stores its rows with ids
-  // (`assignRepeaterRowIds`), so asking the stored side too would leave a
-  // writer that never sends ids unable to keep any password it leaves out.
+  // Whether the list is paired by id. A repeater's is asked of the sent
+  // rows alone: every write stores its rows with ids (`assignRepeaterRowIds`),
+  // so asking the stored side too would leave a writer that never sends ids
+  // unable to keep any password it leaves out.
   const identified = (
     identifiedBy === "sent" ? value : [...value, ...previous]
   ).some(hasRowId);
   value.forEach((row, index) => {
-    if (identified && !hasRowId(row)) return;
+    const sentId = hasRowId(row);
+    // A field-group instance without an id, among ones with, is new. A
+    // repeater row without one takes the stored row at its place that no
+    // sent row names (`rowPairing`), so an unchanged row keeps its password
+    // and a changed one is refused (`refuseAmbiguousCarry`), never dropped.
+    if (identified && !sentId && identifiedBy === "both") return;
     const at = pairOf(index);
     const storedRow = at === undefined ? undefined : previous[at];
     // Paired by id only, on both sides: an id the stored rows never carried
     // pairs by position, which names no record.
-    if (identified && !hasRowId(storedRow)) return;
+    if (identified && sentId && !hasRowId(storedRow)) return;
     if (isPlainRecord(row) && isPlainRecord(storedRow)) visit(row, storedRow);
   });
 }

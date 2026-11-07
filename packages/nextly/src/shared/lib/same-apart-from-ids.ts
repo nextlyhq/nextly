@@ -6,10 +6,15 @@
  * Only the system's ids are set aside, read from the schema: a repeater row's
  * own `id`, at any depth, and an inline field-group instance's. An `id` the
  * schema declares as a field is the author's value, and is compared like any
- * other: two rows told apart only by it are different rows.
+ * other: two rows told apart only by it are different rows. A reference is
+ * compared as the reference a write stores, so a row read at depth, with
+ * its relationships populated, still matches the row stored from it.
  *
  * @module shared/lib/same-apart-from-ids
  */
+import { declaresOwnId } from "../../collections/fields/repeater-row-identity";
+import { normalizeRelationshipValue } from "../../domains/collections/services/collection-utils";
+
 import { deepEqual } from "./deep-equal";
 
 /** The field shape this reads: a name, a type, and the fields it holds. */
@@ -17,19 +22,8 @@ interface RowField {
   readonly name?: string;
   readonly type: string;
   readonly fields?: readonly RowField[];
-}
-
-/**
- * Whether a repeater's rows declare a field named `id`, on the row itself or
- * through a layout container, which keeps its fields on the row. Such a
- * row's `id` is the author's, so the system gives the row none.
- */
-export function declaresOwnId(fields: readonly RowField[]): boolean {
-  return fields.some(field =>
-    field.name === undefined || field.name === ""
-      ? declaresOwnId(field.fields ?? [])
-      : field.name === "id"
-  );
+  /** A relationship's target, a list where it may point at several. */
+  readonly relationTo?: unknown;
 }
 
 /**
@@ -95,6 +89,11 @@ function copyLevel(
 
 /** One field's value copied for comparison, by what the field is. */
 function copyHeld(value: unknown, field: RowField | undefined): unknown {
+  if (field?.type === "relationship") {
+    // Reduced as a write reduces it, so a populated row equals its id.
+    return normalizeRelationshipValue(value, Array.isArray(field.relationTo));
+  }
+  if (field?.type === "upload") return uploadReference(value);
   if (field?.type === "repeater" && Array.isArray(value)) {
     return value.map(row => withoutRowIds(row, field.fields ?? []));
   }
@@ -102,6 +101,12 @@ function copyHeld(value: unknown, field: RowField | undefined): unknown {
     return copyLevel(value, field.fields ?? [], false);
   }
   return value;
+}
+
+/** An upload's value as the id it stores: a populated file is its id. */
+function uploadReference(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(uploadReference);
+  return isRecord(value) && "id" in value ? value.id : value;
 }
 
 /** A non-null, non-array object that isn't a date. */

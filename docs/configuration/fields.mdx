@@ -695,7 +695,7 @@ Each row is saved with an `id`, which stays the same across saves, so a row can 
 - a row sent without one keeps its saved `id` only when it is unchanged at the same position; otherwise it gets a new one;
 - rows saved before rows had ids get theirs on the next save that sends the repeater. An update that leaves the repeater out doesn't touch its rows.
 
-If a repeater declares a field of its own named `id`, that field is yours: its value is left as you write it, and its rows get no saved id.
+If a repeater declares a field of its own named `id`, that field is yours: its value is left as you write it, and its rows get no saved id. If you add such a field to a repeater that already has saved rows, those rows keep their saved row id as the field's value until you change it. Nextly warns about this while you develop.
 
 Send each row's `id` back, from your last read, when you update a repeater with a password field. A row sent without its `id` that keeps its saved password but has other values changed is refused, with `ROW_ID_REQUIRED` naming the row: by position alone, a reorder could hand one row's password to another. Send the row's `id`, or send the password again.
 

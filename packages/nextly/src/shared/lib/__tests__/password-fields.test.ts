@@ -404,6 +404,37 @@ describe("carryStoredPasswords", () => {
       ).toThrow();
     });
 
+    it("keeps the password of an unchanged id-less row among rows with ids", () => {
+      // b is sent with its id; a, unchanged, without. a takes the stored row
+      // at its place, which no sent row names, and keeps its password.
+      const { rows } = carried([{ label: "a" }, { id: "b" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_A, HASH_B]);
+      // Changed, the same row is refused rather than its password dropped.
+      expect(() => carried([{ label: "edited" }, { id: "b" }])).toThrow();
+    });
+
+    it("matches a row read at depth, its relationship populated, as unchanged", () => {
+      const linked = [
+        {
+          name: "links",
+          type: "repeater",
+          fields: [
+            { name: "target", type: "relationship", relationTo: "pages" },
+            { name: "pw", type: "password" },
+          ],
+        },
+      ];
+      const stored = { links: [{ id: "a", target: "page-1", pw: HASH_A }] };
+      // Round-tripped from a populated read, without ids or the password.
+      const data: Record<string, unknown> = {
+        links: [{ target: { id: "page-1", title: "Home" } }],
+      };
+      carryStoredPasswords(data, stored, linked, NO_FIELD_GROUPS);
+      expect((data.links as Array<Record<string, unknown>>)[0]?.pw).toBe(
+        HASH_A
+      );
+    });
+
     it("keeps everything else working without ids", () => {
       // A row sending its own password keeps no stored one: nothing to guess.
       expect(carried([{ label: "x", pw: "new-secret" }]).rows[0]?.pw).toBe(

@@ -47,7 +47,9 @@ import {
   type FieldGroupReach,
   type NamedField,
 } from "./password-fields";
-import { declaresOwnId, sameApartFromIds } from "./same-apart-from-ids";
+import { declaresOwnId } from "../../collections/fields/repeater-row-identity";
+
+import { sameApartFromIds } from "./same-apart-from-ids";
 
 /** What one walk carries through every level. */
 interface RowIdWalk {

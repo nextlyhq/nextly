@@ -20,6 +20,7 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
+import { declaresOwnId } from "nextly/field-catalog";
 import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -191,20 +192,6 @@ function RepeaterAddButton({
  * which the default key name, `id`, would hide.
  */
 const RENDER_KEY = "nx.renderKey";
-
-/**
- * Whether a repeater's rows declare a field named `id`, on the row or through
- * a layout container, which keeps its fields on the row: the server's own
- * rule (`declaresOwnId` in core), read the same way here.
- */
-function declaresOwnId(fields: readonly FieldConfig[]): boolean {
-  return fields.some(field => {
-    const named = "name" in field ? field.name : undefined;
-    if (typeof named === "string" && named !== "") return named === "id";
-    const inner = "fields" in field ? field.fields : undefined;
-    return Array.isArray(inner) && declaresOwnId(inner as FieldConfig[]);
-  });
-}
 
 /**
  * A repeater's rows as a field array: their render keys, drag-and-drop, and
