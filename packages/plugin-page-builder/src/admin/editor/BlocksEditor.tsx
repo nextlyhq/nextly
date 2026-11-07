@@ -42,6 +42,7 @@ import {
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
   type AppliedConditions,
+  type AppliedConditionsOptions,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -1266,8 +1267,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   const conditions = useAppliedConditionsSwitch(
     reveal.document,
     templatePreview,
-    conditionServices,
-    mount.componentLibrary.titleOf
+    {
+      services: conditionServices,
+      componentTitle: mount.componentLibrary.titleOf,
+      // Every block the canvas draws, under the limits it draws with.
+      limits: canvas.canvasRender.limits,
+      // The site's zone, as the canvas's bindings read it, for a date a
+      // condition compares by day.
+      timeZone: canvasRender.bindings.timeZone,
+    }
   );
   const view: EditorView = {
     ...mount,
@@ -1564,12 +1572,19 @@ interface AppliedConditionsSwitch {
 function useAppliedConditionsSwitch(
   document: BlockDocument,
   preview: ReturnType<typeof useTemplatePreviewState>,
-  services: ReturnType<typeof useConditionServices>,
-  componentTitle: (componentId: string) => string | undefined
+  options: Omit<AppliedConditionsOptions, "noun">
 ): AppliedConditionsSwitch {
   const [on, setOn] = useState(false);
   const toggle = useCallback(() => setOn(was => !was), []);
-  const held = useMemo(() => conditionedBlocksIn(document), [document]);
+  const maxNodes = options.limits?.maxNodes;
+  const held = useMemo(
+    () =>
+      conditionedBlocksIn(
+        document,
+        maxNodes === undefined ? undefined : { maxNodes }
+      ),
+    [document, maxNodes]
+  );
   const noun =
     preview === undefined ? "entry" : preview.labels.singular.toLowerCase();
   const previewed = preview?.previewed;
@@ -1578,9 +1593,7 @@ function useAppliedConditionsSwitch(
   const applied = useAppliedConditions(
     document,
     on && held.readingEntry ? previewed : undefined,
-    noun,
-    services,
-    componentTitle
+    { ...options, noun }
   );
   const template = useMemo<TemplateConditions | undefined>(
     () =>

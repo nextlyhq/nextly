@@ -4,7 +4,8 @@
  *
  * @module use-applied-conditions
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
+import { conditionDayStart } from "@nextlyhq/blocks-react";
 import { useMemo } from "react";
 
 import {
@@ -41,7 +42,9 @@ import type { PreviewedEntry } from "./previewed-entry";
 export function conditionsPreviewOf(
   previewed: PreviewedEntry | undefined,
   noun: string,
-  labelled?: readonly ConditionField[]
+  labelled?: readonly ConditionField[],
+  /** The site's zone, where a day compared by a condition starts. */
+  timeZone?: string
 ): ConditionsPreview | undefined {
   if (previewed?.kind !== "entry") return undefined;
   const readable = previewed.fields;
@@ -58,7 +61,24 @@ export function conditionsPreviewOf(
           },
     noun,
     fields: labelled ?? conditionFieldsOfShapes(readable),
+    // The published page's own rule for when a day starts, in the site's
+    // zone, so a date compared by day is judged as a visitor gets it.
+    dayStart: conditionDayStart(timeZone),
   };
+}
+
+/** What the conditions are applied with, besides the entry. */
+export interface AppliedConditionsOptions {
+  /** What the entry is called in words, lower case: "post". */
+  readonly noun: string;
+  /** The collections the inspector lists, for the fields' names. */
+  readonly services?: Pick<ContentServices, "listLoopCollections">;
+  /** A placed component's title, for a hidden placement's name. */
+  readonly componentTitle?: ComponentTitleOf;
+  /** The limits the canvas draws under. */
+  readonly limits?: Pick<DocumentLimits, "maxNodes">;
+  /** The site's time zone, as the canvas's bindings read it. */
+  readonly timeZone?: string;
 }
 
 /**
@@ -73,9 +93,7 @@ export function conditionsPreviewOf(
 export function useAppliedConditions(
   document: BlockDocument,
   previewed: PreviewedEntry | undefined,
-  noun: string,
-  services: Pick<ContentServices, "listLoopCollections"> | undefined,
-  componentTitle?: ComponentTitleOf
+  { noun, services, componentTitle, limits, timeZone }: AppliedConditionsOptions
 ): AppliedConditions | undefined {
   // The collections the inspector lists, read once and shared, for the
   // fields' names as the rows give them.
@@ -87,16 +105,20 @@ export function useAppliedConditions(
     return found === undefined ? undefined : conditionFieldsOf(found);
   }, [listed, collection]);
   const preview = useMemo(
-    () => conditionsPreviewOf(previewed, noun, labelled),
-    [previewed, noun, labelled]
+    () => conditionsPreviewOf(previewed, noun, labelled, timeZone),
+    [previewed, noun, labelled, timeZone]
   );
+  const maxNodes = limits?.maxNodes;
   return useMemo(
     () =>
       preview === undefined
         ? undefined
-        : appliedConditionsOf(document, preview, node =>
-            layerLabel(node, undefined, componentTitle)
+        : appliedConditionsOf(
+            document,
+            preview,
+            node => layerLabel(node, undefined, componentTitle),
+            maxNodes === undefined ? undefined : { maxNodes }
           ),
-    [document, preview, componentTitle]
+    [document, preview, componentTitle, maxNodes]
   );
 }

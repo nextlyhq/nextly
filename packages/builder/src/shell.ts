@@ -420,6 +420,7 @@ export {
 export {
   conditionsPreviewOf,
   useAppliedConditions,
+  type AppliedConditionsOptions,
 } from "./use-applied-conditions";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";

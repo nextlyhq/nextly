@@ -11,6 +11,7 @@
  * @module condition-hidden-block
  */
 import {
+  CONDITION_HIDDEN_TYPE,
   defineBlock,
   type BlockDefinition,
   type BlockRenderArgs,
@@ -19,10 +20,7 @@ import type { BlockResolver } from "@nextlyhq/blocks-react";
 import { AlertCircle, EyeOff } from "lucide-react";
 import type { ReactElement } from "react";
 
-import {
-  CONDITION_HIDDEN_TYPE,
-  type ConditionHiddenProps,
-} from "./applied-conditions";
+import type { ConditionHiddenProps } from "./applied-conditions";
 
 /** One hidden block's line: its name, then why it is hidden. */
 function renderConditionHidden({

@@ -440,6 +440,10 @@ describe("the root entry", () => {
       // editor's canvas and read back there, by one pair of functions.
       "bindingsFromWire",
       "bindingsToWire",
+      // When a day starts for a visibility condition on a date, in the site's
+      // zone: public so the editor's canvas judges conditions with the rule
+      // the published page judges them with.
+      "conditionDayStart",
       "createBlockResolver",
       // The provider a route reads its lists through when given none, public
       // so a route's own `data` can narrow it rather than rewrite it.

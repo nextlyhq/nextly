@@ -16,6 +16,7 @@
  * @module applied-conditions
  */
 import {
+  CONDITION_HIDDEN_TYPE,
   conditionScopeIn,
   DEFAULT_LIMITS,
   evaluateConditions,
@@ -31,6 +32,7 @@ import {
   type ConditionOp,
   type ConditionScope,
   type ConditionSubject,
+  type DocumentLimits,
   type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
 
@@ -42,12 +44,6 @@ import {
   conditionSentence,
   type ConditionField,
 } from "./condition-model";
-
-/**
- * The type of the marker a hidden block is drawn as. Editor-only: it is never
- * stored, and only the canvas's renderer knows it.
- */
-export const CONDITION_HIDDEN_TYPE = "nx-editor/condition-hidden";
 
 /**
  * What a hidden block's marker shows: the block's name and why it is hidden,
@@ -112,9 +108,11 @@ const ENTRY_SCOPE: ConditionScope = { source: "entry", collection: undefined };
 export function appliedConditionsOf(
   document: BlockDocument,
   preview: ConditionsPreview,
-  nameOf: (node: BlockNode) => string
+  nameOf: (node: BlockNode) => string,
+  /** The limits the canvas draws under, so every block it draws is judged. */
+  limits?: Pick<DocumentLimits, "maxNodes">
 ): AppliedConditions {
-  const { shown, hidden } = judgedBlocks(document, preview, nameOf);
+  const { shown, hidden } = judgedBlocks(document, preview, nameOf, limits);
   const byId = new Map(hidden.map(block => [block.id, block]));
   // Every conditioned block is drawn, as the canvas draws them while
   // conditions are not applied; a hidden one then becomes its marker.
@@ -124,7 +122,7 @@ export function appliedConditionsOf(
       ? revealed.nodes
       : mapForest(revealed.nodes, node => {
           const block = byId.get(node.id);
-          return block === undefined ? node : markerFor(block);
+          return block === undefined ? node : markerFor(block, node);
         });
   return {
     document: nodes === revealed.nodes ? revealed : { ...revealed, nodes },
@@ -133,14 +131,25 @@ export function appliedConditionsOf(
   };
 }
 
-/** A hidden block's marker, keeping its id so the canvas selects the block. */
-function markerFor(block: HiddenBlock): BlockNode {
+/**
+ * A hidden block's marker, keeping its id so the canvas selects the block,
+ * and what is left of its visibility once its conditions are lifted: the
+ * devices it is hidden on, which the marker is hidden on too, as the block
+ * would be whatever its conditions said.
+ */
+function markerFor(block: HiddenBlock, drawn: BlockNode): BlockNode {
   const props: ConditionHiddenProps = {
     name: block.name,
     reason: block.reason,
     unchecked: block.unchecked,
   };
-  return { id: block.id, type: CONDITION_HIDDEN_TYPE, version: 1, props };
+  return {
+    id: block.id,
+    type: CONDITION_HIDDEN_TYPE,
+    version: 1,
+    props,
+    ...(drawn.visibility === undefined ? {} : { visibility: drawn.visibility }),
+  };
 }
 
 /** One block to visit, with what its conditions read. */
@@ -157,11 +166,12 @@ interface Visit {
 function judgedBlocks(
   document: BlockDocument,
   preview: ConditionsPreview,
-  nameOf: (node: BlockNode) => string
+  nameOf: (node: BlockNode) => string,
+  limits: Pick<DocumentLimits, "maxNodes"> | undefined
 ): { shown: Set<string>; hidden: HiddenBlock[] } {
   const shown = new Set<string>();
   const hidden: HiddenBlock[] = [];
-  walkScoped(document, (block, scope) => {
+  walkScoped(document, limits, (block, scope) => {
     if (scope.source !== "entry" || !gatedAsStored(block)) return true;
     const verdict = evaluateConditions(storedGate(block), inputOf(preview));
     if (verdict.shown) {
@@ -184,13 +194,16 @@ function judgedBlocks(
  *
  * @experimental Settles with the editor's condition controls.
  */
-export function conditionedBlocksIn(document: BlockDocument): {
+export function conditionedBlocksIn(
+  document: BlockDocument,
+  limits?: Pick<DocumentLimits, "maxNodes">
+): {
   readonly any: boolean;
   readonly readingEntry: boolean;
 } {
   let any = false;
   let readingEntry = false;
-  walkScoped(document, (block, scope) => {
+  walkScoped(document, limits, (block, scope) => {
     if (gatedAsStored(block)) {
       any = true;
       readingEntry ||= scope.source === "entry";
@@ -204,18 +217,20 @@ export function conditionedBlocksIn(document: BlockDocument): {
  * Every block of a document, in page order, with what its conditions read:
  * the entry, or a list's item inside its per-entry slot (`conditionScopeIn`,
  * the save's and the renderer's one rule). `visit` answers whether to go on
- * into the block's own blocks. Bounded by the document limits, as any walk of
- * stored data is.
+ * into the block's own blocks. Bounded by the limits the canvas draws under,
+ * the defaults where none are given, so it reads every block the canvas draws
+ * and no more, as any walk of stored data is bounded.
  */
 function walkScoped(
   document: BlockDocument,
+  limits: Pick<DocumentLimits, "maxNodes"> | undefined,
   visit: (block: BlockNode, scope: ConditionScope) => boolean
 ): void {
   const roots: unknown[] = Array.isArray(document.nodes) ? document.nodes : [];
   const stack: Visit[] = roots
     .map(node => ({ node, scope: ENTRY_SCOPE }))
     .reverse();
-  let left = DEFAULT_LIMITS.maxNodes;
+  let left = limits?.maxNodes ?? DEFAULT_LIMITS.maxNodes;
   while (stack.length > 0 && left > 0) {
     const next = stack.pop();
     left -= 1;

@@ -5,6 +5,7 @@
  */
 import {
   COLLECTION_LIST_TYPE,
+  CONDITION_HIDDEN_TYPE,
   DOCUMENT_FORMAT_VERSION,
   LIST_ENTRY_SLOT,
   type BindingFieldShape,
@@ -16,10 +17,10 @@ import { describe, expect, it } from "vitest";
 import {
   appliedConditionsOf,
   conditionedBlocksIn,
-  CONDITION_HIDDEN_TYPE,
   type ConditionsPreview,
 } from "./applied-conditions";
 import { conditionFieldsOfShapes } from "./condition-model";
+import { conditionsPreviewOf } from "./use-applied-conditions";
 
 const FIELDS: readonly BindingFieldShape[] = [
   { name: "category", type: "text" },
@@ -174,6 +175,86 @@ describe("the page with its conditions applied", () => {
     const drawn = applied.document.nodes[0]?.slots?.[LIST_ENTRY_SLOT]?.[0];
     expect(drawn).toMatchObject({ id: "featured", type: "core/text" });
     expect(drawn?.visibility).toBeUndefined();
+  });
+});
+
+describe("the page with its conditions applied, as the canvas draws it", () => {
+  it("keeps a hidden block's device hiding on its marker", () => {
+    const mobileOff = block("worksheet", {
+      visibility: { conditions: [[guides]], devices: { mobile: false } },
+    });
+    const applied = appliedConditionsOf(
+      page(mobileOff),
+      previewFor({ category: "News" }),
+      nameOf
+    );
+    // Hidden on mobile whatever its conditions say, so its marker is too.
+    expect(applied.document.nodes[0]).toMatchObject({
+      type: CONDITION_HIDDEN_TYPE,
+      visibility: { devices: { mobile: false } },
+    });
+    expect(JSON.stringify(applied.document.nodes[0])).not.toContain(
+      "conditions"
+    );
+  });
+
+  it("judges every block under a raised node limit, and none past the limit given", () => {
+    // 5,000 blocks ahead of the conditioned one: past the default limit.
+    const filler = Array.from({ length: 5_000 }, (_, index) =>
+      block(`filler-${String(index)}`)
+    );
+    const document = page(...filler, worksheet);
+    const raised = appliedConditionsOf(
+      document,
+      previewFor({ category: "News" }),
+      nameOf,
+      { maxNodes: 10_000 }
+    );
+    expect(raised.hidden.map(each => each.id)).toEqual(["worksheet"]);
+    const defaults = appliedConditionsOf(
+      document,
+      previewFor({ category: "News" }),
+      nameOf
+    );
+    expect(defaults.hidden).toEqual([]);
+  });
+
+  it("starts a day where the published page does, in the site's zone", () => {
+    // Published at 23:30 UTC on 1 March: already 2 March in Tokyo.
+    const fields: readonly BindingFieldShape[] = [
+      { name: "publishedAt", type: "date" },
+    ];
+    const late = block("worksheet", {
+      visibility: {
+        conditions: [
+          [{ field: "publishedAt", op: "less_than", value: "2026-03-02" }],
+        ],
+      },
+    });
+    const judged = (timeZone: string | undefined) =>
+      appliedConditionsOf(
+        page(late),
+        conditionsPreviewOf(
+          {
+            kind: "entry",
+            collection: "posts",
+            id: "p1",
+            title: "Post",
+            publicValues: { publishedAt: "2026-03-01T23:30:00.000Z" },
+            editorValues: {},
+            fields,
+          },
+          "post",
+          undefined,
+          timeZone
+        ) ?? previewFor(undefined),
+        nameOf
+      );
+    // Before 2 March in UTC, so shown; not before it in Tokyo, so hidden.
+    expect([...judged(undefined).shown]).toEqual(["worksheet"]);
+    expect(judged("Asia/Tokyo").hidden.map(each => each.id)).toEqual([
+      "worksheet",
+    ]);
   });
 });
 

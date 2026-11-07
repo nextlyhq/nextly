@@ -295,6 +295,12 @@ export { prepareDocumentAsDrawn } from "./prepare-document";
  */
 export { repairingLookup } from "./prepare-document";
 /**
+ * @experimental When a day starts for a visibility condition on a date field,
+ * in the site's zone, for an editor surface judging conditions as the
+ * published page judges them.
+ */
+export { conditionDayStart } from "./blocks/list-read";
+/**
  * @experimental The collections a page's lists draw, whose field shapes judge
  * their items' bindings: one walk for the published route and the editor.
  */
