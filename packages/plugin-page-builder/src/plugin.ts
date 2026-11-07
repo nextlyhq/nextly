@@ -22,6 +22,7 @@ import {
   definePlugin,
   NextlyError,
   type HookContext,
+  readableTitleText,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginCollectionTransaction,
@@ -171,7 +172,7 @@ import {
 } from "./default-layout/settings-single";
 import { definitionActionsRoute } from "./definition-actions-route";
 import { asOverwrite } from "./document-version";
-import { entriesRoute } from "./entries-route";
+import { entriesRoute, titleFieldIn } from "./entries-route";
 import type {
   CompositionSetup,
   LayersLockUnjudged,
@@ -2215,16 +2216,36 @@ export const pageBuilder = (
                 id,
                 {}
               ),
-            listEntries: (collection, ids) =>
-              ctx.services.collections.listEntries(
+            // Named by the field the collection names its entries by, and
+            // its value read as core reads a title, so the dialog shows the
+            // names people recognise.
+            entryTitles: async (collection, ids) => {
+              const config = await ctx.services.collections
+                .getCollection(collection, undefined as never)
+                .catch(() => null);
+              const field =
+                (typeof config === "object" && config !== null
+                  ? titleFieldIn(config)?.name
+                  : undefined) ?? "title";
+              const found = await ctx.services.collections.listEntries(
                 collection,
                 {
                   where: { id: { in: [...ids] } },
                   pagination: { limit: ids.length },
+                  select: { id: true, [field]: true },
                   depth: 0,
                 },
                 { as: "system" }
-              ),
+              );
+              const titles = new Map<string, string>();
+              for (const entry of found.data as Record<string, unknown>[]) {
+                const title = readableTitleText(entry[field]);
+                if (entry.id !== undefined && title !== undefined) {
+                  titles.set(String(entry.id), title);
+                }
+              }
+              return titles;
+            },
           },
         })
       );

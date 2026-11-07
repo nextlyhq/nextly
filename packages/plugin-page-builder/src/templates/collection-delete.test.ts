@@ -47,7 +47,7 @@ function standIn(rows: Record<string, unknown>[]) {
         1
       );
     },
-    listEntries: async () => ({ data: [] }),
+    entryTitles: async () => new Map<string, string>(),
   };
   return { services, asked, deleted, stored };
 }
@@ -55,6 +55,40 @@ function standIn(rows: Record<string, unknown>[]) {
 const own = () => new Set(["templates", "pages"]);
 
 describe("the page builder's collection-delete handlers", () => {
+  it("names an own design by its entry's title, read once for the page", async () => {
+    const { services } = standIn([
+      {
+        id: "d1",
+        title: "Design copy",
+        entryCollection: "articles",
+        entryId: "e1",
+      },
+      {
+        id: "d2",
+        title: "Another copy",
+        entryCollection: "articles",
+        entryId: "e2",
+      },
+    ]);
+    // Own designs name no collection, so they are listed here directly.
+    services.listTemplates = async () => ({
+      data: [
+        { id: "d1", entryCollection: "articles", entryId: "e1" },
+        { id: "d2", entryCollection: "articles", entryId: "e2" },
+      ],
+    });
+    const asks: string[][] = [];
+    services.entryTitles = async (_collection, ids) => {
+      asks.push([...ids]);
+      return new Map([["e1", "Ten years of field notes"]]);
+    };
+    const handlers = templateCollectionDelete({ services, own });
+    expect(await handlers.impact("articles")).toEqual([
+      { label: "Ten years of field notes", kind: "design" },
+      { label: "e2", kind: "design" },
+    ]);
+    expect(asks).toEqual([["e1", "e2"]]);
+  });
   it("names the collection's template by its title, deleting nothing", async () => {
     const { services, deleted } = standIn([
       {

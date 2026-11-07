@@ -64,8 +64,15 @@ export interface TemplateDeleteServices<Tx> {
   listTemplatesInTransaction(tx: Tx, options: ListOptions): Promise<Page>;
   /** Delete one template on the delete's transaction. */
   deleteTemplateInTransaction(tx: Tx, id: string): Promise<unknown>;
-  /** The entries of `collection` with these ids, as the system. */
-  listEntries(collection: string, ids: readonly string[]): Promise<Page>;
+  /**
+   * The titles of the entries of `collection` with these ids, as the system,
+   * read by the field the collection names its entries by: entry id to title,
+   * for those with one.
+   */
+  entryTitles(
+    collection: string,
+    ids: readonly string[]
+  ): Promise<ReadonlyMap<string, string>>;
 }
 
 /** What an in-transaction handler is told about a template's write. */
@@ -127,6 +134,37 @@ function stringOf(row: Record<string, unknown>, field: string) {
 }
 
 /**
+ * What one page of the templates naming `slug` takes with the collection:
+ * its template by title, and each own design by its entry's title, read in
+ * one list for the page rather than one read per design.
+ */
+async function impactOfPage<Tx>(
+  services: TemplateDeleteServices<Tx>,
+  slug: string,
+  rows: readonly Record<string, unknown>[]
+): Promise<DeleteImpactItem[]> {
+  const isDesign = (row: Record<string, unknown>) =>
+    stringOf(row, TEMPLATE_ENTRY_COLLECTION_FIELD) === slug;
+  const entryIds = rows.filter(isDesign).flatMap(row => {
+    const id = stringOf(row, TEMPLATE_ENTRY_ID_FIELD);
+    return id === undefined ? [] : [id];
+  });
+  const titles =
+    entryIds.length > 0
+      ? await services.entryTitles(slug, entryIds)
+      : new Map<string, string>();
+  return rows.map(row => {
+    const id = stringOf(row, "id") ?? "";
+    if (!isDesign(row)) {
+      return { label: stringOf(row, "title") ?? id, kind: "template" };
+    }
+    const entryId = stringOf(row, TEMPLATE_ENTRY_ID_FIELD);
+    const title = entryId === undefined ? undefined : titles.get(entryId);
+    return { label: title ?? entryId ?? id, kind: "design" };
+  });
+}
+
+/**
  * Collection-delete handlers for the templates collection `templates`,
  * skipping the plugin's own collections (`own`).
  */
@@ -148,42 +186,7 @@ export function templateCollectionDelete<Tx>(args: {
           pagination: { limit: PAGE, page },
           depth: 0,
         });
-        // A page's own designs are named by their entries' titles, read in
-        // one list per page rather than one read per design.
-        const designs = found.data.filter(
-          row => stringOf(row, TEMPLATE_ENTRY_COLLECTION_FIELD) === slug
-        );
-        const entryIds = designs.flatMap(row => {
-          const id = stringOf(row, TEMPLATE_ENTRY_ID_FIELD);
-          return id === undefined ? [] : [id];
-        });
-        const titles = new Map<string, string>();
-        if (entryIds.length > 0) {
-          const entries = await services.listEntries(slug, entryIds);
-          for (const entry of entries.data) {
-            const id = stringOf(entry, "id");
-            const title = stringOf(entry, "title");
-            if (id !== undefined && title !== undefined) titles.set(id, title);
-          }
-        }
-        for (const row of found.data) {
-          const id = stringOf(row, "id") ?? "";
-          if (stringOf(row, TEMPLATE_ENTRY_COLLECTION_FIELD) === slug) {
-            const entryId = stringOf(row, TEMPLATE_ENTRY_ID_FIELD);
-            items.push({
-              label:
-                (entryId === undefined ? undefined : titles.get(entryId)) ??
-                entryId ??
-                id,
-              kind: "design",
-            });
-          } else {
-            items.push({
-              label: stringOf(row, "title") ?? id,
-              kind: "template",
-            });
-          }
-        }
+        items.push(...(await impactOfPage(services, slug, found.data)));
         if (found.data.length < PAGE) return items;
       }
     },

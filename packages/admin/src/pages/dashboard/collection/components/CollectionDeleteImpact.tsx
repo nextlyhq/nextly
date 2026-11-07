@@ -23,7 +23,7 @@ import {
 const MAX_VISIBLE_IMPACT = 10;
 
 /** The impact groups as the dialog lists them. */
-export function CollectionDeleteImpactList({
+function CollectionDeleteImpactList({
   groups,
 }: {
   groups: readonly CollectionDeleteImpactGroup[];

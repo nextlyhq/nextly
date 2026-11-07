@@ -1362,8 +1362,15 @@ export class CollectionMetadataService extends BaseService {
           // delete back on every dialect, MySQL included, whose table drops
           // below commit what ran before them.
           await runCollectionDeleteHandlers(getActiveHookRegistry(), slugs, tx);
-          ddlStarted = true;
-          const teardownAdapter = teardownAdapterIn(this.adapter, tx);
+          // Marked at the first statement that can commit on MySQL, not
+          // before the teardown that may issue none: a failure before it
+          // rolls everything back, and keeps its own error.
+          const teardownAdapter = noticingDdl(
+            teardownAdapterIn(this.adapter, tx),
+            () => {
+              ddlStarted = true;
+            }
+          );
           for (const { slug, collection } of ordered) {
             await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
           }
@@ -1371,6 +1378,7 @@ export class CollectionMetadataService extends BaseService {
           // `nextly migrate` applies the file.
           if (this.isDevelopment()) {
             for (const statement of splitStatements([drop.migrationSQL])) {
+              ddlStarted = true;
               await tx.execute(statement);
             }
           }
@@ -1478,4 +1486,28 @@ export class CollectionMetadataService extends BaseService {
       logger: this.logger,
     });
   }
+}
+
+/** A statement that changes the schema: on MySQL it commits what ran before it. */
+const DDL_STATEMENT = /^\s*(drop|alter|create|truncate|rename)\b/i;
+
+/**
+ * `adapter`, telling `onDdl` before each schema-changing statement its
+ * `executeQuery` runs, so a delete knows whether anything it did may have
+ * been committed before it failed.
+ */
+function noticingDdl<A extends object>(adapter: A, onDdl: () => void): A {
+  return new Proxy(adapter, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      if (property !== "executeQuery") return value.bind(target);
+      return (statement: unknown, ...rest: unknown[]) => {
+        if (typeof statement === "string" && DDL_STATEMENT.test(statement)) {
+          onDdl();
+        }
+        return Reflect.apply(value, target, [statement, ...rest]);
+      };
+    },
+  });
 }
