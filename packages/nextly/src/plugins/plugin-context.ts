@@ -117,7 +117,7 @@ import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
 import { createPluginSettings } from "./plugin-settings-provider";
-import { wrapSinglesForPlugin } from "./plugin-singles";
+import { toPluginSingleRecord, wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import {
@@ -2110,6 +2110,17 @@ function restrictDatabase(
   };
 }
 
+/**
+ * Each registry row's fields, by the row's slug, as the one-row read reduces
+ * a row: for a host-types walk that reads every row in one statement.
+ */
+function fieldsBySlug<R extends { slug: string }, F>(
+  records: readonly R[],
+  fieldsOf: (record: R) => F
+): ReadonlyMap<string, F> {
+  return new Map(records.map(record => [record.slug, fieldsOf(record)]));
+}
+
 export function createPluginContext(
   getServiceFn: <T extends PluginServiceName>(
     name: T
@@ -2676,6 +2687,42 @@ export function createPluginContext(
                 "fieldGroupRegistryService"
               ).getComponentBySlug(slug)
             )?.fields ?? null,
+          // The listings a plugin reads through `services.collections` and
+          // `services.singles`, so the host-types walk describes each entry
+          // as those do, each beside the fields `fieldsOf` would take from
+          // it, from the same statement. The collection listing ignores its
+          // request context; its record carries the registry's fields, with
+          // the title and slug inputs every collection has, which are of no
+          // plugin's type (a registered type cannot take a built-in name).
+          listCollections: async limit =>
+            (
+              await collectionService.listCollections(
+                { page: 1, limit, sortBy: "slug", sortOrder: "asc" },
+                {}
+              )
+            ).data.map(record => ({
+              record,
+              fields: collectionFields(record),
+            })),
+          // The rows `services.singles.list` lists, in its order, described
+          // by its own mapping; the row's declared fields come beside it,
+          // since the description drops the component a field names.
+          listSingles: async () =>
+            (await getServiceFn("singleRegistryService").getAllSingles()).map(
+              row => ({
+                record: toPluginSingleRecord(row),
+                fields: row.fields,
+              })
+            ),
+          // Every row at once, each reduced to its fields exactly as
+          // `componentFields` reduces the one row it reads.
+          allComponentFields: async () =>
+            fieldsBySlug(
+              await getServiceFn(
+                "fieldGroupRegistryService"
+              ).getAllComponents(),
+              record => record.fields
+            ),
         }
       ),
       // The plugin view, refusing the writes that decide who administers the

@@ -1,11 +1,13 @@
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { act, render, screen, within } from "@admin/__tests__/utils";
 
+import { DataTable } from "./DataTable";
 import { DataTableView } from "./DataTableView";
 import type { DataTableSelection } from "./DataTableView";
 import {
+  registerBulkAction,
   registerColumns,
   registerRowAction,
   clearDataTablePlugins,
@@ -160,6 +162,47 @@ describe("DataTableView", () => {
     expect(onToggleAll).toHaveBeenCalledWith(rows, false);
   });
 
+  it("draws a plugin column registered while the list is already on screen", () => {
+    clearDataTablePlugins();
+    render(
+      <DataTableView columns={columns} rows={rows} registryKey="late-list" />
+    );
+    expect(table().queryByText("Late")).toBeNull();
+
+    // A plugin that decides after a read of its own registers once the list
+    // is drawn: the list redraws with the column, rather than missing it
+    // until it is opened again.
+    act(() => {
+      registerColumns("late-list", () => [
+        { name: "late", header: "Late", cell: () => "LATE_CELL" },
+      ]);
+    });
+
+    expect(table().getByText("Late")).toBeInTheDocument();
+    expect(table().getAllByText("LATE_CELL").length).toBe(rows.length);
+  });
+
+  it("drops a plugin column taken back while the list is on screen", () => {
+    clearDataTablePlugins();
+    const remove = registerColumns("leaving-list", () => [
+      { name: "leaving", header: "Leaving", cell: () => "LEAVING_CELL" },
+    ]);
+    render(
+      <DataTableView columns={columns} rows={rows} registryKey="leaving-list" />
+    );
+    expect(table().getByText("Leaving")).toBeInTheDocument();
+
+    // A plugin whose column follows something that changed (a collection
+    // that no longer has what the column shows) takes it back.
+    act(() => {
+      remove();
+    });
+
+    expect(table().queryByText("Leaving")).toBeNull();
+    expect(table().queryByText("LEAVING_CELL")).toBeNull();
+    expect(table().getByText("Ada")).toBeInTheDocument();
+  });
+
   it("merges plugin-registered columns and row actions via registryKey", async () => {
     clearDataTablePlugins();
     registerColumns("probe-list", () => [
@@ -209,5 +252,42 @@ describe("DataTableView", () => {
     await user.click(rowCheckbox);
     expect(onToggle).toHaveBeenCalledWith("1");
     expect(navigateTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("DataTable's selection bar", () => {
+  it("offers a plugin bulk action registered while the list is on screen", async () => {
+    clearDataTablePlugins();
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(
+      <DataTable
+        columns={columns}
+        data={rows}
+        enableSelection
+        registryKey="late-bulk"
+      />
+    );
+    await screen.findAllByText("Ada");
+    await user.click(
+      table().getAllByRole("checkbox", { name: "Select row" })[0]
+    );
+    expect(screen.getByText("1 item selected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+
+    // Registered after the bar is drawn, with nothing else changing: the bar
+    // reads the same subscribed registrations as the rows, so it redraws
+    // with the action rather than waiting for an unrelated render.
+    act(() => {
+      registerBulkAction<Row>("late-bulk", {
+        id: "archive",
+        label: "Archive",
+        onSelect: selected => onSelect(selected.map(row => row.id)),
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+    expect(onSelect).toHaveBeenCalledWith(["1"]);
+    clearDataTablePlugins();
   });
 });

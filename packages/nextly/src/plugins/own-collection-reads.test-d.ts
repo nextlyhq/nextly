@@ -87,6 +87,7 @@ expectTypeOf<keyof Own>().toEqualTypeOf<
   | "listHostEntriesInTransaction"
   | "findHostEntryByIdInTransaction"
   | "getHostSingleInTransaction"
+  | "listHostTypesInTransaction"
 >();
 
 // No ordinary read, and no Direct API read, can name the grant.
@@ -135,4 +136,20 @@ expectTypeOf<ReturnType<Own["findHostEntryByIdInTransaction"]>>().toEqualTypeOf<
 >();
 expectTypeOf<ReturnType<Own["getHostSingleInTransaction"]>>().toEqualTypeOf<
   Promise<SingleDocument>
+>();
+// The host-types listing names each collection and Single as the plugin's
+// own listings of them do, so an entry can be handed on as one of theirs.
+expectTypeOf<
+  Awaited<ReturnType<Own["listHostTypesInTransaction"]>>["collections"][number]
+>().toEqualTypeOf<
+  Awaited<
+    ReturnType<PluginContext["services"]["collections"]["listCollections"]>
+  >["data"][number]
+>();
+expectTypeOf<
+  Awaited<ReturnType<Own["listHostTypesInTransaction"]>>["singles"][number]
+>().toEqualTypeOf<
+  Awaited<
+    ReturnType<PluginContext["services"]["singles"]["list"]>
+  >["data"][number]
 >();
