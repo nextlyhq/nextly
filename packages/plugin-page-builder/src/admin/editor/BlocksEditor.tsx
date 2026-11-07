@@ -1290,11 +1290,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           // The title is the top bar's switcher, so the shell draws none.
           {...editorTopBar(view, { title: page.title, field: name })}
           // Pinned above a template's canvas: the entry it is drawn with.
-          {...(templatePreview === undefined
-            ? {}
-            : {
-                canvasStrip: <TemplatePreviewStrip preview={templatePreview} />,
-              })}
+          canvasStrip={templateStrip(templatePreview)}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page)}
           // The shell owns the region; this fills it. Rendered unconditionally
@@ -1426,6 +1422,15 @@ function EditorBody<TFieldValues extends FieldValues>({
         </BuilderShell>
       </VisitorUnreadableProvider>
     </EditorFrame>
+  );
+}
+
+/** The Previewing strip for a template's preview, or none for any other document. */
+function templateStrip(
+  preview: ReturnType<typeof useTemplatePreviewState>
+): React.JSX.Element | undefined {
+  return preview === undefined ? undefined : (
+    <TemplatePreviewStrip preview={preview} />
   );
 }
 
