@@ -5,6 +5,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/builder-address
  */
+import type { Binding } from "@nextlyhq/blocks-engine";
 import type {
   DocumentIdentity,
   DocumentLocale,
@@ -172,6 +173,51 @@ export function entryCreatePath(collection: string): string {
  */
 export function entryEditPath(collection: string, id: string): string {
   return `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`;
+}
+
+/**
+ * The admin's edit screen for the Single `slug`, as its own route table
+ * spells it (`/admin/singles/<slug>`).
+ */
+function singleEditPath(slug: string): string {
+  return `/admin/singles/${encodeURIComponent(slug)}`;
+}
+
+/**
+ * The admin's general settings, as its own route table spells it
+ * (`/admin/settings`): where the site settings a binding reads (its name,
+ * address, logo and time zone) are edited.
+ */
+const SITE_SETTINGS_PATH = "/admin/settings";
+
+/**
+ * Where the source a binding reads is edited: the entry's edit screen (the
+ * page's own, or the entry a template is previewed with), the Single's, or
+ * the site settings. `undefined` where there is no one screen: a list's item,
+ * and an entry not saved yet.
+ *
+ * @param entry - the entry the editor's bindings read, as the picker lists it
+ */
+export function bindingSourcePath(
+  binding: Binding,
+  entry: DocumentIdentity | null
+): string | undefined {
+  switch (binding.source ?? "entry") {
+    case "entry":
+      if (entry === null) return undefined;
+      if (entry.kind === "single") return singleEditPath(entry.slug);
+      return entry.documentId === undefined
+        ? undefined
+        : entryEditPath(entry.slug, entry.documentId);
+    case "single":
+      return "sourceKey" in binding && typeof binding.sourceKey === "string"
+        ? singleEditPath(binding.sourceKey)
+        : undefined;
+    case "site":
+      return SITE_SETTINGS_PATH;
+    default:
+      return undefined;
+  }
 }
 
 /**

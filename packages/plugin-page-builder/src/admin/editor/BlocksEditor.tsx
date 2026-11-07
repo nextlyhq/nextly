@@ -94,7 +94,7 @@ import {
 import { valueAtPath } from "../snapshot-merge";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
-import type { OpenAt } from "./builder-address";
+import { bindingSourcePath, type OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { previewedCanvas } from "./canvas-preview-mode";
@@ -586,6 +586,9 @@ function servicesFor(
       // An unbind's plan against the document the editor holds, by the same
       // decision as the page actions API's.
       ...withPlanUnbind(unbindPlanner(binding.page, locale)),
+      // Where a bound field's source is edited, for the chip's "Open
+      // source": the entry the bindings read, a Single, or the settings.
+      sourceHref: bound => bindingSourcePath(bound, binding.entry),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),
     };

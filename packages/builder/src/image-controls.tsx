@@ -11,6 +11,12 @@
  *   library's words, muted and read-only; Custom an alt text field that grows
  *   with its words; Decorative says screen readers skip the image.
  *
+ * Each offers binding through the inspector's `bindable` wrapper: the Source
+ * row binds the image (`mediaId`, which takes a media field or an image
+ * address), the address field binds the address, and the alt row binds the
+ * alt text. A bound image draws only what its binding gives, so while it is
+ * bound the Source row is its chip and neither side is shown.
+ *
  * Every write goes through the group's one edit, so a choice that changes two
  * props is one step to undo. A stored state no option names exactly (an
  * address kept beside a library file, alt text kept on a decorative image,
@@ -19,7 +25,11 @@
  * @module image-controls
  */
 
-import { isAuthoredText } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  isAuthoredText,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   Label,
@@ -56,6 +66,7 @@ import {
   type SourceMode,
 } from "./image-group";
 import { propLabel, type EditableProp } from "./inspector";
+import type { BindableWrapper } from "./prop-groups";
 import { useStoredDraft } from "./stored-draft";
 
 /** What both image controls are given. */
@@ -71,6 +82,24 @@ interface ImageGroupFieldProps {
   readonly placedWith: ReadonlyArray<Readonly<Record<string, unknown>>>;
   /** Write several props as one edit. */
   readonly onCommitMany: (changes: ImageChanges) => unknown;
+  /** One prop's binding controls, from the inspector; absent, none are drawn. */
+  readonly bindable?: BindableWrapper | undefined;
+  /** The document the block is in, whose bindings say which props are bound. */
+  readonly document?: BlockDocument | undefined;
+  /** The block's id. */
+  readonly nodeId?: string | undefined;
+}
+
+/** A field drawn as it is, where the inspector offers no binding controls. */
+const unwrapped: BindableWrapper = (_name, field) => field;
+
+/** The names of the block's props that hold a binding. */
+function boundPropsOf(
+  document: BlockDocument | undefined,
+  nodeId: string | undefined
+): ReadonlySet<string> {
+  if (document === undefined || nodeId === undefined) return new Set();
+  return new Set(Object.keys(findNode(document.nodes, nodeId)?.bindings ?? {}));
 }
 
 /** The props as STORED, by name: a default is not a value the page holds. */
@@ -125,6 +154,8 @@ function AddressField({
 
 /** A source side's field, with what it is given to write. */
 interface SourceSideProps {
+  /** A prop's binding controls around its field. */
+  readonly wrap: BindableWrapper;
   readonly group: ImageSourceGroup;
   readonly props: readonly EditableProp[];
   readonly values: Readonly<Record<string, unknown>>;
@@ -193,18 +224,22 @@ function AddressSide({
   writable,
   reasonId,
   write,
+  wrap,
 }: SourceSideProps): React.JSX.Element {
   const address = props.find(prop => prop.name === group.address);
   const storedMedia = storedString(values[group.media]);
   return (
     <HeldByLock reasonId={writable(group.address) ? undefined : reasonId}>
-      {address === undefined ? null : (
-        <AddressField
-          prop={address}
-          disabled={!writable(group.address)}
-          onCommit={typed => write(addressChanges(group, typed, values))}
-        />
-      )}
+      {address === undefined
+        ? null
+        : wrap(
+            group.address,
+            <AddressField
+              prop={address}
+              disabled={!writable(group.address)}
+              onCommit={typed => write(addressChanges(group, typed, values))}
+            />
+          )}
       {storedMedia === undefined ? null : (
         <div className="nx-inspector__note-row">
           <p className="nx-inspector__note">
@@ -227,6 +262,48 @@ function AddressSide({
 }
 
 /**
+ * The side the stored props read as: `sourceModeOf`, except that an address
+ * bound with no library file stored is on the URL side, where its chip is
+ * drawn.
+ */
+function storedSide(
+  group: ImageSourceGroup,
+  values: Readonly<Record<string, unknown>>,
+  bound: ReadonlySet<string>
+): SourceMode {
+  const addressBound = !bound.has(group.media) && bound.has(group.address);
+  return addressBound && storedString(values[group.media]) === undefined
+    ? "url"
+    : sourceModeOf(group, values);
+}
+
+/** The chosen side's field: the library chip, or the address. */
+function SourceSideShown({
+  mode,
+  side,
+  services,
+  showLibraryAlt,
+  placedWith,
+}: {
+  mode: SourceMode;
+  side: SourceSideProps;
+  services: ContentServices | undefined;
+  showLibraryAlt: boolean;
+  placedWith: ImageGroupFieldProps["placedWith"];
+}): React.JSX.Element {
+  return mode === "library" ? (
+    <LibrarySide
+      {...side}
+      services={services}
+      showLibraryAlt={showLibraryAlt}
+      placedWith={placedWith}
+    />
+  ) : (
+    <AddressSide {...side} />
+  );
+}
+
+/**
  * Where an image's picture comes from: a library file or an address, one
  * shown at a time.
  */
@@ -239,6 +316,9 @@ export function ImageSourceField({
   placedWith,
   onCommitMany,
   showLibraryAlt,
+  bindable,
+  document,
+  nodeId,
 }: ImageGroupFieldProps & {
   group: ImageSourceGroup;
   /** Whether the chip shows the library's alt text: not when a row says it. */
@@ -246,10 +326,13 @@ export function ImageSourceField({
 }): React.JSX.Element {
   const id = React.useId();
   const values = storedValues(props);
+  const wrap = bindable ?? unwrapped;
+  const bound = boundPropsOf(document, nodeId);
+  const imageBound = bound.has(group.media);
   // The side shown, starting from what is stored. Choosing a side changes
   // only what is shown; the props change when a file is picked or an
   // address typed, so looking at the other side never loses a value.
-  const stored = sourceModeOf(group, values);
+  const stored = storedSide(group, values, bound);
   const [view, setView] = React.useState<{
     readonly mode: SourceMode;
     readonly from: SourceMode;
@@ -263,6 +346,7 @@ export function ImageSourceField({
   const mode = view.from === stored ? view.mode : stored;
   const setMode = (next: SourceMode) => setView({ mode: next, from: stored });
   const side: SourceSideProps = {
+    wrap,
     group,
     props,
     values,
@@ -274,29 +358,34 @@ export function ImageSourceField({
   };
   return (
     <div className="nx-image-group" data-image-group="source">
-      <div className="nx-inspector__field" data-content-control="source">
-        <p className="nx-inspector__field-name" id={`${id}-label`}>
-          Source
-        </p>
-        <SegmentedChoice
-          id={id}
-          labelledBy={`${id}-label`}
-          options={SOURCE_MODES}
-          labels={SOURCE_LABELS}
-          value={mode}
-          disabled={!writable(group.media) && !writable(group.address)}
-          onChoose={next => setMode(next === "url" ? "url" : "library")}
-        />
-      </div>
-      {mode === "library" ? (
-        <LibrarySide
-          {...side}
+      {/* The image's bind button sits on the Source row, which says where
+          the picture comes from; bound, the row is the chip, and an unbind's
+          note stays under it whichever side the kept value is on. */}
+      {wrap(
+        group.media,
+        <div className="nx-inspector__field" data-content-control="source">
+          <p className="nx-inspector__field-name" id={`${id}-label`}>
+            Source
+          </p>
+          <SegmentedChoice
+            id={id}
+            labelledBy={`${id}-label`}
+            options={SOURCE_MODES}
+            labels={SOURCE_LABELS}
+            value={mode}
+            disabled={!writable(group.media) && !writable(group.address)}
+            onChoose={next => setMode(next === "url" ? "url" : "library")}
+          />
+        </div>
+      )}
+      {imageBound ? null : (
+        <SourceSideShown
+          mode={mode}
+          side={side}
           services={services}
           showLibraryAlt={showLibraryAlt}
           placedWith={placedWith}
         />
-      ) : (
-        <AddressSide {...side} />
       )}
     </div>
   );
@@ -493,6 +582,7 @@ export function ImageAltField({
   reasonId,
   services,
   onCommitMany,
+  bindable,
 }: ImageGroupFieldProps & { group: ImageAltGroup }): React.JSX.Element {
   const id = React.useId();
   const values = storedValues(props);
@@ -520,44 +610,52 @@ export function ImageAltField({
   // Held is a lock's doing alone: a choice only waiting for the library is
   // not one a lock refuses.
   const held = ALT_MODES.every(next => !allowed(next) || next === mode);
+  const wrap = bindable ?? unwrapped;
+  // The alt text's bind button sits on its menu's row; bound, the chip
+  // stands for the menu and the words alike.
   return (
-    <div className="nx-image-group" data-image-group="alt">
-      <HeldByLock reasonId={held ? reasonId : undefined}>
-        <div className="nx-inspector__field" data-content-control="alt">
-          <Label htmlFor={id}>{altLabel(group, props)}</Label>
-          <AltMenu
-            id={id}
-            mode={mode}
-            held={held}
-            pickable={pickable}
-            onPick={next => {
-              const changes = changesFor(next);
-              if (allWritable(changes, writable)) onCommitMany(changes);
-            }}
-          />
-          {mode === "library" ? (
-            <LibraryAltNote
-              mediaId={mediaId}
-              libraryAlt={libraryAlt}
-              read={summary !== undefined}
-            />
+    <>
+      {wrap(
+        group.alt,
+        <div className="nx-image-group" data-image-group="alt">
+          <HeldByLock reasonId={held ? reasonId : undefined}>
+            <div className="nx-inspector__field" data-content-control="alt">
+              <Label htmlFor={id}>{altLabel(group, props)}</Label>
+              <AltMenu
+                id={id}
+                mode={mode}
+                held={held}
+                pickable={pickable}
+                onPick={next => {
+                  const changes = changesFor(next);
+                  if (allWritable(changes, writable)) onCommitMany(changes);
+                }}
+              />
+              {mode === "library" ? (
+                <LibraryAltNote
+                  mediaId={mediaId}
+                  libraryAlt={libraryAlt}
+                  read={summary !== undefined}
+                />
+              ) : null}
+              {mode === "decorative" ? <DecorativeNote own={own} /> : null}
+            </div>
+          </HeldByLock>
+          {mode === "custom" ? (
+            <HeldByLock reasonId={writable(group.alt) ? undefined : reasonId}>
+              <CustomAlt
+                own={own}
+                libraryAlt={libraryAlt}
+                disabled={!writable(group.alt)}
+                // An emptied field keeps an empty alt rather than removing it:
+                // removed, the library's words would apply, which is From
+                // library, not what the author just did.
+                onCommit={text => onCommitMany({ [group.alt]: text })}
+              />
+            </HeldByLock>
           ) : null}
-          {mode === "decorative" ? <DecorativeNote own={own} /> : null}
         </div>
-      </HeldByLock>
-      {mode === "custom" ? (
-        <HeldByLock reasonId={writable(group.alt) ? undefined : reasonId}>
-          <CustomAlt
-            own={own}
-            libraryAlt={libraryAlt}
-            disabled={!writable(group.alt)}
-            // An emptied field keeps an empty alt rather than removing it:
-            // removed, the library's words would apply, which is From
-            // library, not what the author just did.
-            onCommit={text => onCommitMany({ [group.alt]: text })}
-          />
-        </HeldByLock>
-      ) : null}
-    </div>
+      )}
+    </>
   );
 }

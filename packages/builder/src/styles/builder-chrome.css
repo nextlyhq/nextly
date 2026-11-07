@@ -11430,16 +11430,70 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   text-overflow: clip;
 }
 
+/*
+ * Fallback and Format, one under the other: their names in a column of the
+ * same width, so the two controls start at the same edge.
+ */
 .nx-binding__fallback {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 3.5rem minmax(0, 1fr);
   align-items: center;
   column-gap: 0.5rem;
+  row-gap: 0.25rem;
 }
 
 .nx-binding__fallback-label {
   color: var(--nx-muted-foreground);
   font-size: 0.75rem;
+}
+
+/* Why a value was refused, or what an unset Format means: under its control. */
+.nx-binding__fallback > .nx-inspector__error,
+.nx-binding__fallback > .nx-inspector__note {
+  grid-column: 2;
+  margin: 0;
+}
+
+/* An image's fallback: the address, its picture inside the field's start. */
+.nx-image-fallback__value {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+.nx-image-fallback__address {
+  position: relative;
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.nx-image-fallback__thumb {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 0.375rem;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--nx-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.nx-image-fallback__address[data-pictured] > input {
+  padding-inline-start: 2rem;
+}
+
+/* A long address is cut with an ellipsis until the field is being edited. */
+.nx-image-fallback__address > input:not(:focus) {
+  text-overflow: ellipsis;
+}
+
+/* The place kept for more ways to fill it, drawn only once it holds one. */
+.nx-image-fallback__actions:empty {
+  display: none;
 }
 
 /* An unbind's note: what was kept, or why it could not be. */

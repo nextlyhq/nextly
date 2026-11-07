@@ -108,7 +108,7 @@ import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { useCanvasTokenModeAt } from "./prefers-dark";
-import { propGroupsOf } from "./prop-groups";
+import { propGroupsOf, type BindableWrapper } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -1498,6 +1498,30 @@ function ContentFields({
   const groups = propGroupsOf(inspection.props.filter(prop => prop.offered));
   const leads = new Map(groups.map(group => [group.lead, group]));
   const grouped = new Set(groups.flatMap(group => [...group.drawn]));
+  // A group's prop wrapped in the same binding controls a prop on its own
+  // row gets, for the props the group offers: one chip, one menu and one
+  // note for every bindable prop, wherever it is drawn.
+  const bindableIn = (offered: ReadonlySet<string>): BindableWrapper =>
+    function wrapBindable(name, field) {
+      const prop = inspection.props.find(each => each.name === name);
+      if (prop === undefined || !prop.offered || !offered.has(name)) {
+        return field;
+      }
+      return (
+        <BindableField
+          nodeId={inspection.nodeId}
+          prop={prop}
+          blockLabel={inspection.label}
+          binding={bindings?.[name]}
+          document={document}
+          services={services}
+          disabled={!writable(name)}
+          onApply={onApply}
+        >
+          {field}
+        </BindableField>
+      );
+    };
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
@@ -1535,6 +1559,7 @@ function ContentFields({
                 document,
                 nodeId: inspection.nodeId,
                 ...listGroupView(listView),
+                bindable: bindableIn(group.bindable),
               })}
             </React.Fragment>
           );

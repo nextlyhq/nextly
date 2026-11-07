@@ -16,7 +16,10 @@
 import {
   bindablePropKind,
   canBindFieldToProp,
+  findNode,
+  getBlock,
   type Binding,
+  type BindingFormat,
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
@@ -32,9 +35,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import { Check, ChevronDown, Database, EyeOff, Unlink } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Database,
+  ExternalLink,
+  EyeOff,
+  Unlink,
+} from "lucide-react";
 import * as React from "react";
 
+import { BindingFormatField, offersFormat } from "./binding-format-field";
 import { bindOp, unbindOp } from "./binding-ops";
 import type {
   BindingFieldChoice,
@@ -43,6 +54,7 @@ import type {
 import { ChoiceList, type ListedChoice } from "./choice-list";
 import type { UnbindAnswer } from "./composition-actions";
 import type { ContentServices } from "./content-controls";
+import { ImageBindingFallback } from "./image-binding-fallback";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
 
 /** One field the picker offers, with where it is read from. */
@@ -80,6 +92,11 @@ function withFallback(binding: Binding, fallback: string): Binding {
     Object.entries(binding).filter(([key]) => key !== "fallback")
   );
   return (fallback === "" ? rest : { ...rest, fallback }) as Binding;
+}
+
+/** The binding with `format` as its format, through the same write as a fallback. */
+function withFormat(binding: Binding, format: BindingFormat): Binding {
+  return { ...binding, format };
 }
 
 /** A source's name as the chip and the picker say it: "This post", "Site". */
@@ -407,18 +424,30 @@ function UnboundNote({ note }: { note: UnbindNote }): React.JSX.Element {
 function noteFor(
   answer: UnbindAnswer,
   blockLabel: string,
-  propName: string
+  propName: string,
+  intoLabel?: string
 ): string {
   const block = `The ${blockLabel.toLowerCase()}`;
   const value =
     typeof answer.value === "string" && answer.value !== ""
       ? `: “${answer.value}”`
       : "";
+  // An image kept by its address goes to another prop than the one unbound,
+  // which is left empty, so the note names where the address went.
+  if (answer.into !== undefined) {
+    const into = intoLabel ?? fieldLabel(answer.into);
+    switch (answer.kept) {
+      case "visitor":
+        return `Visitors saw an image address, not a library image, so it's kept in ${into}.`;
+      case "fallback":
+        return `Visitors saw the fallback, an image address, so it's kept in ${into}.`;
+      default:
+        return `The address given is kept in ${into}.`;
+    }
+  }
   switch (answer.kept) {
     case "visitor":
-      return answer.into === undefined
-        ? `${block} keeps what visitors saw${value}.`
-        : `${block} keeps the image visitors saw, by its address.`;
+      return `${block} keeps what visitors saw${value}.`;
     case "fallback":
       return `Visitors saw the fallback, so ${block.toLowerCase()} keeps it${value}.`;
     case "own":
@@ -428,23 +457,176 @@ function noteFor(
   }
 }
 
-/** The field a binding reads, named, and its source, once the sources are read. */
-function boundNames(
+/** The source a binding reads, once the sources are read and it is among them. */
+function boundSource(
   binding: Binding,
   sources: readonly BindingFieldSource[] | "loading" | "failed"
-): { readonly field: string; readonly source: string | undefined } {
-  const path = binding.$bind;
-  const field = path.split(".").map(fieldLabel).join(" › ");
-  if (typeof sources === "string") return { field, source: undefined };
+): BindingFieldSource | undefined {
+  if (typeof sources === "string") return undefined;
   const wanted = binding.source ?? "entry";
-  const found = sources.find(
+  return sources.find(
     candidate =>
       candidate.binding.source === wanted &&
       (candidate.binding.source !== "single" ||
         ("sourceKey" in binding &&
           candidate.binding.sourceKey === binding.sourceKey))
   );
+}
+
+/** The field a binding reads, named, and its source, once the sources are read. */
+function boundNames(
+  binding: Binding,
+  sources: readonly BindingFieldSource[] | "loading" | "failed"
+): { readonly field: string; readonly source: string | undefined } {
+  const field = binding.$bind.split(".").map(fieldLabel).join(" › ");
+  const found = boundSource(binding, sources);
   return { field, source: found === undefined ? undefined : sourceName(found) };
+}
+
+/**
+ * The field a binding reads, as the picker listed it: one step into a
+ * relation or a group at most, as a path may go. `undefined` until the
+ * sources are read, and for a field they don't list.
+ */
+function boundField(
+  binding: Binding,
+  sources: readonly BindingFieldSource[] | "loading" | "failed"
+): BindingFieldChoice | undefined {
+  const [first, inner, ...rest] = binding.$bind.split(".");
+  if (rest.length > 0) return undefined;
+  const top = boundSource(binding, sources)?.fields.find(
+    field => field.name === first
+  );
+  if (inner === undefined) return top;
+  return top?.fields?.find(field => field.name === inner);
+}
+
+/** What the block names a prop, for a note naming another prop than the bound one. */
+function blockPropLabel(
+  document: BlockDocument,
+  nodeId: string,
+  name: string | undefined
+): string | undefined {
+  if (name === undefined) return undefined;
+  const node = findNode(document.nodes, nodeId);
+  const schema =
+    node === undefined ? undefined : getBlock(node.type)?.props?.[name];
+  return schema === undefined ? undefined : propLabel(name, schema);
+}
+
+/**
+ * The chip menu's way to the field's source: a link, so it opens as one, in a
+ * new tab with the editor kept and no hold on this window. Named with the
+ * field, so the item says whose source it opens.
+ */
+function OpenSourceItem({
+  href,
+  field,
+}: {
+  href: string;
+  field: string;
+}): React.JSX.Element {
+  return (
+    <DropdownMenuItem asChild>
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        <ExternalLink aria-hidden="true" size={14} />
+        {`Open ${field}'s source`}
+      </a>
+    </DropdownMenuItem>
+  );
+}
+
+/** A bound prop's own rows under its chip: its Fallback, and its Format. */
+function BoundValueRows({
+  prop,
+  binding,
+  field,
+  services,
+  disabled,
+  labelId,
+  onRebind,
+}: {
+  prop: EditableProp;
+  binding: Binding;
+  /** The field the binding reads, once the sources are read. */
+  field: BindingFieldChoice | undefined;
+  services: ContentServices | undefined;
+  disabled: boolean;
+  /** The id of the prop's name, which each row is about. */
+  labelId: string;
+  /** Write the binding with a new fallback or format. */
+  onRebind: (next: Binding) => void;
+}): React.JSX.Element {
+  const kind = bindablePropKind(prop.schema);
+  return (
+    <>
+      {kind === "image" ? (
+        // An image's fallback is an address, with its picture shown.
+        <ImageBindingFallback
+          binding={binding}
+          services={services}
+          disabled={disabled}
+          describedBy={labelId}
+          onFallback={next => onRebind(withFallback(binding, next))}
+        />
+      ) : (
+        <TextFallback
+          binding={binding}
+          disabled={disabled}
+          labelId={labelId}
+          onFallback={next => onRebind(withFallback(binding, next))}
+        />
+      )}
+      {offersFormat(kind, field) ? (
+        <BindingFormatField
+          stored={binding.format}
+          kind={kind}
+          field={field}
+          disabled={disabled}
+          describedBy={labelId}
+          onFormat={format => onRebind(withFormat(binding, format))}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** A bound prop's Fallback as text, committed when the field is left. */
+function TextFallback({
+  binding,
+  disabled,
+  labelId,
+  onFallback,
+}: {
+  binding: Binding;
+  disabled: boolean;
+  labelId: string;
+  onFallback: (next: string) => void;
+}): React.JSX.Element {
+  const fallbackId = React.useId();
+  const fallback =
+    "fallback" in binding && typeof binding.fallback === "string"
+      ? binding.fallback
+      : "";
+  return (
+    <div className="nx-binding__fallback">
+      <label className="nx-binding__fallback-label" htmlFor={fallbackId}>
+        Fallback
+      </label>
+      <Input
+        id={fallbackId}
+        key={fallback}
+        defaultValue={fallback}
+        disabled={disabled}
+        title={fallback === "" ? undefined : `Fallback: ${fallback}`}
+        aria-describedby={labelId}
+        onBlur={event => {
+          const next = event.currentTarget.value;
+          if (next !== fallback) onFallback(next);
+        }}
+      />
+    </div>
+  );
 }
 
 /** A bound prop: the chip, its menu, and the fallback a visitor sees without a value. */
@@ -463,12 +645,13 @@ function BoundField({
   onUnbound: (note: UnbindNote) => void;
 }): React.JSX.Element {
   const labelId = React.useId();
-  const fallbackId = React.useId();
   const [changing, setChanging] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const sources = useBindingSources(services, true);
   const name = propLabel(prop.name, prop.schema);
   const names = boundNames(binding, sources);
+  // Where "Open source" leads: the host's answer, absent where it has none.
+  const sourceHref = services?.sourceHref?.(binding);
   // The whole of it, on the tooltip and in the accessible name: the chip
   // cuts the source first, then the field, where the panel is narrow.
   const whole =
@@ -489,12 +672,12 @@ function BoundField({
     const op = unbindOp(document, nodeId, prop.name, plan.kept);
     if (op === null) return;
     onApply(op);
-    onUnbound({ text: noteFor(plan.answer, blockLabel, name), refused: false });
+    const into = blockPropLabel(document, nodeId, plan.answer.into);
+    onUnbound({
+      text: noteFor(plan.answer, blockLabel, name, into),
+      refused: false,
+    });
   };
-  const fallback =
-    "fallback" in binding && typeof binding.fallback === "string"
-      ? binding.fallback
-      : "";
   return (
     <div className="nx-inspector__field nx-binding" data-bound="">
       <p className="nx-inspector__field-name" id={labelId}>
@@ -539,6 +722,9 @@ function BoundField({
                 <Database aria-hidden="true" size={14} />
                 Change field…
               </DropdownMenuItem>
+              {sourceHref === undefined ? null : (
+                <OpenSourceItem href={sourceHref} field={names.field} />
+              )}
               {services?.planUnbind === undefined ? null : (
                 <>
                   <DropdownMenuSeparator />
@@ -569,30 +755,20 @@ function BoundField({
             />
           </PopoverContent>
         </Popover>
-        <div className="nx-binding__fallback">
-          <label className="nx-binding__fallback-label" htmlFor={fallbackId}>
-            Fallback
-          </label>
-          <Input
-            id={fallbackId}
-            key={fallback}
-            defaultValue={fallback}
-            disabled={disabled}
-            title={fallback === "" ? undefined : `Fallback: ${fallback}`}
-            aria-describedby={labelId}
-            onBlur={event => {
-              const next = event.currentTarget.value;
-              if (next === fallback) return;
-              const op = bindOp(
-                document,
-                nodeId,
-                prop.name,
-                withFallback(binding, next)
-              );
-              if (op !== null) onApply(op);
-            }}
-          />
-        </div>
+        <BoundValueRows
+          prop={prop}
+          binding={binding}
+          field={boundField(binding, sources)}
+          services={services}
+          disabled={disabled}
+          labelId={labelId}
+          // One write for the fallback and the format alike: the binding
+          // replaced, as a pick replaces it.
+          onRebind={next => {
+            const op = bindOp(document, nodeId, prop.name, next);
+            if (op !== null) onApply(op);
+          }}
+        />
         {refusal === null ? null : (
           <UnboundNote note={{ text: refusal, refused: true }} />
         )}
