@@ -7,7 +7,14 @@
  * The separating property is that one slug in two databases takes two names,
  * and that the hold asks the connection which database it is in: a name
  * hashed from the slug alone passes every other assertion here.
+ *
+ * The old name, a hash of the slug alone, is taken too, first and in the
+ * order the release before took it, so a hold on either release waits for
+ * the other's. A hold taking only the new name, or taking the names in
+ * another order, fails the last two cases.
  */
+import { createHash } from "node:crypto";
+
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
@@ -15,8 +22,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   DynamicCollectionRegistryService,
+  legacyCollectionLockName,
   namedCollectionLockName,
+  namedCollectionLockNames,
 } from "../dynamic-collection-registry-service";
+
+/** The name the release before this one gave a slug's lock, written out. */
+function oldReleaseName(slug: string): string {
+  return `nextly:collection:${createHash("sha256").update(slug).digest("hex").slice(0, 40)}`;
+}
 
 describe("a collection's named lock", () => {
   it("is named apart for one slug in two databases", () => {
@@ -47,7 +61,25 @@ describe("a collection's named lock", () => {
     );
   });
 
-  it("is taken under the name of the database the transaction's connection is in", async () => {
+  it("keeps the name the release before gave it, for instances not yet updated", () => {
+    expect(legacyCollectionLockName("posts")).toBe(oldReleaseName("posts"));
+    expect(legacyCollectionLockName("posts")).not.toBe(
+      namedCollectionLockName("site_a", "posts")
+    );
+  });
+
+  it("is taken under both names, the old ones first in slug order", () => {
+    expect(
+      namedCollectionLockNames("site_a", ["posts", "authors", "posts"])
+    ).toEqual([
+      oldReleaseName("authors"),
+      oldReleaseName("posts"),
+      namedCollectionLockName("site_a", "authors"),
+      namedCollectionLockName("site_a", "posts"),
+    ]);
+  });
+
+  it("is taken on the transaction's connection under both names, and released under both in reverse", async () => {
     const dialect = new MySqlDialect();
     const statements: { sql: string; params: unknown[] }[] = [];
     const tx = {
@@ -58,7 +90,10 @@ describe("a collection's named lock", () => {
         if (query.sql.includes("GET_LOCK")) return [{ locked: 1 }];
         return [{}];
       }),
-      select: vi.fn(async () => [{ slug: "posts", id: "c1" }]),
+      select: vi.fn(async () => [
+        { slug: "posts", id: "c1" },
+        { slug: "authors", id: "c2" },
+      ]),
     } as unknown as TransactionContext;
     const adapter = {
       getCapabilities: () => ({ dialect: "mysql" }),
@@ -71,17 +106,27 @@ describe("a collection's named lock", () => {
     } as never;
     const registry = new DynamicCollectionRegistryService(adapter, logger);
 
-    const held = await registry.holdCollectionsIn(tx, ["posts"], "share");
+    const held = await registry.holdCollectionsIn(
+      tx,
+      ["posts", "authors"],
+      "share"
+    );
 
-    expect(held.existing).toEqual(["posts"]);
-    const taken = statements.find(query => query.sql.includes("GET_LOCK"));
-    expect(taken?.params[0]).toBe(namedCollectionLockName("site_a", "posts"));
-    // Released under the same name, once the row has been read.
-    const released = statements.find(query =>
-      query.sql.includes("RELEASE_LOCK")
-    );
-    expect(released?.params[0]).toBe(
-      namedCollectionLockName("site_a", "posts")
-    );
+    expect([...held.existing].sort()).toEqual(["authors", "posts"]);
+    const expected = [
+      oldReleaseName("authors"),
+      oldReleaseName("posts"),
+      namedCollectionLockName("site_a", "authors"),
+      namedCollectionLockName("site_a", "posts"),
+    ];
+    const taken = statements
+      .filter(query => query.sql.includes("GET_LOCK"))
+      .map(query => query.params[0]);
+    expect(taken).toEqual(expected);
+    // Released once the rows have been read, each name once, in reverse.
+    const released = statements
+      .filter(query => query.sql.includes("RELEASE_LOCK"))
+      .map(query => query.params[0]);
+    expect(released).toEqual([...expected].reverse());
   });
 });
