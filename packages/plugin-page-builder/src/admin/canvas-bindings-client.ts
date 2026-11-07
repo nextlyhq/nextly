@@ -43,7 +43,11 @@ import {
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
-import { useCanvasEntryIdentity } from "./editor/canvas-entry";
+import {
+  useCanvasEntryIdentity,
+  useCanvasEntryRead,
+  type CanvasEntryRead,
+} from "./editor/canvas-entry";
 
 /** No source read: what the canvas draws with until an answer arrives. */
 const NONE: PageBindings = Object.freeze({});
@@ -164,6 +168,23 @@ export function canvasBindingsFor(
 }
 
 /**
+ * Where the canvas's read of ask `key` stands: not needed (nothing bound),
+ * answered for this person, failed, or on its way.
+ */
+function readStateOf(
+  key: string,
+  answer: { readonly key: string; readonly userId: string } | null,
+  failed: string | null,
+  userId: string | null
+): CanvasEntryRead["state"] {
+  if (key === "") return "none";
+  if (answer !== null && answer.key === key && answer.userId === userId) {
+    return "answered";
+  }
+  return failed === key ? "failed" : "pending";
+}
+
+/**
  * The binding sources the canvas draws a page with, as the person editing
  * reads them. `drawn` is every tree the canvas draws, and `component` says
  * the document is a component's own (see {@link canvasBindingsRequest}).
@@ -185,6 +206,8 @@ export function useCanvasBindings(
   // The entry the canvas is drawn as: the document's own, or a template's
   // previewed entry of the collection it draws.
   const identity = useCanvasEntryIdentity();
+  // A retry the editor asks for, and where it hears how this read stands.
+  const { retry, onRead } = useCanvasEntryRead();
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>
@@ -198,6 +221,9 @@ export function useCanvasBindings(
     readonly userId: string;
     readonly bindings: PageBindings;
   } | null>(null);
+  // The ask that failed last, so its failure is told rather than taken for
+  // an answer on its way.
+  const [failed, setFailed] = useState<string | null>(null);
   // Bumped once an answer has been kept its while, so the same ask is made
   // again: a source can change while what the page asks stays the same (a
   // saved title, an updated Single).
@@ -208,6 +234,8 @@ export function useCanvasBindings(
     if (key === "" || userId === null) return;
     let current = true;
     let stale: ReturnType<typeof setTimeout> | undefined;
+    // Asked again, so an earlier failure of this ask is no longer the answer.
+    setFailed(previous => (previous === key ? null : previous));
     // Asked again when the editor is back in sight, never while it is not.
     const onVisible = () => {
       if (document.visibilityState === "hidden") return;
@@ -226,6 +254,7 @@ export function useCanvasBindings(
       bindings => {
         if (!current) return;
         setAnswer({ key, userId, bindings });
+        setFailed(null);
         stale = setTimeout(askAgain, KEPT_FOR_MS);
       },
       () => {
@@ -233,7 +262,9 @@ export function useCanvasBindings(
         // or fallbacks, as before any answer. The previous ask's answer is
         // dropped too, or the canvas would go on drawing another locale's or
         // another page's values as this one's.
-        if (current) setAnswer(null);
+        if (!current) return;
+        setAnswer(null);
+        setFailed(key);
       }
     );
     return () => {
@@ -241,7 +272,14 @@ export function useCanvasBindings(
       if (stale !== undefined) clearTimeout(stale);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [key, userId, round]);
+  }, [key, userId, round, retry]);
+  // Where this read stands, told to the editor that gave the entry, so what
+  // it says the canvas shows is what the canvas shows.
+  const state = readStateOf(key, answer, failed, userId);
+  const entryId = identity?.documentId;
+  useEffect(() => {
+    onRead?.({ entryId, state });
+  }, [onRead, entryId, state]);
   // Never another person's answer, none for an unknown person, and nothing
   // for a page with no binding.
   if (key === "" || answer === null || answer.userId !== userId) return NONE;

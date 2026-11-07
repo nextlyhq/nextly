@@ -24,6 +24,25 @@ import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
  */
 export const TEMPLATE_COLLECTION_FIELD = "collection";
 
+/**
+ * The field an entry's own design names its entry's collection in: an own
+ * design leaves `collection` empty and draws that collection's entry.
+ */
+export const TEMPLATE_ENTRY_COLLECTION_FIELD = "entryCollection";
+
+/** The field an entry's own design names the one entry it serves in, by id. */
+export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
+
+/**
+ * The fields a template names the collection it draws in, in order: a
+ * collection's template by `collection`, an entry's own design by
+ * `entryCollection`.
+ */
+export const TEMPLATE_TARGET_FIELDS: readonly string[] = [
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+];
+
 /** Where the entries a template may preview are listed. */
 export const TEMPLATE_PREVIEW_ENTRIES_PATH = "/template-preview/entries";
 

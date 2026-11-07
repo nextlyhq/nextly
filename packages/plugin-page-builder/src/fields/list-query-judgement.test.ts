@@ -164,7 +164,7 @@ describe("a template's lists and conditions, judged against the collection it dr
     stored: Readonly<Record<string, string>> = {}
   ): TemplateTargets & { storedTargetsOf: ReturnType<typeof vi.fn> } => ({
     collection: "templates",
-    field: "collection",
+    fields: ["collection", "entryCollection"],
     storedTargetsOf: vi.fn(
       async (ids: readonly string[]) =>
         new Map(
@@ -236,6 +236,37 @@ describe("a template's lists and conditions, judged against the collection it dr
     expect(found.map(issue => issue.code)).toEqual([
       "TEMPLATE_COLLECTION_UNKNOWN",
     ]);
+  });
+
+  it("judges an entry's own design against the collection its entry is of, made inside a transaction", async () => {
+    // An own design leaves `collection` empty and names its entry's
+    // collection as `entryCollection`, the write that makes it included.
+    fieldsOf.mockClear();
+    expect(
+      await newListQueryIssues(
+        asTemplate,
+        templateWrite(
+          { collection: "", entryCollection: "posts" },
+          { inTransaction: true }
+        ),
+        "Template",
+        { fieldsOf, templates: templates() }
+      )
+    ).toEqual([]);
+    expect(fieldsOf.mock.calls.map(([collection]) => collection)).toEqual([
+      "posts",
+      "categories",
+    ]);
+    // And read from the stored design when the write names neither.
+    const targets = templates({ d1: "posts" });
+    expect(
+      await newListQueryIssues(
+        asTemplate,
+        templateWrite({}, { id: "d1" }),
+        "Template",
+        { fieldsOf, templates: targets }
+      )
+    ).toEqual([]);
   });
 
   it("refuses a template saved inside a batch without its collection, where the stored one cannot be read", async () => {

@@ -182,6 +182,9 @@ export function pageBindingRun(
     schema,
     ...(locale === undefined ? {} : { locale }),
     ...(bindings.timeZone === undefined ? {} : { timeZone: bindings.timeZone }),
+    ...(bindings.mediaCollection === undefined
+      ? {}
+      : { mediaCollection: bindings.mediaCollection }),
     props: resolver,
   });
 }

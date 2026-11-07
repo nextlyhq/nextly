@@ -31,8 +31,9 @@ import { deviceLabel } from "./breakpoint-switcher";
 import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
-  DROP_PARENT_ATTRIBUTE,
   ENTRY_CONTENT_ATTRIBUTE,
+  CONDITIONED_OWN_ATTRIBUTE,
+  DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   isOutermostForAddress,
   LOCKED_ATTRIBUTE,
@@ -189,6 +190,9 @@ function tagWidthOf(label: string): number {
   return label.length * 7 + 12;
 }
 
+/** The room a condition tab's icon and its gap take beside the words. */
+const CONDITION_ICON_ROOM = 16;
+
 /** @experimental */
 export interface CanvasMarksProps {
   /**
@@ -306,8 +310,8 @@ function markStyle(mark: Mark): React.CSSProperties {
     borderRadius: mark.radius,
   };
   if (mark.kind === "hovered" || mark.kind === "at-rest") {
-    // The hovered block's name tag, and an at-rest mark's tabs, move in from
-    // the side the screen cuts.
+    // The hovered block's name tag, and an at-rest mark's tabs, move in
+    // from the side the screen cuts.
     return {
       ...box,
       "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
@@ -734,7 +738,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  found.push(...atRestMarks(root, space, onScreen));
+  found.push(...atRestMarks(root, space, onScreen, toolbarAbove));
   return dimmedBesideEditing(found);
 }
 
@@ -775,17 +779,10 @@ function atRestTabsOf(element: Element): AtRestTabs | undefined {
 function atRestMarks(
   root: HTMLElement,
   space: OverlaySpace,
-  onScreen: Rect
+  onScreen: Rect,
+  toolbarAbove: (rect: Rect) => boolean
 ): Mark[] {
-  const marks = new Map<
-    string,
-    {
-      tabs: AtRestTabs;
-      parts: Outline[];
-      selected: boolean;
-      placement: boolean;
-    }
-  >();
+  const badges = new Map<string, ConditionBadge>();
   const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
@@ -797,56 +794,127 @@ function atRestMarks(
       if (tabs === undefined) return;
       const outline = outlineOf(element, root, space);
       if (outline === null) return;
-      // One mark per copy of a placement, as one frame is drawn round a
-      // selected one: each of a definition's roots is outermost for the
-      // placement's address, and they are one block on the page.
-      const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
-      const key =
-        placement === ""
-          ? `block\u0000${String(marks.size)}`
-          : `${String(copyOf(copies, element))}\u0000${placement}`;
-      const selected = element.hasAttribute(SELECTED_ATTRIBUTE);
-      const gathered = marks.get(key);
+      const key = badgeKey(element, copies, badges.size);
+      const selected = element.getAttribute(SELECTED_ATTRIBUTE);
+      const gathered = badges.get(key);
       if (gathered === undefined) {
-        marks.set(key, {
+        badges.set(key, {
           tabs,
           parts: [outline],
-          selected,
-          placement: placement !== "",
+          selected: selected !== null,
+          primary: selected === "primary",
+          placement: (element.getAttribute(INSTANCE_ATTRIBUTE) ?? "") !== "",
         });
       } else {
         gathered.parts.push(outline);
-        gathered.selected ||= selected;
+        gathered.selected ||= selected !== null;
+        gathered.primary ||= selected === "primary";
       }
     });
-  return [...marks.values()].map(({ tabs, parts, selected, placement }) => {
-    const outline = placementOutline(parts);
-    // A selected placement's frame names it in a tab on the same corner, so
-    // the at-rest tabs take the bottom edge instead of covering the name.
-    const at = tabsAtOf(outline.rect, onScreen, selected && placement);
-    return {
-      ...outline,
-      kind: "at-rest",
-      secondary: false,
-      component: false,
-      locked: false,
-      hidden: false,
-      tag: "below",
-      tagEdge: "right",
-      // Moved in from the right when the screen cuts the block's right edge,
-      // so the tabs stay on what's seen.
-      tagInset: {
-        bottom: 0,
-        side: Math.max(
-          0,
-          outline.rect.x + outline.rect.width - (onScreen.x + onScreen.width)
-        ),
-      },
-      ...tabs,
-      tabsAt: at,
-      ...(selected ? { atRestSelected: true } : {}),
-    };
-  });
+  return [...badges.values()].map(badge =>
+    atRestMark(badge, onScreen, toolbarAbove)
+  );
+}
+
+/** A marked block's parts, gathered to draw one outline and its tabs. */
+interface ConditionBadge {
+  readonly tabs: AtRestTabs;
+  readonly parts: Outline[];
+  selected: boolean;
+  primary: boolean;
+  readonly placement: boolean;
+}
+
+/**
+ * Which badge an element's outline joins: a block of a placed component's
+ * definition its own, by its composed id within one drawn copy; the roots of one copy of a
+ * conditioned placement one together, as one frame is drawn round a selected
+ * one; any other block its own.
+ */
+function badgeKey(
+  element: Element,
+  copies: Map<Element | null, number>,
+  index: number
+): string {
+  if (element.hasAttribute(CONDITIONED_OWN_ATTRIBUTE)) {
+    // By copy as well: a list drawing the component once per entry draws
+    // the block once per entry, each with the same composed id.
+    // The roots of one placement nested in a component share its badge, as
+    // a page placement's roots share theirs.
+    const nested = element.getAttribute(CONDITIONED_OWN_ATTRIBUTE) ?? "";
+    const id =
+      nested === ""
+        ? (element.getAttribute(NODE_ID_ATTRIBUTE) ?? String(index))
+        : `placed\u0000${nested}`;
+    return `own\u0000${String(copyOf(copies, element))}\u0000${id}`;
+  }
+  const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
+  return placement === ""
+    ? `block\u0000${String(index)}`
+    : `${String(copyOf(copies, element))}\u0000${placement}`;
+}
+
+/** One marked block's at-rest mark: its outline and where its tabs go. */
+function atRestMark(
+  badge: ConditionBadge,
+  onScreen: Rect,
+  toolbarAbove: (rect: Rect) => boolean
+): Mark {
+  const outline = placementOutline(badge.parts);
+  // The top is taken by a selected placement's name, or by the block
+  // toolbar above the primary block: the tab then takes the bottom edge.
+  const topTaken =
+    (badge.selected && badge.placement) ||
+    (badge.primary && toolbarAbove(outline.rect));
+  return {
+    ...outline,
+    kind: "at-rest",
+    secondary: false,
+    component: false,
+    locked: false,
+    hidden: false,
+    tag: "below",
+    tagEdge: "right",
+    tagInset: {
+      bottom: 0,
+      side: tabInset(outline.rect, onScreen, badge.tabs),
+    },
+    ...badge.tabs,
+    tabsAt: tabsAtOf(outline.rect, onScreen, topTaken),
+    ...(badge.selected ? { atRestSelected: true } : {}),
+  };
+}
+
+/**
+ * How far the right-anchored tab moves in from the block's right edge so it
+ * is on screen: in by what the screen cuts off the right, or out past the
+ * edge, a negative inset, when the screen cuts the block's left so little of
+ * it shows that the tab would run off the left.
+ */
+function tabInset(rect: Rect, onScreen: Rect, tabs: AtRestTabs): number {
+  const right = rect.x + rect.width;
+  // A block wholly off the screen to either side keeps its tab with it,
+  // rather than leaving one stranded at the screen's edge.
+  if (right <= onScreen.x || rect.x >= onScreen.x + onScreen.width) return 0;
+  const cutRight = Math.max(0, right - (onScreen.x + onScreen.width));
+  const width = tabsWidthOf(tabs);
+  const fitsLeft = right - onScreen.x - width;
+  return Math.min(cutRight, fitsLeft);
+}
+
+/** About how wide an at-rest mark's tabs are drawn, side by side. */
+function tabsWidthOf({ condition, entryContent }: AtRestTabs): number {
+  const conditionWidth =
+    condition === undefined
+      ? 0
+      : tagWidthOf(conditionWords(condition)) + CONDITION_ICON_ROOM;
+  const entryWidth = entryContent === undefined ? 0 : tagWidthOf(entryContent);
+  return conditionWidth + entryWidth;
+}
+
+/** A condition tab's words. */
+function conditionWords(condition: "conditional" | "unchecked"): string {
+  return condition === "unchecked" ? "Can’t be checked" : "Conditional";
 }
 
 /** Which copy of a placement an element is part of: its parent, numbered. */
@@ -884,6 +952,7 @@ function tabsAtOf(
  */
 function AtRestTabsView({ mark }: { mark: Mark }): React.JSX.Element {
   const { condition, entryContent } = mark;
+  const Icon = condition === "unchecked" ? AlertCircle : Split;
   return (
     <span className="nx-canvas-mark__tabs">
       {entryContent === undefined ? null : (
@@ -893,12 +962,8 @@ function AtRestTabsView({ mark }: { mark: Mark }): React.JSX.Element {
       )}
       {condition === undefined ? null : (
         <span className="nx-canvas-mark__tab" data-tab={condition}>
-          {condition === "unchecked" ? (
-            <AlertCircle aria-hidden="true" size={12} />
-          ) : (
-            <Split aria-hidden="true" size={12} />
-          )}
-          {condition === "unchecked" ? "Can’t be checked" : "Conditional"}
+          <Icon aria-hidden="true" size={12} />
+          {conditionWords(condition)}
         </span>
       )}
     </span>

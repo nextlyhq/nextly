@@ -167,8 +167,12 @@ function listSettingOf(
 export interface TemplateTargets {
   /** The RESOLVED templates collection: a host may rename it. */
   readonly collection: string;
-  /** The field a template names its collection in. */
-  readonly field: string;
+  /**
+   * The fields a template names the collection it draws in, in order: a
+   * collection's template by `collection`, an entry's own design by
+   * `entryCollection`.
+   */
+  readonly fields: readonly string[];
   /**
    * The collections stored templates draw, by template id, read as the
    * system in ONE read whatever the number of ids: a template missing from
@@ -233,8 +237,10 @@ async function templateSettingOf(
   if (write.kind !== "collection") return undefined;
   if (!isStoredTemplate(write.slug, document, templates)) return undefined;
   const locale = write.locale === undefined ? {} : { locale: write.locale };
-  const carried = data[templates.field];
-  if (typeof carried === "string" && carried !== "") {
+  const carried = templates.fields
+    .map(field => data[field])
+    .find(value => typeof value === "string" && value !== "");
+  if (typeof carried === "string") {
     return { ...locale, entryCollection: carried };
   }
   if (write.id === undefined || write.inTransaction) {
@@ -338,7 +344,7 @@ async function sourceFor(
 }
 
 /** A stored form's nodes, when it has a forest to walk. */
-function nodesOf(document: unknown): readonly unknown[] | undefined {
+export function nodesOf(document: unknown): readonly unknown[] | undefined {
   return isPlainRecord(document) && Array.isArray(document.nodes)
     ? document.nodes
     : undefined;
@@ -470,7 +476,7 @@ function listErrorsIn(
 }
 
 /** A write's errors as the field reports them, each naming where it is. */
-function asFieldIssues(
+export function asFieldIssues(
   found: readonly ForestIssue[],
   args: PluginFieldValidateArgs,
   label: string
@@ -638,6 +644,19 @@ export function composedConditionIssues(
   });
 }
 
+/** The component each of a page's placements places, by the placement's id. */
+export function placedComponents(
+  host: BlockDocument,
+  maxNodes: number | undefined
+): Map<string, string> {
+  const componentOf = new Map<string, string>();
+  for (const placement of componentPlacementsIn(host, maxNodes).placements) {
+    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
+    if (typeof id === "string") componentOf.set(id, placement.target);
+  }
+  return componentOf;
+}
+
 /** What one composed judgement reads, and how its findings are said. */
 interface ComposedJudge<Issue extends ForestIssue> {
   readonly judge: (
@@ -686,12 +705,7 @@ async function composedIssues<Issue extends ForestIssue>(
     issue => placedNodes.has(issue.nodeId) && by.counts(issue)
   );
   if (found.length === 0) return [];
-  const componentOf = new Map<string, string>();
-  for (const placement of componentPlacementsIn(host, site.maxNodes)
-    .placements) {
-    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
-    if (typeof id === "string") componentOf.set(id, placement.target);
-  }
+  const componentOf = placedComponents(host, site.maxNodes);
   return found.map(issue => {
     const placement = placedNodes.get(issue.nodeId) ?? "";
     const component = componentOf.get(placement);

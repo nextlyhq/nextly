@@ -216,7 +216,10 @@ function addressesIn(
  * come free. A page is the plugin's own content, so it is read there; another
  * collection's document cannot be, so it is named by id.
  */
-function describeFor(deps: PageClaimsDeps, tx: Tx): DescribeHolder {
+export function describeFor(
+  deps: Pick<PageClaimsDeps, "pages" | "readPage">,
+  tx: Tx
+): DescribeHolder {
   return async holder => {
     if (holder.collection !== deps.pages) return `a document (${holder.id})`;
     const row = await deps.readPage(tx, holder.id).catch(() => null);

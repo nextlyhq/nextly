@@ -20,6 +20,15 @@ export type { TemplateAction };
 /** Where the template actions are served, under the plugin's route prefix. */
 export const TEMPLATE_ACTIONS_ROUTE_PATH = "/templates/actions";
 
+/** Where the admin asks whether this caller may change template addresses. */
+export const TEMPLATE_ROUTING_ROUTE_PATH = "/templates/routing";
+
+/** What the routing route answers. */
+export interface TemplateRoutingAccess {
+  /** Whether the caller holds `manage-template-routing`. */
+  readonly mayManageRouting: boolean;
+}
+
 /** One template action request. */
 export interface TemplateActionRequest {
   readonly action: TemplateAction;
@@ -31,9 +40,16 @@ export interface TemplateSummary {
   /** Absent from a dry run's create, which stores nothing. */
   readonly id?: string;
   readonly title: string;
-  /** The collection whose entries it draws. */
+  /** The collection whose entries it draws, or whose entry it serves. */
   readonly collection: string;
+  /** For an entry's own design, the id of the entry it serves. */
+  readonly entry?: string;
   readonly status: "draft" | "published";
+  /**
+   * The address its collection's entries are served at, as the template
+   * stores it, or null for none. Absent where the action does not set one.
+   */
+  readonly address?: string | null;
 }
 
 /** What a template action answers. */
@@ -44,5 +60,11 @@ export interface TemplateActionResult {
   readonly template?: TemplateSummary;
   /** Why the site would refuse the action, in its own words; empty when it would not. */
   readonly refusals: readonly string[];
+  /**
+   * For an applied `set-template-address`: how many of the collection's
+   * entries wait for an address another document holds, unserved until it
+   * is given up. The address store's waiting report names each.
+   */
+  readonly waiting?: number;
   readonly by: ActionBy;
 }

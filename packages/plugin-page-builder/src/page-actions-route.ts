@@ -99,6 +99,7 @@ import { entryBlocksFieldsOf } from "./templates/entry-content-fields";
 import {
   carryingTemplateTarget,
   templateTargetOf,
+  type TemplateTarget,
 } from "./templates/template-target";
 
 /** The blocks field a page action edits when the address names none. */
@@ -181,7 +182,7 @@ interface ReadPage {
   readonly page: StoredPage;
   readonly version: unknown;
   /** The collection the row names, where it is a template's. */
-  readonly templateTarget: string | undefined;
+  readonly templateTarget: TemplateTarget | undefined;
 }
 
 /** What an action plans: the write it makes, and what it answers with. */
@@ -228,7 +229,8 @@ export async function runPageAction(
     field,
     page.collection,
     setup,
-    read.templateTarget
+    // The collection the template draws: an own design's is its entry's.
+    read.templateTarget?.collection
   );
   // A template's collection with it, read with the page, so the write is
   // judged against it inside the transaction below.

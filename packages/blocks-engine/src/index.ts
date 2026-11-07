@@ -626,6 +626,7 @@ export { authoredText, isAuthoredText } from "./authored-text";
 export {
   declaresNoMarkup,
   isConditionGated,
+  placementGatesOf,
   storedVisibilityOf,
 } from "./visibility";
 // Per-device visibility as an author works with it: each device's resolved
@@ -673,6 +674,7 @@ export type {
   BlockIsland,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoRead,
   BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,
@@ -1283,7 +1285,15 @@ export type {
   BindingSchemaRef,
   BindingSchemaSource,
   CheckedBinding,
+  ImageValue,
 } from "./binding-rules";
+// A document's bindings judged against the schema of what they read, as a
+// save judges them: one rule with the renderer, a held break a warning.
+export { bindingSchemaIssues } from "./binding-schema-issues";
+export type {
+  BindingDocument,
+  BindingSchemaJudgement,
+} from "./binding-schema-issues";
 export {
   checkFormat,
   createBindingFormatter,

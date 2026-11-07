@@ -11,6 +11,7 @@ import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-changed-after-consent";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { exitWithError } from "../errors";
@@ -22,6 +23,10 @@ import type { CommandContext } from "../program";
 import type { Logger } from "../utils/logger";
 import { answered } from "../utils/prompt-cancelled";
 
+import {
+  storedTemplateAddress,
+  templateAddressNote,
+} from "./db-sync-promote-template-address";
 import {
   collectionChangedAfterConsent,
   openCollectionRegistry,
@@ -52,6 +57,11 @@ export interface PromoteCollectionArgs {
   confirm: (code: string) => Promise<boolean>;
   /** How long a held schema lock is waited for, in milliseconds. */
   lockWaitMs?: number;
+  /**
+   * The template address the collection's entries are served at, stored on its page builder
+   * template, or null for none. Absent, none is read.
+   */
+  templateAddress?: (slug: string) => Promise<string | null>;
 }
 
 /**
@@ -72,8 +82,13 @@ export async function promoteCollection(
 
   const fields = (confirmed.fields ?? []) as unknown[];
   const code = serializeCollection({ slug, fields: fields as never[] });
+  // A collection whose template stores an address keeps its entries there only if the address is
+  // declared in code too, so the declaration is shown and appended beside its code.
+  const address = (await args.templateAddress?.(slug)) ?? null;
+  const note = address === null ? [] : templateAddressNote(slug, address);
+  const preview = [code, ...note.map(line => `// ${line}`)].join("\n");
 
-  if (!(await args.confirm(code))) {
+  if (!(await args.confirm(preview))) {
     logger.info("Promote cancelled.");
     return "cancelled";
   }
@@ -97,6 +112,18 @@ export async function promoteCollection(
           current,
         });
       }
+      // The address the printed declaration names, read again too: one
+      // changed in the admin since the preview would be declared stale, and
+      // the collection moved back to it at the next start.
+      const addressNow = (await args.templateAddress?.(slug)) ?? null;
+      if (addressNow !== address) {
+        throw planChangedAfterConsent({
+          command: "nextly db:sync --promote",
+          message: `${slug}'s template address changed after you confirmed; nothing was changed; run the command again`,
+          agreed: address === null ? [] : [address],
+          current: addressNow === null ? [] : [addressNow],
+        });
+      }
 
       // Append to config file as a COMMENTED snippet. We do not try to AST-edit the collections
       // array because users may have custom imports, env-gated branches, or other machinery the
@@ -106,13 +133,14 @@ export async function promoteCollection(
         logger.warn(
           "Could not locate nextly.config.ts. The snippet is printed below; paste it into the collections array manually."
         );
-        logger.info(code);
+        logger.info(preview);
       } else {
         const snippet = [
           "",
           `// Promoted from UI source on ${new Date().toISOString()}.`,
           "// Move this entry into your collections array:",
           ...code.split("\n").map(line => `// ${line}`),
+          ...note.map(line => `// ${line}`),
           "",
         ].join("\n");
         appendFileSync(configPath, snippet);
@@ -130,6 +158,7 @@ export async function promoteCollection(
   logger.info(
     `Collection '${slug}' removed from UI source. Move the snippet into your collections array, then restart dev server.`
   );
+  if (note.length > 0) logger.info(note.join("\n"));
   return "promoted";
 }
 
@@ -180,6 +209,14 @@ export async function runPromote(
       cwd: context.cwd,
       registry,
       adapter,
+      templateAddress: collection =>
+        storedTemplateAddress(
+          {
+            getAllCollections: () => registry.getAllCollections(),
+            queryStatement: statement => adapter.queryStatement(statement),
+          },
+          collection
+        ),
       // `--yes` answers the confirmation: append, without asking.
       confirm: code =>
         confirmationAnswered(context)

@@ -106,6 +106,7 @@ function previewOf(
         };
   return {
     collection: "posts",
+    fixed: false,
     labels: { singular: "Post", plural: "Posts" },
     language: undefined,
     list: { state: "ready", items: ROWS, mayCreate: true },
@@ -117,6 +118,7 @@ function previewOf(
             title: current.title,
             status: current.status,
             unavailable: false,
+            loading: false,
           },
     previewed,
     choose: vi.fn(),
@@ -225,6 +227,19 @@ describe("the chip", () => {
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       LONG_TITLE
     );
+  });
+
+  it("claims no status for an entry still being read", () => {
+    const preview = previewOf();
+    renderStrip({
+      ...preview,
+      chip: { ...preview.chip!, loading: true },
+      previewed: { kind: "none", reason: "loading" },
+    });
+    expect(
+      screen.getByRole("button", { name: `Previewing ${LONG_TITLE}, loading` })
+    ).toBeTruthy();
+    expect(screen.queryByText("Published")).toBeNull();
   });
 
   it("names an entry that could not be read as such, never as the entry previewed", () => {
@@ -406,5 +421,53 @@ describe("with nothing to preview", () => {
   it("shows no notice while an entry is previewed (the control)", () => {
     renderStrip(previewOf());
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("on an entry's own design", () => {
+  it("previews its one entry, with no picker and no keys", () => {
+    const preview = previewOf({ fixed: true });
+    renderStrip(preview);
+    const strip = document.querySelector(".nx-preview-strip");
+    expect(strip?.textContent).toContain(`Previewing${LONG_TITLE}Published`);
+    // Nothing to choose: no chip to press, so no menu and no chevron.
+    expect(screen.queryByRole("button", { name: /^Previewing / })).toBeNull();
+    expect(document.querySelector(".nx-preview-strip__chevron")).toBeNull();
+    fireEvent.keyDown(document.body, {
+      key: "ArrowDown",
+      altKey: true,
+      shiftKey: true,
+    });
+    expect(preview.step).not.toHaveBeenCalled();
+  });
+
+  it("says its entry could not be read, with Try again", () => {
+    const preview = previewOf({ fixed: true });
+    renderStrip({
+      ...preview,
+      chip: { ...preview.chip!, unavailable: true },
+      previewed: { kind: "none", reason: "unavailable" },
+    });
+    expect(document.querySelector(".nx-preview-strip")?.textContent).toContain(
+      "Couldn’t be read"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(preview.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the picker and the keys on a collection's template (the control)", () => {
+    const preview = previewOf();
+    renderStrip(preview);
+    expect(
+      screen
+        .getByRole("button", { name: /^Previewing / })
+        .getAttribute("aria-haspopup")
+    ).toBe("listbox");
+    fireEvent.keyDown(document.body, {
+      key: "ArrowDown",
+      altKey: true,
+      shiftKey: true,
+    });
+    expect(preview.step).toHaveBeenCalledWith(1);
   });
 });

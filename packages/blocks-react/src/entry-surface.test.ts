@@ -686,7 +686,11 @@ describe("the next entry", () => {
       "BLOCKS_REACT_NEXT_ENTRY",
       "DEFAULT_MAX_QUERIES",
       "createBlocksPage",
+      // Added deliberately: the one route serving every address the site's
+      // address store holds, a page's or a collection's entry's.
+      "createContentPage",
       "createPublicBlocksPage",
+      "createPublicContentPage",
       "createPublicSinglePage",
       "createSinglePage",
       // Added deliberately: what a page's bindings read, through whichever

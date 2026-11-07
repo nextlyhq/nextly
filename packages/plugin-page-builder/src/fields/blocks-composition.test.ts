@@ -1528,7 +1528,7 @@ describe("a component save judged inside the templates that use it", () => {
     );
     return {
       collection: "templates",
-      field: "collection",
+      fields: ["collection", "entryCollection"],
       storedTargetsOf,
     } satisfies TemplateTargets;
   };

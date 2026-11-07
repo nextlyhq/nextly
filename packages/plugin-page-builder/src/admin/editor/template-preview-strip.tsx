@@ -81,7 +81,8 @@ import {
 } from "react-hook-form";
 
 import {
-  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
+  TEMPLATE_TARGET_FIELDS,
   type PreviewCollectionLabels,
   type PreviewEntryItem,
 } from "../../templates/template-preview-contract";
@@ -89,8 +90,9 @@ import { StatusPill } from "../status-pill";
 import { listPreviewEntries } from "../template-preview-client";
 
 import { entryCreatePath, entryEditPath } from "./builder-address";
-import { CanvasEntryProvider } from "./canvas-entry";
+import { CanvasEntryProvider, type CanvasEntryRead } from "./canvas-entry";
 import {
+  followingCanvas,
   useTemplatePreview,
   type TemplatePreview,
 } from "./use-template-preview";
@@ -114,13 +116,34 @@ export function useTemplatePreviewState(): TemplatePreview | undefined {
   return useContext(TemplatePreviewState);
 }
 
-/** The form's value of the template's collection field, where it is text. */
+/**
+ * The collection the template draws, as its form holds it now: a
+ * collection's template names it as `collection`, an entry's own design
+ * (whose `collection` is empty) as `entryCollection`.
+ */
 function useTemplateCollection<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>
+): string | undefined {
+  const values: unknown[] = useWatch({
+    control,
+    name: [...TEMPLATE_TARGET_FIELDS] as Path<TFieldValues>[],
+  });
+  const found = values.find(
+    value => typeof value === "string" && value.trim() !== ""
+  );
+  return typeof found === "string" ? found.trim() : undefined;
+}
+
+/**
+ * The one entry an entry's own design serves, by its stored id, as the form
+ * holds it; `undefined` for a collection's template, which names none.
+ */
+function useOwnDesignEntry<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
 ): string | undefined {
   const value: unknown = useWatch({
     control,
-    name: TEMPLATE_COLLECTION_FIELD as Path<TFieldValues>,
+    name: TEMPLATE_ENTRY_ID_FIELD as Path<TFieldValues>,
   });
   return typeof value === "string" && value.trim() !== ""
     ? value.trim()
@@ -140,21 +163,36 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   readonly children: ReactNode;
 }): JSX.Element {
   const collection = useTemplateCollection(control);
+  // An entry's own design serves one entry, which it always previews.
+  const entry = useOwnDesignEntry(control);
   const identity = useDocumentIdentity();
   const userId = useCurrentUserId();
   // The language the editor edits, as the editor's own reads take it.
   const locale = useDocumentLocale()?.code ?? undefined;
-  const preview = useTemplatePreview({
+  const read = useTemplatePreview({
     collection,
     templateId:
       identity?.kind === "collection" ? identity.documentId : undefined,
     userId,
     locale,
+    entry,
   });
+  // The canvas's own read of the entry, heard here and asked again with a
+  // retry, so the strip and the seam name an entry only once both the entry
+  // and the canvas's read of it have answered.
+  const [canvasRead, setCanvasRead] = useState<CanvasEntryRead | undefined>(
+    undefined
+  );
+  const [retry, setRetry] = useState(0);
+  const preview = useMemo(
+    () => followingCanvas(read, canvasRead, () => setRetry(count => count + 1)),
+    [read, canvasRead]
+  );
   // The entry the strip names, read by the canvas from the moment it is
-  // chosen, so the two never name different entries; none where it could
-  // not be read, so bound text draws its fallback as the strip says.
-  const chip = preview.chip;
+  // chosen, so the two never name different entries; none where its own
+  // read failed, so bound text draws its fallback as the strip says. Taken
+  // from the entry's read alone: the canvas's read follows from it.
+  const chip = read.chip;
   const previewedId =
     chip === undefined || chip.unavailable ? undefined : chip.id;
   const canvasIdentity = useMemo(
@@ -170,8 +208,36 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   );
   // The collection as the builder reads it, for an Entry content block's
   // mark, inspector and canvas notes.
+  const previewedCollection = usePreviewedCollectionOf(collection, preview);
+  return (
+    <TemplatePreviewState.Provider value={preview}>
+      <CanvasEntryProvider
+        identity={canvasIdentity}
+        retry={retry}
+        onRead={setCanvasRead}
+      >
+        <PreviewedEntryProvider
+          value={preview.previewed}
+          collection={previewedCollection}
+        >
+          {children}
+        </PreviewedEntryProvider>
+      </CanvasEntryProvider>
+    </TemplatePreviewState.Provider>
+  );
+}
+
+/**
+ * The template's collection as the builder reads it: its names, its
+ * top-level blocks fields, and where one of its entries is edited; nothing
+ * while the template names no collection.
+ */
+function usePreviewedCollectionOf(
+  collection: string | undefined,
+  preview: TemplatePreview
+): PreviewedCollection | undefined {
   const { labels, blocksFields } = preview;
-  const previewedCollection = useMemo(
+  return useMemo(
     (): PreviewedCollection | undefined =>
       collection === undefined
         ? undefined
@@ -183,20 +249,6 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
             entryHref: id => entryEditPath(collection, id),
           },
     [collection, labels.singular, labels.plural, blocksFields]
-  );
-  return (
-    <TemplatePreviewState.Provider value={preview}>
-      <CanvasEntryProvider identity={canvasIdentity}>
-        <PreviewedEntryProvider
-          value={preview.previewed}
-          {...(previewedCollection === undefined
-            ? {}
-            : { collection: previewedCollection })}
-        >
-          {children}
-        </PreviewedEntryProvider>
-      </CanvasEntryProvider>
-    </TemplatePreviewState.Provider>
   );
 }
 
@@ -220,6 +272,12 @@ function openNewEntry(collection: string): void {
 /** Whether the strip has nothing to preview, as opposed to not knowing yet. */
 function hasNothing(previewed: PreviewedEntry): boolean {
   return previewed.kind === "none" && previewed.reason === "empty";
+}
+
+/** The keys that step through the entries, while a list can be stepped. */
+function SwitchKeys({ preview }: { readonly preview: TemplatePreview }): null {
+  useSwitchKeys(preview);
+  return null;
 }
 
 /**
@@ -268,13 +326,18 @@ export function TemplatePreviewStrip({
 }: {
   readonly preview: TemplatePreview;
 }): JSX.Element {
-  useSwitchKeys(preview);
   return (
     <div data-template-preview="">
+      {/* An own design's one entry is not chosen, so no keys step through. */}
+      {preview.fixed ? null : <SwitchKeys preview={preview} />}
       <div className="nx-preview-strip">
         {/* Never dropped: it keeps the template's status and the entry's apart. */}
         <span>Previewing</span>
-        <EntryPicker preview={preview} />
+        {preview.fixed ? (
+          <FixedEntry preview={preview} />
+        ) : (
+          <EntryPicker preview={preview} />
+        )}
       </div>
       <PreviewNotice preview={preview} />
     </div>
@@ -343,7 +406,9 @@ function chipWords(preview: TemplatePreview): {
     return {
       name: chip.unavailable
         ? `Previewing ${chip.title}, couldn’t be read`
-        : `Previewing ${chip.title}, ${chip.status}`,
+        : chip.loading
+          ? `Previewing ${chip.title}, loading`
+          : `Previewing ${chip.title}, ${chip.status}`,
       shown: chip.title,
     };
   }
@@ -355,6 +420,49 @@ function chipWords(preview: TemplatePreview): {
   }
   const nothing = nothingToPreview(labels);
   return { name: nothing, shown: nothing };
+}
+
+/**
+ * An own design's one entry, named as the chip names an entry but not a
+ * control: there is nothing to choose, so no chevron and no menu.
+ */
+function FixedEntry({
+  preview,
+}: {
+  readonly preview: TemplatePreview;
+}): JSX.Element {
+  const words = chipWords(preview);
+  return (
+    // Plain words rather than a labelled control: read as they stand, with
+    // the full title on hover where the strip cuts it.
+    <span className="nx-preview-strip__chip" data-fixed="" title={words.shown}>
+      <span className="nx-preview-strip__title">{words.shown}</span>
+      <ChipMark preview={preview} />
+    </span>
+  );
+}
+
+/** What follows the chip's title: its status, or that it is loading or unreadable. */
+function ChipMark({
+  preview,
+}: {
+  readonly preview: TemplatePreview;
+}): JSX.Element | null {
+  const { chip } = preview;
+  if (chip === undefined) return null;
+  if (chip.unavailable) {
+    return (
+      <span className="nx-preview-strip__unavailable">
+        <AlertTriangle aria-hidden="true" size={12} />
+        Couldn’t be read
+      </span>
+    );
+  }
+  // Not drawn yet: no status is claimed for it.
+  if (chip.loading) {
+    return <span className="nx-preview-strip__none">Loading…</span>;
+  }
+  return <StatusPill state={chip.status} size="sm" />;
 }
 
 /**
@@ -400,14 +508,7 @@ function EntryPicker({
                   <span ref={tip.title} className="nx-preview-strip__title">
                     {chip.title}
                   </span>
-                  {chip.unavailable ? (
-                    <span className="nx-preview-strip__unavailable">
-                      <AlertTriangle aria-hidden="true" size={12} />
-                      Couldn’t be read
-                    </span>
-                  ) : (
-                    <StatusPill state={chip.status} size="sm" />
-                  )}
+                  <ChipMark preview={preview} />
                 </>
               )}
               <ChevronDown

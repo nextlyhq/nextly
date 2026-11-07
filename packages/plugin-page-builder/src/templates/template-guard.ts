@@ -19,10 +19,35 @@
  *
  * @module templates/template-guard
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginCollectionTransaction,
+} from "@nextlyhq/plugin-sdk";
 
-import { TEMPLATE_COLLECTION_FIELD } from "../collections/templates";
+import {
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
+} from "../collections/templates";
+import type { TemplateTargets } from "../fields/list-query-judgement";
 import { JUDGEMENT_CONTEXT } from "../judged-writes";
+
+import {
+  designShapeProblem,
+  designShapeRefusal,
+  isEntryDesign,
+} from "./entry-designs";
+import { TEMPLATE_TARGET_FIELDS } from "./template-preview-contract";
+import {
+  addressRefusal,
+  heldAddressMessage,
+  storedAddressOf,
+  storedAddressProblem,
+  writtenAddressOf,
+  TEMPLATE_ADDRESS_FIELD,
+  type AddressHolderRead,
+} from "./template-routing";
+import { templateTargetOf } from "./template-target";
 
 /** The template drawing a collection, as a refusal names it. */
 export interface TemplateHolder {
@@ -41,7 +66,8 @@ export interface OwnTemplateReads {
     slug: string,
     options: {
       where: Record<string, unknown>;
-      pagination: { limit: number };
+      pagination: { limit: number; page?: number };
+      sort?: { field: string; direction: "asc" | "desc" };
       depth: number;
     }
   ): Promise<{ data: readonly unknown[] }>;
@@ -75,7 +101,7 @@ export function templateHolderReader(
  * none. What template lists are judged against when a save does not carry
  * the collection, and when a component save judges the templates placing it.
  */
-export function templateTargetsReader(
+function templateTargetsReader(
   own: OwnTemplateReads,
   templatesCollection: string
 ): (ids: readonly string[]) => Promise<ReadonlyMap<string, string>> {
@@ -89,16 +115,97 @@ export function templateTargetsReader(
     });
     for (const value of found.data) {
       const row = recordOf(value);
-      const target = row?.[TEMPLATE_COLLECTION_FIELD];
-      if (
-        typeof row?.id === "string" &&
-        typeof target === "string" &&
-        target !== ""
-      ) {
-        targets.set(row.id, target);
+      // A collection's template names it as `collection`, an entry's own
+      // design as `entryCollection`: the one rule `templateTargetOf` keeps.
+      const target = templateTargetOf(row);
+      if (typeof row?.id === "string" && target !== undefined) {
+        targets.set(row.id, target.collection);
       }
     }
     return targets;
+  };
+}
+
+/**
+ * Where templates live and what each stored one draws, as a save's
+ * judgement reads them (`TemplateTargets`): the templates collection under
+ * the host's name for it, the fields a template names its collection in,
+ * and the reader of those collections from the stored templates.
+ */
+export function templateTargets(
+  own: OwnTemplateReads,
+  templatesCollection: string
+): TemplateTargets {
+  return {
+    collection: templatesCollection,
+    fields: TEMPLATE_TARGET_FIELDS,
+    storedTargetsOf: templateTargetsReader(own, templatesCollection),
+  };
+}
+
+/**
+ * The lookup of the template storing an address, over the plugin's own reads,
+ * hook-free and as the system, as the holder lookup above is, so a read hook
+ * cannot hide the collection an address belongs to.
+ */
+export function addressHolderReader(
+  own: OwnTemplateReads,
+  templatesCollection: string
+): AddressHolderRead {
+  return async address => {
+    const found = await own.listEntries(templatesCollection, {
+      where: { [TEMPLATE_ADDRESS_FIELD]: { equals: address } },
+      pagination: { limit: 10 },
+      depth: 0,
+    });
+    // Matched again exactly: a database may compare text loosely.
+    for (const entry of found.data) {
+      const row = recordOf(entry);
+      const collection = row?.[TEMPLATE_COLLECTION_FIELD];
+      if (
+        row?.[TEMPLATE_ADDRESS_FIELD] === address &&
+        (typeof row.id === "string" || typeof row.id === "number") &&
+        typeof collection === "string"
+      ) {
+        return { id: String(row.id), collection };
+      }
+    }
+    return null;
+  };
+}
+
+/** How many templates one read of every stored address takes. */
+const ADDRESS_READ_PAGE = 100;
+
+/**
+ * Every collection whose template stores an address, with it, as last
+ * committed: the plugin's own read, hook-free and as the system. A site has
+ * a template per collection at most, so the walk is short.
+ */
+export function storedAddressesReader(
+  own: OwnTemplateReads,
+  templatesCollection: string
+): () => Promise<ReadonlyMap<string, string>> {
+  return async () => {
+    const addresses = new Map<string, string>();
+    for (let page = 1; ; page += 1) {
+      const found = await own.listEntries(templatesCollection, {
+        where: {},
+        pagination: { limit: ADDRESS_READ_PAGE, page },
+        // A unique order, so no template moves between pages of the walk.
+        sort: { field: "id", direction: "asc" },
+        depth: 0,
+      });
+      for (const entry of found.data) {
+        const row = recordOf(entry);
+        const collection = row?.[TEMPLATE_COLLECTION_FIELD];
+        const address = storedAddressOf(row?.[TEMPLATE_ADDRESS_FIELD]);
+        if (typeof collection === "string" && address !== null) {
+          addresses.set(collection, address);
+        }
+      }
+      if (found.data.length < ADDRESS_READ_PAGE) return addresses;
+    }
   };
 }
 
@@ -210,6 +317,14 @@ export function templateCollectionRefusal(message: string): NextlyError {
   });
 }
 
+/**
+ * The hook context key a template action's own write carries when the action
+ * asked the guard's questions before opening its transaction, and asks the
+ * ones that can change meanwhile again once it has committed: giving an
+ * entry its own design checks the entry before, and again after.
+ */
+export const ASKED_BEFORE_CONTEXT = "pageBuilder.templateAskedBefore";
+
 /** What the guard is built with. */
 export interface TemplateGuardSetup {
   /** The RESOLVED templates slug: a host may rename it. */
@@ -218,6 +333,21 @@ export interface TemplateGuardSetup {
   readonly ownCollections: () => ReadonlySet<string>;
   readonly readCollection: CollectionRecordRead;
   readonly holderOf: TemplateHolderRead;
+  /** Whether `collection` holds an entry `id`, in any state, read as the system. */
+  readonly entryExists: (collection: string, id: string) => Promise<boolean>;
+  /**
+   * Hold the entry's own lock row until `tx` ends: taken by giving an entry
+   * its own design and by deleting the entry, so the two take turns.
+   */
+  readonly lockEntry: (
+    tx: PluginCollectionTransaction,
+    collection: string,
+    id: string
+  ) => Promise<void>;
+  /** Each address declared in code, by collection slug. */
+  readonly declaredAddresses: ReadonlyMap<string, string>;
+  /** The template storing an address, read as the system. */
+  readonly addressHolderOf: AddressHolderRead;
 }
 
 /** The parts of a `beforeChange` hook context the guard reads. */
@@ -258,9 +388,128 @@ export function registerTemplateGuard(
   ctx: TemplateGuardHooks,
   setup: TemplateGuardSetup
 ): void {
-  ctx.hooks.on("beforeChange", setup.templatesCollection, context =>
-    guardWrite(setup, recordOf(context) ?? {})
+  ctx.hooks.on("beforeChange", setup.templatesCollection, async context => {
+    const hook = recordOf(context) ?? {};
+    const data = await guardAddress(setup, hook);
+    await guardWrite(setup, data === undefined ? hook : { ...hook, data });
+    // The data as the address guard left it, an emptied address made none;
+    // undefined keeps the write's own.
+    return data;
+  });
+}
+
+/**
+ * Judge the address a write gives a template, when it gives one: its one
+ * spelling, that it is not `/`, that no other collection is given it in code
+ * or stores it, and that the template is a collection's own. An emptied
+ * address, which a cleared input sends, is stored as none. Answers the data
+ * to write where it changed it.
+ *
+ * Who may set it is not judged here: the field's create and update rules
+ * take an address out of a write by anyone without the routing permission,
+ * before this runs. The unique index refuses a second template storing an
+ * address under concurrent writes; the template's in-transaction phase asks
+ * the questions that need no read again, whichever path the write took.
+ */
+export async function guardAddress(
+  setup: TemplateGuardSetup,
+  context: GuardContext
+): Promise<Record<string, unknown> | undefined> {
+  const data = recordOf(context.data);
+  if (
+    data === null ||
+    !Object.prototype.hasOwnProperty.call(data, TEMPLATE_ADDRESS_FIELD)
+  ) {
+    return undefined;
+  }
+  const address = writtenAddressOf(data[TEMPLATE_ADDRESS_FIELD]);
+  const written =
+    address === data[TEMPLATE_ADDRESS_FIELD]
+      ? undefined
+      : { ...data, [TEMPLATE_ADDRESS_FIELD]: address };
+  const original = recordOf(context.originalData);
+  if (
+    address === null ||
+    address === undefined ||
+    (context.operation !== "create" &&
+      address === storedAddressOf(original?.[TEMPLATE_ADDRESS_FIELD]))
+  ) {
+    return written;
+  }
+  const row = { ...original, ...data };
+  const notHere = addressHolderProblem(row);
+  if (notHere !== null) throw addressRefusal(notHere);
+  const collection = row[TEMPLATE_COLLECTION_FIELD];
+  const problem = storedAddressProblem(address, collection, {
+    declared: setup.declaredAddresses,
+  });
+  if (problem !== null) throw addressRefusal(problem);
+  // Text by now: anything else has a problem above.
+  if (typeof address !== "string") return written;
+  // Inside a caller's transaction a read would wait on the connection that
+  // transaction holds, as `skipsReads` explains. A template action's dry run
+  // asked who stores the address before it opened its transaction.
+  if (context.executor !== undefined) {
+    if (recordOf(context.context)?.[JUDGEMENT_CONTEXT] === true) return written;
+    throw addressRefusal(
+      "A template's address cannot be checked inside a bulk operation. Set it on the template on its own."
+    );
+  }
+  const unserved = await addressCollectionProblem(setup, collection);
+  if (unserved !== null) throw addressRefusal(unserved);
+  const holder = await setup.addressHolderOf(address);
+  if (holder !== null && holder.id !== original?.id) {
+    throw addressRefusal(heldAddressMessage(address, holder));
+  }
+  return written;
+}
+
+/**
+ * Why `collection`'s entries cannot be served under an address, or null
+ * when they can: one that may not have a template at all (no `slug` text
+ * field, kept out of the admin, gone, or the page builder's own), judged as a
+ * new template's collection is, and a localized one, whose entries have a
+ * slug and a state in each language, which one address per collection cannot
+ * follow yet, as a collection given an address in code is refused at start.
+ */
+export async function addressCollectionProblem(
+  setup: Pick<TemplateGuardSetup, "readCollection" | "ownCollections">,
+  collection: unknown
+): Promise<string | null> {
+  if (typeof collection !== "string") return null;
+  const problem = await templateCollectionProblem(
+    collection,
+    setup.readCollection,
+    setup.ownCollections()
   );
+  if (problem !== null) return problem;
+  const record = await setup.readCollection(collection);
+  return record?.localized === true
+    ? `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
+    : null;
+}
+
+/**
+ * Refuse pointing a template at another collection while it stores an
+ * address: it moves live addresses wherever it draws, so it is pointed
+ * elsewhere only once its address is removed, which needs the routing
+ * permission. The address is the write's own where it names one, else the
+ * stored one.
+ */
+function refuseAddressedRetarget(
+  data: Record<string, unknown>,
+  original: Record<string, unknown> | null
+): void {
+  const addressed = storedAddressOf(
+    Object.prototype.hasOwnProperty.call(data, TEMPLATE_ADDRESS_FIELD)
+      ? data[TEMPLATE_ADDRESS_FIELD]
+      : original?.[TEMPLATE_ADDRESS_FIELD]
+  );
+  if (addressed !== null) {
+    throw addressRefusal(
+      `This template serves its collection's entries at ${addressed}. Remove its address before pointing it at another collection.`
+    );
+  }
 }
 
 /** Judge one write to a template's collection, refusing it or letting it through. */
@@ -271,9 +520,31 @@ export async function guardWrite(
   const data = recordOf(context.data);
   if (data === null) return;
   const collection = data[TEMPLATE_COLLECTION_FIELD];
+  const creating = context.operation === "create";
+  const original = creating ? null : recordOf(context.originalData);
 
-  if (context.operation !== "create") {
-    const original = recordOf(context.originalData);
+  // What the template serves, read from the write alone, before anything
+  // else: an own design names its entry and no collection, and no template
+  // changes what it serves.
+  const shape = designShapeProblem(creating ? null : (original ?? {}), data);
+  if (shape !== null) throw designShapeRefusal(shape);
+  if (isEntryDesign(creating ? data : { ...original, ...data })) {
+    if (creating) await judgeEntryDesign(setup, context, data);
+    return;
+  }
+  // A collection's template names its collection. The field itself is not
+  // required, since an own design leaves it empty, so it is required here.
+  if (
+    (creating ||
+      Object.prototype.hasOwnProperty.call(data, TEMPLATE_COLLECTION_FIELD)) &&
+    (typeof collection !== "string" || collection === "")
+  ) {
+    throw templateCollectionRefusal(
+      "A template names the collection whose entries it draws."
+    );
+  }
+
+  if (!creating) {
     const before = original?.[TEMPLATE_COLLECTION_FIELD];
     if (
       !Object.prototype.hasOwnProperty.call(data, TEMPLATE_COLLECTION_FIELD) ||
@@ -281,6 +552,7 @@ export async function guardWrite(
     ) {
       return;
     }
+    refuseAddressedRetarget(data, original);
     if (skipsReads(context)) return;
     // A template keeps the collection it draws. The one exception is a
     // template whose collection no longer exists under its name, renamed or
@@ -305,6 +577,39 @@ export async function guardWrite(
   }
 
   await judgeCollection(setup, context, collection, null);
+}
+
+/**
+ * Judge a new own design's entry: one in a collection that may have a
+ * template, and one that exists. Its uniqueness is the index's to hold.
+ */
+async function judgeEntryDesign(
+  setup: TemplateGuardSetup,
+  context: GuardContext,
+  data: Record<string, unknown>
+): Promise<void> {
+  const collection = data[TEMPLATE_ENTRY_COLLECTION_FIELD];
+  const id = data[TEMPLATE_ENTRY_ID_FIELD];
+  // Both are strings here: the shape check refused anything else.
+  if (typeof collection !== "string" || typeof id !== "string") return;
+  if (skipsReads(context)) return;
+  const problem = await templateCollectionProblem(
+    collection,
+    setup.readCollection,
+    setup.ownCollections()
+  );
+  if (problem !== null) {
+    throw designShapeRefusal({
+      path: TEMPLATE_ENTRY_COLLECTION_FIELD,
+      message: problem,
+    });
+  }
+  if (!(await setup.entryExists(collection, id))) {
+    throw designShapeRefusal({
+      path: TEMPLATE_ENTRY_ID_FIELD,
+      message: `The collection "${collection}" has no entry "${id}" to give its own design.`,
+    });
+  }
 }
 
 /**
@@ -352,7 +657,9 @@ async function judgeCollection(
  */
 function skipsReads(context: GuardContext): boolean {
   if (context.executor === undefined) return false;
-  if (recordOf(context.context)?.[JUDGEMENT_CONTEXT] === true) return true;
+  const marked = recordOf(context.context);
+  if (marked?.[JUDGEMENT_CONTEXT] === true) return true;
+  if (marked?.[ASKED_BEFORE_CONTEXT] === true) return true;
   throw templateCollectionRefusal(
     "A template's collection cannot be checked inside a bulk operation. Create or change the template on its own."
   );
@@ -398,4 +705,23 @@ function recordOf(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * Why a template row cannot hold an address at all, or null when it can.
+ * Only a collection's base template holds one: the address is where the
+ * collection's entries are served.
+ */
+export function addressHolderProblem(
+  row: Readonly<Record<string, unknown>>
+): string | null {
+  // An entry's own design names the entry it draws, not a collection, and is
+  // served at that entry's address.
+  if (isEntryDesign(row)) {
+    return "An entry's own design has no address of its own: it is drawn at its entry's address.";
+  }
+  const collection = row[TEMPLATE_COLLECTION_FIELD];
+  return typeof collection === "string" && collection !== ""
+    ? null
+    : "Only a collection's template has an address: this template draws no collection.";
 }

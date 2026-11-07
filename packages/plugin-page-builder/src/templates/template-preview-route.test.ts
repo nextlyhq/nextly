@@ -463,6 +463,9 @@ describe("the list route reads AS THE CALLER", () => {
       guard: () => ({
         templatesCollection: "templates",
         holderOf: async () => null,
+        // An own design's lookups, which the preview's list never makes.
+        entryExists: async () => true,
+        lockEntry: async () => undefined,
         ...collections,
       }),
     }).handler(

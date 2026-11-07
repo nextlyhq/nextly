@@ -27,7 +27,7 @@ vi.mock("../template-preview-client", () => ({
   readPreviewEntry,
 }));
 
-const { steppedEntry, useTemplatePreview } = await import(
+const { followingCanvas, steppedEntry, useTemplatePreview } = await import(
   "./use-template-preview"
 );
 const { rememberEntry, rememberedEntry, templatePreviewStore } = await import(
@@ -149,6 +149,27 @@ describe("the entry a template opens on", () => {
     expect(rememberedEntry(templatePreviewStore("u1"), "t2")).toBeUndefined();
   });
 
+  it("is the remembered one once the person is known, on a load that learns who they are late", async () => {
+    rememberEntry(templatePreviewStore("u1"), "t1", "p1");
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    // Signed in, but not known yet: the admin is still asking who they are.
+    const { result, rerender } = renderHook(
+      ({ userId }: { userId: string | null }) =>
+        useTemplatePreview({ ...ARGS, userId }),
+      { initialProps: { userId: null as string | null } }
+    );
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p2" })
+    );
+    rerender({ userId: "u1" });
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p1" })
+    );
+    // What they left the template on is still theirs, not the newest.
+    expect(rememberedEntry(templatePreviewStore("u1"), "t1")).toBe("p1");
+  });
+
   it("is none, with the reason empty, where the author may read no entry", async () => {
     listPreviewEntries.mockResolvedValue(listed([]));
     const { result } = renderHook(() => useTemplatePreview(ARGS));
@@ -243,6 +264,74 @@ describe("an entry listed but not readable", () => {
   });
 });
 
+describe("an entry waiting on a working draft", () => {
+  it("is listed by its saved title, and once chosen the chip names its draft's", async () => {
+    const changed: PreviewEntryItem = {
+      id: "p3",
+      title: "Field notes: a week with the editor",
+      status: "changed",
+      updatedAt: "2026-11-05T08:00:00Z",
+    };
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, changed]));
+    entriesReadable(["p2"]);
+    readPreviewEntry.mockImplementation(async ({ id }: { id: string }) => ({
+      id,
+      title: id === "p3" ? "Field notes, the draft's title" : `Entry ${id}`,
+      status: "changed",
+      editorValues: { id },
+      publicValues: { id },
+      fields: [],
+    }));
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() => expect(result.current.list.items).toHaveLength(2));
+    // The list keeps the saved title, marked as Changed.
+    expect(result.current.list.items[1]).toMatchObject({
+      title: "Field notes: a week with the editor",
+      status: "changed",
+    });
+    act(() => result.current.choose(changed));
+    await waitFor(() =>
+      expect(result.current.chip).toMatchObject({
+        id: "p3",
+        title: "Field notes, the draft's title",
+        loading: false,
+      })
+    );
+  });
+});
+
+describe("an entry's own design", () => {
+  it("previews the one entry it serves, whatever is newer, and chooses nothing else", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    const { result } = renderHook(() =>
+      useTemplatePreview({ ...ARGS, entry: "p1" })
+    );
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({
+        kind: "entry",
+        id: "p1",
+      })
+    );
+    expect(result.current.fixed).toBe(true);
+    act(() => result.current.choose(NEWEST));
+    expect(result.current.step(1)).toBeUndefined();
+    expect(result.current.chip?.id).toBe("p1");
+    // It remembers nothing: there is nothing to come back to.
+    expect(rememberedEntry(templatePreviewStore("u1"), "t1")).toBeUndefined();
+  });
+
+  it("previews the newest on a collection's template (the control)", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p2" })
+    );
+    expect(result.current.fixed).toBe(false);
+  });
+});
+
 describe("a window that regains focus", () => {
   it("asks for the list again, so an entry made in another tab can be previewed", async () => {
     listPreviewEntries.mockResolvedValueOnce(listed([NEWEST, OLDER]));
@@ -291,5 +380,80 @@ describe("stepping through the list", () => {
     expect(steppedEntry([NEWEST], "p2", 1)).toBeUndefined();
     expect(steppedEntry(items, "elsewhere", 1)?.id).toBe("p2");
     expect(steppedEntry(items, "elsewhere", -1)?.id).toBe("p9");
+  });
+});
+
+describe("what the strip says, following the canvas's own read", () => {
+  /** A preview whose entry read answered for p2. */
+  function answered() {
+    return {
+      collection: "posts",
+      fixed: false,
+      labels: { singular: "Post", plural: "Posts" },
+      language: undefined,
+      list: { state: "ready" as const, items: [NEWEST], mayCreate: true },
+      chip: {
+        id: "p2",
+        title: NEWEST.title,
+        status: "published" as const,
+        unavailable: false,
+        loading: false,
+      },
+      previewed: {
+        kind: "entry" as const,
+        collection: "posts",
+        id: "p2",
+        title: NEWEST.title,
+        editorValues: {},
+        publicValues: null,
+        fields: [],
+      },
+      choose: vi.fn(),
+      step: vi.fn(),
+      refresh: vi.fn(),
+    };
+  }
+
+  it("names the entry previewed once the canvas's read of it has answered", () => {
+    const shown = followingCanvas(
+      answered(),
+      { entryId: "p2", state: "answered" },
+      vi.fn()
+    );
+    expect(shown.previewed).toMatchObject({ kind: "entry", id: "p2" });
+    expect(shown.chip).toMatchObject({ unavailable: false, loading: false });
+    // A canvas with nothing bound reads nothing, and counts as answered.
+    expect(
+      followingCanvas(answered(), { entryId: "p2", state: "none" }, vi.fn())
+        .previewed
+    ).toMatchObject({ kind: "entry" });
+  });
+
+  it("marks the entry unavailable when the canvas's read failed, and retries both reads", () => {
+    const preview = answered();
+    const retry = vi.fn();
+    const shown = followingCanvas(
+      preview,
+      { entryId: "p2", state: "failed" },
+      retry
+    );
+    expect(shown.chip).toMatchObject({ id: "p2", unavailable: true });
+    expect(shown.previewed).toEqual({ kind: "none", reason: "unavailable" });
+    shown.refresh();
+    expect(preview.refresh).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("names no entry previewed while the canvas still reads it, or reads another", () => {
+    for (const canvas of [
+      { entryId: "p2", state: "pending" as const },
+      // The canvas's last answer is another entry's.
+      { entryId: "p1", state: "answered" as const },
+      undefined,
+    ]) {
+      const shown = followingCanvas(answered(), canvas, vi.fn());
+      expect(shown.previewed).toEqual({ kind: "none", reason: "loading" });
+      expect(shown.chip).toMatchObject({ loading: true, unavailable: false });
+    }
   });
 });

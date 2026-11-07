@@ -33,6 +33,7 @@ import {
   readPreviewEntry,
 } from "../template-preview-client";
 
+import type { CanvasEntryRead } from "./canvas-entry";
 import {
   rememberedEntry,
   rememberEntry,
@@ -58,12 +59,22 @@ export interface PreviewChip {
    * rather than claiming an entry the canvas does not show.
    */
   readonly unavailable: boolean;
+  /**
+   * Whether the entry is still being read, by its own read or the canvas's:
+   * the chip names the entry chosen, and says it is not drawn yet.
+   */
+  readonly loading: boolean;
 }
 
 /** A template's preview, as the strip, the picker and the canvas read it. */
 export interface TemplatePreview {
   /** The template's collection, or `undefined` where it names none yet. */
   readonly collection: string | undefined;
+  /**
+   * Whether the entry is fixed: an own design previews the one entry it
+   * serves, so there is nothing to choose and no keys step through a list.
+   */
+  readonly fixed: boolean;
   /** How the collection is named, for "No posts to preview" and "New post". */
   readonly labels: PreviewCollectionLabels;
   /**
@@ -97,6 +108,11 @@ export interface TemplatePreviewArgs {
   readonly templateId: string | undefined;
   readonly userId: string | null;
   readonly locale: string | undefined;
+  /**
+   * The one entry an entry's own design serves, by id: previewed always,
+   * with nothing to choose. Absent for a collection's template.
+   */
+  readonly entry?: string | undefined;
 }
 
 /**
@@ -242,14 +258,16 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     undefined
   );
   const list = usePreviewList(args, round);
-  const memory = usePreviewMemory(args);
+  // An own design remembers nothing: it previews its one entry.
+  const fixed = args.entry;
+  const memory = usePreviewMemory(memoryArgsOf(args));
   const mostRecent = list.items[0]?.id;
-  const selected = chosenRow?.id ?? memory.remembered ?? mostRecent;
+  const selected = fixed ?? chosenRow?.id ?? memory.remembered ?? mostRecent;
   const read = useEntryRead(args, selected, round);
   const dropChosen = useCallback(() => setChosen(undefined), []);
   useSettledRead(read, {
     selected,
-    mostRecent,
+    mostRecent: fixed ?? mostRecent,
     chosen: chosenRow?.id,
     memory,
     dropChosen,
@@ -258,25 +276,20 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     () => previewedFrom(collection, list, selected, read),
     [collection, list, selected, read]
   );
-  const chip = chipFrom(
-    chosenRow === undefined ? list.items : [chosenRow, ...list.items],
-    selected,
-    read
-  );
-  const choose = useCallback((entry: PreviewEntryItem) => setChosen(entry), []);
-  const step = useCallback(
-    (by: 1 | -1) => {
-      const next = steppedEntry(list.items, selected, by);
-      if (next !== undefined) setChosen(next);
-      return next;
-    },
-    [list.items, selected]
-  );
+  const labels = list.labels ?? labelsFromSlug(collection ?? "entries");
+  const chip =
+    chipFrom(
+      chosenRow === undefined ? list.items : [chosenRow, ...list.items],
+      selected,
+      read
+    ) ?? fixedChip(fixed, labels, read);
+  const { choose, step } = useChoosing(fixed, list.items, selected, setChosen);
   return {
     collection,
+    fixed: fixed !== undefined,
     // A template always names its collection; "entries" only stands in
     // until its form has the value.
-    labels: list.labels ?? labelsFromSlug(collection ?? "entries"),
+    labels,
     blocksFields: list.blocksFields,
     language: locale,
     list,
@@ -286,6 +299,80 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     step,
     refresh,
   };
+}
+
+/**
+ * The preview as the strip and the seam say it: an entry is named as the
+ * one previewed only once both its own read and the canvas's read of it
+ * have answered, so neither claims an entry the canvas is not drawing. A
+ * canvas read that failed marks the entry unavailable, as a failed entry
+ * read does, and Try again then asks both again (`retryCanvas`). A canvas
+ * with nothing bound needs no read, and counts as answered.
+ */
+export function followingCanvas(
+  preview: TemplatePreview,
+  canvas: CanvasEntryRead | undefined,
+  retryCanvas: () => void
+): TemplatePreview {
+  const refresh = () => {
+    preview.refresh();
+    retryCanvas();
+  };
+  const { chip } = preview;
+  if (chip === undefined || chip.unavailable) return { ...preview, refresh };
+  const state = canvas?.entryId === chip.id ? canvas.state : "pending";
+  if (state === "failed") {
+    return {
+      ...preview,
+      chip: { ...chip, unavailable: true },
+      previewed: { kind: "none", reason: "unavailable" },
+      refresh,
+    };
+  }
+  if (state === "pending") {
+    return {
+      ...preview,
+      chip: { ...chip, loading: true },
+      ...(preview.previewed.kind === "entry"
+        ? { previewed: { kind: "none", reason: "loading" } as const }
+        : {}),
+      refresh,
+    };
+  }
+  return { ...preview, refresh };
+}
+
+/** What the memory is kept for: nothing for an own design, which previews its one entry. */
+function memoryArgsOf(args: TemplatePreviewArgs): TemplatePreviewArgs {
+  return args.entry === undefined ? args : { ...args, templateId: undefined };
+}
+
+/**
+ * Choosing an entry and stepping through the list, both of which an own
+ * design's one entry (`fixed`) refuses: it has nothing else to preview.
+ */
+function useChoosing(
+  fixed: string | undefined,
+  items: readonly PreviewEntryItem[],
+  selected: string | undefined,
+  setChosen: (entry: PreviewEntryItem) => void
+): Pick<TemplatePreview, "choose" | "step"> {
+  const choose = useCallback(
+    (entry: PreviewEntryItem) => {
+      if (fixed === undefined) setChosen(entry);
+    },
+    [fixed, setChosen]
+  );
+  const step = useCallback(
+    (by: 1 | -1) => {
+      if (fixed !== undefined) return undefined;
+      const next = steppedEntry(items, selected, by);
+      if (next !== undefined) setChosen(next);
+      return next;
+    },
+    [fixed, items, selected, setChosen]
+  );
+  return { choose, step };
 }
 
 /** A count bumped whenever the window regains focus, and a way to bump it. */
@@ -313,17 +400,32 @@ interface PreviewMemory {
 function usePreviewMemory(args: TemplatePreviewArgs): PreviewMemory {
   const { templateId, userId } = args;
   const store = useMemo(() => templatePreviewStore(userId), [userId]);
-  const [remembered, setRemembered] = useState<string | undefined>(() =>
-    templateId === undefined ? undefined : rememberedEntry(store, templateId)
-  );
+  // Whose memory, of which template: none until both are known. On a cold
+  // load the person is known only once the admin has asked who they are, so
+  // the memory is read again then, never kept from the read made before.
+  const whose =
+    userId === null || templateId === undefined
+      ? null
+      : JSON.stringify([userId, templateId]);
+  const read = (): string | undefined =>
+    whose === null || templateId === undefined
+      ? undefined
+      : rememberedEntry(store, templateId);
+  const [held, setHeld] = useState(() => ({ whose, remembered: read() }));
+  // Read again, in this render, whenever the person or the template changes.
+  const current = held.whose === whose ? held : { whose, remembered: read() };
+  if (current !== held) setHeld(current);
   const keep = useCallback(
     (entry: string | null) => {
-      setRemembered(entry ?? undefined);
-      if (templateId !== undefined) rememberEntry(store, templateId, entry);
+      // Nothing is kept for a person not known yet: a choice made then would
+      // be written over theirs once they are.
+      if (whose === null || templateId === undefined) return;
+      setHeld({ whose, remembered: entry ?? undefined });
+      rememberEntry(store, templateId, entry);
     },
-    [store, templateId]
+    [store, templateId, whose]
   );
-  return { remembered, keep };
+  return { remembered: current.remembered, keep };
 }
 
 /**
@@ -393,6 +495,27 @@ function previewedFrom(
 }
 
 /**
+ * The chip for an own design's one entry before its read answers, which no
+ * list row stands in for: named for the collection's entry ("the post"),
+ * read, or marked unavailable where its read failed.
+ */
+function fixedChip(
+  entry: string | undefined,
+  labels: PreviewCollectionLabels,
+  read: EntryRead | undefined
+): PreviewChip | undefined {
+  if (entry === undefined) return undefined;
+  const failed = read !== undefined && "failed" in read && read.id === entry;
+  return {
+    id: entry,
+    title: `the ${labels.singular.toLowerCase()}`,
+    status: "published",
+    unavailable: failed,
+    loading: !failed,
+  };
+}
+
+/**
  * What the chip shows: the selected entry, from its read, else from the row
  * it was chosen from or the list's.
  */
@@ -404,12 +527,18 @@ function chipFrom(
   if (selected === undefined) return undefined;
   if (read !== undefined && "answer" in read && read.answer.id === selected) {
     const { id, title, status } = read.answer;
-    return { id, title, status, unavailable: false };
+    return { id, title, status, unavailable: false, loading: false };
   }
   const row = rows.find(item => item.id === selected);
   // Named from its row while it is read; marked when that read failed.
   const failed = read !== undefined && "failed" in read && read.id === selected;
   return row === undefined
     ? undefined
-    : { id: row.id, title: row.title, status: row.status, unavailable: failed };
+    : {
+        id: row.id,
+        title: row.title,
+        status: row.status,
+        unavailable: failed,
+        loading: !failed,
+      };
 }

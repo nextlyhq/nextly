@@ -262,6 +262,249 @@ describe("carryStoredPasswords", () => {
     expect(lines[1]?.pw).toBe(HASH_B);
   });
 
+  describe("repeater rows, now stored with ids", () => {
+    const LINES = [
+      {
+        name: "lines",
+        type: "repeater",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "pw", type: "password" },
+          { name: "pin", type: "password" },
+        ],
+      },
+    ];
+    const STORED = {
+      lines: [
+        { id: "a", label: "a", pw: HASH_A },
+        { id: "b", label: "b", pw: HASH_B },
+      ],
+    };
+    /** Carry the stored passwords onto `lines`, as sent; the rows after. */
+    const carried = (lines: Array<Record<string, unknown>>) => {
+      const data: Record<string, unknown> = { lines };
+      const kept = carryStoredPasswords(data, STORED, LINES, NO_FIELD_GROUPS);
+      return { rows: data.lines as Array<Record<string, unknown>>, kept };
+    };
+
+    it("keeps each password on its own row through a reorder by id", () => {
+      const { rows } = carried([{ id: "b" }, { id: "a" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_B, HASH_A]);
+    });
+
+    it("drops a removed row's password", () => {
+      const { rows, kept } = carried([{ id: "b" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_B]);
+      expect([...kept]).toEqual([HASH_B]);
+    });
+
+    it("never carries a row's password to a row at another place that names none, or to a copy", () => {
+      // Row b moved first; the new id-less row now at b's old place takes
+      // nothing of b's or a's.
+      const moved = carried([{ id: "b" }, { label: "new" }]);
+      expect(moved.rows.map(row => row.pw)).toEqual([HASH_B, undefined]);
+      // A second row naming a's id is a copy, and gets no password.
+      const copied = carried([{ id: "a" }, { id: "a" }]);
+      expect(copied.rows.map(row => row.pw)).toEqual([HASH_A, undefined]);
+    });
+
+    it("refuses a row sent without its id that changed, rather than guess whose password it keeps", () => {
+      // Reordered by a writer that sends no ids: by position, a's row would
+      // be handed b's password.
+      let refused: unknown;
+      try {
+        carried([{ label: "b" }, { label: "a" }]);
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "lines.0",
+              code: "ROW_ID_REQUIRED",
+              message: expect.stringContaining(
+                "Row 1 of 'lines' changed without its id"
+              ),
+            },
+          ],
+        },
+      });
+    });
+
+    it("names a nested row by its whole path when it refuses it", () => {
+      const nested = [
+        {
+          name: "lines",
+          type: "repeater",
+          fields: [
+            {
+              name: "items",
+              type: "repeater",
+              fields: [
+                { name: "label", type: "text" },
+                { name: "pw", type: "password" },
+              ],
+            },
+          ],
+        },
+      ];
+      const stored = {
+        lines: [{ id: "a", items: [{ id: "i", label: "i", pw: HASH_A }] }],
+      };
+      const data: Record<string, unknown> = {
+        lines: [{ id: "a", items: [{ label: "edited" }] }],
+      };
+      let refused: unknown;
+      try {
+        carryStoredPasswords(data, stored, nested, NO_FIELD_GROUPS);
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "lines.0.items.0",
+              message: expect.stringContaining("Row 1 of 'lines.0.items'"),
+            },
+          ],
+        },
+      });
+    });
+
+    it("tells rows apart by an authored id inside a group before keeping a password", () => {
+      const tagged = [
+        {
+          name: "creds",
+          type: "repeater",
+          fields: [
+            {
+              name: "meta",
+              type: "group",
+              fields: [{ name: "id", type: "text" }],
+            },
+            { name: "pw", type: "password" },
+          ],
+        },
+      ];
+      const stored = {
+        creds: [
+          { id: "a", meta: { id: "x" }, pw: HASH_A },
+          { id: "b", meta: { id: "y" }, pw: HASH_B },
+        ],
+      };
+      // Swapped by a writer sending no ids: by position, x would get y's.
+      const data: Record<string, unknown> = {
+        creds: [{ meta: { id: "y" } }, { meta: { id: "x" } }],
+      };
+      expect(() =>
+        carryStoredPasswords(data, stored, tagged, NO_FIELD_GROUPS)
+      ).toThrow();
+    });
+
+    it("keeps the password of an unchanged id-less row among rows with ids", () => {
+      // b is sent with its id; a, unchanged, without. a takes the stored row
+      // at its place, which no sent row names, and keeps its password.
+      const { rows } = carried([{ label: "a" }, { id: "b" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_A, HASH_B]);
+      // Changed, the same row is refused rather than its password dropped.
+      expect(() => carried([{ label: "edited" }, { id: "b" }])).toThrow();
+    });
+
+    it("matches a row read at depth, its relationship populated, as unchanged", () => {
+      const linked = [
+        {
+          name: "links",
+          type: "repeater",
+          fields: [
+            { name: "target", type: "relationship", relationTo: "pages" },
+            { name: "pw", type: "password" },
+          ],
+        },
+      ];
+      const stored = { links: [{ id: "a", target: "page-1", pw: HASH_A }] };
+      // Round-tripped from a populated read, without ids or the password.
+      const data: Record<string, unknown> = {
+        links: [{ target: { id: "page-1", title: "Home" } }],
+      };
+      carryStoredPasswords(data, stored, linked, NO_FIELD_GROUPS);
+      expect((data.links as Array<Record<string, unknown>>)[0]?.pw).toBe(
+        HASH_A
+      );
+    });
+
+    it("reads an empty id as no id, so the row's password is never dropped", () => {
+      // An empty id names no row: unchanged, the row keeps its password by
+      // place; changed, it is refused like any row sent without its id.
+      const { rows } = carried([{ id: "", label: "a" }, { id: "b" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_A, HASH_B]);
+      expect(() => carried([{ id: "", label: "edited" }])).toThrow();
+    });
+
+    it("keeps everything else working without ids", () => {
+      // A row sending its own password keeps no stored one: nothing to guess.
+      expect(carried([{ label: "x", pw: "new-secret" }]).rows[0]?.pw).toBe(
+        "new-secret"
+      );
+      // A stored row with no password has nothing to hand on.
+      const plain = { lines: [{ id: "a", label: "a" }] };
+      const data: Record<string, unknown> = { lines: [{ label: "edited" }] };
+      expect(() =>
+        carryStoredPasswords(data, plain, LINES, NO_FIELD_GROUPS)
+      ).not.toThrow();
+      // Rows stored before rows had ids pair by position, as they did.
+      const legacy = { lines: [{ label: "a", pw: HASH_A }] };
+      const edited: Record<string, unknown> = { lines: [{ label: "edited" }] };
+      carryStoredPasswords(edited, legacy, LINES, NO_FIELD_GROUPS);
+      expect((edited.lines as Array<Record<string, unknown>>)[0]?.pw).toBe(
+        HASH_A
+      );
+    });
+
+    it("never carries a password into a different field", () => {
+      const { rows } = carried([{ id: "a" }]);
+      expect(rows[0]?.pw).toBe(HASH_A);
+      expect(rows[0]?.pin).toBeUndefined();
+    });
+  });
+
+  it("keeps each password of a repeater sent without any ids, though its stored rows carry them", () => {
+    // Every write stores repeater rows with ids, so a writer that never sends
+    // them would otherwise lose every password it leaves out: a list sent
+    // with no ids at all pairs by position, as it did before rows had ids.
+    const fields = [
+      {
+        name: "lines",
+        type: "repeater",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "pw", type: "password" },
+        ],
+      },
+    ];
+    const data: Record<string, unknown> = {
+      lines: [{ label: "a" }, { label: "b" }],
+    };
+
+    const kept = carryStoredPasswords(
+      data,
+      {
+        lines: [
+          { id: "a", label: "a", pw: HASH_A },
+          { id: "b", label: "b", pw: HASH_B },
+        ],
+      },
+      fields,
+      NO_FIELD_GROUPS
+    );
+
+    const lines = data.lines as Array<Record<string, unknown>>;
+    expect(lines.map(line => line.pw)).toEqual([HASH_A, HASH_B]);
+    expect([...kept].sort()).toEqual([HASH_A, HASH_B].sort());
+  });
+
   it("gives rows that carry ids none of the passwords of stored rows that carry none", () => {
     const fields = [
       {

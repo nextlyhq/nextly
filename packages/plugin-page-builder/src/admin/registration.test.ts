@@ -22,6 +22,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { TEMPLATE_ADDRESS_FIELD_COMPONENT } from "../collections/templates";
 import { BLOCKS_FIELD_COMPONENT } from "../fields/blocksField";
 
 // Captured rather than reconstructed. The assertion is about what this module
@@ -66,6 +67,17 @@ describe("the admin entry's component registration", () => {
       // unrelated entry satisfies a count and leaves the field unresolvable.
       expect(Object.keys(registered)).toContain(BLOCKS_FIELD_COMPONENT);
       expect(registered[BLOCKS_FIELD_COMPONENT]).toBeTypeOf("function");
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
+
+  it(
+    "registers the exact specifier the template address field declares",
+    async () => {
+      await import("./index");
+      expect(registered[TEMPLATE_ADDRESS_FIELD_COMPONENT]).toBeTypeOf(
+        "function"
+      );
     },
     IMPORT_GRAPH_BUDGET_MS
   );

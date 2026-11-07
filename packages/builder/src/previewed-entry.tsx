@@ -134,7 +134,7 @@ export function PreviewedEntryProvider({
    * The template's collection, for what reads its fields: an Entry content
    * block's mark, its inspector and its canvas notes.
    */
-  readonly collection?: PreviewedCollection;
+  readonly collection?: PreviewedCollection | undefined;
   readonly children?: ReactNode;
 }): React.JSX.Element {
   return (

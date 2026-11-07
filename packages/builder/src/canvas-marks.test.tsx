@@ -23,6 +23,7 @@ import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
+  CONDITIONED_OWN_ATTRIBUTE,
   Canvas,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
@@ -435,6 +436,175 @@ describe("selection marks", () => {
     expect(badges()[1]?.style.getPropertyValue("--nx-tag-inset-side")).toBe(
       "500px"
     );
+  });
+
+  it("badges a component's two conditioned blocks apart, though they share its address", async () => {
+    // Each is the definition's own block, marked by its composed id.
+    const own = (id: string) =>
+      createElement("div", {
+        key: id,
+        [NODE_ID_ATTRIBUTE]: id,
+        [INSTANCE_ATTRIBUTE]: "place",
+        [CONDITIONED_ATTRIBUTE]: "conditional",
+        [CONDITIONED_OWN_ATTRIBUTE]: "",
+      });
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {own("block-1")}
+        {own("block-2")}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
+      ).toHaveLength(2)
+    );
+  });
+
+  it("badges each copy of a component's own conditioned block apart, though they share its composed id", async () => {
+    // A list drawing the component once per entry: each copy of the block
+    // carries the same composed id, in a wrapper of its own.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const copy = this.parentElement?.getAttribute("data-copy");
+        if (copy === "first") return new DOMRect(100, 100, 200, 50);
+        if (copy === "second") return new DOMRect(100, 600, 200, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const copyOfBlock = (copy: string) =>
+      createElement(
+        "div",
+        { key: copy, "data-copy": copy },
+        createElement("div", {
+          [NODE_ID_ATTRIBUTE]: "block-1",
+          [INSTANCE_ATTRIBUTE]: "place",
+          [CONDITIONED_ATTRIBUTE]: "conditional",
+          [CONDITIONED_OWN_ATTRIBUTE]: "",
+        })
+      );
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {copyOfBlock("first")}
+        {copyOfBlock("second")}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="at-rest"]'
+        )
+      );
+    // One outline per copy, not one spanning both and what lies between.
+    await waitFor(() => expect(badges()).toHaveLength(2));
+    expect(badges().map(badge => badge.style.top)).not.toEqual([
+      badges()[0]?.style.top,
+      badges()[0]?.style.top,
+    ]);
+  });
+
+  it("badges the roots of one placement nested in a component together", async () => {
+    // Each root has its own composed id; the value names the placement
+    // whose gate they carry, so they share one outline and one badge.
+    const root = (id: string) =>
+      createElement("div", {
+        key: id,
+        [NODE_ID_ATTRIBUTE]: id,
+        [INSTANCE_ATTRIBUTE]: "place",
+        [CONDITIONED_ATTRIBUTE]: "conditional",
+        [CONDITIONED_OWN_ATTRIBUTE]: "p1",
+      });
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {root("root-1")}
+        {root("root-2")}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
+      ).toHaveLength(1)
+    );
+  });
+
+  it("keeps the tab with a block wholly off the screen's left", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 500, 500);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "gone") {
+          return new DOMRect(-900, 200, 500, 50);
+        }
+        return new DOMRect(-900, 0, 2000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <div className={CANVAS_ROOT_CLASS}>
+          {createElement("div", {
+            [NODE_ID_ATTRIBUTE]: "gone",
+            [CONDITIONED_ATTRIBUTE]: "conditional",
+          })}
+          <CanvasMarks />
+        </div>
+      </div>
+    );
+    await act(async () => undefined);
+    const badge = () =>
+      container.querySelector<HTMLElement>(
+        '.nx-canvas-mark[data-mark="at-rest"]'
+      );
+    await waitFor(() => expect(badge()).not.toBeNull());
+    // No inset pulling the tab back onto the screen, away from its block.
+    const inset = Number.parseFloat(
+      badge()?.style.getPropertyValue("--nx-tag-inset-side") || "0"
+    );
+    expect(inset).toBe(0);
+  });
+
+  it("keeps the tab on screen when the screen cuts a block's left side", async () => {
+    // Only the block's rightmost 100px show, less than the tab's width.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 500, 500);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "cut") {
+          return new DOMRect(-900, 200, 1000, 50);
+        }
+        return new DOMRect(-900, 0, 2000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <div className={CANVAS_ROOT_CLASS}>
+          {createElement("div", {
+            [NODE_ID_ATTRIBUTE]: "cut",
+            [CONDITIONED_ATTRIBUTE]: "conditional",
+          })}
+          <CanvasMarks />
+        </div>
+      </div>
+    );
+    await act(async () => undefined);
+    const badge = () =>
+      container.querySelector<HTMLElement>(
+        '.nx-canvas-mark[data-mark="at-rest"]'
+      );
+    await waitFor(() => expect(badge()).not.toBeNull());
+    // Moved out past the block's right edge, a negative inset, so its left
+    // starts on screen.
+    const inset = Number.parseFloat(
+      badge()?.style.getPropertyValue("--nx-tag-inset-side") ?? "0"
+    );
+    expect(inset).toBeLessThan(0);
   });
 
   it("puts a tall block's badge inside its top when neither edge outside it is on screen", async () => {

@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
+import { eq, and, or, like, asc, desc, count, inArray, sql } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -667,6 +669,72 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   /**
+   * Lock the registry rows of `slugs` inside `tx`, and answer the slugs whose
+   * row is there, the id of each row held (`ids`, by slug), and how to end the
+   * hold early (`release`). The ids tell a caller that loaded the rows before
+   * taking the hold whether the row it now holds is the one it loaded: a slug
+   * deleted and created again between the two holds a new row.
+   *
+   * `"update"` is a collection delete's: taken before it removes anything, so
+   * a write holding a row for `"share"` (one that must not outlive the
+   * collection, such as a plugin's row naming it) and the delete take turns.
+   * The write either commits before the delete reads what it removes, or
+   * waits and finds the row gone. SQLite has one writer at a time, so there
+   * the rows are only read.
+   *
+   * MySQL ends a transaction at its first table drop, which releases row
+   * locks while the delete still has the registry rows to remove. So there
+   * each side also takes the collection's named lock on the transaction's
+   * connection (`GET_LOCK`), which a commit does not release: the delete
+   * holds it until `release`, which it calls once its last statement has
+   * run, and a write holds it only across its read of the row. A write that
+   * waited for a delete therefore reads the row after the delete removed it.
+   * The lock belongs to the connection, so `release` must run before the
+   * transaction hands the connection back, and a hold for `"share"` releases
+   * its own before it returns.
+   */
+  async holdCollectionsIn(
+    tx: TransactionContext,
+    slugs: readonly string[],
+    strength: "share" | "update"
+  ): Promise<{
+    existing: string[];
+    ids: ReadonlyMap<string, string>;
+    release: () => Promise<void>;
+  }> {
+    // Nothing to release: settled at once, with no work to wait for.
+    const none = (): Promise<void> => Promise.resolve();
+    if (slugs.length === 0) {
+      return { existing: [], ids: new Map(), release: none };
+    }
+    const named =
+      this.dialect === "mysql"
+        ? await takeNamedCollectionLocks(tx, slugs)
+        : { release: none };
+    let rows: { slug: string; id: unknown }[];
+    try {
+      rows = await tx.select<{ slug: string; id: unknown }>(
+        "dynamic_collections",
+        {
+          columns: ["slug", "id"],
+          where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
+          ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
+        }
+      );
+    } catch (error) {
+      await named.release();
+      throw error;
+    }
+    const existing = rows.map(row => row.slug);
+    const ids = new Map(rows.map(row => [row.slug, String(row.id)]));
+    if (strength === "share") {
+      await named.release();
+      return { existing, ids, release: none };
+    }
+    return { existing, ids, release: named.release };
+  }
+
+  /**
    * Remove a collection's registry row inside `tx`, so it goes with whatever
    * else that transaction removes or not at all. The setting and the delete
    * run with the row locked between them: the expiry after the commit uses
@@ -721,4 +789,50 @@ export class DynamicCollectionRegistryService extends BaseService {
       );
     }
   }
+}
+
+/** How long a hold waits for another's named lock on a collection, in seconds. */
+const NAMED_LOCK_WAIT_SECONDS = 30;
+
+/**
+ * The named lock of each of `slugs` on MySQL, taken on `tx`'s connection in
+ * one order, so two holds of overlapping sets cannot wait on each other. A
+ * name is a hash of the slug: MySQL caps a lock name at 64 characters.
+ */
+async function takeNamedCollectionLocks(
+  tx: TransactionContext,
+  slugs: readonly string[]
+): Promise<{ release: () => Promise<void> }> {
+  const names = [...new Set(slugs)]
+    .sort()
+    .map(
+      slug =>
+        `nextly:collection:${createHash("sha256").update(slug).digest("hex").slice(0, 40)}`
+    );
+  const taken: string[] = [];
+  // In the reverse of the order taken, each once.
+  const release = async (): Promise<void> => {
+    for (const name of taken.splice(0).reverse()) {
+      await tx.queryStatement(sql`SELECT RELEASE_LOCK(${name})`);
+    }
+  };
+  try {
+    for (const name of names) {
+      const [row] = await tx.queryStatement<{ locked: unknown }>(
+        sql`SELECT GET_LOCK(${name}, ${NAMED_LOCK_WAIT_SECONDS}) AS ${sql.identifier("locked")}`
+      );
+      if (Number(row?.locked) !== 1) {
+        throw NextlyError.conflict({
+          message:
+            "This collection is being changed elsewhere. Try again in a moment.",
+          logContext: { reason: "collection-named-lock-timeout", lock: name },
+        });
+      }
+      taken.push(name);
+    }
+  } catch (error) {
+    await release();
+    throw error;
+  }
+  return { release };
 }
