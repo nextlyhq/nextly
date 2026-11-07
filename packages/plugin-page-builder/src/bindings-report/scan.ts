@@ -252,9 +252,10 @@ async function hostRows(
   try {
     read = await reading.read(host);
   } catch {
-    // A value the stored-field reader cannot reach is no document to judge,
-    // and asking again would fail the same way.
-    return { rows: [], incomplete: false };
+    // Not read is not judged: a read that failed (the database, or a value
+    // that kept changing while it was read) leaves the document marked, so
+    // its last verdict stands until a later pass reads it.
+    return { rows: [], incomplete: true };
   }
   const value = valueOf(read.draft) ?? valueOf(read.published);
   if (value === undefined) return { rows: [], incomplete: false };
