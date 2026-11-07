@@ -317,8 +317,6 @@ each of them.
 
    ```ts
    // src/nextly/cached-read.ts
-   import "server-only";
-
    import { cacheLife, cacheTag } from "next/cache";
    import { getNextly } from "nextly";
    import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
@@ -394,7 +392,7 @@ each of them.
 
 With Cache Components off, which Nextly does not support, Next.js refuses to
 build a `"use cache"` function, so a blog with it off keeps only the start in
-this file: the `server-only`, `getNextly` and config imports and the last line,
+this file: the `getNextly` and config imports and the last line,
 without `cachedRead` and its registration. Its reads are then cached with
 `unstable_cache`.
 

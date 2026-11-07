@@ -16,8 +16,6 @@
  * `next.config.ts`, as this dev app ships:
  * https://nextlyhq.com/docs/guides/isr-caching#cache-components
  */
-import "server-only";
-
 import { cacheLife, cacheTag } from "next/cache";
 import { getNextly } from "nextly";
 import { registerCachedRead, runRegisteredRead } from "nextly/runtime";

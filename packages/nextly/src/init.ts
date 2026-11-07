@@ -105,6 +105,13 @@ const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_drizzleVersionChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
+  /**
+   * The config of a start that failed, until a start succeeds, so
+   * `getCachedNextly` can start Nextly again with it (the database down,
+   * say): without it a worker whose only start failed stays unusable until it
+   * restarts, refusing every read as "called before initialization".
+   */
+  __nextly_failedStartConfig?: GetNextlyOptions["config"];
 };
 
 // ============================================================
@@ -466,6 +473,17 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // calls that arrive while we are still in registerServices() will join
   // this Promise rather than starting a new one.
   globalForInit.__nextly_initPromise = initPromise;
+  // A failed start leaves its config for `getCachedNextly` to start again
+  // with; a start that succeeds clears it. Observed on a branch of its own,
+  // so the rejection still reaches every caller awaiting `initPromise`.
+  initPromise.then(
+    () => {
+      globalForInit.__nextly_failedStartConfig = undefined;
+    },
+    () => {
+      globalForInit.__nextly_failedStartConfig = options.config;
+    }
+  );
 
   return initPromise;
 }
@@ -542,6 +560,16 @@ export async function getCachedNextly(): Promise<Nextly> {
     const instance = buildNextlyInstance(getDirectAPI());
     globalForInit.__nextly_cachedInstance = instance;
     return instance;
+  }
+
+  // A start was made with the app's config and failed, leaving nothing to
+  // read and nothing in flight: start again with that config, so a worker
+  // recovers once what failed it (the database, say) is back, rather than
+  // refusing every read until it restarts. A start that fails again rejects
+  // with its own error, which says what is wrong.
+  const failedStart = globalForInit.__nextly_failedStartConfig;
+  if (failedStart !== undefined) {
+    return getNextly({ config: failedStart });
   }
 
   throw NextlyError.configuration({
@@ -657,6 +685,8 @@ export function createRegister(
  * ```
  */
 export async function shutdownNextly(): Promise<void> {
+  // A shut-down process is not one to start again on its next read.
+  globalForInit.__nextly_failedStartConfig = undefined;
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }

@@ -34,3 +34,5 @@
 New apps need nothing: the base, blank and blog templates and the plugin template's dev app now ship `src/nextly/cached-read.ts` and import it from their root layout. That one import both registers the cached read and starts Nextly with the app's config, so a page only the root layout renders, such as `/_not-found` during `next build`, finds Nextly starting rather than failing with "getCachedNextly() called before initialization". An app made by an earlier release that renders `<SiteCode>` under Cache Components adds both, as the [site code page](https://nextlyhq.com/docs/page-builder/site-code#with-cache-components) shows.
 
 `nextly/runtime` adds `cachedReadRegistered()`, which says whether the app has registered its `"use cache"` read function in this process.
+
+`getCachedNextly()` now starts Nextly again after a start that failed, with the config that start was given, so a worker whose first start met a database that was down recovers once the database is back instead of refusing every read until it restarts.

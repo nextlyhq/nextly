@@ -7,8 +7,6 @@
  * guide tells an app with Cache Components off to. It still starts Nextly, as
  * `cached-read.ts` does, so the one import does that whatever the setting.
  */
-import "server-only";
-
 import { getNextly } from "nextly";
 
 import config from "../../nextly.config";

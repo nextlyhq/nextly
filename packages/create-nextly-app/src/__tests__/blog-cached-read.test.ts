@@ -2,7 +2,7 @@
  * The blog template's Cache Components read function, as an app runs it: the
  * lifetime it gives each read, the tags, the key, and its registration. The
  * file is copied into a temporary directory, its `next/cache`, `nextly`,
- * `nextly/runtime`, `server-only` and app config imports pointed at stand-ins
+ * `nextly/runtime` and app config imports pointed at stand-ins
  * that record what they are called with.
  *
  * The guide prints the same function for apps made before it shipped, so the
@@ -58,8 +58,6 @@ export const getNextly = async args => { calls.started.push(args); throw new Err
 /** The app's config, as `@nextly-config` resolves it. */
 const APP_CONFIG = `export default { app: "config" };
 `;
-const SERVER_ONLY = `export {};
-`;
 
 let dir = "";
 let calls: Calls;
@@ -77,7 +75,6 @@ beforeAll(async () => {
   await writeFile(join(dir, "nextly-runtime.mjs"), NEXTLY_RUNTIME);
   await writeFile(join(dir, "nextly.mjs"), NEXTLY);
   await writeFile(join(dir, "app-config.mjs"), APP_CONFIG);
-  await writeFile(join(dir, "server-only.mjs"), SERVER_ONLY);
   const source = (await readFile(TEMPLATE, "utf8"))
     .replace('"next/cache"', JSON.stringify(join(dir, "next-cache.mjs")))
     .replace(
@@ -85,8 +82,7 @@ beforeAll(async () => {
       JSON.stringify(join(dir, "nextly-runtime.mjs"))
     )
     .replace('"nextly"', JSON.stringify(join(dir, "nextly.mjs")))
-    .replace('"@nextly-config"', JSON.stringify(join(dir, "app-config.mjs")))
-    .replace('"server-only"', JSON.stringify(join(dir, "server-only.mjs")));
+    .replace('"@nextly-config"', JSON.stringify(join(dir, "app-config.mjs")));
   await writeFile(join(dir, "cached-read.ts"), source);
   ({ cachedRead } = await import(join(dir, "cached-read.ts")));
 });

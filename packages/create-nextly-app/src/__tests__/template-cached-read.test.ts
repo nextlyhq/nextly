@@ -175,7 +175,9 @@ describe("every copy of the cached-read function is the blog's", () => {
       "src/nextly/cached-read.cache-components-off.ts"
     );
     const source = readFileSync(off, "utf8");
-    expect(source).toMatch(/^import "server-only";$/m);
+    // No `server-only` marker: a CLI, cron or worker importing a query module
+    // reaches this file, and the marker's Node entry throws there.
+    expect(source).not.toMatch(/server-only/);
     expect(configResolves(off, join(PLAYGROUND, "tsconfig.json"))).toBe(true);
     expect(startBlock(source)).toBe(
       startBlock(readFileSync(BLOG_CACHED_READ, "utf8"))

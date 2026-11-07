@@ -18,8 +18,6 @@
  * `cached-read.cache-components-off.ts` beside it instead.
  * https://nextlyhq.com/docs/guides/isr-caching#cache-components
  */
-import "server-only";
-
 import { cacheLife, cacheTag } from "next/cache";
 import { getNextly } from "nextly";
 import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
