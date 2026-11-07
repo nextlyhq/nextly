@@ -229,6 +229,13 @@ collection exists. A refused action answers `409` for a collection that already 
 template and `422` for one that cannot have one; a dry run answers either as `refusals`.
 The answer holds the `template` as the write stored it.
 
+A template's lists and visibility conditions are judged against the collection it draws,
+not the `templates` collection, so a list of the entry's related entries names that
+collection's relations. In the editor a template is previewed with a real entry of its
+collection ([Editing a template](/docs/page-builder/editor#editing-a-template)). Which
+entry is previewed is the editor's own state and is not stored, so there is no action for
+it.
+
 ## Other routes with a dry run
 
 - `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save,

@@ -1,6 +1,6 @@
 ---
 title: Using the editor
-description: The editor's rail and panels, the Design panel's tabs, Help, and the keyboard shortcuts.
+description: The editor's rail and panels, the Design panel's tabs, editing a template, Help, and the keyboard shortcuts.
 ---
 
 The editor opens with the page on the canvas, the inspector on the right for the
@@ -328,6 +328,35 @@ up**, **Move down**, **Move in** or **Move out**.
   through the rows, <kbd>→</kbd> and <kbd>←</kbd> open and close a block, and
   <kbd>Home</kbd> and <kbd>End</kbd> go to the first and last row.
 
+## Editing a template
+
+A template draws every entry of the collection it names, so while you edit one the
+canvas draws it with a real entry of that collection. The **Previewing** strip pinned
+above the canvas names that entry in full, with its status: Draft, Published, or Changed
+(published, with saved changes not yet published). It stays in place while the page
+scrolls, and appears only on a template.
+
+- **The entry it opens on** is the one you last previewed this template with in this
+  browser session, or the most recently updated entry you may read.
+- **Choose another** from the strip's chip. The list shows the entries you may read,
+  drafts included, most recently updated first, with when each was updated. Type to
+  search them by title.
+- **The keys** <kbd>Shift+Alt+↓</kbd> and <kbd>Shift+Alt+↑</kbd> preview the next
+  and the previous entry in the list, from the canvas or the panels but not while you
+  type. A short message says which entry you switched to.
+- **New** opens the screen for a new entry in a new tab and leaves the template open.
+  When you come back to the editor the list is read again, so the new entry is there to
+  choose. It is offered only if you may create entries in that collection.
+
+Bound text, lists of related entries and visibility conditions on the canvas read the
+entry you preview as you would read it, drafts included. When there is no entry you may
+read, the chip says so, for example "No posts to preview", and the canvas draws each
+binding's fallback until there is one. The words are the same whether the collection is
+empty or you may read none of it.
+
+Which entry you preview is not saved with the template. When the template is saved, its
+lists and conditions are checked against the collection it draws.
+
 ## Help
 
 Help lists the keyboard shortcuts the editor has right now, read from the same list the
@@ -341,25 +370,26 @@ Escape closes Help and returns you to the rail.
 
 On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 
-| Keys                                                                          | What they do                                                                                                                      |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                  | Undo the last change                                                                                                              |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo the last undone change                                                                                                       |
-| <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                  | Duplicate the selected block                                                                                                      |
-| <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                     | Delete the selected block                                                                                                         |
-| <kbd>Enter</kbd>                                                              | Edit the selected block's text                                                                                                    |
-| <kbd>Escape</kbd>                                                             | Select the block holding this one, or clear the selection at the top of the page                                                  |
-| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                     | Move the selected block up or down                                                                                                |
-| <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                     | Move the selected block into the container above it, or out of its container                                                      |
-| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                  | Open search: blocks to add, this page's blocks, other pages and commands                                                          |
-| <kbd>F6</kbd>                                                                 | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
-| <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                 | Hide both side panels, or show them again                                                                                         |
-| <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                  | Show the page at actual size                                                                                                      |
-| <kbd>Shift</kbd>+<kbd>1</kbd>                                                 | Fit the page to the canvas                                                                                                        |
-| <kbd>F2</kbd>                                                                 | In Layers, rename the focused row's block                                                                                         |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>                                 | In Layers, hide or show the focused row's block on the device you are editing                                                     |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>                                 | In Layers, lock or unlock the focused row's block                                                                                 |
-| <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key                               | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
+| Keys                                                                                        | What they do                                                                                                                      |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd>                                                                | Undo the last change                                                                                                              |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd>               | Redo the last undone change                                                                                                       |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
+| <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
+| <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
+| <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |
+| <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                                   | Move the selected block into the container above it, or out of its container                                                      |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                                | Open search: blocks to add, this page's blocks, other pages and commands                                                          |
+| <kbd>F6</kbd>                                                                               | Move to the next area of the editor: top bar, rail, panel, canvas, inspector                                                      |
+| <kbd>Ctrl</kbd>+<kbd>\\</kbd>                                                               | Hide both side panels, or show them again                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>0</kbd>                                                                | Show the page at actual size                                                                                                      |
+| <kbd>Shift</kbd>+<kbd>1</kbd>                                                               | Fit the page to the canvas                                                                                                        |
+| <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>↓</kbd> | In a template, preview the previous or the next entry                                                                             |
+| <kbd>F2</kbd>                                                                               | In Layers, rename the focused row's block                                                                                         |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>                                               | In Layers, hide or show the focused row's block on the device you are editing                                                     |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>                                               | In Layers, lock or unlock the focused row's block                                                                                 |
+| <kbd>Shift</kbd>+<kbd>F10</kbd> or the menu key                                             | Open the menu of the block that holds focus, from a link or button inside it. Elsewhere, right-click the block or use its toolbar |
 
 Help is the complete list for the editor you have open, including any shortcut the
 page around it adds, such as saving.
