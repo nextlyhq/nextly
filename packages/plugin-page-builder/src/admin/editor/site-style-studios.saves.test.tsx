@@ -7,7 +7,8 @@
  *
  * The site style client is replaced with a recorder, and the builder's
  * panels with ones that keep their props: the panels' own drawing is asserted
- * where it lives.
+ * where it lives. A save stored over someone else's change says so: on the
+ * Variables panel's line, and in a toast for shared styles and fonts.
  */
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import type { NamedClass } from "@nextlyhq/blocks-engine";
@@ -22,7 +23,33 @@ const saves = vi.hoisted(() => ({
     options: { base?: unknown; hold?: boolean } | undefined;
   }[],
   answer: (): unknown => ({ saved: true, issues: {} }),
+  /** How many times a surface asked for the site style to be read again. */
+  rereads: 0,
 }));
+
+/** The warnings toasted, with their options. */
+const toasts = vi.hoisted(() => ({
+  warning: [] as {
+    message: string;
+    options: { action?: { label: string; onClick: () => void } } | undefined;
+  }[],
+}));
+
+vi.mock("@nextlyhq/ui", async importOriginal => {
+  const actual = await importOriginal<typeof import("@nextlyhq/ui")>();
+  return {
+    ...actual,
+    toast: {
+      ...actual.toast,
+      warning: (
+        message: string,
+        options?: { action?: { label: string; onClick: () => void } }
+      ) => {
+        toasts.warning.push({ message, options });
+      },
+    },
+  };
+});
 
 /** The props the builder's panels were last drawn with. */
 const panels = vi.hoisted(() => ({
@@ -31,6 +58,7 @@ const panels = vi.hoisted(() => ({
     | {
         tokens: { tokens: { name: string }[] } | undefined;
         onChange: (next: unknown) => void;
+        notice?: { text: string; onReload: () => void };
       },
   fonts: undefined as
     | undefined
@@ -44,8 +72,17 @@ vi.mock("../site-style-client", () => {
     saves.calls.push({ section, value, options });
     return saves.answer();
   };
+  const reread = () => {
+    saves.rereads += 1;
+  };
+  // A place in the history saves as a section save does.
+  const reserve = (section: string) => ({
+    save: (value: unknown, _inverse: unknown, options?: object) =>
+      save(section, value, options),
+    cancel: () => {},
+  });
   return {
-    useSaveSiteStyle: () => ({ save, reserve: () => ({}) }),
+    useSaveSiteStyle: () => ({ save, reserve, reread }),
     useSaveSpacingMode: () => ({ save: async () => ({ saved: true }) }),
     useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
     useFontCatalogueClient: () => ({
@@ -95,9 +132,28 @@ const other = {
 const names = (set: { tokens: { name: string }[] } | undefined) =>
   (set?.tokens ?? []).map(each => each.name);
 
+/** Conflicts after one refusal naming Sam, exactly one save between. */
+const bySam = (entries: unknown[]) => ({
+  entries,
+  refusal: { changedBy: { name: "Sam", kind: "person" }, oneSaveBetween: true },
+});
+
+/** One entry both sides changed differently, mine kept. */
+const bothChanged = (key: string, base: unknown, mine: unknown) => ({
+  key,
+  setting: false,
+  kind: "changed",
+  kept: "mine",
+  base,
+  mine,
+  theirs: base,
+});
+
 beforeEach(() => {
   saves.calls.length = 0;
   saves.answer = () => ({ saved: true, issues: {} });
+  saves.rereads = 0;
+  toasts.warning.length = 0;
   panels.tokens = undefined;
   panels.fonts = undefined;
 });
@@ -228,5 +284,185 @@ describe("the Fonts tab's saves", () => {
     expect(saves.calls[1]?.options?.base).toEqual(
       expect.arrayContaining([added])
     );
+  });
+});
+
+describe("a save stored over someone else's change", () => {
+  const brandMine = { ...brand, values: { light: "#000000" } };
+  const BRAND_WORDS =
+    "Sam changed Brand while you were editing. Your value was kept. Undo puts theirs back.";
+
+  function variablesStudio() {
+    render(
+      <TokensStudio
+        merged={{ tokens: [brand] } as never}
+        supplied={undefined}
+        pending={false}
+      >
+        <VariablesTab />
+      </TokensStudio>
+    );
+  }
+
+  it("says so on the Variables line, and Reload reads again and drops the studio's copy", async () => {
+    variablesStudio();
+    saves.answer = () => ({
+      saved: true,
+      issues: {},
+      stored: { tokens: [brandMine, accent] },
+      conflicts: bySam([bothChanged("color.brand", brand, brandMine)]),
+    });
+    await act(async () => {
+      panels.tokens?.onChange({ tokens: [brandMine, accent] });
+    });
+    expect(panels.tokens?.notice?.text).toBe(BRAND_WORDS);
+    expect(names(panels.tokens?.tokens)).toContain("color.accent");
+    // Variables say it on their own line, not in a toast.
+    expect(toasts.warning).toEqual([]);
+
+    act(() => {
+      panels.tokens?.notice?.onReload();
+    });
+    expect(saves.rereads).toBe(1);
+    expect(panels.tokens?.notice).toBeUndefined();
+    // The studio's own copy is gone: it shows the read again.
+    expect(names(panels.tokens?.tokens)).toContain("color.brand");
+    expect(names(panels.tokens?.tokens)).not.toContain("color.accent");
+  });
+
+  it("clears the line on the next edit, and says nothing for a clean merge", async () => {
+    variablesStudio();
+    saves.answer = () => ({
+      saved: true,
+      issues: {},
+      conflicts: bySam([bothChanged("color.brand", brand, brandMine)]),
+    });
+    await act(async () => {
+      panels.tokens?.onChange({ tokens: [brandMine] });
+    });
+    expect(panels.tokens?.notice?.text).toBe(BRAND_WORDS);
+
+    // Merged cleanly: someone else's token kept, and nothing said.
+    saves.answer = () => ({
+      saved: true,
+      issues: {},
+      stored: { tokens: [brandMine, other] },
+    });
+    await act(async () => {
+      panels.tokens?.onChange({ tokens: [brandMine, accent] });
+    });
+    expect(panels.tokens?.notice).toBeUndefined();
+    expect(saves.rereads).toBe(0);
+  });
+
+  const card = { id: "c1", slug: "card", orderIndex: 0, styles: {} };
+  const cardMine = { ...card, label: "My card" };
+
+  it("toasts a shared style's conflict with a Reload that reads again", async () => {
+    const read = { classes: [card] as unknown as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    saves.answer = () => ({
+      saved: true,
+      issues: {},
+      stored: [cardMine],
+      conflicts: bySam([bothChanged("c1", card, cardMine)]),
+    });
+    await act(async () => {
+      await result.current.rename("c1", { label: "My card", slug: "card" });
+    });
+    expect(toasts.warning).toHaveLength(1);
+    expect(toasts.warning[0]?.message).toBe(
+      "Sam changed My card while you were editing. Your value was kept. Undo puts theirs back."
+    );
+    expect(toasts.warning[0]?.options?.action?.label).toBe("Reload");
+    toasts.warning[0]?.options?.action?.onClick();
+    expect(saves.rereads).toBe(1);
+  });
+
+  it("toasts nothing for a shared style merged cleanly", async () => {
+    const read = { classes: [card] as unknown as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    saves.answer = () => ({ saved: true, issues: {}, stored: [card] });
+    await act(async () => {
+      await result.current.add({
+        id: "c2",
+        slug: "hero",
+        orderIndex: 1,
+        styles: {},
+      } as NamedClass);
+    });
+    expect(toasts.warning).toEqual([]);
+  });
+
+  it("toasts a font's conflict, and Reload drops the faces held ahead of the read", async () => {
+    const lora = {
+      family: "Lora",
+      weight: "400",
+      style: "normal",
+      src: [{ url: "/api/media/m1/raw", format: "woff2" as const }],
+    };
+    const loraBold = {
+      ...lora,
+      weight: "700",
+      src: [{ url: "/api/media/m2/raw", format: "woff2" as const }],
+    };
+    const inter = {
+      ...lora,
+      family: "Inter",
+      src: [{ url: "/api/media/m3/raw", format: "woff2" as const }],
+    };
+    // A face someone else added meanwhile, which the merge kept.
+    const merriweather = {
+      ...lora,
+      family: "Merriweather",
+      src: [{ url: "/api/media/m4/raw", format: "woff2" as const }],
+    };
+    render(
+      <FontsPanelWithUpload
+        {...({} as FontsPanelProps)}
+        storedFaces={[lora, inter]}
+        storedPending={false}
+        unreadableFonts={[]}
+      />
+    );
+    // Removing Lora met a bold face of it someone else added; mine won.
+    saves.answer = () => ({
+      saved: true,
+      issues: {},
+      stored: [inter, merriweather],
+      conflicts: bySam([
+        {
+          key: "Lora|700",
+          setting: false,
+          kind: "removed-by-me",
+          kept: "mine",
+          base: undefined,
+          mine: undefined,
+          theirs: loraBold,
+        },
+      ]),
+    });
+    await act(async () => {
+      await panels.fonts?.onRemoveFamily({ key: "lora", family: "Lora" });
+    });
+    expect(toasts.warning.map(each => each.message)).toEqual([
+      "Sam changed Lora while you were removing it. It was removed. Undo brings it back with their value.",
+    ]);
+    act(() => {
+      toasts.warning[0]?.options?.action?.onClick();
+    });
+    expect(saves.rereads).toBe(1);
+
+    // The next save is made from the read alone: the stored merge this
+    // writer held ahead of the read, Merriweather in it, is dropped.
+    saves.answer = () => ({ saved: true, issues: {} });
+    await act(async () => {
+      await panels.fonts?.onRemoveFamily({ key: "inter", family: "Inter" });
+    });
+    expect(saves.calls[1]?.options?.base).toEqual([lora, inter]);
   });
 });

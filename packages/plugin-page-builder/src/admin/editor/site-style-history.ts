@@ -33,6 +33,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { conflictWords } from "../conflict-words";
 import {
   releaseHeldSiteStyle,
   sameSection,
@@ -199,6 +200,7 @@ export function useSiteStyleHistory(): {
           const stored = outcome.stored;
           if (stored) {
             waitForRead(outcome);
+            toastReplayConflicts(outcome, verb);
           } else {
             toast.error(
               `That style change could not be ${verb}, so it stays as it is.`
@@ -222,6 +224,20 @@ export function useSiteStyleHistory(): {
   const replay = useMemo(() => ({ revision, settling }), [revision, settling]);
   useReleaseWhenDone(history);
   return { history, replay, connect, preview: shown };
+}
+
+/**
+ * Says where an undo or redo met a change made since and kept it: that part
+ * of the step could not be taken back or put forward. No Reload is offered,
+ * since the surfaces holding a copy remount once the replay is read back.
+ */
+function toastReplayConflicts(
+  outcome: SiteStyleReplay,
+  verb: "undone" | "redone"
+): void {
+  if (outcome.section === "breakpoints") return;
+  const words = conflictWords(outcome.section, outcome.conflicts, verb);
+  if (words !== undefined) toast.warning(words);
 }
 
 /** A held value drawn over the read, and the read its write answered at. */

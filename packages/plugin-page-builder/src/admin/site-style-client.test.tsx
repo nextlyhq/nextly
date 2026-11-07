@@ -130,6 +130,7 @@ const {
   useSaveSpacingMode,
   useSiteStyle,
 } = await import("./site-style-client");
+const { KEPT_CHANGING_WORDS } = await import("./conflict-words");
 
 /** A defaults tier a host states in code. */
 const DEFAULTS = {
@@ -444,7 +445,62 @@ describe("a save merged onto the newest stored copy", () => {
       verdict = await result.current.save("classes", [hero], { base: [card] });
     });
     expect(writes).toHaveLength(3);
-    expect(verdict).toMatchObject({ saved: false, keptChanging: true });
+    // Refused in the editor's one sentence for it, wherever it is shown.
+    expect(verdict).toMatchObject({
+      saved: false,
+      keptChanging: true,
+      issues: { classes: KEPT_CHANGING_WORDS },
+    });
+  });
+
+  it("keeps the form's leave guard asking until a write retried after a refusal has answered", async () => {
+    // The entry form asks before the page is left while a tracked write is
+    // unanswered. A write refused as stale and sent again is still
+    // unanswered between the two, so its attempt must not settle there.
+    const history = { record: () => () => {}, settled: new Map() };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={history}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    readAnswer = {
+      data: { classes: [card], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    freshAnswer = () => ({ classes: [card], _rev: "6" });
+    const answers: {
+      ok: (value: unknown) => void;
+      no: (reason: unknown) => void;
+    }[] = [];
+    writeBehaviour = () =>
+      new Promise((ok, no) => {
+        answers.push({ ok, no });
+      });
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = result.current.save("classes", [hero], { base: [card] });
+    });
+    expect(tracked).toHaveLength(1);
+    let answered = false;
+    void tracked[0]?.settled.then(() => {
+      answered = true;
+    });
+    await waitFor(() => expect(answers).toHaveLength(1));
+    expect(answered).toBe(false);
+
+    await act(async () => {
+      answers[0]?.no(staleRefusal("6"));
+    });
+    await waitFor(() => expect(answers).toHaveLength(2));
+    expect(answered).toBe(false);
+
+    await act(async () => {
+      answers[1]?.ok({ id: "1", _rev: "7" });
+      await saving;
+    });
+    await waitFor(() => expect(answered).toBe(true));
   });
 
   it("undoes onto the newest copy, yielding to a change made since", async () => {
@@ -481,8 +537,17 @@ describe("a save merged onto the newest stored copy", () => {
     await act(async () => {
       await result.current.save("classes", [mine], { base: [card] });
     });
+    let replay: unknown;
     await act(async () => {
-      await steps[0]?.undo();
+      replay = await steps[0]?.undo();
+    });
+    // The undo answers what it kept of theirs, so the history can say so.
+    expect(replay).toMatchObject({
+      stored: true,
+      conflicts: {
+        entries: [{ key: "c1", kind: "changed", kept: "theirs" }],
+        refusal: { oneSaveBetween: true },
+      },
     });
     expect(writes).toEqual([
       { classes: [mine], _rev: "5" },

@@ -95,6 +95,7 @@ import {
   type VersionedSiteStyle,
 } from "../site-style-versioned-save";
 
+import { KEPT_CHANGING_WORDS } from "./conflict-words";
 import { useStoredSiteStyle } from "./site-style-read";
 
 /**
@@ -345,6 +346,12 @@ export interface SiteStyleReplay {
   readonly section: SiteStyleSection;
   /** The section's value once the write answered. */
   readonly value: unknown;
+  /**
+   * The true conflicts the replay's merge settled, theirs kept: where a
+   * change made since stood, this one could not be taken back or put
+   * forward, which the history says.
+   */
+  readonly conflicts?: SaveConflicts;
 }
 
 /**
@@ -599,6 +606,11 @@ export interface SiteStyleWrite {
   readonly reserve: (section: SiteStyleSection) => SiteStyleSlot;
   /** Whether a save is in flight. */
   readonly saving: boolean;
+  /**
+   * Read the stored site style again, for a surface dropping its own copy
+   * after a save met someone else's ("Reload").
+   */
+  readonly reread: () => void;
 }
 
 /**
@@ -734,11 +746,17 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         // the same decision onto four surfaces, and the one that forgot would
         // show an unhandled rejection where a field message belongs.
         const issues = issuesFromRejection(reason);
-        // Refused as stale after every try: the design kept changing.
-        const keptChanging =
-          staleRefusalData(reason) === undefined
-            ? {}
-            : { keptChanging: true as const };
+        // Refused as stale after every try: the design kept changing, said
+        // in the editor's one sentence for it wherever the refusal shows.
+        if (staleRefusalData(reason) !== undefined) {
+          return {
+            result: {
+              saved: false,
+              issues: { [section]: KEPT_CHANGING_WORDS },
+              keptChanging: true,
+            },
+          };
+        }
         // A rejection carrying no per-path detail is still a refusal. Answering
         // `saved: true` because nothing could be read from it would report a
         // save that did not happen, which is the one outcome worth failing
@@ -748,15 +766,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             reason instanceof Error
               ? reason.message
               : "This could not be saved.";
-          return {
-            result: {
-              saved: false,
-              issues: { [section]: message },
-              ...keptChanging,
-            },
-          };
+          return { result: { saved: false, issues: { [section]: message } } };
         }
-        return { result: { saved: false, issues, ...keptChanging } };
+        return { result: { saved: false, issues } };
       }
     },
     [mutation, refetch, readFresh, newest]
@@ -948,7 +960,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             // to theirs where the change to take back is no longer there.
             REPLAY_PLAN
           ).done;
-          return { stored: result.saved, section, value: holds };
+          return replayOf(result, section, holds);
         };
       const withdraw = history.record({
         // Back to what stood just before the change was stored, as the
@@ -1078,7 +1090,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
               result.saved ? "stored" : "dropped"
             );
           }
-          return { stored: result.saved, section, value: holds };
+          return replayOf(result, section, holds);
         };
       const withdraw = history.record({
         // A change still waiting is written before it is taken back, so the
@@ -1115,7 +1127,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
     [write, writeWithoutStep, history, inTurn, chainOf]
   );
 
-  return { save, reserve, saving: mutation.isPending };
+  const reread = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+
+  return { save, reserve, saving: mutation.isPending, reread };
 }
 
 /** How one section write is merged onto the newest stored copy. */
@@ -1151,6 +1167,20 @@ interface TurnAnswer {
   readonly skipped?: boolean;
   /** The section as the merged write found it stored, which Undo puts back. */
   readonly replaced?: unknown;
+}
+
+/** What one half of a step came to, with the conflicts its merge settled. */
+function replayOf(
+  result: SiteStyleSaveResult,
+  section: SiteStyleSection,
+  holds: unknown
+): SiteStyleReplay {
+  return {
+    stored: result.saved,
+    section,
+    value: holds,
+    ...(result.conflicts === undefined ? {} : { conflicts: result.conflicts }),
+  };
 }
 
 /**

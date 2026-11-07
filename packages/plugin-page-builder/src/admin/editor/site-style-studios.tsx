@@ -64,6 +64,7 @@ import {
 } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
+import { conflictWords } from "../conflict-words";
 import { useSharedStylesClient } from "../shared-styles-client";
 import {
   useFontCatalogueClient,
@@ -76,6 +77,7 @@ import { useShown } from "../use-shown";
 import { useVariablesClient } from "../variables-client";
 
 import { rebasedOnCode } from "./class-override-rebase";
+import { toastSaveConflicts } from "./conflict-toast";
 import { useDesignHeaderSlot } from "./design-panel";
 import { StyleRevisionContext } from "./site-style-history";
 import { PLUGIN_SOURCE } from "./stored-document";
@@ -233,7 +235,7 @@ export function TokensStudio({
    */
   const editable = merged === undefined ? undefined : resolveSiteTokens(merged);
   const baseline = resolveSiteTokens(supplied);
-  const { edits, shownNow, issue, setIssue, commit } = useTokenCommits(
+  const { edits, shownNow, issue, setIssue, notice, commit } = useTokenCommits(
     baseline,
     editable,
     supplied
@@ -257,6 +259,7 @@ export function TokensStudio({
     tokens: edits ?? editable,
     supplied: baseline,
     issue,
+    ...(notice === undefined ? {} : { notice }),
     absence: absenceOf(pending),
     readOnly: !mayChange,
     onChange: commit,
@@ -303,11 +306,18 @@ function useTokenCommits(
   shownNow: () => SiteTokenSet | null;
   issue: string | undefined;
   setIssue: (issue: string | undefined) => void;
+  /** What the last save met of someone else's, with the way to read again. */
+  notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
 } {
-  const { save } = useSaveSiteStyle();
+  const { save, reread } = useSaveSiteStyle();
   const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
   const [issue, setIssue] = useState<string | undefined>(undefined);
+  /*
+   * The words for a save that was stored but met someone else's change to
+   * the same variables. Cleared by the next edit and by Reload.
+   */
+  const [conflict, setConflict] = useState<string | undefined>(undefined);
   /*
    * The last set a save is KNOWN to have stored, and what a refused edit falls
    * back to — not "whatever was on screen before it", which after an earlier
@@ -332,6 +342,7 @@ function useTokenCommits(
         : tokenOverrideOf(baseline, shownBefore);
     show(next);
     setIssue(undefined);
+    setConflict(undefined);
     latest.current = next;
     /*
      * Only what DIFFERS from the site's own defaults. `merged` is what the
@@ -352,9 +363,27 @@ function useTokenCommits(
         { latest, persisted },
         show
       );
+      // Said whichever edit it answers: a true conflict is never silent.
+      const words = result.saved
+        ? conflictWords("tokens", result.conflicts)
+        : undefined;
+      if (words !== undefined) setConflict(words);
     });
   };
-  return { edits, shownNow, issue, setIssue, commit };
+  /*
+   * Reload: the studio's own copy is dropped, so it shows the read again,
+   * and the read is asked for again, carrying both changes as stored.
+   */
+  const reload = (): void => {
+    setConflict(undefined);
+    latest.current = null;
+    persisted.current = null;
+    show(null);
+    reread();
+  };
+  const notice =
+    conflict === undefined ? undefined : { text: conflict, onReload: reload };
+  return { edits, shownNow, issue, setIssue, notice, commit };
 }
 
 /**
@@ -1041,7 +1070,7 @@ function useAddClass(
   writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
-  const { save: saveSection } = useSaveSiteStyle();
+  const { save: saveSection, reread } = useSaveSiteStyle();
   return useCallback(
     async (entry: NamedClass): Promise<string | undefined> =>
       writes.run<string | undefined>(async existing => {
@@ -1076,6 +1105,8 @@ function useAddClass(
           classOverrideOf(configured, next),
           { base: classOverrideOf(configured, existing) }
         );
+        // Stored over someone else's change to a style: said, with Reload.
+        toastSaveConflicts("classes", result, reread);
         // `next` is returned ONLY on success, so a refused write never becomes
         // the base the following edit builds on; the merge as stored, where
         // the save met a newer one.
@@ -1090,7 +1121,7 @@ function useAddClass(
             }
           : { result: refused };
       }),
-    [writes, configured, saveSection]
+    [writes, configured, saveSection, reread]
   );
 }
 
@@ -1103,7 +1134,7 @@ function useWriteClassStyles(
   writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
-  const { reserve } = useSaveSiteStyle();
+  const { reserve, reread } = useSaveSiteStyle();
   // The code's styles as they are when a step is undone or redone, not when
   // it was made: the code may change while the step waits in the history.
   const configuredNow = useRef(configured);
@@ -1175,6 +1206,7 @@ function useWriteClassStyles(
           { undo: replay(undo), redo: replay(change) },
           { base: classOverrideOf(configured, existing) }
         );
+        toastSaveConflicts("classes", result, reread);
         const refused = refusalOf(
           result,
           "This shared style could not be changed."
@@ -1187,7 +1219,7 @@ function useWriteClassStyles(
           : { result: refused };
       });
     },
-    [writes, configured, reserve]
+    [writes, configured, reserve, reread]
   );
 }
 
@@ -1215,7 +1247,7 @@ function useRenameClass(
   /** Release the pending name, but only if this attempt is still the live one. */
   endRename: (classId: string, attempt: number) => void
 ) {
-  const { reserve } = useSaveSiteStyle();
+  const { reserve, reread } = useSaveSiteStyle();
   return useCallback(
     async (
       classId: string,
@@ -1254,6 +1286,7 @@ function useRenameClass(
             undefined,
             { base: classOverrideOf(configured, existing) }
           );
+          toastSaveConflicts("classes", result, reread);
           if (result.saved) {
             return {
               result: { ok: true as const },
@@ -1286,7 +1319,7 @@ function useRenameClass(
         endRename(classId, mine);
       }
     },
-    [writes, configured, reserve, beginRename, endRename]
+    [writes, configured, reserve, reread, beginRename, endRename]
   );
 }
 
@@ -1324,7 +1357,7 @@ function useFontFaceWriter(
   add: (request: FontFaceUpload) => Promise<string | undefined>;
   remove: (family: SiteFamily) => Promise<string | undefined>;
 } {
-  const { save: saveSiteStyle } = useSaveSiteStyle();
+  const { save: saveSiteStyle, reread } = useSaveSiteStyle();
   const { mutateAsync: uploadMedia } = useUploadMedia();
   /*
    * Every face this writer has saved, kept until the read reports it back.
@@ -1355,6 +1388,14 @@ function useFontFaceWriter(
    * and which changes exactly when the author chooses a different file.
    */
   const uploaded = useRef<{ file: File; media: UploadedMedia } | null>(null);
+  /*
+   * Reload after a save met someone else's change: what this writer saved
+   * ahead of the read is dropped, and the read is asked for again.
+   */
+  const reload = useCallback(() => {
+    written.current = [];
+    reread();
+  }, [reread]);
 
   const add = useCallback(
     async (request: FontFaceUpload): Promise<string | undefined> => {
@@ -1458,6 +1499,7 @@ function useFontFaceWriter(
       const base = appendBase(stored, written.current);
       const next = [...base, face];
       const result = await saveSiteStyle("fonts", next, { base });
+      toastSaveConflicts("fonts", result, reload);
       if (result.saved) {
         // Stored and referenced, so the next add starts clean rather than
         // pointing a second face at the first face's bytes.
@@ -1475,7 +1517,7 @@ function useFontFaceWriter(
         ? reasons.join(" ")
         : "That font could not be saved.";
     },
-    [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia]
+    [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia, reload]
   );
 
   /*
@@ -1494,6 +1536,7 @@ function useFontFaceWriter(
       const base = appendBase(stored, written.current);
       const next = withoutFamily(base, family.key);
       const result = await saveSiteStyle("fonts", next, { base });
+      toastSaveConflicts("fonts", result, reload);
       if (result.saved) {
         // Forgotten here too, or the next upload would put it back; the
         // merge as stored, where the save met a newer one.
@@ -1508,7 +1551,7 @@ function useFontFaceWriter(
         ? reasons.join(" ")
         : `${family.family} could not be removed.`;
     },
-    [saveSiteStyle, stored, storedPending, unreadableFonts]
+    [saveSiteStyle, stored, storedPending, unreadableFonts, reload]
   );
 
   return { add, remove };
