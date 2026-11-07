@@ -137,6 +137,16 @@ export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin";
 export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
 
 /**
+ * A field's address in its document (@experimental): its path from the
+ * document's root, with each repeater row named by the id it was last saved
+ * with rather than its position (`sections.<rowId>.body`), so a link built on
+ * it opens the same row however the rows are reordered. A row added since the
+ * last save, or in a repeater whose rows set their own `id` field, has none
+ * yet, and the answer says why. Outside repeaters it is the field's form path.
+ */
+export { useFieldAddress, type FieldAddress } from "@nextlyhq/admin";
+
+/**
  * The surrounding document's full-page preview (@experimental).
  *
  * For a field that shows the page it holds — the page builder's entry view —

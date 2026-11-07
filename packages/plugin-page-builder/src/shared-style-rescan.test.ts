@@ -67,6 +67,50 @@ describe("whether a stored row references a style", () => {
     ).toBe(true);
   });
 
+  it("reads a blocks field in every row of a repeater, rows stored as text too", () => {
+    // Only the second row uses the style: a reader of one row, or of none,
+    // would take it for unused.
+    const rows = [
+      { id: "r1", body: blocks("c-hero") },
+      { id: "r2", body: blocks("c-card") },
+    ];
+    expect(
+      referencesAny({ sections: rows }, ["sections.body"], ids, classes)
+    ).toBe(true);
+    expect(
+      referencesAny(
+        { sections: JSON.stringify(rows) },
+        ["sections.body"],
+        ids,
+        classes
+      )
+    ).toBe(true);
+    expect(
+      referencesAny(
+        { sections: [{ id: "r1", body: blocks("c-hero") }] },
+        ["sections.body"],
+        ids,
+        classes
+      )
+    ).toBe(false);
+  });
+
+  it("reads a blocks field in a repeater inside a row of another", () => {
+    expect(
+      referencesAny(
+        {
+          sections: [
+            { id: "s1", columns: [{ id: "c1", body: blocks() }] },
+            { id: "s2", columns: [{ id: "c2", body: blocks("c-card") }] },
+          ],
+        },
+        ["sections.columns.body"],
+        ids,
+        classes
+      )
+    ).toBe(true);
+  });
+
   it("reads only the fields named, and only the ids asked about", () => {
     expect(
       referencesAny({ other: blocks("c-card") }, ["content"], ids, classes)
@@ -278,6 +322,68 @@ describe("the stored documents, as the rescan reads them on a real site", () => 
       },
     };
   }
+
+  it("finds a style used only inside a repeater's row, on a collection whose only blocks field is there", async () => {
+    // The collection declares no blocks field outside its repeater, so it is
+    // a document the builder edits only through a row; a removal must still
+    // see the row's use and be refused.
+    const site = {
+      self: { collections: {}, singles: {} },
+      config: {},
+      services: {
+        collections: {
+          listCollections: async () => ({
+            data: [
+              {
+                slug: "landing",
+                label: "Landing",
+                fields: [
+                  {
+                    name: "sections",
+                    type: "repeater",
+                    fields: [
+                      { name: "heading", type: "text" },
+                      { name: "body", type: "blocks" },
+                    ],
+                  },
+                ],
+              },
+            ],
+            pagination: { hasMore: false },
+          }),
+        },
+        singles: { list: async () => ({ data: [], total: 0 }) },
+      },
+    };
+    const sections = [
+      { id: "r1", heading: "One", body: blocks() },
+      { id: "r2", heading: "Two", body: blocks("c-card") },
+    ];
+    const selects: unknown[] = [];
+    const nextly = {
+      find: async (args: { select?: unknown }) => {
+        selects.push(args.select);
+        return {
+          items: [{ id: "l1", sections }],
+          meta: { hasNext: false },
+        };
+      },
+      findByID: (async args => ({
+        id: args.id,
+        sections,
+      })) as ClassUsageDirectApi["findByID"],
+      findSingle: async () => null,
+    };
+    expect(
+      await storedUsesOf(
+        ["c-card"],
+        storedDocumentsOf(site as never, nextly as never),
+        classes
+      )
+    ).toEqual([{ kind: "collection", slug: "landing", id: "l1" }]);
+    // The repeater's column is the one read for its rows' blocks.
+    expect(selects).toEqual([{ id: true, sections: true }]);
+  });
 
   it("finds a use only a non-default language stores, reading each language with its fallback off", async () => {
     const { nextly, reads } = directApiOf([{ id: "p1", content: blocks() }], {

@@ -32,8 +32,9 @@ import {
   navigateTo,
   useDocumentIdentity,
   useDocumentLocale,
+  useFieldAddress,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo, type JSX } from "react";
+import { useEffect, useMemo, useRef, type JSX } from "react";
 import {
   useController,
   type Control,
@@ -43,7 +44,11 @@ import {
 
 import { acceptedKinds } from "../fields/blocks-options";
 
-import { builderAddress } from "./editor/builder-address";
+import {
+  fieldBuilderAddress,
+  type BuilderAddress,
+} from "./editor/builder-address";
+import { claimBuilderReturn } from "./editor/builder-return";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
 import { PageLayoutPicker, usePageLayoutAsk } from "./page-layout";
 import { PageBuilderCard } from "./PageBuilderCard";
@@ -137,17 +142,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   field: declaration,
 }: BlocksFieldProps<TFieldValues>): JSX.Element {
   const { field } = useController({ name, control });
-  /*
-   * Where the builder opens for this field: the document view at the
-   * document's own address. The editor is that screen rather than an overlay
-   * inside this form, so nothing it draws can submit the form, and it can move
-   * between pages without being tied to the one that mounted it.
-   */
-  const address = builderAddress(
-    useDocumentIdentity(),
-    name,
-    useDocumentLocale()
-  );
+  const { address, returnedTo } = useBuilderWayIn(control, name);
 
   // What an empty document has to be for THIS field, asked of its declaration
   // as the editor's view asks it, so the card and the editor read one answer.
@@ -193,7 +188,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   });
 
   return (
-    <>
+    <div ref={returnedTo}>
       <PageBuilderCard
         document={restingDocument}
         siteStyles={resting.siteStyles}
@@ -204,18 +199,90 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
         // answers it, and two readings of "may this author edit" is one more
         // than the question has.
         canEdit={editable}
-        href={"href" in address ? address.href : undefined}
         onNavigate={navigateTo}
         // The page's Layout, chosen where its blocks are summarised. Draws
         // nothing for a form that is not a page's.
         after={<PageLayoutPicker control={control} disabled={!editable} />}
-        {...("unavailable" in address
-          ? { note: address.unavailable }
-          : address.note === undefined
-            ? {}
-            : { note: address.note })}
+        {...cardWayIn(address)}
       />
       {publishOffer}
-    </>
+    </div>
   );
+}
+
+/**
+ * Where the builder opens for this field: the document view at the document's
+ * own address. The editor is that screen rather than an overlay inside this
+ * form, so nothing it draws can submit the form, and it can move between pages
+ * without being tied to the one that mounted it.
+ *
+ * Named by the field's address rather than its form path: inside a repeater's
+ * row the form numbers the row by its position, which names another row once
+ * the rows are reordered, and the address names it by its saved id. A row not
+ * saved yet has no address, and the card says why. Read together with the
+ * return from the builder, which is asked by the same address.
+ */
+function useBuilderWayIn<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  name: Path<TFieldValues>
+) {
+  const identity = useDocumentIdentity();
+  const fieldAddress = useFieldAddress(control, name);
+  const address = fieldBuilderAddress(
+    identity,
+    fieldAddress,
+    useDocumentLocale()
+  );
+  const returnedTo = useBuilderReturn(
+    identity,
+    "address" in fieldAddress ? fieldAddress.address : undefined
+  );
+  return { address, returnedTo };
+}
+
+/**
+ * The card's way in from the builder's address: its link, and the sentence
+ * beneath it — why there is no link, or where the link leads. Kept out of the
+ * render so the card is told one thing about its way in, in one place.
+ */
+function cardWayIn(address: BuilderAddress): {
+  href: string | undefined;
+  note?: string;
+} {
+  if ("unavailable" in address) {
+    return { href: undefined, note: address.unavailable };
+  }
+  return address.note === undefined
+    ? { href: address.href }
+    : { href: address.href, note: address.note };
+}
+
+/**
+ * Where the author lands on leaving the builder: this field, when it is the
+ * one the builder was open on, scrolled into view with its way back in
+ * focused. Asked by the field's address, so inside a repeater it is the field
+ * in the same row, found by the row's id wherever the row now stands.
+ *
+ * @returns the ref for the box around the field's card
+ */
+function useBuilderReturn(
+  identity: ReturnType<typeof useDocumentIdentity>,
+  address: string | undefined
+) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (address === undefined || !claimBuilderReturn(identity, address)) {
+      return;
+    }
+    const element = box.current;
+    if (element === null) return;
+    // Centred, so the row's own header above the card is in view too.
+    if (typeof element.scrollIntoView === "function") {
+      element.scrollIntoView({ block: "center" });
+    }
+    element
+      .querySelector<HTMLElement>("[data-builder-open]")
+      ?.focus({ preventScroll: true });
+  }, [identity, address]);
+  return box;
 }

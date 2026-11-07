@@ -39,7 +39,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import { walkPages } from "./paged-walk";
 import type { BuilderDocumentType } from "./site-style-route";
-import { readStoredJson } from "./stored-json";
+import { storedValuesAt } from "./stored-blocks-values";
 
 /** How many rows one read of a collection asks for. */
 export const RESCAN_PAGE_SIZE = 100;
@@ -97,22 +97,10 @@ export interface StoredDocuments {
 }
 
 /**
- * The value at a dot-separated form path of a stored row. Each step is read
- * through `readStoredJson`, since a group may arrive as the text SQLite
- * stored it.
+ * Whether a stored row's blocks fields reference any of `ids`. A field inside
+ * a repeater's rows is read in every row (`storedValuesAt`), so a style used
+ * in one row alone still counts as used.
  */
-function valueAt(row: unknown, path: string): unknown {
-  let at: unknown = row;
-  for (const key of path.split(".")) {
-    const record = readStoredJson(at);
-    if (typeof record !== "object" || record === null) return undefined;
-    if (!Object.hasOwn(record, key)) return undefined;
-    at = (record as Record<string, unknown>)[key];
-  }
-  return at;
-}
-
-/** Whether a stored row's blocks fields reference any of `ids`. */
 export function referencesAny(
   row: unknown,
   paths: readonly string[],
@@ -120,7 +108,9 @@ export function referencesAny(
   referencesOf: ReferencesOf
 ): boolean {
   return paths.some(path =>
-    referencesOf(valueAt(row, path)).some(id => ids.has(id))
+    storedValuesAt(row, path).some(value =>
+      referencesOf(value).some(id => ids.has(id))
+    )
   );
 }
 

@@ -33,10 +33,10 @@ import {
 import {
   addedUndefinedIds,
   storedFormsFor,
-  storedReadReaches,
   type StoredForms,
 } from "./added-undefined-ids";
 import { isTopLevel } from "./layers-lock-judgement";
+import { storedReadReaches } from "./lock-baselines";
 
 /** The stored forms of a field the stored read refuses to name: none held. */
 const NOTHING_HELD: StoredForms = { forms: [], readable: true };

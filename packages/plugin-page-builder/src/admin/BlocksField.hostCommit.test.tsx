@@ -244,6 +244,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   usePluginClientConfig: () => undefined,
   useDocumentIdentity: () => null,
   navigateTo: vi.fn(),
+  // The field's address as the admin gives it outside repeaters: its form
+  // path. No case here draws a field inside a repeater's row.
+  useFieldAddress: (_control: unknown, path: string) => ({ address: path }),
   useDocumentLocale: () => null,
   // Every plugin read answers with nothing: a site with no stored style, no
   // components and no patterns, which none of these cases is about.

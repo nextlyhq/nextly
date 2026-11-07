@@ -49,7 +49,7 @@ import {
   type StoredSiteStyle,
 } from "./library-contract";
 import type { ComponentStore } from "./library-route";
-import { editorBlocksFields } from "./nested-blocks-fields";
+import { builderBlocksFields } from "./nested-blocks-fields";
 import {
   registryRecords,
   type PageCollectionsContext,
@@ -108,7 +108,11 @@ export interface BuilderDocumentType {
   readonly slug: string;
   /** The registry's label for it, when it has a usable one. */
   readonly label: string | undefined;
-  /** Each blocks field the builder opens on it, by its form path (`hero.body`). */
+  /**
+   * Each blocks field the builder opens on it, by its declared path:
+   * `hero.body` inside a group, `sections.body` inside a repeater's rows,
+   * whose value is stored once per row (read with `storedValuesAt`).
+   */
   readonly paths: readonly string[];
 }
 
@@ -121,7 +125,7 @@ export interface BuilderDocumentType {
 function builderTypeOf(record: unknown): BuilderDocumentType | undefined {
   if (typeof record !== "object" || record === null) return undefined;
   const slug = slugOf(record);
-  const paths = editorBlocksFields(record).map(field => field.path);
+  const paths = builderBlocksFields(record).map(field => field.path);
   if (slug === undefined || paths.length === 0) return undefined;
   const label = (record as { label?: unknown }).label;
   return {

@@ -19,6 +19,7 @@ import {
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
+import { toast } from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
@@ -40,6 +41,8 @@ import { usePageLayoutAsk } from "../page-layout";
 import { usePublishOffer } from "../publish-offer";
 import { useRemovalHold } from "../removal-hold-client";
 import { withValueAtPath } from "../snapshot-merge";
+
+import { RowCommitRefused } from "./row-commit";
 
 /**
  * Record the LIVE document as this author's recovery point while the editor is
@@ -275,9 +278,18 @@ function useCommitOnUnmount(
         return;
       }
       committed.current = true;
-      held.onCommit(
-        finishInlineEdit(held.inline, held.editor.document).document
-      );
+      try {
+        held.onCommit(
+          finishInlineEdit(held.inline, held.editor.document).document
+        );
+      } catch (error) {
+        // The repeater row this field sits in is not where the editor was
+        // bound, so the write was refused rather than put in another row.
+        // Nothing can stay open to keep the work now; the recovery point
+        // recorded while editing still holds it. Anything else is not this
+        // refusal and is not swallowed.
+        if (!(error instanceof RowCommitRefused)) throw error;
+      }
     },
     []
   );
@@ -441,7 +453,16 @@ export function useHostCommit<TFieldValues extends FieldValues>({
      * told what happened, and their text is still where they left it.
      */
     if (!finished.mayClose) return;
-    onCommit(finished.document);
+    try {
+      onCommit(finished.document);
+    } catch (error) {
+      // The row this field sits in is gone, or not where the editor was
+      // bound: nothing was written, so the editor stays open with the work in
+      // it, and the author is told why rather than left at a silent button.
+      if (!(error instanceof RowCommitRefused)) throw error;
+      toast.error(error.message);
+      return;
+    }
     markCommitted();
     onClose();
   }, [editor.document, inline, onCommit, onClose, markCommitted]);

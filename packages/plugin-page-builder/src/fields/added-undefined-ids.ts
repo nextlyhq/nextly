@@ -28,16 +28,6 @@ export interface StoredForms {
 }
 
 /**
- * Whether the stored read can name the field at `path`: a top-level field, or
- * one inside named groups (`hero.body`), which is where the editor opens a
- * blocks field. A field in a repeater's rows (`rows[2].body`) has no stored
- * path of its own.
- */
-export function storedReadReaches(path: string): boolean {
-  return path !== "" && !/[[\]]/.test(path) && !path.split(".").includes("");
-}
-
-/**
  * Both stored forms of the field being written: an id either one holds is the
  * page's already.
  */

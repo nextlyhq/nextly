@@ -278,10 +278,37 @@ const COMPONENT_READ_NOTES: Readonly<
  * history and state at the start, the devices in the centre, and Preview and
  * the document's actions at the end.
  */
+/**
+ * Which field of the page the editor is open on, beside the page's title, for
+ * a field below the top level: `Sections · Hero banner · Body`. Inside a
+ * repeater the row is named by its title, as the form's row header names it,
+ * so the author can tell which row's layout this is; the way back to the
+ * entry is the exit at the start of the bar.
+ */
+function FieldLocation({ location }: { location: string }): React.JSX.Element {
+  return (
+    <span
+      // The whole of it on hover, where the bar's width cuts it short.
+      title={location}
+      className="min-w-0 max-w-[20rem] shrink truncate text-sm text-muted-foreground"
+      data-testid="builder-field-location"
+    >
+      {location}
+    </span>
+  );
+}
+
 function editorTopBar(
   view: EditorView,
-  /** The page's title as the form has it now, and the field being edited. */
-  page: { title: string | undefined; field: string }
+  /**
+   * The page's title as the form has it now, the field being edited by its
+   * address, and where that field sits in words when below the top level.
+   */
+  page: {
+    title: string | undefined;
+    field: string;
+    location?: string | undefined;
+  }
 ): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
@@ -316,6 +343,9 @@ function editorTopBar(
           userId={view.userId}
           onAllPages={() => view.requestPanel("pages")}
         />
+        {page.location === undefined ? null : (
+          <FieldLocation location={page.location} />
+        )}
         <DocumentStatusPill isDirty={documentDirty} />
         <HistoryButtons editor={editor} inline={inline} />
       </>
@@ -1017,6 +1047,28 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   control: Control<TFieldValues>;
   /** The section to open at, as the address names it; none opens at the top. */
   openAt?: string | undefined;
+  /**
+   * The field's address from the document's root, where it differs from
+   * `name`: inside a repeater's row, which the address names by its saved id
+   * and the form by its position. What the editor records the page under, so
+   * opening it again finds the same row. `name` where absent.
+   */
+  address?: string | undefined;
+  /**
+   * Where the field sits, in words, for a field below the top level
+   * (`Sections · Hero banner · Body`): said in the top bar and at the root of
+   * the bottom bar, so the author knows which row's layout this is.
+   */
+  location?: string | undefined;
+  /**
+   * For a field in a repeater's row: where it sits in another copy of the
+   * document's values, found by the row's id. The editor reads the field's
+   * stored copy through it, since the row may stand elsewhere in the values
+   * last stored than in the form.
+   */
+  pathIn?:
+    | ((values: Record<string, unknown>) => string | undefined)
+    | undefined;
 }
 
 export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
@@ -1041,7 +1093,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
             window the page is drawn in.
           */}
             <CanvasFrameProvider>
-              <EditorBody {...props} />
+              <EditorBody {...props} place={fieldPlace(props)} />
             </CanvasFrameProvider>
           </ConnectStyleHistoryContext.Provider>
         </StyleRevisionContext.Provider>
@@ -1066,6 +1118,76 @@ function searchInsertSources(
   };
 }
 
+/**
+ * The field's value as last loaded or saved: the form resets its defaults to
+ * what a save stored, so the editor holds an edit to the locks against the
+ * same stored copy the next save is judged against. Inside a repeater's row
+ * the row is found in that copy by its id (`pathIn`), since the form may hold
+ * the rows in another order; a row not stored yet has no stored copy. A hook
+ * of its own so the editor's body reads one answer rather than the steps.
+ */
+function useStoredFieldValue<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  name: Path<TFieldValues>,
+  pathIn: FieldPlace["pathIn"]
+): unknown {
+  const { defaultValues } = useFormState({ control, name });
+  const storedPath = pathIn === undefined ? name : pathIn(defaultValues ?? {});
+  return storedPath === undefined
+    ? undefined
+    : valueAtPath(defaultValues, storedPath);
+}
+
+/**
+ * The bottom bar's trail, for the shell to draw. For a field below the top
+ * level it starts at where the field sits, so the author reads which row's
+ * layout this is; for a top-level field it starts at the page, as it always
+ * has. Built here so the editor's body passes one finished element.
+ */
+function editorBreadcrumb(
+  editor: React.ComponentProps<typeof SelectionBreadcrumb>["editor"],
+  componentTitle: React.ComponentProps<
+    typeof SelectionBreadcrumb
+  >["componentTitle"],
+  location: string | undefined
+): React.JSX.Element {
+  return (
+    <SelectionBreadcrumb
+      editor={editor}
+      {...(location === undefined ? {} : { rootLabel: location })}
+      hints={{ editText: true, goUp: true, commandPalette: true }}
+      {...(componentTitle === undefined ? {} : { componentTitle })}
+    />
+  );
+}
+
+/**
+ * Where the field the editor is open on sits, in one value: its address, which
+ * the editor records the page under; where it sits in words, for the top bar
+ * and the bottom bar; and, inside a repeater's row, how to find the row in
+ * another copy of the values. Gathered so the editor's body takes one fact
+ * about the field's place rather than three.
+ */
+interface FieldPlace {
+  address: string;
+  location: string | undefined;
+  pathIn: ((values: Record<string, unknown>) => string | undefined) | undefined;
+}
+
+/**
+ * The field's place from the editor's props: a field outside repeaters is
+ * addressed by its form path, so `name` stands in for an address not given.
+ */
+function fieldPlace<TFieldValues extends FieldValues>(
+  props: BlocksEditorProps<TFieldValues>
+): FieldPlace {
+  return {
+    address: props.address ?? props.name,
+    location: props.location,
+    pathIn: props.pathIn,
+  };
+}
+
 function EditorBody<TFieldValues extends FieldValues>({
   initialValue,
   kinds,
@@ -1074,15 +1196,12 @@ function EditorBody<TFieldValues extends FieldValues>({
   name,
   control,
   openAt,
-}: BlocksEditorProps<TFieldValues>): JSX.Element {
-  // The field's value as last loaded or saved: the form resets its defaults to
-  // what a save stored, so the editor holds an edit to the locks against the
-  // same stored copy the next save is judged against.
-  const { defaultValues } = useFormState({ control, name });
+  place,
+}: BlocksEditorProps<TFieldValues> & { place: FieldPlace }): JSX.Element {
   const mount = useEditorMount(
     initialValue,
     kinds,
-    valueAtPath(defaultValues, name)
+    useStoredFieldValue(control, name, place.pathIn)
   );
   const { editor, inline } = mount;
 
@@ -1263,7 +1382,13 @@ function EditorBody<TFieldValues extends FieldValues>({
           // the editor's OWN dirty signal: the form's is false for as long as the
           // editor is open, because the document is committed on the way out.
           // The title is the top bar's switcher, so the shell draws none.
-          {...editorTopBar(view, { title: page.title, field: name })}
+          {...editorTopBar(view, {
+            title: page.title,
+            // Recorded by its address, so the recent page opens the same row
+            // after the rows are reordered.
+            field: place.address,
+            location: place.location,
+          })}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page)}
           // The shell owns the region; this fills it. Rendered unconditionally
@@ -1292,13 +1417,11 @@ function EditorBody<TFieldValues extends FieldValues>({
           // The hint names Enter, Escape and the palette's key because this
           // editor binds all three: inline editing and the block keyboard
           // actions below, and the palette it mounts.
-          breadcrumb={
-            <SelectionBreadcrumb
-              editor={editor}
-              hints={{ editText: true, goUp: true, commandPalette: true }}
-              componentTitle={componentLibrary.titleOf}
-            />
-          }
+          breadcrumb={editorBreadcrumb(
+            editor,
+            componentLibrary.titleOf,
+            place.location
+          )}
           checklist={editorChecklist(view)}
           renderPanel={editorPanelRenderer(view)}
         >
