@@ -62,7 +62,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { DeleteComponentDialog, checkedFace } = await import(
   "./DeleteComponentDialog"
 );
-const { addSlice, EMPTY_TALLY } = await import("./component-delete-client");
+const { addSlice, EMPTY_TALLY, tallyUses } = await import(
+  "./component-delete-client"
+);
 
 const NONE: DocumentList = { named: [], unreadable: 0, more: 0 };
 
@@ -210,6 +212,23 @@ describe("the dry run", () => {
     expect(
       screen.getByText(/You may not be allowed to change 2 of these/)
     ).toBeTruthy();
+  });
+
+  it("counts a converted document and a draft-only one together, and lists both", async () => {
+    answer = () =>
+      envelope(
+        result({
+          status: "used",
+          plan: planOf({
+            convert: { named: [HOME], unreadable: 0, more: 0 },
+            drafts: { named: [PRICING], unreadable: 0, more: 0 },
+          }),
+        })
+      );
+    show();
+    expect(await screen.findByText(/is used in 2 documents\./)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Home / })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Pricing / })).toBeTruthy();
   });
 
   it("offers a plain delete when nothing uses it", async () => {
@@ -562,6 +581,35 @@ describe("the delete", () => {
     ).toBeTruthy();
   });
 
+  it("says what was already converted when a step part way fails", async () => {
+    let stepped = 0;
+    answer = body => {
+      if (body.dryRun === true) return envelope(USED);
+      stepped += 1;
+      if (stepped === 1) {
+        return envelope(
+          result({
+            status: "running",
+            run: { yours: true, step: "converting" },
+            progress: { converted: 2, unchanged: 0, left: 0, pending: 1 },
+          })
+        );
+      }
+      return Promise.reject(new ApiError("The site is busy.", 500));
+    };
+    show();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Turn each copy into plain blocks, then delete",
+      })
+    );
+    await shown("The site is busy.");
+    expect(
+      screen.getByText("2 documents were already turned into plain blocks.")
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
   it("says someone else is deleting it when the start is refused with 409", async () => {
     answer = body =>
       body.dryRun === true
@@ -603,6 +651,22 @@ describe("the delete", () => {
         screen.getByRole("button", { name: "Pause" })
       )
     );
+  });
+});
+
+describe("tallyUses", () => {
+  it("counts a document both converted and holding changes once, and one only holding changes too", () => {
+    const tally = addSlice(
+      EMPTY_TALLY,
+      result({
+        status: "used",
+        plan: planOf({
+          convert: { named: [HOME], unreadable: 0, more: 0 },
+          drafts: { named: [HOME, PRICING], unreadable: 0, more: 0 },
+        }),
+      })
+    );
+    expect(tallyUses(tally)).toBe(2);
   });
 });
 

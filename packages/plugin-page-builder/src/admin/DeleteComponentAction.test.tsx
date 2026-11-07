@@ -69,9 +69,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // The import bar beside it has tests of its own.
 vi.mock("./transfer-import", () => ({ TransferImport: () => null }));
 
-const { ComponentListTools, registerDeleteComponentAction } = await import(
-  "./DeleteComponentAction"
-);
+const { ComponentListTools } = await import("./DeleteComponentAction");
 const { RemoveLayoutToolbarSlot } = await import("./RemoveLayoutAction");
 
 beforeEach(() => {
@@ -131,21 +129,28 @@ describe("in the document bar", () => {
 });
 
 describe("on the Components list", () => {
-  it("registers one destructive row action, however often it is asked", () => {
-    registerDeleteComponentAction();
-    registerDeleteComponentAction();
-    expect(rowActions.map(entry => entry.target)).toEqual(["components"]);
+  it("registers one destructive row action on the list it is drawn above, by that list's renamed slug", () => {
+    // The plugin's collection renamed by the host: its list is keyed by the
+    // new slug, and nothing registers under the old one, which another
+    // collection may have taken.
+    const { rerender } = render(
+      <ComponentListTools collectionSlug="site-components" />
+    );
+    rerender(<ComponentListTools collectionSlug="site-components" />);
+    expect(rowActions.map(entry => entry.target)).toEqual(["site-components"]);
     expect(rowActions[0]?.action.destructive).toBe(true);
     expect(rowActions[0]?.action.isVisible?.({ id: "c1" })).toBe(true);
     expect(rowActions[0]?.action.isVisible?.({})).toBe(false);
   });
 
   it("opens the dialog for the row chosen, naming it", async () => {
-    registerDeleteComponentAction();
-    render(<ComponentListTools />);
+    render(<ComponentListTools collectionSlug="site-components" />);
     expect(screen.queryByRole("alertdialog")).toBeNull();
+    const action = rowActions.find(
+      entry => entry.action.id === "page-builder-delete-component"
+    )?.action;
     act(() => {
-      rowActions[0]?.action.onSelect({ id: "c1", title: "Hero banner" });
+      action?.onSelect({ id: "c1", title: "Hero banner" });
     });
     expect(await screen.findByText("Hero banner")).toBeTruthy();
   });

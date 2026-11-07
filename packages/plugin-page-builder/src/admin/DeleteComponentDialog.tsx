@@ -87,6 +87,7 @@ import {
   stepComponentDelete,
   tallyRefuses,
   tallyUses,
+  usingDocuments,
   underWay,
   type DeleteCall,
   type DeleteTally,
@@ -138,6 +139,12 @@ type View =
       readonly message: string;
       /** What Try again does: check again, or start the delete again. */
       readonly retry: "check" | "delete";
+      /**
+       * How many documents earlier steps had turned into plain blocks, as the
+       * last answer counted them: a floor, since the failed step may have
+       * converted more.
+       */
+      readonly converted: number;
     };
 
 /** How long the dialog waits between two steps of the delete. */
@@ -410,17 +417,16 @@ function checkedFaceOf(
   args: FaceArgs
 ): Face {
   const { name, cancelRef } = args;
+  // Converted and held in unpublished changes alike: the one list the count
+  // is read from, so what is said and what is listed agree.
+  const using = usingDocuments(tally);
   const count = tallyUses(tally);
-  // "At least" while documents are still to be read.
-  const atLeast = tally.complete ? "" : "at least ";
+  // "At least" while documents are still to be read, or while the count is
+  // only a floor.
+  const atLeast = tally.complete && !using.floor ? "" : "at least ";
   const list =
-    documentCount(tally.convert) > 0 ? (
-      <DocumentLinks list={tally.convert} label="Documents that use it" />
-    ) : documentCount(tally.drafts) > 0 ? (
-      <DocumentLinks
-        list={tally.drafts}
-        label="Documents with unpublished changes"
-      />
+    count > 0 ? (
+      <DocumentLinks list={using.list} label="Documents that use it" />
     ) : null;
   switch (checkedFace(result, tally)) {
     case "counting":
@@ -531,7 +537,7 @@ function checkedFaceOf(
         sentence: (
           <>
             <Named name={name} opening />
-            {` is used in ${documents(count)}. Deleting it turns each copy into plain blocks first, so every page keeps showing exactly what it shows now. The blocks are no longer linked to the component.`}
+            {` is used in ${atLeast}${documents(count)}. Deleting it turns each copy into plain blocks first, so every page keeps showing exactly what it shows now. The blocks are no longer linked to the component.`}
           </>
         ),
         body: (
@@ -540,7 +546,7 @@ function checkedFaceOf(
             <PlanNotes tally={tally} />
           </div>
         ),
-        announce: `It is used in ${documents(count)}.`,
+        announce: `It is used in ${atLeast}${documents(count)}.`,
         footer: (
           <>
             <SafeButton label="Cancel" cancelRef={cancelRef} />
@@ -750,9 +756,18 @@ function faceOf(view: View, args: FaceArgs): Face {
             ? "Something went wrong while checking where it is used."
             : "The delete stopped before it was finished. The component is still here.",
         body: (
-          <Alert variant="destructive">
-            <AlertDescription>{view.message}</AlertDescription>
-          </Alert>
+          <div className="space-y-3">
+            <Alert variant="destructive">
+              <AlertDescription>{view.message}</AlertDescription>
+            </Alert>
+            {/* What earlier steps converted stays converted, showing what it
+                showed: said, so Try again is not read as starting over. */}
+            {view.converted > 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {`${documents(view.converted)} ${view.converted === 1 ? "was" : "were"} already turned into plain blocks.`}
+              </p>
+            ) : null}
+          </div>
         ),
         announce: view.message,
         footer: (
@@ -784,7 +799,7 @@ function viewOfRefusal(
     case "forbidden":
       return { kind: "forbidden", converted };
     case "failed":
-      return { kind: "failed", message: call.message, retry };
+      return { kind: "failed", message: call.message, retry, converted };
   }
 }
 
@@ -838,6 +853,7 @@ export function DeleteComponentDialog({
           kind: "failed",
           message: "Not every document could be checked. Try again.",
           retry: "check",
+          converted: 0,
         });
         return;
       }
@@ -881,6 +897,7 @@ export function DeleteComponentDialog({
           kind: "failed",
           message: "The delete answered in a way this screen doesn't know.",
           retry: "delete",
+          converted: last?.progress?.converted ?? 0,
         });
       }
       return;

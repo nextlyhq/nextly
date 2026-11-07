@@ -18,6 +18,12 @@
  *   `BeforeListTable`) draw the dialog for it. A deleted component's list is
  *   read again, so its row goes.
  *
+ *   The action is registered by those tools, for the list they are drawn
+ *   above, by the slug that list is keyed by. A host may rename the
+ *   Components collection, and only the collection's own list draws its
+ *   tools, so the action follows a rename and never reaches another
+ *   collection that took the old name.
+ *
  * Whether the author may delete is the dialog's dry run's answer, not a
  * guess here: the grant is judged on the server, for this component.
  *
@@ -27,11 +33,6 @@ import { registerRowAction } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import { Trash2 } from "lucide-react";
 import { useState, useSyncExternalStore, type JSX } from "react";
-
-// The list key from the isomorphic transfer contract, not the collection's
-// own module: that one declares the collection's fields, server code a
-// client bundle must not carry.
-import { TRANSFER_KIND_PATHS } from "../transfer/transfer-contract";
 
 import { DeleteComponentDialog } from "./DeleteComponentDialog";
 import { TransferImport } from "./transfer-import";
@@ -100,18 +101,17 @@ function textOf(row: Record<string, unknown>, key: string): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
 
-/** Whether the row action is registered, so a second load adds no copy. */
-let registered = false;
+/** The lists the row action is registered on, so each gets one copy. */
+const registeredOn = new Set<string>();
 
 /**
- * Offer "Delete component…" on each row of the Components list. Keyed by the
- * collection's own name, as the list's Export is: a host that renamed it
- * gets no action on it.
+ * Offer "Delete component…" on each row of the list keyed `listSlug`: the
+ * Components collection's list, by the slug the site resolved.
  */
-export function registerDeleteComponentAction(): void {
-  if (registered) return;
-  registered = true;
-  registerRowAction<Record<string, unknown>>(TRANSFER_KIND_PATHS.component, {
+function registerDeleteComponentAction(listSlug: string): void {
+  if (listSlug === "" || registeredOn.has(listSlug)) return;
+  registeredOn.add(listSlug);
+  registerRowAction<Record<string, unknown>>(listSlug, {
     id: DELETE_ROW_ACTION_ID,
     label: "Delete component…",
     icon: <Trash2 className="h-4 w-4" aria-hidden="true" />,
@@ -127,8 +127,18 @@ export function registerDeleteComponentAction(): void {
 /**
  * Above the Components list: Import from file, as on the Patterns and
  * Layouts lists, and the dialog for the row Delete component was chosen on.
+ *
+ * `collectionSlug` is the list's own, renamed or not. The row action is
+ * registered for it here, while rendering: the tools are drawn above the
+ * table, so they render before it reads its row actions, and registering
+ * again is a no-op.
  */
-export function ComponentListTools(): JSX.Element {
+export function ComponentListTools({
+  collectionSlug,
+}: {
+  readonly collectionSlug?: string;
+}): JSX.Element {
+  registerDeleteComponentAction(collectionSlug ?? "");
   const current = useSyncExternalStore(
     subscribe,
     () => asked,

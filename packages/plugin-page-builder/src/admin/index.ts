@@ -54,10 +54,7 @@ import "../styles/editor.css";
 
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
-import {
-  ComponentListTools,
-  registerDeleteComponentAction,
-} from "./DeleteComponentAction";
+import { ComponentListTools } from "./DeleteComponentAction";
 import { PageBuilderView } from "./editor/PageBuilderView";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
 import { registerExportActions } from "./transfer-export-action";
@@ -103,14 +100,13 @@ const COMPONENTS = {
 registerComponents(COMPONENTS);
 // "Export" on the Components, Patterns and Layouts lists.
 registerExportActions();
-// "Delete component…" on the Components list.
-registerDeleteComponentAction();
+// "Delete component…" on the Components list is registered by the list's
+// own tools (`ComponentListTools`), under the slug the site resolved.
 
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   registerComponents(COMPONENTS);
   registerExportActions();
-  registerDeleteComponentAction();
   return Promise.resolve();
 });
 

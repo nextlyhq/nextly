@@ -180,10 +180,40 @@ export function tallyRefuses(tally: DeleteTally): boolean {
   return tally.left.length > 0 || documentCount(tally.layouts) > 0;
 }
 
-/** How many documents use it, as read so far. */
+/**
+ * The documents that use it, as read so far: those whose copies are turned
+ * into plain blocks and those holding unpublished changes, as one list. A
+ * document in both is named once. The ones only counted (unreadable, or past
+ * what a list names) cannot be matched across the two lists, so where both
+ * count some, the larger count stands and the total is only a floor.
+ */
+export function usingDocuments(tally: DeleteTally): {
+  readonly list: DocumentList;
+  /** Whether the count may be short of the true one. */
+  readonly floor: boolean;
+} {
+  const { convert, drafts } = tally;
+  const seen = new Set(convert.named.map(keyOf));
+  const unnamed = (a: number, b: number): number =>
+    a > 0 && b > 0 ? Math.max(a, b) : a + b;
+  return {
+    list: {
+      named: [
+        ...convert.named,
+        ...drafts.named.filter(document => !seen.has(keyOf(document))),
+      ],
+      unreadable: unnamed(convert.unreadable, drafts.unreadable),
+      more: unnamed(convert.more, drafts.more),
+    },
+    floor:
+      (convert.unreadable > 0 && drafts.unreadable > 0) ||
+      (convert.more > 0 && drafts.more > 0),
+  };
+}
+
+/** How many documents use it, as read so far: {@link usingDocuments} counted. */
 export function tallyUses(tally: DeleteTally): number {
-  const convert = documentCount(tally.convert);
-  return convert > 0 ? convert : documentCount(tally.drafts);
+  return documentCount(usingDocuments(tally).list);
 }
 
 /** How many documents a list stands for: named, unreadable and beyond it. */
