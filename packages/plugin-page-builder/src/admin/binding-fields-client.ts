@@ -61,7 +61,8 @@ async function askFields(
 }
 
 /**
- * The picker's read of the fields for the entry `identity` names, in
+ * The picker's read of the fields for the entry `identity` names (none for
+ * a document with no entry of its own, such as a component's), in
  * `locale`, as `userId` reads them: an answer kept for
  * {@link BINDING_FIELDS_KEPT_MS}, or asked afresh. A failed read is not
  * kept, so the next opening asks again.
@@ -76,40 +77,63 @@ export function bindingFieldsReader(
   now: () => number = Date.now
 ): () => Promise<readonly BindingFieldSource[]> {
   return () => {
-    if (identity === null) return Promise.resolve([]);
     // Another person's answers are dropped before anything is read.
     if (keptFor !== userId) {
       kept.clear();
       keptFor = userId;
     }
-    const request: BindingFieldsRequest = {
-      source: {
-        kind: identity.kind,
-        slug: identity.slug,
-        ...(identity.documentId === undefined
-          ? {}
-          : { id: identity.documentId }),
-      },
-      ...(locale === undefined ? {} : { locale }),
-    };
-    const key = JSON.stringify(request);
-    const hit = kept.get(key);
-    if (hit !== undefined && now() - hit.at < BINDING_FIELDS_KEPT_MS) {
-      return hit.read;
-    }
-    const at = now();
-    // Aged answers are dropped as a new one is kept, so a long session that
-    // opens many pages holds only the last half-minute's.
-    for (const [old, { at: when }] of kept) {
-      if (at - when >= BINDING_FIELDS_KEPT_MS) kept.delete(old);
-    }
-    const entry: Kept = { at, read: ask(request) };
-    kept.set(key, entry);
-    entry.read.catch(() => {
-      if (kept.get(key) === entry) kept.delete(key);
-    });
-    return entry.read;
+    const request = fieldsRequest(identity, locale);
+    // While the person signed in is not known yet, nothing is kept: an
+    // answer kept under no one could be handed to whoever signs in next.
+    if (userId === null) return ask(request);
+    return keptRead(request, ask, now());
   };
+}
+
+/** The ask for `identity`'s fields; no entry, as for a component's document. */
+function fieldsRequest(
+  identity: DocumentIdentity | null,
+  locale: string | undefined
+): BindingFieldsRequest {
+  const at = locale === undefined ? {} : { locale };
+  if (identity === null) return at;
+  return {
+    source: {
+      kind: identity.kind,
+      slug: identity.slug,
+      ...(identity.documentId === undefined ? {} : { id: identity.documentId }),
+    },
+    ...at,
+  };
+}
+
+/**
+ * The answer kept for `request` while it is younger than
+ * {@link BINDING_FIELDS_KEPT_MS}, or a new ask, kept. Aged answers are dropped
+ * as a new one is kept, so a long session that opens many pages holds only
+ * the last half-minute's; a failed read is not kept.
+ */
+function keptRead(
+  request: BindingFieldsRequest,
+  ask: (
+    request: BindingFieldsRequest
+  ) => Promise<readonly BindingFieldSource[]>,
+  at: number
+): Promise<readonly BindingFieldSource[]> {
+  const key = JSON.stringify(request);
+  const hit = kept.get(key);
+  if (hit !== undefined && at - hit.at < BINDING_FIELDS_KEPT_MS) {
+    return hit.read;
+  }
+  for (const [old, { at: when }] of kept) {
+    if (at - when >= BINDING_FIELDS_KEPT_MS) kept.delete(old);
+  }
+  const entry: Kept = { at, read: ask(request) };
+  kept.set(key, entry);
+  entry.read.catch(() => {
+    if (kept.get(key) === entry) kept.delete(key);
+  });
+  return entry.read;
 }
 
 /**

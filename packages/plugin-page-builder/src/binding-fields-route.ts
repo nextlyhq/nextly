@@ -29,6 +29,7 @@ import {
   isPlainRecord,
   sameJsonValue,
   SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_LABELS,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -66,7 +67,8 @@ const BindingFieldsBody = z
         slug: SLUG,
         id: z.string().min(1).max(200).optional(),
       })
-      .strict(),
+      .strict()
+      .optional(),
     locale: z.string().min(1).max(35).optional(),
   })
   .strict();
@@ -271,11 +273,16 @@ function throughRelation(
   const { draft: ownDraft, ...rest } = withoutPreview;
   const isPublic = inner.public && relation.public;
   const draft = relation.draft === true || ownDraft === true;
+  // A group's fields are reached through the same relation, every level down.
+  const { fields: inside, ...withoutInside } = rest;
   return {
-    ...rest,
+    ...withoutInside,
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
     ...(isPublic && !draft && preview !== undefined ? { preview } : {}),
+    ...(inside === undefined
+      ? {}
+      : { fields: inside.map(field => throughRelation(field, relation)) }),
   };
 }
 
@@ -340,6 +347,13 @@ function isReachable(field: PickerField): boolean {
   return field.public || (field.fields ?? []).some(isReachable);
 }
 
+/** A site setting's label, from the engine's table of them. */
+function siteSettingLabel(name: string): { readonly label?: string } {
+  return Object.hasOwn(SITE_SETTING_LABELS, name)
+    ? { label: SITE_SETTING_LABELS[name as keyof typeof SITE_SETTING_LABELS] }
+    : {};
+}
+
 /** The site settings, every one public, previewed as visitors see them. */
 async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
   const values = await reads.site();
@@ -351,6 +365,8 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
       return {
         name: shape.name,
         type: shape.type,
+        // The settings screen's name for it: "Site URL", not "Site url".
+        ...siteSettingLabel(shape.name),
         public: true,
         ...(preview === undefined ? {} : { preview }),
       };
@@ -360,7 +376,7 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
 
 /** The page's own entry as a source: read, named as failed, or none to list. */
 async function entrySource(
-  own: BindingFieldsRequest["source"],
+  own: NonNullable<BindingFieldsRequest["source"]>,
   ref: FieldsRef,
   singles: readonly { readonly slug: string; readonly label: string }[],
   reads: BindingFieldsReads,
@@ -433,12 +449,14 @@ export async function readBindingFields(
   const budget: FollowBudget = { followed: 0 };
   const singles = (await reads.singles()).slice(0, MOST_SINGLES);
   const entryRef: FieldsRef | undefined =
-    own.kind === "single"
-      ? { single: own.slug }
-      : own.id === undefined
-        ? undefined
-        : { collection: own.slug, id: own.id };
-  if (entryRef !== undefined) {
+    own === undefined
+      ? undefined
+      : own.kind === "single"
+        ? { single: own.slug }
+        : own.id === undefined
+          ? undefined
+          : { collection: own.slug, id: own.id };
+  if (own !== undefined && entryRef !== undefined) {
     const entry = await entrySource(own, entryRef, singles, reads, budget);
     if (entry !== undefined) sources.push(entry);
   }

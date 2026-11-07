@@ -169,6 +169,15 @@ describe("the picker's fields", () => {
     ]);
   });
 
+  it("lists the Singles and the site for a document with no entry of its own", async () => {
+    // A component's document, which reads each placing page's entry.
+    const answer = await readBindingFields({}, reads());
+    expect(answer.sources.map(source => source.binding.source)).toEqual([
+      "single",
+      "site",
+    ]);
+  });
+
   it("lists no entry's fields where there is no entry to read", async () => {
     const answer = await ask();
     expect(answer.sources.map(source => source.binding.source)).toEqual([
@@ -182,9 +191,17 @@ describe("the picker's fields", () => {
     expect(named(site, "applicationName")).toEqual({
       name: "applicationName",
       type: "text",
+      label: "Application name",
       public: true,
       preview: "Northwind Academy",
     });
+    // Named as the settings screen names them.
+    expect(site.map(field => field.label)).toEqual([
+      "Application name",
+      "Site URL",
+      "Logo URL",
+      "Time zone",
+    ]);
   });
 
   it("marks a relation's fields as visitors reach them, through the relation", async () => {
@@ -192,6 +209,57 @@ describe("the picker's fields", () => {
     // The reviewer's user is public, but visitors can't follow the reviewer.
     expect(named(named(post, "reviewer")?.fields ?? [], "name")).toEqual({
       name: "name",
+      type: "text",
+      public: false,
+    });
+  });
+
+  it("carries the relation's visibility into a group's fields, every level down", async () => {
+    const base = reads();
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      {
+        ...base,
+        // The reviewer's user has a profile group; visitors could read it,
+        // but not through the reviewer.
+        declared: async ref =>
+          "collection" in ref && ref.collection === "users"
+            ? [
+                { name: "name", type: "text" },
+                {
+                  name: "profile",
+                  type: "group",
+                  fields: [{ name: "bio", type: "text" }],
+                },
+              ]
+            : base.declared(ref),
+        publicShapes: async ref =>
+          "collection" in ref && ref.collection === "users"
+            ? [
+                { name: "name", type: "text" },
+                {
+                  name: "profile",
+                  type: "group",
+                  fields: [{ name: "bio", type: "text" }],
+                },
+              ]
+            : base.publicShapes(ref),
+        asEditor: async (ref, select) =>
+          "collection" in ref && ref.collection === "users"
+            ? { name: "Ada Lovelace", profile: { bio: "Mathematician" } }
+            : base.asEditor(ref, select),
+        published: async (ref, select) =>
+          "collection" in ref && ref.collection === "users"
+            ? { name: "Ada Lovelace", profile: { bio: "Mathematician" } }
+            : base.published(ref, select),
+      }
+    );
+    const profile = named(
+      named(fieldsOf(answer, "Post"), "reviewer")?.fields ?? [],
+      "profile"
+    );
+    expect(named(profile?.fields ?? [], "bio")).toEqual({
+      name: "bio",
       type: "text",
       public: false,
     });

@@ -20,6 +20,8 @@ import type { UnbindAnswer, UnbindKeep } from "./composition-actions";
  * @experimental Settles with the editor's binding controls.
  */
 export interface BindingFieldChoice extends Omit<BindingFieldShape, "fields"> {
+  /** What the field is called, where its name alone reads poorly. */
+  readonly label?: string;
   /** Whether a visitor may read it; a binding to one shows its fallback. */
   readonly public: boolean;
   /**
