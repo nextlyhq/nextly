@@ -82,13 +82,19 @@ function harness(options: {
     addresses: new Map(),
     templates: "templates",
     locales: () => ["en"],
-    templateOf: async collection => {
-      steps.push(`read template of ${collection}`);
+    templateOf: async (collection, tx) => {
+      // Read on the save's transaction, never through the pool.
+      steps.push(
+        `read template of ${collection}${tx === undefined ? " (pool)" : ""}`
+      );
       return options.template ?? null;
     },
     storedAddresses: async () => new Map(),
     neverServed: collection => collection === "pages",
-    mayHaveTemplate: async () => options.mayHaveTemplate,
+    mayHaveTemplate: async collection => {
+      steps.push(`ask whether ${collection} may have a template`);
+      return options.mayHaveTemplate;
+    },
     storedAddressProblem: () => null,
     lifecycle: async () => true,
     pages: "pages",
@@ -106,12 +112,19 @@ function harness(options: {
     },
     deps
   );
-  const save = (collection: string) =>
+  const save = (
+    collection: string,
+    data: Record<string, unknown> = {
+      id: "e1",
+      slug: "launch",
+      status: "published",
+    }
+  ) =>
     handlers.get("*")?.({
       collection,
       operation: "update",
       id: "e1",
-      data: { id: "e1", slug: "launch", status: "published" },
+      data,
       transaction: {},
     });
   const writeTemplate = (write: Record<string, unknown>) =>
@@ -126,22 +139,22 @@ describe("an entry's save in a collection not given an address in code", () => {
     expect(steps).toEqual(["lock events", "read template of events"]);
   });
 
-  it("takes no lock, and reads nothing, in a collection that may not have a template", async () => {
-    const { steps, save } = harness({ mayHaveTemplate: false });
-    await save("events");
+  it("takes no lock, and reads nothing, for an entry with no slug", async () => {
+    const { steps, save } = harness({ mayHaveTemplate: true });
+    await save("users", { id: "u1", email: "a@example.com" });
     expect(steps).toEqual([]);
   });
 
-  it("locks and gives addresses up in a collection that lost the means to have a template but still has one", async () => {
+  it("asks whether the collection may still have a template only once it has one", async () => {
     const { steps, save } = harness({
       mayHaveTemplate: false,
       template: { published: true, address: ["events"] },
     });
     await save("events");
     expect(steps).toEqual([
-      "read template of events",
       "lock events",
       "read template of events",
+      "ask whether events may have a template",
     ]);
   });
 

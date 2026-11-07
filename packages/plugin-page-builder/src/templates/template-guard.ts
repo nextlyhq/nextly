@@ -425,13 +425,15 @@ export async function addressCollectionProblem(
   collection: unknown
 ): Promise<string | null> {
   if (typeof collection !== "string") return null;
+  // One read of the collection's record, both questions asked of it, so a
+  // change between two reads cannot pass each half.
+  const record = await setup.readCollection(collection);
   const problem = await templateCollectionProblem(
     collection,
-    setup.readCollection,
+    async () => record,
     setup.ownCollections()
   );
   if (problem !== null) return problem;
-  const record = await setup.readCollection(collection);
   return record?.localized === true
     ? `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
     : null;

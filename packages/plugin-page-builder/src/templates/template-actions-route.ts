@@ -795,12 +795,26 @@ async function setTemplateAddress(
       template: summaryOf(written, asked),
       refusals: [],
       by,
-      waiting:
-        typeof collection === "string"
-          ? await setup.waitingEntries(collection)
-          : 0,
+      ...(await waitingAfter(setup, collection)),
     },
   };
+}
+
+/**
+ * How many of `collection`'s entries wait, for the answer to a write that
+ * has committed: a read that fails then leaves the count out rather than
+ * reporting the write as failed.
+ */
+async function waitingAfter(
+  setup: TemplateActionsSetup,
+  collection: unknown
+): Promise<{ waiting?: number }> {
+  if (typeof collection !== "string") return {};
+  try {
+    return { waiting: await setup.waitingEntries(collection) };
+  } catch {
+    return {};
+  }
 }
 
 /**

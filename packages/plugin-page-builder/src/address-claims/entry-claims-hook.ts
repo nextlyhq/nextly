@@ -86,8 +86,16 @@ export interface EntryClaimsDeps {
   readonly templates: string;
   /** The languages an entry's address is held in. */
   readonly locales: () => readonly string[];
-  /** `collection`'s template, as last committed, or null when it has none. */
-  readonly templateOf: (collection: string) => Promise<ServingTemplate | null>;
+  /**
+   * `collection`'s template, or null when it has none: as last committed, or,
+   * given a save's transaction, read on that transaction's own connection
+   * (and held against writes until it ends), so a save asking takes no
+   * second connection from the pool while it holds one.
+   */
+  readonly templateOf: (
+    collection: string,
+    tx?: Tx
+  ) => Promise<ServingTemplate | null>;
   /**
    * Every collection whose template stores an address, with it as segments,
    * as last committed.
@@ -103,8 +111,8 @@ export interface EntryClaimsDeps {
   readonly neverServed: (collection: string) => boolean;
   /**
    * Whether `collection` may have a template at all (a `slug` text field,
-   * shown in the admin, not localized): a collection that may not never
-   * holds an address, so its saves take no lock.
+   * shown in the admin, not localized): one that has a template still but
+   * may no longer serves nothing. Asked only of a collection that has one.
    */
   readonly mayHaveTemplate: (collection: string) => Promise<boolean>;
   /**
@@ -204,15 +212,14 @@ function neverTemplated(collection: string, deps: EntryClaimsDeps): boolean {
 }
 
 /**
- * An entry's claims in a collection not given an address in code. One that
- * may have a template takes its lock before it reads whether it has one, so
- * a template created, published or given an address while the entry is
- * saved is either seen by this save or sees the entry in its own walk, and
- * the entry is judged at the address its template stores. One that may not
- * takes no lock, unless it has a template still, from before it lost its
- * `slug` field or became localized: its entries are then served nowhere, and
- * each save gives its address up. No template can be made for it meanwhile,
- * so that read needs no lock.
+ * An entry's claims in a collection not given an address in code. Only an
+ * entry with a slug can be served under an address, so a collection without
+ * one (users, media, a plugin's records) takes no lock and reads nothing.
+ * One with a slug takes its collection's lock before it reads whether it has
+ * a template, on the save's own transaction, so a template created,
+ * published or given an address while the entry is saved is either seen by
+ * this save or sees the entry in its own walk, and the entry is judged at
+ * the address its template stores.
  */
 async function holdRuntimeEntryClaims(
   write: HostWrite,
@@ -222,9 +229,9 @@ async function holdRuntimeEntryClaims(
   if (typeof collection !== "string" || neverTemplated(collection, deps)) {
     return;
   }
-  const eligible = await deps.mayHaveTemplate(collection);
-  if (!eligible && (await deps.templateOf(collection)) === null) return;
-  await holdEntryClaims(collection, write, deps, eligible);
+  const data = recordOf(write.data);
+  if (data === null || !(ENTRY_SLUG_FIELD in data)) return;
+  await holdEntryClaims(collection, write, deps);
 }
 
 /** Whether two addresses, as segments, are one, or both none. */
@@ -277,9 +284,7 @@ function savedData(write: HostWrite): Row | null {
 async function holdEntryClaims(
   collection: string,
   write: HostWrite,
-  deps: EntryClaimsDeps,
-  /** False for a collection that may no longer have a template: served nowhere. */
-  eligible = true
+  deps: EntryClaimsDeps
 ): Promise<void> {
   if (typeof write.id !== "string" && typeof write.id !== "number") return;
   const holder: Holder = { collection, id: String(write.id) };
@@ -290,7 +295,7 @@ async function holdEntryClaims(
   }
   const data = savedData(write);
   if (data !== null) {
-    await claimEntry(deps, write.transaction, holder, data, eligible);
+    await claimEntry(deps, write.transaction, holder, data);
   }
 }
 
@@ -313,14 +318,13 @@ async function claimEntry(
   deps: EntryClaimsDeps,
   tx: Tx,
   holder: Holder,
-  data: Row,
-  eligible: boolean
+  data: Row
 ): Promise<void> {
   // Before the template is read, so a publish of it or a change of its
   // address in flight is waited for and then seen, and the template's walk
   // sees this entry once committed.
   await lockCollection(deps.claims, tx, holder.collection);
-  const address = await servingAddress(deps, holder.collection, eligible);
+  const address = await servingAddress(deps, tx, holder.collection);
   if (address === undefined) return;
   const wanted =
     address === null
@@ -337,22 +341,25 @@ async function claimEntry(
 }
 
 /**
- * Where `collection`'s entries are served now, read under its lock: its
- * address declared in code, else its template's stored one, while the
- * template is published; null where they are served nowhere. Undefined for
- * a collection given no address in code and with no template, which holds
+ * Where `collection`'s entries are served now, read under its lock on the
+ * save's transaction: its address declared in code, else its template's
+ * stored one, while the template is published; null where they are served
+ * nowhere, as a collection that has a template still but may no longer have
+ * one (its `slug` field removed, or made localized) is. Undefined for a
+ * collection given no address in code and with no template, which holds
  * nothing to reconcile: a template's removal gave every entry's address up.
  */
 async function servingAddress(
   deps: EntryClaimsDeps,
-  collection: string,
-  eligible: boolean
+  tx: Tx,
+  collection: string
 ): Promise<readonly string[] | null | undefined> {
-  const template = await deps.templateOf(collection);
+  const template = await deps.templateOf(collection, tx);
   const declared = deps.addresses.get(collection);
   if (template === null && declared === undefined) return undefined;
-  if (!eligible || template?.published !== true) return null;
-  return declared ?? template.address;
+  if (template?.published !== true) return null;
+  if (declared !== undefined) return declared;
+  return (await deps.mayHaveTemplate(collection)) ? template.address : null;
 }
 
 /**
@@ -674,7 +681,7 @@ async function settleAtStart(
     await releaseCollection(deps, tx, collection);
     return;
   }
-  const template = await deps.templateOf(collection);
+  const template = await deps.templateOf(collection, tx);
   const address = declared ?? template?.address ?? null;
   if (template?.published !== true || address === null) return;
   await settleEntries(deps, tx, collection, address);
@@ -737,7 +744,7 @@ async function releaseUnaddressed(
   collection: string
 ): Promise<void> {
   await lockCollection(deps.claims, tx, collection);
-  const address = (await deps.templateOf(collection))?.address ?? null;
+  const address = (await deps.templateOf(collection, tx))?.address ?? null;
   if (address === null) await releaseCollection(deps, tx, collection);
 }
 
