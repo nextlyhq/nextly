@@ -111,6 +111,10 @@ export function TemplateConditionsPart({
   );
 }
 
+/** Why the switch can't apply a component's or a Layout's conditions. */
+const PLACED_WHY =
+  "No entry to check here. The published page checks them where it’s placed.";
+
 /**
  * The strip a component or a Layout gets while it holds a conditioned block:
  * what is being edited, and the switch, disabled, since there is no entry to
@@ -128,12 +132,13 @@ export function PlacedConditionsStrip({
   return (
     <div className="nx-preview-strip">
       <span>{kind}</span>
-      <b className="font-medium text-[var(--nx-foreground)]">{name}</b>
+      <b className="nx-preview-strip__name" title={name}>
+        {name}
+      </b>
       <span className="nx-preview-strip__sep" aria-hidden="true" />
       <ConditionsSwitch on={false} disabled describedBy={why} />
-      <span className="nx-preview-strip__why" id={why}>
-        No entry to check here. The published page checks them where it’s
-        placed.
+      <span className="nx-preview-strip__why" id={why} title={PLACED_WHY}>
+        {PLACED_WHY}
       </span>
     </div>
   );

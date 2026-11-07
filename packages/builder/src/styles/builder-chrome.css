@@ -3992,46 +3992,6 @@
 }
 
 /*
- * A block hidden for the previewed entry while conditions apply, drawn in its
- * place as one dashed line naming it and why. Editor chrome in the admin's own
- * surface, as the page inserters are, so it reads on any site's page; the
- * renderer marks it with the block's id, so it is selected as the block.
- */
-.nx-condition-hidden {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 1.875rem;
-  padding: 0.375rem 0.625rem;
-  border: 1px dashed var(--nx-border);
-  border-radius: 2px;
-  background: var(--nx-muted);
-  color: var(--nx-muted-foreground);
-  font:
-    400 0.71875rem/1.35 var(--font-sans, system-ui),
-    sans-serif;
-  text-align: start;
-}
-
-.nx-condition-hidden > svg {
-  flex: none;
-}
-
-.nx-condition-hidden b {
-  color: var(--nx-foreground);
-  font-weight: 500;
-}
-
-.nx-condition-hidden[data-unchecked] {
-  border-color: var(--nx-destructive);
-  color: var(--nx-destructive);
-}
-
-.nx-condition-hidden[data-unchecked] b {
-  color: var(--nx-destructive);
-}
-
-/*
  * A selected block locked in Layers, by its own lock or one around it: the
  * ring is dashed, so the canvas says it is held before anything is tried on
  * it.
@@ -10503,9 +10463,24 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-foreground);
 }
 
-/* Why the switch can't apply conditions here, beside it. */
+/* Why the switch can't apply conditions here, beside it, and the name of
+   what is edited: both give way on a narrow canvas, cut short, the whole of
+   each in its title. */
+.nx-preview-strip > .nx-preview-strip__why,
+.nx-preview-strip > .nx-preview-strip__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .nx-preview-strip__why {
   color: var(--nx-muted-foreground);
+}
+
+.nx-preview-strip__name {
+  color: var(--nx-foreground);
+  font-weight: 500;
 }
 
 .nx-preview-strip__switch {

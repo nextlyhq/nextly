@@ -301,6 +301,12 @@ export { repairingLookup } from "./prepare-document";
  */
 export { conditionDayStart } from "./blocks/list-read";
 /**
+ * @experimental A stored document made sound to walk, as the renderer makes
+ * it before drawing: for an editor surface that reads the tree the renderer
+ * draws, so a node the renderer drops is one it drops too.
+ */
+export { sanitizeDocument } from "./sanitize";
+/**
  * @experimental The collections a page's lists draw, whose field shapes judge
  * their items' bindings: one walk for the published route and the editor.
  */

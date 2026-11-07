@@ -33,6 +33,8 @@ function renderConditionHidden({
   const reason = typeof props.reason === "string" ? props.reason : "";
   const unchecked = props.unchecked === true;
   const Icon = unchecked ? AlertCircle : EyeOff;
+  // The look is the definition's base styles, in the site's colours: the
+  // canvas may draw in a frame that loads no editor stylesheet.
   return (
     <div
       className={["nx-condition-hidden", className].filter(Boolean).join(" ")}
@@ -46,7 +48,47 @@ function renderConditionHidden({
   );
 }
 
-/** The marker's definition: no settings, nothing to style, never offered. */
+/**
+ * How the marker looks: one dashed line in the site's own colours. Compiled
+ * into the page's sheet with the page, as any block's defaults are, because
+ * the canvas may draw the page in a frame of the site's own that loads the
+ * site's stylesheet and none of the editor's.
+ */
+const CONDITION_HIDDEN_BASE_STYLES = {
+  base: {
+    base: {
+      display: "flex",
+      alignItems: "center",
+      gap: "0.5rem",
+      padding: {
+        blockStart: "0.375rem",
+        blockEnd: "0.375rem",
+        inlineStart: "0.625rem",
+        inlineEnd: "0.625rem",
+      },
+      border: {
+        width: {
+          blockStart: "1px",
+          blockEnd: "1px",
+          inlineStart: "1px",
+          inlineEnd: "1px",
+        },
+        style: "dashed",
+        color: { $token: "color.border-strong" },
+      },
+      borderRadius: "2px",
+      backgroundColor: { $token: "color.surface" },
+      color: { $token: "color.muted" },
+      // 13px at the page's own scale, over the 12px floor, in the muted
+      // colour, which the site's default tokens hold at 4.6:1 on the surface
+      // in light and 6.8:1 in dark.
+      fontSize: "0.8125rem",
+      lineHeight: "1.35",
+    },
+  },
+} as const;
+
+/** The marker's definition: no settings, never offered, never stored. */
 const conditionHidden: BlockDefinition<ConditionHiddenProps> = defineBlock({
   name: CONDITION_HIDDEN_TYPE,
   version: 1,
@@ -54,6 +96,7 @@ const conditionHidden: BlockDefinition<ConditionHiddenProps> = defineBlock({
   props: {},
   defaultProps: { name: "", reason: "", unchecked: false },
   example: { props: { name: "", reason: "", unchecked: false } },
+  baseStyles: CONDITION_HIDDEN_BASE_STYLES,
   render: renderConditionHidden,
 });
 

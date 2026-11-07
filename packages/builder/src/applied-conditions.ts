@@ -16,6 +16,7 @@
  * @module applied-conditions
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   CONDITION_HIDDEN_TYPE,
   conditionScopeIn,
   DEFAULT_LIMITS,
@@ -32,9 +33,11 @@ import {
   type ConditionOp,
   type ConditionScope,
   type ConditionSubject,
+  type DefinitionsById,
   type DocumentLimits,
   type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
+import { sanitizeDocument } from "@nextlyhq/blocks-react";
 
 import { storedGroups } from "./condition-checks";
 import { gatedAsStored } from "./condition-gate";
@@ -94,8 +97,9 @@ export interface AppliedConditions {
   /** The judged blocks a visitor would not, outermost first, in page order. */
   readonly hidden: readonly HiddenBlock[];
   /**
-   * Whether the page holds a conditioned block left unjudged, one a list's
-   * item decides, so what is said of the judged blocks is not said of all.
+   * Whether the page holds a conditioned block left unjudged, so what is said
+   * of the judged blocks is not said of all: one a list's item decides, or
+   * one inside a component the page places.
    */
   readonly unjudged: boolean;
 }
@@ -114,14 +118,18 @@ export function appliedConditionsOf(
   document: BlockDocument,
   preview: ConditionsPreview,
   nameOf: (node: BlockNode) => string,
-  /** The limits the canvas draws under, so every block it draws is judged. */
-  limits?: Pick<DocumentLimits, "maxNodes">
+  drawn: {
+    /** The limits the canvas draws under, so every block it draws is judged. */
+    readonly limits?: DocumentLimits;
+    /** The definitions of the components the page places. */
+    readonly definitions?: DefinitionsById;
+  } = {}
 ): AppliedConditions {
   const { shown, hidden, unjudged } = judgedBlocks(
     document,
     preview,
     nameOf,
-    limits
+    drawn
   );
   const byId = new Map(hidden.map(block => [block.id, block]));
   // Every conditioned block is drawn, as the canvas draws them while
@@ -178,12 +186,18 @@ function judgedBlocks(
   document: BlockDocument,
   preview: ConditionsPreview,
   nameOf: (node: BlockNode) => string,
-  limits: Pick<DocumentLimits, "maxNodes"> | undefined
+  drawn: {
+    readonly limits?: DocumentLimits;
+    readonly definitions?: DefinitionsById;
+  }
 ): { shown: Set<string>; hidden: HiddenBlock[]; unjudged: boolean } {
   const shown = new Set<string>();
   const hidden: HiddenBlock[] = [];
   let unjudged = false;
-  walkScoped(document, limits, (block, scope) => {
+  walkScoped(document, drawn.limits, (block, scope) => {
+    // A placed component's own conditioned blocks are drawn from its
+    // definition and not judged here, so nothing claims they all show.
+    unjudged ||= placesConditioned(block, drawn.definitions, drawn.limits);
     if (!gatedAsStored(block)) return true;
     if (scope.source !== "entry") {
       unjudged = true;
@@ -212,7 +226,7 @@ function judgedBlocks(
  */
 export function conditionedBlocksIn(
   document: BlockDocument,
-  limits?: Pick<DocumentLimits, "maxNodes">
+  limits?: DocumentLimits
 ): {
   readonly any: boolean;
   readonly readingEntry: boolean;
@@ -233,20 +247,27 @@ export function conditionedBlocksIn(
  * Every block of a document, in page order, with what its conditions read:
  * the entry, or a list's item inside its per-entry slot (`conditionScopeIn`,
  * the save's and the renderer's one rule). `visit` answers whether to go on
- * into the block's own blocks. Bounded by the limits the canvas draws under,
- * the defaults where none are given, so it reads every block the canvas draws
- * and no more, as any walk of stored data is bounded.
+ * into the block's own blocks.
+ *
+ * Walked over the document as the renderer makes it sound to draw
+ * (`sanitizeDocument`), under the limits the canvas draws with: a node the
+ * renderer drops (no type, an impossible version) or never reaches (past the
+ * node limit) is never judged, so applying conditions never draws a marker
+ * for a block the canvas would not draw.
  */
 function walkScoped(
   document: BlockDocument,
-  limits: Pick<DocumentLimits, "maxNodes"> | undefined,
+  limits: DocumentLimits | undefined,
   visit: (block: BlockNode, scope: ConditionScope) => boolean
 ): void {
-  const roots: unknown[] = Array.isArray(document.nodes) ? document.nodes : [];
+  const sound = sanitizeDocument(document, limits ?? DEFAULT_LIMITS);
+  const roots: unknown[] = sound.nodes;
   const stack: Visit[] = roots
     .map(node => ({ node, scope: ENTRY_SCOPE }))
     .reverse();
-  let left = limits?.maxNodes ?? DEFAULT_LIMITS.maxNodes;
+  // The sanitized tree already holds no more than the limit; bounded again
+  // because the walk is the one that would loop on a tree that did.
+  let left = (limits ?? DEFAULT_LIMITS).maxNodes;
   while (stack.length > 0 && left > 0) {
     const next = stack.pop();
     left -= 1;
@@ -255,6 +276,48 @@ function walkScoped(
       stack.push(...childVisits(next.node, next.scope));
     }
   }
+}
+
+/**
+ * Whether a block places a component whose definition holds a conditioned
+ * block, at any depth of the components it places in turn. Bounded by the
+ * node limit and by each component read once, as the resolver reads them.
+ */
+function placesConditioned(
+  block: BlockNode,
+  definitions: DefinitionsById | undefined,
+  limits: DocumentLimits | undefined
+): boolean {
+  if (definitions === undefined || block.type !== COMPONENT_INSTANCE_TYPE) {
+    return false;
+  }
+  const seen = new Set<string>();
+  const queue = [componentIdOf(block)];
+  let left = (limits ?? DEFAULT_LIMITS).maxNodes;
+  while (queue.length > 0 && left > 0) {
+    const id = queue.pop();
+    if (id === undefined || seen.has(id)) continue;
+    seen.add(id);
+    const definition = definitions.get(id);
+    if (definition === undefined) continue;
+    let found = false;
+    walkScoped(definition, limits, node => {
+      left -= 1;
+      if (gatedAsStored(node)) found = true;
+      if (node.type === COMPONENT_INSTANCE_TYPE)
+        queue.push(componentIdOf(node));
+      return !found && left > 0;
+    });
+    if (found) return true;
+  }
+  return false;
+}
+
+/** The component a placement names, or none. */
+function componentIdOf(block: BlockNode): string | undefined {
+  const props: unknown = block.props;
+  if (!isPlainRecord(props)) return undefined;
+  return typeof props.componentId === "string" ? props.componentId : undefined;
 }
 
 /** Whether a stored value is a block this walk can read. */

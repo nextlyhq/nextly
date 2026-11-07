@@ -37,6 +37,7 @@ import * as previewContainerModule from "./preview-container";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
+import * as sanitizeModule from "./sanitize";
 import * as sharedStyleInputsModule from "./shared-style-inputs";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
@@ -166,6 +167,14 @@ const SOURCE_MODULES: ReadonlyArray<{
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
   { name: "resolver", module: resolverModule, internal: [] },
+  {
+    name: "sanitize",
+    module: sanitizeModule,
+    // `sanitizeDocument` is public, so the editor's canvas judges a page's
+    // conditions on the tree the renderer draws, not a corrupt node it drops.
+    // Repairing duplicate ids is a step of the renderer's own preparation.
+    internal: ["dedupeNodeIds"],
+  },
   {
     name: "shared-style-inputs",
     module: sharedStyleInputsModule,
@@ -508,6 +517,9 @@ describe("the root entry", () => {
       "repairingLookup",
       "resolvePageStyles",
       "resolvePageStylesWithTrace",
+      // A stored document made sound to walk, as the renderer makes it: public
+      // so the editor judges conditions on the tree the renderer draws.
+      "sanitizeDocument",
       "sharedStyleInputs",
       "styleTextForInjection",
       // The render's own discovery, asked from outside the render. Public so a

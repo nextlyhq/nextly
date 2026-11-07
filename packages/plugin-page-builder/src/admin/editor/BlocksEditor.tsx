@@ -1272,6 +1272,8 @@ function EditorBody<TFieldValues extends FieldValues>({
       componentTitle: mount.componentLibrary.titleOf,
       // Every block the canvas draws, under the limits it draws with.
       limits: canvas.canvasRender.limits,
+      // The placed components, whose own conditioned blocks go unchecked.
+      definitions: canvas.canvasRender.definitions,
       // The site's zone, as the canvas's bindings read it, for a date a
       // condition compares by day.
       timeZone: canvasRender.bindings.timeZone,
@@ -1576,14 +1578,10 @@ function useAppliedConditionsSwitch(
 ): AppliedConditionsSwitch {
   const [on, setOn] = useState(false);
   const toggle = useCallback(() => setOn(was => !was), []);
-  const maxNodes = options.limits?.maxNodes;
+  const { limits } = options;
   const held = useMemo(
-    () =>
-      conditionedBlocksIn(
-        document,
-        maxNodes === undefined ? undefined : { maxNodes }
-      ),
-    [document, maxNodes]
+    () => conditionedBlocksIn(document, limits),
+    [document, limits]
   );
   const noun =
     preview === undefined ? "entry" : preview.labels.singular.toLowerCase();

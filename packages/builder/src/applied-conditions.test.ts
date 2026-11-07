@@ -5,7 +5,9 @@
  */
 import {
   COLLECTION_LIST_TYPE,
+  COMPONENT_INSTANCE_TYPE,
   CONDITION_HIDDEN_TYPE,
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   LIST_ENTRY_SLOT,
   type BindingFieldShape,
@@ -211,7 +213,7 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
       document,
       previewFor({ category: "News" }),
       nameOf,
-      { maxNodes: 10_000 }
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 10_000 } }
     );
     expect(raised.hidden.map(each => each.id)).toEqual(["worksheet"]);
     const defaults = appliedConditionsOf(
@@ -220,6 +222,66 @@ describe("the page with its conditions applied, as the canvas draws it", () => {
       nameOf
     );
     expect(defaults.hidden).toEqual([]);
+  });
+
+  it("never draws a marker for a node the renderer drops", () => {
+    // A stored node with an id and conditions but no type: the renderer's
+    // repair drops it, so applying conditions must not bring it back.
+    const corrupt = JSON.parse(
+      JSON.stringify({ id: "corrupt", visibility: { conditions: [[guides]] } })
+    ) as BlockNode;
+    const applied = appliedConditionsOf(
+      page(corrupt, worksheet),
+      previewFor({ category: "News" }),
+      nameOf
+    );
+    expect(applied.hidden.map(each => each.id)).toEqual(["worksheet"]);
+    expect(
+      applied.document.nodes.filter(node => node.type === CONDITION_HIDDEN_TYPE)
+    ).toHaveLength(1);
+  });
+
+  it("says a placed component's conditioned blocks go unjudged", () => {
+    const placed = block("placed", {
+      type: COMPONENT_INSTANCE_TYPE,
+      props: { componentId: "promo" },
+    });
+    const definitions = new Map([
+      [
+        "promo",
+        {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: [worksheet],
+        } as BlockDocument,
+      ],
+    ]);
+    const passing = appliedConditionsOf(
+      page(placed),
+      previewFor({ category: "Guides" }),
+      nameOf,
+      { definitions }
+    );
+    expect(passing.unjudged).toBe(true);
+    // A component with no conditioned block leaves nothing unjudged.
+    const plain = appliedConditionsOf(
+      page(placed),
+      previewFor({ category: "Guides" }),
+      nameOf,
+      {
+        definitions: new Map([
+          [
+            "promo",
+            {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [block("plain")],
+            } as BlockDocument,
+          ],
+        ]),
+      }
+    );
+    expect(plain.unjudged).toBe(false);
   });
 
   it("starts a day where the published page does, in the site's zone", () => {

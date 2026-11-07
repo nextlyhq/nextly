@@ -4,7 +4,11 @@
  *
  * @module use-applied-conditions
  */
-import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  DefinitionsById,
+  DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 import { conditionDayStart } from "@nextlyhq/blocks-react";
 import { useMemo } from "react";
 
@@ -76,7 +80,9 @@ export interface AppliedConditionsOptions {
   /** A placed component's title, for a hidden placement's name. */
   readonly componentTitle?: ComponentTitleOf;
   /** The limits the canvas draws under. */
-  readonly limits?: Pick<DocumentLimits, "maxNodes">;
+  readonly limits?: DocumentLimits;
+  /** The definitions of the components the page places. */
+  readonly definitions?: DefinitionsById;
   /** The site's time zone, as the canvas's bindings read it. */
   readonly timeZone?: string;
 }
@@ -93,7 +99,14 @@ export interface AppliedConditionsOptions {
 export function useAppliedConditions(
   document: BlockDocument,
   previewed: PreviewedEntry | undefined,
-  { noun, services, componentTitle, limits, timeZone }: AppliedConditionsOptions
+  {
+    noun,
+    services,
+    componentTitle,
+    limits,
+    definitions,
+    timeZone,
+  }: AppliedConditionsOptions
 ): AppliedConditions | undefined {
   // The collections the inspector lists, read once and shared, for the
   // fields' names as the rows give them.
@@ -108,7 +121,6 @@ export function useAppliedConditions(
     () => conditionsPreviewOf(previewed, noun, labelled, timeZone),
     [previewed, noun, labelled, timeZone]
   );
-  const maxNodes = limits?.maxNodes;
   return useMemo(
     () =>
       preview === undefined
@@ -117,8 +129,11 @@ export function useAppliedConditions(
             document,
             preview,
             node => layerLabel(node, undefined, componentTitle),
-            maxNodes === undefined ? undefined : { maxNodes }
+            {
+              ...(limits === undefined ? {} : { limits }),
+              ...(definitions === undefined ? {} : { definitions }),
+            }
           ),
-    [document, preview, componentTitle, maxNodes]
+    [document, preview, componentTitle, limits, definitions]
   );
 }
