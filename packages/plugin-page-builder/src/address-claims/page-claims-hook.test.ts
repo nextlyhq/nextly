@@ -53,8 +53,7 @@ function hookWith(
       pages: "pages",
       claims: {} as Claims,
       locales: () => ["en"],
-      nextly: async () => ({ findByID: async () => null }),
-      collection: async () => null,
+      readPage: async () => null,
       backfillDone: () => false,
       publishedPages: async function* () {
         yield* [];

@@ -20,6 +20,7 @@ import {
   findNode,
   outerListOf,
   readListQuery,
+  type BindingFieldShape,
   type BlockNode,
   type Condition,
 } from "@nextlyhq/blocks-engine";
@@ -42,6 +43,7 @@ import {
   completedCondition,
   conditionChoices,
   conditionFieldsOf,
+  conditionFieldsOfShapes,
   conditionLine,
   conditionSentence,
   valueOpFor,
@@ -63,8 +65,10 @@ import {
   LimitNote,
   listLimit,
   PUBLIC_ONLY,
+  useCustomSources,
   useEntryTitles,
 } from "./list-query-controls";
+import { customSourceLookup, type CustomSource } from "./named-query-model";
 import {
   SentenceRow,
   useSentenceRows,
@@ -91,6 +95,11 @@ interface ConditionSource {
   /** What the conditions must match: "this post", "each post in the list". */
   readonly match: string;
   readonly item: boolean;
+  /**
+   * The fields an item has where the list's source is a named query whose
+   * rows are a schema of their own, which no collection holds.
+   */
+  readonly rowFields?: readonly BindingFieldShape[];
 }
 
 /** One entry's name in a sentence: "post", "page". */
@@ -103,17 +112,35 @@ function sourceOf(
   node: BlockNode,
   nodes: BlockNode[],
   entryCollection: string | null | undefined,
-  collections: readonly LoopCollection[]
+  collections: readonly LoopCollection[],
+  customs: readonly CustomSource[] | undefined
 ): ConditionSource {
   const outer = outerListOf(nodes, node.id);
   if (outer !== undefined) {
-    const collection = readListQuery(outer.props).query.collection;
+    const { query } = readListQuery(outer.props);
+    // A custom source's items are its query's rows: entries of the
+    // collection they name, or rows of the query's own fields.
+    const rows =
+      query.namedQuery === undefined
+        ? undefined
+        : customs?.find(
+            each => each.declaration.name === query.namedQuery?.name
+          )?.declaration.rows;
+    const collection =
+      rows === undefined
+        ? query.collection
+        : "collection" in rows
+          ? rows.collection
+          : undefined;
     const found = collections.find(each => each.slug === collection);
     return {
       collection,
       words: `Each ${oneOf(found)} in the list`,
       match: `each ${oneOf(found)} in the list`,
       item: true,
+      ...(rows !== undefined && "fields" in rows
+        ? { rowFields: rows.fields }
+        : {}),
     };
   }
   if (entryCollection === null) {
@@ -138,13 +165,18 @@ function problemsOf(
   editor: EditorState,
   nodeId: string,
   collections: readonly LoopCollection[] | undefined,
-  entryCollection: string | null | undefined
+  entryCollection: string | null | undefined,
+  customs: readonly CustomSource[] | undefined
 ): { rows: ReadonlyMap<number, string>; whole: readonly string[] } {
   const found = conditionIssues(editor.document.nodes, {
     ...(collections === undefined
       ? {}
       : { fields: fieldSourceOf(collections) }),
     ...(entryCollection === undefined ? {} : { entryCollection }),
+    // A custom source's items judged by its query's rows, as the save does.
+    ...(customs === undefined
+      ? {}
+      : { namedQueries: customSourceLookup(customs) }),
   }).filter(issue => issue.nodeId === nodeId && issue.severity === "error");
   const rows = new Map<number, string>();
   const whole: string[] = [];
@@ -726,12 +758,14 @@ function useConditionSource(
 ): {
   listing: ConditionListing;
   collections: readonly LoopCollection[] | undefined;
+  customs: readonly CustomSource[] | undefined;
   source: ConditionSource | undefined;
   fields: readonly ConditionField[];
   listFields: readonly LoopListField[];
 } {
   const listed = useLoopCollections(services?.listLoopCollections);
   const collections = listed?.kind === "ready" ? listed.collections : undefined;
+  const customs = useCustomSources(services?.listCustomSources);
   const source =
     node === undefined
       ? undefined
@@ -739,16 +773,23 @@ function useConditionSource(
           node,
           editor.document.nodes,
           services?.entryCollection,
-          collections ?? []
+          collections ?? [],
+          customs
         );
   const collection = collections?.find(
     each => each.slug === source?.collection
   );
   // Every field the public may read, not only those a list filters by: a
   // condition can ask whether any of them has a value.
+  const rowFields = source?.rowFields;
   const fields = React.useMemo(
-    () => (collection === undefined ? [] : conditionFieldsOf(collection)),
-    [collection]
+    () =>
+      rowFields !== undefined
+        ? conditionFieldsOfShapes(rowFields)
+        : collection === undefined
+          ? []
+          : conditionFieldsOf(collection),
+    [collection, rowFields]
   );
   const listing: ConditionListing =
     listed === undefined || listed.kind === "failed"
@@ -757,6 +798,7 @@ function useConditionSource(
   return {
     listing,
     collections,
+    customs,
     source,
     fields,
     listFields: collection?.fields ?? [],
@@ -773,7 +815,7 @@ export function ShowWhen({
 }: ShowWhenProps): React.JSX.Element | null {
   const id = React.useId();
   const node = findNode(editor.document.nodes, nodeId);
-  const { listing, collections, source, fields, listFields } =
+  const { listing, collections, customs, source, fields, listFields } =
     useConditionSource(editor, node, services);
   const groups = node === undefined ? [] : storedGroups(node);
   const stored = groups?.[0] ?? [];
@@ -798,7 +840,8 @@ export function ShowWhen({
     editor,
     nodeId,
     collections,
-    services?.entryCollection
+    services?.entryCollection,
+    customs
   );
   const writes = conditionWrites(editor, nodeId, stored, state, fields);
   const titleId = `${id}-title`;

@@ -37,6 +37,12 @@ import {
   type SingleConfig,
 } from "nextly/config";
 
+import {
+  siteCodeEntryProblem,
+  type SiteCodeEntry,
+  type SiteCodeSlot,
+} from "./rules";
+
 /** The Single the site's code is kept in. */
 export const SITE_CODE_SLUG = "page-builder-site-code";
 
@@ -131,5 +137,27 @@ export function siteCodeSingle(): SingleConfig {
         admin: { readOnly: true, hidden: true },
       }),
     ],
+  });
+}
+
+/**
+ * The stored entries for `slot` that the rules still accept, from a read of
+ * the Single. Any other, a row edited in the database say, is left out and
+ * the server log says so: rendered pages and the Settings summary both read
+ * stored code through this, so they never disagree about what is there.
+ */
+export function storedSiteCodeEntries(
+  doc: unknown,
+  slot: SiteCodeSlot
+): SiteCodeEntry[] {
+  const stored = (doc as Record<string, unknown> | null)?.[slot];
+  if (!Array.isArray(stored)) return [];
+  return stored.filter((entry: unknown): entry is SiteCodeEntry => {
+    const problem = siteCodeEntryProblem(entry, slot);
+    if (problem === undefined) return true;
+    console.warn(
+      `[page-builder] A stored site code entry was left out of the ${slot}: ${problem}.`
+    );
+    return false;
   });
 }

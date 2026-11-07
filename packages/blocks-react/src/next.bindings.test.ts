@@ -10,6 +10,7 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
+  defineNamedQuery,
   DOCUMENT_FORMAT_VERSION,
   type BindingFieldShape,
   type BlockDocument,
@@ -1212,6 +1213,78 @@ describe("a page's site settings, in a process serving several sites", () => {
       zoneOf(siteInstance(dayList, "Globex", "America/New_York"), "globex")
     ).resolves.toBe("America/New_York");
     expect(runtime.processSiteReads).toBe(0);
+  });
+
+  it("reads the site settings once for a page whose list compares days and whose query asks today", async () => {
+    // A custom source of rows with their own date field, its items hidden
+    // by a condition ordering that date: the list's days need the zone, and
+    // the query's run asks for today in it. One question, asked twice.
+    const soon = defineNamedQuery({
+      name: "events.soon",
+      label: "Events soon",
+      reads: {},
+      rows: {
+        key: "id",
+        fields: [
+          { name: "id", type: "text" },
+          { name: "startsAt", type: "date" },
+        ],
+      },
+      run: () => Promise.resolve({ rows: [{ id: "e1", startsAt: null }] }),
+    });
+    const events = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "list",
+            type: "core/collection-loop",
+            version: 1,
+            props: { namedQuery: { name: "events.soon", params: {} } },
+            slots: {
+              children: [
+                {
+                  id: "badge",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Soon", level: "h3" },
+                  visibility: {
+                    conditions: [
+                      [
+                        {
+                          field: "startsAt",
+                          op: "greater_than",
+                          value: "2026-11-01",
+                        },
+                      ],
+                    ],
+                  },
+                },
+              ],
+              empty: [],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const route = createBlocksPage({
+      ...base,
+      cacheScope: "acme",
+      namedQueries: {
+        definitionOf: name => (name === soon.name ? soon : undefined),
+      },
+      nextly: siteInstance(events, "Acme", "Europe/Paris") as never,
+    });
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { slug: ["about"] } })
+    );
+    // The zone was read, from this instance's settings.
+    expect(element.props.context?.timeZone).toBe("Europe/Paris");
+    const siteReads = runtime.reads.filter(
+      read => read.keyParts[0] === "nextly-public-site-settings"
+    );
+    expect(siteReads).toHaveLength(1);
   });
 
   /** A reader of the app's own that forwards no site-settings read. */

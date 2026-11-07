@@ -12,8 +12,6 @@
  */
 import { readableTitleText } from "@nextlyhq/plugin-sdk";
 
-import { titleFieldIn } from "../entries-route";
-
 import { claimKey, spaceHolding, type ServedAddress } from "./claim-key";
 import {
   claimAddress,
@@ -28,11 +26,6 @@ import {
 } from "./claim-store";
 import { pageClaims } from "./page-claims";
 
-/** The one Direct API read the naming makes. */
-export interface ReadsById {
-  findByID(args: Record<string, unknown>): Promise<unknown>;
-}
-
 /** What the page claims need, resolved per save. */
 export interface PageClaimsDeps {
   /** The Pages collection's slug, as the host named it. */
@@ -40,10 +33,14 @@ export interface PageClaimsDeps {
   readonly claims: Claims;
   /** The languages a page's address is held in. */
   readonly locales: () => readonly string[];
-  /** The Direct API, for naming the document an address is held by. */
-  readonly nextly: () => Promise<ReadsById>;
-  /** A collection's configuration, for its label and title field. */
-  readonly collection: (slug: string) => Promise<unknown>;
+  /**
+   * The page `id` as stored, read on the transaction `tx` stands for, or
+   * null when there is none: for naming the page an address is held by.
+   */
+  readonly readPage: (
+    tx: Tx,
+    id: string
+  ) => Promise<Readonly<Record<string, unknown>> | null>;
   /** Where the host serves its pages (`pagePreviewPath`), if it says. */
   readonly pathTemplate?: string;
   /** Whether the start-up pass has claimed every existing page. */
@@ -112,7 +109,7 @@ async function holdPageClaims(
   }
   const wanted = savedClaims(write.data, deps);
   if (wanted === null) return;
-  const describe = describeFor(deps);
+  const describe = describeFor(deps, write.transaction);
   // Until the start-up pass has claimed every existing page, a list's later
   // pages could be taken over a page published among them that holds no
   // claim yet. So the pages already there are claimed first, in this save's
@@ -207,63 +204,31 @@ function addressesIn(
 }
 
 /**
- * How a refusal names the document holding an address: by its title where
- * a visitor may read it (`the page "About us" (abc123)`), which a published
- * page is, and by its id alone where not (`a page (abc123)`). Read as the
- * public rather than as the person saving, because a save's API key may
- * hold narrower grants than its owner and the write does not carry them:
- * naming only what the public may read leaks nothing to any caller.
+ * How a refusal names the document holding an address: a page by its title
+ * where a visitor may read it, which a published page is (`the page "About
+ * us" (abc123)`), and by its id alone where not (`a page (abc123)`); any
+ * other document by its id alone (`a document (abc123)`). Named as the
+ * public would see it rather than as the person saving, so a name leaks
+ * nothing to any caller.
+ *
+ * Read on the save's own transaction, never through the pool: the save holds
+ * a connection while it is refused, and on a pool of one a second would never
+ * come free. A page is the plugin's own content, so it is read there; another
+ * collection's document cannot be, so it is named by id.
  */
 export function describeFor(
-  deps: Pick<PageClaimsDeps, "collection" | "nextly">
+  deps: Pick<PageClaimsDeps, "pages" | "readPage">,
+  tx: Tx
 ): DescribeHolder {
   return async holder => {
-    const config = await deps.collection(holder.collection).catch(() => null);
-    const label = singularLabel(config);
-    const row = await readAsPublic(holder, deps).catch(() => null);
-    if (typeof row !== "object" || row === null) {
-      return `${article(label)} ${label} (${holder.id})`;
-    }
-    const titleField =
-      typeof config === "object" && config !== null
-        ? (titleFieldIn(config)?.name ?? "title")
-        : "title";
-    const title = readableTitleText(
-      (row as Record<string, unknown>)[titleField]
-    );
+    if (holder.collection !== deps.pages) return `a document (${holder.id})`;
+    const row = await deps.readPage(tx, holder.id).catch(() => null);
+    const title =
+      row !== null && row.status === "published"
+        ? readableTitleText(row.title)
+        : undefined;
     return title === undefined
-      ? `the ${label} ${holder.id}`
-      : `the ${label} "${title}" (${holder.id})`;
+      ? `a page (${holder.id})`
+      : `the page "${title}" (${holder.id})`;
   };
-}
-
-/** The holder as a visitor reads it: published, and only if public. */
-async function readAsPublic(
-  holder: Holder,
-  deps: Pick<PageClaimsDeps, "nextly">
-): Promise<unknown> {
-  const nextly = await deps.nextly();
-  return nextly.findByID({
-    collection: holder.collection,
-    id: holder.id,
-    overrideAccess: false,
-    depth: 0,
-  });
-}
-
-/** A collection's singular label, lower-cased, as a sentence names it. */
-function singularLabel(config: unknown): string {
-  const labels =
-    typeof config === "object" && config !== null
-      ? (config as { labels?: { singular?: unknown } }).labels
-      : undefined;
-  const singular = labels?.singular;
-  return typeof singular === "string" && singular.trim() !== ""
-    ? singular.trim().toLowerCase()
-    : "document";
-}
-
-/** "a" or "an", by the word's first letter. */
-function article(word: string): string {
-  return /^[aeiou]/i.test(word) ? "an" : "a";
 }

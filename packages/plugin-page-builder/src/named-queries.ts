@@ -60,6 +60,7 @@ import {
   type NamedQueriesResponse,
   type NamedQueryInputItem,
   type NamedQueryItem,
+  type NamedQueryRowField,
 } from "./named-queries-contract";
 import { optionalText, parseRouteQuery } from "./route-query";
 
@@ -180,17 +181,21 @@ function inputItem(key: string, param: NamedQueryParam): NamedQueryInputItem {
   };
 }
 
-/** A row field as the binding picker lists it. */
-function rowField(shape: BindingFieldShape): {
-  name: string;
-  type: string;
-  kind?: ReturnType<typeof listFieldKind>;
-} {
+/**
+ * A row field as the binding picker lists it, a group's own fields with it,
+ * however deep, so every path a row's bindings may name is listed. A field
+ * holding several (`hasMany`) lists none of its children: a binding may not
+ * follow a path through one, so none is offered.
+ */
+function rowField(shape: BindingFieldShape): NamedQueryRowField {
   const kind = listFieldKind(shape);
   return {
     name: shape.name,
     type: shape.type,
     ...(kind === undefined ? {} : { kind }),
+    ...(shape.fields === undefined || shape.hasMany === true
+      ? {}
+      : { fields: shape.fields.map(rowField) }),
   };
 }
 

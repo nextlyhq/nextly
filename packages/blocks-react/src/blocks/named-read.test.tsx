@@ -529,6 +529,61 @@ describe("a list whose source is a named query", () => {
     expect(headings(element)).toEqual(["Template"]);
   });
 
+  it("decides a block's condition on a row of the query's own schema", async () => {
+    const definition = eventsQuery(() =>
+      Promise.resolve({
+        rows: [
+          { id: "e1", title: "One" },
+          { id: "e2", title: "Two" },
+        ],
+      })
+    );
+    // Shown only for the row titled One: decided against the fields the
+    // query declares, so neither row fails closed for want of a collection.
+    const gatedHeading = {
+      ...itemHeading("t"),
+      visibility: {
+        conditions: [[{ field: "title", op: "equals", value: "One" }]],
+      },
+    } as BlockNode;
+    const { element } = await draw(definition, { children: [gatedHeading] });
+    expect(headings(element)).toEqual(["One"]);
+  });
+
+  it("draws its template with no outer item where no host runs named queries", async () => {
+    // An ordinary list of posts around it, whose template also shows each
+    // post's title beside the custom source's list.
+    const outer = node(
+      "outer",
+      "core/collection-loop",
+      { collection: "posts" },
+      {
+        children: [
+          itemHeading("outer-title"),
+          list(named(), [itemHeading("inner-title")], "inner"),
+        ],
+        empty: [],
+      }
+    );
+    const element = await drawn(
+      page(outer),
+      context({
+        data: {
+          find: () =>
+            Promise.resolve({
+              items: [{ id: "p1", title: "Outer post" }],
+              total: 1,
+            }),
+        },
+      })
+    );
+    // The outer template shows the post, so the item reaches that far; the
+    // custom source's template, drawn with no rows, does not show it again.
+    expect(headings(element).filter(text => text === "Outer post")).toEqual([
+      "Outer post",
+    ]);
+  });
+
   it("claims a run's reads once per render, however many lists draw it", async () => {
     const run = vi.fn<NamedQueryDefinition["run"]>(async ({ reader }) => ({
       rows: (await reader.find({ collection: "events" })).items,

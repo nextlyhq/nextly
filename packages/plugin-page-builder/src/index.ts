@@ -321,8 +321,10 @@ export {
   mergeSiteCodeIntoCsp,
   parseCsp,
   siteCodeFacts,
+  siteCodePolicyAdditions,
 } from "./site-code/csp";
 export type {
+  CspAddition,
   CspCheck,
   CspCheckInput,
   CspFinding,
