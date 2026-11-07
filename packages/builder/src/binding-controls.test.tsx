@@ -15,6 +15,7 @@ import {
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -112,16 +113,38 @@ function mount(
     undoDepth: 0,
     composed: () => undefined,
   } as unknown as EditorState;
-  render(
-    <InspectorPanel
-      editor={editor}
-      contentServices={{
-        listBindingFields: async () => SOURCES,
-        ...services,
-      }}
-    />
+  const contentServices = {
+    listBindingFields: async () => SOURCES,
+    ...services,
+  };
+  const view = render(
+    <InspectorPanel editor={editor} contentServices={contentServices} />
   );
+  // As the editor publishes an applied edit: a new document object, drawn.
+  replaceDocument = next => {
+    view.rerender(
+      <InspectorPanel
+        editor={{ ...editor, document: next } as EditorState}
+        contentServices={contentServices}
+      />
+    );
+  };
   return editor;
+}
+
+/** Draw the inspector again over a new document, as an applied edit does. */
+let replaceDocument: (next: BlockDocument) => void = () => undefined;
+
+/** The document's one block, with `changes` made to it. */
+function withBlock(
+  editor: EditorState,
+  changes: Record<string, unknown>
+): BlockDocument {
+  const [block] = editor.document.nodes;
+  return {
+    ...editor.document,
+    nodes: [{ ...block, ...changes } as BlockNode],
+  };
 }
 
 describe("a prop's bind button", () => {
@@ -293,21 +316,57 @@ describe("an unbind that can't be applied as planned", () => {
       }
     );
     await openUnbind();
-    // Meanwhile the author binds the prop to another field.
-    // (The test's document is the editor's own object, so the inspector
-    // reads the change when the plan comes back.)
-    const nodes = editor.document.nodes as unknown as Array<
-      Record<string, unknown>
-    >;
-    nodes[0] = { ...nodes[0], bindings: { label: { $bind: "lede" } } };
-    answer({
-      kept: { set: { label: "Spring sale" } },
-      answer: { kept: "visitor", value: "Spring sale", reason: "" },
+    // Meanwhile the author binds the prop to another field: a new document.
+    act(() => {
+      replaceDocument(
+        withBlock(editor, { bindings: { label: { $bind: "lede" } } })
+      );
+    });
+    act(() => {
+      answer({
+        kept: { set: { label: "Spring sale" } },
+        answer: { kept: "visitor", value: "Spring sale", reason: "" },
+      });
     });
     expect((await screen.findByRole("status")).textContent).toMatch(
       /binding changed/
     );
     expect(vi.mocked(editor.apply)).not.toHaveBeenCalled();
+  });
+
+  it("keeps an edit made to the block while the plan was read", async () => {
+    let answer: (plan: UnbindPlanAnswer) => void = () => undefined;
+    const editor = mount(
+      { label: { $bind: "title" } },
+      {
+        planUnbind: () =>
+          new Promise<UnbindPlanAnswer>(resolve => {
+            answer = resolve;
+          }),
+      }
+    );
+    await openUnbind();
+    // Meanwhile another prop of the block is edited, the binding untouched.
+    act(() => {
+      replaceDocument(
+        withBlock(editor, { props: { label: "Own", tone: "loud" } })
+      );
+    });
+    act(() => {
+      answer({
+        kept: { set: { label: "Spring sale" } },
+        answer: { kept: "visitor", value: "Spring sale", reason: "" },
+      });
+    });
+    // Built from the document as it is now, the edit is in the unbind's patch;
+    // from the snapshot taken when the unbind began, it would be reverted.
+    await waitFor(() =>
+      expect(vi.mocked(editor.apply)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: { props: { label: "Spring sale", tone: "loud" } },
+        })
+      )
+    );
   });
 
   it("offers no field change where the host lists no fields", async () => {

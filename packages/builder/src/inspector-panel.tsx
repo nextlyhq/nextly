@@ -1213,9 +1213,8 @@ function ContentSurface({
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
       // A binding's edits, applied as any other edit of the block.
-      onApply={op => {
-        editor.apply(op);
-      }}
+      // Whether the editor took it: a refused edit is said, not assumed.
+      onApply={op => editor.apply(op) !== null}
       document={editor.document}
       listView={listViewOf(editor, inspection.nodeId)}
     />
@@ -1444,7 +1443,7 @@ function ContentFields({
 }: {
   inspection: BlockInspection;
   /** Apply one op as an edit: a binding's, which writes props and bindings at once. */
-  onApply: (op: BuilderOp) => void;
+  onApply: (op: BuilderOp) => boolean;
   /** The document the block is in, for a group that reads around it. */
   document: BlockDocument;
   /** Whether the canvas draws this block's empty state, and the switch. */
