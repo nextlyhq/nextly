@@ -51,6 +51,12 @@ export interface PreviewChip {
   readonly id: string;
   readonly title: string;
   readonly status: PreviewEntryStatus;
+  /**
+   * Whether the entry could not be read: listed, then gone or refused when
+   * read whole. The canvas then draws its fallbacks, and the chip says so
+   * rather than claiming an entry the canvas does not show.
+   */
+  readonly unavailable: boolean;
 }
 
 /** A template's preview, as the strip, the picker and the canvas read it. */
@@ -206,9 +212,9 @@ function useEntryRead(
       current = false;
     };
   }, [collection, id, locale, userId, key, round]);
-  // The last answer for this collection, language and person, kept while
-  // another entry's is on its way, so the canvas does not blink to its
-  // fallbacks between two entries.
+  // The last answer for this collection, language and person; its id says
+  // which entry it is, so a read still on its way is never taken for the
+  // entry the strip names.
   return read === undefined || read.key !== key ? undefined : read;
 }
 
@@ -352,9 +358,10 @@ function previewedFrom(
       ? { kind: "none", reason: "loading" }
       : { kind: "none", reason: "empty" };
   }
-  if (read !== undefined && "answer" in read) {
+  if (read !== undefined && "answer" in read && read.answer.id === selected) {
     const { answer } = read;
-    // The entry read last, kept until the selected one's answer replaces it.
+    // Only the selected entry's own answer: the strip names the selected
+    // entry, so nothing reads another one as the entry being previewed.
     return {
       kind: "entry",
       collection,
@@ -383,10 +390,12 @@ function chipFrom(
   if (selected === undefined) return undefined;
   if (read !== undefined && "answer" in read && read.answer.id === selected) {
     const { id, title, status } = read.answer;
-    return { id, title, status };
+    return { id, title, status, unavailable: false };
   }
   const row = rows.find(item => item.id === selected);
+  // Named from its row while it is read; marked when that read failed.
+  const failed = read !== undefined && "failed" in read && read.id === selected;
   return row === undefined
     ? undefined
-    : { id: row.id, title: row.title, status: row.status };
+    : { id: row.id, title: row.title, status: row.status, unavailable: failed };
 }

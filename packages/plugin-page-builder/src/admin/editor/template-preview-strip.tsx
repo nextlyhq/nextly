@@ -52,7 +52,15 @@ import {
   toast,
   useShortcuts,
 } from "@nextlyhq/ui";
-import { Check, ChevronDown, Eye, Info, Plus } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  Eye,
+  Info,
+  Plus,
+  RotateCw,
+} from "lucide-react";
 import {
   createContext,
   useContext,
@@ -62,6 +70,7 @@ import {
   useState,
   type JSX,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   useWatch,
@@ -141,10 +150,12 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
     userId,
     locale,
   });
+  // The entry the strip names, read by the canvas from the moment it is
+  // chosen, so the two never name different entries; none where it could
+  // not be read, so bound text draws its fallback as the strip says.
+  const chip = preview.chip;
   const previewedId =
-    preview.previewed.kind === "entry" ? preview.previewed.id : undefined;
-  // The canvas reads the previewed entry of the template's collection; with
-  // none, the collection alone, so bound text draws its fallback.
+    chip === undefined || chip.unavailable ? undefined : chip.id;
   const canvasIdentity = useMemo(
     (): DocumentIdentity | null =>
       collection === undefined
@@ -236,8 +247,6 @@ export function TemplatePreviewStrip({
   readonly preview: TemplatePreview;
 }): JSX.Element {
   useSwitchKeys(preview);
-  const { collection, labels, list } = preview;
-  const nothing = hasNothing(preview.previewed);
   return (
     <div data-template-preview="">
       <div className="nx-preview-strip">
@@ -245,25 +254,56 @@ export function TemplatePreviewStrip({
         <span>Previewing</span>
         <EntryPicker preview={preview} />
       </div>
-      {nothing ? (
-        <div className="nx-preview-notice" role="status">
-          <Info aria-hidden="true" size={14} />
-          <p>
-            {nothingToPreview(labels)}. Bound text shows its fallback until
-            there is one.
-          </p>
-          {list.mayCreate && collection !== undefined ? (
-            <button
-              type="button"
-              className="nx-preview-notice__new"
-              onClick={() => openNewEntry(collection)}
-            >
-              <Plus aria-hidden="true" size={12} />
-              New {inSentence(labels.singular)}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <PreviewNotice preview={preview} />
+    </div>
+  );
+}
+
+/**
+ * The strip's second row, where the canvas draws no entry: there is none to
+ * preview (with New where the author may create one), or the one named could
+ * not be read (with Try again). Nothing while an entry is previewed.
+ */
+function PreviewNotice({
+  preview,
+}: {
+  readonly preview: TemplatePreview;
+}): JSX.Element | null {
+  const { collection, labels, list, chip } = preview;
+  const unreadable = chip?.unavailable === true ? chip : undefined;
+  if (unreadable === undefined && !hasNothing(preview.previewed)) return null;
+  const create =
+    unreadable === undefined && list.mayCreate && collection !== undefined
+      ? () => openNewEntry(collection)
+      : undefined;
+  return (
+    <div className="nx-preview-notice" role="status">
+      <Info aria-hidden="true" size={14} />
+      <p>
+        {unreadable === undefined
+          ? `${nothingToPreview(labels)}. Bound text shows its fallback until there is one.`
+          : `${unreadable.title} couldn’t be read. Bound text shows its fallback meanwhile.`}
+      </p>
+      {unreadable === undefined ? null : (
+        <button
+          type="button"
+          className="nx-preview-notice__action"
+          onClick={preview.refresh}
+        >
+          <RotateCw aria-hidden="true" size={12} />
+          Try again
+        </button>
+      )}
+      {create === undefined ? null : (
+        <button
+          type="button"
+          className="nx-preview-notice__action"
+          onClick={create}
+        >
+          <Plus aria-hidden="true" size={12} />
+          New {inSentence(labels.singular)}
+        </button>
+      )}
     </div>
   );
 }
@@ -279,7 +319,9 @@ function chipWords(preview: TemplatePreview): {
   const { chip, labels, previewed } = preview;
   if (chip !== undefined) {
     return {
-      name: `Previewing ${chip.title}, ${chip.status}`,
+      name: chip.unavailable
+        ? `Previewing ${chip.title}, couldn’t be read`
+        : `Previewing ${chip.title}, ${chip.status}`,
       shown: chip.title,
     };
   }
@@ -304,20 +346,22 @@ function EntryPicker({
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const { chip } = preview;
-  const title = useRef<HTMLSpanElement | null>(null);
-  // Offered only while the title is cut: a tooltip repeating the chip's own
-  // words says nothing. Measured as the pointer or focus arrives, and never
-  // over the open picker.
-  const [cut, setCut] = useState(false);
-  const [tip, setTip] = useState(false);
-  const measure = () => {
-    const element = title.current;
-    setCut(element !== null && element.scrollWidth > element.clientWidth);
-  };
+  const tip = useTitleTip();
   const words = chipWords(preview);
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip open={tip && cut && !open} onOpenChange={setTip}>
+    <Popover
+      open={open}
+      onOpenChange={next => {
+        tip.hide();
+        setOpen(next);
+      }}
+    >
+      <Tooltip
+        open={tip.shown && !open}
+        onOpenChange={next => {
+          if (!next) tip.hide();
+        }}
+      >
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <button
@@ -325,17 +369,23 @@ function EntryPicker({
               className="nx-preview-strip__chip"
               aria-haspopup="listbox"
               aria-label={words.name}
-              onPointerEnter={measure}
-              onFocus={measure}
+              {...tip.triggerHandlers}
             >
               {chip === undefined ? (
                 <span className="nx-preview-strip__none">{words.shown}</span>
               ) : (
                 <>
-                  <span ref={title} className="nx-preview-strip__title">
+                  <span ref={tip.title} className="nx-preview-strip__title">
                     {chip.title}
                   </span>
-                  <StatusPill state={chip.status} size="sm" />
+                  {chip.unavailable ? (
+                    <span className="nx-preview-strip__unavailable">
+                      <AlertTriangle aria-hidden="true" size={12} />
+                      Couldn’t be read
+                    </span>
+                  ) : (
+                    <StatusPill state={chip.status} size="sm" />
+                  )}
                 </>
               )}
               <ChevronDown
@@ -353,6 +403,9 @@ function EntryPicker({
       <PopoverContent
         align="start"
         className="nx-preview-picker w-[26.25rem] max-w-[calc(100vw-2rem)] p-0"
+        // Focus returned to the chip as the picker closes is not the author
+        // arriving on it, so it opens no tooltip.
+        onCloseAutoFocus={tip.focusReturning}
       >
         {open ? (
           <PickerBody preview={preview} onDone={() => setOpen(false)} />
@@ -360,6 +413,59 @@ function EntryPicker({
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * The chip's full-title tooltip, offered only while the title is cut (one
+ * repeating the chip's own words says nothing): on hover, and on a focus the
+ * keyboard brings, never on a focus a click brings or the focus handed back
+ * as the picker closes.
+ */
+function useTitleTip(): {
+  readonly title: RefObject<HTMLSpanElement | null>;
+  readonly shown: boolean;
+  readonly hide: () => void;
+  readonly focusReturning: () => void;
+  readonly triggerHandlers: {
+    readonly onPointerEnter: () => void;
+    readonly onPointerLeave: () => void;
+    readonly onPointerDown: () => void;
+    readonly onFocus: () => void;
+    readonly onBlur: () => void;
+  };
+} {
+  const title = useRef<HTMLSpanElement | null>(null);
+  const [shown, setShown] = useState(false);
+  // Whether the next focus comes from a pointer, or is handed back.
+  const byPointer = useRef(false);
+  const handedBack = useRef(false);
+  const cut = () => {
+    const element = title.current;
+    return element !== null && element.scrollWidth > element.clientWidth;
+  };
+  const hide = () => setShown(false);
+  return {
+    title,
+    shown,
+    hide,
+    focusReturning: () => {
+      handedBack.current = true;
+    },
+    triggerHandlers: {
+      onPointerEnter: () => setShown(cut()),
+      onPointerLeave: hide,
+      onPointerDown: () => {
+        byPointer.current = true;
+      },
+      onFocus: () => {
+        const quiet = byPointer.current || handedBack.current;
+        byPointer.current = false;
+        handedBack.current = false;
+        if (!quiet && cut()) setShown(true);
+      },
+      onBlur: hide,
+    },
+  };
 }
 
 /**

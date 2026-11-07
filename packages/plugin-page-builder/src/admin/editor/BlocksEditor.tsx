@@ -1205,13 +1205,10 @@ function EditorBody<TFieldValues extends FieldValues>({
   const templatePreview = useTemplatePreviewState();
   // The conditioned blocks the page can't check, badged in red on the canvas,
   // judged with the collections the inspector lists, in this language.
-  const conditionServices = useMemo(
-    () => ({
-      // The inspector's own function, so both share one read of the list.
-      listLoopCollections: loopCollectionsIn(mount.locale, mount.userId),
-      ...(entryCollection === undefined ? {} : { entryCollection }),
-    }),
-    [mount.locale, mount.userId, entryCollection]
+  const conditionServices = useConditionServices(
+    mount.locale,
+    mount.userId,
+    entryCollection
   );
   const conditionsUnchecked = useConditionsUnchecked(
     componentView.preview.document,
@@ -1422,6 +1419,29 @@ function EditorBody<TFieldValues extends FieldValues>({
         </BuilderShell>
       </VisitorUnreadableProvider>
     </EditorFrame>
+  );
+}
+
+/**
+ * What the canvas's condition badges judge with: the inspector's own read of
+ * the collections (so both share one read of the list), and the collection
+ * the document's entry is of, where it has one. One object per language,
+ * person and collection.
+ */
+function useConditionServices(
+  locale: string | undefined,
+  userId: string | null,
+  entryCollection: string | null | undefined
+): {
+  listLoopCollections: NonNullable<ContentServices["listLoopCollections"]>;
+  entryCollection?: string | null;
+} {
+  return useMemo(
+    () => ({
+      listLoopCollections: loopCollectionsIn(locale, userId),
+      ...(entryCollection === undefined ? {} : { entryCollection }),
+    }),
+    [locale, userId, entryCollection]
   );
 }
 

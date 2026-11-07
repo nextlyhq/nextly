@@ -174,6 +174,75 @@ describe("the entry a template opens on", () => {
   });
 });
 
+describe("an entry listed but not readable", () => {
+  it("is named as unavailable, and the canvas reads no entry, rather than claiming the listed row", async () => {
+    // Listed, then deleted before its read: the read is refused.
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1"]);
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() =>
+      expect(result.current.previewed).toEqual({
+        kind: "none",
+        reason: "unavailable",
+      })
+    );
+    expect(result.current.chip).toMatchObject({ id: "p2", unavailable: true });
+  });
+
+  it("is marked available again once a retry reads it (the control)", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1"]);
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() =>
+      expect(result.current.chip).toMatchObject({ unavailable: true })
+    );
+    entriesReadable(["p1", "p2"]);
+    act(() => result.current.refresh());
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({
+        kind: "entry",
+        id: "p2",
+      })
+    );
+    expect(result.current.chip).toMatchObject({ id: "p2", unavailable: false });
+  });
+
+  it("never hands on the previous entry as the one previewed while the next is read", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p2" })
+    );
+    // The next read is held, so the switch is seen mid-way.
+    let release = (): void => {};
+    readPreviewEntry.mockImplementationOnce(
+      ({ id }: { id: string }) =>
+        new Promise(resolve => {
+          release = () =>
+            resolve({
+              id,
+              title: `Entry ${id}`,
+              status: "published",
+              editorValues: { id },
+              publicValues: { id },
+              fields: [],
+            });
+        })
+    );
+    act(() => result.current.choose(OLDER));
+    expect(result.current.chip?.id).toBe("p1");
+    expect(result.current.previewed).toEqual({
+      kind: "none",
+      reason: "loading",
+    });
+    act(() => release());
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p1" })
+    );
+  });
+});
+
 describe("a window that regains focus", () => {
   it("asks for the list again, so an entry made in another tab can be previewed", async () => {
     listPreviewEntries.mockResolvedValueOnce(listed([NEWEST, OLDER]));

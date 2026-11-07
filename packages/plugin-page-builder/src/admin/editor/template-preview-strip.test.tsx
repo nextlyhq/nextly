@@ -112,7 +112,12 @@ function previewOf(
     chip:
       current === undefined
         ? undefined
-        : { id: current.id, title: current.title, status: current.status },
+        : {
+            id: current.id,
+            title: current.title,
+            status: current.status,
+            unavailable: false,
+          },
     previewed,
     choose: vi.fn(),
     step: vi.fn((by: 1 | -1) => (by === 1 ? ROWS[2] : ROWS[0])),
@@ -175,6 +180,73 @@ describe("the chip", () => {
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       LONG_TITLE
     );
+  });
+
+  /** The strip with its title cut by the strip's width. */
+  function renderCut(preview = previewOf()) {
+    renderStrip(preview);
+    const title = screen.getByText(LONG_TITLE);
+    Object.defineProperty(title, "scrollWidth", { value: 900 });
+    Object.defineProperty(title, "clientWidth", { value: 300 });
+    return screen.getByRole("button", { name: /^Previewing / });
+  }
+
+  it("offers the cut title on hover", async () => {
+    const chip = renderCut();
+    fireEvent.pointerEnter(chip);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      LONG_TITLE
+    );
+    fireEvent.pointerLeave(chip);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  });
+
+  it("opens no tooltip when focus comes back to the chip after a pick", async () => {
+    const preview = previewOf();
+    const chip = renderCut(preview);
+    fireEvent.pointerDown(chip);
+    fireEvent.click(chip);
+    const options = await screen.findAllByRole("option");
+    fireEvent.click(options[0] as HTMLElement);
+    expect(preview.choose).toHaveBeenCalledWith(ROWS[0]);
+    // The picker hands focus back to the chip as it closes.
+    await waitFor(() =>
+      expect(screen.queryAllByRole("option")).toHaveLength(0)
+    );
+    act(() => {
+      chip.focus();
+    });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The control: the keyboard arriving on the chip offers it.
+    act(() => {
+      chip.blur();
+    });
+    fireEvent.focus(chip);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      LONG_TITLE
+    );
+  });
+
+  it("names an entry that could not be read as such, never as the entry previewed", () => {
+    const preview = previewOf();
+    renderStrip({
+      ...preview,
+      chip: { ...preview.chip!, unavailable: true },
+      previewed: { kind: "none", reason: "unavailable" },
+    });
+    expect(
+      screen.getByRole("button", {
+        name: `Previewing ${LONG_TITLE}, couldn’t be read`,
+      })
+    ).toBeTruthy();
+    expect(screen.queryByText("Published")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      `${LONG_TITLE} couldn’t be read.`
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(preview.refresh).toHaveBeenCalledTimes(1);
+    // Nothing to create: the entry exists, it could not be read.
+    expect(screen.queryByRole("button", { name: "New post" })).toBeNull();
   });
 });
 
