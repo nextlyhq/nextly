@@ -12,7 +12,7 @@
  *
  * @module admin/bindings-report/BindingsToFixCard
  */
-import { Widget } from "@nextlyhq/plugin-sdk/admin";
+import { Button, Widget } from "@nextlyhq/plugin-sdk/admin";
 import { AlertTriangle } from "lucide-react";
 import type { JSX } from "react";
 
@@ -61,11 +61,33 @@ export function BindingsToFixCard({
     item.rows.map(row => ({ item, row }))
   );
   Widget.useTitleCount(report.data?.meta.bindings ?? data.bindings);
+  if (report.data === undefined) {
+    // The count came with the card; its rows are a read of their own, which
+    // may still be on its way or may have failed. Never an empty list under
+    // a count.
+    return report.pending ? (
+      <div aria-busy="true" className="flex flex-col gap-3 px-4 py-2">
+        {[0, 1, 2].map(line => (
+          <div key={line} className="h-10 animate-pulse rounded-md bg-muted" />
+        ))}
+      </div>
+    ) : (
+      <div
+        role="alert"
+        className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center text-sm text-muted-foreground"
+      >
+        The bindings to fix couldn’t be read.
+        <Button variant="outline" size="sm" onClick={report.refetch}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
   return (
     <div className="flex h-full flex-col">
       <p className="px-4 pb-2 text-sm text-muted-foreground">
-        A field or block changed after these were bound. Each shows its
-        fallback until it’s fixed.
+        A field or block changed after these were bound. Each shows its fallback
+        until it’s fixed.
       </p>
       <Widget.List
         rows={rows}
@@ -77,10 +99,11 @@ export function BindingsToFixCard({
         leading={() => (
           <AlertTriangle aria-hidden="true" className="h-4 w-4 text-warning" />
         )}
-        action={({ item, row }) => ({
-          label: "Open",
-          href: editorAddressOf(item, row),
-        })}
+        action={({ item, row }) => {
+          // None for a binding the builder can't open (another language).
+          const href = editorAddressOf(item, row);
+          return href === undefined ? undefined : { label: "Open", href };
+        }}
         total={{ count: report.data?.meta.bindings ?? data.bindings }}
         viewAllHref={BINDINGS_TO_FIX_PAGE_HREF}
       />

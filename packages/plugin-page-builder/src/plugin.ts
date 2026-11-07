@@ -2835,6 +2835,14 @@ export const pageBuilder = (
                 )
               );
           },
+          // Where a Layout region's binding is edited, and the language the
+          // builder edits, for each row's way into the editor.
+          componentStore: () =>
+            rewriteInstall?.store.collection ??
+            bindingReportCtx?.self.collections[COMPONENTS_SLUG] ??
+            COMPONENTS_SLUG,
+          defaultLocale: () =>
+            bindingReportCtx?.config.localization?.defaultLocale,
         }),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.

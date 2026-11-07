@@ -51,6 +51,17 @@ export interface BindingsToFixDeps {
    * caller's request; never waits for it.
    */
   readonly refresh: (ctx: PluginRouteContext) => void;
+  /** The collection components are stored in, a configured store included. */
+  readonly componentStore: () => string;
+  /** The site's default language, the one the Page Builder edits. */
+  readonly defaultLocale: () => string | undefined;
+}
+
+/** What a row's way into the editor depends on, read once per answer. */
+interface Editing {
+  readonly singles: SingleLabels;
+  readonly componentStore: string;
+  readonly defaultLocale: string | undefined;
 }
 
 /** A capital first letter, for a name read off a key. */
@@ -65,14 +76,26 @@ function named(key: string): string {
  */
 function withLabels(
   bare: BindingReportRow,
-  singles: SingleLabels
+  editing: Editing
 ): BindingsToFixRow {
   // A Single it reads is named as the admin names it, its slug where none.
   const sourceLabel =
     bare.binding.source === "single" && bare.binding.sourceKey !== undefined
-      ? singles.get(bare.binding.sourceKey)
+      ? editing.singles.get(bare.binding.sourceKey)
       : undefined;
-  const row = sourceLabel === undefined ? bare : { ...bare, sourceLabel };
+  const row: BindingReportRow & Partial<BindingsToFixRow> = {
+    ...bare,
+    ...(sourceLabel === undefined ? {} : { sourceLabel }),
+    // A Layout region's binding is in the component the region places, not
+    // in the page: it opens in that component's builder.
+    ...(bare.layout !== undefined && bare.component !== undefined
+      ? { opens: { slug: editing.componentStore, id: bare.component } }
+      : {}),
+    // The builder edits the default language only.
+    ...(bare.locale !== undefined && bare.locale !== editing.defaultLocale
+      ? { inAnotherLanguage: true as const }
+      : {}),
+  };
   if (row.blockType === "") {
     // The document's own metadata: `seo.title` is the page's Title.
     return { ...row, blockLabel: "", propLabel: named(row.prop.slice(4)) };
@@ -166,13 +189,13 @@ function filtersOf(req: Request): {
 function itemFor(
   entry: StoredDocumentReport,
   readable: ReadableDocument | undefined,
-  singles: SingleLabels
+  editing: Editing
 ): BindingsToFixItem | undefined {
   const rows = readableRows(entry, readable);
   if (readable === undefined || rows.length === 0) return undefined;
   // A Single is named by its label, as the admin's sidebar names it.
   const singleLabel =
-    entry.kind === "single" ? singles.get(entry.slug) : undefined;
+    entry.kind === "single" ? editing.singles.get(entry.slug) : undefined;
   return {
     documentKey: entry.documentKey,
     kind: entry.kind,
@@ -181,7 +204,7 @@ function itemFor(
     place: entry.place,
     title: singleLabel ?? readable.title,
     collectionLabel: singleLabel ?? readable.collectionLabel,
-    rows: rows.map(row => withLabels(row, singles)),
+    rows: rows.map(row => withLabels(row, editing)),
     checkedAt: entry.checkedAt.toISOString(),
   };
 }
@@ -212,8 +235,13 @@ async function readBindingsToFix(
     deps.readable(ctx, stored),
     singleLabelsOf(ctx, singlesNamed(stored)),
   ]);
+  const editing: Editing = {
+    singles,
+    componentStore: deps.componentStore(),
+    defaultLocale: deps.defaultLocale(),
+  };
   const visible = stored.flatMap(entry => {
-    const item = itemFor(entry, readable.get(entry.documentKey), singles);
+    const item = itemFor(entry, readable.get(entry.documentKey), editing);
     return item === undefined ? [] : [item];
   });
   // The counts are of every place, so each tab's count stays whatever tab is

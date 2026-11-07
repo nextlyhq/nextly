@@ -66,6 +66,8 @@ function routeOver(
         ])
       ),
     refresh: () => undefined,
+    componentStore: () => "components",
+    defaultLocale: () => "en",
   });
 }
 
@@ -167,5 +169,24 @@ describe("the bindings to fix route", () => {
       },
     });
     expect(unread.items[0]?.rows[0]).not.toHaveProperty("sourceLabel");
+  });
+
+  it("sends a Layout region's binding to its component, and marks one in another language", async () => {
+    const entry: StoredDocumentReport = {
+      ...stored("a", "pages", ["content"]),
+      rows: [
+        { ...row("layout"), layout: "l1", component: "c9" },
+        { ...row("content"), locale: "fr" },
+        { ...row("content"), locale: "en" },
+      ],
+    };
+    const { items } = await answer(
+      routeOver([entry], { a: ["content", "layout"] })
+    );
+    const [region, french, english] = items[0]?.rows ?? [];
+    expect(region).toMatchObject({ opens: { slug: "components", id: "c9" } });
+    expect(french).toMatchObject({ inAnotherLanguage: true });
+    expect(english).not.toHaveProperty("inAnotherLanguage");
+    expect(english).not.toHaveProperty("opens");
   });
 });

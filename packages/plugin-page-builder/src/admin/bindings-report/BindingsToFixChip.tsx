@@ -13,7 +13,7 @@
  * @module admin/bindings-report/BindingsToFixChip
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { revealNode, type LeftPanel } from "@nextlyhq/builder";
+import type { LeftPanel } from "@nextlyhq/builder";
 import type { EditorState } from "@nextlyhq/builder/shell";
 import { navigateTo, useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
@@ -21,6 +21,7 @@ import { AlertTriangle, ArrowRight, MousePointer2 } from "lucide-react";
 import { useState, type JSX } from "react";
 
 import { documentKeyOf } from "../../host-rewrite/contract";
+import { revealWhileSettling } from "../editor/use-open-at-section";
 import { navigateWithin } from "../plain-click";
 
 import { BINDINGS_TO_FIX_PAGE_HREF } from "./BindingsToFixCard";
@@ -60,6 +61,26 @@ function sentence(words: string): string {
   return /[.!?]["”]?$/.test(words) ? words : `${words}.`;
 }
 
+/**
+ * How many bindings to fix are on other documents: unknown while the whole
+ * report is still being read or could not be, never a guess of none.
+ */
+function elsewhereWords(
+  everything: ReturnType<typeof useBindingsToFix>,
+  here: number
+): string {
+  const total = everything.data?.meta.bindings;
+  if (total === undefined) {
+    return everything.error === null || everything.error === undefined
+      ? "Counting other pages…"
+      : "Other pages couldn’t be counted";
+  }
+  const elsewhere = Math.max(0, total - here);
+  return elsewhere > 0
+    ? `${String(elsewhere)} more on other pages`
+    : "None on other pages";
+}
+
 /** The chip, and the list it opens; nothing when the document has none. */
 export function BindingsToFixChip({
   editor,
@@ -74,19 +95,21 @@ export function BindingsToFixChip({
   const [open, setOpen] = useState(false);
   if (key === undefined) return null;
   const item = report.data?.items.find(entry => entry.documentKey === key);
+  // The bindings on this canvas: in the field it is open on, in the default
+  // language it edits.
   const rows = (item?.rows ?? []).filter(
-    row => row.blocksField === undefined || row.blocksField === field
+    row =>
+      (row.blocksField === undefined || row.blocksField === field) &&
+      row.inAnotherLanguage !== true
   );
   if (item === undefined || rows.length === 0) return null;
-  const elsewhere = Math.max(
-    0,
-    (everything.data?.meta.bindings ?? 0) - item.rows.length
-  );
   const select = (nodeId: string): void => {
     setOpen(false);
     editor.select(nodeId);
     requestPanel("layers");
-    if (canvas !== null) revealNode(canvas, nodeId);
+    // As the editor's address does: revealed again while Layers opens and
+    // the canvas narrows, until the author takes over.
+    if (canvas !== null) revealWhileSettling(canvas, nodeId);
   };
   const label = `${String(rows.length)} ${rows.length === 1 ? "binding" : "bindings"} to fix`;
   return (
@@ -144,11 +167,7 @@ export function BindingsToFixChip({
           ))}
         </ul>
         <div className="flex items-center justify-between border-t border-border px-4 py-3 text-[13px] text-muted-foreground">
-          <span>
-            {elsewhere > 0
-              ? `${String(elsewhere)} more on other pages`
-              : "None on other pages"}
-          </span>
+          <span>{elsewhereWords(everything, item.rows.length)}</span>
           <a
             href={BINDINGS_TO_FIX_PAGE_HREF}
             onClick={

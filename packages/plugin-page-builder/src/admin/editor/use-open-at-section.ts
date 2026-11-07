@@ -134,6 +134,26 @@ export function useOpenAtSection({
  */
 export const SETTLE_MS = 2000;
 
+/**
+ * Bring a block into view and keep it there while the editor settles around
+ * it, as the address the editor opens at does once its block is on screen:
+ * for the editor's other ways to a block, such as the bindings report's
+ * Select. Returns what stops it early; it
+ * stops by itself once the author takes over or the editor has settled.
+ */
+export function revealWhileSettling(
+  canvas: HTMLElement,
+  id: string
+): () => void {
+  const stops: (() => void)[] = [];
+  const stop = (): void => {
+    for (const each of stops.splice(0)) each();
+  };
+  revealNode(canvas, id);
+  keepInViewWhileSettling(canvas, id, stops, stop);
+  return stop;
+}
+
 /** What an author does to take over: scroll, point, or type. */
 const TAKE_OVER = ["wheel", "pointerdown", "keydown", "touchstart"] as const;
 

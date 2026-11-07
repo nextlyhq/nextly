@@ -20,6 +20,16 @@ export interface BindingsToFixRow extends BindingReportRow {
   readonly propLabel: string;
   /** The name the admin gives the Single it reads, when it reads a Single. */
   readonly sourceLabel?: string;
+  /**
+   * Where the binding is fixed when that is not this document: the component
+   * a page's Layout region places, which is edited in its own builder.
+   */
+  readonly opens?: { readonly slug: string; readonly id: string };
+  /**
+   * Whether it is in a language other than the default, the one the Page
+   * Builder edits, so no editor link reaches it.
+   */
+  readonly inAnotherLanguage?: true;
 }
 
 /** One document in the answer. */

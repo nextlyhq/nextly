@@ -23,7 +23,7 @@
 import { Button, navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import { AlertTriangle, ArrowRight, ChevronRight } from "lucide-react";
-import { useState, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
 import type {
   BindingsToFixItem,
@@ -32,7 +32,7 @@ import type {
 import { navigateWithin } from "../plain-click";
 
 import { checkedWords } from "./checked-words";
-import { editorAddressOf, useBindingsToFix } from "./client";
+import { checkedNow, editorAddressOf, useBindingsToFix } from "./client";
 import { boundTo, visitorsSee, whatChanged, whereBound } from "./words";
 
 /** The places a document lives, as the tabs name them, in tab order. */
@@ -125,16 +125,24 @@ function BindingRow({
         </div>
       </td>
       <td className="px-4 py-3.5 text-right align-top">
-        <Button asChild variant="outline" size="sm">
-          <a
-            href={href}
-            onClick={navigateWithin(href, navigateTo).onClick}
-            aria-label={`Open ${whereBound(row)} on ${item.title} in the editor`}
-          >
-            Open in editor
-            <ArrowRight aria-hidden="true" className="h-4 w-4" />
-          </a>
-        </Button>
+        {href === undefined ? (
+          // A binding in another language: the builder edits the default
+          // language only, so no link reaches it.
+          <span className="inline-block max-w-[12rem] text-left text-xs text-muted-foreground">
+            In the {row.locale} version, which the Page Builder doesn’t edit
+          </span>
+        ) : (
+          <Button asChild variant="outline" size="sm">
+            <a
+              href={href}
+              onClick={navigateWithin(href, navigateTo).onClick}
+              aria-label={`Open ${whereBound(row)} on ${item.title} in the editor`}
+            >
+              Open in editor
+              <ArrowRight aria-hidden="true" className="h-4 w-4" />
+            </a>
+          </Button>
+        )}
       </td>
     </tr>
   );
@@ -235,6 +243,25 @@ function AllFit(): JSX.Element {
   );
 }
 
+/**
+ * What the page shows when nothing is stored yet but the check of every
+ * document has not finished: not "all fit", which only a finished check can
+ * say.
+ */
+function NotCheckedYet({ checking }: { checking: boolean }): JSX.Element {
+  return (
+    <div className="rounded-lg border border-border bg-card px-6 py-16 text-center">
+      <p className="text-base font-medium text-foreground">
+        {checking ? "Checking every binding…" : "Not checked yet."}
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Any binding that no longer fits its field shows up here as soon as the
+        check finds it.
+      </p>
+    </div>
+  );
+}
+
 /** The report's body: loading, an error, all fitting, or the table. */
 function ReportBody({
   report,
@@ -268,7 +295,13 @@ function ReportBody({
       </div>
     );
   }
-  if (meta.bindings === 0) return <AllFit />;
+  if (meta.bindings === 0) {
+    return checkedNow(meta) ? (
+      <AllFit />
+    ) : (
+      <NotCheckedYet checking={meta.checking} />
+    );
+  }
   const places = PLACES.filter(entry => (meta.byPlace[entry.value] ?? 0) > 0);
   return (
     <>
@@ -327,6 +360,15 @@ export function BindingsToFixPage(): JSX.Element {
     page,
   });
   const meta = report.data?.meta;
+  // A place whose last binding a check cleared has no tab any more: back to
+  // All, rather than an open tab that is not there.
+  const placeGone =
+    place !== "all" && meta !== undefined && (meta.byPlace[place] ?? 0) === 0;
+  useEffect(() => {
+    if (!placeGone) return;
+    setPlace("all");
+    setPage(1);
+  }, [placeGone]);
   return (
     <div className="min-h-[calc(100vh-4rem)] w-full max-w-full px-4 py-6 @sm/content:px-6 @sm/content:py-8 @2xl/content:px-8">
       <Breadcrumb />
