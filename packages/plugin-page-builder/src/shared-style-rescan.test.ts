@@ -14,6 +14,7 @@ import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import {
   referencesAny,
   stillUsedMessage,
+  stoppedBy,
   storedUsesOf,
   type StoredDocuments,
 } from "./shared-style-rescan";
@@ -110,6 +111,30 @@ function storedOf(
 }
 
 describe("every stored document still using a style", () => {
+  it("stops the walk at its next read once its signal is aborted", async () => {
+    const { documents, cursors } = storedOf([
+      { id: "a", content: blocks() },
+      { id: "b", content: blocks() },
+      { id: "c", content: blocks("c-card") },
+    ]);
+    const stop = new AbortController();
+    // Aborted while the first page is read: no later page is asked for.
+    const stopping: StoredDocuments = {
+      ...documents,
+      rowsAfter: async (type, after) => {
+        const page = await documents.rowsAfter(type, after);
+        stop.abort();
+        return page;
+      },
+    };
+    await expect(
+      storedUsesOf(["c-card"], stoppedBy(stopping, stop.signal), classes)
+    ).rejects.toMatchObject({
+      logContext: { reason: "stored-document-walk-stopped" },
+    });
+    expect(cursors).toEqual([undefined]);
+  });
+
   it("walks every page of a collection by id, and names each row using one", async () => {
     const { documents, cursors } = storedOf([
       { id: "a", content: blocks() },

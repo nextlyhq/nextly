@@ -226,6 +226,7 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import { stoppedBy } from "./shared-style-rescan";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
   firstReadableTitle,
@@ -240,17 +241,17 @@ import {
   siteBreakpointUndoRoute,
 } from "./site-breakpoint-undo";
 import {
-  resolveFontOptions,
-  type PageBuilderFontOptions,
-} from "./site-fonts/options";
-import { siteFontRoutes } from "./site-fonts/routes";
-import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
   siteCodeRoutes,
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
@@ -2090,12 +2091,17 @@ export const pageBuilder = (
         suppliedVariables: () => suppliedVariableIds(configStyle),
         // The set the code tier refresh keeps current.
         suppliedClasses: () => configClassIds,
-        variableUses: ids =>
-          variableRemovalChecks(variableCheckSetup).stillUsed.uses(ids),
-        sharedStyleUses: async ids =>
-          storedSharedStyleUses(storedDocumentsOf(ctx, await bootedNextly()))(
-            ids
-          ),
+        // Each walk stops reading once its time has run out.
+        variableUses: (ids, signal) =>
+          variableRemovalChecks({
+            ...variableCheckSetup,
+            documents: async () =>
+              stoppedBy(storedDocumentsOf(ctx, await bootedNextly()), signal),
+          }).stillUsed.uses(ids),
+        sharedStyleUses: async (ids, signal) =>
+          storedSharedStyleUses(
+            stoppedBy(storedDocumentsOf(ctx, await bootedNextly()), signal)
+          )(ids),
       });
       seedGraphLock = () =>
         seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>

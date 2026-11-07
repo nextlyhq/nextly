@@ -46,7 +46,7 @@ const NOTHING_HELD: StoredForms = { forms: [], readable: true };
  * answers that nothing is held, which refuses every undefined reference
  * instead of passing the write unjudged. Any other failure propagates.
  */
-function closedWhenUnreachable(
+export function closedWhenUnreachable(
   stored: () => Promise<StoredForms>,
   path: string
 ): () => Promise<StoredForms> {

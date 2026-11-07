@@ -9,8 +9,9 @@
  * in time refuses, as one whose read fails does, rather than letting the
  * write it guards through or holding it open.
  *
- * The read itself is left to finish unheard: it only reads, so nothing it
- * would have done is lost.
+ * A read that runs out of time is told so through its signal, so one that
+ * makes many reads (a walk over every stored document) can stop at the next
+ * rather than go on unheard after its caller has answered.
  *
  * @module within-time
  */
@@ -41,16 +42,21 @@ export type UnreadReason = "timed-out" | "failed";
  * `read`'s answer within `ms`, or the refusal `refused` makes: for a read that
  * runs out of time and for one that fails alike, so a guard never takes a read
  * it did not get for one that found nothing. `refused` is handed the read's
- * own failure, to keep as the refusal's cause.
+ * own failure, to keep as the refusal's cause. `read` is handed a signal
+ * aborted once the time runs out, to stop reading by.
  */
 export async function readWithinOrRefuse<T>(
-  read: () => Promise<T>,
+  read: (signal: AbortSignal) => Promise<T>,
   ms: number,
   refused: (why: UnreadReason, error?: unknown) => Error
 ): Promise<T> {
   const timedOut = refused("timed-out");
+  const stop = new AbortController();
   try {
-    return await withinTime(read(), ms, () => timedOut);
+    return await withinTime(read(stop.signal), ms, () => {
+      stop.abort();
+      return timedOut;
+    });
   } catch (error) {
     if (error === timedOut) throw error;
     throw refused("failed", error);

@@ -98,6 +98,35 @@ export interface StoredDocuments {
 }
 
 /**
+ * The same stored documents, read only until `signal` is aborted: every read
+ * asked after that throws instead of reaching the database. A walk whose
+ * answer nobody waits for any more (its time ran out) stops at its next read,
+ * rather than going on through every page of every collection.
+ */
+export function stoppedBy(
+  documents: StoredDocuments,
+  signal: AbortSignal
+): StoredDocuments {
+  const reading = <T>(read: () => Promise<T>): Promise<T> => {
+    if (signal.aborted) {
+      return Promise.reject(
+        NextlyError.internal({
+          logContext: { reason: "stored-document-walk-stopped" },
+        })
+      );
+    }
+    return read();
+  };
+  return {
+    collections: () => reading(() => documents.collections()),
+    singles: () => reading(() => documents.singles()),
+    rowsAfter: (type, after) => reading(() => documents.rowsAfter(type, after)),
+    rowForms: (type, id) => reading(() => documents.rowForms(type, id)),
+    singleForms: type => reading(() => documents.singleForms(type)),
+  };
+}
+
+/**
  * The value at a dot-separated form path of a stored row. Each step is read
  * through `readStoredJson`, since a group may arrive as the text SQLite
  * stored it.

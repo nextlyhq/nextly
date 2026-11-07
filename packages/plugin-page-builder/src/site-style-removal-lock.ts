@@ -102,14 +102,17 @@ export interface SiteStyleRemovalLockSetup {
   readonly suppliedClasses: () => ReadonlySet<string>;
   /**
    * Every stored document still naming any of the variables, read through
-   * the Direct API by the walk the remove route's rescan makes.
+   * the Direct API by the walk the remove route's rescan makes. Once `signal`
+   * is aborted (the read's time ran out), the walk makes no further read.
    */
   readonly variableUses: (
-    ids: readonly string[]
+    ids: readonly string[],
+    signal: AbortSignal
   ) => Promise<readonly StoredUse[]>;
   /** Every stored document still applying any of the shared styles, likewise. */
   readonly sharedStyleUses: (
-    ids: readonly string[]
+    ids: readonly string[],
+    signal: AbortSignal
   ) => Promise<readonly StoredUse[]>;
 }
 
@@ -182,10 +185,11 @@ export async function refuseRemovalsInUse(
     });
   }
   const found = await readWithinOrRefuse(
-    async () => ({
+    async signal => ({
       variables:
-        variables.length > 0 ? await setup.variableUses(variables) : [],
-      classes: classes.length > 0 ? await setup.sharedStyleUses(classes) : [],
+        variables.length > 0 ? await setup.variableUses(variables, signal) : [],
+      classes:
+        classes.length > 0 ? await setup.sharedStyleUses(classes, signal) : [],
     }),
     REMOVAL_RESCAN_MS,
     designChanged

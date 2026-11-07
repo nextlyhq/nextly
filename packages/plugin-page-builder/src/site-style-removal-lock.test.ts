@@ -68,14 +68,18 @@ function setupUsing(
   used: { variables?: StoredUse[]; classes?: StoredUse[] } = {},
   supplied: { variables?: string[]; classes?: string[] } = {}
 ) {
-  const variableUses = vi.fn(async (_ids: readonly string[]) => {
-    order.push("variable uses");
-    return used.variables ?? [];
-  });
-  const sharedStyleUses = vi.fn(async (_ids: readonly string[]) => {
-    order.push("shared style uses");
-    return used.classes ?? [];
-  });
+  const variableUses = vi.fn(
+    async (_ids: readonly string[], _signal: AbortSignal) => {
+      order.push("variable uses");
+      return used.variables ?? [];
+    }
+  );
+  const sharedStyleUses = vi.fn(
+    async (_ids: readonly string[], _signal: AbortSignal) => {
+      order.push("shared style uses");
+      return used.classes ?? [];
+    }
+  );
   const setup: SiteStyleRemovalLockSetup = {
     suppliedVariables: () => new Set(supplied.variables ?? []),
     suppliedClasses: () => new Set(supplied.classes ?? []),
@@ -107,7 +111,10 @@ describe("a site style write dropping a variable or a shared style", () => {
       setup,
       "postgresql"
     );
-    expect(variableUses).toHaveBeenCalledWith(["t-accent"]);
+    expect(variableUses).toHaveBeenCalledWith(
+      ["t-accent"],
+      expect.any(AbortSignal)
+    );
     expect(order).toEqual(["lock", "variable uses"]);
   });
 
@@ -154,7 +161,10 @@ describe("a site style write dropping a variable or a shared style", () => {
       publicData: { errors: [{ code: "IN_USE" }] },
       logContext: { classIds: ["c-card"] },
     });
-    expect(sharedStyleUses).toHaveBeenCalledWith(["c-card"]);
+    expect(sharedStyleUses).toHaveBeenCalledWith(
+      ["c-card"],
+      expect.any(AbortSignal)
+    );
     // Nothing of the variables was dropped, so nothing of them was read.
     expect(variableUses).not.toHaveBeenCalled();
   });
@@ -245,6 +255,20 @@ describe("a site style write dropping a variable or a shared style", () => {
     });
     await vi.advanceTimersByTimeAsync(REMOVAL_RESCAN_MS);
     await settled;
+    // The walk is told its answer is no longer wanted, so it stops reading.
+    const signal = sharedStyleUses.mock.calls[0]?.[1] as AbortSignal;
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("leaves the walk's signal alone when it answers in time", async () => {
+    const { setup, sharedStyleUses } = setupUsing();
+    await refuseRemovalsInUse(
+      update({ classes: [style("c-card")] }, { classes: [] }),
+      setup,
+      "postgresql"
+    );
+    const signal = sharedStyleUses.mock.calls[0]?.[1] as AbortSignal;
+    expect(signal.aborted).toBe(false);
   });
 
   it("says a lock refused for an old snapshot in its own words, keeping the cause the routes retry on", async () => {

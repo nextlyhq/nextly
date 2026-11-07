@@ -174,6 +174,22 @@ describe("the references a write adds, judged under the lock", () => {
     expect(definitions).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses a class and a variable added to a blocks field inside a named group", async () => {
+    // `hero.body`: the class check is reached there as the variable check is.
+    const handler = rejudge(setupReading(async () => defining()));
+    const added = page({ classes: ["c-gone"], token: "t-gone" });
+    const write = {
+      ...pageWrite({ data: added, original: page() }),
+      data: { hero: { body: added } },
+      originalData: { hero: { body: page() } },
+      fieldPaths: async () => ["hero.body"],
+    } as unknown as InTransactionContext;
+    expect(await codesOf(handler(write))).toEqual([
+      "unknown-class",
+      "unknown-token",
+    ]);
+  });
+
   it("keeps a reference the stored page already held to something the site has since dropped", async () => {
     const definitions = vi.fn(async () => defining());
     const handler = rejudge(setupReading(definitions));
