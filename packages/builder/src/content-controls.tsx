@@ -46,6 +46,11 @@ import {
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import type {
+  BindingFieldSource,
+  UnbindAsk,
+  UnbindPlanAnswer,
+} from "./binding-services";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
@@ -241,6 +246,19 @@ export interface ContentServices {
    * collections and related entries only.
    */
   readonly listCustomSources?: () => Promise<readonly CustomSource[]>;
+  /**
+   * The fields a binding can read, for the inspector's picker: the entry's,
+   * each Single's and the site settings', only those the signed-in author may
+   * read, each marked by whether visitors may and previewed as the author
+   * reads it. Absent, a prop offers no binding.
+   */
+  readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
+  /**
+   * An unbind's plan, made against the document the editor holds by the same
+   * decision the page actions API takes: what to write in the binding's place
+   * and why, or why it can't be kept. Absent, a bound prop offers no unbind.
+   */
+  readonly planUnbind?: (ask: UnbindAsk) => Promise<UnbindPlanAnswer>;
   /**
    * How many entries a list's stored query matches as the canvas reads them,
    * and how many of those its window shows, from one count read. Asked only

@@ -9,7 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { DOCUMENT_FORMAT_VERSION, type BlockDocument } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+} from "./document";
 import {
   composeEntryContent,
   ENTRY_CONTENT_SLOT,
@@ -17,6 +21,9 @@ import {
   entryContentPlacements,
   holdsEntryContent,
 } from "./entry-content";
+import { DEFAULT_LIMITS } from "./limits";
+import { resolveComponentInstances } from "./resolve-instances";
+import { walkNodes } from "./tree";
 import { validate, type ValidationContext } from "./validation";
 import { FIXTURE_BREAKPOINTS } from "./validation.fixtures";
 
@@ -324,5 +331,196 @@ describe("the ids the entry's blocks are drawn with", () => {
     ).toEqual(
       twice.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(node => node.id)
     );
+  });
+});
+
+describe("a minted DOM id the template already publishes", () => {
+  it("is claimed past, so the drawn id is the page's only one", () => {
+    const body = documentOf("page", {
+      ...text("e-hero", "Entry hero"),
+      cssId: "hero",
+    });
+    // The control: what the entry's `hero` is drawn as beside a template
+    // holding nothing of the kind.
+    const plain = composeEntryContent(
+      documentOf("template", text("t", "Template"), entryContent("ec")),
+      { valueOf: () => body }
+    );
+    const minted = plain.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT]?.[0]?.cssId;
+    expect(typeof minted).toBe("string");
+    // The same template, its own block already publishing that very id.
+    const clashing = composeEntryContent(
+      documentOf(
+        "template",
+        { ...text("t", "Template"), cssId: minted },
+        entryContent("ec")
+      ),
+      { valueOf: () => body }
+    );
+    const drawn = clashing.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT]?.[0]?.cssId;
+    expect(clashing.nodes[0]?.cssId).toBe(minted);
+    expect(drawn).toBe(`${String(minted)}-2`);
+  });
+});
+
+describe("an entry larger than the page may draw", () => {
+  /**
+   * An entry forest of `size` text blocks whose entries past `readable`
+   * count each read of them, as an oversized stored Body would cost.
+   */
+  function counted(size: number, readable: number) {
+    const reads = { past: 0 };
+    const nodes: unknown[] = [];
+    for (let at = 0; at < size; at += 1) {
+      if (at < readable) {
+        nodes.push(text(`e${String(at)}`, `Block ${String(at)}`));
+        continue;
+      }
+      const node = text(`e${String(at)}`, `Block ${String(at)}`);
+      Object.defineProperty(nodes, at, {
+        enumerable: true,
+        get: () => {
+          reads.past += 1;
+          return node;
+        },
+      });
+    }
+    // Not spread: spreading would read every entry here.
+    const body = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes,
+    } as BlockDocument;
+    return { body, reads };
+  }
+
+  it("is cut to what the page may still draw, and never read past it", () => {
+    // A cap of 10 with the template's two nodes: eight of the entry's draw.
+    const { body, reads } = counted(200, 8);
+    const composed = composeEntryContent(
+      documentOf("template", text("t", "Template"), entryContent("ec")),
+      { valueOf: () => body, maxNodes: 10 }
+    );
+    const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    expect(drawn.map(wordsOf)).toEqual(
+      Array.from({ length: 8 }, (_, at) => `Block ${String(at)}`)
+    );
+    expect(reads.past).toBe(0);
+  });
+
+  it("draws every block of an entry within the cap (the control)", () => {
+    const { body, reads } = counted(5, 5);
+    const composed = composeEntryContent(
+      documentOf("template", entryContent("ec")),
+      { valueOf: () => body, maxNodes: 10 }
+    );
+    expect(composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]).toHaveLength(5);
+    expect(reads.past).toBe(0);
+  });
+});
+
+describe("an entry nested deeper than the page may draw", () => {
+  /** A chain of `levels` boxes, the innermost holding a text block. */
+  function chain(levels: number): BlockDocument {
+    let inner: unknown = text("deepest", "At the bottom");
+    for (let level = levels - 1; level >= 0; level -= 1) {
+      inner = box(`b${String(level)}`, [inner]);
+    }
+    return documentOf("page", inner);
+  }
+
+  /** How many levels of the entry's blocks are drawn below the block. */
+  function drawnLevels(composed: BlockDocument): number {
+    let levels = 0;
+    let at = composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT];
+    while (Array.isArray(at) && at.length > 0) {
+      levels += 1;
+      at = at[0]?.slots?.children;
+    }
+    return levels;
+  }
+
+  const template = documentOf("template", entryContent("ec"));
+  const body = chain(20);
+
+  it("draws to the depth the caller raised the limit to", () => {
+    // 20 boxes and the text below them: 21 levels under the top-level block,
+    // the deepest at depth 22.
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxDepth: 22,
+    });
+    expect(drawnLevels(composed)).toBe(21);
+  });
+
+  it("is cut at the format's own depth where none is given (the control)", () => {
+    // The block at depth 1, so its blocks reach depth 12: eleven levels.
+    const composed = composeEntryContent(template, { valueOf: () => body });
+    expect(drawnLevels(composed)).toBe(11);
+  });
+});
+
+describe("an entry beside a template that places a component", () => {
+  // A two-node template: a placement of a two-node component, and the block.
+  const card = documentOf(
+    "component",
+    text("c1", "Card title"),
+    text("c2", "Card body")
+  );
+  const definitions = new Map([["card", card]]);
+  const template = documentOf(
+    "template",
+    {
+      id: "placed",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "card" },
+    },
+    entryContent("ec")
+  );
+  const body = documentOf(
+    "page",
+    text("e1", "One"),
+    text("e2", "Two"),
+    text("e3", "Three"),
+    text("e4", "Four")
+  );
+  const limits = { ...DEFAULT_LIMITS, maxNodes: 5 };
+
+  /** The page as the renderer resolves it under the cap of 5. */
+  function resolvedUnderCap(composed: BlockDocument) {
+    const resolved = resolveComponentInstances(composed, definitions, {
+      limits,
+      conditioned: "carry",
+    });
+    let nodes = 0;
+    walkNodes(resolved.document.nodes, () => {
+      nodes += 1;
+    });
+    return { unresolved: resolved.unresolved, nodes };
+  }
+
+  it("keeps the room the component's expansion needs, and cuts the entry to what remains", () => {
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxNodes: 5,
+      definitions,
+    });
+    const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    // The entry is cut, but not dropped.
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.length).toBeLessThan(4);
+    const resolved = resolvedUnderCap(composed);
+    // The placement resolves, and the page fills exactly the room it has.
+    expect(resolved.unresolved).toEqual([]);
+    expect(resolved.nodes).toBe(5);
+  });
+
+  it("leaves the placement unresolved when each instance is charged as one node (the control)", () => {
+    const composed = composeEntryContent(template, {
+      valueOf: () => body,
+      maxNodes: 5,
+    });
+    expect(resolvedUnderCap(composed).unresolved).toHaveLength(1);
   });
 });

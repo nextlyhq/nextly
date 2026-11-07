@@ -19,9 +19,30 @@ const POSTS = {
   fields: [
     { name: "title", type: "text" },
     { name: "body", type: "blocks", label: "Body" },
-    { type: "row", fields: [{ name: "membersOnly", type: "blocks" }] },
+    // An unnamed group: presentation only, its fields stored on the entry.
+    { type: "group", fields: [{ name: "membersOnly", type: "blocks" }] },
   ],
 };
+
+describe("a blocks field inside an unnamed container", () => {
+  it("is the entry's own inside a group, never inside a repeater, whose rows store it", () => {
+    const record = {
+      fields: [
+        { type: "group", fields: [{ name: "intro", type: "blocks" }] },
+        // Unnamed, yet its children are stored per row.
+        { type: "repeater", fields: [{ name: "slides", type: "blocks" }] },
+        {
+          name: "steps",
+          type: "repeater",
+          fields: [{ name: "step", type: "blocks" }],
+        },
+      ],
+    };
+    expect(entryBlocksFieldsOf(record).map(field => field.name)).toEqual([
+      "intro",
+    ]);
+  });
+});
 
 describe("a collection's blocks fields, read for a template", () => {
   it("names each by its label, else its key in the admin's words", () => {

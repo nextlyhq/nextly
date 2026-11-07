@@ -274,9 +274,14 @@ function addressPlan(
 
 /** Where an unbind reads what a visitor sees. */
 export interface UnbindSource {
-  /** The document the page stores the block in, its id and its language. */
+  /**
+   * The document the page stores the block in, its id and its language. A
+   * Single's page names the Single as `collection`, its slug as `id` too.
+   */
   readonly collection: string;
   readonly id: string;
+  /** Set where the page is a Single's document, whose entry is the Single. */
+  readonly kind?: "single";
   readonly locale?: string;
   /** The collection a template draws its entries from, for a template. */
   readonly templateTarget?: string;
@@ -313,6 +318,14 @@ export function listOf(
   return found;
 }
 
+/** The entry a page's bindings read: a collection's entry, or a Single. */
+interface EntryRead {
+  readonly collection: string;
+  readonly id?: string;
+  /** Set where it is a Single, named as `collection`. */
+  readonly single?: true;
+}
+
 /** Where the node's bindings read: its entry, and its list item when it has one. */
 function readsOf(
   source: UnbindSource,
@@ -322,7 +335,7 @@ function readsOf(
   keep: ReadKeep
 ):
   | {
-      readonly entry: { readonly collection: string; readonly id?: string };
+      readonly entry: EntryRead;
       readonly item?: { readonly collection: string; readonly id: string };
     }
   | UnbindNeeds {
@@ -410,7 +423,7 @@ async function visitorRun(
   };
   const bindings = await next.readBindingSources({
     documents: [alone],
-    entrySource: "collection",
+    entrySource: reads.entry.single === true ? "single" : "collection",
     slug: reads.entry.collection,
     ...(reads.entry.id === undefined ? {} : { entryId: reads.entry.id }),
     page: source.collection,
@@ -567,9 +580,13 @@ function entryOf(
   source: UnbindSource,
   keep: ReadKeep,
   kind: string
-): { readonly collection: string; readonly id?: string } | UnbindNeeds {
+): EntryRead | UnbindNeeds {
   const named =
     typeof keep === "object" && "entry" in keep ? keep.entry : undefined;
+  // A Single's page reads the Single itself, whichever entry is named.
+  if (source.kind === "single") {
+    return { collection: source.collection, single: true };
+  }
   if (source.templateTarget !== undefined) {
     // A template's entries differ: whose value to keep has to be named.
     if (named === undefined && kind === "entry") {
