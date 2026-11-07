@@ -74,6 +74,11 @@ const POSTS: PreviewedCollection = {
     { name: "body", label: "Body" },
     { name: "sidebar", label: "Sidebar" },
   ],
+  // Its label where it has one, else the host's words for a key: here a
+  // stand-in that says which it took.
+  fieldLabel: name =>
+    (({ body: "Body", sidebar: "Sidebar" }) as Record<string, string>)[name] ??
+    `Words for ${name}`,
   entryHref: id => `/admin/collections/posts/${id}`,
 };
 

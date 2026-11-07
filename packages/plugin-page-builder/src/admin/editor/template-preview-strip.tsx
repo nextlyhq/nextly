@@ -32,6 +32,7 @@ import {
 } from "@nextlyhq/builder/shell";
 import {
   formatWidgetTime,
+  humanizeFieldName,
   useCurrentUserId,
   useDocumentIdentity,
   useDocumentLocale,
@@ -263,6 +264,11 @@ function usePreviewedCollectionOf(
             singular: inSentence(labels.singular),
             plural: labels.plural,
             blocksFields,
+            // Its label where the collection has the field, else its name
+            // in the admin's words, for one the collection no longer has.
+            fieldLabel: name =>
+              blocksFields?.find(each => each.name === name)?.label ??
+              humanizeFieldName(name),
             entryHref: id => entryEditPath(collection, id),
           },
     [collection, labels.singular, labels.plural, blocksFields]

@@ -210,3 +210,37 @@ describe("Entry content on the editor's canvas", () => {
     expect(html).not.toContain("data-nx-entry-content-drawn");
   });
 });
+
+describe("a bound block inside the entry's content", () => {
+  it("draws the entry's value, as the template's own bound blocks do", async () => {
+    // The entry's Body holds a heading bound to the entry's excerpt: drawn
+    // composed into the template, it is filled from the page's sources like
+    // any of the template's own blocks.
+    const boundBody: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "bound",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Stored text", level: "h2" },
+          bindings: { text: { $bind: "excerpt" } },
+        },
+      ],
+    };
+    const html = await renderToHtml(
+      <PageRenderer
+        document={composeEntryContent(template, {
+          valueOf: field => (field === "body" ? boundBody : undefined),
+        })}
+        blocks={createBlockResolver(coreBlocks as AnyBlockDefinition[])}
+        siteStyles={false}
+        bindings={{ entry: { excerpt: "Excerpt from the entry" } }}
+      />
+    );
+    expect(html).toContain("Excerpt from the entry");
+    // The control: the stored value is what it would draw unbound.
+    expect(html).not.toContain("Stored text");
+  });
+});

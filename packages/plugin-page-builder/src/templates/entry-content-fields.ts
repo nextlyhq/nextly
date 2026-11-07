@@ -17,8 +17,7 @@
  * @experimental Settles when collection templates ship.
  * @module templates/entry-content-fields
  */
-import { addressableFields } from "@nextlyhq/plugin-sdk";
-import { humanizeFieldName } from "nextly/field-label";
+import { addressableFields, humanizeFieldName } from "@nextlyhq/plugin-sdk";
 
 import { isBlocksField } from "../fields/blocksHelper";
 
@@ -52,7 +51,7 @@ export function entryBlocksFieldsOf(record: unknown): EntryBlocksField[] {
     if (!isBlocksField(field)) continue;
     found.push({
       name: field.name,
-      label: wordsOf(field as { name: string; label?: unknown }),
+      label: wordsOf(field),
     });
   }
   return found;

@@ -6,12 +6,26 @@
  * stays chosen and reads "(removed)", and Open post opens the previewed
  * entry's edit screen in a new tab.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import {
+  ENTRY_CONTENT_TYPE,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+
+import { useEntryContentDrawing } from "./entry-content-canvas";
 import { EntryFieldControl } from "./entry-field-control";
 import type { EditableProp } from "./inspector";
 import {
+  entryContentLabel,
   PreviewedEntryProvider,
   type PreviewedCollection,
   type PreviewedEntry,
@@ -42,7 +56,26 @@ const POSTS: PreviewedCollection = {
     { name: "body", label: "Body" },
     { name: "sidebar", label: "Sidebar" },
   ],
+  // Its label where it has one, else the host's words for a key: here a
+  // stand-in that says which it took.
+  fieldLabel: name =>
+    (({ body: "Body", sidebar: "Sidebar" }) as Record<string, string>)[name] ??
+    `Words for ${name}`,
   entryHref: id => `/admin/collections/posts/${id}`,
+};
+
+/** A template whose Entry content block names a field. */
+const TEMPLATE: BlockDocument = {
+  formatVersion: 1,
+  kind: "template",
+  nodes: [
+    {
+      id: "ec",
+      type: ENTRY_CONTENT_TYPE,
+      version: 1,
+      props: { field: "membersOnly" },
+    },
+  ],
 };
 
 const PREVIEWED: PreviewedEntry = {
@@ -101,15 +134,46 @@ describe("Entry content's Field", () => {
 
   it("keeps a removed choice chosen, read as removed and marked invalid", () => {
     const { trigger } = draw("summary");
-    expect(trigger.textContent).toContain("summary (removed)");
+    expect(trigger.textContent).toContain("Words for summary (removed)");
     expect(trigger.getAttribute("aria-invalid")).toBe("true");
   });
 
   it("never calls a choice removed while the collection's fields are not known (the control)", () => {
     const { trigger } = draw("summary", { ...POSTS, blocksFields: undefined });
-    expect(trigger.textContent).toContain("summary");
+    expect(trigger.textContent).toContain("Words for summary");
     expect(trigger.textContent).not.toContain("(removed)");
     expect(trigger.getAttribute("aria-invalid")).toBeNull();
+  });
+});
+
+describe("one name for a removed field", () => {
+  it("is the same in the Field menu, the canvas's tab and its red note", () => {
+    // The collection's own naming of a field it no longer has, asked of the
+    // one derivation every surface reads.
+    const { trigger } = draw("membersOnly");
+    expect(trigger.textContent).toContain("Words for membersOnly (removed)");
+    expect(entryContentLabel("membersOnly", POSTS)).toBe(
+      "Entry content · Words for membersOnly"
+    );
+    const { result } = renderHook(
+      () => useEntryContentDrawing(TEMPLATE, undefined),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <PreviewedEntryProvider value={PREVIEWED} collection={POSTS}>
+            {children}
+          </PreviewedEntryProvider>
+        ),
+      }
+    );
+    const note =
+      result.current.render?.context?.entryContentCanvas?.noteFor(
+        "membersOnly"
+      );
+    expect(note).toEqual({
+      tone: "failed",
+      words:
+        "The Words for membersOnly field no longer exists in Posts, so this shows nothing. Choose another field.",
+    });
   });
 });
 

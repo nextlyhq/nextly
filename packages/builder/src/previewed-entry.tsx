@@ -88,6 +88,14 @@ export interface PreviewedCollection {
   readonly plural: string;
   /** Its top-level blocks fields, in the collection's order. */
   readonly blocksFields: readonly PreviewedBlocksField[] | undefined;
+  /**
+   * What a field of the collection is called, by its name: its label where
+   * it is one of {@link blocksFields}, else its name in words as the admin
+   * words a key ("membersOnly" is "Members Only"), for a field the
+   * collection no longer has. The one name a field is shown by, on the
+   * canvas, in Layers and in the inspector alike.
+   */
+  readonly fieldLabel: (name: string) => string;
   /** The admin address where entry `id` is edited. */
   readonly entryHref: (id: string) => string;
 }
@@ -178,8 +186,21 @@ export function entryContentLabel(
   collection: PreviewedCollection | undefined
 ): string {
   if (field === undefined) return ENTRY_CONTENT_NAME;
-  const known = collection?.blocksFields?.find(each => each.name === field);
-  return `${ENTRY_CONTENT_NAME} · ${known?.label ?? field}`;
+  return `${ENTRY_CONTENT_NAME} · ${fieldName(field, collection)}`;
+}
+
+/**
+ * The name a field an Entry content block draws is shown by: the
+ * collection's (`PreviewedCollection.fieldLabel`), or the field's own name
+ * where no template's collection is known.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function fieldName(
+  field: string,
+  collection: PreviewedCollection | undefined
+): string {
+  return collection?.fieldLabel(field) ?? field;
 }
 
 /**

@@ -10666,3 +10666,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-color: var(--nx-destructive);
   color: var(--nx-destructive);
 }
+
+/*
+ * A row marking a problem with its block: an Entry content block whose field
+ * the collection no longer has. In the destructive ink, as the canvas's note
+ * and the inspector's Field say it, the words read out beside the icon.
+ */
+.nx-layer-row__badge[data-problem] {
+  color: var(--nx-destructive);
+}

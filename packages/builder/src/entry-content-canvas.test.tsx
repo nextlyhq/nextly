@@ -19,7 +19,10 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
-import { useEntryContentDrawing } from "./entry-content-canvas";
+import {
+  useComposedEntryContent,
+  useEntryContentDrawing,
+} from "./entry-content-canvas";
 import {
   PreviewedEntryProvider,
   type PreviewedCollection,
@@ -55,6 +58,11 @@ const POSTS: PreviewedCollection = {
     { name: "body", label: "Body" },
     { name: "sidebar", label: "Sidebar" },
   ],
+  // Its label where it has one, else the host's words for a key: here a
+  // stand-in that says which it took.
+  fieldLabel: name =>
+    (({ body: "Body", sidebar: "Sidebar" }) as Record<string, string>)[name] ??
+    `Words for ${name}`,
   entryHref: id => `/admin/collections/posts/${id}`,
 };
 
@@ -119,6 +127,38 @@ describe("the previewed entry's own content on the canvas", () => {
     );
     expect(result.current.document).toBe(template);
     expect(result.current.render).toBeUndefined();
+  });
+});
+
+describe("the composed template a host asks its sources of", () => {
+  const wrapper =
+    (previewed: PreviewedEntry) =>
+    ({ children }: { children: ReactNode }) => (
+      <PreviewedEntryProvider value={previewed} collection={POSTS}>
+        {children}
+      </PreviewedEntryProvider>
+    );
+
+  it("is the one the canvas draws: the previewed entry's blocks composed in", () => {
+    const previewed = entry({ body });
+    const composed = renderHook(() => useComposedEntryContent(template), {
+      wrapper: wrapper(previewed),
+    }).result.current;
+    const drawn = renderHook(
+      () => useEntryContentDrawing(template, undefined),
+      { wrapper: wrapper(previewed) }
+    ).result.current.document;
+    expect(composed).toEqual(drawn);
+    expect(
+      composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(node => node.id)
+    ).toEqual(["ec:p1"]);
+  });
+
+  it("is the template itself while no entry is previewed (the control)", () => {
+    const composed = renderHook(() => useComposedEntryContent(template), {
+      wrapper: wrapper({ kind: "none", reason: "empty" }),
+    }).result.current;
+    expect(composed).toBe(template);
   });
 });
 

@@ -39,6 +39,7 @@ import {
   VariantPreviewTag,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
+  useComposedEntryContent,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -1183,9 +1184,20 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The canvas's render inputs with the sources its bindings read, asked of
   // the tree the canvas draws (in a component's view, the open variant's)
   // and of the Layout regions drawn around it, together.
+  // Asked of the document as the canvas draws it: a template's with the
+  // previewed entry's own blocks composed in, so a binding inside them reads
+  // its source here as the published page, which composes first, reads it.
+  const drawnDocument = useComposedEntryContent(
+    componentView.preview.document,
+    canvas.canvasRender.limits?.maxNodes
+  );
   const { canvasRender, visitorUnreadable } = useBoundCanvasRender(
     canvas.canvasRender,
-    { document: componentView.preview.document, regions: panels.canvasRegions },
+    {
+      document: drawnDocument,
+      stored: componentView.preview.document,
+      regions: panels.canvasRegions,
+    },
     mount.locale,
     mount.initialDocument.kind === "component"
   );

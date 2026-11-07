@@ -400,6 +400,12 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * around a template's editor, and anything inside reads it. `undefined`
  * outside a template.
  */
+/**
+ * @experimental A template's document with the previewed entry's own blocks
+ * composed into its Entry content block, as the canvas draws it, for a host
+ * asking for the sources the drawn page's bindings read.
+ */
+export { useComposedEntryContent } from "./entry-content-canvas";
 export {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,

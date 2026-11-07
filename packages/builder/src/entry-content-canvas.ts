@@ -38,6 +38,7 @@ import { useMemo } from "react";
 
 import {
   entryFieldRemoved,
+  fieldName,
   usePreviewedCollection,
   usePreviewedEntry,
   type PreviewedCollection,
@@ -46,26 +47,6 @@ import {
 
 /** What the canvas draws a page with, less what is the page's alone. */
 type CanvasRender = Omit<PageRendererProps, "document" | "siteStyles">;
-
-/** A field's name in words, where the collection's fields are not known. */
-function nameInWords(name: string): string {
-  const words = name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[-_]+/g, " ")
-    .trim();
-  return words === "" ? name : words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-/** What the collection calls `field`: its label, or its name in words. */
-function fieldWords(
-  field: string,
-  collection: PreviewedCollection | undefined
-): string {
-  return (
-    collection?.blocksFields?.find(each => each.name === field)?.label ??
-    nameInWords(field)
-  );
-}
 
 /** The note of a block that names no field yet. */
 function unsetNote(
@@ -89,7 +70,7 @@ function entryContentNote(
   collection: PreviewedCollection | undefined
 ): EntryContentNote {
   if (field === undefined) return unsetNote(collection);
-  const words = fieldWords(field, collection);
+  const words = fieldName(field, collection);
   if (entryFieldRemoved(field, collection)) {
     return {
       tone: "failed",
@@ -126,11 +107,50 @@ export function useEntryContentDrawing(
   const previewed = usePreviewedEntry();
   const collection = usePreviewedCollection();
   const maxNodes = render?.limits?.maxNodes;
-  const holds = useMemo(
+  const holds = useHoldsEntryContent(document, maxNodes);
+  const drawn = useComposedEntryContent(document, maxNodes);
+  const context = render?.context;
+  const drawnRender = useMemo((): CanvasRender | undefined => {
+    if (previewed === undefined || !holds) return render;
+    const canvas: EntryContentCanvas = {
+      noteFor: field => entryContentNote(field, previewed, collection),
+    };
+    const base: PageContext = context ?? createStandaloneContext();
+    return { ...render, context: { ...base, entryContentCanvas: canvas } };
+  }, [render, context, previewed, collection, holds]);
+  return { document: drawn, render: drawnRender };
+}
+
+/** Whether `document` holds an Entry content block, asked once per document. */
+function useHoldsEntryContent(
+  document: BlockDocument,
+  maxNodes: number | undefined
+): boolean {
+  return useMemo(
     () => entryContentPlacements(document.nodes, maxNodes).length > 0,
     [document, maxNodes]
   );
-  const drawn = useMemo(
+}
+
+/**
+ * `document` with the previewed entry's own blocks composed into its Entry
+ * content block, as the canvas draws it; `document` itself, by identity,
+ * where nothing is previewed or it holds no such block.
+ *
+ * The one composition everything about the canvas's template is asked of:
+ * the canvas draws it, and the host asks for the sources its bindings and
+ * lists read from it, so a bound block inside the entry's content reads its
+ * source on the canvas as the published page, which composes first, does.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function useComposedEntryContent(
+  document: BlockDocument,
+  maxNodes?: number
+): BlockDocument {
+  const previewed = usePreviewedEntry();
+  const holds = useHoldsEntryContent(document, maxNodes);
+  return useMemo(
     () =>
       previewed?.kind !== "entry" || !holds
         ? document
@@ -144,14 +164,4 @@ export function useEntryContentDrawing(
           }),
     [document, previewed, holds, maxNodes]
   );
-  const context = render?.context;
-  const drawnRender = useMemo((): CanvasRender | undefined => {
-    if (previewed === undefined || !holds) return render;
-    const canvas: EntryContentCanvas = {
-      noteFor: field => entryContentNote(field, previewed, collection),
-    };
-    const base: PageContext = context ?? createStandaloneContext();
-    return { ...render, context: { ...base, entryContentCanvas: canvas } };
-  }, [render, context, previewed, collection, holds]);
-  return { document: drawn, render: drawnRender };
 }

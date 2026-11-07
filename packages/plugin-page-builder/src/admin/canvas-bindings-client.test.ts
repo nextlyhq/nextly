@@ -4,7 +4,11 @@
  * The canvas's binding sources: asked only for what the page's bindings read,
  * and kept per signed-in person, so no person is ever handed another's.
  */
-import { defineNamedQuery, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  composeEntryContent,
+  defineNamedQuery,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -393,6 +397,34 @@ describe("the canvas's entry, for a template", () => {
       id: "p1",
     });
     editing.identity = null;
+  });
+});
+
+describe("a binding inside a template's Entry content", () => {
+  it("is asked for once the previewed entry's blocks are composed in, as the published page asks", () => {
+    // The template holds no binding of its own; the entry's Body holds a
+    // heading bound to its excerpt.
+    const template = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "ec",
+          type: "core/entry-content",
+          version: 1,
+          props: { field: "body" },
+        },
+      ],
+    } as BlockDocument;
+    const body = page({ text: { $bind: "excerpt" } });
+    // The control: the template as stored asks for nothing.
+    expect(canvasBindingsRequest([template], identity, "en")).toBeUndefined();
+    const composed = composeEntryContent(template, {
+      valueOf: field => (field === "body" ? body : undefined),
+    });
+    expect(
+      canvasBindingsRequest([composed], identity, "en")?.demand.entry
+    ).toEqual({ fields: ["excerpt"], follows: {} });
   });
 });
 

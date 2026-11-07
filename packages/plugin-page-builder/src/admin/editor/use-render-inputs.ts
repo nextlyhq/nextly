@@ -12,6 +12,7 @@ import {
   allBlocks,
   BASE_BREAKPOINT,
   registryNestingSource,
+  findNode,
   getBlock,
   paginatedList,
   visitorUnreadableBindings,
@@ -935,6 +936,21 @@ function sourceHiddenFromVisitors(
   return isEntry ? (bindings.entry ?? null) !== null : true;
 }
 
+/**
+ * `marks` kept for the blocks `held` holds: the editor's own, never a block
+ * composed in for drawing. The same map, by identity, where every block is
+ * held.
+ */
+function heldOnly<Value>(
+  held: BlockDocument,
+  marks: ReadonlyMap<string, Value>
+): ReadonlyMap<string, Value> {
+  const kept = new Map(
+    [...marks].filter(([id]) => findNode(held.nodes, id) !== undefined)
+  );
+  return kept.size === marks.size ? marks : kept;
+}
+
 /** No region: what a page with no Layout draws around it. */
 const NO_DEFINITIONS: DefinitionsById = new Map();
 
@@ -969,6 +985,12 @@ export function useBoundCanvasRender(
   canvasRender: PageRenderInputs,
   drawn: {
     readonly document: BlockDocument;
+    /**
+     * The document as the editor holds it, where `document` is that with an
+     * entry's content composed in (a template's Entry content): only its
+     * blocks are marked. Absent, `document` is the one held.
+     */
+    readonly stored?: BlockDocument;
     readonly regions: readonly {
       readonly document: BlockDocument;
       readonly definitions?: DefinitionsById;
@@ -990,6 +1012,10 @@ export function useBoundCanvasRender(
   >;
 } {
   const { document, regions } = drawn;
+  // The blocks the editor holds, which a mark may name: a composed Entry
+  // content's blocks are the entry's, edited on the entry, so none of them
+  // is marked, though their bindings are read.
+  const marksOf = drawn.stored ?? document;
   const pageTree = useMemo(
     () => drawnTree(document, canvasRender.definitions, canvasRender),
     [document, canvasRender]
@@ -1026,15 +1052,19 @@ export function useBoundCanvasRender(
   const visitorUnreadable = useMemo(() => {
     const shapes = bindings.fieldShapes;
     if (shapes === undefined || pageTree === null) return NONE_UNREADABLE;
-    return visitorUnreadableBindings(pageTree, {
-      schema: shapes,
-      ...(bindings.entryRef === undefined
-        ? {}
-        : { entryRef: bindings.entryRef }),
-      props: { get: getBlock },
-      unreadableSource: ref => sourceHiddenFromVisitors(bindings, shapes, ref),
-    });
-  }, [pageTree, bindings]);
+    return heldOnly(
+      marksOf,
+      visitorUnreadableBindings(pageTree, {
+        schema: shapes,
+        ...(bindings.entryRef === undefined
+          ? {}
+          : { entryRef: bindings.entryRef }),
+        props: { get: getBlock },
+        unreadableSource: ref =>
+          sourceHiddenFromVisitors(bindings, shapes, ref),
+      })
+    );
+  }, [pageTree, bindings, marksOf]);
   return { canvasRender: bound, visitorUnreadable };
 }
 

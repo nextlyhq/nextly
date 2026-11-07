@@ -39,6 +39,7 @@ import type { ContentControlProps } from "./content-controls";
 import { propLabel } from "./inspector";
 import {
   entryFieldRemoved,
+  fieldName,
   usePreviewedCollection,
   usePreviewedEntry,
 } from "./previewed-entry";
@@ -92,9 +93,12 @@ export function EntryFieldControl({
               {each.label}
             </SelectItem>
           ))}
-          {listsStored ? (
+          {field !== undefined && listsStored ? (
             <SelectItem value={field}>
-              {removed ? `${field} (removed)` : field}
+              {/* Named as the canvas and Layers name it. */}
+              {removed
+                ? `${fieldName(field, collection)} (removed)`
+                : fieldName(field, collection)}
             </SelectItem>
           ) : null}
         </SelectContent>
