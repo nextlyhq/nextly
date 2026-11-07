@@ -62,6 +62,11 @@ const ownTxList: Promise<PaginatedResult<unknown>> =
   own.listEntriesInTransaction(tx, "ledger", q, { locale: "fr" });
 const ownTxSingle: Promise<Record<string, unknown>> =
   own.getSingleInTransaction(tx, "settings");
+// Each may read with no row lock, for a caller holding a lock of its own.
+const ownTxPlain: Promise<PaginatedResult<unknown>> =
+  own.listEntriesInTransaction(tx, "ledger", q, { lock: "none" });
+const ownTxPlainSingle: Promise<Record<string, unknown>> =
+  own.getSingleInTransaction(tx, "settings", { lock: "none" });
 // The host reads take the same arguments, of content holding the plugin's
 // field type, and answer the same.
 const hostTxList: Promise<PaginatedResult<unknown>> =
@@ -95,6 +100,8 @@ export const __d56TypeCheck = {
   ownBuckets,
   ownTxList,
   ownTxSingle,
+  ownTxPlain,
+  ownTxPlainSingle,
   hostTxList,
   hostTxSingle,
   hostTypes,

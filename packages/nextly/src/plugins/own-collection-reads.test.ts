@@ -16,6 +16,10 @@ import type {
 } from "../services/collections/collection-service";
 import type { RequestContext } from "../services/shared";
 import { readHooksWaived } from "../services/collections/trust-grant";
+import {
+  lockedForRead,
+  type ReadingAdapter,
+} from "../shared/lib/read-transaction-scope";
 
 import type { PluginSingleRecord } from "./plugin-singles";
 import {
@@ -28,14 +32,40 @@ import {
 } from "./service-opts";
 import type { Principal } from "./principals/types";
 
+/** A PostgreSQL adapter inside an open transaction, for {@link lockInScope}. */
+const lockingAdapter = {
+  getCapabilities: () => ({ dialect: "postgresql" }),
+  transactionOpenInFlow: () => true,
+} as unknown as ReadingAdapter;
+
+/**
+ * The row lock a read made here would take, as a content read builds it
+ * (`lockedForRead`): the strength its locking clause is given, or `none`
+ * when the query is left without one.
+ */
+function lockInScope(): string {
+  const taken: unknown[] = [];
+  const query = {
+    for: (strength: unknown) => {
+      taken.push(strength);
+      return query;
+    },
+  };
+  lockedForRead(query, lockingAdapter, {});
+  return taken.length === 0 ? "none" : String(taken[0]);
+}
+
 function standIn() {
   const seen: { method: string; context: RequestContext }[] = [];
   const principals: (Principal | null)[] = [];
+  /** The lock each call to the service would have read its rows with. */
+  const locks: string[] = [];
   const record =
     (method: string, result: unknown) =>
     (...args: unknown[]): Promise<unknown> => {
       seen.push({ method, context: args[args.length - 1] as RequestContext });
       principals.push(currentPrincipal());
+      locks.push(lockInScope());
       return Promise.resolve(result);
     };
   const service = {
@@ -48,6 +78,7 @@ function standIn() {
     service,
     seen,
     principals,
+    locks,
     facade: service as unknown as CollectionService,
   };
 }
@@ -393,6 +424,57 @@ describe("ctx.services.ownCollections", () => {
       expect(readHooksWaived(pages, "promo")).toBe(false);
       expect(readHooksWaived(pages, "ledger")).toBe(false);
       expect(seen[0]?.context.overrideAccess).toBe(true);
+    });
+
+    it("reads each in-transaction read with the lock it names, shared when it names none", async () => {
+      const { locks, facade } = standIn();
+      const singleLocks: string[] = [];
+      const reads = ownCollectionReads(
+        facade,
+        ["ledger"],
+        {
+          owned: ["settings"],
+          service: () => ({
+            get: () => {
+              singleLocks.push(lockInScope());
+              return Promise.resolve({
+                success: true,
+                statusCode: 200,
+                data: { id: "s1", updatedAt: "2026-01-01T00:00:00.000Z" },
+              });
+            },
+          }),
+        },
+        hostSchema()
+      );
+
+      await withWriteTransactionToken({} as TransactionContext, async tx => {
+        for (const lock of [undefined, "share", "update", "none"] as const) {
+          const opts = lock === undefined ? undefined : { lock };
+          await reads.listEntriesInTransaction(tx, "ledger", {}, opts);
+          await reads.findEntryByIdInTransaction(tx, "ledger", "1", opts);
+          await reads.listHostEntriesInTransaction(tx, "pages", {}, opts);
+          await reads.findHostEntryByIdInTransaction(tx, "promo", "1", opts);
+        }
+        for (const lock of [undefined, "share", "none"] as const) {
+          const opts = lock === undefined ? undefined : { lock };
+          await reads.getSingleInTransaction(tx, "settings", opts);
+          await reads.getHostSingleInTransaction(tx, "home", opts);
+        }
+      });
+
+      // Four collection reads per lock, own and host, list and find: the
+      // default is the shared lock, and `none` leaves the query unlocked.
+      expect(locks).toEqual([
+        ...Array<string>(8).fill("share"),
+        ...Array<string>(4).fill("update"),
+        ...Array<string>(4).fill("none"),
+      ]);
+      // The two Single reads per lock, own and host.
+      expect(singleLocks).toEqual([
+        ...Array<string>(4).fill("share"),
+        ...Array<string>(2).fill("none"),
+      ]);
     });
 
     it("refuses a host collection holding none of the plugin's types, or none at all, before calling the service", async () => {
