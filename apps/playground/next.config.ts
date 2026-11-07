@@ -237,12 +237,13 @@ const nextConfig: NextConfig = {
       "@nextly/validation": ["../../packages/nextly/src/validation/index.ts"],
       "@nextly/validation/*": ["../../packages/nextly/src/validation/*"],
       // The root layout imports `@/nextly/cached-read`, the app's "use cache"
-      // read function, which registers it and starts Nextly for every route
-      // (`<SiteCode>` refuses to read under Cache Components without it).
-      // Next.js refuses to compile `"use cache"` with Cache Components off, so
-      // that leg points the import at a variant that only starts Nextly. An exact key, so it
-      // takes precedence over tsconfig's `@/*` wildcard, which type-checking
-      // follows to the Cache Components file.
+      // read function, which registers it, and how Nextly starts, for every
+      // route (`<SiteCode>` refuses to read under Cache Components without
+      // it). Next.js refuses to compile `"use cache"` with Cache Components
+      // off, so that leg points the import at a variant that registers only
+      // how Nextly starts. An exact key, so it takes precedence over
+      // tsconfig's `@/*` wildcard, which type-checking follows to the Cache
+      // Components file.
       ...(CACHE_COMPONENTS
         ? {}
         : {

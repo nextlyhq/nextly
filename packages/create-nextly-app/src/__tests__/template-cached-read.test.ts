@@ -1,13 +1,14 @@
 /**
  * Every app a template makes registers its `"use cache"` read function, and
- * starts Nextly, from its root layout, as the blog does.
+ * how Nextly starts when a read finds it not started, from its root layout,
+ * as the blog does.
  *
  * `create-nextly-app` turns Cache Components on in every app it makes, and
  * `<SiteCode>` refuses to read under it until a read function is registered.
- * Registration, and starting Nextly, are side effects of importing
- * `src/nextly/cached-read.ts`, so a root layout that imports it does both on
- * every route, `/_not-found` included, before anything reads: in a build's
- * prerender workers nothing else starts Nextly.
+ * Both registrations are side effects of importing `src/nextly/cached-read.ts`,
+ * so a root layout that imports it makes them on every route, `/_not-found`
+ * included, before anything reads: in a build's prerender workers nothing
+ * else starts Nextly.
  *
  * Two properties are held here. Every template's root layout, as the scaffold
  * receives it (a template's own layout replaces base's), imports the file and
@@ -16,7 +17,7 @@
  * imports the app's config from, which must resolve in that app:
  * `blog-cached-read.test.ts` runs the blog's, so a copy that drifted would be
  * a function nothing tests. The playground's variant for Cache Components off
- * starts Nextly the same way.
+ * registers how Nextly starts the same way.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -37,9 +38,9 @@ function codeOf(file: string): string {
   return cachedReadCode(readFileSync(file, "utf8"));
 }
 
-/** The blog's statements from its comment on starting Nextly to the end. */
+/** The statements from the comment on how Nextly starts to the end. */
 function startBlock(source: string): string {
-  return source.slice(source.indexOf("// Starts Nextly")).trim();
+  return source.slice(source.indexOf("// Tells Nextly how")).trim();
 }
 
 /**
@@ -167,9 +168,9 @@ describe("every copy of the cached-read function is the blog's", () => {
     });
   }
 
-  it("the playground's Cache Components off variant starts Nextly the same way", () => {
+  it("the playground's Cache Components off variant registers how Nextly starts the same way", () => {
     // The layout's one import resolves here with Cache Components off, so it
-    // must start Nextly as the Cache Components file does.
+    // must register how Nextly starts as the Cache Components file does.
     const off = join(
       PLAYGROUND,
       "src/nextly/cached-read.cache-components-off.ts"
@@ -183,7 +184,7 @@ describe("every copy of the cached-read function is the blog's", () => {
       startBlock(readFileSync(BLOG_CACHED_READ, "utf8"))
     );
     expect(startBlock(source)).toContain(
-      "void getNextly({ config }).catch(() => undefined);"
+      "registerNextlyStart(() => getNextly({ config }));"
     );
   });
 });

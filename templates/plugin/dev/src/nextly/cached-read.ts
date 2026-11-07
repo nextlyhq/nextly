@@ -8,16 +8,17 @@
  * that key. The root layout imports this file, so it is registered on every
  * route before anything is read, as in an app `create-nextly-app` makes.
  *
- * The same import also starts Nextly with the app's config, so the root
- * layout's import both registers the cached read and starts Nextly for every
- * route, during `next build` too.
+ * The same import also tells Nextly how to start with the app's config when a
+ * read finds it not started, so the root layout's import both registers the
+ * cached read and covers a read made before any page starts Nextly, during
+ * `next build` too.
  *
  * It works with `cacheComponents: true` and Nextly's cache handlers in
  * `next.config.ts`, as this dev app ships:
  * https://nextlyhq.com/docs/guides/isr-caching#cache-components
  */
 import { cacheLife, cacheTag } from "next/cache";
-import { getNextly } from "nextly";
+import { getNextly, registerNextlyStart } from "nextly";
 import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
 
 import config from "../../nextly.config";
@@ -43,10 +44,9 @@ export async function cachedRead(
 
 registerCachedRead(cachedRead, process.env.__NEXT_CACHE_COMPONENTS);
 
-// Starts Nextly as the root layout loads, so a read made before any page has
-// started it, such as the root layout's `<SiteCode>` on `/_not-found` while
-// `next build` prerenders, finds it starting and waits for it: nothing else
-// starts Nextly in a build's prerender workers. A failed start (the database
-// down, say) is caught here so it is not an unhandled rejection; the next
-// read waits for or retries the start, and reports it.
-void getNextly({ config }).catch(() => undefined);
+// Tells Nextly how this app starts it, for a read that finds it not started,
+// such as the root layout's `<SiteCode>` on `/_not-found` while `next build`
+// prerenders, where nothing else starts it. Nothing starts here: a page that
+// calls `getNextly` first is the start that counts. An app that passes
+// `getNextly` more than its config passes the same options here.
+registerNextlyStart(() => getNextly({ config }));

@@ -38,8 +38,10 @@ interface Calls {
   cacheTag: string[][];
   run: string[];
   registered: [unknown, unknown][];
-  /** What `getNextly` was started with as the file loaded. */
+  /** What `getNextly` was called with. */
   started: unknown[];
+  /** The starts the file registered through `registerNextlyStart`. */
+  starts: (() => Promise<unknown>)[];
 }
 
 const NEXT_CACHE = `const calls = globalThis.__cachedReadCalls;
@@ -53,7 +55,8 @@ export const registerCachedRead = (fn, value) => { calls.registered.push([fn, va
 
 /** Starts Nextly as a database that is down would: the start rejects. */
 const NEXTLY = `const calls = globalThis.__cachedReadCalls;
-export const getNextly = async args => { calls.started.push(args); throw new Error("database down"); };
+export const getNextly = async args => { calls.started.push(args); return { started: args }; };
+export const registerNextlyStart = start => { calls.starts.push(start); };
 `;
 /** The app's config, as `@nextly-config` resolves it. */
 const APP_CONFIG = `export default { app: "config" };
@@ -69,7 +72,14 @@ let cachedRead: (
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "nextly-cached-read-"));
-  calls = { cacheLife: [], cacheTag: [], run: [], registered: [], started: [] };
+  calls = {
+    cacheLife: [],
+    cacheTag: [],
+    run: [],
+    registered: [],
+    started: [],
+    starts: [],
+  };
   (globalThis as { __cachedReadCalls?: Calls }).__cachedReadCalls = calls;
   await writeFile(join(dir, "next-cache.mjs"), NEXT_CACHE);
   await writeFile(join(dir, "nextly-runtime.mjs"), NEXTLY_RUNTIME);
@@ -186,10 +196,19 @@ describe("blog template: the Cache Components read function", () => {
     ]);
   });
 
-  it("starts Nextly with the app's config as it loads, and a failed start rejects nothing", () => {
-    // The stand-in's start rejects; uncaught, the run would report an
-    // unhandled rejection. Nothing else in a build's prerender workers starts
-    // Nextly, so the root layout's import of this file must.
+  it("registers how Nextly starts, and starts nothing as it loads", () => {
+    // Starting here would preempt an app page's own `getNextly` with options
+    // beyond the config, and the first start is the one Nextly keeps.
+    expect(calls.starts).toHaveLength(1);
+    expect(calls.started).toEqual([]);
+  });
+
+  it("starts Nextly with the app's config when the registered start runs", async () => {
+    // What a read that finds Nextly not started runs: the root layout's
+    // `<SiteCode>` on `/_not-found` during `next build`.
+    await expect(calls.starts[0]?.()).resolves.toEqual({
+      started: { config: { app: "config" } },
+    });
     expect(calls.started).toEqual([{ config: { app: "config" } }]);
   });
 

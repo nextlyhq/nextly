@@ -106,12 +106,21 @@ const globalForInit = globalThis as unknown as {
   __nextly_drizzleVersionChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
   /**
-   * The config of a start that failed, until a start succeeds, so
-   * `getCachedNextly` can start Nextly again with it (the database down,
-   * say): without it a worker whose only start failed stays unusable until it
-   * restarts, refusing every read as "called before initialization".
+   * The complete options of a start that failed, until a start succeeds, so
+   * `getCachedNextly` can start Nextly again with them (the database down,
+   * say): without them a worker whose only start failed stays unusable until
+   * it restarts, refusing every read as "called before initialization". The
+   * whole options, not the config alone, so a retry keeps a custom adapter,
+   * logger, image processor or service overrides the first start was given.
    */
-  __nextly_failedStartConfig?: GetNextlyOptions["config"];
+  __nextly_failedStartOptions?: GetNextlyOptions;
+  /**
+   * How the app starts Nextly, registered by its `cached-read.ts` through
+   * `registerNextlyStart`. Run by `getCachedNextly` only when a read finds
+   * nothing started, nothing starting and no failed start to retry. It is how
+   * the app starts, not state, so `shutdownNextly` leaves it registered.
+   */
+  __nextly_start?: () => Promise<Nextly>;
 };
 
 // ============================================================
@@ -473,19 +482,39 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // calls that arrive while we are still in registerServices() will join
   // this Promise rather than starting a new one.
   globalForInit.__nextly_initPromise = initPromise;
-  // A failed start leaves its config for `getCachedNextly` to start again
-  // with; a start that succeeds clears it. Observed on a branch of its own,
-  // so the rejection still reaches every caller awaiting `initPromise`.
+  // A failed start leaves its complete options for `getCachedNextly` to
+  // start again with; a start that succeeds clears them. Observed on a branch
+  // of its own, so the rejection still reaches every caller awaiting
+  // `initPromise`.
   initPromise.then(
     () => {
-      globalForInit.__nextly_failedStartConfig = undefined;
+      globalForInit.__nextly_failedStartOptions = undefined;
     },
     () => {
-      globalForInit.__nextly_failedStartConfig = options.config;
+      globalForInit.__nextly_failedStartOptions = options;
     }
   );
 
   return initPromise;
+}
+
+/**
+ * Registers how the app starts Nextly, for a read that finds it not started.
+ *
+ * `getCachedNextly` runs `start` only when nothing has started, nothing is
+ * starting and no failed start is left to retry, so nothing starts eagerly:
+ * an app page that calls `getNextly` with its own options first is the start
+ * that counts. It exists for a read made before anything started Nextly,
+ * such as a root layout's `<SiteCode>` on `/_not-found` while `next build`
+ * prerenders, where `instrumentation.ts` does not run. An app's
+ * `src/nextly/cached-read.ts` registers `() => getNextly({ config })`; an app
+ * that passes `getNextly` more than its config passes the same options here.
+ * A later registration replaces an earlier one.
+ *
+ * @public
+ */
+export function registerNextlyStart(start: () => Promise<Nextly>): void {
+  globalForInit.__nextly_start = start;
 }
 
 /**
@@ -562,14 +591,25 @@ export async function getCachedNextly(): Promise<Nextly> {
     return instance;
   }
 
-  // A start was made with the app's config and failed, leaving nothing to
-  // read and nothing in flight: start again with that config, so a worker
-  // recovers once what failed it (the database, say) is back, rather than
-  // refusing every read until it restarts. A start that fails again rejects
-  // with its own error, which says what is wrong.
-  const failedStart = globalForInit.__nextly_failedStartConfig;
+  // A start was made and failed, leaving nothing to read and nothing in
+  // flight: start again with the same complete options, so a worker recovers
+  // once what failed it (the database, say) is back, rather than refusing
+  // every read until it restarts. A start that fails again rejects with its
+  // own error, which says what is wrong.
+  const failedStart = globalForInit.__nextly_failedStartOptions;
   if (failedStart !== undefined) {
-    return getNextly({ config: failedStart });
+    return getNextly(failedStart);
+  }
+
+  // Nothing has started: start Nextly the way the app registered, so a read
+  // made before any page started it (the root layout's `<SiteCode>` on
+  // `/_not-found` while `next build` prerenders, where instrumentation does
+  // not run) finds it starting. Only here, after every other path, so an app
+  // page that calls `getNextly` with its own options first is the start that
+  // counts.
+  const start = globalForInit.__nextly_start;
+  if (start !== undefined) {
+    return start();
   }
 
   throw NextlyError.configuration({
@@ -685,8 +725,9 @@ export function createRegister(
  * ```
  */
 export async function shutdownNextly(): Promise<void> {
-  // A shut-down process is not one to start again on its next read.
-  globalForInit.__nextly_failedStartConfig = undefined;
+  // A shut-down process is not one to start again on its next read. The
+  // registered start stays: it says how the app starts, not that it did.
+  globalForInit.__nextly_failedStartOptions = undefined;
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }

@@ -318,7 +318,7 @@ each of them.
    ```ts
    // src/nextly/cached-read.ts
    import { cacheLife, cacheTag } from "next/cache";
-   import { getNextly } from "nextly";
+   import { getNextly, registerNextlyStart } from "nextly";
    import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
 
    import config from "@nextly-config";
@@ -344,22 +344,28 @@ each of them.
 
    registerCachedRead(cachedRead, process.env.__NEXT_CACHE_COMPONENTS);
 
-   // Starts Nextly as the root layout loads, so a read made before any page has
-   // started it, such as the root layout's `<SiteCode>` on `/_not-found` while
-   // `next build` prerenders, finds it starting and waits for it: nothing else
-   // starts Nextly in a build's prerender workers. A failed start (the database
-   // down, say) is caught here so it is not an unhandled rejection; the next
-   // read waits for or retries the start, and reports it.
-   void getNextly({ config }).catch(() => undefined);
+   // Tells Nextly how this app starts it, for a read that finds it not started,
+   // such as the root layout's `<SiteCode>` on `/_not-found` while `next build`
+   // prerenders, where nothing else starts it. Nothing starts here: a page that
+   // calls `getNextly` first is the start that counts. An app that passes
+   // `getNextly` more than its config passes the same options here.
+   registerNextlyStart(() => getNextly({ config }));
    ```
 
    Import the config the way your app already does: `@nextly-config` in a
-   scaffolded app, or a relative path to `nextly.config.ts`.
+   scaffolded app, or a relative path to `nextly.config.ts`. If your app
+   passes `getNextly` more than its config (its own adapter, logger or
+   service overrides), pass the same options to `registerNextlyStart`.
 
    Import this file from your root layout (`import "@/nextly/cached-read";`).
-   That one import both registers the cached read and starts Nextly, on every
-   route before anything reads, `/_not-found` included, and during
-   `next build` too, where nothing else starts Nextly. Import it as well from
+   That one import registers the cached read, and how Nextly starts when a
+   read finds it not started, on every route before anything reads,
+   `/_not-found` included. Nothing starts as the file loads: a page that
+   calls `getNextly` first is the start that counts, and the registered start
+   runs only for a read made before anything started Nextly, as on
+   `/_not-found` during `next build`, where `instrumentation.ts` does not run.
+   A start that fails is tried again, with the same options, by the next read.
+   Import it as well from
    every module that reads content through `cachedFind`. A scaffolded app's
    root layout already does, and so do the blog's query modules
    (`src/lib/queries`). The page builder's `<SiteCode>` refuses to read
@@ -391,8 +397,8 @@ each of them.
    the first cached read and keeps using `unstable_cache`.
 
 With Cache Components off, which Nextly does not support, Next.js refuses to
-build a `"use cache"` function, so a blog with it off keeps only the start in
-this file: the `getNextly` and config imports and the last line,
+build a `"use cache"` function, so a blog with it off keeps only how Nextly
+starts in this file: the `nextly` and config imports and the last line,
 without `cachedRead` and its registration. Its reads are then cached with
 `unstable_cache`.
 

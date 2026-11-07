@@ -102,10 +102,12 @@ it from its root layout. Add both if your app doesn't have them:
 
 1. Create `src/nextly/cached-read.ts` with the file the caching guide gives under
    [Cache Components](/docs/guides/isr-caching#cache-components).
-2. Import it from the layout that renders `<SiteCode>`. That one import both registers
-   the cached read and starts Nextly, on every page that layout serves, before
-   `<SiteCode>` reads. Both matter during `next build`, where nothing else starts
-   Nextly for a page such as `/_not-found` that only the root layout renders:
+2. Import it from the layout that renders `<SiteCode>`. That one import registers the
+   cached read, and how Nextly starts when a read finds it not started, on every page
+   that layout serves, before `<SiteCode>` reads. Both matter during `next build`,
+   where nothing else starts Nextly for a page such as `/_not-found` that only the
+   root layout renders. Nothing starts as the file loads, so a page that starts
+   Nextly with options of its own still does:
 
 ```tsx title="app/(frontend)/layout.tsx"
 import "@/nextly/cached-read";
