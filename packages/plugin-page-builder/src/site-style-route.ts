@@ -114,6 +114,13 @@ export interface BuilderDocumentType {
    * whose value is stored once per row (read with `storedValuesAt`).
    */
   readonly paths: readonly string[];
+  /**
+   * The paths of `paths` outside every repeater (`hero.body`): the ones
+   * core's stored read of a single field can name. A reader that asks for a
+   * field by its path, rather than reading the whole document, asks only
+   * these.
+   */
+  readonly fixedPaths: readonly string[];
 }
 
 /**
@@ -125,13 +132,16 @@ export interface BuilderDocumentType {
 function builderTypeOf(record: unknown): BuilderDocumentType | undefined {
   if (typeof record !== "object" || record === null) return undefined;
   const slug = slugOf(record);
-  const paths = builderBlocksFields(record).map(field => field.path);
+  const fields = builderBlocksFields(record);
+  const paths = fields.map(field => field.path);
   if (slug === undefined || paths.length === 0) return undefined;
   const label = (record as { label?: unknown }).label;
   return {
     slug,
     label: typeof label === "string" && label.trim() !== "" ? label : undefined,
     paths,
+    // Derived from the same walk: a field inside a row has no one path.
+    fixedPaths: fields.filter(field => !field.inRow).map(field => field.path),
   };
 }
 

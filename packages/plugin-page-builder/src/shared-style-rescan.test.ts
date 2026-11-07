@@ -47,6 +47,7 @@ const pages: BuilderDocumentType = {
   slug: "pages",
   label: "Pages",
   paths: ["content"],
+  fixedPaths: ["content"],
 };
 
 describe("whether a stored row references a style", () => {
@@ -203,6 +204,7 @@ describe("every stored document still using a style", () => {
       slug: "home",
       label: "Home",
       paths: ["body"],
+      fixedPaths: ["body"],
     };
     const { documents } = storedOf(
       [],
