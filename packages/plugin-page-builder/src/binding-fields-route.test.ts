@@ -169,6 +169,15 @@ describe("the picker's fields", () => {
     ]);
   });
 
+  it("lists the Singles and the site for a document with no entry of its own", async () => {
+    // A component's document, which reads each placing page's entry.
+    const answer = await readBindingFields({}, reads());
+    expect(answer.sources.map(source => source.binding.source)).toEqual([
+      "single",
+      "site",
+    ]);
+  });
+
   it("lists no entry's fields where there is no entry to read", async () => {
     const answer = await ask();
     expect(answer.sources.map(source => source.binding.source)).toEqual([
