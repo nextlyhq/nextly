@@ -1892,21 +1892,87 @@ function mediaResolver(
   budget: QueryBudget
 ): MediaReads {
   const known = new Map<string, Promise<ResolvedMedia | null>>();
+  // The ids a batch on its way will answer, by that batch's read.
+  const inFlight = new Map<
+    string,
+    Promise<ReadonlyMap<string, ResolvedMedia | null> | undefined>
+  >();
   const readOne = mediaReadOne(config, reader);
+  // A read is a read: a page whose images all resolve through the media
+  // library spends the same budget a loop does, and an exhausted budget
+  // resolves to no picture rather than to an unbounded page. A refusal is
+  // not kept, so each block it reaches is named as unread.
+  const ownRead = (id: string, claim?: ReadClaim) => {
+    if (!budget.take({ ...claim, kind: "image" })) {
+      return Promise.resolve(null);
+    }
+    const reading = readOne(id);
+    known.set(id, reading);
+    return reading;
+  };
+  /**
+   * Whether every batch another list has on its way for any of `ids` was
+   * usable, each awaited: `false` once one was not, so a list sharing it
+   * stops where its owner does.
+   */
+  const sharedBatchesHold = async (
+    ids: readonly string[]
+  ): Promise<boolean> => {
+    const pending = new Set(
+      ids.flatMap(id => {
+        const reading = inFlight.get(id);
+        return reading === undefined ? [] : [reading];
+      })
+    );
+    for (const reading of pending) {
+      if ((await reading) === undefined) return false;
+    }
+    return true;
+  };
+
+  /**
+   * One batch of images read ahead, `false` where it stopped short. A batch
+   * that fails leaves each image to its own read, so it is asked only where
+   * the allowance covers it and each image's own read after it: a batch
+   * never costs an image its picture.
+   */
+  const readChunk = async (
+    readMany: NonNullable<ReturnType<typeof mediaReadMany>>,
+    chunk: readonly string[],
+    claim: ReadClaim
+  ): Promise<boolean> => {
+    if ((budget.remaining?.() ?? Infinity) < chunk.length + 1) return false;
+    if (!budget.take({ ...claim, kind: "image" })) return false;
+    // Reserved before the read is awaited, so a list drawn beside this one
+    // waits for it rather than reading the same ids again.
+    const reading = readMany(chunk).catch(() => undefined);
+    for (const id of chunk) inFlight.set(id, reading);
+    const found = await reading;
+    for (const id of chunk) inFlight.delete(id);
+    // An unusable batch (refused, or rows it cannot match) stops the reads
+    // ahead, so the allowance kept for each image's own read is not spent
+    // by a later step first; its reservations are dropped.
+    if (found === undefined) return false;
+    for (const id of chunk) {
+      known.set(id, Promise.resolve(found.get(id) ?? null));
+    }
+    return true;
+  };
   return {
     resolve: (id: string, claim?: ReadClaim) => {
       const kept = known.get(id);
       if (kept !== undefined) return kept;
-      // A read is a read: a page whose images all resolve through the media
-      // library spends the same budget a loop does, and an exhausted budget
-      // resolves to no picture rather than to an unbounded page. A refusal
-      // is not kept, so each block it reaches is named as unread.
-      if (!budget.take({ ...claim, kind: "image" })) {
-        return Promise.resolve(null);
+      // An id a batch on its way holds waits for it, and reads on its own
+      // only where that batch turns out unusable.
+      const pending = inFlight.get(id);
+      if (pending !== undefined) {
+        return pending.then(found =>
+          found === undefined
+            ? (known.get(id) ?? ownRead(id, claim))
+            : (found.get(id) ?? null)
+        );
       }
-      const reading = readOne(id);
-      known.set(id, reading);
-      return reading;
+      return ownRead(id, claim);
     },
     ahead: async (ids, claim) => {
       const readMany = mediaReadMany(config, reader);
@@ -1914,24 +1980,24 @@ function mediaResolver(
       // stops the reads ahead here, so each image's own read, made as it is
       // drawn, comes before a later step's.
       if (readMany === undefined) return false;
-      const wanted = usableIds(ids).filter(id => !known.has(id));
-      for (let at = 0; at < wanted.length; at += AHEAD_BATCH_SIZE) {
-        const chunk = wanted.slice(at, at + AHEAD_BATCH_SIZE);
-        // A batch that fails leaves each image to its own read, so it is
-        // asked only where the allowance covers it and each image's own
-        // read after it: a batch never costs an image its picture.
-        if ((budget.remaining?.() ?? Infinity) < chunk.length + 1) return false;
-        if (!budget.take({ ...claim, kind: "image" })) return false;
-        const found = await readMany(chunk).catch(() => undefined);
-        // An unusable batch (refused, or rows it cannot match) stops the
-        // reads ahead, so the allowance kept for each image's own read is
-        // not spent by a later step first.
-        if (found === undefined) return false;
-        for (const id of chunk) {
-          known.set(id, Promise.resolve(found.get(id) ?? null));
-        }
+      let rest = usableIds(ids).filter(id => !known.has(id));
+      for (;;) {
+        // Another list's batch on its way for any of these ids answers them
+        // for this list too: awaited before this list reads anything of its
+        // own, and its outcome is this list's, so an unusable one stops the
+        // reads ahead here as well, leaving each image its own read.
+        if (!(await sharedBatchesHold(rest))) return false;
+        rest = rest.filter(id => !known.has(id));
+        // A batch reserved while this list waited is awaited first too.
+        if (rest.some(id => inFlight.has(id))) continue;
+        // The ids as they stand now, none read and none reserved, with
+        // nothing awaited between the choosing and the batch's claim and
+        // reservation: one read or reserved meanwhile is not read again.
+        const chunk = rest.slice(0, AHEAD_BATCH_SIZE);
+        if (chunk.length === 0) return true;
+        if (!(await readChunk(readMany, chunk, claim))) return false;
+        rest = rest.filter(id => !known.has(id));
       }
-      return true;
     },
   };
 }
@@ -2445,14 +2511,17 @@ function entryPathResolver(
    * number of reads: their rows by `id in`, then each ownership check asked
    * for all of them at once, as a count. Only a batch every count clears is
    * kept; any other leaves each link to `one`, which asks the checks link by
-   * link, so a batch never answers differently from it.
+   * link, so a batch never answers differently from it. Says `settled` for
+   * a batch kept, `unusable` for one its reads could not settle (rows it
+   * cannot match, a failed read, a check that does not hold), and `spent`
+   * once reads run out.
    */
   const batch = async (
     collection: string,
     ids: readonly string[],
     take: () => boolean,
     known: Map<string, Promise<string | null>>
-  ): Promise<"spent" | undefined> => {
+  ): Promise<"spent" | "unusable" | "settled"> => {
     if (!take()) return "spent";
     const found = await routeFind(
       collection,
@@ -2460,17 +2529,17 @@ function entryPathResolver(
       ids.length
     ).catch(() => undefined);
     const rows = found === undefined ? undefined : rowsById(found, ids);
-    if (rows === undefined) return undefined;
+    if (rows === undefined) return "unusable";
     const { settled, candidates } = linkRows(rows, ids);
     if (candidates.length > 0) {
       const held = await allHold(ownershipChecks(collection, candidates), take);
-      if (held !== true) return held === "spent" ? "spent" : undefined;
+      if (held !== true) return held === "spent" ? "spent" : "unusable";
       for (const { id, path } of candidates) settled.set(id, path);
     }
     for (const [id, path] of settled) {
       known.set(entryKey(collection, id), Promise.resolve(path));
     }
-    return undefined;
+    return "settled";
   };
 
   const known = new Map<string, Promise<string | null>>();
@@ -2534,7 +2603,10 @@ function entryPathResolver(
       for (const [collection, ids] of unsettledByCollection(refs)) {
         for (const chunk of chunked([...ids], AHEAD_BATCH_SIZE)) {
           if (!affordsBatch(collection, chunk.length)) return false;
-          if ((await batch(collection, chunk, take, known)) === "spent") {
+          // A batch that ran out of reads, or whose reads could not settle
+          // its links, stops the reads ahead: each link then reads as it is
+          // drawn, with the reads the batch was asked only where they remain.
+          if ((await batch(collection, chunk, take, known)) !== "settled") {
             return false;
           }
         }
