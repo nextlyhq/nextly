@@ -200,7 +200,7 @@ export function useConditionsUnchecked(
     // composed block holds only what its definition gave it.
     const composed = resolveComponentInstances(
       revealConditioned(document),
-      asStoredDefinitions(definitions),
+      asStoredDefinitions(definitions, limits),
       {
         conditioned: "carry",
         // Every limit the canvas composes under, so a site that raises the

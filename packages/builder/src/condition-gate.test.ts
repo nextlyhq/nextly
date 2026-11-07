@@ -73,4 +73,39 @@ describe("the definitions as the renderer reads them", () => {
     expect(nodes[1]).toMatchObject({ id: "title" });
     expect(JSON.stringify(nodes[1])).not.toContain("within");
   });
+
+  it("reads no deeper than the deepest tree the resolver composes", () => {
+    // Three levels, each with a stored placement gate. Under a depth of 1
+    // the resolver composes two of them, so the third is left as stored:
+    // a hand-edited tree of any depth costs only the limit to read here.
+    const gate = { within: [[{ field: "title", op: "exists" }]] };
+    const level = (id: string, children?: unknown[]) => ({
+      id,
+      type: "core/section",
+      version: 1,
+      props: {},
+      visibility: gate,
+      ...(children === undefined ? {} : { slots: { children } }),
+    });
+    const definitions: DefinitionsById = new Map([
+      [
+        "card",
+        stored(
+          JSON.stringify({
+            version: 1,
+            nodes: [level("top", [level("middle", [level("deepest")])])],
+          })
+        ),
+      ],
+    ]);
+    const read = JSON.stringify(
+      asStoredDefinitions(definitions, { maxDepth: 1 }).get("card")?.nodes
+    );
+    // Only the deepest block keeps its gate: one "within" left, not none (a
+    // walk to the end, whatever the depth) and not three (no walk at all).
+    expect(read.split('"within"')).toHaveLength(2);
+    expect(read).toMatch(
+      /"id":"deepest","type":"core\/section","version":1,"props":\{\},"visibility":\{"within"/
+    );
+  });
 });

@@ -6,14 +6,15 @@
  * @module condition-gate
  */
 import {
+  DEFAULT_LIMITS,
   isConditionGated,
   isPlainRecord,
-  mapForest,
   storedVisibilityOf,
   type BlockDocument,
   type BlockNode,
   type ComponentLookup,
   type DefinitionsById,
+  type DocumentLimits,
   type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
 
@@ -43,14 +44,16 @@ export function gatedAsDrawn(node: BlockNode): boolean {
  * read on first use, so a large component library costs nothing until a page
  * places it.
  *
- * Rewritten with the engine's own forest rewrite, which keeps what it can't
- * walk as stored (nodes that are not a list, an entry that is not a block, a
- * slot that is not a list, a cycle), so malformed stored data reaches the
- * resolver to repair or refuse rather than throwing here first.
+ * Stored data is outside data, so what the walk can't read as blocks (nodes
+ * that are not a list, an entry that is not a block, a slot that is not a
+ * list) is handed on as stored, for the resolver to repair or refuse rather
+ * than throwing here first.
  */
 export function asStoredDefinitions(
-  definitions: DefinitionsById
+  definitions: DefinitionsById,
+  limits?: Pick<DocumentLimits, "maxDepth">
 ): ComponentLookup {
+  const deepest = (limits?.maxDepth ?? DEFAULT_LIMITS.maxDepth) + 1;
   const read = new Map<string, BlockDocument | undefined>();
   return {
     has: id => definitions.has(id),
@@ -58,11 +61,11 @@ export function asStoredDefinitions(
       if (read.has(id)) return read.get(id);
       const definition = definitions.get(id);
       const stored =
-        definition === undefined
-          ? undefined
+        definition === undefined || !Array.isArray(definition.nodes)
+          ? definition
           : {
               ...definition,
-              nodes: mapForest(definition.nodes, withoutPlacementGate),
+              nodes: withoutPlacementGates(definition.nodes, deepest),
             };
       read.set(id, stored);
       return stored;
@@ -70,16 +73,42 @@ export function asStoredDefinitions(
   };
 }
 
-/** One block with any placement gate stored on it removed. */
-function withoutPlacementGate(node: BlockNode): BlockNode {
-  if (
-    !isPlainRecord(node.visibility) ||
-    !Object.hasOwn(node.visibility, "within")
-  ) {
-    return node;
-  }
-  return {
-    ...node,
-    visibility: storedVisibilityOf(node.visibility) as NodeVisibility,
-  };
+/**
+ * A forest with any stored placement gate removed. Past the deepest tree a
+ * definition may hold it is left as it is: the resolver refuses a definition
+ * that deep, so nothing below is drawn, and a stored tree of any depth costs
+ * no more than the limit to read here.
+ *
+ * Its own bounded walk rather than the engine's forest rewrite, which walks a
+ * forest to its end whatever its depth.
+ */
+function withoutPlacementGates(
+  nodes: readonly BlockNode[],
+  levelsLeft: number
+): BlockNode[] {
+  if (levelsLeft <= 0) return [...nodes];
+  return nodes.map(node => {
+    // An entry that is not a block, a null among them, is kept as stored:
+    // reading its visibility here would throw before the resolver could
+    // repair or refuse it.
+    if (!isPlainRecord(node)) return node;
+    const next: BlockNode = { ...node };
+    if (
+      isPlainRecord(node.visibility) &&
+      Object.hasOwn(node.visibility, "within")
+    ) {
+      next.visibility = storedVisibilityOf(node.visibility) as NodeVisibility;
+    }
+    if (isPlainRecord(node.slots)) {
+      const slots: Record<string, BlockNode[]> = {};
+      for (const [name, children] of Object.entries(node.slots)) {
+        // A slot that is not a list holds no blocks the resolver reads.
+        if (Array.isArray(children)) {
+          slots[name] = withoutPlacementGates(children, levelsLeft - 1);
+        }
+      }
+      next.slots = slots;
+    }
+    return next;
+  });
 }
