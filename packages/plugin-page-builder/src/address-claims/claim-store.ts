@@ -398,6 +398,22 @@ export async function lockHolder(
 }
 
 /**
+ * Remove `holder`'s own lock row, in `tx`, once nothing will contend for it
+ * again (its document is deleted), so a lock row does not outlive it. A
+ * transaction still waiting on the row reads none once this one commits,
+ * and makes a new one.
+ */
+export async function releaseHolderLock(
+  claims: Claims,
+  tx: Tx,
+  holder: Holder
+): Promise<void> {
+  if (claims.dialect === "sqlite") return;
+  const [row] = await keyed(claims, tx, [holderLockKey(holder)], "update");
+  if (row !== undefined) await remove(claims, tx, row);
+}
+
+/**
  * Hold the lock row keyed `key`, created with `created` where none is stored
  * yet, and otherwise held by writing `touched` over it (see {@link lock}).
  */
@@ -933,6 +949,11 @@ export interface DesiredClaims {
  * crosswise. Claims come before releases, so a claim that is refused leaves
  * what the holder held in place, and the refusal rolls the save back whole.
  *
+ * With `wait`, an address another document holds is not refused: the
+ * holder waits for it instead ({@link claimOrWait}), as a document does whose
+ * address follows from something no one is saving now (a template published
+ * over existing entries, or a start-up pass).
+ *
  * @returns Whether anything changed.
  */
 export async function reconcileHolder(
@@ -940,7 +961,8 @@ export async function reconcileHolder(
   tx: Tx,
   holder: Holder,
   desired: DesiredClaims,
-  describe: DescribeHolder
+  describe: DescribeHolder,
+  options: { readonly wait?: boolean } = {}
 ): Promise<boolean> {
   const held = await heldBy(claims, tx, holder);
   const owned = held.filter(row => row.kind !== "waiting");
@@ -970,7 +992,11 @@ export async function reconcileHolder(
   ]);
   for (const row of staleWaits) await remove(claims, tx, row);
   for (const address of claimAddresses) {
-    await claimAddress(claims, tx, { address, holder, describe });
+    if (options.wait === true) {
+      await claimOrWait(claims, tx, { address, holder });
+    } else {
+      await claimAddress(claims, tx, { address, holder, describe });
+    }
   }
   for (const list of claimSpaces) {
     await claimSpace(claims, tx, { list, holder, describe });
@@ -983,4 +1009,82 @@ export async function reconcileHolder(
     });
   }
   return true;
+}
+
+/**
+ * Hold the locks on `addresses` until `tx` ends, in key order, so saves that
+ * must not judge the same thing at once take turns: whatever else locks one
+ * of them waits for this transaction, then reads what it committed.
+ */
+export async function holdLocks(
+  claims: Claims,
+  tx: Tx,
+  addresses: readonly ServedAddress[]
+): Promise<void> {
+  await lockInOrder(claims, tx, addresses);
+}
+
+/** Who holds an address, as the route serving it is told. */
+export interface AddressHolding {
+  readonly holder: Holder;
+  /**
+   * `"address"` when the holder is served at the address itself, `"space"`
+   * when the address is a later page of the holder's paginated list.
+   */
+  readonly kind: "address" | "space";
+}
+
+/**
+ * Who holds `address`, as last committed: the document claiming it, else the
+ * paginated list whose later pages it is one of, else null. Takes no lock and
+ * joins no transaction, so a request reading it never waits on a save; what
+ * it answers is what the last committed save left.
+ */
+export async function committedHolderAt(
+  claims: Claims,
+  address: ServedAddress
+): Promise<AddressHolding | null> {
+  const space = spaceHolding(address);
+  const own = storedKey(claimKey("address", address));
+  const list = space === null ? null : storedKey(claimKey("space", space));
+  const { rows } = await committedClaims(
+    claims,
+    { claimKey: { in: list === null ? [own] : [own, list] } },
+    { limit: 2 }
+  );
+  // Matched again exactly, as every read here is: the database's comparison
+  // of the key column is not trusted to be exact on every dialect.
+  const at = rows.find(row => row.key === own && row.kind === "address");
+  if (at?.holder) return { holder: at.holder, kind: "address" };
+  const over =
+    list === null
+      ? undefined
+      : rows.find(row => row.key === list && row.kind === "space");
+  if (over?.holder) return { holder: over.holder, kind: "space" };
+  return null;
+}
+
+/**
+ * Up to `limit` of the addresses held in `locale`, as last committed, from
+ * `page`, with how many there are in all: what a route pre-renders.
+ */
+export async function committedAddresses(
+  claims: Claims,
+  locale: string,
+  { limit, page = 1 }: { limit: number; page?: number }
+): Promise<{ addresses: ServedAddress[]; total: number }> {
+  const { rows, total } = await committedClaims(
+    claims,
+    { kind: { equals: "address" }, locale: { equals: locale } },
+    { limit, page }
+  );
+  const addresses = rows.flatMap(row =>
+    row.kind === "address" &&
+    row.holder !== null &&
+    row.address !== null &&
+    row.address.locale === locale
+      ? [row.address]
+      : []
+  );
+  return { addresses, total };
 }
