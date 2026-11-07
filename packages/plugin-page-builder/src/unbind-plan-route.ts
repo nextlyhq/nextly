@@ -57,13 +57,21 @@ const SLUG = z
 /** The body as it is read, before anything else is. */
 const UnbindPlanBody = z
   .object({
-    page: z
-      .object({
-        collection: SLUG,
-        id: z.string().min(1).max(200),
-        locale: z.string().min(1).max(35).optional(),
-      })
-      .strict(),
+    page: z.union([
+      z
+        .object({
+          collection: SLUG,
+          id: z.string().min(1).max(200),
+          locale: z.string().min(1).max(35).optional(),
+        })
+        .strict(),
+      z
+        .object({
+          single: SLUG,
+          locale: z.string().min(1).max(35).optional(),
+        })
+        .strict(),
+    ]),
     // Its shape is judged by the survey and the plan's own walk: a document
     // the walk can't find the block in is answered with a refusal.
     document: z.unknown(),
@@ -130,13 +138,14 @@ export async function answerUnbindPlan(
       logContext: { reason: "unbind-plan-missing-page" },
     });
   }
+  const { page: at } = request;
   const target = templateTargetOf(page);
   const source: UnbindSource = {
-    collection: request.page.collection,
-    id: request.page.id,
-    ...(request.page.locale === undefined
-      ? {}
-      : { locale: request.page.locale }),
+    // A Single's page reads the Single, named as the collection and the id.
+    ...("single" in at
+      ? { collection: at.single, id: at.single, kind: "single" as const }
+      : { collection: at.collection, id: at.id }),
+    ...(at.locale === undefined ? {} : { locale: at.locale }),
     ...(target === undefined ? {} : { templateTarget: target.collection }),
   };
   const { nodeId, prop, keep } = request.action;
@@ -148,14 +157,21 @@ function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
   return {
     readPage: async page => {
       const reader = await editorReaderAsCaller(ctx, page.locale);
+      const at = page.locale === undefined ? {} : { locale: page.locale };
       // Only what the plan reads of it, the template's collection: the
       // document itself is the editor's, sent with the ask.
-      return reader.findById({
-        collection: page.collection,
-        id: page.id,
-        select: TEMPLATE_TARGET_FIELDS,
-        ...(page.locale === undefined ? {} : { locale: page.locale }),
-      });
+      return "single" in page
+        ? reader.findSingle({
+            slug: page.single,
+            select: TEMPLATE_TARGET_FIELDS,
+            ...at,
+          })
+        : reader.findById({
+            collection: page.collection,
+            id: page.id,
+            select: TEMPLATE_TARGET_FIELDS,
+            ...at,
+          });
     },
     plan: planUnbind,
   };

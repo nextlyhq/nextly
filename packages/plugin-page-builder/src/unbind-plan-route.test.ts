@@ -93,6 +93,22 @@ describe("the editor's unbind plan", () => {
     );
   });
 
+  it("plans a Single's page against the Single itself", async () => {
+    const r = reads({ id: "home" });
+    await answerUnbindPlan(
+      unbindPlanRequestOf(body({ page: { single: "home", locale: "en" } })),
+      r
+    );
+    expect(r.readPage).toHaveBeenCalledWith({ single: "home", locale: "en" });
+    expect(r.plan).toHaveBeenCalledWith(
+      { collection: "home", id: "home", kind: "single", locale: "en" },
+      document,
+      "h",
+      "text",
+      "visitor"
+    );
+  });
+
   it("plans nothing for a page the caller may not read", async () => {
     const r = reads(null);
     await expect(

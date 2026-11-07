@@ -114,21 +114,23 @@ export function bindingFieldsReader(
 
 /**
  * The inspector's unbind planner for the page `identity` names, in `locale`:
- * absent for a document that is no saved collection entry, which the plan
- * route, like the page actions API, can't read.
+ * a saved collection entry or a Single; absent for an entry not saved yet,
+ * which the plan route can't read.
  */
 export function unbindPlanner(
   identity: DocumentIdentity | null,
   locale: string | undefined
 ): ((ask: UnbindAsk) => Promise<UnbindPlanAnswer>) | undefined {
-  if (identity?.kind !== "collection" || identity.documentId === undefined) {
+  if (identity === null) return undefined;
+  const at = locale === undefined ? {} : { locale };
+  let page: UnbindPlanRequest["page"];
+  if (identity.kind === "single") {
+    page = { single: identity.slug, ...at };
+  } else if (identity.documentId === undefined) {
     return undefined;
+  } else {
+    page = { collection: identity.slug, id: identity.documentId, ...at };
   }
-  const page = {
-    collection: identity.slug,
-    id: identity.documentId,
-    ...(locale === undefined ? {} : { locale }),
-  };
   return async ask => {
     const request: UnbindPlanRequest = {
       page,

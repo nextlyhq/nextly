@@ -20,12 +20,17 @@ export const UNBIND_PLAN_ROUTE_PATH = "/unbind-plan";
 
 /** What the editor asks: which prop of which block, in the page being edited. */
 export interface UnbindPlanRequest {
-  /** The page being edited, by its collection and id, and its language. */
-  readonly page: {
-    readonly collection: string;
-    readonly id: string;
-    readonly locale?: string;
-  };
+  /**
+   * The page being edited, and its language: a collection's entry by its
+   * collection and id, or a Single by its slug.
+   */
+  readonly page:
+    | {
+        readonly collection: string;
+        readonly id: string;
+        readonly locale?: string;
+      }
+    | { readonly single: string; readonly locale?: string };
   /** The document as the editor holds it now, unsaved blocks included. */
   readonly document: BlockDocument;
   /** The unbind, as the page actions API spells it. */
