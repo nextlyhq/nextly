@@ -1214,22 +1214,67 @@ describe("a page's site settings, in a process serving several sites", () => {
     expect(runtime.processSiteReads).toBe(0);
   });
 
-  it("a reader of the app's own with no site-settings read shows none, rather than the process's", async () => {
-    const { publicSiteSettings: _dropped, ...withoutSite } = siteInstance(
-      sitePage,
-      "Acme",
-      "Europe/Paris"
-    );
-    const { html } = await renderedPage(
+  /** A reader of the app's own that forwards no site-settings read. */
+  function readerWithoutSite(
+    content: BlockDocument
+  ): Omit<Instance, "publicSiteSettings"> {
+    const { publicSiteSettings: _dropped, ...rest } = instance(content);
+    return rest;
+  }
+
+  /** The warnings that name a reader's missing site-settings read. */
+  function standInWarnings(warn: { mock: { calls: unknown[][] } }): string[] {
+    return warn.mock.calls
+      .map(([message]) => String(message))
+      .filter(message => message.includes("has no `publicSiteSettings`"));
+  }
+
+  it("a reader of the app's own with no site-settings read shows the process's, and says so once per reader", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reader = readerWithoutSite(sitePage);
+
+    const first = await renderedPage(
       createBlocksPage,
       { ...base, cacheScope: "acme" },
-      withoutSite as Instance
+      reader as Instance
     );
-    expect(html).toContain("No name");
-    expect(html).not.toContain("Process site");
-    expect(runtime.processSiteReads).toBe(0);
-    // Nothing to read from, so no read is made or cached.
-    expect(siteReadKeys()).toEqual([]);
+    // The process's settings, as a route like this read them before an
+    // instance could be asked: a single-site app's page keeps its site name.
+    expect(first.html).toContain("Process site");
+    expect(first.html).toContain("03:30");
+    expect(runtime.processSiteReads).toBe(1);
+    // Said once, naming the line that makes the route read its own instance.
+    const said = standInWarnings(warn);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(
+      "publicSiteSettings: async () => (await instance()).publicSiteSettings()"
+    );
+
+    // The same reader again is not said again; another reader is.
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      reader as Instance
+    );
+    expect(standInWarnings(warn)).toHaveLength(1);
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "globex" },
+      readerWithoutSite(sitePage) as Instance
+    );
+    expect(standInWarnings(warn)).toHaveLength(2);
+  });
+
+  it("a reader that forwards the site-settings read is never warned about", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await renderedPage(
+      createBlocksPage,
+      { ...base, cacheScope: "acme" },
+      siteInstance(sitePage, "Acme", "Europe/Paris")
+    );
+    // The control: the page did read its site settings.
+    expect(siteReadKeys()).toEqual([["nextly-public-site-settings", "acme"]]);
+    expect(standInWarnings(warn)).toEqual([]);
   });
 });
 

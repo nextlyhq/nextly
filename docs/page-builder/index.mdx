@@ -129,9 +129,9 @@ const reader: NextlyContentReader &
   } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
-  // The site's name, address, logo and time zone a page shows. Omit it and
-  // the page shows no site settings: a site-name binding shows its fallback,
-  // and dates use the route's `timeZone`, or UTC.
+  // The site's name, address, logo and time zone a page shows, read from this
+  // instance. Omit it and the page shows the settings of the process's
+  // registered instance, and the route warns once.
   publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // Images that store a media id resolve through this. Omit it and those images
   // render nothing, while images holding a literal URL keep working.
@@ -180,7 +180,10 @@ route makes, its site settings among them, is cached under it, and two routes ov
 instances with the same scope, or none, share their cached reads.
 
 A reader of your own forwards `publicSiteSettings` from the instance, as the example above does.
-A reader without it shows no site settings rather than another site's.
+A reader without it still shows the settings of the process's registered instance, as it did
+before, so a single-site app keeps working. On a process serving several sites those are
+another site's settings, so the route warns once per reader, in every environment, naming the
+line to add.
 
 ### Public sites read differently
 

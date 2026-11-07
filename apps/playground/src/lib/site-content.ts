@@ -68,8 +68,8 @@ export const siteReader: NextlyContentReader &
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
   // The site settings a page shows, its name and time zone among them. A
-  // block route reads them through the reader it is given, so one that left
-  // this out would show none.
+  // block route reads them through the reader it is given; one that left this
+  // out would read the process's registered instance and warn once.
   publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // A Single page reads the document itself through `findSingle` and its BLOCKS
   // through `find`/`findByID`. One reader carrying both is what keeps a page and
