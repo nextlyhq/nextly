@@ -113,14 +113,27 @@ describe("the manifest schema", () => {
     ).toBe(true);
   });
 
-  it("requires the templates collection, where template ids live", () => {
+  it("parses a manifest from a server that names no templates collection", () => {
+    // A server from before the key existed sends none; the format version is
+    // the same, so a client must still read the rest of the manifest.
     const manifest = manifestWith(card);
     const { templates: _templates, ...withoutTemplates } =
       manifest.collections as Record<string, unknown>;
+    const parsed = compositionManifestSchema.safeParse({
+      ...manifest,
+      collections: withoutTemplates,
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.collections.templates).toBeUndefined();
+  });
+
+  it("refuses a templates collection that is present but not a slug", () => {
+    // Control: optional, not unchecked.
+    const manifest = manifestWith(card);
     expect(
       compositionManifestSchema.safeParse({
         ...manifest,
-        collections: withoutTemplates,
+        collections: { ...manifest.collections, templates: 7 },
       }).success
     ).toBe(false);
   });

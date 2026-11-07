@@ -33,7 +33,9 @@ The manifest describes what the caller may compose with, read as the caller:
   under the names it gave them, and `componentField`, the field a component's
   definition is stored in. `templates` is the collection templates and entries' own
   designs are kept in: a page action on a template names it as the `page`'s
-  `collection`, and the template actions' ids are its documents' ids.
+  `collection`, and the template actions' ids are its documents' ids. It is optional:
+  a server from before it was listed sends a manifest without it, with the same
+  `formatVersion`. Where it's absent, use the default slug, `templates`.
 - **`patterns.items`**: each pattern's `id`, `title`, and `granularity` where it has one.
 - **`components.items`**: each component's `id` and `title`, with the `fields` a
   placement may set (`id`, `label`, `type`, and `options` for a select), the `slots` it

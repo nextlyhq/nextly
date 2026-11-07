@@ -336,6 +336,20 @@ describe.each(getConfiguredTestDialects())(
      * a binding to the entry, one to each list item and one to a field the
      * public may not read, the banner's condition, then publish it.
      */
+    /**
+     * The templates collection the manifest names. This server always names
+     * it; the key is optional only for manifests from servers that predate it.
+     */
+    function templatesCollectionOf(manifest: {
+      collections: { templates?: string };
+    }): string {
+      const slug = manifest.collections.templates;
+      if (slug === undefined) {
+        throw new Error("the manifest named no templates collection");
+      }
+      return slug;
+    }
+
     async function buildTemplate(t: TestNextly, cookie: string) {
       const manifest = await manifestOf(cookie);
       // Under the name the host gave it: here the plugin's own.
@@ -357,7 +371,7 @@ describe.each(getConfiguredTestDialects())(
         collection: STORIES,
         status: "draft",
       });
-      const at = { collection: manifest.collections.templates, id: template };
+      const at = { collection: templatesCollectionOf(manifest), id: template };
 
       // Entry content, placed drawing one field and moved to the other.
       const placed = await applied(cookie, at, {
@@ -497,7 +511,7 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
       });
       const own = {
-        collection: manifest.collections.templates,
+        collection: templatesCollectionOf(manifest),
         id: templateOf(given.body)?.id ?? "",
       };
 
@@ -660,7 +674,7 @@ describe.each(getConfiguredTestDialects())(
       // Nothing refused was written.
       expect(JSON.stringify(await design(t, template))).toBe(before);
       const templates = await t.nextly.find({
-        collection: manifest.collections.templates,
+        collection: templatesCollectionOf(manifest),
         overrideAccess: true,
         status: "all",
         limit: 10,

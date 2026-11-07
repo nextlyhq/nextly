@@ -193,8 +193,14 @@ export interface CompositionManifest {
      * The collection templates and entries' own designs are kept in, as the
      * host named it: the collection a page action on a template names, and
      * where a `templateAction`'s template ids live.
+     *
+     * Optional while the format stays at version 1: a server from before
+     * templates were listed here sends a manifest without it, and a client
+     * reading that manifest still parses it. Absent, the server named no
+     * templates collection, and a client falls back to the default slug,
+     * `templates`.
      */
-    readonly templates: string;
+    readonly templates?: string;
   };
   readonly patterns: ManifestTier<ManifestPattern>;
   readonly components: ManifestTier<ManifestComponent>;
@@ -256,7 +262,8 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
       components: id,
       componentField: id,
       layouts: id,
-      templates: id,
+      // Optional so a manifest from a server that predates it still parses.
+      templates: id.optional(),
     }),
     patterns: tier(
       z.strictObject({
