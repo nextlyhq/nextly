@@ -199,10 +199,20 @@ const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href"]);
 const DATA_ATTRIBUTE = /^data-[a-z0-9][a-z0-9._:-]*$/;
 
 /**
- * What browsers ignore in a URL before reading it: ASCII whitespace and
- * control characters, which is how `java\tscript:` still runs.
+ * A URL with what browsers ignore before reading it taken out: ASCII
+ * whitespace and control characters (U+0000 to U+0020, U+007F to U+009F),
+ * which is how `java\tscript:` still runs. Read by code point, so no
+ * pattern has to spell control characters.
  */
-const IGNORED_IN_URL = /[\u0000- \u007f-\u009f]/g;
+function withoutIgnored(value: string): string {
+  let read = "";
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x20 || (code >= 0x7f && code <= 0x9f)) continue;
+    read += char;
+  }
+  return read;
+}
 
 /**
  * Why a URL may not be used, or `undefined` when it may: it must be `https:`
@@ -213,7 +223,7 @@ export function siteCodeUrlProblem(value: string): string | undefined {
   if (value.length > SITE_CODE_LIMITS.urlLength) {
     return `is longer than ${SITE_CODE_LIMITS.urlLength} characters`;
   }
-  const read = value.replace(IGNORED_IN_URL, "");
+  const read = withoutIgnored(value);
   // A path on this site, but not `//host` or `/\host`, which browsers read
   // as another host.
   if (read.startsWith("/")) {

@@ -115,7 +115,9 @@ async function schemaFor(
     { readonly collection: string } | { readonly single: string },
     ReadonlyMap<string, readonly string[]>,
   ])[] = [
-    ...(demand.entry === undefined || entry === undefined || "site" in entry
+    ...(demand.entry === undefined ||
+    entry === undefined ||
+    !("collection" in entry || "single" in entry)
       ? []
       : [[entry, demand.entry.follows] as const]),
     ...[...demand.singles].map(
@@ -129,8 +131,13 @@ async function schemaFor(
       if (typeof target === "string") await read({ collection: target });
     }
   }
+  // The site settings and a named query's rows are not read here: their
+  // fields are a fixed set, or declared by the query.
   return {
-    fieldsOf: ref => ("site" in ref ? undefined : known.get(keyOf(ref))),
+    fieldsOf: ref =>
+      "collection" in ref || "single" in ref
+        ? known.get(keyOf(ref))
+        : undefined,
   };
 }
 

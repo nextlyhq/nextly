@@ -315,7 +315,13 @@ export function blocksFieldType(
                 ...(maxNodes === undefined ? {} : { maxNodes }),
               });
         if (listFields === undefined) return bound;
-        const site = { fieldsOf: listFields, storedForms, maxNodes };
+        const namedQueries = composition?.()?.namedQueries;
+        const site = {
+          fieldsOf: listFields,
+          storedForms,
+          maxNodes,
+          ...(namedQueries === undefined ? {} : { namedQueries }),
+        };
         // And the fields its blocks' visibility conditions check, judged the
         // same way, since a condition the page could not check hides its block.
         return [

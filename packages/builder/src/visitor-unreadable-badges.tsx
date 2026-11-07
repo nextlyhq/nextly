@@ -54,6 +54,7 @@ import {
   clippedByAncestorRect,
   onScreenOf,
   overlaySpaceOf,
+  type OverlaySpace,
 } from "./geometry-dom";
 
 /** The badge's words: what the author needs to know, at a glance. */
@@ -66,6 +67,24 @@ const VISITOR_UNREADABLE_WORDS = "Visitors won't see this";
 const OUTLINE_OUTSET_PX = 2;
 /** The badge's height, as the stylesheet draws it. */
 const BADGE_HEIGHT_PX = 22;
+/**
+ * About how wide the badge is drawn, for its first placement: its 11px words,
+ * icon and padding, erring wide. Once drawn, its own width is used.
+ */
+const BADGE_WIDTH_ESTIMATE_PX = 170;
+
+/** The badge's drawn width for `id`, or the estimate before it is drawn. */
+function badgeWidthOf(
+  layer: HTMLElement | null,
+  space: OverlaySpace,
+  id: string
+): number {
+  const drawn = layer?.querySelector(`[data-badge-node="${CSS.escape(id)}"]`);
+  // In the chrome's coordinates, as the outline and the band are: measured
+  // through the overlay's own normalization, which a scaled canvas needs.
+  const width = drawn instanceof HTMLElement ? space.sizeOf(drawn).width : 0;
+  return width > 0 ? width : BADGE_WIDTH_ESTIMATE_PX;
+}
 
 /** Whether two rectangles share any area. */
 function overlaps(a: Rect, b: Rect): boolean {
@@ -171,8 +190,13 @@ export function VisitorUnreadableBadges({
       next.set(id, {
         outline,
         // In from the screen's right edge as far as the block runs past it,
-        // so a block scrolled partly off the side keeps its badge in view.
-        right: Math.min(outline.x + outline.width, onScreen.x + onScreen.width),
+        // and never so far left that the badge, drawn leftwards from here,
+        // runs past the screen's left edge: a block scrolled partly off
+        // either side keeps its whole badge in view.
+        right: Math.max(
+          Math.min(outline.x + outline.width, onScreen.x + onScreen.width),
+          onScreen.x + badgeWidthOf(element, space, id)
+        ),
         // Sitting on the outline's top edge, its border shared with the
         // outline's, so the two read as one mark of this block.
         top: inside ? outline.y : outline.y - BADGE_HEIGHT_PX + 1,
@@ -233,6 +257,7 @@ export function VisitorUnreadableBadges({
             />
             <div
               className="nx-visitor-unreadable__badge"
+              data-badge-node={id}
               data-inside={place.inside ? "" : undefined}
               data-dismissed={dismissed === id ? "" : undefined}
               style={{ left: place.right, top: place.top }}

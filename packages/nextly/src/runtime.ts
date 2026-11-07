@@ -146,6 +146,14 @@ export type {
   PublicSourceReader,
 } from "./runtime/routing/public-reader";
 
+// The frame a page builder named query's `run` executes in: inside it, the
+// Direct API refuses every call, and only the reader handed to the query
+// reads, through the frame's door. `@experimental` with named queries.
+export {
+  openNamedQueryFrame,
+  type NamedQueryFrame,
+} from "./auth/named-query-scope";
+
 // The reader a page builder's canvas reads the same lists with: the same
 // queries, read as the person editing, drafts included. `@experimental` with
 // the public reader.
@@ -164,12 +172,15 @@ export type {
 
 // What a binding on a published page reads besides a list, `@experimental`
 // with the reader: the site settings through their public allowlist (a write
-// to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
-// is checked against, as the anonymous visitor may read them. Both load the
-// service container inside the call, so importing this entry loads neither.
+// to them expires `nextlySiteSettingsTags()`), read from the instance a page
+// is served by when one is given (`PublicSiteSettingsSource`), and the field
+// shapes a binding is checked against, as the anonymous visitor may read
+// them. Both load the service container inside the call, so importing this
+// entry loads neither.
 export {
   readPublicSiteSettings,
   type PublicSiteSettings,
+  type PublicSiteSettingsSource,
 } from "./runtime/site-settings-read";
 // And the same fields as declared, whoever may read them: what a save judges
 // a binding against, since binding a field the public may not read is allowed.

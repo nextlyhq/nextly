@@ -42,6 +42,7 @@ function manifestWith(
     components: { ...tier, items: [component] },
     layouts: { ...tier, defaultLayout: null },
     actions: manifestActions(),
+    namedQueries: [],
   } satisfies Record<keyof CompositionManifest, unknown>;
 }
 
@@ -120,6 +121,38 @@ describe("the manifest schema", () => {
       compositionManifestSchema.safeParse(
         manifestWith({ ...card, variants: [{ label: "Night" }] })
       ).success
+    ).toBe(false);
+  });
+});
+
+describe("the manifest's named queries", () => {
+  const query = {
+    name: "events.upcoming",
+    label: "Upcoming events",
+    params: { type: "object", properties: {} },
+    rows: { key: "id", fields: [{ name: "id", type: "text" }] },
+    total: false,
+  };
+  const card = { id: "c", title: "Card", fields: [], slots: [], variants: [] };
+
+  it("accepts a query listed by its declaration", () => {
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [
+          query,
+          { ...query, name: "b", rows: { collection: "posts" } },
+        ],
+      }).success
+    ).toBe(true);
+  });
+
+  it("refuses a query carrying anything but its declaration, such as its run function", () => {
+    expect(
+      compositionManifestSchema.safeParse({
+        ...manifestWith(card),
+        namedQueries: [{ ...query, run: "() => {}" }],
+      }).success
     ).toBe(false);
   });
 });

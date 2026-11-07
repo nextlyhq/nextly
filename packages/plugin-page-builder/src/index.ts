@@ -26,7 +26,7 @@
  * package registers them. The editor is `@nextlyhq/builder`; blocks render
  * through `@nextlyhq/blocks-react`.
  */
-export { pageBuilder } from "./plugin";
+export { namedQueriesOf, pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
 export type {
   FontAddLimits,

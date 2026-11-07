@@ -32,6 +32,7 @@ import {
   type IssueCode,
   type ListFields,
   type ListFieldSource,
+  type NamedQuerySource,
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -101,12 +102,23 @@ export function listFieldsFrom(reads: {
       declared,
       // A collection the public may read none of has no readable field, so
       // every field a list names on it is refused as one visitors can't see.
-      readable:
-        shapes === undefined
-          ? []
-          : [{ name: "id", type: "text" }, ...stamps, ...shapes],
+      readable: publicReadsNothing(shapes)
+        ? []
+        : [{ name: "id", type: "text" }, ...stamps, ...shapes],
     };
   };
+}
+
+/**
+ * Whether visitors may read nothing of a collection, from the public field
+ * shapes `bindingFieldShapes` answers: `undefined` when the public may not
+ * read it at all. An empty list is a collection visitors may read whose own
+ * fields are all hidden: they still read its id and timestamps.
+ */
+export function publicReadsNothing(
+  shapes: readonly BindingFieldShape[] | undefined
+): shapes is undefined {
+  return shapes === undefined;
 }
 
 /**
@@ -153,7 +165,8 @@ export function listSettingOf(
 function collectionsAsked(
   nodes: readonly unknown[],
   entryCollection: string | null | undefined,
-  maxNodes: number | undefined
+  maxNodes: number | undefined,
+  namedQueries: NamedQuerySource | undefined
 ): Set<string> {
   const asked = new Set<string>();
   const judgement = {
@@ -165,6 +178,8 @@ function collectionsAsked(
     },
     ...(entryCollection === undefined ? {} : { entryCollection }),
     ...(maxNodes === undefined ? {} : { maxNodes }),
+    // A custom source asks about what its query reads and lists.
+    ...(namedQueries === undefined ? {} : { namedQueries }),
   };
   // Both judgements read the schema through one source, so the fields read
   // are those any list or any condition on the page names.
@@ -179,10 +194,16 @@ async function sourceFor(
   setting: ListSetting,
   read: ListFieldsReader,
   known: Map<string, ListFields | undefined>,
-  maxNodes: number | undefined
+  maxNodes: number | undefined,
+  namedQueries: NamedQuerySource | undefined
 ): Promise<ListFieldSource> {
   for (const nodes of forests) {
-    const asked = collectionsAsked(nodes, setting.entryCollection, maxNodes);
+    const asked = collectionsAsked(
+      nodes,
+      setting.entryCollection,
+      maxNodes,
+      namedQueries
+    );
     for (const collection of asked) {
       if (!known.has(collection)) {
         known.set(collection, await read(collection, setting.locale));
@@ -217,6 +238,11 @@ export interface ListJudging {
   readonly storedForms?: () => Promise<StoredForms>;
   readonly maxNodes?: number;
   /**
+   * The site's named queries, for a list whose source is one; absent, such
+   * a list is judged by its shape alone.
+   */
+  readonly namedQueries?: NamedQuerySource;
+  /**
    * Told how many problems were kept unjudged because the stored forms could
    * not be read, for a caller whose server log says so.
    */
@@ -238,6 +264,7 @@ interface ForestJudgement {
   readonly entryCollection?: string | null;
   readonly stored?: readonly BlockDocument[];
   readonly maxNodes?: number;
+  readonly namedQueries?: NamedQuerySource;
 }
 
 /**
@@ -260,8 +287,10 @@ async function errorsIn<Issue extends ForestIssue>(
 ): Promise<Issue[]> {
   const known = new Map<string, ListFields | undefined>();
   const fieldsOf = site.fieldsOf;
+  const namedQueries = site.namedQueries;
   const judge = async (stored: readonly BlockDocument[]) =>
     judgeForest(nodes, {
+      ...(namedQueries === undefined ? {} : { namedQueries }),
       ...(fieldsOf === undefined
         ? {}
         : {
@@ -276,7 +305,8 @@ async function errorsIn<Issue extends ForestIssue>(
               setting,
               fieldsOf,
               known,
-              site.maxNodes
+              site.maxNodes,
+              namedQueries
             ),
           }),
       ...(setting.entryCollection === undefined

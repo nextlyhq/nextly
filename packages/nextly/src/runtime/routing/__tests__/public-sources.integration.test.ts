@@ -419,6 +419,15 @@ describe.each(getConfiguredTestDialects())(
           timezone: "Asia/Karachi",
         });
         expect(JSON.stringify(settings)).not.toContain("owner@acme.test");
+
+        // The instance's own read answers the same, through the same
+        // allowlist, and so does the runtime read given that instance.
+        const own = await t.nextly.publicSiteSettings();
+        expect(own).toEqual(settings);
+        expect(JSON.stringify(own)).not.toContain("owner@acme.test");
+        await expect(readPublicSiteSettings(t.nextly)).resolves.toEqual(
+          settings
+        );
       });
 
       it("expires the settings tag when the settings are written", async () => {

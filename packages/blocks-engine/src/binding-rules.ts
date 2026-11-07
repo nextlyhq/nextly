@@ -205,7 +205,9 @@ export interface BindingFieldShape {
 export type BindingSchemaRef =
   | { readonly collection: string }
   | { readonly single: string }
-  | { readonly site: true };
+  | { readonly site: true }
+  /** The rows of a named query whose rows declare their own fields. */
+  | { readonly query: string };
 
 /**
  * Where a binding's fields are looked up. `undefined` means the shapes of
