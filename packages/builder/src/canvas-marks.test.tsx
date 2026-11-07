@@ -25,12 +25,14 @@ import {
   CONDITIONED_ATTRIBUTE,
   CONDITIONED_OWN_ATTRIBUTE,
   Canvas,
+  ENTRY_CONTENT_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import { markLookReach } from "./look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
+import { PreviewedEntryProvider } from "./previewed-entry";
 
 /**
  * The selection ring and its halo are drawn for EVERY selected rendering, by
@@ -1454,5 +1456,104 @@ describe("a selected block shown although the page hides it", () => {
     await act(async () => undefined);
     await waitFor(() => expect(halosIn(container)).toHaveLength(2));
     expect(tagsOf(container)).toEqual(["below:left", "below:right"]);
+  });
+});
+
+describe("an Entry content block's at-rest mark", () => {
+  beforeAll(() => {
+    registerBlocks([
+      {
+        // A stand-in drawing one element, as the real block draws its root.
+        name: "core/entry-content",
+        version: 1,
+        description: "The entry's own content.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement("div", { className }),
+      },
+    ] as never);
+  });
+
+  const template = {
+    formatVersion: 1,
+    kind: "template",
+    nodes: [
+      { id: "plain", type: "acme/leaf", version: 1, props: {} },
+      {
+        id: "ec",
+        type: "core/entry-content",
+        version: 1,
+        props: { field: "body" },
+      },
+    ],
+  } as never;
+
+  const tabsOf = (container: HTMLElement) =>
+    Array.from(
+      container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
+    ).map(mark =>
+      Array.from(mark.querySelectorAll(".nx-canvas-mark__tab")).map(
+        tab => tab.textContent
+      )
+    );
+
+  it("marks it at rest, named by the field as the collection names it, and nothing else", async () => {
+    const { container } = render(
+      <PreviewedEntryProvider
+        value={{ kind: "none", reason: "empty" }}
+        collection={{
+          slug: "posts",
+          singular: "post",
+          plural: "Posts",
+          blocksFields: [{ name: "body", label: "Body" }],
+          entryHref: id => `/admin/collections/posts/${id}`,
+        }}
+      >
+        <Canvas
+          document={template}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={<CanvasMarks />}
+        />
+      </PreviewedEntryProvider>
+    );
+    await act(async () => undefined);
+    // One mark, for the Entry content block; the plain block beside it is
+    // the control, which carries none.
+    await waitFor(() =>
+      expect(tabsOf(container)).toEqual([["Entry content · Body"]])
+    );
+  });
+
+  it("names the field by its name where the collection's fields are not known", async () => {
+    const { container } = render(
+      <Canvas
+        document={template}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(tabsOf(container)).toEqual([["Entry content · body"]])
+    );
+  });
+
+  it("draws one outline with both tabs on a block that is conditioned too", async () => {
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {createElement("div", {
+          [NODE_ID_ATTRIBUTE]: "ec",
+          [CONDITIONED_ATTRIBUTE]: "conditional",
+          [ENTRY_CONTENT_ATTRIBUTE]: "Entry content · Body",
+        })}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(tabsOf(container)).toEqual([
+        ["Entry content · Body", "Conditional"],
+      ])
+    );
   });
 });
