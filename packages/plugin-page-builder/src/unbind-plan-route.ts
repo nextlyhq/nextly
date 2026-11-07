@@ -19,10 +19,17 @@
  *
  * @module unbind-plan-route
  */
-import { DEFAULT_LIMITS, surveyDocument } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  surveyDocument,
+  type DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 import { pageActionSchema } from "@nextlyhq/builder/ops";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
-import { respondDoc } from "nextly";
+import {
+  NextlyError,
+  respondDoc,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
 import {
@@ -78,7 +85,11 @@ export interface UnbindPlanReads {
  * The request, read from outside input: the unbind as the page actions API
  * spells it, and a document within the limits a saved one keeps to.
  */
-export function unbindPlanRequestOf(raw: unknown): UnbindPlanRequest {
+export function unbindPlanRequestOf(
+  raw: unknown,
+  /** The site's document limits, which the editor and a save judge by. */
+  limits: DocumentLimits = DEFAULT_LIMITS
+): UnbindPlanRequest {
   const body = parsedWith(raw, UnbindPlanBody);
   const action = parsedWith(body.action, pageActionSchema, "action");
   if (action.kind !== "unbind-prop") {
@@ -88,9 +99,9 @@ export function unbindPlanRequestOf(raw: unknown): UnbindPlanRequest {
     });
   }
   const survey = surveyDocument(body.document, {
-    maxBytes: DEFAULT_LIMITS.maxBytes,
-    maxDepth: DEFAULT_LIMITS.maxDepth,
-    maxNodes: DEFAULT_LIMITS.maxNodes,
+    maxBytes: limits.maxBytes,
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
   });
   if (survey.tooLarge || survey.tooDeep || survey.tooManyNodes) {
     throw NextlyError.invalidInput({
@@ -156,7 +167,12 @@ function directUnbindPlanReads(ctx: PluginRouteContext): UnbindPlanReads {
  * caller. A POST because an ask carries a document, never because it writes;
  * `noStore` because its answer is one person's ask.
  */
-export function unbindPlanRoute(): {
+export function unbindPlanRoute(
+  setup: {
+    /** The site's document limits, as the page actions are given them. */
+    readonly limits?: () => DocumentLimits;
+  } = {}
+): {
   method: "POST";
   path: string;
   noStore: true;
@@ -170,7 +186,7 @@ export function unbindPlanRoute(): {
       const raw = await readBodyWith(req, z.unknown(), "unbind plan");
       return respondDoc(
         await answerUnbindPlan(
-          unbindPlanRequestOf(raw),
+          unbindPlanRequestOf(raw, setup.limits?.() ?? DEFAULT_LIMITS),
           directUnbindPlanReads(ctx)
         )
       );

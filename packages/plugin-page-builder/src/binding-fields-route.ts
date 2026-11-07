@@ -31,8 +31,11 @@ import {
   SITE_SETTING_FIELD_SHAPES,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
-import { getCachedNextly, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
-import { respondDoc } from "nextly";
+import {
+  getCachedNextly,
+  respondDoc,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
 import {
@@ -94,10 +97,14 @@ export interface BindingFieldsReads {
   declared(
     ref: { readonly collection: string } | { readonly single: string }
   ): Promise<readonly BindingFieldShape[] | undefined>;
-  /** The fields the public may read, as the published page decides them. */
+  /**
+   * The fields the public may read, as the published page decides them;
+   * `undefined` where a visitor may read none of the source, which an empty
+   * list (a public source with no custom field a visitor reads) is not.
+   */
   publicShapes(
     ref: { readonly collection: string } | { readonly single: string }
-  ): Promise<readonly BindingFieldShape[]>;
+  ): Promise<readonly BindingFieldShape[] | undefined>;
   /** The source as the caller reads it, these fields only; `null` when refused. */
   asEditor(
     ref: FieldsRef,
@@ -153,6 +160,8 @@ interface SourceRead {
   readonly published: Readonly<Record<string, unknown>> | null;
   /** The same level's fields as the public may read them. */
   readonly publicShapes: readonly BindingFieldShape[];
+  /** Whether a visitor may read the source, or the group, at all. */
+  readonly publicSource: boolean;
 }
 
 /**
@@ -188,7 +197,13 @@ async function readSource(
     reads.published(ref, names),
     reads.publicShapes(kind),
   ]);
-  return { shapes: returned(declared, row), row, published, publicShapes };
+  return {
+    shapes: returned(declared, row),
+    row,
+    published,
+    publicShapes: publicShapes ?? [],
+    publicSource: publicShapes !== undefined,
+  };
 }
 
 /** A group's own level, read from its value in the source's read. */
@@ -205,6 +220,7 @@ function groupRead(
     row,
     published: isPlainRecord(published) ? published : null,
     publicShapes: publicShape?.fields ?? [],
+    publicSource: publicShape !== undefined,
   };
 }
 
@@ -219,9 +235,7 @@ function visibilityOf(
   if (publicShape !== undefined) return { publicShape, isPublic: true };
   // The timestamps are read with the entry, so a visitor who may read the
   // source reads them, though its field shapes never list them.
-  return {
-    isPublic: TIMESTAMPS.has(shape.name) && read.publicShapes.length > 0,
-  };
+  return { isPublic: TIMESTAMPS.has(shape.name) && read.publicSource };
 }
 
 /** One field as the picker lists it, from its level's read; a group's inside it. */
@@ -368,6 +382,45 @@ async function entrySource(
 }
 
 /**
+ * The Singles as sources, read at once, then each expanded in the Singles'
+ * order, so the shared relation budget goes to the same Singles on every ask
+ * whatever order the reads finish in. A Single no visitor may read any of
+ * can only ever show a binding's fallback, such as a plugin's own settings:
+ * it is left out. One that could not be read is named, so the picker can say
+ * so.
+ */
+async function singleSources(
+  singles: readonly { readonly slug: string; readonly label: string }[],
+  reads: BindingFieldsReads,
+  budget: FollowBudget
+): Promise<readonly PickerSource[]> {
+  const read = await Promise.all(
+    singles.map(({ slug }) => readOrFailed({ single: slug }, reads))
+  );
+  const listed: PickerSource[] = [];
+  for (const [index, { slug, label }] of singles.entries()) {
+    const source = await singleSource(read[index], slug, label, reads, budget);
+    if (source !== undefined) listed.push(source);
+  }
+  return listed;
+}
+
+/** One Single as a source, or none where it is not listed. */
+async function singleSource(
+  read: SourceRead | undefined | "failed",
+  slug: string,
+  label: string,
+  reads: BindingFieldsReads,
+  budget: FollowBudget
+): Promise<PickerSource | undefined> {
+  const binding = { source: "single" as const, sourceKey: slug };
+  if (read === undefined) return undefined;
+  if (read === "failed") return failedSource(binding, label);
+  const fields = await sourceFields(read, reads, budget);
+  return fields.some(isReachable) ? { binding, label, fields } : undefined;
+}
+
+/**
  * The picker's sources for the page being edited: its entry, when it has
  * one to read, each Single the caller may read, and the site settings.
  */
@@ -389,30 +442,7 @@ export async function readBindingFields(
     const entry = await entrySource(own, entryRef, singles, reads, budget);
     if (entry !== undefined) sources.push(entry);
   }
-  const singleSources = await Promise.all(
-    singles.map(async ({ slug, label }): Promise<PickerSource | undefined> => {
-      const binding = { source: "single" as const, sourceKey: slug };
-      const read = await readOrFailed({ single: slug }, reads);
-      if (read === undefined) return undefined;
-      if (read === "failed") return failedSource(binding, label);
-      return {
-        binding,
-        label,
-        fields: await sourceFields(read, reads, budget),
-      };
-    })
-  );
-  // A Single no visitor may read any of can only ever show a binding's
-  // fallback, such as a plugin's own settings: it is left out. One that
-  // could not be read is named, so the picker can say so.
-  for (const source of singleSources) {
-    if (
-      source !== undefined &&
-      (source.readFailed === true || source.fields.some(isReachable))
-    ) {
-      sources.push(source);
-    }
-  }
+  sources.push(...(await singleSources(singles, reads, budget)));
   sources.push(await siteSource(reads));
   return { sources };
 }
@@ -432,7 +462,7 @@ function directBindingFieldsReads(
     },
     publicShapes: async ref => {
       const { bindingFieldShapes } = await import("nextly/runtime");
-      return (await bindingFieldShapes(ref, at)) ?? [];
+      return bindingFieldShapes(ref, at);
     },
     // The readers answer a missing or refused read with `null`, by core's
     // one gate; any other failure is the ask's, and fails it.
