@@ -2965,23 +2965,33 @@ export const pageBuilder = (
         },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.
-        templateOf: async collection => {
-          const found = await ctx.services.ownCollections.listEntries(
-            templatesSlug,
-            {
-              where: { collection: { equals: collection } },
-              pagination: { limit: 1 },
-              // Asked on every save of a templated collection: the routing
-              // columns alone, never the template's design.
-              select: {
-                id: true,
-                collection: true,
-                status: true,
-                [TEMPLATE_ADDRESS_FIELD]: true,
-              },
-              depth: 0,
-            }
-          );
+        templateOf: async (collection, tx) => {
+          const read = {
+            where: { collection: { equals: collection } },
+            pagination: { limit: 1 },
+            // Asked on every save of a collection with a slug: the routing
+            // columns alone, never the template's design.
+            select: {
+              id: true,
+              collection: true,
+              status: true,
+              [TEMPLATE_ADDRESS_FIELD]: true,
+            },
+            depth: 0,
+          };
+          // On a save's transaction, its own connection: a save holding the
+          // pool's last connection never waits for a second one.
+          const found =
+            tx === undefined
+              ? await ctx.services.ownCollections.listEntries(
+                  templatesSlug,
+                  read
+                )
+              : await ctx.services.ownCollections.listEntriesInTransaction(
+                  tx,
+                  templatesSlug,
+                  read
+                );
           const row = found.data[0] as Record<string, unknown> | undefined;
           if (row === undefined || row.collection !== collection) return null;
           const address = storedAddressOf(row[TEMPLATE_ADDRESS_FIELD]);
