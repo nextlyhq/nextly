@@ -351,6 +351,16 @@ export function storedVariables(raw: unknown): Map<string, NamedVariable> {
 }
 
 /**
+ * One stored token entry's identity, read by the Single's own token rules,
+ * or `undefined` for an entry they cannot read. What a writer changing some
+ * entries keys the others by, so one it cannot read is kept as stored.
+ */
+export function storedVariableIdentity(entry: unknown): string | undefined {
+  const [only] = storedVariables({ tokens: [entry] }).keys();
+  return only;
+}
+
+/**
  * The identities of the variables the site's code supplies, the engine's own
  * defaults among them: these merge back on every read, so dropping a stored
  * override of one resets it and removes nothing.
