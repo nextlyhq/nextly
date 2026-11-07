@@ -1,8 +1,8 @@
 /**
  * The collection template actions as data: what an API client, a script or an
- * agent sends to give a collection its template and to publish it, and to give
- * one entry a design of its own or take it away, with the schema that judges
- * it.
+ * agent sends to give a collection its template, to publish it and to delete
+ * it, and to give one entry a design of its own or take it away, with the
+ * schema that judges it.
  *
  * Published from the `ops` subpath beside the composition actions, for the
  * same reason: the page builder's template route parses its bodies with this
@@ -65,6 +65,17 @@ export type TemplateAction =
       readonly entry: string;
     }
   /**
+   * Delete a template by id: a collection's template, after which the
+   * collection's entries without their own design are not shown as pages until
+   * it has a published template again, or an entry's own design, after which
+   * the entry is drawn with its collection's template. A dry run answers the
+   * template it would delete, so a client can say what that means first.
+   */
+  | {
+      readonly kind: "delete-template";
+      readonly id: string;
+    }
+  /**
    * Set, change or (with `null`) remove the address a collection's entries
    * are served at, stored on its template: for a collection created at
    * runtime, whose address is not declared in code. Needs the routing
@@ -106,6 +117,10 @@ const templateActionOptions = [
     kind: z.literal("remove-entry-design"),
     collection: id,
     entry: id,
+  }),
+  z.strictObject({
+    kind: z.literal("delete-template"),
+    id,
   }),
   z.strictObject({
     kind: z.literal("set-template-address"),

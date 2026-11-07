@@ -1,11 +1,13 @@
 /**
  * The order the entries' claims take their steps in, with the store and the
  * instance stubbed, for what a real instance cannot show without racing two
- * transactions: a save in a collection not declared in code takes the
- * collection's lock BEFORE it reads whether the collection has a template, so
- * a template being published at the same time either is seen by the save or
- * sees the entry in its own walk. A collection that may not have a template
- * takes no lock at all.
+ * transactions: a save in a collection not declared in code reads its
+ * template on the save's own transaction, holding the template's row before
+ * it takes the collection's lock, the order a template's own write takes
+ * them in, and reads it again under the lock when there was none, so a
+ * template published or created meanwhile either is seen by the save or sees
+ * the entry in its own walk. An entry with no slug in a collection with no
+ * template takes no lock at all, and no save asks the registry.
  *
  * What the claims do once taken is proved against a real instance on every
  * dialect by `__tests__/template-addresses-runtime.integration.test.ts`.
@@ -39,8 +41,25 @@ const GONE_CLAIM = {
 function harness(options: {
   mayHaveTemplate: boolean;
   template?: { published: boolean; address: readonly string[] | null };
+  /**
+   * The template each read answers with, in order, in place of `template`:
+   * a template created or published between the save's first read and its
+   * second appears only on the second.
+   */
+  reads?: readonly ({
+    published: boolean;
+    address: readonly string[] | null;
+  } | null)[];
 }) {
   const steps: string[] = [];
+  let read = 0;
+  // The claims the store holds: one for an entry of a collection renamed away.
+  const storedClaims = (read: {
+    where?: Record<string, { equals?: unknown }>;
+  }) =>
+    read.where?.holderCollection?.equals === "gone"
+      ? { data: [GONE_CLAIM], pagination: { total: 1 } }
+      : { data: [], pagination: { total: 0 } };
   const lockKey = storedKey(collectionLockKey("events"));
   const claims = {
     slug: "address-claims",
@@ -51,10 +70,13 @@ function harness(options: {
         listEntries: async (
           _slug: string,
           read: { where?: Record<string, { equals?: unknown }> }
-        ) =>
-          read.where?.holderCollection?.equals === "gone"
-            ? { data: [GONE_CLAIM], pagination: { total: 1 } }
-            : { data: [], pagination: { total: 0 } },
+        ) => storedClaims(read),
+        // The store reads its claims on the save's transaction.
+        listEntriesInTransaction: async (
+          _tx: unknown,
+          _slug: string,
+          read: { where?: Record<string, { equals?: unknown }> }
+        ) => storedClaims(read),
       },
       collections: {
         createEntryInTransaction: async (
@@ -63,6 +85,9 @@ function harness(options: {
           data: Record<string, unknown>
         ) => {
           if (data.claimKey === lockKey) steps.push("lock events");
+          // An address claimed for an entry, so a test sees what the save
+          // took, not only the reads it made.
+          else if (data.kind === "address") steps.push(`claim ${data.path}`);
           return { id: "lock-1", ...data };
         },
         updateEntryInTransaction: async () => ({ item: {} }),
@@ -82,13 +107,24 @@ function harness(options: {
     addresses: new Map(),
     templates: "templates",
     locales: () => ["en"],
-    templateOf: async collection => {
-      steps.push(`read template of ${collection}`);
-      return options.template ?? null;
+    templateOf: async (collection, tx) => {
+      // Read on the save's transaction, never through the pool.
+      steps.push(
+        `read template of ${collection}${tx === undefined ? " (pool)" : ""}`
+      );
+      const answer =
+        options.reads === undefined
+          ? (options.template ?? null)
+          : (options.reads[read] ?? null);
+      read += 1;
+      return answer;
     },
     storedAddresses: async () => new Map(),
     neverServed: collection => collection === "pages",
-    mayHaveTemplate: async () => options.mayHaveTemplate,
+    mayHaveTemplate: async collection => {
+      steps.push(`ask whether ${collection} may have a template`);
+      return options.mayHaveTemplate;
+    },
     storedAddressProblem: () => null,
     lifecycle: async () => true,
     pages: "pages",
@@ -106,12 +142,19 @@ function harness(options: {
     },
     deps
   );
-  const save = (collection: string) =>
+  const save = (
+    collection: string,
+    data: Record<string, unknown> = {
+      id: "e1",
+      slug: "launch",
+      status: "published",
+    }
+  ) =>
     handlers.get("*")?.({
       collection,
       operation: "update",
       id: "e1",
-      data: { id: "e1", slug: "launch", status: "published" },
+      data,
       transaction: {},
     });
   const writeTemplate = (write: Record<string, unknown>) =>
@@ -120,29 +163,52 @@ function harness(options: {
 }
 
 describe("an entry's save in a collection not given an address in code", () => {
-  it("takes the collection's lock before it reads whether there is a template", async () => {
+  it("reads the template on the save's transaction, then takes the collection's lock, and reads it again when there was none", async () => {
     const { steps, save } = harness({ mayHaveTemplate: true });
-    await save("events");
-    expect(steps).toEqual(["lock events", "read template of events"]);
-  });
-
-  it("takes no lock, and reads nothing, in a collection that may not have a template", async () => {
-    const { steps, save } = harness({ mayHaveTemplate: false });
-    await save("events");
-    expect(steps).toEqual([]);
-  });
-
-  it("locks and gives addresses up in a collection that lost the means to have a template but still has one", async () => {
-    const { steps, save } = harness({
-      mayHaveTemplate: false,
-      template: { published: true, address: ["events"] },
-    });
     await save("events");
     expect(steps).toEqual([
       "read template of events",
       "lock events",
       "read template of events",
     ]);
+  });
+
+  it("claims the entry's address from a template that appears only on the read under the lock", async () => {
+    const { steps, save } = harness({
+      mayHaveTemplate: true,
+      reads: [null, { published: true, address: ["events"] }],
+    });
+    await save("events");
+    expect(steps).toEqual([
+      "read template of events",
+      "lock events",
+      "read template of events",
+      "claim /events/launch",
+    ]);
+  });
+
+  it("holds an existing template's row before the collection's lock, as a template's own write does", async () => {
+    const { steps, save } = harness({
+      mayHaveTemplate: true,
+      template: { published: false, address: ["events"] },
+    });
+    await save("events");
+    expect(steps).toEqual(["read template of events", "lock events"]);
+  });
+
+  it("takes no lock for an entry with no slug in a collection with no template", async () => {
+    const { steps, save } = harness({ mayHaveTemplate: true });
+    await save("users", { id: "u1", email: "a@example.com" });
+    expect(steps).toEqual(["read template of users"]);
+  });
+
+  it("gives addresses up, asking the registry nothing, where entries lost their slug", async () => {
+    const { steps, save } = harness({
+      mayHaveTemplate: false,
+      template: { published: true, address: ["events"] },
+    });
+    await save("events", { id: "e1", title: "No slug", status: "published" });
+    expect(steps).toEqual(["read template of events", "lock events"]);
   });
 
   it("leaves the page builder's own collections alone", async () => {

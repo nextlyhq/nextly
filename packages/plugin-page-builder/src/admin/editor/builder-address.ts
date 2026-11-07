@@ -116,6 +116,15 @@ export function documentBuilderPath(collection: string, id: string): string {
 }
 
 /**
+ * The admin's screen for a new entry of `collection`, as its own route
+ * table spells it (`/admin/collections/<slug>/create`): where the template
+ * preview's New opens.
+ */
+export function entryCreatePath(collection: string): string {
+  return `/admin/collections/${encodeURIComponent(collection)}/create`;
+}
+
+/**
  * The query key naming the section the builder opens at.
  *
  * The admin keeps the same key in its list of a view's own address keys, so
