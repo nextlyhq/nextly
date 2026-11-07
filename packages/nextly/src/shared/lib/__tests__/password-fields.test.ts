@@ -308,6 +308,51 @@ describe("carryStoredPasswords", () => {
       expect(copied.rows.map(row => row.pw)).toEqual([HASH_A, undefined]);
     });
 
+    it("refuses a row sent without its id that changed, rather than guess whose password it keeps", () => {
+      // Reordered by a writer that sends no ids: by position, a's row would
+      // be handed b's password.
+      let refused: unknown;
+      try {
+        carried([{ label: "b" }, { label: "a" }]);
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "lines.0",
+              code: "ROW_ID_REQUIRED",
+              message: expect.stringContaining(
+                "Row 1 of 'lines' changed without its id"
+              ),
+            },
+          ],
+        },
+      });
+    });
+
+    it("keeps everything else working without ids", () => {
+      // A row sending its own password keeps no stored one: nothing to guess.
+      expect(carried([{ label: "x", pw: "new-secret" }]).rows[0]?.pw).toBe(
+        "new-secret"
+      );
+      // A stored row with no password has nothing to hand on.
+      const plain = { lines: [{ id: "a", label: "a" }] };
+      const data: Record<string, unknown> = { lines: [{ label: "edited" }] };
+      expect(() =>
+        carryStoredPasswords(data, plain, LINES, NO_FIELD_GROUPS)
+      ).not.toThrow();
+      // Rows stored before rows had ids pair by position, as they did.
+      const legacy = { lines: [{ label: "a", pw: HASH_A }] };
+      const edited: Record<string, unknown> = { lines: [{ label: "edited" }] };
+      carryStoredPasswords(edited, legacy, LINES, NO_FIELD_GROUPS);
+      expect((edited.lines as Array<Record<string, unknown>>)[0]?.pw).toBe(
+        HASH_A
+      );
+    });
+
     it("never carries a password into a different field", () => {
       const { rows } = carried([{ id: "a" }]);
       expect(rows[0]?.pw).toBe(HASH_A);

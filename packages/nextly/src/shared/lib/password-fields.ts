@@ -24,6 +24,7 @@ import { addressableFields } from "../addressable-fields";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
 import { rowPairing } from "./denied-change";
+import { sameApartFromIds } from "./same-apart-from-ids";
 
 /**
  * The minimal field shape both FieldConfig and FieldDefinition satisfy.
@@ -617,7 +618,7 @@ function carryHeld(
   const held = field.fields;
   if (held && (field.type === "group" || field.type === "repeater")) {
     rewriteValue(level, name, value => {
-      carryContainer(value, previous, field.type, held, reach, kept);
+      carryContainer(value, previous, field, held, reach, kept);
       return value;
     });
     return;
@@ -656,20 +657,56 @@ function carryPassword(
 function carryContainer(
   value: unknown,
   previous: unknown,
-  type: string,
+  container: NamedField,
   fields: readonly NamedField[],
   reach: FieldGroupReach,
   kept: Set<string>
 ): void {
-  if (type === "group") {
+  if (container.type === "group") {
     if (isPlainRecord(value) && isPlainRecord(previous)) {
       carryLevel(value, previous, fields, reach, false, kept);
     }
     return;
   }
-  forEachPairedRow(value, previous, "sent", (row, storedRow) =>
-    carryLevel(row, storedRow, fields, reach, false, kept)
-  );
+  const rows = Array.isArray(value) ? value : [];
+  forEachPairedRow(value, previous, "sent", (row, storedRow) => {
+    const carried = kept.size;
+    carryLevel(row, storedRow, fields, reach, false, kept);
+    refuseAmbiguousCarry(row, storedRow, kept.size > carried, {
+      name: container.name ?? "",
+      index: rows.indexOf(row),
+    });
+  });
+}
+
+/**
+ * Refuse a row sent without its id that kept a stored password but no longer
+ * holds what that stored row does. Such a row is matched to the stored row at
+ * its place only by position, and a reorder or an insertion by a writer that
+ * sends no ids would hand that row's password to another. A row the system
+ * has given an id can be sent with it, so the write is refused with how to
+ * fix it, rather than the password moved or silently dropped. Rows stored
+ * before rows had ids carry none to send, and pair by position as before.
+ */
+function refuseAmbiguousCarry(
+  row: Record<string, unknown>,
+  storedRow: Record<string, unknown>,
+  carriedAPassword: boolean,
+  where: { name: string; index: number }
+): void {
+  if (!carriedAPassword || hasRowId(row) || !hasRowId(storedRow)) return;
+  // Compared with the carried passwords in place, so only the row's other
+  // values can tell it apart from the stored row.
+  if (sameApartFromIds(row, storedRow)) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `${where.name}.${where.index}`,
+        code: "ROW_ID_REQUIRED",
+        message: `Row ${where.index + 1} of '${where.name}' changed without its id, so its saved password can't be kept safely. Send each row's id (from the last read), or send the password again.`,
+      },
+    ],
+  });
 }
 
 /** {@link carryLevel} through the instances a field-group field holds. */

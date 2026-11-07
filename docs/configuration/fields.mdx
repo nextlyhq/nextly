@@ -28,15 +28,15 @@ const fields = [
 
 Seven categories partition the field inventory.
 
-| Category | Fields |
-|---|---|
-| [Basic](#basic) | `text`, `textarea`, `richText`, `email`, `icon`, `password`, `code`, `number`, `checkbox`, `date` |
-| [Selection](#selection) | `select`, `radio`, `chips` |
-| [Media](#media) | `upload` |
-| [Relationship](#relationship) | `relationship` |
-| [Layout](#layout) | `repeater`, `group` |
-| [Component](#component-1) | `component` |
-| [Advanced](#advanced) | `json` |
+| Category                      | Fields                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------- |
+| [Basic](#basic)               | `text`, `textarea`, `richText`, `email`, `icon`, `password`, `code`, `number`, `checkbox`, `date` |
+| [Selection](#selection)       | `select`, `radio`, `chips`                                                                        |
+| [Media](#media)               | `upload`                                                                                          |
+| [Relationship](#relationship) | `relationship`                                                                                    |
+| [Layout](#layout)             | `repeater`, `group`                                                                               |
+| [Component](#component-1)     | `component`                                                                                       |
+| [Advanced](#advanced)         | `json`                                                                                            |
 
 The "Common options across fields" section at the bottom lists the shared properties (name, label, required, admin, access, hooks, validate, custom).
 
@@ -49,19 +49,19 @@ The "Common options across fields" section at the bottom lists the shared proper
 Single-line text input. Supports `hasMany` mode for storing arrays of strings (tag-style input).
 
 ```typescript
-text({ name: "title", required: true })
+text({ name: "title", required: true });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `name` | `string` | — | **Required.** Unique field identifier. Lowercase, no spaces. |
-| `minLength` | `number` | — | Minimum string length. |
-| `maxLength` | `number` | — | Maximum string length. Also sets the DB column size. |
-| `hasMany` | `boolean` | `false` | Accept an array of strings. |
-| `minRows` | `number` | — | Min items when `hasMany: true`. |
-| `maxRows` | `number` | — | Max items when `hasMany: true`. |
-| `defaultValue` | `string \| string[] \| (data) => …` | — | Static default or function. |
-| `admin.autoComplete` | `string` | — | HTML `autocomplete` attribute (e.g. `"name"`, `"tel"`). |
+| Option               | Type                                | Default | Description                                                  |
+| -------------------- | ----------------------------------- | ------- | ------------------------------------------------------------ |
+| `name`               | `string`                            | —       | **Required.** Unique field identifier. Lowercase, no spaces. |
+| `minLength`          | `number`                            | —       | Minimum string length.                                       |
+| `maxLength`          | `number`                            | —       | Maximum string length. Also sets the DB column size.         |
+| `hasMany`            | `boolean`                           | `false` | Accept an array of strings.                                  |
+| `minRows`            | `number`                            | —       | Min items when `hasMany: true`.                              |
+| `maxRows`            | `number`                            | —       | Max items when `hasMany: true`.                              |
+| `defaultValue`       | `string \| string[] \| (data) => …` | —       | Static default or function.                                  |
+| `admin.autoComplete` | `string`                            | —       | HTML `autocomplete` attribute (e.g. `"name"`, `"tel"`).      |
 
 ```typescript
 text({ name: "title", required: true, maxLength: 200 });
@@ -84,16 +84,16 @@ text({
 Multi-line text input.
 
 ```typescript
-textarea({ name: "description", maxLength: 1000 })
+textarea({ name: "description", maxLength: 1000 });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `minLength` | `number` | — | Minimum string length. |
-| `maxLength` | `number` | — | Maximum string length. |
-| `defaultValue` | `string \| (data) => string` | — | Static default or function. |
-| `admin.rows` | `number` | `3` | Number of visible text rows. |
-| `admin.resize` | `"vertical" \| "horizontal" \| "both" \| "none"` | `"vertical"` | Resize behavior. |
+| Option         | Type                                             | Default      | Description                  |
+| -------------- | ------------------------------------------------ | ------------ | ---------------------------- |
+| `minLength`    | `number`                                         | —            | Minimum string length.       |
+| `maxLength`    | `number`                                         | —            | Maximum string length.       |
+| `defaultValue` | `string \| (data) => string`                     | —            | Static default or function.  |
+| `admin.rows`   | `number`                                         | `3`          | Number of visible text rows. |
+| `admin.resize` | `"vertical" \| "horizontal" \| "both" \| "none"` | `"vertical"` | Resize behavior.             |
 
 ```typescript
 textarea({
@@ -109,44 +109,64 @@ textarea({
 Full-featured WYSIWYG editor powered by Lexical. Content is stored as a Lexical editor-state JSON object.
 
 ```typescript
-richText({ name: "content" })
+richText({ name: "content" });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `features` | `RichTextFeature[]` | See "Default features" below | Enabled editor features. Pass `[]` for plain text. |
-| `defaultValue` | `RichTextValue \| (data) => RichTextValue` | — | Static default or function. |
-| `admin.hideToolbar` | `boolean` | `false` | Hide the editor toolbar (keyboard shortcuts still work). |
+| Option              | Type                                       | Default                      | Description                                              |
+| ------------------- | ------------------------------------------ | ---------------------------- | -------------------------------------------------------- |
+| `features`          | `RichTextFeature[]`                        | See "Default features" below | Enabled editor features. Pass `[]` for plain text.       |
+| `defaultValue`      | `RichTextValue \| (data) => RichTextValue` | —                            | Static default or function.                              |
+| `admin.hideToolbar` | `boolean`                                  | `false`                      | Hide the editor toolbar (keyboard shortcuts still work). |
 
 **Default features** when `features` is omitted: `bold`, `italic`, `underline`, `strikethrough`, `code`, `h1`–`h4`, `orderedList`, `unorderedList`, `indent`, `blockquote`, `link`.
 
 **All available features** (`RichTextFeature` union):
 
-| Category | Features |
-|---|---|
-| Formatting | `bold`, `italic`, `underline`, `strikethrough`, `code`, `subscript`, `superscript` |
-| Text styling | `fontFamily`, `fontSize`, `fontColor`, `bgColor` |
-| Headings | `h1`, `h2`, `h3`, `h4`, `h5`, `h6` |
-| Lists | `orderedList`, `unorderedList`, `checkList`, `indent` |
-| Links and media | `link`, `upload`, `relationship` |
-| Advanced | `table`, `horizontalRule`, `codeBlock`, `align` |
-| Rich media | `video`, `buttonLink`, `collapsible`, `gallery` |
+| Category        | Features                                                                           |
+| --------------- | ---------------------------------------------------------------------------------- |
+| Formatting      | `bold`, `italic`, `underline`, `strikethrough`, `code`, `subscript`, `superscript` |
+| Text styling    | `fontFamily`, `fontSize`, `fontColor`, `bgColor`                                   |
+| Headings        | `h1`, `h2`, `h3`, `h4`, `h5`, `h6`                                                 |
+| Lists           | `orderedList`, `unorderedList`, `checkList`, `indent`                              |
+| Links and media | `link`, `upload`, `relationship`                                                   |
+| Advanced        | `table`, `horizontalRule`, `codeBlock`, `align`                                    |
+| Rich media      | `video`, `buttonLink`, `collapsible`, `gallery`                                    |
 
 ```typescript
 // Simple blog editor
 richText({
   name: "content",
-  features: ["bold", "italic", "link", "h2", "h3", "orderedList", "unorderedList"],
+  features: [
+    "bold",
+    "italic",
+    "link",
+    "h2",
+    "h3",
+    "orderedList",
+    "unorderedList",
+  ],
 });
 
 // Full-featured editor
 richText({
   name: "body",
   features: [
-    "bold", "italic", "underline", "strikethrough", "code",
-    "h1", "h2", "h3", "blockquote",
-    "orderedList", "unorderedList", "checkList",
-    "link", "upload", "table", "codeBlock",
+    "bold",
+    "italic",
+    "underline",
+    "strikethrough",
+    "code",
+    "h1",
+    "h2",
+    "h3",
+    "blockquote",
+    "orderedList",
+    "unorderedList",
+    "checkList",
+    "link",
+    "upload",
+    "table",
+    "codeBlock",
   ],
 });
 ```
@@ -160,20 +180,20 @@ richText({
 Specialised text input with built-in email-format validation.
 
 ```typescript
-email({ name: "email", required: true, unique: true })
+email({ name: "email", required: true, unique: true });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `defaultValue` | `string \| (data) => string` | — | Static default or function. |
-| `admin.autoComplete` | `string` | `"email"` | HTML `autocomplete` attribute. |
+| Option               | Type                         | Default   | Description                    |
+| -------------------- | ---------------------------- | --------- | ------------------------------ |
+| `defaultValue`       | `string \| (data) => string` | —         | Static default or function.    |
+| `admin.autoComplete` | `string`                     | `"email"` | HTML `autocomplete` attribute. |
 
 Custom `validate` runs **in addition to** the built-in email-format check, so you can layer on domain restrictions without losing format validation.
 
 ```typescript
 email({
   name: "workEmail",
-  validate: (value) =>
+  validate: value =>
     !value || value.endsWith("@company.com")
       ? true
       : "Must be a company email address",
@@ -187,12 +207,12 @@ email({
 One icon from the site's icon sets. The admin shows an icon picker, and the stored value is the icon's id, a plain string of the form `<set>:<name>`, for example `"lucide:star"`. It is stored in a text column, like an email address.
 
 ```typescript
-icon({ name: "badge", defaultValue: "lucide:star" })
+icon({ name: "badge", defaultValue: "lucide:star" });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `defaultValue` | `string` | — | An icon id such as `"lucide:star"`. Any other shape is refused when the config is defined. |
+| Option         | Type     | Default | Description                                                                                |
+| -------------- | -------- | ------- | ------------------------------------------------------------------------------------------ |
+| `defaultValue` | `string` | —       | An icon id such as `"lucide:star"`. Any other shape is refused when the config is defined. |
 
 A saved value must have the id's shape: a set and a name, each of lowercase letters, digits and hyphens, joined by one colon (`"lucide:arrow-up-right"`). Only the shape is checked. An id whose set or icon is not registered is still saved, because icon sets are registered when the site runs; such an id is reported as an issue rather than refused.
 
@@ -207,16 +227,16 @@ password({
   name: "password",
   required: true,
   minLength: 8,
-})
+});
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `minLength` | `number` | — | Minimum password length. (Helper-level default is none; documented recommended minimum is 8.) |
-| `maxLength` | `number` | — | Maximum password length. Most hashing algorithms cap around 72–128 bytes. |
-| `defaultValue` | `string \| (data) => string` | — | Static default. Setting one is rarely a good idea security-wise. |
-| `admin.autoComplete` | `"new-password" \| "current-password" \| "off"` | `"new-password"` | HTML `autocomplete` attribute. |
-| `admin.showStrengthIndicator` | `boolean` | `false` | Show a visual password-strength meter. |
+| Option                        | Type                                            | Default          | Description                                                                                   |
+| ----------------------------- | ----------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------- |
+| `minLength`                   | `number`                                        | —                | Minimum password length. (Helper-level default is none; documented recommended minimum is 8.) |
+| `maxLength`                   | `number`                                        | —                | Maximum password length. Most hashing algorithms cap around 72–128 bytes.                     |
+| `defaultValue`                | `string \| (data) => string`                    | —                | Static default. Setting one is rarely a good idea security-wise.                              |
+| `admin.autoComplete`          | `"new-password" \| "current-password" \| "off"` | `"new-password"` | HTML `autocomplete` attribute.                                                                |
+| `admin.showStrengthIndicator` | `boolean`                                       | `false`          | Show a visual password-strength meter.                                                        |
 
 Full working example:
 
@@ -246,24 +266,24 @@ Code editor with syntax highlighting. Supports 29 languages.
 code({
   name: "snippet",
   admin: { language: "javascript" },
-})
+});
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `defaultValue` | `string \| (data) => string` | — | Static default or function. |
-| `admin.language` | `CodeLanguage` | `"plaintext"` | Syntax-highlighting language. |
-| `admin.editorOptions.lineNumbers` | `boolean` | `true` | Show line numbers. |
-| `admin.editorOptions.wordWrap` | `boolean` | `false` | Enable word wrapping. |
-| `admin.editorOptions.tabSize` | `number` | `2` | Tab width in spaces. |
-| `admin.editorOptions.useTabs` | `boolean` | `false` | Use tabs instead of spaces. |
-| `admin.editorOptions.minHeight` | `number` | `200` | Minimum editor height in px. |
-| `admin.editorOptions.maxHeight` | `number` | — | Maximum editor height in px. |
-| `admin.editorOptions.fontSize` | `number` | `14` | Font size in px. |
-| `admin.editorOptions.fontFamily` | `string` | `"monospace"` | Editor font family. |
-| `admin.editorOptions.folding` | `boolean` | `true` | Enable code folding. |
-| `admin.editorOptions.matchBrackets` | `boolean` | `true` | Highlight matching brackets. |
-| `admin.editorOptions.autoCloseBrackets` | `boolean` | `true` | Auto-close brackets and quotes. |
+| Option                                  | Type                         | Default       | Description                     |
+| --------------------------------------- | ---------------------------- | ------------- | ------------------------------- |
+| `defaultValue`                          | `string \| (data) => string` | —             | Static default or function.     |
+| `admin.language`                        | `CodeLanguage`               | `"plaintext"` | Syntax-highlighting language.   |
+| `admin.editorOptions.lineNumbers`       | `boolean`                    | `true`        | Show line numbers.              |
+| `admin.editorOptions.wordWrap`          | `boolean`                    | `false`       | Enable word wrapping.           |
+| `admin.editorOptions.tabSize`           | `number`                     | `2`           | Tab width in spaces.            |
+| `admin.editorOptions.useTabs`           | `boolean`                    | `false`       | Use tabs instead of spaces.     |
+| `admin.editorOptions.minHeight`         | `number`                     | `200`         | Minimum editor height in px.    |
+| `admin.editorOptions.maxHeight`         | `number`                     | —             | Maximum editor height in px.    |
+| `admin.editorOptions.fontSize`          | `number`                     | `14`          | Font size in px.                |
+| `admin.editorOptions.fontFamily`        | `string`                     | `"monospace"` | Editor font family.             |
+| `admin.editorOptions.folding`           | `boolean`                    | `true`        | Enable code folding.            |
+| `admin.editorOptions.matchBrackets`     | `boolean`                    | `true`        | Highlight matching brackets.    |
+| `admin.editorOptions.autoCloseBrackets` | `boolean`                    | `true`        | Auto-close brackets and quotes. |
 
 **Supported `CodeLanguage` values:** `javascript`, `typescript`, `jsx`, `tsx`, `html`, `css`, `scss`, `less`, `json`, `markdown`, `yaml`, `xml`, `sql`, `graphql`, `python`, `ruby`, `php`, `java`, `c`, `cpp`, `csharp`, `go`, `rust`, `swift`, `kotlin`, `shell`, `bash`, `powershell`, `dockerfile`, `plaintext`.
 
@@ -284,19 +304,19 @@ code({
 Numeric input for integers or decimals. Supports `hasMany` mode for arrays of numbers.
 
 ```typescript
-number({ name: "price", required: true, min: 0, admin: { step: 0.01 } })
+number({ name: "price", required: true, min: 0, admin: { step: 0.01 } });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `min` | `number` | — | Minimum allowed value. |
-| `max` | `number` | — | Maximum allowed value. |
-| `hasMany` | `boolean` | `false` | Accept an array of numbers. |
-| `minRows` | `number` | — | Min items when `hasMany: true`. |
-| `maxRows` | `number` | — | Max items when `hasMany: true`. |
-| `defaultValue` | `number \| number[] \| (data) => …` | — | Static default or function. |
-| `admin.step` | `number` | `1` | Increment step for spinner buttons. |
-| `admin.placeholder` | `string` | — | Placeholder text. |
+| Option              | Type                                | Default | Description                         |
+| ------------------- | ----------------------------------- | ------- | ----------------------------------- |
+| `min`               | `number`                            | —       | Minimum allowed value.              |
+| `max`               | `number`                            | —       | Maximum allowed value.              |
+| `hasMany`           | `boolean`                           | `false` | Accept an array of numbers.         |
+| `minRows`           | `number`                            | —       | Min items when `hasMany: true`.     |
+| `maxRows`           | `number`                            | —       | Max items when `hasMany: true`.     |
+| `defaultValue`      | `number \| number[] \| (data) => …` | —       | Static default or function.         |
+| `admin.step`        | `number`                            | `1`     | Increment step for spinner buttons. |
+| `admin.placeholder` | `string`                            | —       | Placeholder text.                   |
 
 ```typescript
 number({ name: "rating", min: 1, max: 5, admin: { step: 1 } });
@@ -309,12 +329,12 @@ number({ name: "rating", min: 1, max: 5, admin: { step: 1 } });
 Boolean true/false toggle.
 
 ```typescript
-checkbox({ name: "published", defaultValue: false })
+checkbox({ name: "published", defaultValue: false });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `defaultValue` | `boolean \| (data) => boolean` | — | Initial value. If `required: true` and unset, defaults to `false`. |
+| Option         | Type                           | Default | Description                                                        |
+| -------------- | ------------------------------ | ------- | ------------------------------------------------------------------ |
+| `defaultValue` | `boolean \| (data) => boolean` | —       | Initial value. If `required: true` and unset, defaults to `false`. |
 
 ```typescript
 checkbox({
@@ -327,7 +347,7 @@ checkbox({
 checkbox({
   name: "termsAccepted",
   required: true,
-  validate: (value) =>
+  validate: value =>
     value === true ? true : "You must accept the terms to continue",
 });
 ```
@@ -339,21 +359,21 @@ checkbox({
 Date and/or time picker. Dates are stored in UTC as ISO 8601 strings.
 
 ```typescript
-date({ name: "publishedAt" })
+date({ name: "publishedAt" });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `defaultValue` | `string \| Date \| (data) => string \| Date` | — | Static default or function. |
-| `admin.date.pickerAppearance` | `"dayOnly" \| "dayAndTime" \| "timeOnly" \| "monthOnly"` | `"dayOnly"` | Picker mode. |
-| `admin.date.displayFormat` | `string` | — | Display format string (date-fns format). |
-| `admin.date.monthsToShow` | `1 \| 2` | `1` | Months visible in the picker (max 2). |
-| `admin.date.minDate` | `Date \| string` | — | Earliest selectable date. |
-| `admin.date.maxDate` | `Date \| string` | — | Latest selectable date. |
-| `admin.date.minTime` | `Date \| string` | — | Earliest selectable time (when picker includes time). |
-| `admin.date.maxTime` | `Date \| string` | — | Latest selectable time. |
-| `admin.date.timeIntervals` | `number` | `30` | Time step in minutes. |
-| `admin.date.timeFormat` | `string` | `"h:mm aa"` | Time display format. |
+| Option                        | Type                                                     | Default     | Description                                           |
+| ----------------------------- | -------------------------------------------------------- | ----------- | ----------------------------------------------------- |
+| `defaultValue`                | `string \| Date \| (data) => string \| Date`             | —           | Static default or function.                           |
+| `admin.date.pickerAppearance` | `"dayOnly" \| "dayAndTime" \| "timeOnly" \| "monthOnly"` | `"dayOnly"` | Picker mode.                                          |
+| `admin.date.displayFormat`    | `string`                                                 | —           | Display format string (date-fns format).              |
+| `admin.date.monthsToShow`     | `1 \| 2`                                                 | `1`         | Months visible in the picker (max 2).                 |
+| `admin.date.minDate`          | `Date \| string`                                         | —           | Earliest selectable date.                             |
+| `admin.date.maxDate`          | `Date \| string`                                         | —           | Latest selectable date.                               |
+| `admin.date.minTime`          | `Date \| string`                                         | —           | Earliest selectable time (when picker includes time). |
+| `admin.date.maxTime`          | `Date \| string`                                         | —           | Latest selectable time.                               |
+| `admin.date.timeIntervals`    | `number`                                                 | `30`        | Time step in minutes.                                 |
+| `admin.date.timeFormat`       | `string`                                                 | `"h:mm aa"` | Time display format.                                  |
 
 ```typescript
 // Date and time
@@ -397,27 +417,27 @@ import { select, option } from "nextly";
 select({
   name: "priority",
   options: [option("Low"), option("Medium"), option("High")],
-})
+});
 ```
 
 > Use `select` for arbitrary categorical options (priority, region, theme, etc.). For a collection's Draft / Published lifecycle, prefer the built-in `status: true` flag on `defineCollection` -- see [Draft / Published status](/docs/guides/draft-published-status).
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `options` | `SelectOption[]` | — | **Required.** Array of `{ label, value }` objects. |
-| `hasMany` | `boolean` | `false` | Allow multiple selections. |
-| `enumName` | `string` | Auto | Custom SQL enum name. |
-| `interfaceName` | `string` | — | TypeScript interface name for code generation. |
-| `filterOptions` | `(args) => SelectOption[]` | — | Dynamically filter options based on data, sibling data, and user. |
-| `defaultValue` | `string \| string[] \| (data) => …` | — | Default value(s). |
-| `admin.isClearable` | `boolean` | `false` | Show a clear button. |
-| `admin.isSortable` | `boolean` | `false` | Enable drag-and-drop reorder (multi-select only). |
+| Option              | Type                                | Default | Description                                                       |
+| ------------------- | ----------------------------------- | ------- | ----------------------------------------------------------------- |
+| `options`           | `SelectOption[]`                    | —       | **Required.** Array of `{ label, value }` objects.                |
+| `hasMany`           | `boolean`                           | `false` | Allow multiple selections.                                        |
+| `enumName`          | `string`                            | Auto    | Custom SQL enum name.                                             |
+| `interfaceName`     | `string`                            | —       | TypeScript interface name for code generation.                    |
+| `filterOptions`     | `(args) => SelectOption[]`          | —       | Dynamically filter options based on data, sibling data, and user. |
+| `defaultValue`      | `string \| string[] \| (data) => …` | —       | Default value(s).                                                 |
+| `admin.isClearable` | `boolean`                           | `false` | Show a clear button.                                              |
+| `admin.isSortable`  | `boolean`                           | `false` | Enable drag-and-drop reorder (multi-select only).                 |
 
 The `option()` helper auto-generates the value from the label by lowercasing it and replacing spaces with underscores. Pass an explicit second arg if you want a different value.
 
 ```typescript
-option("Draft");        // { label: "Draft", value: "draft" }
-option("In Review");    // { label: "In Review", value: "in_review" }
+option("Draft"); // { label: "Draft", value: "draft" }
+option("In Review"); // { label: "In Review", value: "in_review" }
 option("Active", "active");
 ```
 
@@ -435,7 +455,7 @@ select({
   name: "subcategory",
   options: allSubcategories,
   filterOptions: ({ data }) =>
-    allSubcategories.filter((s) => s.parentId === data.category),
+    allSubcategories.filter(s => s.parentId === data.category),
 });
 ```
 
@@ -451,16 +471,16 @@ Radio button group for single selection. Best when all options should be visible
 radio({
   name: "priority",
   options: [option("Low"), option("Medium"), option("High")],
-})
+});
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `options` | `SelectOption[]` | — | **Required.** Array of `{ label, value }` objects. |
-| `enumName` | `string` | Auto | Custom SQL enum name. |
-| `interfaceName` | `string` | — | TypeScript interface name for code generation. |
-| `defaultValue` | `string \| (data) => string` | — | Default value (must match an option). |
-| `admin.layout` | `"horizontal" \| "vertical"` | `"horizontal"` | Button layout direction. |
+| Option          | Type                         | Default        | Description                                        |
+| --------------- | ---------------------------- | -------------- | -------------------------------------------------- |
+| `options`       | `SelectOption[]`             | —              | **Required.** Array of `{ label, value }` objects. |
+| `enumName`      | `string`                     | Auto           | Custom SQL enum name.                              |
+| `interfaceName` | `string`                     | —              | TypeScript interface name for code generation.     |
+| `defaultValue`  | `string \| (data) => string` | —              | Default value (must match an option).              |
+| `admin.layout`  | `"horizontal" \| "vertical"` | `"horizontal"` | Button layout direction.                           |
 
 ```typescript
 radio({
@@ -477,15 +497,15 @@ radio({
 Free-form multi-value string field that stores an array of unique strings. Renders as interactive chips/tags. Duplicate entries are automatically prevented.
 
 ```typescript
-chips({ name: "tags" })
+chips({ name: "tags" });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `defaultValue` | `string[] \| (data) => string[]` | — | Initial chips. |
-| `maxChips` | `number` | — | Maximum number of chips allowed. The add input is hidden once reached. |
-| `minChips` | `number` | — | Minimum number of chips required (validation). |
-| `admin.placeholder` | `string` | `"Type and press Enter to add"` | Placeholder text for the input. |
+| Option              | Type                             | Default                         | Description                                                            |
+| ------------------- | -------------------------------- | ------------------------------- | ---------------------------------------------------------------------- |
+| `defaultValue`      | `string[] \| (data) => string[]` | —                               | Initial chips.                                                         |
+| `maxChips`          | `number`                         | —                               | Maximum number of chips allowed. The add input is hidden once reached. |
+| `minChips`          | `number`                         | —                               | Minimum number of chips required (validation).                         |
+| `admin.placeholder` | `string`                         | `"Type and press Enter to add"` | Placeholder text for the input.                                        |
 
 ```typescript
 chips({
@@ -505,24 +525,24 @@ chips({
 Reference files from upload-enabled collections. Works like `relationship` but with media-specific UI (thumbnails) and a richer `filterOptions` query schema.
 
 ```typescript
-upload({ name: "featuredImage", relationTo: "media" })
+upload({ name: "featuredImage", relationTo: "media" });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `relationTo` | `string \| string[]` | — | **Required.** Upload-collection slug or array of slugs (polymorphic). |
-| `hasMany` | `boolean` | `false` | Allow multiple file selections. |
-| `minRows` | `number` | — | Min uploads when `hasMany: true`. |
-| `maxRows` | `number` | — | Max uploads when `hasMany: true`. |
-| `maxDepth` | `number` | `1` | Population depth for the related document. |
-| `maxFileSize` | `number` | — | Max file size in bytes (rejected before upload). |
-| `mimeTypes` | `string` | — | Comma-separated allowed MIME types (e.g. `"image/*"` or `"image/png,application/pdf"`). |
-| `filterOptions` | `UploadFilterQuery \| (args) => boolean \| UploadFilterQuery \| Promise<…>` | — | Filter available uploads. Static query or dynamic function. |
-| `defaultValue` | See type union | — | Static default ID, array of IDs, polymorphic ref, or function. |
-| `admin.allowCreate` | `boolean` | `true` | Allow uploading new files from the field. |
-| `admin.allowEdit` | `boolean` | `true` | Allow editing upload metadata. |
-| `admin.isSortable` | `boolean` | `true` | Drag-and-drop reorder when `hasMany: true`. |
-| `admin.displayPreview` | `boolean` | inherited from collection | Show thumbnail preview. |
+| Option                 | Type                                                                        | Default                   | Description                                                                             |
+| ---------------------- | --------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------- |
+| `relationTo`           | `string \| string[]`                                                        | —                         | **Required.** Upload-collection slug or array of slugs (polymorphic).                   |
+| `hasMany`              | `boolean`                                                                   | `false`                   | Allow multiple file selections.                                                         |
+| `minRows`              | `number`                                                                    | —                         | Min uploads when `hasMany: true`.                                                       |
+| `maxRows`              | `number`                                                                    | —                         | Max uploads when `hasMany: true`.                                                       |
+| `maxDepth`             | `number`                                                                    | `1`                       | Population depth for the related document.                                              |
+| `maxFileSize`          | `number`                                                                    | —                         | Max file size in bytes (rejected before upload).                                        |
+| `mimeTypes`            | `string`                                                                    | —                         | Comma-separated allowed MIME types (e.g. `"image/*"` or `"image/png,application/pdf"`). |
+| `filterOptions`        | `UploadFilterQuery \| (args) => boolean \| UploadFilterQuery \| Promise<…>` | —                         | Filter available uploads. Static query or dynamic function.                             |
+| `defaultValue`         | See type union                                                              | —                         | Static default ID, array of IDs, polymorphic ref, or function.                          |
+| `admin.allowCreate`    | `boolean`                                                                   | `true`                    | Allow uploading new files from the field.                                               |
+| `admin.allowEdit`      | `boolean`                                                                   | `true`                    | Allow editing upload metadata.                                                          |
+| `admin.isSortable`     | `boolean`                                                                   | `true`                    | Drag-and-drop reorder when `hasMany: true`.                                             |
+| `admin.displayPreview` | `boolean`                                                                   | inherited from collection | Show thumbnail preview.                                                                 |
 
 `filterOptions` static-query operators: `equals`, `not_equals`, `contains`, `in`, `not_in`, `exists` (strings); `equals`, `not_equals`, `greater_than`, `greater_than_equal`, `less_than`, `less_than_equal`, `exists` (numbers). Available filterable keys: `mimeType`, `filesize`, `width`, `height`, `filename`, `alt`, plus any custom field on the upload collection.
 
@@ -563,23 +583,23 @@ upload({
 Reference documents from other collections. Supports single, multi, and polymorphic relationships.
 
 ```typescript
-relationship({ name: "author", relationTo: "users", required: true })
+relationship({ name: "author", relationTo: "users", required: true });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `relationTo` | `string \| string[]` | — | **Required.** Target collection slug or array of slugs (polymorphic). |
-| `hasMany` | `boolean` | `false` | Allow multiple document references. |
-| `minRows` | `number` | — | Min selections when `hasMany: true`. |
-| `maxRows` | `number` | — | Max selections when `hasMany: true`. |
-| `maxDepth` | `number` | `1` | Population depth for nested relationships. |
-| `filterOptions` | `RelationshipFilterQuery \| (args) => boolean \| RelationshipFilterQuery \| Promise<…>` | — | Filter available documents. Static query or dynamic function. |
-| `defaultValue` | See type union | — | Static default ID, array of IDs, polymorphic ref, or function. |
-| `admin.allowCreate` | `boolean` | `true` | Allow creating new documents from the field. |
-| `admin.allowEdit` | `boolean` | `true` | Allow editing related documents. |
-| `admin.isSortable` | `boolean` | `true` | Enable drag-and-drop reorder (multi only). |
-| `admin.sortOptions` | `string \| Record<string, string>` | — | Default sort. Prefix with `-` for descending. Per-collection mapping for polymorphic. |
-| `admin.appearance` | `"select" \| "drawer"` | `"select"` | Picker UI style. Use `"drawer"` for large lists. |
+| Option              | Type                                                                                    | Default    | Description                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------- |
+| `relationTo`        | `string \| string[]`                                                                    | —          | **Required.** Target collection slug or array of slugs (polymorphic).                 |
+| `hasMany`           | `boolean`                                                                               | `false`    | Allow multiple document references.                                                   |
+| `minRows`           | `number`                                                                                | —          | Min selections when `hasMany: true`.                                                  |
+| `maxRows`           | `number`                                                                                | —          | Max selections when `hasMany: true`.                                                  |
+| `maxDepth`          | `number`                                                                                | `1`        | Population depth for nested relationships.                                            |
+| `filterOptions`     | `RelationshipFilterQuery \| (args) => boolean \| RelationshipFilterQuery \| Promise<…>` | —          | Filter available documents. Static query or dynamic function.                         |
+| `defaultValue`      | See type union                                                                          | —          | Static default ID, array of IDs, polymorphic ref, or function.                        |
+| `admin.allowCreate` | `boolean`                                                                               | `true`     | Allow creating new documents from the field.                                          |
+| `admin.allowEdit`   | `boolean`                                                                               | `true`     | Allow editing related documents.                                                      |
+| `admin.isSortable`  | `boolean`                                                                               | `true`     | Enable drag-and-drop reorder (multi only).                                            |
+| `admin.sortOptions` | `string \| Record<string, string>`                                                      | —          | Default sort. Prefix with `-` for descending. Per-collection mapping for polymorphic. |
+| `admin.appearance`  | `"select" \| "drawer"`                                                                  | `"select"` | Picker UI style. Use `"drawer"` for large lists.                                      |
 
 ```typescript
 // Has many
@@ -601,8 +621,7 @@ relationship({
 relationship({
   name: "parent",
   relationTo: "pages",
-  filterOptions: ({ id }) =>
-    id ? { id: { not_equals: id } } : true,
+  filterOptions: ({ id }) => (id ? { id: { not_equals: id } } : true),
 });
 
 // Drawer picker for big lists
@@ -632,22 +651,22 @@ repeater({
     text({ name: "label", required: true }),
     text({ name: "url", required: true }),
   ],
-})
+});
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `fields` | `FieldConfig[]` | — | **Required.** Field definitions for each row. |
-| `minRows` | `number` | — | Minimum rows. |
-| `maxRows` | `number` | — | Maximum rows. The Add button is disabled when reached. |
-| `labels` | `{ singular?: string; plural?: string }` | — | Custom row labels (e.g. `"Link"` / `"Links"`). |
-| `interfaceName` | `string` | — | TypeScript interface name for code generation. |
-| `dbName` | `string` | Auto | Custom database table name. |
-| `virtual` | `boolean` | `false` | Skip database storage; field exists only in API. |
-| `defaultValue` | `RepeaterRowValue[] \| (data) => RepeaterRowValue[]` | — | Static default rows. |
-| `admin.initCollapsed` | `boolean` | `false` | Render rows initially collapsed. |
-| `admin.isSortable` | `boolean` | `true` | Enable drag-and-drop reorder. |
-| `admin.components.RowLabel` | `React.ComponentType<RepeaterRowLabelProps>` | — | Custom row-label component. |
+| Option                      | Type                                                 | Default | Description                                            |
+| --------------------------- | ---------------------------------------------------- | ------- | ------------------------------------------------------ |
+| `fields`                    | `FieldConfig[]`                                      | —       | **Required.** Field definitions for each row.          |
+| `minRows`                   | `number`                                             | —       | Minimum rows.                                          |
+| `maxRows`                   | `number`                                             | —       | Maximum rows. The Add button is disabled when reached. |
+| `labels`                    | `{ singular?: string; plural?: string }`             | —       | Custom row labels (e.g. `"Link"` / `"Links"`).         |
+| `interfaceName`             | `string`                                             | —       | TypeScript interface name for code generation.         |
+| `dbName`                    | `string`                                             | Auto    | Custom database table name.                            |
+| `virtual`                   | `boolean`                                            | `false` | Skip database storage; field exists only in API.       |
+| `defaultValue`              | `RepeaterRowValue[] \| (data) => RepeaterRowValue[]` | —       | Static default rows.                                   |
+| `admin.initCollapsed`       | `boolean`                                            | `false` | Render rows initially collapsed.                       |
+| `admin.isSortable`          | `boolean`                                            | `true`  | Enable drag-and-drop reorder.                          |
+| `admin.components.RowLabel` | `React.ComponentType<RepeaterRowLabelProps>`         | —       | Custom row-label component.                            |
 
 ```typescript
 // FAQ with custom row labels
@@ -668,6 +687,18 @@ repeater({
 
 > **Note:** Use `repeater()` to define this field. The internal `type` is `"repeater"`. (Some other CMSes call this concept "array".)
 
+#### Row ids
+
+Each row is saved with an `id`, which stays the same across saves, so a row can be addressed after it is reordered:
+
+- an `id` you send is kept, and a second row sending the same `id` gets a new one;
+- a row sent without one keeps its saved `id` only when it is unchanged at the same position; otherwise it gets a new one;
+- rows saved before rows had ids get theirs on the next save.
+
+If a repeater declares a field of its own named `id`, that field is yours: its value is left as you write it, and its rows get no saved id.
+
+Send each row's `id` back, from your last read, when you update a repeater with a password field. A row sent without its `id` that keeps its saved password but has other values changed is refused, with `ROW_ID_REQUIRED` naming the row: by position alone, a reorder could hand one row's password to another. Send the row's `id`, or send the password again.
+
 **Cross-links:** [Field Groups](/docs/configuration/field-groups#repeatable-single-field-group) covers the alternative repeatable field-group pattern when you want a typed schema instead of inline fields.
 
 ---
@@ -683,19 +714,19 @@ group({
     text({ name: "metaTitle", maxLength: 60 }),
     textarea({ name: "metaDescription", maxLength: 160 }),
   ],
-})
+});
 // Stored data: { seo: { metaTitle: "...", metaDescription: "..." } }
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `name` | `string` | — | If provided, fields are nested under this property. If omitted, the group is purely visual. |
-| `fields` | `FieldConfig[]` | — | **Required.** Nested field definitions. |
-| `interfaceName` | `string` | — | TypeScript interface name. |
-| `dbName` | `string` | Auto | Custom database column/table name. |
-| `virtual` | `boolean` | `false` | Skip database storage. |
-| `defaultValue` | `Record<string, unknown> \| (data) => …` | — | Default values for nested fields (named groups only). |
-| `admin.hideGutter` | `boolean` | `false` | Remove the left-side visual gutter. |
+| Option             | Type                                     | Default | Description                                                                                 |
+| ------------------ | ---------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `name`             | `string`                                 | —       | If provided, fields are nested under this property. If omitted, the group is purely visual. |
+| `fields`           | `FieldConfig[]`                          | —       | **Required.** Nested field definitions.                                                     |
+| `interfaceName`    | `string`                                 | —       | TypeScript interface name.                                                                  |
+| `dbName`           | `string`                                 | Auto    | Custom database column/table name.                                                          |
+| `virtual`          | `boolean`                                | `false` | Skip database storage.                                                                      |
+| `defaultValue`     | `Record<string, unknown> \| (data) => …` | —       | Default values for nested fields (named groups only).                                       |
+| `admin.hideGutter` | `boolean`                                | `false` | Remove the left-side visual gutter.                                                         |
 
 ```typescript
 // Presentational group — no data nesting; fields stored at parent level
@@ -721,14 +752,14 @@ Embed reusable [field groups](/docs/configuration/field-groups) inside collectio
 
 ```typescript
 // Single fixed type
-fieldGroup({ name: "seo", component: "seo" })
+fieldGroup({ name: "seo", component: "seo" });
 
 // Dynamic zone
 fieldGroup({
   name: "layout",
   components: ["hero", "cta", "content-block"],
   repeatable: true,
-})
+});
 
 // Repeatable single type
 fieldGroup({
@@ -737,18 +768,18 @@ fieldGroup({
   repeatable: true,
   minRows: 1,
   maxRows: 12,
-})
+});
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `component` | `string` | — | Single mode: one specific component slug. Mutually exclusive with `components`. |
-| `components` | `string[]` | — | Dynamic-zone mode: array of allowed component slugs. Mutually exclusive with `component`. |
-| `repeatable` | `boolean` | `false` | Allow multiple instances (array mode). |
-| `minRows` | `number` | — | Min instances when `repeatable: true`. |
-| `maxRows` | `number` | — | Max instances when `repeatable: true`. |
-| `admin.initCollapsed` | `boolean` | `false` | Start instances collapsed. |
-| `admin.isSortable` | `boolean` | `true` | Drag-and-drop reorder when `repeatable: true`. |
+| Option                | Type       | Default | Description                                                                               |
+| --------------------- | ---------- | ------- | ----------------------------------------------------------------------------------------- |
+| `component`           | `string`   | —       | Single mode: one specific component slug. Mutually exclusive with `components`.           |
+| `components`          | `string[]` | —       | Dynamic-zone mode: array of allowed component slugs. Mutually exclusive with `component`. |
+| `repeatable`          | `boolean`  | `false` | Allow multiple instances (array mode).                                                    |
+| `minRows`             | `number`   | —       | Min instances when `repeatable: true`.                                                    |
+| `maxRows`             | `number`   | —       | Max instances when `repeatable: true`.                                                    |
+| `admin.initCollapsed` | `boolean`  | `false` | Start instances collapsed.                                                                |
+| `admin.isSortable`    | `boolean`  | `true`  | Drag-and-drop reorder when `repeatable: true`.                                            |
 
 **Gotchas:** `component` and `components` are mutually exclusive; you'll get a startup error if both are set. Component nesting is capped at depth 3.
 
@@ -763,23 +794,23 @@ fieldGroup({
 Store arbitrary JSON data with an in-browser code editor. Supports JSON Schema validation.
 
 ```typescript
-json({ name: "metadata" })
+json({ name: "metadata" });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `jsonSchema` | `JSONSchemaDefinition` | — | Inline JSON Schema for validation and editor hints. |
-| `defaultValue` | Any valid JSON value or function | — | Default value. |
-| `admin.editorOptions.height` | `number \| string` | `300` | Editor height. |
-| `admin.editorOptions.minHeight` | `number` | `100` | Minimum height. |
-| `admin.editorOptions.maxHeight` | `number` | — | Maximum height. |
-| `admin.editorOptions.lineNumbers` | `boolean` | `true` | Show line numbers. |
-| `admin.editorOptions.folding` | `boolean` | `true` | Enable code folding. |
-| `admin.editorOptions.wordWrap` | `boolean` | `false` | Enable word wrapping. |
-| `admin.editorOptions.minimap` | `boolean` | `false` | Show code minimap. |
-| `admin.editorOptions.tabSize` | `number` | `2` | Tab size in spaces. |
-| `admin.editorOptions.formatOnBlur` | `boolean` | `true` | Auto-prettify on blur. |
-| `admin.editorOptions.validateOnChange` | `boolean` | `true` | Real-time syntax validation. |
+| Option                                 | Type                             | Default | Description                                         |
+| -------------------------------------- | -------------------------------- | ------- | --------------------------------------------------- |
+| `jsonSchema`                           | `JSONSchemaDefinition`           | —       | Inline JSON Schema for validation and editor hints. |
+| `defaultValue`                         | Any valid JSON value or function | —       | Default value.                                      |
+| `admin.editorOptions.height`           | `number \| string`               | `300`   | Editor height.                                      |
+| `admin.editorOptions.minHeight`        | `number`                         | `100`   | Minimum height.                                     |
+| `admin.editorOptions.maxHeight`        | `number`                         | —       | Maximum height.                                     |
+| `admin.editorOptions.lineNumbers`      | `boolean`                        | `true`  | Show line numbers.                                  |
+| `admin.editorOptions.folding`          | `boolean`                        | `true`  | Enable code folding.                                |
+| `admin.editorOptions.wordWrap`         | `boolean`                        | `false` | Enable word wrapping.                               |
+| `admin.editorOptions.minimap`          | `boolean`                        | `false` | Show code minimap.                                  |
+| `admin.editorOptions.tabSize`          | `number`                         | `2`     | Tab size in spaces.                                 |
+| `admin.editorOptions.formatOnBlur`     | `boolean`                        | `true`  | Auto-prettify on blur.                              |
+| `admin.editorOptions.validateOnChange` | `boolean`                        | `true`  | Real-time syntax validation.                        |
 
 **Database storage:** PostgreSQL uses `JSONB`, MySQL uses `JSON`, SQLite uses `TEXT`. Schema validation happens at the application level so behavior is consistent across adapters.
 
@@ -805,37 +836,37 @@ Every field type inherits the following from `BaseFieldConfig`. Where a specific
 
 ### Identity
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `name` | `string` | — | **Required.** Unique identifier. Lowercase, underscores or numbers — no hyphens, no spaces, no SQL reserved words. |
-| `type` | `FieldType` | Set by helper | Field type literal. The helper functions (`text`, `number`, etc.) set this for you. |
-| `label` | `string` | Auto from `name` | Display label in the admin UI (e.g. `user_name` → `User Name`). |
-| `required` | `boolean` | `false` | Whether the field must have a non-null, non-empty value. |
-| `unique` | `boolean` | `false` | Enforce database-level uniqueness. |
-| `index` | `boolean` | `false` | Create a single-field database index. |
-| `localized` | `boolean` | Per type | On a localized collection, Single or field group: whether the field keeps a value per language. Unset, the text-like types (`text`, `textarea`, `richText`, `email`, `code`) are translated and every other type is shared. `password` and virtual fields are never translated, and the flag does nothing where the collection or Single is not localized. Nor does it on a `component` reference, which has no value of its own to translate: set `localized` on the component's own fields instead. A many-to-many `relationship` keeps its links in one table for every language, so it is shared whatever the flag says. See [Choose what gets translated](/docs/localization#choose-what-gets-translated). |
-| `custom` | `Record<string, unknown>` | — | Arbitrary metadata for plugins or hooks. Not persisted. |
-| `virtual` | `boolean` | `false` | On a collection, Single or component: store nothing. The field gets no column, a value sent for it on create or update is dropped before the write, write validation skips it (so `required` and `validate` do not apply), and it is never localized. Compute its value in an `afterRead` hook. Group and repeater also accept `options.virtual`. Custom user fields are always stored, so user config validation refuses `virtual` on them. |
+| Option      | Type                      | Default          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------- | ------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`      | `string`                  | —                | **Required.** Unique identifier. Lowercase, underscores or numbers — no hyphens, no spaces, no SQL reserved words.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `type`      | `FieldType`               | Set by helper    | Field type literal. The helper functions (`text`, `number`, etc.) set this for you.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `label`     | `string`                  | Auto from `name` | Display label in the admin UI (e.g. `user_name` → `User Name`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `required`  | `boolean`                 | `false`          | Whether the field must have a non-null, non-empty value.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `unique`    | `boolean`                 | `false`          | Enforce database-level uniqueness.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `index`     | `boolean`                 | `false`          | Create a single-field database index.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `localized` | `boolean`                 | Per type         | On a localized collection, Single or field group: whether the field keeps a value per language. Unset, the text-like types (`text`, `textarea`, `richText`, `email`, `code`) are translated and every other type is shared. `password` and virtual fields are never translated, and the flag does nothing where the collection or Single is not localized. Nor does it on a `component` reference, which has no value of its own to translate: set `localized` on the component's own fields instead. A many-to-many `relationship` keeps its links in one table for every language, so it is shared whatever the flag says. See [Choose what gets translated](/docs/localization#choose-what-gets-translated). |
+| `custom`    | `Record<string, unknown>` | —                | Arbitrary metadata for plugins or hooks. Not persisted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `virtual`   | `boolean`                 | `false`          | On a collection, Single or component: store nothing. The field gets no column, a value sent for it on create or update is dropped before the write, write validation skips it (so `required` and `validate` do not apply), and it is never localized. Compute its value in an `afterRead` hook. Group and repeater also accept `options.virtual`. Custom user fields are always stored, so user config validation refuses `virtual` on them.                                                                                                                                                                                                                                                                    |
 
 ### `admin`
 
 Shared UI options:
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `position` | `"sidebar"` | — | Place the field in the sidebar instead of the main content area. |
-| `width` | `"25%" \| "33%" \| "50%" \| "66%" \| "75%" \| "100%"` | `"100%"` | Field width in the form layout grid. |
-| `description` | `string` | — | Help text below the field label. |
-| `placeholder` | `string` | — | Placeholder text when empty. |
-| `readOnly` | `boolean` | `false` | Make the field read-only in the UI. |
-| `disabled` | `boolean` | `false` | Disable the input. |
-| `hidden` | `boolean` | `false` | Hide the field from the UI entirely (still settable via API). |
-| `condition` | `FieldCondition` | — | Conditionally show/hide based on another field's value. |
-| `className` | `string` | — | Custom CSS class on the wrapper. |
-| `style` | `Record<string, string>` | — | Inline styles on the wrapper. |
-| `components.Field` | `React.ComponentType<FieldComponentProps>` | — | Custom form-field renderer. |
-| `components.Cell` | `React.ComponentType<CellComponentProps>` | — | Custom list/table cell renderer. |
-| `components.Filter` | `React.ComponentType<FilterComponentProps>` | — | Custom list-view filter UI. |
+| Option              | Type                                                  | Default  | Description                                                      |
+| ------------------- | ----------------------------------------------------- | -------- | ---------------------------------------------------------------- |
+| `position`          | `"sidebar"`                                           | —        | Place the field in the sidebar instead of the main content area. |
+| `width`             | `"25%" \| "33%" \| "50%" \| "66%" \| "75%" \| "100%"` | `"100%"` | Field width in the form layout grid.                             |
+| `description`       | `string`                                              | —        | Help text below the field label.                                 |
+| `placeholder`       | `string`                                              | —        | Placeholder text when empty.                                     |
+| `readOnly`          | `boolean`                                             | `false`  | Make the field read-only in the UI.                              |
+| `disabled`          | `boolean`                                             | `false`  | Disable the input.                                               |
+| `hidden`            | `boolean`                                             | `false`  | Hide the field from the UI entirely (still settable via API).    |
+| `condition`         | `FieldCondition`                                      | —        | Conditionally show/hide based on another field's value.          |
+| `className`         | `string`                                              | —        | Custom CSS class on the wrapper.                                 |
+| `style`             | `Record<string, string>`                              | —        | Inline styles on the wrapper.                                    |
+| `components.Field`  | `React.ComponentType<FieldComponentProps>`            | —        | Custom form-field renderer.                                      |
+| `components.Cell`   | `React.ComponentType<CellComponentProps>`             | —        | Custom list/table cell renderer.                                 |
+| `components.Filter` | `React.ComponentType<FilterComponentProps>`           | —        | Custom list-view filter UI.                                      |
 
 #### Conditional logic
 
@@ -884,12 +915,12 @@ field hooks produced and not the other way round; and a row reached through
 relationship expansion runs only the target's field-level `afterRead`, with no
 collection-level `afterRead` before it.
 
-| Hook | When it runs |
-|---|---|
+| Hook             | When it runs                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------ |
 | `beforeValidate` | Before validation, after the collection's `beforeValidate`. Can transform the value. |
-| `beforeChange` | After the collection's `beforeChange`. The last hook before the database write. |
-| `afterChange` | After the database write. |
-| `afterRead` | After reading from the database. Can transform the returned value. |
+| `beforeChange`   | After the collection's `beforeChange`. The last hook before the database write.      |
+| `afterChange`    | After the database write.                                                            |
+| `afterRead`      | After reading from the database. Can transform the returned value.                   |
 
 Every handler receives its own `value` and a `data` object at the field's own
 nesting level: for a field inside a group or a repeater, the containing row
@@ -976,7 +1007,7 @@ Custom validation function. Receives the typed field value plus `{ data, req }` 
 ```typescript
 text({
   name: "username",
-  validate: (value) => {
+  validate: value => {
     if (value && !/^[a-z0-9_]+$/.test(String(value))) {
       return "Lowercase letters, numbers, and underscores only";
     }
@@ -1036,8 +1067,8 @@ Creates a `{ label, value }` option for `select` and `radio` fields. Auto-genera
 ```typescript
 import { option } from "nextly";
 
-option("Draft");          // { label: "Draft", value: "draft" }
-option("In Progress");    // { label: "In Progress", value: "in_progress" }
+option("Draft"); // { label: "Draft", value: "draft" }
+option("In Progress"); // { label: "In Progress", value: "in_progress" }
 option("Active", "active");
 ```
 

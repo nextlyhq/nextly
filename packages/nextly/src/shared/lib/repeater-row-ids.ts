@@ -37,7 +37,6 @@ import { randomUUID } from "node:crypto";
 
 import { extractFieldGroupReferences } from "../../domains/field-groups/storage/field-group-field-type";
 
-import { deepEqual } from "./deep-equal";
 import {
   instanceFields,
   isPlainRecord,
@@ -48,6 +47,7 @@ import {
   type FieldGroupReach,
   type NamedField,
 } from "./password-fields";
+import { sameApartFromIds } from "./same-apart-from-ids";
 
 /** What one walk carries through every level. */
 interface RowIdWalk {
@@ -128,14 +128,13 @@ function assignHeld(
   // named, and its fields already say what it holds.
   if (field.type === "repeater") {
     const rowFields = field.fields ?? [];
+    // A repeater whose rows declare a field of their own named `id` keeps
+    // that value as authored: its rows get no system id, and only what they
+    // hold is walked.
+    const assign = declaresOwnId(rowFields) ? walkRowsOnly : assignRows;
     rewriteValue(level, name, value => {
       if (Array.isArray(value)) {
-        assignRows(
-          value,
-          Array.isArray(previous) ? previous : [],
-          rowFields,
-          walk
-        );
+        assign(value, Array.isArray(previous) ? previous : [], rowFields, walk);
       }
       return value;
     });
@@ -169,6 +168,37 @@ function assignHeld(
   rewriteValue(level, name, value => {
     assignInstances(value, previous, references, walk);
     return value;
+  });
+}
+
+/**
+ * Whether a repeater's rows declare a field named `id`, on the row itself or
+ * through a layout container, which keeps its fields on the row.
+ */
+function declaresOwnId(fields: readonly NamedField[]): boolean {
+  return fields.some(field =>
+    field.name === undefined || field.name === ""
+      ? declaresOwnId(field.fields ?? [])
+      : field.name === "id"
+  );
+}
+
+/**
+ * The fields of rows given no id, each walked with the stored row at its
+ * place: what that row holds is matched again by its own rules, which ask
+ * for an unchanged row before any stored id passes on, so nothing moves.
+ */
+function walkRowsOnly(
+  rows: unknown[],
+  previous: readonly unknown[],
+  fields: readonly NamedField[],
+  walk: RowIdWalk
+): void {
+  rows.forEach((row, index) => {
+    if (!isPlainRecord(row)) return;
+    const atIndex = previous[index];
+    const partner = isPlainRecord(atIndex) ? atIndex : undefined;
+    assignLevel(row, partner, fields, walk, false, new WeakSet());
   });
 }
 
@@ -314,27 +344,4 @@ function rowIdOf(row: unknown): string | undefined {
   return isPlainRecord(row) && typeof row.id === "string" && row.id !== ""
     ? row.id
     : undefined;
-}
-
-/**
- * Whether a sent row holds what the stored one does, once every `id` key is
- * set aside at every depth. A key holding `undefined` counts as absent, as
- * storing the value as JSON leaves it out.
- */
-function sameApartFromIds(sent: unknown, stored: unknown): boolean {
-  return deepEqual(withoutIds(sent), withoutIds(stored));
-}
-
-/** A copy of `value` with every `id` key, and every `undefined` value, left out. */
-function withoutIds(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutIds);
-  if (!isPlainRecord(value) || value instanceof Date) return value;
-  // A null prototype, so an own `__proto__` key is copied as a key and
-  // compared, rather than setting the copy's prototype and dropping out.
-  const out = Object.create(null) as Record<string, unknown>;
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "id" || child === undefined) continue;
-    out[key] = withoutIds(child);
-  }
-  return out;
 }

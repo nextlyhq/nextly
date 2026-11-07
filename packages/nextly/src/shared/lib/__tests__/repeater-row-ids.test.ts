@@ -38,6 +38,37 @@ describe("assignRepeaterRowIds", () => {
     expect(rowsOf(data)[0]?.id).toBe("a");
   });
 
+  it("leaves an authored id field as it is, and gives its rows no system id", () => {
+    // The schema declares `id` itself (through a layout container, too), so
+    // the value is the author's: a number, a repeat or none stays so.
+    const authored = [
+      {
+        name: "codes",
+        type: "repeater",
+        fields: [
+          { type: "row", fields: [{ name: "id", type: "number" }] },
+          {
+            name: "lines",
+            type: "repeater",
+            fields: [{ name: "label", type: "text" }],
+          },
+        ],
+      },
+    ];
+    const data = {
+      codes: [
+        { id: 7, lines: [{ label: "x" }] },
+        { id: 7, lines: [] },
+        { lines: [] },
+      ],
+    };
+    assignRepeaterRowIds(data, undefined, authored, NO_FIELD_GROUPS, counter());
+    const codes = rowsOf(data, "codes");
+    expect(codes.map(row => row.id)).toEqual([7, 7, undefined]);
+    // What a row holds is still given ids.
+    expect((codes[0]?.lines as Row[])[0]?.id).toBe("new-1");
+  });
+
   it("gives a fresh id to every row without one on a create", () => {
     const data = { lines: [{ label: "x" }, { label: "y" }] };
     assignRepeaterRowIds(data, undefined, LINES, NO_FIELD_GROUPS, counter());
