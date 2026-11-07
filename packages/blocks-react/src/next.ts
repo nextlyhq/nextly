@@ -2305,6 +2305,14 @@ function entryPathResolver(
     routeCollections.slice(0, routeCollections.indexOf(collection));
 
   /**
+   * What settling links into a collection costs, a batch or one link alike:
+   * the rows, the two ownership checks in the collection, and one for each
+   * collection the route searches before it.
+   */
+  const linkReads = (collection: string): number =>
+    3 + earlierThan(collection).length;
+
+  /**
    * How many stored rows match, as the database counts them: the count is
    * made on stored columns, so it answers the probes' questions for many
    * links at once without matching any returned value to a link. `undefined`
@@ -2436,6 +2444,32 @@ function entryPathResolver(
   };
 
   const known = new Map<string, Promise<string | null>>();
+
+  /** The links not yet settled, by the route collection each points into. */
+  const unsettledByCollection = (
+    refs: readonly { readonly collection: string; readonly id: string }[]
+  ): Map<string, Set<string>> => {
+    const byCollection = new Map<string, Set<string>>();
+    for (const { collection, id } of refs) {
+      const served = routeCollections.includes(collection) && id.trim() !== "";
+      if (!served || known.has(entryKey(collection, id))) continue;
+      byCollection.set(
+        collection,
+        (byCollection.get(collection) ?? new Set<string>()).add(id)
+      );
+    }
+    return byCollection;
+  };
+
+  /**
+   * Whether a batch of `count` links into `collection` may be asked: a batch
+   * that falls back has spent its reads before each link's own, so it is
+   * asked only where the allowance covers both, and a batch never costs a
+   * link the address it would have had.
+   */
+  const affordsBatch = (collection: string, count: number): boolean =>
+    (budget.remaining?.() ?? Infinity) >= linkReads(collection) * (count + 1);
+
   return {
     resolve: (collection, id, claim) => {
       // A collection this route does not serve has no path THIS route can
@@ -2467,16 +2501,9 @@ function entryPathResolver(
     },
     ahead: async (refs, claim) => {
       const take = () => budget.take({ ...claim, kind: "link" });
-      const byCollection = new Map<string, Set<string>>();
-      for (const { collection, id } of refs) {
-        if (!routeCollections.includes(collection) || id.trim() === "")
-          continue;
-        if (known.has(entryKey(collection, id))) continue;
-        const ids = byCollection.get(collection) ?? new Set<string>();
-        byCollection.set(collection, ids.add(id));
-      }
-      for (const [collection, ids] of byCollection) {
+      for (const [collection, ids] of unsettledByCollection(refs)) {
         for (const chunk of chunked([...ids], AHEAD_BATCH_SIZE)) {
+          if (!affordsBatch(collection, chunk.length)) return;
           if ((await batch(collection, chunk, take, known)) === "spent") return;
         }
       }
@@ -4134,8 +4161,9 @@ function blocksRouteConfig(
           ...(listPage === undefined ? {} : { listPage }),
           listReads,
           // The blocks the renderer keeps for the entry's conditions, from
-          // the same preparation it draws, so a list reads ahead for exactly
-          // the blocks it draws.
+          // the same preparation it draws the page with, so a list reads
+          // ahead for exactly the blocks it draws. Each Layout region gets
+          // its own (`drawWithRegions`).
           heldConditions: heldConditionsOf(page.prepared ?? undefined),
         },
         blocks: resolver,
@@ -4267,6 +4295,16 @@ function drawWithRegions(args: {
       { key: area, "data-nextly-region": area },
       createElement(PageRenderer, {
         ...shared,
+        // The blocks the renderer keeps for this region's own conditions,
+        // from the preparation it draws the region with, not the page's.
+        ...(shared.context === undefined
+          ? {}
+          : {
+              context: {
+                ...shared.context,
+                heldConditions: heldConditionsOf(part.prepared ?? undefined),
+              },
+            }),
         ...sheet,
         // The document the region was prepared from, so the renderer reuses
         // that preparation rather than running the pipeline again.

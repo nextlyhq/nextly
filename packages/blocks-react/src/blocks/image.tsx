@@ -33,6 +33,7 @@ import {
   flag,
   canLink,
   isAuthoredText,
+  isPresent,
   LINK_PROPS,
   linkFor,
   oneOf,
@@ -62,6 +63,17 @@ export interface ImageProps extends LinkProps {
 }
 
 /**
+ * Whether an image has anything to draw, and so a link to follow: a media
+ * id or an address. `has` says whether a prop holds a value (or, for a list
+ * reading its links ahead, is bound to one). Asked by the render before it
+ * reads anything, and by a list before it reads this image's link ahead, so
+ * the two agree on which images link.
+ */
+export function imageMayDraw(has: (prop: string) => boolean): boolean {
+  return has("mediaId") || has("src");
+}
+
+/**
  * The media record an image names, or `null` for none. A resolver that
  * throws must not take the page with it: media lives behind a network call
  * for a signed-URL host, and one unreachable image is not a reason to lose
@@ -69,9 +81,12 @@ export interface ImageProps extends LinkProps {
  */
 async function mediaRecordOf(
   ctx: PageContext,
-  mediaId: string,
+  props: ImageProps,
   claim: ReadClaim | undefined
 ): Promise<ResolvedMedia | null> {
+  // Nothing to draw: no read, and below, no picture and no link.
+  if (!imageMayDraw(prop => isPresent(props, prop))) return null;
+  const mediaId = text(props.mediaId);
   return mediaId === ""
     ? null
     : await ctx.resolveMedia(mediaId, claim).catch(() => null);
@@ -88,7 +103,7 @@ export async function renderImage({
   // Each read this block makes is claimed as its own, so a page past its
   // allowance names it among the blocks drawn without their data.
   const claim = readClaimOf(node);
-  const record = await mediaRecordOf(ctx, text(props.mediaId), claim);
+  const record = await mediaRecordOf(ctx, props, claim);
 
   // A candidate has to clear BOTH filters, and both are asked before the two are
   // chosen between rather than after.
@@ -278,7 +293,9 @@ function wrapPicture(
  * definition below registers under it. Two literals would be one contract with
  * two spellings, and the rule that missed would simply not apply.
  */
-const IMAGE_BLOCK = "core/image";
+/** The image block's type, which a list reading its links ahead asks by. */
+export const IMAGE_TYPE = "core/image";
+const IMAGE_BLOCK = IMAGE_TYPE;
 
 const IMAGE_BASE_STYLES = {
   base: {

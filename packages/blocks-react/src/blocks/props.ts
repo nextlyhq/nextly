@@ -224,6 +224,14 @@ export function readClaimOf(
   return node === undefined ? undefined : { nodeId: node.id };
 }
 
+/** Whether a block's prop holds text, for its draw checks. */
+export function isPresent(props: object, prop: string): boolean {
+  const value: unknown = Object.hasOwn(props, prop)
+    ? Reflect.get(props, prop)
+    : undefined;
+  return text(value) !== "";
+}
+
 /** A link's attributes, ready to spread onto an `<a>`. */
 export interface LinkAttributes {
   readonly href: string;

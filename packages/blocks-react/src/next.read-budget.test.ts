@@ -100,7 +100,17 @@ function matches(row: Row, where: unknown): boolean {
 }
 
 /** A site of `count` posts, each with an author, an image and a page. */
-function site(count: number, document: BlockDocument) {
+function site(
+  count: number,
+  document: BlockDocument,
+  options: {
+    /**
+     * Answer a read by `id in` with a count one higher than its rows, as a
+     * read hook dropping a row would: a batch the route cannot trust.
+     */
+    readonly distrustBatches?: boolean;
+  } = {}
+) {
   const ids = Array.from({ length: count }, (_, index) => index + 1);
   const stored: Record<string, Row[]> = {
     pages: [{ id: "p1", slug: "journal", title: "Journal", content: document }],
@@ -144,7 +154,10 @@ function site(count: number, document: BlockDocument) {
               Object.entries(row).filter(([key]) => select[key] === true)
             )
       );
-    return { items, meta: { total: all.length } };
+    const batched = JSON.stringify(args.where ?? {}).includes('"id":{"in"');
+    const total =
+      options.distrustBatches === true && batched ? all.length + 1 : all.length;
+    return { items, meta: { total } };
   });
   const findByID = vi.fn(async () => null);
   const mediaById = vi.fn(async () => null);
@@ -436,8 +449,9 @@ describe("a list's reads", () => {
   it("a cap reached part-way through names each block that went without its data, and stops reading", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const nextly = site(50, listing(50));
-    // The entries and their authors, then nothing: the links are refused
-    // ahead and again as each block asks, and the image as each asks.
+    // The entries and their authors, then nothing: the links are not asked
+    // ahead, since the allowance left could not cover a batch that fell
+    // back, and are refused as each block asks, as is the image.
     const { html, reads } = await journal(nextly, { maxQueries: 2 });
     expect(html).toContain("Post number 50");
     expect(html).toContain("Writer 1");
@@ -447,7 +461,7 @@ describe("a list's reads", () => {
     await quiet();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      '[blocks] "pages" page "journal" needed more than its 2 reads: at least 101 read(s) refused; 3 block(s) drawn as if their data were missing: posts, picture, more.'
+      '[blocks] "pages" page "journal" needed more than its 2 reads: at least 100 read(s) refused; 2 block(s) drawn as if their data were missing: picture, more.'
     );
   });
 });
@@ -658,6 +672,171 @@ describe("a list's relations and links, read ahead", () => {
     expect(
       described(reads).filter(read => read === "posts: by ids")
     ).toHaveLength(1);
+  });
+});
+
+/** A page of the given nodes. */
+function pageOf(nodes: readonly unknown[]): BlockDocument {
+  return JSON.parse(
+    JSON.stringify({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes,
+    })
+  ) as BlockDocument;
+}
+
+/** A list of posts drawing `children` for each. */
+function postsList(id: string, limit: number, children: readonly unknown[]) {
+  return {
+    id,
+    type: "core/collection-loop",
+    version: 1,
+    props: { collection: "posts", limit },
+    slots: { children },
+  };
+}
+
+/** A heading bound to a list item's path. */
+function itemHeading(id: string, path: string, fallback: string) {
+  return {
+    id,
+    type: "core/heading",
+    version: 1,
+    props: { text: "", level: "h3" },
+    bindings: { text: { $bind: path, source: "item", fallback } },
+  };
+}
+
+describe("a list's read-ahead, at its edges", () => {
+  it("never draws an inner list's item with what was read for the outer one", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("outer", 1, [
+          itemHeading("outer-author", "author.name", "Outer none"),
+          postsList("inner", 1, [
+            itemHeading("inner-author", "author.name", "Inner none"),
+          ]),
+        ]),
+      ])
+    );
+    // The outer list, its authors and the inner list; the inner list's
+    // authors are refused.
+    const { html } = await journal(nextly, { maxQueries: 3 });
+    expect(html).toContain(">Writer 1<");
+    expect(html.split("Writer 1")).toHaveLength(2);
+    expect(html).toContain(">Inner none<");
+  });
+
+  it("reads no link ahead for an image with nothing to draw, nor an icon naming none", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const linked = { entryCollection: "posts" };
+    const byId = { entryId: { $bind: "id", source: "item" } };
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("list", 3, [
+          {
+            id: "pic",
+            type: "core/image",
+            version: 1,
+            props: { alt: "", ...linked },
+            bindings: byId,
+          },
+          {
+            id: "mark",
+            type: "core/icon",
+            version: 1,
+            props: { ...linked },
+            bindings: byId,
+          },
+        ]),
+      ])
+    );
+    const { html, reads } = await journal(nextly, { maxQueries: 20 });
+    expect(html).not.toContain('href="/post-');
+    // The entries alone: neither block draws, so neither reads its link.
+    expect(described(reads)).toEqual(["posts: query"]);
+  });
+
+  it("goes link by link when the allowance covers only that, so a link keeps its address", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(
+      5,
+      pageOf([
+        postsList("list", 1, [
+          {
+            id: "more",
+            type: "core/button",
+            version: 1,
+            props: { label: "Read", entryCollection: "posts" },
+            bindings: { entryId: { $bind: "id", source: "item" } },
+          },
+        ]),
+      ]),
+      { distrustBatches: true }
+    );
+    // The entries, then exactly one link's own reads: its row, the two
+    // checks in its collection and one for the collection before it.
+    const { html } = await journal(nextly, { maxQueries: 1 + 4 });
+    expect(html).toContain('href="/post-1"');
+  });
+});
+
+describe("a page drawn inside its Layout", () => {
+  it("hands each region the blocks kept for its own conditions, not the page's", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Kept where the page's entry is titled "Journal", as it is.
+    const kept = (id: string) => ({
+      id,
+      type: "core/heading",
+      version: 1,
+      props: { text: id, level: "h2" },
+      visibility: {
+        conditions: [[{ field: "title", op: "equals", value: "Journal" }]],
+      },
+    });
+    const nextly = site(1, pageOf([kept("page-kept")]));
+    nextly.stored.layouts = [
+      { id: "main", areas: [{ area: "header", component: "head" }] },
+    ];
+    nextly.stored.components = [
+      {
+        id: "head",
+        content: {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: [kept("region-kept")],
+        },
+      },
+    ];
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      layouts: {
+        readDefault: () => Promise.resolve("main"),
+        singles: ["page-builder-settings"],
+      },
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    // The header, then the page.
+    const [header, page] = element.props.children as ReactElement<{
+      children?: ReactElement<PageRendererProps>;
+      context?: PageRendererProps["context"];
+    }>[];
+    const regionHeld = header?.props.children?.props.context?.heldConditions;
+    const pageHeld = page?.props.context?.heldConditions;
+    // The region's one kept block, by the id it is drawn with inside its
+    // component; the page's own, by its id. Neither holds the other's.
+    expect(regionHeld?.size).toBe(1);
+    expect(regionHeld?.has("page-kept")).toBe(false);
+    expect([...(pageHeld ?? [])]).toEqual(["page-kept"]);
   });
 });
 
