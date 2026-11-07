@@ -25,6 +25,10 @@
  * loaded before anything after it starts, as the parser would, but a script
  * that writes into the page as it loads (`document.write`) can't be site code.
  *
+ * A path is skipped when any `<SiteCode>` on the page skips it: each loader
+ * reads every data block's list, so the head and the end of the body never
+ * disagree about where code may run.
+ *
  * A navigation within the app that crosses into or out of a path the loader
  * skips (a `<Link>` into `/admin`, Back out of it) loads the new page afresh:
  * code that ran never shares a document with the admin, and a public page
@@ -80,8 +84,17 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
       return false;
     }
   }
+  function skipList() {
+    var paths = [];
+    document.querySelectorAll("script[${SITE_CODE_DATA_ATTRIBUTE}]").forEach(function (other) {
+      try {
+        paths = paths.concat(JSON.parse(other.textContent || "{}").skip || []);
+      } catch (e) {}
+    });
+    return paths;
+  }
   function skipped() {
-    return (data.skip || []).some(function (path) {
+    return skipList().some(function (path) {
       return location.pathname === path || location.pathname.indexOf(path + "/") === 0;
     });
   }

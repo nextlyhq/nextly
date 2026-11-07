@@ -573,8 +573,11 @@ export interface SiteCodeFacts {
   readonly siteOrigin: string;
   /** The hashes of its inline code, as CSP sources (`sha256-…`), by kind. */
   readonly hashes: Readonly<Record<SiteCodeInlineKind, readonly string[]>>;
-  /** Those of its inline code's hashes that no nonce can allow. */
-  readonly unnonceable: readonly string[];
+  /**
+   * Those of its inline code's hashes that no nonce can allow. Optional, so
+   * facts written before it existed still type; none when absent.
+   */
+  readonly unnonceable?: readonly string[];
   /** Every resource it loads, each once, as written. */
   readonly loads: readonly SiteCodeLoad[];
 }
@@ -934,7 +937,7 @@ function inlineNeeds(
   const rule = governing(policy, kind);
   if (rule === undefined) return [];
   // Code no nonce can allow needs its hash, whatever nonce the site passes.
-  const unnonceable = new Set(facts.unnonceable);
+  const unnonceable = new Set(facts.unnonceable ?? []);
   const blocked = facts.hashes[kind].filter(
     hash =>
       !allowsInline(

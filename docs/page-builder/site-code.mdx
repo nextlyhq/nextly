@@ -31,11 +31,11 @@ whoever views it, signed-in staff included. Only add code from sources you trust
 Code is checked on the server when it is saved, and anything off the list is refused
 with a reason, never quietly removed, so what is stored is what you wrote:
 
-| Where | Elements |
-| --- | --- |
-| Head and end of body | `<script>` (code, a module or JSON-LD), `<style>` |
-| Head only | `<meta>` (no `http-equiv`), `<link>` (hints, stylesheets, icons, the manifest, alternates) |
-| End of body only | `<noscript>` holding one `<img>` or `<iframe>`, the pixel tag managers use |
+| Where                | Elements                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| Head and end of body | `<script>` (code, a module or JSON-LD), `<style>`                                          |
+| Head only            | `<meta>` (no `http-equiv`), `<link>` (hints, stylesheets, icons, the manifest, alternates) |
+| End of body only     | `<noscript>` holding one `<img>` or `<iframe>`, the pixel tag managers use                 |
 
 Event handler attributes (`onload=`), a `nonce`, `<base>`, `<iframe>` outside
 `<noscript>`, and any URL that isn't `https:` or a path on your site are refused,
@@ -76,7 +76,9 @@ guards against this even when it is mounted in the wrong place:
 - Scripts, styles and stylesheet links are written to the page as data, not as
   elements. A small loader builds them only on a page that isn't framed by your own
   site (the canvas and the preview are), isn't under `/admin`, and isn't the canvas.
-  Pass `skip` to name more paths: `<SiteCode slot="head" skip={["/admin", "/studio"]} />`.
+  Pass `skip` to name more paths, as the app names them (a base path is added for you):
+  `<SiteCode slot="head" skip={["/admin", "/studio"]} />`. A path either place skips is
+  skipped in both.
 - Meta tags, link hints, icons, structured data and the no-script pixel run nothing,
   so they are written as they are, where crawlers and pages without scripting see
   them.

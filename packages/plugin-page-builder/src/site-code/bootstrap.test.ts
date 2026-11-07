@@ -170,6 +170,34 @@ describe("the loader, in order and kept out of the admin", () => {
   });
 });
 
+describe("where the loaders skip", () => {
+  it("skips a path either place names, in both places", async () => {
+    // The head skips only /admin; the end of the body also skips /studio.
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin"],
+      entries: [{ tag: "script", attrs: {}, text: "window.ran = ['head']" }],
+    });
+    const body = JSON.stringify({
+      slot: "body",
+      skip: ["/admin", "/studio"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {},
+          text: "window.ran = (window.ran || []).concat('body')",
+        },
+      ],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="body">${body}</script><script>${SITE_CODE_BOOTSTRAP}</script></body></html>`,
+      { url: "https://acme.example/studio", runScripts: "dangerously" }
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect((dom.window as unknown as { ran?: string[] }).ran).toBeUndefined();
+  });
+});
+
 describe("what the loader starts", () => {
   it("is what runs or styles the page, and nothing inert", () => {
     expect(isGatedSiteCode({ tag: "script", attrs: {}, text: "a()" })).toBe(
