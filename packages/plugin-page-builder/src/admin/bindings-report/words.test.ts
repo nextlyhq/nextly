@@ -48,8 +48,12 @@ describe("whatChanged", () => {
       codes: ["binding-field-missing"],
       binding: { source: "single", sourceKey: "footer", path: "links.label" },
     });
+    // Named as the admin names the Single, by its slug only where it has no label.
+    expect(
+      whatChanged({ ...single, sourceLabel: "Contact details" }, "Posts")
+    ).toBe("The Contact details Single has no field “label”");
     expect(whatChanged(single, "Posts")).toBe(
-      "The “footer” Single has no field “label”"
+      "The footer Single has no field “label”"
     );
   });
 
@@ -120,5 +124,12 @@ describe("whereBound and boundTo", () => {
     expect(
       boundTo(row({ binding: { source: "site", path: "name" } }), "Posts")
     ).toBe("Site › name");
+    const single = row({
+      binding: { source: "single", sourceKey: "contact", path: "slogan" },
+    });
+    expect(
+      boundTo({ ...single, sourceLabel: "Contact details" }, "Posts")
+    ).toBe("Contact details › slogan");
+    expect(boundTo(single, "Posts")).toBe("contact › slogan");
   });
 });

@@ -18,6 +18,8 @@ export interface BindingsToFixRow extends BindingReportRow {
   readonly blockLabel: string;
   /** The prop's name as the inspector shows it. */
   readonly propLabel: string;
+  /** The name the admin gives the Single it reads, when it reads a Single. */
+  readonly sourceLabel?: string;
 }
 
 /** One document in the answer. */

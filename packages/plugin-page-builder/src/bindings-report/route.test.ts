@@ -71,14 +71,15 @@ function routeOver(
 
 async function answer(
   route: ReturnType<typeof bindingsToFixRoute>,
-  query = ""
+  query = "",
+  ctx: unknown = {}
 ): Promise<{
-  items: { documentKey: string; rows: unknown[] }[];
+  items: { documentKey: string; rows: Record<string, unknown>[] }[];
   meta: Record<string, unknown>;
 }> {
   const response = await route.handler(
     new Request(`http://admin.test/bindings-to-fix${query}`),
-    {} as PluginRouteContext
+    ctx as PluginRouteContext
   );
   return (await response.json()) as never;
 }
@@ -128,5 +129,43 @@ describe("the bindings to fix route", () => {
     const second = await answer(route, "?place=pages&page=2");
     expect(second.items).toHaveLength(20);
     expect(second.meta).toMatchObject({ hasNext: false, hasPrev: true });
+  });
+
+  it("names a bound Single by its label, and by its slug when the registry can't say", async () => {
+    const bound: StoredDocumentReport = {
+      ...stored("a", "pages", ["content"]),
+      rows: [
+        {
+          ...row("content"),
+          binding: { source: "single", sourceKey: "contact", path: "slogan" },
+        },
+      ],
+    };
+    const route = routeOver([bound], { a: ["content"] });
+    const asked: unknown[] = [];
+    const labelled = await answer(route, "", {
+      services: {
+        singles: {
+          list: async (query: unknown) => {
+            asked.push(query);
+            return { data: [{ slug: "contact", label: "Contact details" }] };
+          },
+        },
+      },
+    });
+    expect(asked).toEqual([{ slugAllowlist: ["contact"], limit: 1 }]);
+    expect(labelled.items[0]?.rows[0]).toMatchObject({
+      sourceLabel: "Contact details",
+    });
+    const unread = await answer(route, "", {
+      services: {
+        singles: {
+          list: async () => {
+            throw new Error("registry unavailable");
+          },
+        },
+      },
+    });
+    expect(unread.items[0]?.rows[0]).not.toHaveProperty("sourceLabel");
   });
 });

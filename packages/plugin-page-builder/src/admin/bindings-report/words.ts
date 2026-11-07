@@ -30,7 +30,7 @@ const TYPE_WORDS: Readonly<Record<string, string>> = {
 function sourceWords(row: BindingsToFixRow, documentLabel: string): string {
   switch (row.binding.source) {
     case "single":
-      return `The “${row.binding.sourceKey ?? ""}” Single`;
+      return `The ${row.sourceLabel ?? row.binding.sourceKey ?? ""} Single`;
     case "site":
       return "The site settings";
     case "item":
@@ -65,7 +65,8 @@ export function whatChanged(row: BindingsToFixRow, entryLabel: string): string {
     return `${sourceWords(row, entryLabel)} has no field “${field}”`;
   }
   if (codes.has("binding-type-misfit")) {
-    const type = row.reaches === undefined ? undefined : TYPE_WORDS[row.reaches.type];
+    const type =
+      row.reaches === undefined ? undefined : TYPE_WORDS[row.reaches.type];
     return type === undefined
       ? `“${field}” no longer fits ${row.propLabel}`
       : `“${field}” is now ${type}; ${row.propLabel} can’t show it`;
@@ -124,7 +125,7 @@ export function whereBound(row: BindingsToFixRow): string {
 export function boundTo(row: BindingsToFixRow, entryLabel: string): string {
   const source =
     row.binding.source === "single"
-      ? (row.binding.sourceKey ?? "Single")
+      ? (row.sourceLabel ?? row.binding.sourceKey ?? "Single")
       : row.binding.source === "site"
         ? "Site"
         : row.binding.source === "item"
