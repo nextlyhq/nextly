@@ -50,6 +50,7 @@ import {
 } from "./bindings-report/scan";
 import { bindingReportStore } from "./bindings-report/store";
 import {
+  bindingsToFixAttention,
   bindingsToFixWidget,
   EDIT_PAGES_PERMISSION,
 } from "./bindings-report/widget";
@@ -2847,7 +2848,11 @@ export const pageBuilder = (
       // nothing. Declare it again alongside the check that reads it.
       // The "Bindings to fix" card, for those who edit pages, hidden while
       // they may see no broken binding.
-      dashboard: { widgets: [bindingsToFixWidget(bindingReportDeps.store)] },
+      dashboard: {
+        widgets: [bindingsToFixWidget(bindingReportDeps.store)],
+        // And a line on the Needs your attention card every dashboard shows.
+        attention: [bindingsToFixAttention(bindingReportDeps.store)],
+      },
       admin: {
         // What the editor in the browser needs of the options: see
         // `adminClientConfig`.

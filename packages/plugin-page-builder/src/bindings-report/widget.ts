@@ -10,8 +10,10 @@
  * @module bindings-report/widget
  */
 import {
+  defineAttentionItem,
   defineWidget,
   type AnyWidget,
+  type AttentionItem,
   type WidgetReadServices,
 } from "@nextlyhq/plugin-sdk";
 
@@ -74,6 +76,40 @@ async function readableCount(
   }
 }
 
+/** How many broken bindings the reader may see, as the card and the line count them. */
+async function bindingsReadable(
+  store: () => BindingReportStore | null,
+  services: WidgetReadServices,
+  signal: AbortSignal | undefined
+): Promise<number> {
+  const kept = store();
+  if (kept === null) return 0;
+  const { singles, byCollection } = grouped(await kept.list());
+  let bindings = singles;
+  for (const [collection, ids] of byCollection) {
+    bindings += await readableCount(services, collection, ids, signal);
+  }
+  return bindings;
+}
+
+/**
+ * The report's line on the dashboard's Needs your attention card, which every
+ * dashboard shows: how many bindings to fix, linking to the page. The card
+ * leaves out a line with nothing to count.
+ */
+export function bindingsToFixAttention(
+  store: () => BindingReportStore | null
+): AttentionItem {
+  return defineAttentionItem({
+    id: "page-builder/bindings-to-fix",
+    label: "Bindings to fix",
+    reason: "Bindings whose field or block changed after they were saved",
+    permission: EDIT_PAGES_PERMISSION,
+    link: "/plugins/nextlyhq-plugin-page-builder/bindings-to-fix",
+    count: ({ services, signal }) => bindingsReadable(store, services, signal),
+  });
+}
+
 /** The card's declaration, reading the report's store when it loads. */
 export function bindingsToFixWidget(
   store: () => BindingReportStore | null
@@ -87,16 +123,9 @@ export function bindingsToFixWidget(
     size: { default: { w: 6, h: 4 }, min: { w: 6, h: 4 } },
     access: EDIT_PAGES_PERMISSION,
     hidesWhenEmpty: true,
-    load: async ({ services, signal }) => {
-      const kept = store();
-      if (kept === null) return { bindings: 0 };
-      const { singles, byCollection } = grouped(await kept.list());
-      let bindings = singles;
-      for (const [collection, ids] of byCollection) {
-        bindings += await readableCount(services, collection, ids, signal);
-      }
-      return { bindings };
-    },
+    load: async ({ services, signal }) => ({
+      bindings: await bindingsReadable(store, services, signal),
+    }),
     view: { component: BINDINGS_TO_FIX_CARD_COMPONENT },
     isEmpty: data => data.bindings === 0,
   });
