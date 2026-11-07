@@ -235,7 +235,7 @@ function conditionMarksOf(
     // as the renderer reads them.
     const tree = resolveComponentInstances(
       revealConditioned(document),
-      asStoredDefinitions(composed.definitions, composed.limits),
+      asStoredDefinitions(composed.definitions),
       {
         conditioned: "carry",
         ...(composed.limits === undefined ? {} : { limits: composed.limits }),

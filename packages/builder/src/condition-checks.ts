@@ -25,8 +25,8 @@ import {
 import * as React from "react";
 
 import { useLoopCollections } from "./collection-loop-controls";
-import type { ContentServices, LoopCollection } from "./content-controls";
 import { asStoredDefinitions, gatedAsStored } from "./condition-gate";
+import type { ContentServices, LoopCollection } from "./content-controls";
 import { fieldSourceOf } from "./list-query-controls";
 
 /** Whether a stored value is a condition a row can show: a field and an operator. */
@@ -200,7 +200,7 @@ export function useConditionsUnchecked(
     // composed block holds only what its definition gave it.
     const composed = resolveComponentInstances(
       revealConditioned(document),
-      asStoredDefinitions(definitions, limits),
+      asStoredDefinitions(definitions),
       {
         conditioned: "carry",
         // Every limit the canvas composes under, so a site that raises the
