@@ -19,10 +19,10 @@
 import { getBlock } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
+  respondList,
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
-import { respondList } from "nextly";
 
 import { PAGES_SLUG } from "../collections/pages";
 

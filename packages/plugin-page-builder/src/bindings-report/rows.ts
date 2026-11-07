@@ -129,12 +129,14 @@ function sourceFields(
 /**
  * What a visitor sees where a binding with these problems is: nothing for a
  * prop the block no longer has, the fallback while it is valid, else the
- * block's own value.
+ * block's own value; and nothing for the document's metadata, which has no
+ * value of its own to show.
  */
 function showsFor(
   codes: readonly string[],
   binding: Readonly<Record<string, unknown>>,
-  own: unknown
+  own: unknown,
+  metadata: boolean
 ): BindingReportShows {
   if (codes.includes("binding-prop-missing")) return { kind: "nothing" };
   if (
@@ -143,7 +145,7 @@ function showsFor(
   ) {
     return { kind: "fallback", value: binding.fallback };
   }
-  return { kind: "own", value: own };
+  return metadata ? { kind: "nothing" } : { kind: "own", value: own };
 }
 
 /** What a stored binding reads, as a row names it. */
@@ -224,7 +226,7 @@ function rowAt(
     ...(field === undefined
       ? {}
       : { reaches: { name: field.name, type: field.type } }),
-    shows: showsFor(codes, bound, where.own),
+    shows: showsFor(codes, bound, where.own, where.blockType === ""),
   };
 }
 

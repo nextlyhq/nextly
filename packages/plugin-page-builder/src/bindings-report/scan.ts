@@ -387,15 +387,15 @@ async function settleDirty(
   reading: DocumentReading,
   deadline: Date
 ): Promise<boolean> {
-  const tried = new Set<string>();
+  // A cursor over the marked keys: each is tried once a pass, and one left
+  // marked (its judgement incomplete) is not read again until the next.
+  let after: string | undefined;
   for (;;) {
-    const batch = (await store.dirty(DIRTY_BATCH + tried.size)).filter(
-      marked => !tried.has(marked.document.documentKey)
-    );
+    const batch = await store.dirty(DIRTY_BATCH, after);
     if (batch.length === 0) return true;
     for (const marked of batch) {
       if (Date.now() >= deadline.getTime()) return false;
-      tried.add(marked.document.documentKey);
+      after = marked.document.documentKey;
       await settleOne(marked, store, deps, reading);
     }
   }

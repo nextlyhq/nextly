@@ -116,6 +116,8 @@ describe("a document's bindings to fix", () => {
         prop: "seo.title",
         binding: { source: "entry", path: "headline" },
         codes: ["binding-field-missing"],
+        // Metadata has no value of its own: with no fallback, nothing shows.
+        shows: { kind: "nothing" },
       }),
     ]);
   });

@@ -55,9 +55,14 @@ function memoryStore() {
         dirty: `t${String(tokens)}`,
       });
     },
-    dirty: async limit =>
-      [...rows.values()]
-        .filter(row => row.dirty !== null)
+    dirty: async (limit, after) =>
+      [...rows.entries()]
+        .filter(
+          ([key, row]) =>
+            row.dirty !== null && (after === undefined || key > after)
+        )
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([, row]) => row)
         .slice(0, limit)
         .map(row => ({ document: row.document, token: row.dirty ?? "" })),
     settle: async (marked, found) => {
@@ -299,6 +304,44 @@ describe("the check of every document", () => {
     // Not recorded clean: still marked, and the binding it had still listed.
     expect(memory.rows.get(key)?.dirty).not.toBeNull();
     expect(memory.rows.get(key)?.rows).toHaveLength(1);
+  });
+
+  it("reads each marked document once a pass, a document it can't judge included", async () => {
+    const memory = memoryStore();
+    const pages = site(
+      {
+        a: pageBinding("headline"),
+        b: pageBinding("title"),
+        c: pageBinding("title"),
+      },
+      () => "v1"
+    );
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    for (const id of ["a", "b", "c"]) {
+      await memory.store.markDirty({
+        documentKey: `collection:pages:${id}`,
+        kind: "collection",
+        slug: "pages",
+        documentId: id,
+        place: "pages",
+      });
+    }
+    pages.read.length = 0;
+    // "a" stays marked every time it is read; the pass must not loop on it.
+    const reading = {
+      ...pages.reading,
+      read: async (address: HostAddress) => {
+        if (address.id === "a") {
+          pages.read.push("a");
+          throw new Error("database unavailable");
+        }
+        return pages.reading.read(address);
+      },
+    };
+    await runFullCheck(pages.walk, deps(memory.store, reading), LATER());
+    expect([...pages.read].sort()).toEqual(["a", "b", "c"]);
+    expect(memory.rows.get("collection:pages:a")?.dirty).not.toBeNull();
+    expect(memory.rows.get("collection:pages:b")?.dirty).toBeNull();
   });
 
   it("drops a document's row once a complete check no longer finds it", async () => {
