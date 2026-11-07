@@ -196,6 +196,25 @@ wins) and call `notFound()` on a genuine miss or a reserved path (`/admin`,
 `/api`, `/_next`, `/static`, and metadata files like `sitemap.xml`). `status`
 behaves as in `resolveContent`.
 
+### A paginated list's pages
+
+Give either factory `listPages`, a function from a resolved entry to how many pages its
+paginated list has (or `null` when it paginates none), and the route also serves
+`<address>/page/<n>`. `render` and `buildMetadata` receive `context.page`, from 2, on a
+later page; the entry's own address is page 1. They also receive `context.listPagePath(n)`,
+the address of page `n` as the route serves it, for the list's links. A route mounted
+below the site root (`app/blocks/[[...slug]]`) says so with `mountPath: "/blocks"`, so its
+addresses and redirects carry the prefix. `/page/1` redirects permanently to the
+entry's own address, and a number past the last page, or spelled any other way (`0`, `02`,
+`1.5`), calls `notFound()`. A path matching an entry exactly is served as that entry
+first, so a page stored at `news/page/2` keeps its address. On the public route,
+`generateStaticParams` also lists each later page, up to the count at build and within
+`staticParamsLimit`; pages that come to exist later render on their first request. Blocks
+routes (`createBlocksPage`, `createPublicBlocksPage`) set `listPages` themselves for a page
+whose Collection list is split into pages. `listPages`, `mountPath`, `context.page`, `context.listPagePath` and the helpers
+`listPageOf`, `listPageNumber`, `slugToPath` and `LIST_PAGE_SEGMENT` (from `nextly/runtime`
+and `nextly/route-path`) are experimental.
+
 **Which factory you call decides whether access rules are consulted at all, so
 choose it per collection set, not per preference.**
 

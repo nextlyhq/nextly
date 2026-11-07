@@ -634,6 +634,56 @@ describe("a page drawn inside its Layout", () => {
     expect(meta.title).toBe("Entry title");
   });
 
+  it("spends a tight budget in metadata as the render does, when the page's conditions read the entry", async () => {
+    // A heading shown by a condition on the entry: no binding, but the entry
+    // read it needs comes after the Layout's, in the render and in metadata.
+    const content = doc([
+      {
+        ...heading("c", "Conditioned title", "h1"),
+        visibility: {
+          conditions: [
+            [{ field: "title", op: "equals", value: "Entry title" }],
+          ],
+        },
+      },
+    ]);
+    const routeWith = (maxQueries?: number) => {
+      const r = siteReader({ page: { content } });
+      return createBlocksPage({
+        collections: ["pages"],
+        field: "content",
+        nextly: r.nextly,
+        blocks: createBlockResolver(coreBlocks),
+        layouts: provider("main"),
+        metadata: (_entry, _context, derived) => ({
+          title: derived.title ?? "No derived title",
+        }),
+        ...(maxQueries === undefined ? {} : { maxQueries }),
+      });
+    };
+    const outcome = async (maxQueries?: number) => {
+      const element = await throughBoundary(
+        routeWith(maxQueries).ContentPage({ params: { slug: ["about"] } })
+      );
+      const html = renderToStaticMarkup(element as ReactElement);
+      const meta = await routeWith(maxQueries).generateMetadata({
+        params: { slug: ["about"] },
+      });
+      return { drawn: html.includes("Conditioned title"), title: meta.title };
+    };
+    // One claim: the Layout takes it, so the entry can't be read and the
+    // block fails closed; metadata, reading in the same order, agrees.
+    expect(await outcome(1)).toEqual({
+      drawn: false,
+      title: "No derived title",
+    });
+    // CONTROL: with room for both, the block shows and names the page.
+    expect(await outcome()).toEqual({
+      drawn: true,
+      title: "Conditioned title",
+    });
+  });
+
   it("renders exactly as before when the option is off", async () => {
     const off = await render(
       { page: { content: PAGE_BODY, layout: "landing" } },

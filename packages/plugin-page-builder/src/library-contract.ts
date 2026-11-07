@@ -707,6 +707,16 @@ export interface SiteBreakpointRemoval {
 export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
 
 /**
+ * The code an undo is refused with (409) when its breakpoints no longer fit
+ * the set: one is a breakpoint again, would end at another's width, or its
+ * axis is full. Editing the breakpoints is the way on; any other refusal is
+ * answered by reading Settings again.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_DOES_NOT_FIT = "BREAKPOINT_UNDO_DOES_NOT_FIT";
+
+/**
  * Values an undo could not put back into one document, for one reason (a
  * document may be listed once per reason):
  * - `changed`: something else was set there after the removal;
@@ -721,6 +731,16 @@ export interface SiteBreakpointUndoSkipped {
   readonly kind: "collection" | "single";
   readonly slug: string;
   readonly id?: string;
+  /**
+   * What the person asking knows the document by; absent for one they may
+   * not read, or one deleted since.
+   */
+  readonly name?: string;
+  /**
+   * Set on the site's shared styles, whatever slug their Single is
+   * registered under, so the person is told of them as such.
+   */
+  readonly sharedStyles?: true;
   readonly values: number;
   readonly reason:
     | "changed"
@@ -843,6 +863,43 @@ export interface SiteSettingsRead {
    * @experimental
    */
   readonly removals?: readonly SiteBreakpointRemovalStatus[];
+  /**
+   * The removal Settings may still undo: the newest, within its 30 days, not
+   * undone yet. `null` when there is none; absent where the site carries no
+   * removals out.
+   *
+   * @experimental
+   */
+  readonly undoable?: SiteBreakpointUndoable | null;
+}
+
+/**
+ * The removal that can still be undone, as the Site tab offers it.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoable {
+  readonly runId: string;
+  /** The breakpoints it removed, by id. */
+  readonly ids: readonly string[];
+  /** The same breakpoints, by the names the author knew them by. */
+  readonly labels: readonly string[];
+  /** When it was made, as an ISO date and time. */
+  readonly removedAt: string;
+  /** When its 30 days end, as an ISO date and time. */
+  readonly until: string;
+}
+
+/**
+ * What reading the removals alone answers (`GET` on the removal route with no
+ * run named): what the Site tab's read reports of them, without the rest of
+ * Settings, for an open Settings watching for a removal another tab started.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalsRead {
+  readonly removals: readonly SiteBreakpointRemovalStatus[];
+  readonly undoable: SiteBreakpointUndoable | null;
 }
 
 /**
@@ -852,8 +909,13 @@ export interface SiteSettingsRead {
  */
 export interface SiteBreakpointRemovalStatus {
   readonly runId: string;
-  /** The breakpoints it removed, by the names the author knew them by. */
+  /**
+   * The breakpoints it removed, by the names the author knew them by; for an
+   * undo, the ones it puts back.
+   */
   readonly labels: readonly string[];
+  /** For an undo: the removal it puts back. */
+  readonly undoes?: string;
   /** Whether it is still walking the site. */
   readonly open: boolean;
   /**
@@ -1222,6 +1284,15 @@ export interface VariableUseItem {
   readonly title: string;
   readonly collection: string;
   readonly kind: VariableUseKind;
+  /**
+   * For a shared style that is a block look, the block type it is bound to.
+   * Two block types' own looks may share an id, so a look is named by the
+   * pair: the panel opens the look `{ id, blockType }`. Absent for every
+   * other place.
+   *
+   * @experimental Settles when the Variables panel shows usage.
+   */
+  readonly blockType?: string;
 }
 
 /**

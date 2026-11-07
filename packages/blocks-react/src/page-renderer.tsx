@@ -13,20 +13,25 @@ import {
   type SiteSheetInput,
   type StyleCompileContext,
   type BreakpointSet,
-  type BindingIssue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
-import { BlockList, type BoundaryBindings } from "./block-boundary";
+import {
+  BlockList,
+  type BoundaryBindings,
+  type BoundaryConditions,
+} from "./block-boundary";
 import {
   createStandaloneContext,
   type BindingIssuesHandler,
   type BlockHostPolicy,
   type PageBindings,
   type PageContext,
+  type PageIssue,
 } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
+  heldConditionsOf,
   pageBindingRun,
   readStagesFor,
   rendersOwnMarkup,
@@ -41,6 +46,7 @@ import {
   gatedMapCoversPrunedNodes,
   hasDuplicateNodeIds,
   migrationChangedWhatDraws,
+  itemDecidedRules,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
@@ -192,12 +198,14 @@ export interface PageRendererProps {
  */
 function bindingIssueReport(
   handler: BindingIssuesHandler | undefined
-): (issues: readonly BindingIssue[]) => void {
+): (issues: readonly PageIssue[]) => void {
   const seen = new Set<string>();
   return issues => {
     if (handler === undefined) return;
     const fresh = issues.filter(issue => {
-      const key = `${issue.nodeId}\u0000${issue.prop}\u0000${issue.code}`;
+      // A binding is placed by its prop, a condition by where it is stored.
+      const at = "prop" in issue ? issue.prop : issue.path;
+      const key = `${issue.nodeId}\u0000${at}\u0000${issue.code}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -734,7 +742,11 @@ export function PageRenderer({
   const boundaryBindings: BoundaryBindings | undefined =
     bindingRun === undefined
       ? undefined
-      : { run: bindingRun, bound: stages.boundValues, report };
+      : {
+          run: bindingRun,
+          bound: stages.boundValues,
+          report,
+        };
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
@@ -900,7 +912,7 @@ export function PageRenderer({
     remotePatterns: hostPolicy?.remotePatterns,
   });
 
-  const { css, classes, scope } = resolvePageStyles(
+  const resolvedStyles = resolvePageStyles(
     styleInput,
     styles,
     compileContext,
@@ -918,6 +930,21 @@ export function PageRenderer({
       storedDocument: doc,
     }
   );
+  const { css, classes, scope } = resolvedStyles;
+  // The rules of each block a list's item decides, served beside the first
+  // instance a list draws, so a block no item shows publishes nothing.
+  const itemRules = itemDecidedRules(resolvedStyles, styleInput, drawsNothing);
+  // Threaded apart from the bindings, so a page drawn with list data and no
+  // bindings still decides its items' conditions and serves their rules.
+  const boundaryConditions: BoundaryConditions = {
+    // The blocks the route kept because their conditions held for the page's
+    // entry, drawn where any other conditioned block is not.
+    held: heldConditionsOf(prepared),
+    report,
+    ...(itemRules.size === 0
+      ? {}
+      : { itemRules, itemRulesServed: new Set<string>() }),
+  };
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
   // Tokens LAYERED over the defaults, never replacing them: a site supplying
@@ -1058,6 +1085,7 @@ export function PageRenderer({
         {...(boundaryBindings === undefined
           ? {}
           : { bindings: boundaryBindings })}
+        conditions={boundaryConditions}
       />
     </div>
   );

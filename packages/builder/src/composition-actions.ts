@@ -35,7 +35,10 @@ import {
   type ExposureEditResult,
   type ExposureSources,
   type ExposureTarget,
+  CONDITION_MAX,
+  CONDITION_OPS,
   LIST_FILTER_OPS,
+  type ConditionOp,
   type ListFilter,
   type ListRelation,
   type OpPosition,
@@ -89,12 +92,26 @@ export type PageAction =
    * offset, each part set when given, removed when `null`, and kept as
    * stored when absent. The write is judged as an editor save is, so a limit
    * outside 1 to 100, a negative offset, a field the collection lacks or
-   * visitors can't see, and a related list nested too deep are refused.
+   * visitors can't see, a related list nested too deep, and a split into
+   * pages a page cannot serve are refused.
    */
   | {
       readonly kind: "set-list-query";
       readonly listId: string;
       readonly query: ListQueryChange;
+    }
+  /**
+   * Set a block's visibility conditions: an OR of AND groups of
+   * `{ field, op, value? }`, or `null` to show it to everyone. The write is
+   * judged as an editor save is, so an operator conditions do not have, a
+   * field the entry or list item lacks or visitors can't see, and a value
+   * its field does not take are refused. The devices a block shows on are
+   * kept.
+   */
+  | {
+      readonly kind: "set-conditions";
+      readonly nodeId: string;
+      readonly conditions: readonly (readonly ConditionInput[])[] | null;
     }
   /**
    * Choose the page's Layout: a Layout's id, or `null` for the site's default.
@@ -127,6 +144,24 @@ export interface ListQueryChange {
   readonly limit?: number | null;
   /** How many matching entries to skip, from 0. */
   readonly offset?: number | null;
+  /**
+   * Split into pages of `limit` entries, each at its own address
+   * (`/news/page/2`). One list on a page may be, and not one inside another
+   * list, one showing related entries, or one in a component or a Layout
+   * region; the write is refused naming the reason.
+   */
+  readonly paginate?: boolean | null;
+}
+
+/**
+ * One condition a `set-conditions` action sets, as a block stores it.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ConditionInput {
+  readonly field: string;
+  readonly op: ConditionOp;
+  readonly value?: string | number | boolean;
 }
 
 /** Which part of a block an exposure targets: a prop, or its visibility. */
@@ -239,7 +274,30 @@ const pageActionOptions = [
       sort: z.string().max(2048).nullable().optional(),
       limit: z.number().nullable().optional(),
       offset: z.number().nullable().optional(),
+      paginate: z.boolean().nullable().optional(),
     }),
+  }),
+  z.strictObject({
+    kind: z.literal("set-conditions"),
+    nodeId: id,
+    // The shape a block stores, in the operators' own spellings, and no
+    // more: whether a field fits its entry, visitors may read it, or a value
+    // fits it is the page's blocks field to judge on the write, in the
+    // editor's own words.
+    conditions: z
+      .array(
+        z
+          .array(
+            z.strictObject({
+              field: id,
+              op: z.enum(CONDITION_OPS),
+              value: filterScalar.optional(),
+            })
+          )
+          .max(CONDITION_MAX)
+      )
+      .max(CONDITION_MAX)
+      .nullable(),
   }),
   z.strictObject({
     kind: z.literal("set-layout"),

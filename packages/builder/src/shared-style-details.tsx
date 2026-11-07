@@ -34,10 +34,15 @@ import {
   type SharedStyleRemoval,
   type SharedStyleReach,
   type SharedStyleRow,
-  type SharedStyleUse,
   type SharedStyleUsesPage,
 } from "./shared-style-library";
 import type { SharedStylesAccess } from "./shared-styles-panel";
+import {
+  useUses,
+  USES_PAGE_SIZE,
+  type UsesPage,
+  type UsesRead,
+} from "./uses-read";
 
 /**
  * Remove through the host, with the in-use signal where it gives one: its
@@ -52,9 +57,6 @@ export async function removeSharedStylesThrough(
   }
   return sharedStyleRefusalOf(await access.remove(ids));
 }
-
-/** How many documents one where-used page names. */
-const USES_PAGE = 20;
 
 export interface SharedStyleDetailsProps {
   row: SharedStyleRow;
@@ -391,63 +393,6 @@ function Declares({
   );
 }
 
-/** The where-used pages read so far, and how the last read went. */
-interface UsesRead {
-  readonly items: readonly SharedStyleUse[];
-  readonly last: SharedStyleUsesPage | undefined;
-  readonly page: number;
-  /** The last page that arrived; behind `page` while that one is coming. */
-  readonly loaded: number;
-  readonly failed: boolean;
-}
-
-/** The documents a style is used on, read a page at a time from the route. */
-function useUses(
-  access: SharedStylesAccess | undefined,
-  id: string
-): { read: UsesRead; more: () => void } {
-  const [read, setRead] = React.useState<UsesRead>({
-    items: [],
-    last: undefined,
-    page: 1,
-    loaded: 0,
-    failed: false,
-  });
-  React.useEffect(() => {
-    if (access === undefined) return;
-    const controller = new AbortController();
-    access.uses(id, read.page, controller.signal).then(
-      answer => {
-        if (controller.signal.aborted) return;
-        setRead(current => ({
-          ...current,
-          items: [...current.items, ...answer.items],
-          last: answer,
-          loaded: current.page,
-        }));
-      },
-      () => {
-        if (controller.signal.aborted) return;
-        setRead(current => ({ ...current, failed: true }));
-      }
-    );
-    return () => controller.abort();
-  }, [access, id, read.page]);
-  // The next page follows the last one that arrived, and only once the one
-  // asked for has: a second press while a page is coming would otherwise
-  // abort it and append the page after it, losing a page of documents.
-  const more = React.useCallback(
-    () =>
-      setRead(current =>
-        current.loaded < current.page
-          ? current
-          : { ...current, page: current.loaded + 1 }
-      ),
-    []
-  );
-  return { read, more };
-}
-
 /** Where a style is used: the reach in words, then the documents by name. */
 function WhereUsed({
   id,
@@ -458,7 +403,7 @@ function WhereUsed({
   sentence: string;
   access: SharedStylesAccess | undefined;
 }): React.JSX.Element {
-  const { read, more } = useUses(access, id);
+  const { read, more } = useUses(access?.uses, id);
   return (
     <div className="nx-vars-editor__field">
       <span className="nx-vars-editor__label">Where it&rsquo;s used</span>
@@ -475,20 +420,11 @@ function UsesList({
   read,
   onMore,
 }: {
-  read: UsesRead;
+  read: UsesRead<SharedStyleUsesPage>;
   onMore: () => void;
 }): React.JSX.Element {
   const { last, items } = read;
-  if (read.failed) {
-    return <Refusal refusal="Where it’s used could not be read." />;
-  }
-  if (last === undefined) {
-    return (
-      <p className="nx-shared-styles__meta" role="status">
-        Reading where it&rsquo;s used&hellip;
-      </p>
-    );
-  }
+  if (last === undefined || read.failed) return <UsesUnread read={read} />;
   return (
     <>
       {items.length === 0 ? null : (
@@ -504,11 +440,55 @@ function UsesList({
           ))}
         </ul>
       )}
-      <ShowMore
-        hidden={last.hasNext ? last.total - items.length : 0}
-        pageSize={USES_PAGE}
-        onMore={onMore}
-      />
+      <UsesTail last={last} listed={items.length} onMore={onMore} />
+    </>
+  );
+}
+
+/**
+ * A where-used list not read yet: that it is being read, or that the read
+ * failed. Shared by every tab that lists where something is used.
+ */
+export function UsesUnread({
+  read,
+}: {
+  read: { readonly failed: boolean };
+}): React.JSX.Element {
+  if (read.failed) {
+    return <Refusal refusal="Where it’s used could not be read." />;
+  }
+  return (
+    <p className="nx-shared-styles__meta" role="status">
+      Reading where it&rsquo;s used&hellip;
+    </p>
+  );
+}
+
+/**
+ * Under a where-used list: "Show N more" while pages follow, that the list
+ * may be short while pages are being counted, and the places counted but
+ * not named because this author may not open them.
+ */
+export function UsesTail({
+  last,
+  listed,
+  onMore,
+}: {
+  last: UsesPage<unknown>;
+  /** How many places the list names so far. */
+  listed: number;
+  /** The next page. Absent: the list is a first few, and offers no more. */
+  onMore?: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      {onMore === undefined ? null : (
+        <ShowMore
+          hidden={last.hasNext ? last.total - listed : 0}
+          pageSize={USES_PAGE_SIZE}
+          onMore={onMore}
+        />
+      )}
       {last.complete ? null : (
         <p className="nx-shared-styles__meta">{SHARED_STYLE_NOT_WHOLE_NOTE}</p>
       )}

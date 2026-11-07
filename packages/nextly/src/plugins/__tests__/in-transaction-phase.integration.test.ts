@@ -167,7 +167,11 @@ describeEachDialect("the in-transaction phase", dialect => {
     ctx.hooks.onInTransaction("orders", keepLedger);
 
     const id = await createOrder("first");
-    await nextly().update({ collection: "orders", id, data: { title: "2" } });
+    await nextly().update({
+      collection: "orders",
+      id,
+      data: { title: "2", _overwrite: true },
+    });
     await nextly().delete({ collection: "orders", id });
 
     expect(await ledgerRows(ctx)).toEqual([
@@ -218,7 +222,11 @@ describeEachDialect("the in-transaction phase", dialect => {
     });
 
     const update = await rejectionOf(() =>
-      nextly().update({ collection: "orders", id, data: { title: "lost" } })
+      nextly().update({
+        collection: "orders",
+        id,
+        data: { title: "lost", _overwrite: true },
+      })
     );
     const remove = await rejectionOf(() =>
       nextly().delete({ collection: "orders", id })
@@ -270,7 +278,7 @@ describeEachDialect("the in-transaction phase", dialect => {
     await nextly().update({
       collection: "orders",
       id,
-      data: { title: "after" },
+      data: { title: "after", _overwrite: true },
     });
 
     expect(attempts).toEqual(["update", "update"]);
@@ -361,7 +369,7 @@ describeEachDialect("the in-transaction phase", dialect => {
     await nextly().update({
       collection: "orders",
       id,
-      data: { title: "after" },
+      data: { title: "after", _overwrite: true },
       context: sent,
     });
 
@@ -406,7 +414,11 @@ describeEachDialect("the in-transaction phase", dialect => {
       data: { title: "a" },
     });
     const id = created.item.id as string;
-    await nextly().update({ collection: "notes", id, data: { title: "b" } });
+    await nextly().update({
+      collection: "notes",
+      id,
+      data: { title: "b", _overwrite: true },
+    });
     await nextly().delete({ collection: "notes", id });
 
     expect(asked.mock.calls.map(([collection]) => collection)).toEqual([
@@ -445,7 +457,7 @@ describeEachDialect(
           tx,
           "orders",
           createdId,
-          { title: "two" },
+          { title: "two", _overwrite: true },
           {}
         );
         return createdId;
@@ -483,7 +495,7 @@ describeEachDialect(
             tx,
             "orders",
             String(created.id),
-            { title: "rolled back too" },
+            { title: "rolled back too", _overwrite: true },
             {}
           );
           throw failure;
@@ -540,7 +552,7 @@ describeEachDialect(
           tx,
           "orders",
           id,
-          { title: "two" },
+          { title: "two", _overwrite: true },
           {}
         );
       });

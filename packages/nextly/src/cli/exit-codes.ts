@@ -8,6 +8,8 @@
  */
 import type { Command } from "commander";
 
+import { REPAIR_COLUMNS_EXIT_HELP } from "../domains/schema/repair-columns/exit-code";
+
 /** The codes every command ends with. */
 const SHARED_EXIT_CODES =
   "0 done or nothing to do · 1 failed or refused · 130 interrupted";
@@ -20,6 +22,9 @@ export const COMMAND_EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   // `migrateExitCode`: an edited applied file is told apart from any other
   // failure.
   migrate: ["2 an applied migration file was edited since it ran"],
+  // `REPAIR_COLUMNS_EXIT`: when more than one holds, could not run (1), then
+  // failed or interrupted (3), then differences remain (2).
+  "repair-columns": REPAIR_COLUMNS_EXIT_HELP,
   // `COMPONENT_MAP_CHECK_EXIT`.
   "generate:types": [
     "with --check: 2 the component map is out of step with the config, 1 it could not be checked",

@@ -23,10 +23,16 @@ import {
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import {
+  lockSharedStyle,
+  removeSharedStyles,
+  siteStyleClassStore,
+  type SharedStyleUsageSource,
+} from "../shared-styles-routes";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 
@@ -100,6 +106,27 @@ function backfillTick(plugin: PluginDefinition): () => Promise<unknown> {
       } as never
     );
 }
+
+/** The slice of the Direct API the routes' class store reads and writes. */
+type ClassApi = Parameters<typeof siteStyleClassStore>[1];
+
+/**
+ * The usage index's answer for a site whose styles nothing uses. The index
+ * itself is driven over HTTP above; these cases are about the Single's write.
+ */
+const NOTHING_USED: SharedStyleUsageSource = {
+  health: async () => ({
+    coversExistingDocuments: true,
+    anyUndetermined: false,
+  }),
+  documentsUsingEach: async ids =>
+    new Map(ids.map(id => [id, { collections: [], complete: true }])),
+  kindOf: () => "pages",
+};
+
+/** A route's request, as its handler is handed it. */
+const routeRequest = (body: unknown) =>
+  new Request(`${ORIGIN}/x`, { method: "POST", body: JSON.stringify(body) });
 
 describe.each(getConfiguredTestDialects())(
   "shared styles (%s)",
@@ -551,6 +578,107 @@ describe.each(getConfiguredTestDialects())(
         "Still used on 1 page you can't open."
       );
       expect(JSON.stringify(unnamed.body)).not.toContain("Home");
+    });
+
+    /**
+     * The routes' class store over the Direct API, with another save of the
+     * Single made just before each of the route's first `times` writes: a
+     * fixed interleave, not a race. That save renames hero, a style the
+     * route does not touch.
+     */
+    function interleaved(t: TestNextly, times: number) {
+      const real = t.nextly as unknown as ClassApi;
+      const writes = { count: 0 };
+      let renames = 0;
+      const api: ClassApi = {
+        findSingle: args => real.findSingle(args),
+        updateSingle: async args => {
+          writes.count += 1;
+          if (writes.count <= times) {
+            renames += 1;
+            const classes = await stored(t);
+            await t.nextly.updateSingle({
+              slug: SITE_STYLE_SLUG,
+              data: {
+                classes: classes.map(entry =>
+                  entry.id === "c-hero"
+                    ? { ...entry, label: `Hero ${renames}` }
+                    : entry
+                ),
+                _overwrite: true,
+              },
+              overrideAccess: true,
+            });
+          }
+          return real.updateSingle(args);
+        },
+      };
+      const store = siteStyleClassStore(
+        { self: { singles: {}, collections: {} }, user: null } as never,
+        api
+      );
+      return { store, writes };
+    }
+
+    it("locks a style when another save lands first, keeping that save's change", async () => {
+      const { t } = await boot();
+      const { store, writes } = interleaved(t, 1);
+      const answer = await lockSharedStyle(
+        routeRequest({ classId: "c-spare", locked: true }),
+        store,
+        new Set()
+      );
+      expect(answer.status).toBe(200);
+      // Refused once as made from a replaced version, then made again.
+      expect(writes.count).toBe(2);
+      expect(await stored(t)).toEqual([
+        lockedCard,
+        { ...hero, label: "Hero 1" },
+        { ...spare, locked: true },
+      ]);
+    });
+
+    it("removes a style when another save lands first, keeping that save's change", async () => {
+      const { t } = await boot();
+      const { store, writes } = interleaved(t, 1);
+      const stillUsed = {
+        uses: vi.fn(async () => []),
+        firstReadable: async () => undefined,
+      };
+      const answer = await removeSharedStyles(
+        routeRequest({ ids: ["c-spare"] }),
+        store,
+        NOTHING_USED,
+        new Set(),
+        stillUsed
+      );
+      expect(answer.status).toBe(200);
+      expect(writes.count).toBe(2);
+      expect(await stored(t)).toEqual([
+        lockedCard,
+        { ...hero, label: "Hero 1" },
+      ]);
+      // The stored documents do not depend on the Single: walked once.
+      expect(stillUsed.uses).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a lock as stale after three writes when the Single keeps changing, storing nothing of it", async () => {
+      const { t } = await boot();
+      const { store, writes } = interleaved(t, Number.POSITIVE_INFINITY);
+      await expect(
+        lockSharedStyle(
+          routeRequest({ classId: "c-spare", locked: true }),
+          store,
+          new Set()
+        )
+      ).rejects.toMatchObject({ code: "STALE_VERSION", statusCode: 409 });
+      expect(writes.count).toBe(3);
+      // Every other save is kept; the lock is not.
+      expect(await stored(t)).toEqual([
+        lockedCard,
+        { ...hero, label: "Hero 3" },
+        spare,
+      ]);
     });
 
     it("refuses a page that adds a class the site does not define, and keeps one it already held", async () => {
