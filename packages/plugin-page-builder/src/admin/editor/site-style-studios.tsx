@@ -57,10 +57,13 @@ import { createPortal } from "react-dom";
 import { catalogueFileUrl } from "../../site-fonts/contract";
 import {
   classOverrideOf,
+  resolveSiteStyle,
   tokenOverrideOf,
   tokenSaveOutcome,
   type SiteStyleData,
 } from "../../site-style";
+import { readSiteStyleRecord } from "../../site-style-record";
+import { sameStoredValue } from "../../stored-json";
 import { useSharedStylesClient } from "../shared-styles-client";
 import {
   useFontCatalogueClient,
@@ -244,21 +247,40 @@ export function TokensStudio({
   const latest = useRef<SiteTokenSet | null>(null);
 
   const commit = (next: SiteTokenSet): void => {
+    /*
+     * What this edit was made from, taken before it is shown: the set on
+     * screen, as the stored tier holds it. The save is merged onto the
+     * section as stored now from this base, so a token someone else saved
+     * meanwhile is kept rather than dropped by a copy that never saw it.
+     */
+    const shownBefore = shownNow() ?? editable;
+    const base =
+      shownBefore === undefined
+        ? undefined
+        : tokenOverrideOf(baseline, shownBefore);
     show(next);
     setIssue(undefined);
     latest.current = next;
-    void save(
-      "tokens",
-      /*
-       * Only what DIFFERS from the site's own defaults. `merged` is what the
-       * canvas compiles, so saving it whole would copy every config token into
-       * the database on the first edit and mask the site's code from then on.
-       */
-      tokenOverrideOf(baseline, next),
-      { hold: true }
-    ).then(result =>
-      settleTokenSave(result, next, { latest, persisted }, show, setIssue)
-    );
+    /*
+     * Only what DIFFERS from the site's own defaults. `merged` is what the
+     * canvas compiles, so saving it whole would copy every config token into
+     * the database on the first edit and mask the site's code from then on.
+     */
+    const sent = tokenOverrideOf(baseline, next);
+    void save("tokens", sent, {
+      hold: true,
+      ...(base === undefined ? {} : { base }),
+    }).then(result => {
+      settleTokenSave(result, next, { latest, persisted }, show, setIssue);
+      adoptMergedTokens(
+        result,
+        sent,
+        next,
+        supplied,
+        { latest, persisted },
+        show
+      );
+    });
   };
 
   /*
@@ -369,6 +391,79 @@ function settleTokenSave(
   if (result.saved) refs.persisted.current = next;
   if (outcome.tokens !== undefined) show(outcome.tokens);
   if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
+}
+
+/**
+ * After a save merged onto a newer stored copy, the studio shows what was
+ * stored: the author's edit with what someone else saved kept, so their
+ * change appears and the next edit builds on it. Only for the latest edit,
+ * and only where the merge stored something other than what was sent.
+ */
+function adoptMergedTokens(
+  result: { readonly saved: boolean; readonly stored?: unknown },
+  sent: SiteTokenSet,
+  next: SiteTokenSet,
+  supplied: SiteTokenSet | undefined,
+  refs: {
+    readonly latest: { current: SiteTokenSet | null };
+    readonly persisted: { current: SiteTokenSet | null };
+  },
+  show: (tokens: SiteTokenSet | null) => void
+): void {
+  if (!result.saved || result.stored === undefined) return;
+  if (refs.latest.current !== next || sameStoredValue(result.stored, sent)) {
+    return;
+  }
+  const adopted = tokensFromStored(supplied, result.stored);
+  refs.latest.current = adopted;
+  refs.persisted.current = adopted;
+  show(adopted);
+}
+
+/**
+ * A stored token section as the studio shows it: read as the editor reads
+ * the document, over the site's code and the engine's defaults.
+ */
+function tokensFromStored(
+  supplied: SiteTokenSet | undefined,
+  stored: unknown
+): SiteTokenSet {
+  return resolveSiteTokens(
+    resolveSiteStyle(
+      supplied === undefined ? {} : { tokens: supplied },
+      readSiteStyleRecord({ tokens: stored })
+    ).tokens
+  );
+}
+
+/**
+ * A stored class section as the class surface holds it: read as the editor
+ * reads the document, over the site's config classes.
+ */
+function classesFromStored(
+  configured: readonly NamedClass[] | undefined,
+  stored: unknown
+): readonly NamedClass[] {
+  return (
+    resolveSiteStyle(
+      configured === undefined ? {} : { classes: configured },
+      readSiteStyleRecord({ classes: stored })
+    ).classes ?? NO_CLASSES
+  );
+}
+
+/**
+ * The class list a stored save leaves: the merge as stored, when the save
+ * was merged onto a newer copy, else the list composed for it.
+ */
+function classesAfterSave(
+  result: { readonly stored?: unknown },
+  composed: readonly NamedClass[],
+  configured: readonly NamedClass[] | undefined
+): readonly NamedClass[] {
+  return result.stored === undefined
+    ? composed
+    : classesFromStored(configured, result.stored);
 }
 
 /**
@@ -846,18 +941,25 @@ function useAddClass(
          * MERGED set the canvas compiles, so saving it whole would copy every
          * config class into the database and mask the site's code from then on.
          */
+        // Merged from the list it was composed against, so a style saved
+        // elsewhere meanwhile is kept.
         const result = await saveSection(
           "classes",
-          classOverrideOf(configured, next)
+          classOverrideOf(configured, next),
+          { base: classOverrideOf(configured, existing) }
         );
         // `next` is returned ONLY on success, so a refused write never becomes
-        // the base the following edit builds on.
+        // the base the following edit builds on; the merge as stored, where
+        // the save met a newer one.
         const refused = refusalOf(
           result,
           "This shared style could not be saved."
         );
         return refused === undefined
-          ? { result: undefined, next }
+          ? {
+              result: undefined,
+              next: classesAfterSave(result, next, configured),
+            }
           : { result: refused };
       }),
     [writes, configured, saveSection]
@@ -940,16 +1042,20 @@ function useWriteClassStyles(
             if (out.kind !== "gone") baseline = now;
             return out;
           };
-        const result = await slot.save(classOverrideOf(configured, next), {
-          undo: replay(undo),
-          redo: replay(change),
-        });
+        const result = await slot.save(
+          classOverrideOf(configured, next),
+          { undo: replay(undo), redo: replay(change) },
+          { base: classOverrideOf(configured, existing) }
+        );
         const refused = refusalOf(
           result,
           "This shared style could not be changed."
         );
         return refused === undefined
-          ? { result: undefined, next }
+          ? {
+              result: undefined,
+              next: classesAfterSave(result, next, configured),
+            }
           : { result: refused };
       });
     },
@@ -1013,9 +1119,19 @@ function useRenameClass(
               ? { ...entry, label: name.label, slug: name.slug }
               : entry
           );
-          // A refused save withdraws its place itself.
-          const result = await slot.save(classOverrideOf(configured, next));
-          if (result.saved) return { result: { ok: true as const }, next };
+          // A refused save withdraws its place itself. Merged from the list
+          // it was composed against, the next edit builds on what was stored.
+          const result = await slot.save(
+            classOverrideOf(configured, next),
+            undefined,
+            { base: classOverrideOf(configured, existing) }
+          );
+          if (result.saved) {
+            return {
+              result: { ok: true as const },
+              next: classesAfterSave(result, next, configured),
+            };
+          }
           const reasons = Object.values(result.issues);
           return {
             result: {
@@ -1209,13 +1325,16 @@ function useFontFaceWriter(
         source: { kind: "upload" },
       };
 
-      const next = [...appendBase(stored, written.current), face];
-      const result = await saveSiteStyle("fonts", next);
+      // The faces this add was made from, which the save is merged onto
+      // the stored ones from: a face added elsewhere meanwhile is kept.
+      const base = appendBase(stored, written.current);
+      const next = [...base, face];
+      const result = await saveSiteStyle("fonts", next, { base });
       if (result.saved) {
         // Stored and referenced, so the next add starts clean rather than
         // pointing a second face at the first face's bytes.
         uploaded.current = null;
-        written.current = next;
+        written.current = facesAfterSave(result, next);
         return undefined;
       }
       /*
@@ -1244,14 +1363,16 @@ function useFontFaceWriter(
       if (unreadableFonts.length > 0) {
         return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and removing one would replace it. Repair or remove that entry first.`;
       }
-      const next = withoutFamily(
-        appendBase(stored, written.current),
-        family.key
-      );
-      const result = await saveSiteStyle("fonts", next);
+      const base = appendBase(stored, written.current);
+      const next = withoutFamily(base, family.key);
+      const result = await saveSiteStyle("fonts", next, { base });
       if (result.saved) {
-        // Forgotten here too, or the next upload would put it back.
-        written.current = withoutFamily(written.current, family.key);
+        // Forgotten here too, or the next upload would put it back; the
+        // merge as stored, where the save met a newer one.
+        written.current =
+          result.stored === undefined
+            ? withoutFamily(written.current, family.key)
+            : facesAfterSave(result, next);
         return undefined;
       }
       const reasons = Object.values(result.issues);
@@ -1263,6 +1384,20 @@ function useFontFaceWriter(
   );
 
   return { add, remove };
+}
+
+/**
+ * The faces a stored save leaves: the merge as stored, read as the editor
+ * reads the document, when the save was merged onto a newer copy, else the
+ * faces sent.
+ */
+function facesAfterSave(
+  result: { readonly stored?: unknown },
+  sent: readonly FontFaceDef[]
+): readonly FontFaceDef[] {
+  return result.stored === undefined
+    ? sent
+    : (readSiteStyleRecord({ fonts: result.stored }).fonts ?? []);
 }
 
 /**

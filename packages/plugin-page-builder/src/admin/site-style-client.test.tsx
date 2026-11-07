@@ -58,6 +58,9 @@ const routeWrites: unknown[] = [];
 let refetches = 0;
 /** Whether the read after a write answers that it failed. */
 let readFails = false;
+/** What a fresh read answers with, and how many were made. */
+let freshAnswer: () => unknown = () => readAnswer.data;
+let freshReads = 0;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
 /** What the form's storing gate was handed to wait for, in order. */
@@ -71,6 +74,10 @@ vi.mock("./site-style-read", () => ({
     refetch: async () => {
       refetches += 1;
       return { isError: readFails };
+    },
+    readFresh: async () => {
+      freshReads += 1;
+      return freshAnswer();
     },
   }),
 }));
@@ -144,6 +151,8 @@ beforeEach(() => {
   routeWrites.length = 0;
   refetches = 0;
   readFails = false;
+  freshAnswer = () => readAnswer.data;
+  freshReads = 0;
   writeOptions = undefined;
   tracked.length = 0;
 });
@@ -250,37 +259,42 @@ describe("saving the space between blocks", () => {
   });
 });
 
-describe("a save across two studios", () => {
-  it("stores both sections, refusing neither", async () => {
-    // A page save releases each studio's held edit at once. The server is
-    // modelled as the Single's update judges a write: one that names neither
-    // the current version nor an overwrite is refused. Both writes are this
-    // editor's, so both must be stored.
-    let current = 3;
-    readAnswer = {
+/** The admin transport's refusal of a write made from a replaced version. */
+function staleRefusal(currentVersion: string, changedBy?: string): Error {
+  return Object.assign(
+    new Error("This document changed since the version you gave."),
+    {
+      status: 409,
+      code: "STALE_VERSION",
       data: {
-        tokens: null,
-        fonts: null,
-        classes: null,
-        breakpoints: null,
-        _rev: "3",
+        currentVersion,
+        ...(changedBy === undefined
+          ? {}
+          : { changedBy: { kind: "person", name: changedBy } }),
       },
-      isPending: false,
-      error: null,
-    };
+    }
+  );
+}
+
+describe("a save across two studios", () => {
+  it("stores both sections, the second read again and merged after its refusal", async () => {
+    // A page save releases each studio's held edit at once. The server is
+    // modelled as the Single's update judges a write: one that names a
+    // version other than the current one is refused. Both studios read
+    // version 3; the second write is refused once, read again, and stored.
+    let current = 3;
+    const doc = () => ({
+      tokens: null,
+      fonts: null,
+      classes: null,
+      breakpoints: null,
+      _rev: String(current),
+    });
+    readAnswer = { data: doc(), isPending: false, error: null };
+    freshAnswer = doc;
     writeBehaviour = async () => {
       const sent = writes[writes.length - 1] ?? {};
-      const overwrite = overwrites[overwrites.length - 1];
-      if (overwrite !== true && sent._rev !== String(current)) {
-        throw Object.assign(
-          new Error("This document changed since the version you gave."),
-          {
-            status: 409,
-            code: "STALE_VERSION",
-            data: { currentVersion: String(current) },
-          }
-        );
-      }
+      if (sent._rev !== String(current)) throw staleRefusal(String(current));
       current += 1;
       return { id: "1", _rev: String(current) };
     };
@@ -296,12 +310,203 @@ describe("a save across two studios", () => {
     });
 
     expect(results).toEqual([
-      { saved: true, issues: {} },
-      { saved: true, issues: {} },
+      { saved: true, issues: {}, stored: { tokens: [] } },
+      { saved: true, issues: {}, stored: [] },
     ]);
-    // Last writer wins, on purpose: each write says so, and names no version.
-    expect(writes).toEqual([{ tokens: { tokens: [] } }, { fonts: [] }]);
-    expect(overwrites).toEqual([true, true]);
+    // Each write names the version it was merged onto, and none overwrites.
+    expect(writes).toEqual([
+      { tokens: { tokens: [] }, _rev: "3" },
+      { fonts: [], _rev: "3" },
+      { fonts: [], _rev: "4" },
+    ]);
+    expect(overwrites).toEqual([undefined, undefined, undefined]);
+    expect(freshReads).toBe(1);
+  });
+});
+
+describe("a save merged onto the newest stored copy", () => {
+  const card = { id: "c1", slug: "card", orderIndex: 0, styles: {} };
+  const hero = { id: "c2", slug: "hero", orderIndex: 1, styles: {} };
+  const promo = { id: "c3", slug: "promo", orderIndex: 2, styles: {} };
+
+  it("keeps a style saved since the studio's base, and sends the read's version", async () => {
+    // The studio built its list before hero was saved elsewhere; the read
+    // already holds hero, so the merge keeps it without a refusal.
+    readAnswer = {
+      data: { classes: [card, hero], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    writeBehaviour = async () => ({ id: "1", _rev: "6" });
+    const { result } = renderHook(() => useSaveSiteStyle());
+    const renamed = { ...card, label: "Promo card" };
+    let verdict: unknown;
+    await act(async () => {
+      verdict = await result.current.save("classes", [renamed], {
+        base: [card],
+      });
+    });
+    expect(writes).toEqual([{ classes: [renamed, hero], _rev: "5" }]);
+    expect(verdict).toEqual({
+      saved: true,
+      issues: {},
+      stored: [renamed, hero],
+    });
+    expect(freshReads).toBe(0);
+  });
+
+  it("reads again after a stale refusal and merges onto the fresh copy", async () => {
+    readAnswer = {
+      data: { classes: [card], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    freshAnswer = () => ({ classes: [card, promo], _rev: "6" });
+    let calls = 0;
+    writeBehaviour = async () => {
+      calls += 1;
+      if (calls === 1) throw staleRefusal("6", "Sam");
+      return { id: "1", _rev: "7" };
+    };
+    const { result } = renderHook(() => useSaveSiteStyle());
+    const renamed = { ...card, label: "Promo card" };
+    let verdict: unknown;
+    await act(async () => {
+      verdict = await result.current.save("classes", [renamed], {
+        base: [card],
+      });
+    });
+    expect(writes).toEqual([
+      { classes: [renamed], _rev: "5" },
+      { classes: [renamed, promo], _rev: "6" },
+    ]);
+    expect(verdict).toMatchObject({ saved: true, stored: [renamed, promo] });
+    expect(freshReads).toBe(1);
+  });
+
+  it("answers the true conflicts it settled, with who caused them", async () => {
+    // Both changed card's name: mine is kept and the conflict is described,
+    // naming Sam because exactly one save came between versions 5 and 6.
+    readAnswer = {
+      data: { classes: [card], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    const theirs = { ...card, label: "Their card" };
+    freshAnswer = () => ({ classes: [theirs], _rev: "6" });
+    let calls = 0;
+    writeBehaviour = async () => {
+      calls += 1;
+      if (calls === 1) throw staleRefusal("6", "Sam");
+      return { id: "1", _rev: "7" };
+    };
+    const { result } = renderHook(() => useSaveSiteStyle());
+    const mine = { ...card, label: "My card" };
+    let verdict: { stored?: unknown; conflicts?: unknown } | undefined;
+    await act(async () => {
+      verdict = await result.current.save("classes", [mine], { base: [card] });
+    });
+    expect(verdict?.stored).toEqual([mine]);
+    expect(verdict?.conflicts).toEqual({
+      entries: [
+        {
+          key: "c1",
+          setting: false,
+          kind: "changed",
+          kept: "mine",
+          base: card,
+          mine,
+          theirs,
+        },
+      ],
+      refusal: {
+        changedBy: { name: "Sam", kind: "person" },
+        oneSaveBetween: true,
+      },
+    });
+  });
+
+  it("is refused as kept changing after three stale refusals", async () => {
+    readAnswer = {
+      data: { classes: [card], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    let current = 5;
+    freshAnswer = () => ({ classes: [card], _rev: String(current) });
+    writeBehaviour = async () => {
+      current += 1;
+      throw staleRefusal(String(current));
+    };
+    const { result } = renderHook(() => useSaveSiteStyle());
+    let verdict: unknown;
+    await act(async () => {
+      verdict = await result.current.save("classes", [hero], { base: [card] });
+    });
+    expect(writes).toHaveLength(3);
+    expect(verdict).toMatchObject({ saved: false, keptChanging: true });
+  });
+
+  it("undoes onto the newest copy, yielding to a change made since", async () => {
+    // Mine renamed card and was stored; someone then renamed it again. The
+    // undo cannot take back a change that is no longer there, so theirs stays.
+    const steps: { undo: () => Promise<unknown> }[] = [];
+    const history = {
+      record: (step: { undo: () => Promise<unknown> }) => {
+        steps.push(step);
+        return () => {};
+      },
+      settled: new Map(),
+    };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={history}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    readAnswer = {
+      data: { classes: [card], _rev: "5" },
+      isPending: false,
+      error: null,
+    };
+    const mine = { ...card, label: "My card" };
+    const theirs = { ...card, label: "Their card" };
+    let calls = 0;
+    writeBehaviour = async () => {
+      calls += 1;
+      if (calls === 2) throw staleRefusal("7", "Sam");
+      return { id: "1", _rev: String(5 + calls) };
+    };
+    freshAnswer = () => ({ classes: [theirs], _rev: "7" });
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("classes", [mine], { base: [card] });
+    });
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes).toEqual([
+      { classes: [mine], _rev: "5" },
+      // Undo's first try, made from this editor's own write: back to card.
+      { classes: [card], _rev: "6" },
+      // Refused; merged onto their rename, which it yields to.
+      { classes: [theirs], _rev: "7" },
+    ]);
+  });
+
+  it("writes the section alone, unmerged, when the read gives no version", async () => {
+    // A server that issues no versions: the write is made as it always was.
+    readAnswer = {
+      data: { classes: [card, hero] },
+      isPending: false,
+      error: null,
+    };
+    const { result } = renderHook(() => useSaveSiteStyle());
+    let verdict: unknown;
+    await act(async () => {
+      verdict = await result.current.save("classes", [promo], { base: [card] });
+    });
+    expect(writes).toEqual([{ classes: [promo] }]);
+    expect(verdict).toEqual({ saved: true, issues: {} });
   });
 });
 
