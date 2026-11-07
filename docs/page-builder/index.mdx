@@ -430,6 +430,55 @@ to this claims its published pages' addresses in the background after start-up,
 oldest first; a page that clashes with an older one waits for it and appears in the
 waiting report.
 
+### Serving a collection's entries
+
+A collection defined in code can serve each of its entries at its own address,
+drawn with the collection's template. Declare where in the plugin's options:
+
+```ts
+pageBuilder({ templates: { addresses: { posts: "/blog" } } });
+```
+
+Once the collection's template is published, each published post is served at
+`/blog/<its slug>`. Write the address as a visitor requests it: starting with
+`/`, ending without one, with no empty or `.` segment, and not `/` itself or under
+a path the runtime keeps (`/admin`, `/api`, …). Two collections may not share an
+address, and the collection needs a `slug` text field. Anything else stops the
+site from starting, naming what is wrong.
+
+An entry's address is held like a page's, from the save that publishes it: saving
+an entry at an address another document holds is refused, naming it, and
+unpublishing, deleting or renaming the entry frees it. When a template is first
+published over entries whose addresses a page already holds, those entries wait
+and are served as soon as the page frees the address.
+
+Pages and entries are served by one route, which answers every path from the
+addresses the site holds:
+
+```tsx title="app/(frontend)/[...slug]/page.tsx"
+import { createContentPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
+import { previewDraftGate } from "nextly/runtime";
+
+const { ContentPage, generateMetadata } = createContentPage({
+  ...pageBuilderContent(),
+  pages: {
+    collections: ["pages"],
+    field: "content",
+    draft: previewDraftGate(),
+  },
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+A page is served as `createBlocksPage` serves it. An entry is drawn with its
+collection's published template, reading the entry as a visitor would, and takes
+its title, description and image from the template's SEO settings. A path nobody
+holds is not found, and so is an entry whose collection has no published template.
+`createPublicContentPage` is the cached, pre-rendered form.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your

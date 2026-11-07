@@ -25,9 +25,12 @@ import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
+import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
+import { collectionFields } from "../domains/collections/services/collection-utils";
 import type { StoredReads } from "../domains/collections/services/stored-field-read";
 import type { ContentEventSubject } from "../domains/content-events/record";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
+import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { JobRegistry } from "../domains/jobs/job-registry";
 import type { JobsPassDatabase } from "../domains/jobs/jobs-runner";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
@@ -1489,6 +1492,10 @@ export const PLUGIN_SERVICE_NAMES = [
   // The Singles read a plugin's own-Single read goes through
   // (`ownCollections.getSingleInTransaction`), resolved on first use.
   "singleEntryService",
+  // The registries a host read judges a collection's, a Single's and a
+  // component's fields from (`ownCollections.*Host*InTransaction`).
+  "collectionRegistryService",
+  "fieldGroupRegistryService",
   "db",
   "relations",
   "dialect",
@@ -2066,25 +2073,29 @@ export function createPluginContext(
               ? SingleRegistryService
               : T extends "singleEntryService"
                 ? SingleEntryService
-                : T extends "db"
-                  ? DatabaseInstance
-                  : T extends "relations"
-                    ? AnyRelations
-                    : T extends "dialect"
-                      ? SupportedDialect
-                      : T extends "logger"
-                        ? Logger
-                        : T extends "config"
-                          ? NextlyServiceConfig
-                          : T extends "adapter"
-                            ? AdapterTransactions
-                            : T extends "jobRegistry"
-                              ? JobRegistry
-                              : T extends "jobsDatabase"
-                                ? JobsPassDatabase
-                                : T extends "webhookFastDrainScheduler"
-                                  ? WebhookFastDrainScheduler | null
-                                  : never,
+                : T extends "collectionRegistryService"
+                  ? CollectionRegistryService
+                  : T extends "fieldGroupRegistryService"
+                    ? FieldGroupRegistryService
+                    : T extends "db"
+                      ? DatabaseInstance
+                      : T extends "relations"
+                        ? AnyRelations
+                        : T extends "dialect"
+                          ? SupportedDialect
+                          : T extends "logger"
+                            ? Logger
+                            : T extends "config"
+                              ? NextlyServiceConfig
+                              : T extends "adapter"
+                                ? AdapterTransactions
+                                : T extends "jobRegistry"
+                                  ? JobRegistry
+                                  : T extends "jobsDatabase"
+                                    ? JobsPassDatabase
+                                    : T extends "webhookFastDrainScheduler"
+                                      ? WebhookFastDrainScheduler | null
+                                      : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2533,6 +2544,34 @@ export function createPluginContext(
         {
           owned: Object.values(self.singles),
           service: () => getServiceFn("singleEntryService"),
+        },
+        // What a host read is judged against: this plugin's field types, and
+        // each schema as the registries hold it when the read is made, so a
+        // collection created or changed at runtime is judged as it is now.
+        // The registries are asked inside the read's transaction scope, so
+        // they read on its connection.
+        {
+          fieldTypes: (plugin?.contributes?.fieldTypes ?? []).map(
+            fieldType => fieldType.type
+          ),
+          fieldsOf: async (kind, slug) => {
+            if (kind === "Single") {
+              const record = await getServiceFn(
+                "singleRegistryService"
+              ).getSingleBySlug(slug);
+              return record?.fields ?? null;
+            }
+            const record = await getServiceFn(
+              "collectionRegistryService"
+            ).getCollectionBySlug(slug);
+            return record === null ? null : collectionFields(record);
+          },
+          componentFields: async slug =>
+            (
+              await getServiceFn(
+                "fieldGroupRegistryService"
+              ).getComponentBySlug(slug)
+            )?.fields ?? null,
         }
       ),
       // The plugin view, refusing the writes that decide who administers the
