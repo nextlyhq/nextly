@@ -105,7 +105,7 @@ export function bindingsToFixAttention(
     label: "Bindings to fix",
     reason: "Bindings whose field or block changed after they were saved",
     permission: EDIT_PAGES_PERMISSION,
-    link: "/plugins/nextlyhq-plugin-page-builder/bindings-to-fix",
+    link: "plugins/nextlyhq-plugin-page-builder/bindings-to-fix",
     count: ({ services, signal }) => bindingsReadable(store, services, signal),
   });
 }
