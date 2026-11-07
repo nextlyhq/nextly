@@ -104,6 +104,13 @@ describe("one Entry content block per template", () => {
         ENTRY_CONTENT_TYPE
       )
     ).toBe(ONE_REASON);
+    // Not while the collection's fields are unknown, and offered once known.
+    expect(
+      entryContentRefusal(documentOf("template"), ENTRY_CONTENT_TYPE, false)
+    ).toBe("Loading the collection’s fields…");
+    expect(
+      entryContentRefusal(documentOf("template"), ENTRY_CONTENT_TYPE, true)
+    ).toBeUndefined();
     // Another block is never refused by it.
     expect(
       entryContentRefusal(
@@ -224,6 +231,27 @@ describe("Entry content in the Add panel", () => {
         .getByRole("option", { name: "Heading" })
         .getAttribute("data-refused")
     ).toBeNull();
+  });
+
+  it("is refused, saying why, while the collection's fields are on their way, and inserts nothing", () => {
+    registerLibrary();
+    const editor = editorOf(documentOf("template"));
+    render(
+      <PreviewedEntryProvider
+        value={{ kind: "none", reason: "loading" }}
+        collection={{ ...POSTS, blocksFields: undefined }}
+      >
+        <InsertPanel editor={editor} />
+      </PreviewedEntryProvider>
+    );
+    const tile = screen.getByRole("option", { name: "Entry content" });
+    expect(tile.getAttribute("data-refused")).toBe("true");
+    expect(document.body.textContent).toContain(
+      "Loading the collection’s fields…"
+    );
+    fireEvent.click(tile);
+    // Placed now it would name no field, and nothing would fill it later.
+    expect(editor.apply).not.toHaveBeenCalled();
   });
 
   it("is not listed at all outside a template", () => {

@@ -32,6 +32,13 @@ import {
 const ENTRY_CONTENT_ONE_REASON = "A template holds one Entry content block.";
 
 /**
+ * Why an Entry content block cannot be added yet: the template's
+ * collection's blocks fields are still being read, and one placed now would
+ * name no field for anything to fill.
+ */
+const ENTRY_CONTENT_LOADING_REASON = "Loading the collection’s fields…";
+
+/**
  * Whether the Add panel offers a block of `blockName` in a document of
  * `kind`: every block anywhere, but Entry content in a template only.
  */
@@ -41,16 +48,20 @@ export function offeredIn(kind: unknown, blockName: string): boolean {
 
 /**
  * Why a block of `blockName` cannot be added to `document`, or `undefined`
- * when the template's one Entry content block does not stand in the way.
+ * when nothing about Entry content stands in the way: the template's one is
+ * already placed, or the collection's blocks fields are not known yet
+ * (`fieldsKnown`), so the block would be placed naming none.
  */
 export function entryContentRefusal(
   document: BlockDocument,
-  blockName: string
+  blockName: string,
+  fieldsKnown = true
 ): string | undefined {
   if (blockName !== ENTRY_CONTENT_TYPE) return undefined;
-  return entryContentPlacements(document.nodes).length > 0
-    ? ENTRY_CONTENT_ONE_REASON
-    : undefined;
+  if (entryContentPlacements(document.nodes).length > 0) {
+    return ENTRY_CONTENT_ONE_REASON;
+  }
+  return fieldsKnown ? undefined : ENTRY_CONTENT_LOADING_REASON;
 }
 
 /**

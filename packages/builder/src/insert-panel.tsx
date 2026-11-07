@@ -989,7 +989,11 @@ export function useInsertOffers({
   // The field an Entry content block draws once placed: the template's
   // collection's first top-level blocks field, so the stored choice is
   // explicit from the start.
-  const firstBlocksField = usePreviewedCollection()?.blocksFields?.[0]?.name;
+  const blocksFields = usePreviewedCollection()?.blocksFields;
+  const firstBlocksField = blocksFields?.[0]?.name;
+  // Whether the field a placed Entry content block names can be filled: not
+  // while the collection's fields are on their way.
+  const entryFieldsKnown = blocksFields !== undefined;
 
   // Inside a list the canvas shows empty, a block goes to its empty state.
   const showingEmpty = editor.listsShowingEmpty;
@@ -1031,6 +1035,7 @@ export function useInsertOffers({
         components: componentDefinitions,
         expansion: { definitions: blockSource, nesting },
         editor,
+        entryFieldsKnown,
       });
   /*
    * Add an entry where its offer says, or nothing when it was refused.
@@ -1192,8 +1197,10 @@ export function InsertPanel({
     inside,
     onInsert,
   });
-  // The field a dragged Entry content block draws, as a click places it.
-  const firstBlocksField = usePreviewedCollection()?.blocksFields?.[0]?.name;
+  // The field a dragged Entry content block draws, as a click places it,
+  // and whether it can be known yet.
+  const blocksFields = usePreviewedCollection()?.blocksFields;
+  const firstBlocksField = blocksFields?.[0]?.name;
   // The tab's share of the catalog, then the query. Refused entries stay, so
   // an empty list means the query matched nothing, or the tab holds nothing.
   const groups = paletteGroups(
@@ -1407,7 +1414,8 @@ export function InsertPanel({
                         entry.kind === "block" &&
                         entryContentRefusal(
                           editor.document,
-                          entry.blockName
+                          entry.blockName,
+                          blocksFields !== undefined
                         ) !== undefined,
                     });
                   }}
@@ -1528,6 +1536,7 @@ interface OfferCache {
   readonly definitions: unknown;
   readonly nesting: unknown;
   readonly editor: unknown;
+  readonly entryFieldsKnown: boolean;
   readonly offers: ReadonlyMap<string, EntryOffer>;
 }
 
@@ -1541,6 +1550,8 @@ interface OfferInputs {
   readonly expansion: EntryPlacement["expansion"];
   /** Asked what the locks say of an insert; its identity changes with the document. */
   readonly editor: Pick<EditorState, "lockRefusalFor">;
+  /** Whether the template's collection's blocks fields are known yet. */
+  readonly entryFieldsKnown: boolean;
 }
 
 /**
@@ -1563,7 +1574,8 @@ function cachedOffers(
     held.components === inputs.components &&
     held.definitions === inputs.expansion.definitions &&
     held.nesting === inputs.expansion.nesting &&
-    held.editor === inputs.editor
+    held.editor === inputs.editor &&
+    held.entryFieldsKnown === inputs.entryFieldsKnown
   ) {
     return held.offers;
   }
@@ -1577,6 +1589,7 @@ function cachedOffers(
     definitions: inputs.expansion.definitions,
     nesting: inputs.expansion.nesting,
     editor: inputs.editor,
+    entryFieldsKnown: inputs.entryFieldsKnown,
     offers,
   };
   return offers;
@@ -1602,7 +1615,11 @@ function offersFor(inputs: OfferInputs): ReadonlyMap<string, EntryOffer> {
     // template's one Entry content block, already placed.
     const anywhere =
       entry.kind === "block"
-        ? entryContentRefusal(inputs.document, entry.blockName)
+        ? entryContentRefusal(
+            inputs.document,
+            entry.blockName,
+            inputs.entryFieldsKnown
+          )
         : undefined;
     if (anywhere !== undefined) {
       offers.set(entry.id, { entry, refusal: anywhere });
