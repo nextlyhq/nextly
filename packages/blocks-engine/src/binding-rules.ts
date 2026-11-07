@@ -223,6 +223,13 @@ export type BindingSchemaRef =
  */
 export interface BindingSchemaSource {
   fieldsOf(ref: BindingSchemaRef): readonly BindingFieldShape[] | undefined;
+  /**
+   * Whether the shapes list an entry's `createdAt` and `updatedAt` where the
+   * source has them. Then one unlisted is missing, as any other field is;
+   * otherwise it is judged by the value it reads, as shapes that never list
+   * them leave it to be.
+   */
+  readonly listsTimestamps?: boolean;
 }
 
 /**
@@ -576,14 +583,20 @@ function shapelessRest(remaining: number): PathWalk {
 
 /**
  * A path naming a field its source's schema does not list: one every entry
- * carries is judged by its value, any other is missing.
+ * carries is judged by its value, any other is missing. A timestamp is one
+ * only where the shapes do not list timestamps: where they do, a source
+ * without them has none.
  */
 function unlistedField(
   name: string,
   index: number,
-  segments: readonly string[]
+  segments: readonly string[],
+  schema: BindingSchemaSource
 ): PathWalk {
-  if (index === 0 && SYSTEM_FIELDS.has(name)) {
+  const carried =
+    name === "id" ||
+    (SYSTEM_FIELDS.has(name) && schema.listsTimestamps !== true);
+  if (index === 0 && carried) {
     return shapelessRest(segments.length - MAX_SEGMENTS_WITHOUT_SCHEMA + 1);
   }
   return walkFailure(
@@ -613,7 +626,9 @@ function walkPath(
     const field: BindingFieldShape | undefined = fields.find(
       candidate => candidate.name === name
     );
-    if (field === undefined) return unlistedField(name, index, segments);
+    if (field === undefined) {
+      return unlistedField(name, index, segments, schema);
+    }
     if (last) return { ok: true, field };
     const step = stepInto(field, hops, schema);
     if (!step.ok) return step;
