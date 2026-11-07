@@ -35,7 +35,10 @@ import {
 } from "../services/collections/trust-grant";
 import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
-import { runReadsInTransaction } from "../shared/lib/read-transaction-scope";
+import {
+  type ReadLock,
+  runReadsInTransaction,
+} from "../shared/lib/read-transaction-scope";
 import type { AuthUser } from "../types/auth";
 
 import type { PluginSingleRecord } from "./plugin-singles";
@@ -1043,9 +1046,32 @@ export type OwnCollectionReadOpts = Pick<
  * also holds them against other transactions' locking reads, for a read
  * that goes on to write the rows it read, so two such transactions take
  * turns rather than each holding a shared lock the other's write waits on.
+ *
+ * `none` (`@experimental`) is a plain read on the transaction's own
+ * connection: no `FOR SHARE` or `FOR UPDATE`, so it waits for no other
+ * writer and holds nothing it read. It is for a caller holding a lock of its
+ * own (a lock row each of its writes takes first, say) that reads rows
+ * another writer may be updating: a locking read waits for that writer, and
+ * when the writer is itself waiting for the caller's lock the two wait on
+ * each other until the database refuses one of them. Under READ COMMITTED
+ * (PostgreSQL's default) the plain read sees the latest committed rows;
+ * under REPEATABLE READ (MySQL's default) it answers from the transaction's
+ * snapshot, which may predate a commit the caller's lock was meant to order
+ * it after, and the caller must guard against that itself. SQLite has one
+ * connection and takes no row locks, so there the three read alike.
  */
 export type OwnTransactionReadOpts = OwnCollectionReadOpts & {
-  readonly lock?: "share" | "update";
+  readonly lock?: "share" | "update" | "none";
+};
+
+/**
+ * @experimental What a read of a Single on a transaction may also say: its
+ * row's lock on PostgreSQL and MySQL, `share` (the default) or `none`, as
+ * {@link OwnTransactionReadOpts} describes them. A Single's read has no
+ * `update`: it is one row, read to answer a document rather than to write it.
+ */
+export type OwnSingleTransactionReadOpts = OwnCollectionReadOpts & {
+  readonly lock?: Exclude<OwnTransactionReadOpts["lock"], "update">;
 };
 
 /**
@@ -1090,7 +1116,9 @@ export interface PluginOwnCollectionReads {
    * stop on a short page rather than on the total. A settled token, or a
    * collection this plugin did not declare, is refused before anything is
    * read. `opts.lock: "update"` reads the rows for update instead, for a
-   * read that goes on to write them (see {@link OwnTransactionReadOpts}).
+   * read that goes on to write them, and `opts.lock: "none"`
+   * (`@experimental`) reads them with no lock, for a caller holding a lock of
+   * its own (see {@link OwnTransactionReadOpts}).
    */
   listEntriesInTransaction(
     tx: PluginCollectionTransaction,
@@ -1102,7 +1130,8 @@ export interface PluginOwnCollectionReads {
    * @experimental {@link findEntryById}, read on the transaction `tx` stands
    * for, as {@link listEntriesInTransaction} reads: on its connection, and on
    * PostgreSQL and MySQL with a shared lock on the row, held until the
-   * transaction ends. Same answer.
+   * transaction ends, unless `opts.lock` names another
+   * ({@link OwnTransactionReadOpts}). Same answer.
    */
   findEntryByIdInTransaction(
     tx: PluginCollectionTransaction,
@@ -1114,7 +1143,9 @@ export interface PluginOwnCollectionReads {
    * @experimental A Single this plugin declared, as stored, read on the
    * transaction `tx` stands for, as {@link listEntriesInTransaction} reads:
    * on its connection, and on PostgreSQL and MySQL with a shared lock on the
-   * Single's row, held until the transaction ends.
+   * Single's row, held until the transaction ends. `opts.lock: "none"`
+   * (`@experimental`) reads the row with no lock
+   * ({@link OwnSingleTransactionReadOpts}).
    *
    * Answers the document the Singles read answers, shaped by none of the
    * Single's read hooks (`beforeOperation`, `beforeRead`, `afterRead`) or its
@@ -1126,7 +1157,7 @@ export interface PluginOwnCollectionReads {
   getSingleInTransaction(
     tx: PluginCollectionTransaction,
     slug: string,
-    opts?: OwnCollectionReadOpts
+    opts?: OwnSingleTransactionReadOpts
   ): Promise<SingleDocument>;
   /**
    * @experimental {@link listEntriesInTransaction}, of a HOST collection: one
@@ -1161,11 +1192,12 @@ export interface PluginOwnCollectionReads {
    * @experimental {@link getSingleInTransaction}, of a HOST Single: one that
    * holds a field of a type this plugin registered, at any depth, judged at
    * the call as {@link listHostEntriesInTransaction} judges a collection.
+   * Same lock (`opts.lock`).
    */
   getHostSingleInTransaction(
     tx: PluginCollectionTransaction,
     slug: string,
-    opts?: OwnCollectionReadOpts
+    opts?: OwnSingleTransactionReadOpts
   ): Promise<SingleDocument>;
   /**
    * @experimental Which collections and Singles hold a field of a type this
@@ -1490,7 +1522,7 @@ export function ownCollectionReads(
   const onTransaction = async <T>(
     token: PluginCollectionTransaction,
     readOwned: () => Promise<T>,
-    lock: "share" | "update" = "share"
+    lock: ReadLock = "share"
   ): Promise<T> => {
     const { tx, scope } = transactionOf(token);
     scope.assertOpen();
@@ -1573,7 +1605,7 @@ export function ownCollectionReads(
     findEntryByIdInTransaction: (tx, slug, id, opts) =>
       onTransaction(tx, () => findEntryById(slug, id, opts), opts?.lock),
     getSingleInTransaction: (tx, slug, opts) =>
-      onTransaction(tx, () => getSingleUnder(single, slug, opts)),
+      onTransaction(tx, () => getSingleUnder(single, slug, opts), opts?.lock),
     // The same reads under a grant decided at the call, inside the
     // transaction's scope, before the service is reached.
     listHostEntriesInTransaction: (tx, slug, options, opts) =>
@@ -1591,8 +1623,10 @@ export function ownCollectionReads(
         opts?.lock
       ),
     getHostSingleInTransaction: (tx, slug, opts) =>
-      onTransaction(tx, async () =>
-        getSingleUnder(await hostGrant("Single", slug), slug, opts)
+      onTransaction(
+        tx,
+        async () => getSingleUnder(await hostGrant("Single", slug), slug, opts),
+        opts?.lock
       ),
     // Listings and schemas only: no content row is read, so no grant is
     // issued, and the token is checked and the work tracked as above.

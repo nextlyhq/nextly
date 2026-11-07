@@ -1544,7 +1544,7 @@ export class SingleQueryService extends BaseService {
     if (!joinable) {
       // Inside a read routed to a plugin's transaction the row is read with a
       // shared lock (`readLocksRows`): the latest committed row, held until
-      // that transaction ends.
+      // that transaction ends. A read that asked for no lock reads it plainly.
       const doc = await this.adapter.selectOne<SingleDocument>(
         singleMeta.tableName,
         readLocksRows(this.adapter) ? { forShare: true } : {}

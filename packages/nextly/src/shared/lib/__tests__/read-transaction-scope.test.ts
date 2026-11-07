@@ -210,6 +210,51 @@ describe("the shared lock a routed read takes", () => {
     }
   });
 
+  it("takes no lock when the scope asks for none, and still reads on the transaction, on both dialects", async () => {
+    for (const dialect of ["postgresql", "mysql"] as const) {
+      const { adapter } = standInAdapter(dialect);
+      const reader = new Reader(adapter, consoleLogger);
+      const { query, calls } = lockable();
+      await runReadsInTransaction(
+        standInTransaction(),
+        async () => {
+          // The query unchanged, as a read outside the scope is.
+          expect(lockedForRead(query, adapter, table)).toBe(query);
+          // The Singles read's choice between `forShare` and a plain read.
+          expect(readLocksRows(adapter)).toBe(false);
+          // A plain read, not a pooled one: still on the transaction's
+          // connection, so it sees what the transaction wrote.
+          expect(reader.handle()).toBe(TX_WITH_RELATIONS);
+          expect(await reader.selectRows()).toEqual([{ executor: TX }]);
+        },
+        "none"
+      );
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("takes the shared lock by default and when asked for it by name, the control for none", async () => {
+    for (const dialect of ["postgresql", "mysql"] as const) {
+      const { adapter } = standInAdapter(dialect);
+      const { query, calls } = lockable();
+      await runReadsInTransaction(standInTransaction(), async () => {
+        expect(readLocksRows(adapter)).toBe(true);
+        lockedForRead(query, adapter, table);
+      });
+      await runReadsInTransaction(
+        standInTransaction(),
+        async () => {
+          expect(readLocksRows(adapter)).toBe(true);
+          lockedForRead(query, adapter, table);
+        },
+        "share"
+      );
+      const share =
+        dialect === "postgresql" ? ["share", { of: table }] : ["share"];
+      expect(calls).toEqual([share, share]);
+    }
+  });
+
   it("takes MySQL's clause, which names no table", async () => {
     const { adapter } = standInAdapter("mysql");
     const { query, calls } = lockable();
