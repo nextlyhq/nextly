@@ -19,7 +19,10 @@
  *
  * @module templates/template-guard
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginCollectionTransaction,
+} from "@nextlyhq/plugin-sdk";
 
 import {
   TEMPLATE_COLLECTION_FIELD,
@@ -186,6 +189,14 @@ export function templateCollectionRefusal(message: string): NextlyError {
   });
 }
 
+/**
+ * The hook context key a template action's own write carries when the action
+ * asked the guard's questions before opening its transaction, and asks the
+ * ones that can change meanwhile again once it has committed: giving an
+ * entry its own design checks the entry before, and again after.
+ */
+export const ASKED_BEFORE_CONTEXT = "pageBuilder.templateAskedBefore";
+
 /** What the guard is built with. */
 export interface TemplateGuardSetup {
   /** The RESOLVED templates slug: a host may rename it. */
@@ -196,6 +207,15 @@ export interface TemplateGuardSetup {
   readonly holderOf: TemplateHolderRead;
   /** Whether `collection` holds an entry `id`, in any state, read as the system. */
   readonly entryExists: (collection: string, id: string) => Promise<boolean>;
+  /**
+   * Hold the entry's own lock row until `tx` ends: taken by giving an entry
+   * its own design and by deleting the entry, so the two take turns.
+   */
+  readonly lockEntry: (
+    tx: PluginCollectionTransaction,
+    collection: string,
+    id: string
+  ) => Promise<void>;
 }
 
 /** The parts of a `beforeChange` hook context the guard reads. */
@@ -385,7 +405,9 @@ async function judgeCollection(
  */
 function skipsReads(context: GuardContext): boolean {
   if (context.executor === undefined) return false;
-  if (recordOf(context.context)?.[JUDGEMENT_CONTEXT] === true) return true;
+  const marked = recordOf(context.context);
+  if (marked?.[JUDGEMENT_CONTEXT] === true) return true;
+  if (marked?.[ASKED_BEFORE_CONTEXT] === true) return true;
   throw templateCollectionRefusal(
     "A template's collection cannot be checked inside a bulk operation. Create or change the template on its own."
   );

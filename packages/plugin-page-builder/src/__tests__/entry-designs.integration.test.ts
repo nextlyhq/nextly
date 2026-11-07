@@ -305,6 +305,29 @@ describe.each(getConfiguredTestDialects())(
       expect(remove.status).toBe(403);
     });
 
+    it("keeps an entry's own design when its template is deleted, naming the template no longer", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      const template = await publishedTemplate(t, cookie);
+      const hello = await entry(t, "Hello world");
+      await act(cookie, {
+        kind: "give-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      expect((await designs(t))[0]?.forkedFrom).toBe(template);
+
+      await t.nextly.delete({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        overrideAccess: true,
+      });
+
+      const [kept] = await designs(t);
+      expect(kept?.entryId).toBe(hello);
+      expect(kept?.forkedFrom ?? null).toBeNull();
+    });
+
     it("deletes an entry's own design with the entry", async () => {
       const t = await boot();
       const { cookie } = await holding(t, DESIGNER);

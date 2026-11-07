@@ -44,6 +44,7 @@ import {
   publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
+import { lockHolder } from "./address-claims/claim-store";
 import { claimLocales } from "./address-claims/page-claims";
 import { registerPageAddressClaims } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
@@ -101,7 +102,12 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
+import {
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_FORKED_FROM_FIELD,
+  templatesCollection,
+  TEMPLATES_SLUG,
+} from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -145,6 +151,7 @@ import {
   pageBuilderSettingsSingle,
 } from "./default-layout/settings-single";
 import { definitionActionsRoute } from "./definition-actions-route";
+import { asOverwrite } from "./document-version";
 import { entriesRoute } from "./entries-route";
 import type {
   CompositionSetup,
@@ -1958,6 +1965,13 @@ export const pageBuilder = (
       // place and names the template already holding it. RESOLVED slugs, for
       // the reason the guard above takes them.
       const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      // The address store's collection, as the address claims and the lock an
+      // entry's own design is given and deleted under both reach it.
+      const addressClaims = {
+        services: ctx.services,
+        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
+        dialect: ctx.dialect,
+      };
       templateGuard = {
         templatesCollection: templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
@@ -1973,6 +1987,8 @@ export const pageBuilder = (
           }
         },
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
+        lockEntry: (tx, collection, id) =>
+          lockHolder(addressClaims, tx, { collection, id }),
         // Read as the system and in any state: whether the entry exists is
         // the question, and who may see it is the action's to ask.
         entryExists: async (collection, id) => {
@@ -2002,15 +2018,71 @@ export const pageBuilder = (
       registerEntryDesignCascade(ctx.hooks, {
         templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
-        designUnder: async key => {
-          const found = await ctx.services.ownCollections.listEntries(
-            templates,
-            { where: designUnderWhere(key), pagination: { limit: 1 }, depth: 0 }
-          );
+        hasTemplate: async (tx, collection) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templates,
+              {
+                where: { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
+                pagination: { limit: 1 },
+                depth: 0,
+              }
+            );
+          return found.data.length > 0;
+        },
+        lockEntry: (tx, entry) => lockHolder(addressClaims, tx, entry),
+        // On the delete's own transaction, for update: the design is deleted
+        // next, and no second pooled connection is taken while the delete
+        // holds one.
+        designUnder: async (tx, key) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templates,
+              {
+                where: designUnderWhere(key),
+                pagination: { limit: 1 },
+                depth: 0,
+              },
+              { lock: "update" }
+            );
           const id = (found.data[0] as { id?: unknown } | undefined)?.id;
           return typeof id === "string" || typeof id === "number"
             ? String(id)
             : null;
+        },
+        unlinkCopiesOf: async (tx, id) => {
+          // Every copy first, then each emptied: paged by a short page, as an
+          // in-transaction list's total is an unlocked count.
+          const copies: string[] = [];
+          for (let page = 1; ; page += 1) {
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
+                tx,
+                templates,
+                {
+                  where: { [TEMPLATE_FORKED_FROM_FIELD]: { equals: id } },
+                  pagination: { limit: 100, page },
+                  depth: 0,
+                },
+                { lock: "update" }
+              );
+            for (const row of found.data as { id?: unknown }[]) {
+              if (typeof row.id === "string" || typeof row.id === "number") {
+                copies.push(String(row.id));
+              }
+            }
+            if (found.data.length < 100) break;
+          }
+          for (const copy of copies) {
+            await ctx.services.collections.updateEntryInTransaction(
+              tx,
+              templates,
+              copy,
+              asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null })
+            );
+          }
         },
         deleteInTransaction: (tx, slug, id) =>
           ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
@@ -2252,11 +2324,7 @@ export const pageBuilder = (
       // A page's address, and its paginated list's later pages, held in the
       // address store in the save's own transaction, so two documents never
       // hold one address whichever path saved them.
-      const claimsStore = {
-        services: ctx.services,
-        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
-        dialect: ctx.dialect,
-      };
+      const claimsStore = addressClaims;
       const pagesSlug = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
       const siteLocales = (): readonly string[] =>
         claimLocales(

@@ -68,6 +68,7 @@ import {
   type TemplateSummary,
 } from "./template-actions-contract";
 import {
+  ASKED_BEFORE_CONTEXT,
   secondTemplateRefusal,
   templateCollectionProblem,
   type MayReadTemplate,
@@ -277,7 +278,15 @@ async function giveEntryDesign(
   }
   let created: { item: unknown };
   try {
-    created = await collections.createEntry(templates, data, asCaller(ctx));
+    // Under the entry's lock, which deleting the entry takes too: a delete
+    // that took it first has committed by the time this write runs.
+    created = await collections.withTransaction(async tx => {
+      await guard.lockEntry(tx, action.collection, action.entry);
+      return collections.createEntryInTransaction(tx, templates, data, {
+        ...asCaller(ctx),
+        context: { [ASKED_BEFORE_CONTEXT]: true },
+      });
+    });
   } catch (error) {
     // Two gives that both found no own design meet at the unique index; the
     // one that loses is told the entry has one now.
@@ -289,6 +298,17 @@ async function giveEntryDesign(
     );
     if (winner === null) throw error;
     throw alreadyHasDesign(winner);
+  }
+  // Asked again now it has committed: an entry deleted while this waited for
+  // its lock is gone, and its delete found no design to take with it.
+  if (!(await guard.entryExists(action.collection, action.entry))) {
+    const id = idOf(created.item);
+    if (id !== undefined) {
+      await collections.deleteEntry(templates, id, { as: "system" });
+    }
+    throw NextlyError.notFound({
+      logContext: { reason: "entry-design-entry-deleted" },
+    });
   }
   return {
     message: "The entry was given its own design.",

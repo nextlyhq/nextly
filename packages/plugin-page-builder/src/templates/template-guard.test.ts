@@ -32,6 +32,7 @@ function setup(
     ownCollections: () => new Set(["pages", "templates", "components"]),
     readCollection: async slug => (slug === "posts" ? POSTS : null),
     holderOf: async () => null,
+    lockEntry: async () => undefined,
     entryExists: async (collection, id) =>
       collection === "posts" && id === "p1",
     ...overrides,
