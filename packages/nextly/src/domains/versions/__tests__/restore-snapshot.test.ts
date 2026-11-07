@@ -308,6 +308,58 @@ describe("buildRestorePayload — layered schemas", () => {
     expect(droppedFields).toEqual(["items[0].gone"]);
   });
 
+  it("keeps a repeater row's saved id, at any depth, and still prunes a group's", () => {
+    // A row's `id` is its identity, which the write keeps, so a restore brings
+    // the rows back as the same rows. A group is not a row: a stray `id` there
+    // is an unknown key like any other.
+    const rows = [
+      {
+        name: "items",
+        type: "repeater",
+        fields: [
+          { name: "label", type: "text" },
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              { name: "note", type: "text" },
+              {
+                name: "tags",
+                type: "repeater",
+                fields: [{ name: "tag", type: "text" }],
+              },
+            ],
+          },
+        ],
+      },
+    ] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        items: [
+          {
+            id: "row-1",
+            label: "a",
+            meta: { id: "stray", note: "n", tags: [{ id: "t1", tag: "x" }] },
+          },
+        ],
+      },
+      rows,
+      ctx
+    );
+
+    expect(payload).toEqual({
+      items: [
+        {
+          id: "row-1",
+          label: "a",
+          meta: { note: "n", tags: [{ id: "t1", tag: "x" }] },
+        },
+      ],
+    });
+    expect(droppedFields).toEqual(["items[0].meta.id"]);
+  });
+
   it("skips a component whose schema holds a password", () => {
     // A component names its schema by slug rather than carrying it, so without
     // the resolved fields the walk cannot see the password inside.
