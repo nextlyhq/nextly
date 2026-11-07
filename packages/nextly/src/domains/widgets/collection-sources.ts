@@ -27,12 +27,9 @@
 
 import { container } from "../../di/container";
 import { getNextlyLogger } from "../../observability/logger";
-// An unnamed group lays its children out at this level; an unnamed repeater
-// stores them per row, so a widget query could not address them
-// (`storedAtThisLevel`, the rule every such walk takes).
 import {
   addressableFields,
-  storedAtThisLevel,
+  type UnvalidatedContainer,
 } from "../../shared/addressable-fields";
 
 import { registerBuiltInSources } from "./built-in-sources";
@@ -94,6 +91,26 @@ interface RegisteredCollection {
 
 interface CollectionRegistrySurface {
   getAllCollections(): Promise<RegisteredCollection[]>;
+}
+
+/**
+ * Whether an unnamed container's children are stored at ITS level, and so
+ * belong in this collection's column list.
+ *
+ * An unnamed GROUP is layout: its children are stored at the level the group
+ * sits in, which is exactly what a widget query addresses. An unnamed REPEATER
+ * is not: its children are stored PER ROW, so declaring one would be a promise
+ * the read path cannot keep -- the query passes validation and fails on a
+ * missing column, the same failure declaring `createdAt` on a collection with
+ * `timestamps: false` produces.
+ *
+ * Decided DURING the walk rather than filtered afterwards, because it cannot be
+ * done afterwards: the walk emits the children themselves, so a field reached
+ * through an unnamed repeater is the same object as one reached through an
+ * unnamed group and ancestry is gone by the time a predicate could read it.
+ */
+function storedAtThisLevel(container: UnvalidatedContainer): boolean {
+  return container.type === "group";
 }
 
 /** One field as a widget source is built from it. */

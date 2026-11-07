@@ -456,17 +456,6 @@ export type { FieldConfig } from "nextly";
 export { addressableFields } from "nextly";
 
 /**
- * Whether an unnamed container's children are stored at the level it sits
- * in, for `addressableFields`' `descendInto`: every presentation-only
- * container (an unnamed group, a row, tabs, a collapsible) does, and one that
- * stores them per row (a repeater, an array) does not. Core's own rule, so a
- * plugin finds a level's stored fields as core does.
- *
- * @experimental
- */
-export { storedAtThisLevel } from "nextly";
-
-/**
  * What a caller passes to control the walk, and what it emits.
  *
  * `descendInto` chooses which unnamed containers are transparent, and the

@@ -1018,12 +1018,7 @@ export type { VersionRef } from "./domains/versions/versions-repository";
 // Exported because a plugin that walks a collection's fields was otherwise
 // reaching into core's file layout, and a second copy of this walk is a second
 // answer to one question.
-export {
-  addressableFields,
-  // Whether an unnamed container's children are stored at its own level:
-  // the one `descendInto` rule core's walks and a plugin's take.
-  storedAtThisLevel,
-} from "./shared/addressable-fields";
+export { addressableFields } from "./shared/addressable-fields";
 export type {
   AddressableFieldsOptions,
   AddressableField,

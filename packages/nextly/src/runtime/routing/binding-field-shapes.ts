@@ -25,13 +25,7 @@ import {
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import { isListField } from "../../domains/versions/diff/field-cardinality";
 import { NextlyError } from "../../errors/nextly-error";
-// Whether an unnamed container's children are this level's fields: the one
-// rule the field-rule registry files its rules by too, so a field found here
-// is looked up at the level its rule is filed under.
-import {
-  addressableFields,
-  storedAtThisLevel,
-} from "../../shared/addressable-fields";
+import { addressableFields } from "../../shared/addressable-fields";
 
 import { readAsVisitor } from "./read-as-visitor";
 
@@ -202,6 +196,17 @@ function dateKindOf(field: StoredField): DateKind {
   // version does not know is read as an instant, which claims nothing.
   const appearance = field.admin?.date?.pickerAppearance ?? "dayOnly";
   return isPickerAppearance(appearance) ? DATE_KINDS[appearance] : {};
+}
+
+/**
+ * Whether an unnamed container's children are stored at the level it sits
+ * in. An unnamed group only lays fields out, so its children are this level's
+ * fields; an unnamed repeater stores its children per row. The same rule the
+ * field-rule registry files its rules by, so a field found here is looked up
+ * at the level its rule is filed under.
+ */
+function storedAtThisLevel(container: { type?: unknown }): boolean {
+  return container.type === "group";
 }
 
 /** A plugin-contributed type's storage primitive; nothing for a built-in, which the registry does not hold. */

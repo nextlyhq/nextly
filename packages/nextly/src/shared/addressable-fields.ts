@@ -136,28 +136,6 @@ export interface AddressableFieldsOptions {
 }
 
 /**
- * The unnamed containers that store their children per row rather than at
- * the level they sit in: a repeater, and the array-like container a config
- * may spell as `array`.
- */
-const PER_ROW_CONTAINERS: ReadonlySet<unknown> = new Set(["repeater", "array"]);
-
-/**
- * Whether an unnamed container's children are stored at the level it sits in,
- * the `descendInto` for a walk that must find where a value is kept: every
- * presentation-only container (an unnamed group, a row, tabs, a collapsible)
- * lays its children out at that level, and one that stores them per row (a
- * repeater, an array) does not, so a field inside it is no field of this
- * level. The one rule every walk asking that question takes, core's and a
- * plugin's alike.
- */
-export function storedAtThisLevel(container: {
-  readonly type?: unknown;
-}): boolean {
-  return !PER_ROW_CONTAINERS.has(container.type);
-}
-
-/**
  * What an unnamed field contributes to the level it sits in: its children when
  * it is a transparent container, or nothing.
  *
