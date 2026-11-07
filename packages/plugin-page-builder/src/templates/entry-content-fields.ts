@@ -10,11 +10,10 @@
  *
  * Top-level means stored on the entry itself, addressed by its own name: a
  * blocks field directly in the collection's fields, or inside an unnamed
- * container that is presentation only (a group, a row, tabs, a collapsible),
- * which stores its children on the entry as they are. A blocks field inside a
- * named group is stored under it, and one inside a repeater per row, so
- * neither is one: it is never offered and never accepted. Which containers
- * count is core's own rule (`storedAtThisLevel`).
+ * group, which is presentation only and stores its children on the entry as
+ * they are. A blocks field inside a named group, or inside any other unnamed
+ * container (an unnamed repeater stores its children per row), is not one,
+ * so it is never offered and never accepted.
  *
  * @experimental Settles when collection templates ship.
  * @module templates/entry-content-fields
@@ -23,7 +22,6 @@ import {
   addressableFields,
   humanizeFieldName,
   NextlyError,
-  storedAtThisLevel,
 } from "@nextlyhq/plugin-sdk";
 
 import { labelOf, pluralLabelOf } from "../collection-labels";
@@ -47,6 +45,16 @@ function wordsOf(field: {
 }
 
 /**
+ * Whether an unnamed container's children are stored on the entry itself:
+ * only a group's, as the binding sources' field shapes read a collection
+ * (`fieldShapesOf`). Any other unnamed container, a repeater above all,
+ * stores its children per row, and a blocks field there is no entry's own.
+ */
+function storedOnTheEntry(container: { readonly type?: unknown }): boolean {
+  return container.type === "group";
+}
+
+/**
  * The top-level blocks fields a collection's registry record declares, in
  * its order. None for a record that is not one.
  */
@@ -55,7 +63,7 @@ export function entryBlocksFieldsOf(record: unknown): EntryBlocksField[] {
   const fields = (record as { fields?: unknown }).fields;
   const found: EntryBlocksField[] = [];
   for (const field of addressableFields(fields, {
-    descendInto: storedAtThisLevel,
+    descendInto: storedOnTheEntry,
   })) {
     if (typeof field.name !== "string" || field.name === "") continue;
     if (!isBlocksField(field)) continue;
