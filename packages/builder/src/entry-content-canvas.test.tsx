@@ -109,8 +109,10 @@ describe("the previewed entry's own content on the canvas", () => {
   it("draws the entry's editor values for the field, drafts included, and stores nothing", () => {
     const drawn = drawing(entry({ body }));
     expect(
-      drawn.document.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(node => node.id)
-    ).toEqual(["ec:p1"]);
+      drawn.document.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(
+        node => node.props.text
+      )
+    ).toEqual(["Hello"]);
     // The document the editor holds is the template as stored.
     expect(template.nodes[0]?.slots).toBeUndefined();
     expect(drawn.render?.context?.entryContentCanvas).toBeDefined();
@@ -150,8 +152,10 @@ describe("the composed template a host asks its sources of", () => {
     ).result.current.document;
     expect(composed).toEqual(drawn);
     expect(
-      composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(node => node.id)
-    ).toEqual(["ec:p1"]);
+      composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(
+        node => node.props.text
+      )
+    ).toEqual(["Hello"]);
   });
 
   it("is the template itself while no entry is previewed (the control)", () => {

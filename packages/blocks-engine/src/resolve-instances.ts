@@ -4056,18 +4056,37 @@ function mintScopedId(
   instanceId: string,
   definitionNodeId: string
 ): string {
-  const base = `${SCOPED_ID_PREFIX}${hashId(`${instanceId} ${definitionNodeId}`)}`;
-  if (!run.taken.has(base)) {
-    run.taken.add(base);
-    run.minted.push(base);
+  const minted = composedNodeId(instanceId, definitionNodeId, run.taken);
+  run.minted.push(minted);
+  return minted;
+}
+
+/**
+ * The id a node drawn inside another wears for one render: a digest of the
+ * node it is drawn inside (`scopeId`) and its own id, disambiguated against
+ * every id in `taken` and then added to it. Deterministic, so the same
+ * document and sources mint the same ids in the same order on every render.
+ * A component's inlined nodes are minted by it, and so are an entry's blocks
+ * drawn inside its template's Entry content block, so neither can take an
+ * id the document already holds.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function composedNodeId(
+  scopeId: string,
+  nodeId: string,
+  taken: Set<string>
+): string {
+  const base = `${SCOPED_ID_PREFIX}${hashId(`${scopeId} ${nodeId}`)}`;
+  if (!taken.has(base)) {
+    taken.add(base);
     return base;
   }
   // Terminates: `taken` is finite and the suffix strictly increases.
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
-    if (run.taken.has(candidate)) continue;
-    run.taken.add(candidate);
-    run.minted.push(candidate);
+    if (taken.has(candidate)) continue;
+    taken.add(candidate);
     return candidate;
   }
 }

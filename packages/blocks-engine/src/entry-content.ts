@@ -36,6 +36,7 @@ import {
 import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { describeValue, pointer } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
+import { composedNodeId } from "./resolve-instances";
 import { mapForest, mintDomId, remapIdReferences, walkNodes } from "./tree";
 
 /**
@@ -277,12 +278,29 @@ export interface EntryContentSource {
 }
 
 /**
- * A node of the entry's content as the template draws it: its id prefixed
- * by the Entry content block's, so it can never take an id the template's
- * own blocks hold, and drawn the same on every render.
+ * The ids the entry's nodes wear once drawn inside the template, by node:
+ * minted as a component's inlined nodes are (`composedNodeId`), from the
+ * Entry content block's id and each node's own, against every id the
+ * template already holds, so a drawn node can never take one of the
+ * template's ids, nor two of them one. The same on every render.
  */
-function drawnId(host: string, id: unknown): string {
-  return `${host}:${typeof id === "string" ? id : ""}`;
+function drawnIds(
+  template: readonly BlockNode[],
+  nodes: readonly BlockNode[],
+  host: string
+): Map<BlockNode, string> {
+  const taken = new Set<string>();
+  walkNodes([...template], node => {
+    if (typeof node.id === "string") taken.add(node.id);
+  });
+  const ids = new Map<BlockNode, string>();
+  walkNodes([...nodes], node => {
+    ids.set(
+      node,
+      composedNodeId(host, typeof node.id === "string" ? node.id : "", taken)
+    );
+  });
+  return ids;
 }
 
 /**
@@ -294,16 +312,17 @@ function drawnId(host: string, id: unknown): string {
  */
 function drawnDomIds(
   nodes: readonly BlockNode[],
-  host: string
+  ids: ReadonlyMap<BlockNode, string>
 ): Map<string, string> {
-  const ids = new Map<string, string>();
+  const domIds = new Map<string, string>();
   walkNodes([...nodes], node => {
     const rendered = renderedDomId(node);
-    if (rendered !== undefined && !ids.has(rendered)) {
-      ids.set(rendered, mintDomId(rendered, drawnId(host, node.id)));
+    const id = ids.get(node);
+    if (rendered !== undefined && id !== undefined && !domIds.has(rendered)) {
+      domIds.set(rendered, mintDomId(rendered, id));
     }
   });
-  return ids;
+  return domIds;
 }
 
 /**
@@ -314,10 +333,10 @@ function drawnDomIds(
  */
 function drawnNode(
   node: BlockNode,
-  host: string,
+  ids: ReadonlyMap<BlockNode, string>,
   domIds: ReadonlyMap<string, string>
 ): BlockNode {
-  const drawn: BlockNode = { ...node, id: drawnId(host, node.id) };
+  const drawn: BlockNode = { ...node, id: ids.get(node) ?? node.id };
   if (domIds.size === 0) return drawn;
   const rendered = renderedDomId(node);
   const minted = rendered === undefined ? undefined : domIds.get(rendered);
@@ -378,7 +397,7 @@ function withoutEntryContent(nodes: readonly BlockNode[]): BlockNode[] {
 /**
  * `document` with the entry's content composed into its Entry content block,
  * for drawing: the blocks of the field the block names, read through
- * `source`, put in the block's slot with their ids prefixed by the block's.
+ * `source`, put in the block's slot with ids minted against the template's own.
  *
  * Only a template is composed, and only its first Entry content block, since
  * a template holds one. The entry's content is drawn without any Entry
@@ -407,10 +426,10 @@ export function composeEntryContent(
   if (field === undefined) return document;
   const entry = entryBlocksDocumentOf(source.valueOf(field));
   if (entry === null || entry.nodes.length === 0) return document;
-  const host = first.node.id;
   const kept = withoutEntryContent(entry.nodes);
-  const domIds = drawnDomIds(kept, host);
-  const drawn = mapForest(kept, node => drawnNode(node, host, domIds));
+  const ids = drawnIds(document.nodes, kept, first.node.id);
+  const domIds = drawnDomIds(kept, ids);
+  const drawn = mapForest(kept, node => drawnNode(node, ids, domIds));
   // The block as stored, by identity: the walk hands back the very node the
   // rebuild below meets, so only that one is composed.
   const target: unknown = first.node;

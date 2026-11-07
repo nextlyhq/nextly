@@ -45,6 +45,11 @@ function documentOf(kind: string, ...nodes: unknown[]): BlockDocument {
   } as BlockDocument;
 }
 
+/** What a text block says, or nothing for any other block. */
+function wordsOf(node: { readonly props?: Record<string, unknown> }): unknown {
+  return node.props?.text;
+}
+
 /** The Entry content codes validation reports, with where each is. */
 function entryContentFindings(document: BlockDocument) {
   return validate(document, ctx)
@@ -146,8 +151,17 @@ describe("composing an entry's content into its template", () => {
       valueOf: field => (field === "body" ? body : undefined),
     });
     const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
-    expect(drawn.map(node => node.id)).toEqual(["ec:p1", "ec:inner"]);
-    expect(drawn[1]?.slots?.children?.[0]?.id).toBe("ec:p2");
+    // The entry's blocks, in order, each with an id of its own.
+    expect(drawn.map(wordsOf)).toEqual(["First paragraph", undefined]);
+    expect(drawn[1]?.slots?.children?.map(wordsOf)).toEqual([
+      "Second paragraph",
+    ]);
+    const ids = [
+      ...drawn.map(node => node.id),
+      drawn[1]?.slots?.children?.[0]?.id,
+    ];
+    expect(new Set(ids).size).toBe(3);
+    for (const id of ids) expect(["p1", "inner", "p2"]).not.toContain(id);
     // What the template stores is untouched: nothing of the entry is in it.
     expect(template.nodes[1]).toEqual(entryContent("ec", "body"));
   });
@@ -187,8 +201,8 @@ describe("composing an entry's content into its template", () => {
       valueOf: () => JSON.stringify(body),
     });
     expect(
-      composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(node => node.id)
-    ).toEqual(["ec:p1", "ec:inner"]);
+      composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(wordsOf)
+    ).toEqual(["First paragraph", undefined]);
   });
 
   it("never draws an Entry content block the entry's content holds, at any depth", () => {
@@ -204,9 +218,9 @@ describe("composing an entry's content into its template", () => {
     );
     const drawn = composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
     // The control: the entry's other blocks are drawn.
-    expect(drawn.map(node => node.id)).toEqual(["ec:p1", "ec:inner"]);
+    expect(drawn.map(wordsOf)).toEqual(["Kept", undefined]);
     expect(entryContentPlacements(drawn)).toEqual([]);
-    expect(drawn[1]?.slots?.children?.map(node => node.id)).toEqual(["ec:p2"]);
+    expect(drawn[1]?.slots?.children?.map(wordsOf)).toEqual(["Kept too"]);
   });
 
   it("composes only a template, and only its first Entry content block", () => {
@@ -277,5 +291,38 @@ describe("the entry's own DOM ids, once drawn inside its template", () => {
     expect(drawn[0]?.attributes?.["data-x"]).toBe("kept");
     // A fragment on another page's address names that page's id, not this one's.
     expect(drawn[1]?.props.href).toBe("/pricing#intro");
+  });
+});
+
+describe("the ids the entry's blocks are drawn with", () => {
+  it("never takes an id the template already holds, so both nodes are kept", () => {
+    // A template already holding the id a plain concatenation would mint
+    // for the entry's `p` (`ec:p`), and the id `p` itself.
+    const template = documentOf(
+      "template",
+      text("ec:p", "The template's own"),
+      text("p", "The template's p"),
+      entryContent("ec")
+    );
+    const composed = composeEntryContent(template, {
+      valueOf: () => documentOf("page", text("p", "The entry's p")),
+    });
+    const [drawn] = composed.nodes[2]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    expect(drawn?.props.text).toBe("The entry's p");
+    // The template's two blocks keep their ids, and the drawn one has its own.
+    expect(composed.nodes.map(node => node.id)).toEqual(["ec:p", "p", "ec"]);
+    expect(["ec:p", "p", "ec"]).not.toContain(drawn?.id);
+  });
+
+  it("mints the same ids on every render", () => {
+    const template = documentOf("template", entryContent("ec"));
+    const body = documentOf("page", text("p", "x"), text("q", "y"));
+    const once = composeEntryContent(template, { valueOf: () => body });
+    const twice = composeEntryContent(template, { valueOf: () => body });
+    expect(
+      once.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(node => node.id)
+    ).toEqual(
+      twice.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.map(node => node.id)
+    );
   });
 });
