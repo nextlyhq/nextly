@@ -38,7 +38,6 @@ const NOTHING_USES_IT: ComponentDeleteResult = {
     next: null,
     convert: { named: [], unreadable: 0, more: 0 },
     drafts: { named: [], unreadable: 0, more: 0 },
-    mayBeRefused: 0,
   },
 };
 

@@ -120,9 +120,11 @@ export function underWay(result: ComponentDeleteResult): boolean {
 export interface DeleteTally {
   readonly convert: DocumentList;
   readonly drafts: DocumentList;
-  readonly mayBeRefused: number;
   readonly layouts: DocumentList;
+  /** The documents that stop it, as each slice listed them (each capped). */
   readonly left: readonly LeftDocument[];
+  /** How many more stop it than the slices listed. */
+  readonly leftMore: number;
   /** Whether every document has been read. */
   readonly complete: boolean;
 }
@@ -133,9 +135,9 @@ const NO_DOCUMENTS: DocumentList = { named: [], unreadable: 0, more: 0 };
 export const EMPTY_TALLY: DeleteTally = {
   convert: NO_DOCUMENTS,
   drafts: NO_DOCUMENTS,
-  mayBeRefused: 0,
   layouts: NO_DOCUMENTS,
   left: [],
+  leftMore: 0,
   complete: false,
 };
 
@@ -167,9 +169,9 @@ export function addSlice(
   return {
     convert: joined(tally.convert, plan?.convert),
     drafts: joined(tally.drafts, plan?.drafts),
-    mayBeRefused: tally.mayBeRefused + (plan?.mayBeRefused ?? 0),
     layouts: joined(tally.layouts, result.layouts),
     left: [...tally.left, ...(result.left ?? [])],
+    leftMore: tally.leftMore + (result.leftMore ?? 0),
     // A dry run that answers no plan has nothing more to read.
     complete: plan === undefined || plan.complete,
   };
@@ -177,7 +179,11 @@ export function addSlice(
 
 /** Whether what was read so far stops the delete: it cannot be undone by more. */
 export function tallyRefuses(tally: DeleteTally): boolean {
-  return tally.left.length > 0 || documentCount(tally.layouts) > 0;
+  return (
+    tally.left.length > 0 ||
+    tally.leftMore > 0 ||
+    documentCount(tally.layouts) > 0
+  );
 }
 
 /**

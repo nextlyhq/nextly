@@ -268,12 +268,35 @@ function DocumentLinks({
 /** The documents that stop the delete, or that it left, each with why. */
 function LeftDocuments({
   left,
+  more,
+  label,
+}: {
+  left: readonly LeftDocument[];
+  /** How many more there are than `left` lists (the route caps the list). */
+  more: number;
+  label: string;
+}): JSX.Element | null {
+  if (left.length === 0 && more === 0) return null;
+  return (
+    <div className="space-y-1">
+      {left.length > 0 ? <LeftList left={left} label={label} /> : null}
+      {more > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {left.length > 0 ? `and ${String(more)} more` : documents(more)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** The listed documents, each with why. */
+function LeftList({
+  left,
   label,
 }: {
   left: readonly LeftDocument[];
   label: string;
-}): JSX.Element | null {
-  if (left.length === 0) return null;
+}): JSX.Element {
   return (
     <ul
       aria-label={label}
@@ -387,26 +410,20 @@ function SafeButton({
   return <AlertDialogCancel ref={cancelRef}>{label}</AlertDialogCancel>;
 }
 
-/** What a used component's plan says beside its list. */
+/**
+ * What a used component's plan says beside its list. Rights need no note
+ * here: a document the author may not change is judged before anything
+ * changes, and stops the delete as a refusal that names it.
+ */
 function PlanNotes({ tally }: { tally: DeleteTally }): JSX.Element | null {
   const drafts = documentCount(tally.drafts);
-  const mayBeRefused = tally.mayBeRefused;
-  if (drafts === 0 && mayBeRefused === 0) return null;
+  if (drafts === 0) return null;
   return (
-    <div className="space-y-2">
-      {drafts > 0 ? (
-        <Alert variant="warning" role="note">
-          <AlertDescription>
-            {`${documents(drafts)} ${drafts === 1 ? "has" : "have"} unpublished changes. ${drafts === 1 ? "Its copy is" : "Their copies are"} converted in those changes too, but the component is kept until they are published or discarded. Delete it again after that.`}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      {mayBeRefused > 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {`You may not be allowed to change ${String(mayBeRefused)} of these. If a change is refused, the component is kept and the document is listed.`}
-        </p>
-      ) : null}
-    </div>
+    <Alert variant="warning" role="note">
+      <AlertDescription>
+        {`${documents(drafts)} ${drafts === 1 ? "has" : "have"} unpublished changes. ${drafts === 1 ? "Its copy is" : "Their copies are"} converted in those changes too, but the component is kept until they are published or discarded. Delete it again after that.`}
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -606,7 +623,7 @@ function refusedFace(
           </>
         ) : (
           <>
-            {left.length === 1
+            {left.length + tally.leftMore === 1
               ? "The document below stops the delete. Fix it, then check again."
               : "Each document below stops the delete. Fix them, then check again."}
           </>
@@ -619,7 +636,11 @@ function refusedFace(
         {layouts !== undefined && layoutCount > 0 ? (
           <DocumentLinks list={layouts} label="Layouts" />
         ) : null}
-        <LeftDocuments left={left} label="Documents that stop the delete" />
+        <LeftDocuments
+          left={left}
+          more={tally.leftMore}
+          label="Documents that stop the delete"
+        />
       </div>
     ),
     announce: MESSAGES.refused,
@@ -704,6 +725,7 @@ function faceOf(view: View, args: FaceArgs): Face {
             ) : null}
             <LeftDocuments
               left={view.result.left ?? []}
+              more={view.result.leftMore ?? 0}
               label="Documents left as they are"
             />
           </div>

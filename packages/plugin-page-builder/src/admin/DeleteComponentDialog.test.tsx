@@ -75,7 +75,6 @@ function planOf(rest: Partial<DeletePlan> = {}): DeletePlan {
     next: null,
     convert: NONE,
     drafts: NONE,
-    mayBeRefused: 0,
     ...rest,
   };
 }
@@ -195,22 +194,18 @@ describe("the dry run", () => {
     ).toBeTruthy();
   });
 
-  it("says which documents hold unpublished changes, and how many the author may not be allowed to change", async () => {
+  it("says which documents hold unpublished changes", async () => {
     answer = () =>
       envelope({
         ...USED,
         plan: planOf({
           convert: USED.plan?.convert ?? NONE,
           drafts: { named: [HOME], unreadable: 0, more: 0 },
-          mayBeRefused: 2,
         }),
       });
     show();
     expect(
       await screen.findByText(/1 document has unpublished changes/)
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/You may not be allowed to change 2 of these/)
     ).toBeTruthy();
   });
 
@@ -384,6 +379,8 @@ describe("the dry run", () => {
             },
             { document: null, reason: "not-permitted", words: "No rights." },
           ],
+          // The route lists 50 at most and counts the rest.
+          leftMore: 60,
         })
       );
     show();
@@ -391,6 +388,8 @@ describe("the dry run", () => {
       await screen.findByText("Remove the component there by hand.")
     ).toBeTruthy();
     expect(screen.getByText(/A document you can.t view/)).toBeTruthy();
+    expect(screen.getByText("No rights.")).toBeTruthy();
+    expect(screen.getByText("and 60 more")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
   });
 
@@ -521,6 +520,7 @@ describe("the delete", () => {
                 },
               ],
               progress: { converted: 2, unchanged: 0, left: 1, pending: 0 },
+              leftMore: 3,
             })
           );
     show();
@@ -534,6 +534,7 @@ describe("the delete", () => {
     expect(
       screen.getByText("2 documents turned into plain blocks.")
     ).toBeTruthy();
+    expect(screen.getByText("and 3 more")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
