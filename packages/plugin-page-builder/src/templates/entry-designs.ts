@@ -46,10 +46,11 @@ export interface DesignShapeProblem {
 }
 
 /**
- * What is wrong with the shape of a write to a template, or null: a new own
- * design that names a collection, names its entry only in part, or carries a
- * key its entry does not make; or a change to what an existing template
- * serves. `original` is the stored row of an update, null for a create.
+ * What is wrong with the shape of a write to a template, or null: an empty
+ * value for a field naming an entry; a new own design that names a
+ * collection, names its entry only in part, or carries a key its entry does
+ * not make; or a change to what an existing template serves. `original` is
+ * the stored row of an update, null for a create.
  *
  * Read from the write alone, so it is asked inside a transaction too.
  */
@@ -57,9 +58,51 @@ export function designShapeProblem(
   original: Readonly<Record<string, unknown>> | null,
   data: Readonly<Record<string, unknown>>
 ): DesignShapeProblem | null {
-  return original === null
-    ? newDesignProblem(data)
-    : changedTemplateProblem(original, data);
+  return (
+    emptyEntryFieldProblem(data) ??
+    (original === null
+      ? newDesignProblem(data)
+      : changedTemplateProblem(original, data))
+  );
+}
+
+/**
+ * What is wrong with a write giving a field that names an entry an empty
+ * value, or null. Treated as none it would let the row through as a
+ * collection's template, while the unique `entry` index holds the empty
+ * value against every other row written the same way; so a field naming an
+ * entry is left out, null, or names it. A form's cleared input is stored as
+ * none before this is asked ({@link withoutEmptyEntryFields}).
+ */
+function emptyEntryFieldProblem(
+  data: Readonly<Record<string, unknown>>
+): DesignShapeProblem | null {
+  const emptied = ENTRY_FIELDS.find(field => data[field] === "");
+  return emptied === undefined
+    ? null
+    : {
+        path: emptied,
+        message:
+          "A template names the entry it serves in full, or leaves these fields out: an empty value names none.",
+      };
+}
+
+/**
+ * `data` with each field naming an entry that a write gives an empty value
+ * stored as none, as a form sends a cleared input; or undefined where the
+ * write gives none of them an empty value, so the write is kept as it is.
+ */
+export function withoutEmptyEntryFields(
+  data: Readonly<Record<string, unknown>> | null
+): Record<string, unknown> | undefined {
+  if (data === null || !ENTRY_FIELDS.some(field => data[field] === "")) {
+    return undefined;
+  }
+  const kept: Record<string, unknown> = { ...data };
+  for (const field of ENTRY_FIELDS) {
+    if (kept[field] === "") kept[field] = null;
+  }
+  return kept;
 }
 
 /**

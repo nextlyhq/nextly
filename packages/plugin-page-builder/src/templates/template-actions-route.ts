@@ -337,11 +337,17 @@ async function designSource(
 }
 
 /**
- * Create the own design, under the entry's lock, which deleting the entry
- * takes too, and check once it has committed that the entry is still there:
- * a delete that held the lock first has committed by then, and the design
- * made after it is removed. Two gives meet at the unique key; the one that
- * loses is told the entry has one now.
+ * Create the own design with the entry's row held for share in the same
+ * transaction, taken before the design is written: deleting the entry locks
+ * that row for update before it removes it, and deletes the entry's own
+ * design after, so the two take turns. A delete that held the row first has
+ * committed by the time this hold is granted, which then finds the entry
+ * gone and writes nothing; a delete that comes after waits for this one and
+ * deletes the design with the entry. Held before the write rather than only
+ * in the templates' in-transaction phase (which holds it again, for every
+ * other path), so on MySQL a delete reading the new design's key never waits
+ * on this transaction while it waits on the delete. Two gives meet at the
+ * unique key; the one that loses is told the entry has one now.
  */
 async function createDesign(
   ctx: TemplateActionsContext,
@@ -357,7 +363,11 @@ async function createDesign(
   let created: unknown;
   try {
     created = await collections.withTransaction(async tx => {
-      await guard.lockEntry(tx, action.collection, action.entry);
+      if (!(await guard.holdEntry(tx, action.collection, action.entry))) {
+        throw NextlyError.notFound({
+          logContext: { reason: "entry-design-entry-deleted" },
+        });
+      }
       return collections.createEntryInTransaction(tx, templates, data, {
         ...asCaller(ctx),
         context: { [ASKED_BEFORE_CONTEXT]: true },
@@ -372,15 +382,6 @@ async function createDesign(
     );
     if (winner === null) throw error;
     throw alreadyHasDesign(winner);
-  }
-  if (!(await guard.entryExists(action.collection, action.entry))) {
-    const id = idOf(created);
-    if (id !== undefined) {
-      await collections.deleteEntry(templates, id, { as: "system" });
-    }
-    throw NextlyError.notFound({
-      logContext: { reason: "entry-design-entry-deleted" },
-    });
   }
   await unlinkIfSourceGone(ctx, data, created, guard);
   return created;
@@ -635,7 +636,22 @@ function entryTitle(
 ): string {
   const title =
     (field === null ? undefined : readableTitleText(entry[field])) ?? id;
-  return [...title].slice(0, TITLE_MAX).join("").trimEnd();
+  return cutToTitleLength(title, TITLE_MAX).trimEnd();
+}
+
+/**
+ * `text` cut to at most `max` UTF-16 code units, the length a text field's
+ * `maxLength` counts (a string's `length`), so a derived title always passes
+ * the title field's own check. A character outside the Basic Multilingual
+ * Plane, an emoji, takes two units; a cut that would split one keeps neither
+ * half, so the title never ends in half a character.
+ */
+export function cutToTitleLength(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  // A high surrogate as the last unit kept: its low half is past the cut.
+  const end = last >= 0xd800 && last <= 0xdbff ? max - 1 : max;
+  return text.slice(0, end);
 }
 
 /** `create-template`, as the module docblock describes. */
@@ -1161,10 +1177,10 @@ async function defaultTitle(
     typeof labels?.singular === "string" && labels.singular.trim() !== ""
       ? labels.singular.trim()
       : collection;
-  return `${[...singular]
-    .slice(0, TITLE_MAX - TITLE_SUFFIX.length)
-    .join("")
-    .trimEnd()}${TITLE_SUFFIX}`;
+  return `${cutToTitleLength(
+    singular,
+    TITLE_MAX - TITLE_SUFFIX.length
+  ).trimEnd()}${TITLE_SUFFIX}`;
 }
 
 /** A refusal of the action as a whole, with the reasons given. */
