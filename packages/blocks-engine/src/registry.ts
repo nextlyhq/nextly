@@ -12,6 +12,7 @@
 import type { AnyBlockDefinition, BlockSupports } from "./block";
 import {
   COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
   isBlockType,
   isPartName,
   isTokenRef,
@@ -150,7 +151,10 @@ export const MAX_BLOCK_VERSION: number = 1 + MAX_MIGRATION_STEPS;
  * Names the engine owns. They identify nodes resolved by the engine's own
  * machinery rather than by a registered block, so a block may not claim one.
  */
-const RESERVED_BLOCK_NAMES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
+const RESERVED_BLOCK_NAMES = new Set<string>([
+  COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
+]);
 
 /** A support key is a single lowerCamel/slug token. */
 const SUPPORT_KEY_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;

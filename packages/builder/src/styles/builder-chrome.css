@@ -4012,6 +4012,12 @@
   color: var(--nx-destructive);
 }
 
+/* Shown for the previewed entry while conditions apply: a tick in the
+   success colour, the words in the foreground's. */
+.nx-canvas-mark[data-condition="shown"] > .nx-canvas-mark__condition > svg {
+  color: var(--nx-success);
+}
+
 /*
  * A selected block locked in Layers, by its own lock or one around it: the
  * ring is dashed, so the canvas says it is held before anything is tried on
@@ -10545,6 +10551,111 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 .nx-preview-strip__chip[data-state="open"] {
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
+}
+
+/* The rule between the entry and the switch that applies conditions to it. */
+.nx-preview-strip__sep {
+  width: 1px;
+  height: 1rem;
+  background: var(--nx-border);
+}
+
+/* What the conditions do for the entry, at the strip's far end. The one part
+   besides the chip that gives way on a narrow canvas: cut short, with the
+   whole sentence in its title and announced whole. */
+.nx-preview-strip > .nx-preview-strip__count {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-inline-start: auto;
+  color: var(--nx-foreground);
+}
+
+/* Why the switch can't apply conditions here, beside it, and the name of
+   what is edited: both give way on a narrow canvas, cut short, the whole of
+   each in its title. */
+.nx-preview-strip > .nx-preview-strip__why,
+.nx-preview-strip > .nx-preview-strip__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nx-preview-strip__why {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-strip__name {
+  color: var(--nx-foreground);
+  font-weight: 500;
+}
+
+.nx-preview-strip__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-preview-strip__switch:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.nx-preview-strip__switch:disabled {
+  cursor: not-allowed;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-strip__track {
+  position: relative;
+  width: 1.75rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--nx-input);
+  transition: background-color 120ms;
+}
+
+.nx-preview-strip__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: var(--nx-background);
+  box-shadow: 0 1px 2px
+    color-mix(in oklch, var(--nx-foreground) 30%, transparent);
+  transition: transform 120ms;
+}
+
+.nx-preview-strip__switch[aria-checked="true"] > .nx-preview-strip__track {
+  background: var(--nx-primary);
+}
+
+.nx-preview-strip__switch[aria-checked="true"]
+  > .nx-preview-strip__track::after {
+  transform: translateX(0.75rem);
+}
+
+.nx-preview-strip__switch:disabled > .nx-preview-strip__track {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-preview-strip__track,
+  .nx-preview-strip__track::after {
+    transition: none;
+  }
 }
 
 .nx-preview-strip__chip > * {

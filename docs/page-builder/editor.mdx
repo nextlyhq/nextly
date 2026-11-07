@@ -375,8 +375,9 @@ scrolls, and appears only on a template.
   When you come back to the editor the list is read again, so the new entry is there to
   choose. It is offered only if you may create entries in that collection.
 
-Bound text, lists of related entries and visibility conditions on the canvas read the
-entry you preview as you would read it, drafts included. When there is no entry you may
+Bound text and lists of related entries on the canvas read the entry you preview as you
+would read it, drafts included. Visibility conditions are checked against what a visitor
+reads instead, when you apply them (below). When there is no entry you may
 read, the chip says so, for example "No posts to preview", and the canvas draws each
 binding's fallback until there is one. The words are the same whether the collection is
 empty or you may read none of it. If the entry you chose can't be read when the editor
@@ -385,6 +386,37 @@ again, rather than naming an entry the canvas isn't drawing.
 
 Which entry you preview is not saved with the template. When the template is saved, its
 lists and conditions are checked against the collection it draws.
+
+### Applying conditions
+
+While the canvas draws every block, a block with visibility conditions carries a
+**Conditional** badge, whoever the page would show it to. When a template holds such a
+block, the **Previewing** strip offers an **Apply conditions** switch after the entry.
+Turn it on to see the page as a visitor reading that entry would get it:
+
+- **A block a visitor would see** is drawn as usual, with the badge **Shown for this
+  post** (named after the collection's entries).
+- **A block a visitor wouldn't see** is drawn as one dashed line in its place, naming
+  it and why: "Members' worksheet · hidden for this post: Category is not Guides". It
+  stays selectable, so you can change its conditions.
+- **The strip's far end** says what the conditions did: "1 block hidden for this post",
+  or "Every conditioned block shows for this post" ("Every block checked shows" while the
+  template also holds blocks it doesn't check, below).
+
+The conditions are checked against the entry as a visitor reads it: its published values
+and the fields visitors may read, not your unpublished changes. An entry that was never
+published hides every conditioned block, and its line says so. A condition that can't be
+checked, for example on a field visitors can't see, hides its block from every visitor,
+and its line says so, with a warning sign.
+
+Blocks inside a list's entries and blocks inside a placed component aren't checked yet:
+they keep their **Conditional** badge while conditions are applied, and the strip's count
+leaves them out.
+
+Editing a component or a Layout that holds a conditioned block, the switch is shown but
+turned off: there's no entry to check against there. The published page checks them
+where the component or the Layout is placed. The switch is yours for this session and is
+never saved.
 
 ## Help
 
