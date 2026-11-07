@@ -30,11 +30,13 @@ export const COMPONENT_LIST_TOOLS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#ComponentListTools";
 
 /**
- * The same delete tools alone, above a host's own component store's list,
- * where Import from file has nothing to bring in.
+ * The delete tools for a host's own component store, drawn through the
+ * plugin's header slot: on every admin page, so on the store's list whatever
+ * the host draws above it, where they register the row action and draw its
+ * dialog.
  */
-export const COMPONENT_DELETE_LIST_TOOLS_COMPONENT =
-  "@nextlyhq/plugin-page-builder/admin#ComponentDeleteListTools";
+export const COMPONENT_STORE_DELETE_HOST_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#ComponentStoreDeleteHost";
 
 /**
  * What the component store's own Delete opens in the document screen's menu:

@@ -27,8 +27,10 @@
  * - **Someone else's delete**: nothing to confirm until theirs is finished.
  * - **Your paused delete**: resume it.
  * - **Deleting**: each call carries the delete on by one step, while the
- *   dialog stays open; the bar counts the documents finished. Closing pauses
- *   the delete, which the next opening offers to resume.
+ *   dialog stays open; the bar counts the documents finished. Pause (or
+ *   closing) takes effect between requests: the step on its way answers
+ *   first ("Pausing…"), and an answer that ended the delete is shown instead.
+ *   The next opening offers to resume a paused delete.
  * - **Partly done**: the documents left, each with why, so the component was
  *   kept; trying again picks up where it stopped. A delete refused part way
  *   for want of the right says what was converted before it.
@@ -388,6 +390,8 @@ interface FaceArgs {
   readonly onLeave: () => void;
   readonly cancelRef: RefObject<HTMLButtonElement | null>;
   readonly leaveRef: RefObject<HTMLButtonElement | null>;
+  /** Whether Pause was asked while a step is on its way. */
+  readonly pausing: boolean;
 }
 
 /**
@@ -411,11 +415,17 @@ function Named({
 function SafeButton({
   label,
   cancelRef,
+  disabled = false,
 }: {
   label: string;
   cancelRef: RefObject<HTMLButtonElement | null>;
+  disabled?: boolean;
 }): JSX.Element {
-  return <AlertDialogCancel ref={cancelRef}>{label}</AlertDialogCancel>;
+  return (
+    <AlertDialogCancel ref={cancelRef} disabled={disabled}>
+      {label}
+    </AlertDialogCancel>
+  );
 }
 
 /**
@@ -718,7 +728,13 @@ function faceOf(view: View, args: FaceArgs): Face {
             : `${String(Math.min(finished, total))} of ${documents(total)} done.`,
         footer: (
           <>
-            <SafeButton label="Pause" cancelRef={cancelRef} />
+            {/* Pause waits for the step on its way: its answer may be the
+                delete's end, which must be shown, not dropped. */}
+            <SafeButton
+              label={args.pausing ? "Pausing…" : "Pause"}
+              cancelRef={cancelRef}
+              disabled={args.pausing}
+            />
             <Button
               type="button"
               variant="destructive"
@@ -868,6 +884,9 @@ export function DeleteComponentDialog({
   // earlier one, after the author closed the dialog or moved on, changes
   // nothing, and a loop that sees a newer number stops.
   const turn = useRef(0);
+  // Pause asked while the delete runs, read between its requests.
+  const pauseAsked = useRef(false);
+  const [pausing, setPausing] = useState(false);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const leaveRef = useRef<HTMLButtonElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -926,13 +945,16 @@ export function DeleteComponentDialog({
       return;
     }
     setView({ kind: "deleting", result: null });
+    pauseAsked.current = false;
+    setPausing(false);
     let last: ComponentDeleteResult | null = null;
     for (;;) {
       const answer = await stepComponentDelete(componentId);
-      // Closed or moved on: the delete pauses here, and resumes when the
-      // dialog is opened again.
+      // Unmounted or moved on: nothing more is sent, and the delete resumes
+      // when the dialog is opened again.
       if (turn.current !== mine) return;
       if (answer.kind !== "answer") {
+        setPausing(false);
         setView(
           viewOfRefusal(answer, "delete", last?.progress?.converted ?? 0)
         );
@@ -942,10 +964,23 @@ export function DeleteComponentDialog({
       if (underWay(result)) {
         last = result;
         setView({ kind: "deleting", result });
+        // Pause takes effect here, between requests, once the step on its way
+        // has answered: an answer that ended the delete is shown instead.
+        if (pauseAsked.current) {
+          setPausing(false);
+          onClose();
+          return;
+        }
         await wait(STEP_GAP_MS);
         if (turn.current !== mine) return;
+        if (pauseAsked.current) {
+          setPausing(false);
+          onClose();
+          return;
+        }
         continue;
       }
+      setPausing(false);
       if (result.status === "done") {
         setView({ kind: "deleted" });
       } else if (
@@ -963,7 +998,7 @@ export function DeleteComponentDialog({
       }
       return;
     }
-  }, [componentId, mayStart]);
+  }, [componentId, mayStart, onClose]);
 
   // Each opening checks afresh; closing stops whatever loop is running.
   useEffect(() => {
@@ -1003,6 +1038,7 @@ export function DeleteComponentDialog({
     onLeave: onDeleted,
     cancelRef,
     leaveRef,
+    pausing,
   });
 
   return (
@@ -1011,7 +1047,11 @@ export function DeleteComponentDialog({
       onOpenChange={next => {
         if (next) return;
         if (view.kind === "deleted") onDeleted();
-        else onClose();
+        else if (view.kind === "deleting") {
+          // Asked to pause: the step on its way finishes first (above).
+          pauseAsked.current = true;
+          setPausing(true);
+        } else onClose();
       }}
     >
       <AlertDialogContent

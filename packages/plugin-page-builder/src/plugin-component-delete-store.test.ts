@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
 } from "./builder-view";
@@ -45,22 +45,32 @@ describe("Delete component's admin wiring", () => {
     expect(plugin.contributes?.admin?.views).toEqual({
       [COMPONENTS_SLUG]: { documentActions: REPLACED },
     });
+    // The plugin's own list draws the tools itself: no header tools.
+    expect(plugin.contributes?.admin?.header).toBeUndefined();
+    expect(plugin.contributes?.admin?.clientConfig).not.toHaveProperty(
+      "componentStore"
+    );
     expect(ownComponentsAdmin(plugin)).toMatchObject({
       disableDelete: true,
       components: { BeforeListTable: COMPONENT_LIST_TOOLS_COMPONENT },
     });
   });
 
-  it("replaces the host store's Delete and draws its list's tools, and leaves the plugin's own collection alone", () => {
+  it("replaces the host store's Delete and draws its list's tools outside the slot above its list, and leaves the plugin's own collection alone", () => {
     const plugin = pageBuilder({
       componentReadiness: { collection: "site-components" },
     });
 
+    // No `beforeList`: that slot is the host's to fill, and a host's own
+    // would drop it. The tools are drawn in the header, told the store.
     expect(plugin.contributes?.admin?.views).toEqual({
-      "site-components": {
-        documentActions: REPLACED,
-        beforeList: COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
-      },
+      "site-components": { documentActions: REPLACED },
+    });
+    expect(plugin.contributes?.admin?.header).toEqual({
+      slot: COMPONENT_STORE_DELETE_HOST_COMPONENT,
+    });
+    expect(plugin.contributes?.admin?.clientConfig).toMatchObject({
+      componentStore: "site-components",
     });
     // Not the store: its own Delete stays, with no delete tools.
     expect(ownComponentsAdmin(plugin)).toMatchObject({

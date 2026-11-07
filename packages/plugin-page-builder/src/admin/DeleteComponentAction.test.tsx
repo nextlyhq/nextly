@@ -54,14 +54,16 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   registerRowAction: (target: string, action: RowAction) => {
     rowActions.push({ target, action });
   },
+  // The plugin's options as the browser gets them: a host's own store.
+  usePluginClientConfig: () => ({ componentStore: "site-components-store" }),
 }));
 
 // The import bar beside it has tests of its own.
 vi.mock("./transfer-import", () => ({ TransferImport: () => null }));
 
 const {
-  ComponentDeleteListTools,
   ComponentListTools,
+  ComponentStoreDeleteHost,
   DeleteComponentReplacement,
 } = await import("./DeleteComponentAction");
 
@@ -156,8 +158,11 @@ describe("on the Components list", () => {
     expect(screen.queryByText("Hero banner")).toBeNull();
   });
 
-  it("registers on a host's own store's list, and a row chosen on one list opens no dialog above another", async () => {
-    render(<ComponentDeleteListTools collectionSlug="site-components-store" />);
+  it("registers on a host's own store's list from the header, whatever the host draws above that list, and opens one dialog for the row chosen there", async () => {
+    // Drawn in the header, twice as a page may draw it, and not in the slot
+    // above the list, which the host's own component may hold.
+    render(<ComponentStoreDeleteHost />);
+    render(<ComponentStoreDeleteHost />);
     render(<ComponentListTools collectionSlug="site-components" />);
     expect(
       rowActions.filter(entry => entry.target === "site-components-store")

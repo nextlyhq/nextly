@@ -14,15 +14,14 @@
  *   `DeleteComponentReplacement`. Closing it after the delete leaves the
  *   document as the built-in Delete does, the list's cache refreshed.
  * - **The list** offers a row action. A row action is a description, not a
- *   component, so choosing it tells the list's tools above the table
- *   (`ComponentListTools` on the plugin's own collection,
- *   `ComponentDeleteListTools` on a host's store) which row was chosen, and
- *   they draw the dialog for it. A deleted component's list is read again, so
+ *   component, so choosing it tells the list's tools which row was chosen,
+ *   and they draw the dialog for it: `ComponentListTools` above the plugin's
+ *   own collection's list, or `ComponentStoreDeleteHost` in the header for a
+ *   host's store, whose own slot above the list the host may already fill. A deleted component's list is read again, so
  *   its row goes.
  *
- *   The action is registered by those tools, for the list they are drawn
- *   above, by the slug that list is keyed by. The tools are drawn only above
- *   the store's list, so the action follows a rename or a host's store and
+ *   The action is registered by those tools, by the store's slug, the key
+ *   its list is read under, so it follows a rename or a host's store and
  *   never reaches another collection, whichever slug it took.
  *
  * Whether the author may delete is the dialog's dry run's answer, not a
@@ -32,10 +31,13 @@
  */
 import {
   registerRowAction,
+  usePluginClientConfig,
   type DocumentActionReplacementProps,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Trash2 } from "lucide-react";
 import { useEffect, useState, type JSX } from "react";
+
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import { DeleteComponentDialog } from "./DeleteComponentDialog";
 import { TransferImport } from "./transfer-import";
@@ -80,10 +82,15 @@ interface Asked {
  * it goes with them when the list is left and a list opened again starts with
  * no dialog.
  */
-const openers = new Map<string, Set<(asked: Asked) => void>>();
+const openers = new Map<string, ((asked: Asked) => void)[]>();
 
+/**
+ * Tell the latest tools mounted for `listSlug`: one dialog, even where a
+ * page draws the header (and its tools) twice.
+ */
 function ask(listSlug: string, next: Asked): void {
-  for (const open of openers.get(listSlug) ?? []) open(next);
+  const mounted = openers.get(listSlug) ?? [];
+  mounted[mounted.length - 1]?.(next);
 }
 
 /** A row's non-empty string field, or null. */
@@ -133,11 +140,12 @@ export function ComponentDeleteListTools({
   registerDeleteComponentAction(listSlug);
   const [current, setCurrent] = useState<Asked | null>(null);
   useEffect(() => {
-    const mine = openers.get(listSlug) ?? new Set();
-    mine.add(setCurrent);
+    const mine = openers.get(listSlug) ?? [];
+    mine.push(setCurrent);
     openers.set(listSlug, mine);
     return () => {
-      mine.delete(setCurrent);
+      const at = mine.indexOf(setCurrent);
+      if (at !== -1) mine.splice(at, 1);
     };
   }, [listSlug]);
   if (current === null) return null;
@@ -157,6 +165,20 @@ export function ComponentDeleteListTools({
       leaveLabel="Close"
     />
   );
+}
+
+/**
+ * The delete tools for a host's own component store, drawn through the
+ * plugin's header slot, on every admin page. They register the row action on
+ * that store's list, by the slug the plugin's options named (`clientConfig`),
+ * and draw its dialog; nothing where the store is the plugin's own
+ * collection, whose list draws the tools itself.
+ */
+export function ComponentStoreDeleteHost(): JSX.Element | null {
+  const config = usePluginClientConfig(PAGE_BUILDER_PLUGIN_NAME);
+  const store = config?.componentStore;
+  if (typeof store !== "string" || store === "") return null;
+  return <ComponentDeleteListTools collectionSlug={store} />;
 }
 
 /**

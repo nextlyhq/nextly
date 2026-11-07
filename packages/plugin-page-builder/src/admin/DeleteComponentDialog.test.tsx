@@ -492,7 +492,8 @@ describe("the delete", () => {
     expect(await screen.findByText("3 of 10 documents done")).toBeTruthy();
     expect(screen.getByText(MESSAGES.running)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
-    expect(handlers.onClose).toHaveBeenCalled();
+    // Between requests: once the step on its way has answered.
+    await waitFor(() => expect(handlers.onClose).toHaveBeenCalled());
     // A step already sent may land; none is sent after it. Calling on would
     // send one every quarter second.
     const atPause = stepped;
@@ -500,6 +501,49 @@ describe("the delete", () => {
       await new Promise(resolve => setTimeout(resolve, 900));
     });
     expect(stepped).toBeLessThanOrEqual(atPause + 1);
+  });
+
+  it("waits for the step on its way when paused, and shows the delete done when that step finished it", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let stepped = 0;
+    answer = async body => {
+      if (body.dryRun === true) return envelope(USED);
+      stepped += 1;
+      if (stepped === 1) {
+        return envelope(
+          result({
+            status: "running",
+            run: { yours: true, step: "converting" },
+            progress: { converted: 1, unchanged: 0, left: 0, pending: 1 },
+          })
+        );
+      }
+      await held;
+      return envelope(
+        result({ status: "done", run: { yours: true, step: "deleted" } })
+      );
+    };
+    render(<Host />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Turn each copy into plain blocks, then delete",
+      })
+    );
+    await waitFor(() => expect(stepped).toBe(2));
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    const pausing = await screen.findByRole("button", { name: "Pausing…" });
+    expect((pausing as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      release();
+      await held;
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Component deleted" })
+    ).toBeTruthy();
+    expect(handlers.onClose).not.toHaveBeenCalled();
   });
 
   it("lists the documents a partly done delete left, and offers to try again", async () => {

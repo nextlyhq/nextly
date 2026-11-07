@@ -54,7 +54,7 @@ import {
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
-  COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "./builder-view";
@@ -418,12 +418,17 @@ function deleteComponentViews(
   };
   return store.collection === undefined || storeIsOwn(store)
     ? { [COMPONENTS_SLUG]: replaced }
-    : {
-        [store.collection]: {
-          ...replaced,
-          beforeList: COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
-        },
-      };
+    : { [store.collection]: replaced };
+}
+
+/**
+ * A host's own component store's slug, or `undefined` when the store is the
+ * plugin's own collection.
+ */
+function hostStoreOf(store: ComponentStore): string | undefined {
+  return store.collection === undefined || storeIsOwn(store)
+    ? undefined
+    : store.collection;
 }
 
 /**
@@ -780,6 +785,11 @@ function adminClientConfig(
       ? {}
       : { remotePatterns: opts.remotePatterns }),
     ...(opts.checklist === undefined ? {} : { checklist: opts.checklist }),
+    // A host's own component store, by slug, for the delete tools the header
+    // draws for its list. A slug, nothing secret.
+    ...(hostStoreOf(componentStoreOf(opts)) === undefined
+      ? {}
+      : { componentStore: hostStoreOf(componentStoreOf(opts)) }),
     // The canvas route's path, which the editor loads its frame from. A path,
     // never a secret: the route serves an empty page.
     ...(canvasPath === undefined ? {} : { canvasPath }),
@@ -2800,6 +2810,13 @@ export const pageBuilder = (
         // also gets the delete tools above its list, for the row action; the
         // plugin's own collection declares them itself.
         views: deleteComponentViews(componentStoreOf(opts)),
+        // A host's own store's list gets Delete component on each row through
+        // tools drawn in the header, which is on every page: the slot above a
+        // list is the host's own to fill, and a second one there would be
+        // dropped. Its slug reaches them through `clientConfig`.
+        ...(hostStoreOf(componentStoreOf(opts)) === undefined
+          ? {}
+          : { header: { slot: COMPONENT_STORE_DELETE_HOST_COMPONENT } }),
         menu: [
           {
             label: "Patterns",

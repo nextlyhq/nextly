@@ -32,7 +32,7 @@ import {
 
 import {
   BUILDER_VIEW_COMPONENT,
-  COMPONENT_DELETE_LIST_TOOLS_COMPONENT,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
@@ -57,8 +57,8 @@ import "../styles/editor.css";
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
 import {
-  ComponentDeleteListTools,
   ComponentListTools,
+  ComponentStoreDeleteHost,
   DeleteComponentReplacement,
 } from "./DeleteComponentAction";
 import { PageBuilderView } from "./editor/PageBuilderView";
@@ -97,9 +97,10 @@ const COMPONENTS = {
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
   // Above the Components list: Import from file, and the row action's
-  // Delete component dialog; above a host's component store, the dialog.
+  // Delete component dialog; for a host's component store, the same tools
+  // drawn through the header slot.
   [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
-  [COMPONENT_DELETE_LIST_TOOLS_COMPONENT]: ComponentDeleteListTools,
+  [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
   // The component store's own Delete, opening Delete component instead.
   [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
 };
@@ -121,8 +122,8 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 export {
   BlocksField,
   BlocksSummary,
-  ComponentDeleteListTools,
   ComponentListTools,
+  ComponentStoreDeleteHost,
   DeleteComponentReplacement,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
