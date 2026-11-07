@@ -23,7 +23,6 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
-  conditionedBlocksIn,
   useAppliedConditions,
   useConditionsUnchecked,
   CanvasFrame,
@@ -40,10 +39,8 @@ import {
   SpacingOverlay,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
-  useComposedEntryContent,
   type AppliedConditions,
   type AppliedConditionsOptions,
-  type PreviewedEntry,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -98,6 +95,7 @@ import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { previewedCanvas } from "./canvas-preview-mode";
+import { useConditionedPage, type ConditionedPage } from "./conditioned-page";
 import {
   PageConditionsStrip,
   PlacedConditionsStrip,
@@ -1431,8 +1429,15 @@ function EditorBody<TFieldValues extends FieldValues>({
     mount.userId,
     entryCollection
   );
+  // The page as the canvas draws it, the previewed entry's blocks composed
+  // in once: what its conditions are badged on, judged on and applied to.
+  const conditioned = useConditionedPage(
+    reveal.document,
+    templatePreview,
+    canvas.canvasRender.limits
+  );
   const conditionsUnchecked = useConditionsUnchecked(
-    componentView.preview.document,
+    conditioned.composed,
     conditionServices,
     // The limits the canvas draws and the save surveys under.
     canvas.canvasRender.limits,
@@ -1443,7 +1448,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The switch that applies the conditions for the entry a template is
   // previewed with: the author's own, for this session, never saved.
   const conditions = useAppliedConditionsSwitch(
-    reveal.document,
+    conditioned,
     templatePreview,
     pageConditionsSourceOf(
       templatePreview,
@@ -1789,40 +1794,13 @@ interface AppliedConditionsSwitch {
 }
 
 /**
- * The page as the canvas draws it, the previewed entry's own blocks in a
- * template's Entry content among its blocks, and which of its blocks are
- * conditioned: the entry's are judged with the template's, counted, and
- * offer the switch where only they are conditioned. The one composition the
- * canvas draws.
- */
-function useConditionedPage(
-  document: BlockDocument,
-  previewed: PreviewedEntry | undefined,
-  limits: AppliedConditionsOptions["limits"]
-): {
-  readonly composed: BlockDocument;
-  readonly held: ReturnType<typeof conditionedBlocksIn>;
-} {
-  const composed = useComposedEntryContent(
-    document,
-    previewed,
-    limits?.maxNodes
-  );
-  const held = useMemo(
-    () => conditionedBlocksIn(composed, limits),
-    [composed, limits]
-  );
-  return { composed, held };
-}
-
-/**
  * The author's switch that applies the conditions for the entry a template
  * is previewed with, and the page as they leave it. Applied only to the
  * blocks that read the entry; checked against the entry as a visitor reads
  * it, so the canvas hides what the published page would.
  */
 function useAppliedConditionsSwitch(
-  document: BlockDocument,
+  { composed, held }: ConditionedPage,
   preview: ReturnType<typeof useTemplatePreviewState>,
   pageSource: PageConditionsSource | undefined,
   options: Omit<AppliedConditionsOptions, "noun">
@@ -1835,11 +1813,6 @@ function useAppliedConditionsSwitch(
     if (!on) setAttempt(count => count + 1);
     setOn(!on);
   }, [on]);
-  const { composed, held } = useConditionedPage(
-    document,
-    preview?.previewed,
-    options.limits
-  );
   // A page is read as a visitor reads it, and only once the author applies
   // its conditions.
   const pageRead = usePageConditionsRead(
