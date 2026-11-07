@@ -25,8 +25,11 @@ import { addressableFields } from "../addressable-fields";
 import { toCamelCase, toSnakeCase } from "./case-conversion";
 import { rowPairing } from "./denied-change";
 
-/** The minimal field shape both FieldConfig and FieldDefinition satisfy. */
-interface NamedField {
+/**
+ * The minimal field shape both FieldConfig and FieldDefinition satisfy.
+ * Exported for the other walks over the same values (`repeater-row-ids`).
+ */
+export interface NamedField {
   name?: string;
   // `string`, not the strict field-type union: these helpers accept both
   // code-first FieldConfig[] and runtime FieldDefinition[], whose `type`
@@ -287,9 +290,10 @@ const WITHHELD = Symbol("withheld");
 /**
  * Rewrite one value of `holder` through `rewrite`, parsing it first where it
  * is held as JSON text and writing it back in that shape; a value that is not
- * valid JSON is left alone.
+ * valid JSON is left alone. Exported so every walk over a container's value
+ * opens and writes it back one way.
  */
-function rewriteValue(
+export function rewriteValue(
   holder: Record<string, unknown>,
   name: string,
   rewrite: (value: unknown) => unknown
@@ -336,9 +340,9 @@ function keepsInstance(
 /**
  * The fields one instance is judged by: its field group's, or for a dynamic
  * zone's row the field group its type names. `undefined` when they are not
- * known.
+ * known. Exported so every walk reads an inline instance by the same fields.
  */
-function instanceFields(
+export function instanceFields(
   instance: Record<string, unknown>,
   { single, many }: { single?: string; many?: string[] },
   { reach, untypedZoneRows }: Pick<PasswordWalk, "reach" | "untypedZoneRows">
@@ -663,7 +667,7 @@ function carryContainer(
     }
     return;
   }
-  forEachPairedRow(value, previous, (row, storedRow) =>
+  forEachPairedRow(value, previous, "sent", (row, storedRow) =>
     carryLevel(row, storedRow, fields, reach, false, kept)
   );
 }
@@ -688,7 +692,7 @@ function carryInstances(
     carryLevel(instance, storedInstance, fields, reach, false, kept);
   };
   if (Array.isArray(value)) {
-    forEachPairedRow(value, previous, carryInstance);
+    forEachPairedRow(value, previous, "both", carryInstance);
   } else if (
     isPlainRecord(value) &&
     isPlainRecord(previous) &&
@@ -698,18 +702,28 @@ function carryInstances(
   }
 }
 
-/** Each row of `value` with the stored row `rowPairing` pairs it with. */
+/**
+ * Each row of `value` with the stored row `rowPairing` pairs it with.
+ * `identifiedBy` says whose ids make the list one paired by id: "both"
+ * sides', or, for a repeater's rows, the "sent" rows' alone.
+ */
 function forEachPairedRow(
   value: unknown,
   previous: unknown,
+  identifiedBy: "both" | "sent",
   visit: (row: Record<string, unknown>, stored: Record<string, unknown>) => void
 ): void {
   if (!Array.isArray(value) || !Array.isArray(previous)) return;
   const pairOf = rowPairing(value, previous);
   // Where rows carry ids, a row without one is new and takes no stored
   // password: pairing it by position could hand it another record's. Only a
-  // list whose rows carry none at all pairs by position.
-  const identified = [...value, ...previous].some(hasRowId);
+  // list whose rows carry none at all pairs by position. A repeater's are
+  // asked of the sent rows alone: every write stores its rows with ids
+  // (`assignRepeaterRowIds`), so asking the stored side too would leave a
+  // writer that never sends ids unable to keep any password it leaves out.
+  const identified = (
+    identifiedBy === "sent" ? value : [...value, ...previous]
+  ).some(hasRowId);
   value.forEach((row, index) => {
     if (identified && !hasRowId(row)) return;
     const at = pairOf(index);
@@ -753,8 +767,9 @@ function visitStoredPlainPasswords(
 /**
  * Whether a single instance is the stored one: the same id, or none on
  * either side. One with another id replaces it and takes none of its values.
+ * Exported so the row-id walk pairs a single instance the way this one does.
  */
-function sameInstance(
+export function sameInstance(
   instance: Record<string, unknown>,
   stored: Record<string, unknown>
 ): boolean {
@@ -768,7 +783,7 @@ function hasRowId(row: unknown): boolean {
 }
 
 /** A stored value, parsed where the dialect holds it as JSON text. */
-function parsedValue(value: unknown): unknown {
+export function parsedValue(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
     return JSON.parse(value) as unknown;
@@ -777,7 +792,10 @@ function parsedValue(value: unknown): unknown {
   }
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+/** A non-null, non-array object: one level of a value, or one row. */
+export function isPlainRecord(
+  value: unknown
+): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -843,11 +861,25 @@ export function reachesPasswordField(
   fields: readonly NamedField[],
   reach: FieldGroupReach
 ): boolean {
-  return reachesFrom(fields, reach, new Set(), true);
+  return reachesFieldWhere(fields, reach, field => field.type === "password");
 }
 
 /**
- * {@link reachesPasswordField} at one level, following field groups where the
+ * Whether `fields` declare a field `test` accepts at any depth, through the
+ * field groups `reach` follows, as {@link reachesPasswordField} asks it for a
+ * password: one question, so a walk asking it for another field type follows
+ * field groups exactly as the password walk does.
+ */
+export function reachesFieldWhere(
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  test: (field: NamedField) => boolean
+): boolean {
+  return reachesFrom(fields, reach, test, new Set(), true);
+}
+
+/**
+ * {@link reachesFieldWhere} at one level, following field groups where the
  * walk does: one placed directly on the entry is left to its own read, as the
  * walk leaves it, and one held inline that `reach` has no fields for counts,
  * since the strip withholds it and so has to run.
@@ -855,16 +887,17 @@ export function reachesPasswordField(
 function reachesFrom(
   fields: readonly NamedField[],
   reach: FieldGroupReach,
+  test: (field: NamedField) => boolean,
   seen: ReadonlySet<string>,
   atEntry: boolean
 ): boolean {
   return fields.some(field => {
-    if (field.type === "password") return true;
+    if (test(field)) return true;
     // A layout container keeps its fields on this level; a group or
     // repeater holds a level of its own.
     if (
       field.fields &&
-      reachesFrom(field.fields, reach, seen, atEntry && !field.name)
+      reachesFrom(field.fields, reach, test, seen, atEntry && !field.name)
     ) {
       return true;
     }
@@ -876,7 +909,7 @@ function reachesFrom(
       const inner = reach.fieldsOf(slug);
       return (
         inner === undefined ||
-        reachesFrom(inner, reach, new Set([...seen, slug]), false)
+        reachesFrom(inner, reach, test, new Set([...seen, slug]), false)
       );
     });
   });

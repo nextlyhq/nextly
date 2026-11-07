@@ -21,7 +21,7 @@ import {
 } from "@nextlyhq/ui";
 import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
 import type { JSX } from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   useFieldArray,
   useFormContext,
@@ -31,6 +31,7 @@ import {
 } from "react-hook-form";
 
 import { Plus, ChevronDown, ChevronRight } from "@admin/components/icons";
+import { freshId } from "@admin/lib/fresh-id";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -184,6 +185,49 @@ function RepeaterAddButton({
 }
 
 /**
+ * A repeater's rows as a field array: their render keys, drag-and-drop, and
+ * adding a row, which carries its saved id from the start, so the server
+ * keeps it rather than matching the row against stored ones.
+ */
+function useRepeaterRows<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  name: FieldArrayPath<TFieldValues>,
+  fields: FieldConfig[]
+) {
+  // A row's own `id` is its saved identity, so the field array keeps its
+  // render key under another name: under the default, `id`, each item would
+  // show the generated key in place of the row's id.
+  const {
+    fields: items,
+    append,
+    remove,
+    move,
+  } = useFieldArray({
+    control,
+    name,
+    keyName: "fieldKey",
+  });
+
+  // The drag-and-drop list identifies rows by their render key, which every
+  // row has, where a row's saved id is absent until it is first saved.
+  const sortableItems = useMemo(
+    () => items.map(item => ({ id: item.fieldKey })),
+    [items]
+  );
+
+  const { sensors, handleDragEnd } = useSortableFieldArray(sortableItems, move);
+
+  const handleAdd = useCallback(() => {
+    append({
+      id: freshId("row"),
+      ...createDefaultFieldValues(fields),
+    } as TFieldValues[FieldArrayPath<TFieldValues>][number]);
+  }, [append, fields]);
+
+  return { items, remove, sortableItems, sensors, handleDragEnd, handleAdd };
+}
+
+/**
  * RepeaterInput provides a repeater field for managing lists of structured data.
  *
  * Features:
@@ -242,24 +286,8 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     );
   }
 
-  const {
-    fields: items,
-    append,
-    remove,
-    move,
-  } = useFieldArray({
-    control,
-    name,
-  });
-
-  const { sensors, handleDragEnd } = useSortableFieldArray(items, move);
-
-  const handleAdd = useCallback(() => {
-    const defaultValues = createDefaultFieldValues(
-      field.fields as FieldConfig[]
-    );
-    append(defaultValues as TFieldValues[FieldArrayPath<TFieldValues>][number]);
-  }, [append, field.fields]);
+  const { items, remove, sortableItems, sensors, handleDragEnd, handleAdd } =
+    useRepeaterRows(control, name, field.fields as FieldConfig[]);
 
   const { canAdd, canRemove, isSortable } = getFieldArrayConstraints({
     count: items.length,
@@ -289,7 +317,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
         <CollapsibleContent>
           <CardContent className="p-3 space-y-3">
             <SortableFieldArrayContainer
-              items={items}
+              items={sortableItems}
               // The words each row's handle is named with.
               describeItem={(_, index) => `${singularLabel} ${index + 1}`}
               sensors={sensors}
@@ -300,8 +328,8 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
             >
               {items.map((item, index) => (
                 <RepeaterRow
-                  key={item.id}
-                  id={item.id}
+                  key={item.fieldKey}
+                  id={item.fieldKey}
                   index={index}
                   field={field}
                   basePath={`${name}.${index}`}

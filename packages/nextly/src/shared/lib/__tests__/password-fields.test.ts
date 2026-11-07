@@ -262,6 +262,41 @@ describe("carryStoredPasswords", () => {
     expect(lines[1]?.pw).toBe(HASH_B);
   });
 
+  it("keeps each password of a repeater sent without any ids, though its stored rows carry them", () => {
+    // Every write stores repeater rows with ids, so a writer that never sends
+    // them would otherwise lose every password it leaves out: a list sent
+    // with no ids at all pairs by position, as it did before rows had ids.
+    const fields = [
+      {
+        name: "lines",
+        type: "repeater",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "pw", type: "password" },
+        ],
+      },
+    ];
+    const data: Record<string, unknown> = {
+      lines: [{ label: "a" }, { label: "b" }],
+    };
+
+    const kept = carryStoredPasswords(
+      data,
+      {
+        lines: [
+          { id: "a", label: "a", pw: HASH_A },
+          { id: "b", label: "b", pw: HASH_B },
+        ],
+      },
+      fields,
+      NO_FIELD_GROUPS
+    );
+
+    const lines = data.lines as Array<Record<string, unknown>>;
+    expect(lines.map(line => line.pw)).toEqual([HASH_A, HASH_B]);
+    expect([...kept].sort()).toEqual([HASH_A, HASH_B].sort());
+  });
+
   it("gives rows that carry ids none of the passwords of stored rows that carry none", () => {
     const fields = [
       {

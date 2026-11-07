@@ -99,6 +99,49 @@ describe("RepeaterInput", () => {
     });
   });
 
+  it("gives each added row a saved id of its own in the form values", () => {
+    // The server keeps a row's id as sent, so a new row carries one from the
+    // moment it is added; two added rows never share one.
+    render(
+      <RepeaterHarness
+        field={baseRepeater}
+        defaultValues={{ testimonials: [] }}
+      />
+    );
+    const addButton = screen.getByRole("button", { name: /Add Testimonial/i });
+    fireEvent.click(addButton);
+    fireEvent.click(addButton);
+
+    const values = JSON.parse(
+      screen.getByTestId("form-values").textContent || "{}"
+    ) as { testimonials: Array<{ id?: unknown }> };
+    const [first, second] = values.testimonials;
+    expect(typeof first?.id).toBe("string");
+    expect(first?.id).not.toBe("");
+    expect(typeof second?.id).toBe("string");
+    expect(second?.id).not.toBe(first?.id);
+  });
+
+  it("keeps a stored row's own id in the form values when a row is added", () => {
+    // The field array's render key must not replace the row's saved id.
+    render(
+      <RepeaterHarness
+        field={baseRepeater}
+        defaultValues={{
+          testimonials: [{ id: "row-a", author: "Alice", rating: 5 }],
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Add Testimonial/i }));
+
+    const values = JSON.parse(
+      screen.getByTestId("form-values").textContent || "{}"
+    ) as { testimonials: Array<{ id?: unknown; fieldKey?: unknown }> };
+    expect(values.testimonials[0]?.id).toBe("row-a");
+    expect(values.testimonials[0]?.fieldKey).toBeUndefined();
+    expect(values.testimonials[1]?.id).not.toBe("row-a");
+  });
+
   it("displays min-rows warning when row count is less than minRows", () => {
     const minConstrained: RepeaterFieldConfig = {
       ...baseRepeater,
