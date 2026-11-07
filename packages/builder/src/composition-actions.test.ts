@@ -329,10 +329,38 @@ describe("the page actions' JSON Schema", () => {
     for (const format of formats) {
       expect(format).toMatchObject({ type: "object" });
     }
-    // An unbind may keep any JSON value: no type is stated for it.
-    const values = propertiesNamed(schema, "value");
-    expect(values.length).toBeGreaterThan(0);
-    expect(values.some(value => !("type" in (value as object)))).toBe(true);
+    // An unbind may keep any JSON value: its `{ value }` keep states no
+    // constraint at all, and still requires the value.
+    const unbind = (
+      schema.oneOf as { properties: { kind: { const: string } } }[]
+    ).find(option => option.properties.kind.const === "unbind-prop");
+    expect(unbind).toBeDefined();
+    const keepsValue: {
+      properties: Record<string, unknown>;
+      required?: string[];
+    }[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (typeof node !== "object" || node === null) return;
+      const shaped = node as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      if (
+        shaped.properties !== undefined &&
+        Object.keys(shaped.properties).join() === "value"
+      ) {
+        keepsValue.push({
+          properties: shaped.properties,
+          required: shaped.required,
+        });
+      }
+      Object.values(node).forEach(walk);
+    };
+    walk(unbind);
+    expect(keepsValue).toHaveLength(1);
+    expect(keepsValue[0]?.properties.value).toEqual({});
+    expect(keepsValue[0]?.required).toContain("value");
   });
 });
 
