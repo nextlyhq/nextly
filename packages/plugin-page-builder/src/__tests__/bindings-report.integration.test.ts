@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BINDINGS_REPORT_JOB } from "../bindings-report/job";
 import { asOverwrite } from "../document-version";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { documentKeyOf } from "../host-rewrite/contract";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
@@ -96,9 +97,9 @@ describe.each(getConfiguredTestDialects())(
       id: string
     ): Promise<Record<string, unknown> | undefined> {
       const rows = await t.adapter.select<Record<string, unknown>>(TABLE);
-      return rows.find(
-        row => row.document_key === `collection:${ARTICLES}:${id}`
-      );
+      // The key as the store spells it, through the one function that does.
+      const key = documentKeyOf({ kind: "collection", slug: ARTICLES, id });
+      return rows.find(row => row.document_key === key);
     }
 
     /** The codes a row's stored issues carry. */

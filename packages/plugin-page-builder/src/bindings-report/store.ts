@@ -22,6 +22,7 @@ import {
   asc,
   desc,
   eq,
+  gt,
   isNotNull,
   isNull,
   lt,
@@ -96,8 +97,11 @@ export interface BindingReportStore {
   ): Promise<void>;
   /** Mark a document to be judged again, with a fresh token. */
   markDirty(document: ReportedDocument): Promise<void>;
-  /** Up to `limit` documents marked to be judged again. */
-  dirty(limit: number): Promise<DirtyDocument[]>;
+  /**
+   * Up to `limit` documents marked to be judged again, in key order, after
+   * the key `after` when given, so a pass walks them once with a cursor.
+   */
+  dirty(limit: number, after?: string): Promise<DirtyDocument[]>;
   /**
    * Settle a marked document with its rows; `false`, changing nothing, when
    * it was marked again since `token` was read.
@@ -224,11 +228,18 @@ export function bindingReportStore(
       await db.update(bindingIssues, { dirty: token }).where(keyed);
     },
 
-    dirty: async limit => {
+    dirty: async (limit, after) => {
       const found = await db
         .select(bindingIssues)
-        .where(isNotNull(issues().dirty))
-        .orderBy(asc(issues().updatedAt))
+        .where(
+          after === undefined
+            ? isNotNull(issues().dirty)
+            : (and(
+                isNotNull(issues().dirty),
+                gt(issues().documentKey, after)
+              ) ?? isNotNull(issues().dirty))
+        )
+        .orderBy(asc(issues().documentKey))
         .limit(limit)
         .all();
       return found.flatMap(row =>
