@@ -69,8 +69,18 @@ export interface PreviewCollectionLabels {
 }
 
 /**
+ * One top-level blocks field of the template's collection, which an Entry
+ * content block may draw: its name, and what the admin calls it.
+ */
+export interface PreviewBlocksField {
+  readonly name: string;
+  readonly label: string;
+}
+
+/**
  * The list's meta: its pagination, whether the author may create an entry
- * of the collection, and the collection's names.
+ * of the collection, the collection's names, and its top-level blocks
+ * fields.
  */
 export interface PreviewEntriesMeta {
   readonly total: number;
@@ -81,6 +91,8 @@ export interface PreviewEntriesMeta {
   readonly hasPrev: boolean;
   readonly mayCreate: boolean;
   readonly labels: PreviewCollectionLabels;
+  /** The collection's top-level blocks fields, in its order. */
+  readonly blocksFields: readonly PreviewBlocksField[];
 }
 
 /** What the list answers: the canonical list envelope. */

@@ -22,6 +22,7 @@ import type { PreviewedEntry } from "@nextlyhq/builder/shell";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
+  PreviewBlocksField,
   PreviewCollectionLabels,
   PreviewEntryItem,
   PreviewEntryResponse,
@@ -65,6 +66,11 @@ export interface TemplatePreview {
   readonly collection: string | undefined;
   /** How the collection is named, for "No posts to preview" and "New post". */
   readonly labels: PreviewCollectionLabels;
+  /**
+   * The collection's top-level blocks fields, which an Entry content block
+   * may draw; `undefined` until the list says, or where it was refused.
+   */
+  readonly blocksFields: readonly PreviewBlocksField[] | undefined;
   readonly language: string | undefined;
   readonly list: PreviewList;
   /** The entry being previewed, as the chip shows it; none while there is none. */
@@ -128,15 +134,21 @@ export function steppedEntry(
   return item === undefined || item.id === id ? undefined : item;
 }
 
+/** What the list's answer says of the collection besides its entries. */
+interface ListFacts {
+  readonly labels?: PreviewCollectionLabels;
+  readonly blocksFields?: readonly PreviewBlocksField[];
+}
+
 /** The list, read for this collection and person, again on each `round`. */
 function usePreviewList(
   args: TemplatePreviewArgs,
   round: number
-): PreviewList & { readonly labels?: PreviewCollectionLabels } {
+): PreviewList & ListFacts {
   const { collection, locale, userId } = args;
   const [answer, setAnswer] = useState<{
     readonly key: string;
-    readonly list: PreviewList & { readonly labels?: PreviewCollectionLabels };
+    readonly list: PreviewList & ListFacts;
   } | null>(null);
   const key = JSON.stringify([collection ?? null, locale ?? null, userId]);
   useEffect(() => {
@@ -157,6 +169,7 @@ function usePreviewList(
             items: found.items,
             mayCreate: found.meta.mayCreate,
             labels: found.meta.labels,
+            blocksFields: found.meta.blocksFields,
           },
         });
       },
@@ -264,6 +277,7 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     // A template always names its collection; "entries" only stands in
     // until its form has the value.
     labels: list.labels ?? labelsFromSlug(collection ?? "entries"),
+    blocksFields: list.blocksFields,
     language: locale,
     list,
     chip,

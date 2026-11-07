@@ -83,6 +83,7 @@ import {
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
+import { labelOf, pluralLabelOf } from "./collection-labels";
 import {
   ADDRESS_CLAIMS_SLUG,
   addressClaimsCollection,
@@ -293,6 +294,7 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import { entryBlocksFieldsOf } from "./templates/entry-content-fields";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
@@ -2077,6 +2079,21 @@ export const pageBuilder = (
             ctx.services.ownCollections,
             templates
           ),
+        },
+        // A collection's top-level blocks fields, for the field a template's
+        // Entry content block draws: read per write, so a field removed a
+        // moment ago is refused at the next save that newly chooses it.
+        entryBlocksFields: async collection => {
+          const record: unknown = await ctx.services.collections
+            .getCollection(collection, {})
+            .catch(() => undefined);
+          if (typeof record !== "object" || record === null) return undefined;
+          const named = record as Record<string, unknown>;
+          return {
+            fields: entryBlocksFieldsOf(named),
+            label:
+              pluralLabelOf(named).pluralLabel ?? labelOf(named, collection),
+          };
         },
         listFields: listFieldsFrom({
           record: collection =>

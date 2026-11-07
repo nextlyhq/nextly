@@ -67,6 +67,7 @@ describe("core block registration", () => {
       "core/columns",
       "core/divider",
       "core/embed",
+      "core/entry-content",
       "core/form",
       "core/gallery",
       "core/heading",

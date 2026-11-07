@@ -27,6 +27,7 @@ import { keyHint } from "@nextlyhq/builder";
 import {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,
+  type PreviewedCollection,
   type PreviewedEntry,
 } from "@nextlyhq/builder/shell";
 import {
@@ -87,7 +88,7 @@ import {
 import { StatusPill } from "../status-pill";
 import { listPreviewEntries } from "../template-preview-client";
 
-import { entryCreatePath } from "./builder-address";
+import { entryCreatePath, entryEditPath } from "./builder-address";
 import { CanvasEntryProvider } from "./canvas-entry";
 import {
   useTemplatePreview,
@@ -167,10 +168,31 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
           },
     [collection, previewedId]
   );
+  // The collection as the builder reads it, for an Entry content block's
+  // mark, inspector and canvas notes.
+  const { labels, blocksFields } = preview;
+  const previewedCollection = useMemo(
+    (): PreviewedCollection | undefined =>
+      collection === undefined
+        ? undefined
+        : {
+            slug: collection,
+            singular: inSentence(labels.singular),
+            plural: labels.plural,
+            blocksFields,
+            entryHref: id => entryEditPath(collection, id),
+          },
+    [collection, labels.singular, labels.plural, blocksFields]
+  );
   return (
     <TemplatePreviewState.Provider value={preview}>
       <CanvasEntryProvider identity={canvasIdentity}>
-        <PreviewedEntryProvider value={preview.previewed}>
+        <PreviewedEntryProvider
+          value={preview.previewed}
+          {...(previewedCollection === undefined
+            ? {}
+            : { collection: previewedCollection })}
+        >
           {children}
         </PreviewedEntryProvider>
       </CanvasEntryProvider>
