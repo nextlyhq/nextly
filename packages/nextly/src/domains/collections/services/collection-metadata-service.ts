@@ -1280,7 +1280,9 @@ export class CollectionMetadataService extends BaseService {
    * where the database can undo a table drop, none.
    *
    * What can fail without removing anything runs first: the drop migration is
-   * written before anything is torn down. One transaction then removes every
+   * written before anything is torn down. One transaction then runs each
+   * plugin's collection-delete handler (`ctx.hooks.onCollectionDelete`), which
+   * removes what the plugin holds for the collections, then removes every
    * collection's field-group values and translations, runs the drop in
    * development, and removes the registry rows, so a failure part-way leaves
    * the earlier collections as they were, and the migration written for the
@@ -1295,9 +1297,16 @@ export class CollectionMetadataService extends BaseService {
   private async removeTogether(
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
   ): Promise<void> {
-    const [{ teardownAdapterIn }, { splitStatements }] = await Promise.all([
+    const [
+      { teardownAdapterIn },
+      { splitStatements },
+      { runCollectionDeleteHandlers },
+      { getActiveHookRegistry },
+    ] = await Promise.all([
       import("./teardown-adapter-in-transaction"),
       import("../../schema/pipeline/sql-statement-utils"),
+      import("./collection-delete-plugins"),
+      import("../../../hooks/hook-registry"),
     ]);
     const drop = this.dropMigrationFor(ordered);
     await this.fileManager.saveDropMigration(
@@ -1308,6 +1317,15 @@ export class CollectionMetadataService extends BaseService {
     const unregistered = new Map<string, UnregisteredCollectionRow>();
     try {
       await this.adapter.transaction(async tx => {
+        // The plugins' handlers first: what they remove is plain rows, so
+        // here, before any DDL, a handler that throws rolls the whole delete
+        // back on every dialect, MySQL included, whose table drops below
+        // commit what ran before them.
+        await runCollectionDeleteHandlers(
+          getActiveHookRegistry(),
+          ordered.map(({ slug }) => slug),
+          tx
+        );
         const teardownAdapter = teardownAdapterIn(this.adapter, tx);
         for (const { slug, collection } of ordered) {
           await this.tearDownStoredWithIt(slug, collection, teardownAdapter);

@@ -38,7 +38,11 @@ import type { AuthUser } from "../types/auth";
 import { assertRunnableAsPrincipal } from "./principals/run-as";
 import type { Principal } from "./principals/types";
 import { methodFacade } from "./service-facade";
-import { type TransactionScope, transactionScope } from "./transaction-scope";
+import {
+  type PluginTransactionMethod,
+  type TransactionScope,
+  transactionScope,
+} from "./transaction-scope";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.
@@ -625,13 +629,16 @@ const writeTransactionKeys = new WeakMap<object, object>();
  * Run `work` with a token for the write transaction `tx`, as the collection
  * service's in-transaction methods take it, open while `work` runs and
  * refusing once it has settled, as every token a plugin holds does; and with
- * the key that transaction's every handler call shares.
+ * the key that transaction's every handler call shares. `method` is what a
+ * refusal of the settled token names as the callback the work belongs in.
  *
- * @internal The in-transaction phase's, for `InTransactionContext`.
+ * @internal The in-transaction phase's, for `InTransactionContext`, and a
+ * collection delete's, for `ctx.hooks.onCollectionDelete`.
  */
 export function withWriteTransactionToken<R>(
   tx: TransactionContext,
-  work: (token: PluginCollectionTransaction, key: object) => Promise<R>
+  work: (token: PluginCollectionTransaction, key: object) => Promise<R>,
+  method: PluginTransactionMethod = "ctx.hooks.onInTransaction"
 ): Promise<R> {
   const adapterTx = tx as unknown as object;
   let key = writeTransactionKeys.get(adapterTx);
@@ -640,7 +647,7 @@ export function withWriteTransactionToken<R>(
     writeTransactionKeys.set(adapterTx, key);
   }
   const token = Object.freeze({}) as PluginCollectionTransaction;
-  const scope = transactionScope("ctx.hooks.onInTransaction");
+  const scope = transactionScope(method);
   pluginTransactions.set(token, { tx, scope });
   const shared = key;
   return scope.run(() => work(token, shared));

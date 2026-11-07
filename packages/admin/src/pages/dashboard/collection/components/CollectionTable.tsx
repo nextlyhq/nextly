@@ -56,6 +56,7 @@ import type {
   MigrationStatus,
 } from "@admin/types/entities";
 
+import { CollectionDeleteImpact } from "./CollectionDeleteImpact";
 import { CollectionTableSkeleton } from "./CollectionTableSkeleton";
 
 /** Source badge label + icon. */
@@ -629,7 +630,12 @@ export default function CollectionTable(): JSX.Element {
         }
         onConfirm={handleConfirmDelete}
         isLoading={isDeleting}
-      />
+      >
+        <CollectionDeleteImpact
+          slugs={collectionToDelete ? [collectionToDelete.name] : []}
+          enabled={deleteDialogOpen}
+        />
+      </BulkDeleteDialog>
 
       <BulkDeleteDialog
         open={bulkDeleteDialogOpen}
@@ -641,7 +647,15 @@ export default function CollectionTable(): JSX.Element {
           .map(c => ({ id: c.id, name: c.label, secondary: c.name }))}
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
-      />
+      >
+        {/* The same set the confirm deletes together. */}
+        <CollectionDeleteImpact
+          slugs={filteredData
+            .filter(c => selectedIds.includes(c.id) && !c.locked)
+            .map(c => c.name)}
+          enabled={bulkDeleteDialogOpen}
+        />
+      </BulkDeleteDialog>
     </>
   );
 }

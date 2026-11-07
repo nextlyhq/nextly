@@ -83,7 +83,7 @@ symbol rather than a version. Too high, and installs that would have worked are
 refused.
 
 There is one case that catches people out. If the API you need is landing in
-the *same release as your plugin* — you added it to core yourself, or you are
+the _same release as your plugin_ — you added it to core yourself, or you are
 building inside the Nextly monorepo — then the version to name **does not exist
 yet**. Writing the next one is a guess about a release that has not happened,
 and it makes your plugin unusable in the source tree, where core carries the
@@ -128,18 +128,18 @@ something newer.
 
 `init(ctx)` and `destroy(ctx)` receive:
 
-| Field | Use |
-|---|---|
-| `ctx.services` | Managed data access — **secure by default** (acts as the ambient user, RBAC on). Pass `{ as: "system" }` to elevate. Validation/hooks/events always run. |
-| `ctx.db` | Typed, owner-checked access to your declared tables — **unmanaged** (no validation, hooks or events). `ctx.db.raw` is the Drizzle builder escape hatch; `execute`/`run` need `capabilities.db.rawSql` and the app's `db.rawSqlPlugins` listing. |
-| `ctx.dialect` | The database this installation runs on (`@experimental`). |
-| `ctx.hooks` | Hooks — can **modify or abort** an operation before it writes, or write **inside its transaction** (`onInTransaction`). |
-| `ctx.events` | Post-commit event bus — **observe-only, best-effort** (may be dropped). React/notify here. |
-| `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects. |
-| `ctx.self` | Your entities' **resolved** slugs after any host `.rename()`. Always reference your own entities through this. |
-| `ctx.logger` | Structured logging. |
-| `ctx.config` | A `PluginConfig`: a frozen copy of the plain configuration values. No live handle (adapter, logger, hook registry, storage, rate limiter) and no email provider credentials; `plugins` lists summaries, not definitions. Reach the database through `ctx.db` and log through `ctx.logger`. |
-| `ctx.nextlyVersion` | The running core version (feature detection). |
+| Field                         | Use                                                                                                                                                                                                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ctx.services`                | Managed data access — **secure by default** (acts as the ambient user, RBAC on). Pass `{ as: "system" }` to elevate. Validation/hooks/events always run.                                                                                                                                   |
+| `ctx.db`                      | Typed, owner-checked access to your declared tables — **unmanaged** (no validation, hooks or events). `ctx.db.raw` is the Drizzle builder escape hatch; `execute`/`run` need `capabilities.db.rawSql` and the app's `db.rawSqlPlugins` listing.                                            |
+| `ctx.dialect`                 | The database this installation runs on (`@experimental`).                                                                                                                                                                                                                                  |
+| `ctx.hooks`                   | Hooks — can **modify or abort** an operation before it writes, or write **inside its transaction** (`onInTransaction`).                                                                                                                                                                    |
+| `ctx.events`                  | Post-commit event bus — **observe-only, best-effort** (may be dropped). React/notify here.                                                                                                                                                                                                 |
+| `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects.                                                                                                                                                                                                                                |
+| `ctx.self`                    | Your entities' **resolved** slugs after any host `.rename()`. Always reference your own entities through this.                                                                                                                                                                             |
+| `ctx.logger`                  | Structured logging.                                                                                                                                                                                                                                                                        |
+| `ctx.config`                  | A `PluginConfig`: a frozen copy of the plain configuration values. No live handle (adapter, logger, hook registry, storage, rate limiter) and no email provider credentials; `plugins` lists summaries, not definitions. Reach the database through `ctx.db` and log through `ctx.logger`. |
+| `ctx.nextlyVersion`           | The running core version (feature detection).                                                                                                                                                                                                                                              |
 
 **Hooks vs events:** need to change or block an operation → use a **hook**; need to react after it commits → use an **event**.
 
@@ -147,12 +147,12 @@ something newer.
 
 A write offers four timings, in this order:
 
-| When | What runs | How often |
-|---|---|---|
-| Before the write | `beforeOperation`, `beforeCreate` / `beforeUpdate` / `beforeDelete`, `beforeChange` | once |
-| In the transaction | `ctx.hooks.onInTransaction` handlers (`@experimental`) | once per attempt, so possibly more than once |
-| After the commit | `afterCreate` / `afterUpdate` / `afterDelete`, and the collection events | once |
-| After | field `afterChange` hooks | once |
+| When               | What runs                                                                           | How often                                    |
+| ------------------ | ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| Before the write   | `beforeOperation`, `beforeCreate` / `beforeUpdate` / `beforeDelete`, `beforeChange` | once                                         |
+| In the transaction | `ctx.hooks.onInTransaction` handlers (`@experimental`)                              | once per attempt, so possibly more than once |
+| After the commit   | `afterCreate` / `afterUpdate` / `afterDelete`, and the collection events            | once                                         |
+| After              | field `afterChange` hooks                                                           | once                                         |
 
 An **in-transaction** handler runs last inside the write's own transaction: after the entry, its field groups, its version and its outbox event are written, and before the commit. It is handed the write and your `db`, bound to that transaction, so a row you write there commits or rolls back **with** the entry:
 
@@ -170,6 +170,55 @@ init(ctx) {
 - **It may run more than once.** When the write loses a version-conflict race, the attempt is rolled back and tried again, and your handler runs again with it; only the attempt that commits keeps its writes. So write only through the `db` you are handed. A network call, an email or a write through the outer `ctx.db` is not undone with a discarded attempt: in development Nextly warns, once per plugin, when a handler makes an outbound HTTP call. Do that work after the commit, in an `after*` hook or an event.
 - Keep it short: the entry's row stays locked while it runs.
 - `readStored(fieldType, target)` reads a stored value of a field type your plugin contributes, on the same transaction, with the scope a field type's validator has: so a rule your field type judges against other stored values can be judged again on the value finally stored. A target naming no language reads the app's default language. `fieldPaths(fieldType)` lists the written document's fields of that type, at the top level and through named groups. A collection write that runs in-transaction handlers reads committed on every dialect, so a handler that serializes writes by locking a row of its own table reads what committed before it took the lock. A Single's write, and a write inside a transaction its caller opened, read at that transaction's isolation.
+
+### Taking part in deleting a collection
+
+A plugin that keeps rows naming a collection by slug, in a collection or table of its own,
+can have them go with the collection. `ctx.hooks.onCollectionDelete` (`@experimental`)
+takes two optional handlers:
+
+```ts
+init(ctx) {
+  const designs = ctx.self.collections.designs;
+  const naming = (slug: string) => ({ where: { target: { equals: slug } } });
+  ctx.hooks.onCollectionDelete({
+    // Listed in the admin's delete dialog, under your plugin's name, before the confirm.
+    impact: async slug => {
+      const { data } = await ctx.services.ownCollections.listEntries(designs, naming(slug));
+      return data.map(row => ({ label: String(row.title), kind: "design" }));
+    },
+    // Run inside the delete's transaction, before the collection is removed.
+    inTransaction: async ({ slug, transaction }) => {
+      const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+        transaction, designs, naming(slug), { lock: "update" }
+      );
+      for (const row of data) {
+        await ctx.services.collections.deleteEntryInTransaction(
+          transaction, designs, String(row.id), {}
+        );
+      }
+    },
+  });
+}
+```
+
+- `impact` is asked for each collection the delete dialog is about to delete, as the
+  admin opens it (`GET /api/collections/schema/<slug>/delete-impact`). It must only read.
+  It answers `{ label, kind }` items; anything else fails the dialog's check and names
+  your plugin in the log.
+- `inTransaction` runs for each collection deleted, the Schema Builder's delete and a
+  bulk delete of several alike, inside the delete's transaction and before the
+  collection's field-group values, translations, table and registry row are removed.
+  `transaction` is a token for the `*InTransaction` methods of
+  `ctx.services.collections` and `ctx.services.ownCollections`, refused once your
+  handler settles.
+- **Throwing refuses the delete**, and nothing of it is kept: your handler runs before
+  the delete's first table drop, so this holds on MySQL too. On MySQL a failure after
+  that point (a table drop, the registry row's removal) can leave what your handler
+  removed gone while the collection stays registered, because MySQL commits each table
+  drop with everything before it; deleting the collection again finishes it.
+- Both are asked about every collection deleted, your own among them: decide in the
+  handler which you hold anything for.
 
 **Never hardcode your own slugs** in `init`. Use `ctx.self` so your plugin keeps working when an integrator renames an entity:
 
@@ -189,7 +238,7 @@ pnpm dev          # runs the dev/ playground (next dev) → open /admin
 
 Editing files under `src/` hot-reloads the playground (the `dev/next.config.ts` transpiles your plugin source). A hot reload re-runs neither `init()` nor `destroy()`, so restart `pnpm dev` after changing either. `destroy()` runs on shutdown and before services register again: clean up subscriptions and timers there.
 
-> **HMR gotcha:** Nextly's registries (hooks, events, filters) survive hot-reload because they live on `globalThis`. If *you* keep state in a module-scoped singleton, it will be recreated on every reload and your subscriptions lost. Register through `ctx.hooks`/`ctx.events`/`ctx.filters` instead.
+> **HMR gotcha:** Nextly's registries (hooks, events, filters) survive hot-reload because they live on `globalThis`. If _you_ keep state in a module-scoped singleton, it will be recreated on every reload and your subscriptions lost. Register through `ctx.hooks`/`ctx.events`/`ctx.filters` instead.
 
 ## Test
 

@@ -53,6 +53,8 @@ import { getFilterRegistry } from "../filters";
 import { singleHookNamespace } from "../hooks/register-single-hooks";
 import type {
   BeforeOperationHandler,
+  CollectionDeleteImpactItem,
+  CollectionDeleteRunner,
   HookContextPhase,
   HookHandler,
   HookOwner,
@@ -351,6 +353,58 @@ export interface PluginHookRegistry {
     collection: string,
     handler: InTransactionHandler<T>
   ): void;
+
+  /**
+   * @experimental Take part in deleting a collection: say what the delete
+   * takes with it, and remove that in the delete's own transaction, so
+   * nothing the plugin keeps is left naming a collection that no longer
+   * exists.
+   *
+   * `impact` is asked for each collection the admin's delete dialog is about
+   * to delete, before the confirm, and what it answers is listed under the
+   * plugin's name. It must only read. `inTransaction` runs for each
+   * collection deleted, inside the delete's transaction, before the
+   * collection's field-group values, translations, table and registry row
+   * are removed. Its `transaction` is a token for the `*InTransaction`
+   * methods of `ctx.services.collections` and `ctx.services.ownCollections`,
+   * refused once the handler settles. A handler that throws rolls the delete
+   * back on every dialect: it runs before the delete's first table drop,
+   * which on MySQL commits what ran before it.
+   *
+   * Asked of every collection deleted, the plugin's own among them: a handler
+   * decides for itself which it holds anything for.
+   *
+   * @example
+   * ```typescript
+   * ctx.hooks.onCollectionDelete({
+   *   impact: async slug => (await designsOf(slug)).map(design => ({
+   *     label: design.title, kind: 'design',
+   *   })),
+   *   inTransaction: async ({ slug, transaction }) => {
+   *     for (const design of await designsOf(slug, transaction)) {
+   *       await ctx.services.collections.deleteEntryInTransaction(
+   *         transaction, 'designs', design.id, {}
+   *       );
+   *     }
+   *   },
+   * });
+   * ```
+   */
+  onCollectionDelete(handlers: CollectionDeleteHandlers): void;
+}
+
+/**
+ * @experimental What `ctx.hooks.onCollectionDelete` takes: either part may be
+ * left out.
+ */
+export interface CollectionDeleteHandlers {
+  /** What deleting `slug` takes with it, for the delete dialog. Reads only. */
+  impact?: (slug: string) => Promise<readonly CollectionDeleteImpactItem[]>;
+  /** Remove it, in the delete's transaction, before the collection goes. */
+  inTransaction?: (context: {
+    slug: string;
+    transaction: PluginCollectionTransaction;
+  }) => Promise<void>;
 }
 
 /**
@@ -2123,6 +2177,18 @@ export function createPluginContext(
       runner: InTransactionRunner,
       owner?: HookOwner
     ) => void;
+    /**
+     * Optional for the same reason: a registry without them refuses
+     * `ctx.hooks.onCollectionDelete` rather than dropping the handlers.
+     */
+    registerCollectionDelete?: (
+      runner: CollectionDeleteRunner,
+      owner?: HookOwner
+    ) => void;
+    unregisterCollectionDelete?: (
+      runner: CollectionDeleteRunner,
+      owner?: HookOwner
+    ) => void;
   },
   /**
    * The plugin this context is built for — used to resolve `ctx.self`.
@@ -2292,6 +2358,10 @@ export function createPluginContext(
     hookRegistry.registerInTransaction?.bind(hookRegistry);
   const unregisterInTransaction =
     hookRegistry.unregisterInTransaction?.bind(hookRegistry);
+  const registerCollectionDelete =
+    hookRegistry.registerCollectionDelete?.bind(hookRegistry);
+  const unregisterCollectionDelete =
+    hookRegistry.unregisterCollectionDelete?.bind(hookRegistry);
 
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
@@ -2358,6 +2428,40 @@ export function createPluginContext(
         inTransactionRunner(handler as InTransactionHandler),
         hookOwner
       );
+    },
+    onCollectionDelete: handlers => {
+      if (!registerCollectionDelete || !unregisterCollectionDelete) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "hook-registry-without-collection-delete",
+            plugin: pluginName,
+          },
+        });
+      }
+      const { impact, inTransaction } = handlers;
+      const runner: CollectionDeleteRunner = {
+        ...(impact === undefined ? {} : { impact }),
+        // The delete's transaction reaches the plugin as a token of its own,
+        // open while the handler runs and refused once it settles, as an
+        // in-transaction handler's is; a statement it started and did not
+        // await finishes before the delete goes on.
+        ...(inTransaction === undefined
+          ? {}
+          : {
+              inTransaction: (slug: string, tx: TransactionContext) =>
+                withWriteTransactionToken(
+                  tx,
+                  transaction => inTransaction({ slug, transaction }),
+                  "ctx.hooks.onCollectionDelete"
+                ),
+            }),
+      };
+      registerCollectionDelete(runner, hookOwner);
+      if (pluginName) {
+        recordPluginSubscription(pluginName, () =>
+          unregisterCollectionDelete(runner, hookOwner)
+        );
+      }
     },
   };
 

@@ -24,6 +24,7 @@ import {
   type HookContext,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginCollectionTransaction,
   type PluginCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
@@ -289,6 +290,7 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import { templateCollectionDelete } from "./templates/collection-delete";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
@@ -1971,6 +1973,42 @@ export const pageBuilder = (
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
       };
       registerTemplateGuard(ctx, templateGuard);
+      // A collection's template and its entries' own designs go with the
+      // collection: listed in its delete dialog, and removed in the delete's
+      // transaction, so none is left drawing a collection that is gone.
+      ctx.hooks.onCollectionDelete(
+        templateCollectionDelete<PluginCollectionTransaction>({
+          own: () => new Set(Object.values(ctx.self.collections)),
+          services: {
+            listTemplates: options =>
+              ctx.services.ownCollections.listEntries(templates, options),
+            listTemplatesInTransaction: (transaction, options) =>
+              ctx.services.ownCollections.listEntriesInTransaction(
+                transaction,
+                templates,
+                options,
+                { lock: "update" }
+              ),
+            deleteTemplateInTransaction: (transaction, id) =>
+              ctx.services.collections.deleteEntryInTransaction(
+                transaction,
+                templates,
+                id,
+                {}
+              ),
+            listEntries: (collection, ids) =>
+              ctx.services.collections.listEntries(
+                collection,
+                {
+                  where: { id: { in: [...ids] } },
+                  pagination: { limit: ids.length },
+                  depth: 0,
+                },
+                { as: "system" }
+              ),
+          },
+        })
+      );
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.

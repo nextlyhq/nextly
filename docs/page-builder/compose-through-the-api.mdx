@@ -229,6 +229,11 @@ collection exists. A refused action answers `409` for a collection that already 
 template and `422` for one that cannot have one; a dry run answers either as `refusals`.
 The answer holds the `template` as the write stored it.
 
+Deleting a collection deletes its template with it, in the same transaction. The Schema
+Builder's delete dialog lists the template first, under the page builder's name, so
+you see what goes before you confirm. The page builder's own collections are not
+affected.
+
 ## Other routes with a dry run
 
 - `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save,
