@@ -1328,6 +1328,30 @@ export type {
   VisitorUnreadableInput,
 } from "./visitor-unreadable-bindings";
 
+// The Entry content block: where a collection's template draws the entry's
+// own blocks content. Its rules, shared by the validator, the editor and the
+// page builder's save, and the one composition of an entry's content into a
+// template for drawing, shared by the published page and the editor's canvas.
+export {
+  composeEntryContent,
+  entryBlocksDocumentOf,
+  ENTRY_CONTENT_FIELD_PROP,
+  ENTRY_CONTENT_ISSUE_CODES,
+  ENTRY_CONTENT_SLOT,
+  ENTRY_CONTENT_TYPE,
+  entryContentFieldOf,
+  entryContentIssues,
+  entryContentPlacements,
+  holdsEntryContent,
+} from "./entry-content";
+export type {
+  EntryContentIssue,
+  EntryContentIssueCode,
+  EntryContentJudgement,
+  EntryContentPlacement,
+  EntryContentSource,
+} from "./entry-content";
+
 // A collection list's stored query: the one reading of it, shared by the
 // validator, the renderer and the editor, and its save-time judgement.
 export {
