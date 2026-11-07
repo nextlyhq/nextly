@@ -13,9 +13,7 @@
  * @module unbind-plan-contract
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import type { KeptProps, UnbindKeep } from "@nextlyhq/builder/ops";
-
-import type { UnbindAnswer } from "./composition-actions-contract";
+import type { UnbindKeep } from "@nextlyhq/builder/ops";
 
 /** Where the editor asks for an unbind's plan, under this plugin's namespace. */
 export const UNBIND_PLAN_ROUTE_PATH = "/unbind-plan";
@@ -40,6 +38,4 @@ export interface UnbindPlanRequest {
 }
 
 /** The props the editor writes in the binding's place and the answer, or why not. */
-export type UnbindPlanResponse =
-  | { readonly kept: KeptProps; readonly answer: UnbindAnswer }
-  | { readonly refusal: string };
+export type { UnbindPlanAnswer as UnbindPlanResponse } from "@nextlyhq/builder/ops";

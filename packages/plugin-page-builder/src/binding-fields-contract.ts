@@ -14,7 +14,7 @@
  *
  * @module binding-fields-contract
  */
-import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
+import type { BindingFieldSource } from "@nextlyhq/builder/ops";
 
 /** Where the picker reads its fields, under this plugin's namespace. */
 export const BINDING_FIELDS_ROUTE_PATH = "/binding-fields";
@@ -35,38 +35,16 @@ export interface BindingFieldsRequest {
   readonly locale?: string;
 }
 
-/** One field a binding can read, as the picker lists it. */
-export interface PickerField extends Omit<BindingFieldShape, "fields"> {
-  /** Whether a visitor may read it; a binding to one shows its fallback. */
-  readonly public: boolean;
-  /**
-   * The start of its value, as the person editing reads it. Absent for a
-   * field visitors can't read, an empty one, one whose value is not text, a
-   * number or a yes-or-no, and one whose value is a draft's.
-   */
-  readonly preview?: string;
-  /** Set when the value differs from what the published entry holds. */
-  readonly draft?: true;
-  /**
-   * The fields inside it: a group's own, or a relation's, one step in, as the
-   * entry it names holds them.
-   */
-  readonly fields?: readonly PickerField[];
-}
-
-/** One source of bound values, as the picker groups its fields. */
-export interface PickerSource {
-  /** How a binding names the source. */
-  readonly binding:
-    | { readonly source: "entry" }
-    | { readonly source: "single"; readonly sourceKey: string }
-    | { readonly source: "site" };
-  /** The source's name: a collection's or a Single's label. */
-  readonly label: string;
-  readonly fields: readonly PickerField[];
-}
+/**
+ * One field, and one source of fields, as the picker lists them: the
+ * builder's shapes, which the editor reads them as.
+ */
+export type {
+  BindingFieldChoice as PickerField,
+  BindingFieldSource as PickerSource,
+} from "@nextlyhq/builder/ops";
 
 /** The sources, in the order the picker lists them: entry, Singles, site. */
 export interface BindingFieldsResponse {
-  readonly sources: readonly PickerSource[];
+  readonly sources: readonly BindingFieldSource[];
 }

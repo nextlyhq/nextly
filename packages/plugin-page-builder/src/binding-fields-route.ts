@@ -69,11 +69,11 @@ const BindingFieldsBody = z
   .strict();
 
 /** At most this many fields of one source, or of one relation, are listed. */
-export const MOST_FIELDS = 100;
+const MOST_FIELDS = 100;
 /** At most this many Singles are listed. */
-export const MOST_SINGLES = 50;
+const MOST_SINGLES = 50;
 /** At most this many relations of one source are followed a step in. */
-export const MOST_RELATIONS = 10;
+const MOST_RELATIONS = 10;
 /** A preview's length, in characters, before it is cut. */
 const PREVIEW_LENGTH = 80;
 
@@ -103,7 +103,9 @@ export interface BindingFieldsReads {
     select: readonly string[]
   ): Promise<Readonly<Record<string, unknown>> | null>;
   /** Up to {@link MOST_SINGLES} Singles, by slug, with their labels. */
-  singles(): Promise<readonly { readonly slug: string; readonly label: string }[]>;
+  singles(): Promise<
+    readonly { readonly slug: string; readonly label: string }[]
+  >;
   /** A collection's label, for the entry's group. */
   collectionLabel(slug: string): Promise<string>;
   /** The site settings, as every visitor reads them. */
@@ -132,7 +134,8 @@ function relatedId(value: unknown): string | undefined {
 
 /** A single relation's target collection, which a step in reads. */
 function followable(shape: BindingFieldShape): string | undefined {
-  if (shape.type !== "relationship" && shape.type !== "upload") return undefined;
+  if (shape.type !== "relationship" && shape.type !== "upload")
+    return undefined;
   if (shape.hasMany === true) return undefined;
   return typeof shape.relationTo === "string" ? shape.relationTo : undefined;
 }
@@ -399,7 +402,10 @@ export function bindingFieldsRoute(): {
     handler: async (req, ctx) => {
       const body = await readBodyWith(req, BindingFieldsBody, "binding fields");
       return respondDoc(
-        await readBindingFields(body, directBindingFieldsReads(ctx, body.locale))
+        await readBindingFields(
+          body,
+          directBindingFieldsReads(ctx, body.locale)
+        )
       );
     },
   };
