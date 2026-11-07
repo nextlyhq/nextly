@@ -4173,7 +4173,8 @@ export interface ContentPageConfig {
   /**
    * How a page is drawn, as {@link createBlocksPage} takes it. An entry's
    * page is drawn with the same options (blocks, styles, Layouts, limits,
-   * metadata), with its collection's template as the document. A stored
+   * metadata), with the design serving it as the document: its own published
+   * design, or else its collection's published template. A stored
    * page stylesheet (`styles`) is a page's own and is not used for an entry,
    * whose sheet is compiled from `styleContext`.
    */
@@ -4188,7 +4189,10 @@ export interface ContentPageConfig {
     locale: string | undefined,
     path: string
   ) => Promise<ContentAddressHolder | null>;
-  /** Each collection's published template, and where templates are kept. */
+  /**
+   * Each collection's published template, each entry's own published design,
+   * and where both are kept.
+   */
   readonly templates: {
     /** The templates collection, whose writes refresh the pages they draw. */
     readonly collection: string;
@@ -4198,6 +4202,20 @@ export interface ContentPageConfig {
      */
     readonly read: (
       collection: string,
+      locale: string | undefined
+    ) => Promise<ContentTemplate | null>;
+    /**
+     * What draws the entry `id` of `collection`, as the public reads it: the
+     * entry's own design where it has a published one, else the collection's
+     * published template, else null. A draft own design is never answered.
+     * Absent, every entry is drawn with its collection's template, as
+     * {@link read} answers it.
+     *
+     * @experimental Settles with entries' own designs.
+     */
+    readonly readFor?: (
+      collection: string,
+      id: string,
       locale: string | undefined
     ) => Promise<ContentTemplate | null>;
   };
@@ -4348,7 +4366,8 @@ function buildContentRoute(
   const mountSegments = mountPath.split("/").filter(part => part !== "");
   const window = pages.revalidate;
   // An entry is drawn by the same render as a page, over its collection, with
-  // the template as the document. A page's stored sheet is not an entry's.
+  // the design serving it as the document. A page's stored sheet is not an
+  // entry's.
   const { styles: _styles, ...entryOptions } = pages;
   const entryRoutes = new Map<string, ContentRouteConfig<ReactElement>>();
   const entryRouteOf = (
@@ -4406,6 +4425,41 @@ function buildContentRoute(
   }
 
   /**
+   * What draws the entry `id` of `collection`: its own published design, or
+   * else its collection's published template, as the provider's `readFor`
+   * answers. Cached per entry, since two entries of one collection may be
+   * drawn with different designs, and tagged with templates, so publishing,
+   * unpublishing or removing an own design or the template refreshes it.
+   *
+   * Published only, on a route whose draft gate grants previews too, as a
+   * collection's template is: the gate speaks for pages, and a design's
+   * working draft is previewed in the editor, which draws it itself. A
+   * provider without `readFor` draws every entry with its collection's
+   * template.
+   */
+  async function designOf(
+    collection: string,
+    id: string
+  ): Promise<ContentTemplate | null> {
+    const readFor = templates.readFor;
+    if (readFor === undefined) return await templateOf(collection);
+    return await cachedFind(
+      async () => (await readFor(collection, id, pages.locale)) ?? null,
+      {
+        tags: nextlyTags(templates.collection),
+        keyParts: [
+          "nextly-content-design",
+          pages.cacheScope ?? "",
+          pages.locale ?? "",
+          collection,
+          id,
+        ],
+        revalidate: await releaseBoundedRevalidate(window),
+      }
+    );
+  }
+
+  /**
    * Whether the pages route's draft gate grants this path to the request: a
    * page's working draft holds no address, so a preview of one reaches the
    * pages route only through its gate.
@@ -4456,7 +4510,7 @@ function buildContentRoute(
     if (holder === null) return null;
     // An entry's own address only: an entry's list does not page yet.
     if (holder.kind === "space") return null;
-    const template = await templateOf(holder.collection);
+    const template = await designOf(holder.collection, holder.id);
     if (template === null) return null;
     const entry = await publicRead(holder.collection, holder.id);
     if (entry === null) return null;
@@ -4531,13 +4585,15 @@ function buildContentRoute(
  *
  * - A path a page holds is served as {@link createBlocksPage} serves the
  *   page, its draft gate included.
- * - A path a collection's entry holds is drawn with the collection's
- *   published template, the entry as its bindings' `entry` source, read
- *   published-only as the public reads it. Its metadata comes from the
- *   template's own SEO settings.
- * - Any other path answers not found, and so does an entry whose collection
- *   has no published template. A page's draft is served where the gate
- *   grants it, since a draft holds no address.
+ * - A path a collection's entry holds is drawn with the entry's own
+ *   published design where it has one, else with the collection's published
+ *   template, the entry as its bindings' `entry` source, read published-only
+ *   as the public reads it. Its metadata comes from that design's own SEO
+ *   settings. A draft own design is never drawn here.
+ * - Any other path answers not found, and so does an entry with neither an
+ *   own published design nor a collection's published template. A page's
+ *   draft is served where the gate grants it, since a draft holds no
+ *   address.
  *
  * Returns no `generateStaticParams`, for the reason `createBlocksPage` has
  * none.
