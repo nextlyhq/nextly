@@ -304,6 +304,9 @@ function readState<T>(
   },
   parse: (answer: unknown) => T | undefined
 ): ReadState<T> {
+  // A read asked again is pending whatever it answered last, error included:
+  // the query keeps an earlier error beside the retry in flight.
+  if (read.fetching) return { state: "pending" };
   if (read.error !== null) return { state: "failed" };
   const answer = freshAnswer(read);
   if (answer === undefined) return { state: "pending" };

@@ -500,6 +500,21 @@ describe("the collection control", () => {
     }
   });
 
+  it("waits, rather than offering typing, while a read that failed before is asked again", async () => {
+    // The query keeps its earlier error beside the retry in flight: the
+    // fresh answer may yet list the collections.
+    choices = {
+      ...CHOICES_ANSWER,
+      error: new Error("earlier failure"),
+      fetching: true,
+    };
+    renderField("");
+    const trigger = screen.getByRole("combobox", { name: "Collection" });
+    expect(trigger.textContent).toBe("Loading collections…");
+    expect(screen.queryByText(TYPE_SLUG_NOTE)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Collection" })).toBeNull();
+  });
+
   it("offers nothing while a cached answer is refreshed, until the fresh one arrives", async () => {
     // The hook keeps the cached choices while it asks again on mount: they
     // may name a collection since removed or no longer eligible.
