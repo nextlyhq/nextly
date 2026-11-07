@@ -710,9 +710,11 @@ export async function reconcileHolder(
     },
     row =>
       sameHolder(row.holder, holder) &&
-      (row.kind === "address" || row.kind === "space")
+      (row.kind === "address" || row.kind === "space" || row.kind === "waiting")
   );
-  const heldKeys = new Set(held.map(row => row.key));
+  const waits = held.filter(row => row.kind === "waiting");
+  const owned = held.filter(row => row.kind !== "waiting");
+  const heldKeys = new Set(owned.map(row => row.key));
   const wanted = new Set([
     ...desired.addresses.map(at => storedKey(claimKey("address", at))),
     ...desired.spaces.map(at => storedKey(claimKey("space", at))),
@@ -723,11 +725,23 @@ export async function reconcileHolder(
   const claimSpaces = desired.spaces.filter(
     at => !heldKeys.has(storedKey(claimKey("space", at)))
   );
-  const release = held.filter(row => !wanted.has(row.key));
+  const release = owned.filter(row => !wanted.has(row.key));
+  // A wait for an address the holder no longer wants (it moved, or stopped
+  // being published) is dropped, so releasing what blocked it never hands
+  // the holder an address it gave up.
+  const wantedAddresses = new Set(
+    desired.addresses.map(at => claimKey("address", at))
+  );
+  const staleWaits = waits.filter(
+    row =>
+      row.address === null ||
+      !wantedAddresses.has(claimKey("address", row.address))
+  );
   if (
     claimAddresses.length === 0 &&
     claimSpaces.length === 0 &&
-    release.length === 0
+    release.length === 0 &&
+    staleWaits.length === 0
   ) {
     return false;
   }
@@ -735,7 +749,11 @@ export async function reconcileHolder(
     ...claimAddresses.flatMap(locksFor),
     ...claimSpaces,
     ...release.flatMap(locksOf),
+    ...staleWaits.flatMap(row =>
+      row.address === null ? [] : locksFor(row.address)
+    ),
   ]);
+  for (const row of staleWaits) await remove(claims, tx, row);
   for (const address of claimAddresses) {
     await claimAddress(claims, tx, { address, holder, describe });
   }

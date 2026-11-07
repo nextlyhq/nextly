@@ -7,9 +7,12 @@
  * claims already match what it should hold is read and left alone, so a pass
  * over a site that is up to date writes nothing, and a site whose languages
  * changed since the last boot claims its pages in the new ones. Pages are
- * claimed in id order, the order they were made in, so of two pages that
- * clash the older keeps the address and the newer waits for it, reported in
- * the waiting report rather than refused, since nobody is saving it now.
+ * claimed oldest first, by when they were made (ids are random, so their
+ * order says nothing), so of two pages that clash the older keeps the
+ * address and the newer waits for it, reported in the waiting report rather
+ * than refused, since nobody is saving it now. A page whose address can no
+ * longer be named (a changed page path it cannot fill) gives up what it
+ * held.
  *
  * @module address-claims/backfill
  */
@@ -45,18 +48,17 @@ export interface BackfillDeps {
 
 /** Claim every published page's address, in id order. Never throws. */
 export async function backfillPageClaims(deps: BackfillDeps): Promise<void> {
-  let after: string | undefined;
-  for (;;) {
+  for (let page = 1; ; page += 1) {
     let items: readonly unknown[];
     try {
       ({ items } = await deps.nextly.find({
         collection: deps.pages,
-        where: {
-          status: { equals: "published" },
-          ...(after === undefined ? {} : { id: { greater_than: after } }),
-        },
-        sort: "id",
+        where: { status: { equals: "published" } },
+        // Oldest first; the walk is safe to repeat, so a page published while
+        // it pages through is claimed by its own save, or by the next boot.
+        sort: "createdAt",
         limit: BATCH,
+        page,
         overrideAccess: true,
         depth: 0,
       }));
@@ -70,7 +72,6 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<void> {
       const row = item as Record<string, unknown>;
       if (typeof row.id !== "string" && typeof row.id !== "number") continue;
       await claimPage(deps, String(row.id), row);
-      after = String(row.id);
     }
     if (items.length < BATCH) return;
   }
@@ -86,8 +87,9 @@ async function claimPage(
   row: Readonly<Record<string, unknown>>
 ): Promise<void> {
   const holder = { collection: deps.pages, id };
+  // Reconciled even when it holds nothing now, so claims for an address
+  // it is no longer served at are given up.
   const wanted = pageClaims(row, deps.locales, deps.pathTemplate);
-  if (wanted.addresses.length === 0) return;
   try {
     await deps.withTransaction(tx =>
       reconcileHolder(

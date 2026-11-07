@@ -1282,6 +1282,9 @@ export const pageBuilder = (
   // The claiming of existing pages' addresses, set by `init` and run once the
   // boot has finished.
   let pageClaimsBackfill: (() => Promise<void>) | null = null;
+  // Set once that pass has finished, after which a page save need not claim
+  // the existing pages its list's later pages would fall on.
+  let pageClaimsBackfilled = false;
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -1991,6 +1994,23 @@ export const pageBuilder = (
         ...(opts.pagePreviewPath === undefined
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
+        backfillDone: () => pageClaimsBackfilled,
+        pagesUnder: async prefix => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as PagesReader;
+          const found = await nextly.find({
+            collection: pagesSlug,
+            where: {
+              status: { equals: "published" },
+              slug: { contains: prefix },
+            },
+            sort: "createdAt",
+            limit: 500,
+            overrideAccess: true,
+            depth: 0,
+          });
+          return found.items as readonly Readonly<Record<string, unknown>>[];
+        },
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -2006,6 +2026,7 @@ export const pageBuilder = (
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
         });
+        pageClaimsBackfilled = true;
       };
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
