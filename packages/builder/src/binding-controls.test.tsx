@@ -43,6 +43,9 @@ const SOURCES: readonly BindingFieldSource[] = [
       { name: "title", type: "text", public: true, preview: "Spring sale" },
       { name: "internalNote", type: "text", public: false },
       { name: "lede", type: "text", public: true, draft: true },
+      // A date reaches text only through a format, which this picker can't
+      // set yet: not offered.
+      { name: "publishedOn", type: "date", public: true },
       // A relation itself can't fill text, but its own fields can.
       {
         name: "author",
@@ -249,6 +252,72 @@ describe("a bound prop", () => {
     expect((await screen.findByRole("status")).textContent).toBe(
       "Unbound. The badge keeps what visitors saw: “Spring sale”."
     );
+  });
+});
+
+describe("an unbind that can't be applied as planned", () => {
+  const openUnbind = async () => {
+    const chip = await screen.findByRole("button", { name: /^Text: bound to/ });
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.pointerUp(
+      await screen.findByRole("menuitem", { name: "Unbind, keep the text" }),
+      { pointerType: "mouse", button: 0 }
+    );
+  };
+
+  it("says so when the plan can't be read", async () => {
+    const editor = mount(
+      { label: { $bind: "title" } },
+      {
+        planUnbind: vi.fn(async () => {
+          throw new Error("offline");
+        }),
+      }
+    );
+    await openUnbind();
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "The unbind could not be planned. Try again."
+    );
+    expect(vi.mocked(editor.apply)).not.toHaveBeenCalled();
+  });
+
+  it("applies nothing where the binding changed while the plan was read", async () => {
+    let answer: (plan: UnbindPlanAnswer) => void = () => undefined;
+    const editor = mount(
+      { label: { $bind: "title" } },
+      {
+        planUnbind: () =>
+          new Promise<UnbindPlanAnswer>(resolve => {
+            answer = resolve;
+          }),
+      }
+    );
+    await openUnbind();
+    // Meanwhile the author binds the prop to another field.
+    // (The test's document is the editor's own object, so the inspector
+    // reads the change when the plan comes back.)
+    const nodes = editor.document.nodes as unknown as Array<
+      Record<string, unknown>
+    >;
+    nodes[0] = { ...nodes[0], bindings: { label: { $bind: "lede" } } };
+    answer({
+      kept: { set: { label: "Spring sale" } },
+      answer: { kept: "visitor", value: "Spring sale", reason: "" },
+    });
+    expect((await screen.findByRole("status")).textContent).toMatch(
+      /binding changed/
+    );
+    expect(vi.mocked(editor.apply)).not.toHaveBeenCalled();
+  });
+
+  it("offers no field change where the host lists no fields", async () => {
+    mount({ label: { $bind: "title" } }, { listBindingFields: undefined });
+    const chip = await screen.findByRole("button", { name: /^Text: bound to/ });
+    fireEvent.keyDown(chip, { key: "Enter" });
+    await screen.findByRole("menu");
+    expect(
+      screen.queryByRole("menuitem", { name: "Change field…" })
+    ).toBeNull();
   });
 });
 
