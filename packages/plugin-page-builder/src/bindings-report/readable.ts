@@ -147,22 +147,27 @@ async function readCollection(
   }
 }
 
-/** A Single as the caller may read it; `undefined` when they may not. */
+/**
+ * A Single as the caller reads it: its row, `"refused"` when core's gate
+ * refuses them, or `"none"` when it has no row yet. Core judges the read
+ * before it looks for the row, so `"none"` is a Single they may read.
+ */
 async function singleAsCaller(
   ctx: IdentifiedCaller,
   slug: string
-): Promise<unknown> {
+): Promise<{ readonly row: unknown } | "refused" | "none"> {
   try {
-    return await requireNextly().findSingle({
-      slug,
-      createIfMissing: false,
-      depth: 0,
-      ...(await readingAsUser(ctx)),
-    });
+    return {
+      row: await requireNextly().findSingle({
+        slug,
+        createIfMissing: false,
+        depth: 0,
+        ...(await readingAsUser(ctx)),
+      }),
+    };
   } catch (error) {
-    if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
-      return undefined;
-    }
+    if (NextlyError.isForbidden(error)) return "refused";
+    if (NextlyError.isNotFound(error)) return "none";
     throw error;
   }
 }
@@ -171,6 +176,7 @@ async function singleAsCaller(
  * Which of these Singles the caller may read, each read as them through
  * core's gate: the report names a Single a binding reads by its label only
  * for a reader who may read it, and by the slug the binding holds otherwise.
+ * A Single with no row yet is one they may read, and has a label all the same.
  */
 export async function readableSingles(
   ctx: IdentifiedCaller,
@@ -178,8 +184,7 @@ export async function readableSingles(
 ): Promise<ReadonlySet<string>> {
   const readable = new Set<string>();
   for (const slug of slugs) {
-    const row = await singleAsCaller(ctx, slug);
-    if (typeof row === "object" && row !== null) readable.add(slug);
+    if ((await singleAsCaller(ctx, slug)) !== "refused") readable.add(slug);
   }
   return readable;
 }
@@ -190,7 +195,9 @@ async function readSingle(
   entry: StoredDocumentReport,
   found: Map<string, ReadableDocument>
 ): Promise<void> {
-  const row = await singleAsCaller(ctx, entry.slug);
+  const read = await singleAsCaller(ctx, entry.slug);
+  if (typeof read !== "object") return;
+  const { row } = read;
   if (typeof row !== "object" || row === null) return;
   found.set(entry.documentKey, {
     title: entry.slug,
