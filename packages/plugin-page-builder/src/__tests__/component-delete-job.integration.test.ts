@@ -1127,6 +1127,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.updateSingle({
         slug: "site-settings",
         data: {
+          _overwrite: true,
           siteName: "Site",
           tagline: "Hello",
           seo: { metaTitle: "Site", metaDescription: "A site" },
@@ -1136,7 +1137,10 @@ describe.each(getConfiguredTestDialects())(
       });
       await t.nextly.updateSingle({
         slug: "site-settings",
-        data: { tagline: "Hallo" },
+        data: {
+          _overwrite: true,
+          tagline: "Hallo",
+        },
         locale: "de",
         overrideAccess: true,
       });
@@ -1165,7 +1169,10 @@ describe.each(getConfiguredTestDialects())(
       const { t, cookie } = await boot({}, { blocksInGroup: true });
       await t.nextly.updateSingle({
         slug: "homeband",
-        data: { title: "Home" },
+        data: {
+          _overwrite: true,
+          title: "Home",
+        },
         overrideAccess: true,
       });
       const spare = await card(t, "Spare");
@@ -1192,7 +1199,11 @@ describe.each(getConfiguredTestDialects())(
       await adminGroup(cookie, [{ name: "headline", type: "text" }]);
       await t.nextly.updateSingle({
         slug: "promoband",
-        data: { title: "Promo", promo: { headline: "Sale" } },
+        data: {
+          _overwrite: true,
+          title: "Promo",
+          promo: { headline: "Sale" },
+        },
         overrideAccess: true,
       });
       const spare = await card(t, "Spare");
@@ -1213,7 +1224,10 @@ describe.each(getConfiguredTestDialects())(
       ]);
       await t.nextly.updateSingle({
         slug: "promoband",
-        data: { title: "Promo" },
+        data: {
+          _overwrite: true,
+          title: "Promo",
+        },
         overrideAccess: true,
       });
       const spare = await card(t, "Spare");
