@@ -752,6 +752,51 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental A collection's document screen, changed by a plugin for that
+ * collection only (`contributes.admin.views[slug]`):
+ *
+ * - `documentActions` hides a built-in action (`"hidden"`) or replaces it
+ *   with the plugin's own component (`{ component, label? }`), for the
+ *   `OverridableDocumentAction`s `"delete"` and `"unpublish"`. A replaced
+ *   action keeps its row, the permission it needs and every reason it cannot
+ *   run, and opens the component instead of the built-in write.
+ * - `panelSections` adds `PluginPanelSection`s, `{ title, component }`, to the
+ *   document panel after Details, under a heading the admin draws.
+ *
+ * Collections only; a Single's screen is unchanged. Boot refuses an action
+ * that cannot be overridden, an override or section with nothing to draw, and
+ * two plugins overriding one action on one collection. The props the
+ * components receive are on `@nextlyhq/plugin-sdk/admin`.
+ *
+ * ```ts
+ * contributes: {
+ *   admin: {
+ *     views: {
+ *       layouts: {
+ *         documentActions: {
+ *           unpublish: "hidden",
+ *           delete: {
+ *             component: "@acme/plugin-layouts/admin#RemoveLayoutDialog",
+ *             label: "Remove layout…",
+ *           },
+ *         },
+ *         panelSections: [
+ *           { title: "Used by", component: "@acme/plugin-layouts/admin#LayoutUsage" },
+ *         ],
+ *       },
+ *     },
+ *   },
+ * },
+ * ```
+ */
+export type {
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PluginDocumentActionOverrides,
+  PluginPanelSection,
+} from "nextly";
+
+/**
  * Admin places: the named places on admin pages a plugin adds to, and the
  * places a plugin declares on its own pages (`contributes.admin.places`).
  * A plugin types its own places by augmenting `AdminPlaces` from this module.
@@ -825,6 +870,36 @@ export type {
   InTransactionContext,
   InTransactionHandler,
 } from "nextly";
+
+/**
+ * @experimental `recordAdvisoryNotice(notice)` — tell the person whose write
+ * this is something TRUE about the state it leaves behind, from a hook that
+ * runs inside the write's request (an `after*` hook, say): "this page now uses
+ * the site's default layout". The write still reports success, and the admin
+ * shows the notice beside it as its own advisories are shown, in an info
+ * toast, never in failure wording. Throwing from a hook is how a hook says
+ * something FAILED; this is for what did not.
+ *
+ * `AdvisoryNotice` is what it takes: `phase` (the hook's phase), `collection`
+ * (the slug, or `single:<slug>`), a stable `code` of the plugin's own, the
+ * whole `message`, and the `entryId` it is about when there is one. The
+ * message is shown as written: put nothing in it the person could not already
+ * see. A no-op outside a request, where there is nobody to tell. Core's own,
+ * re-exported deliberately; intended to stay as it is once a first-party
+ * plugin has used it in production.
+ *
+ * ```ts
+ * // In an afterChange hook, with `recordAdvisoryNotice` imported from here:
+ * recordAdvisoryNotice({
+ *   phase: "afterChange",
+ *   collection: "pages",
+ *   code: "LAYOUT_FELL_BACK",
+ *   message: "This page now uses the site's default layout.",
+ *   entryId: id,
+ * });
+ * ```
+ */
+export { recordAdvisoryNotice, type AdvisoryNotice } from "nextly";
 
 /**
  * Event bus (D8/D51) — `ctx.events` surface + types.

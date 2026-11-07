@@ -26,6 +26,7 @@ import * as blocksEntry from "./blocks/index";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
+import * as listCollectionsModule from "./list-collections";
 import * as richTextModule from "./rich-text";
 import * as pagePartsModule from "./page-parts";
 import * as pageRendererModule from "./page-renderer";
@@ -115,6 +116,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     ],
   },
   { name: "context", module: contextModule, internal: [] },
+  {
+    name: "list-collections",
+    module: listCollectionsModule,
+    // The walk behind `listCollections`, shared with the route's other
+    // questions about a page's lists; not a consumer surface.
+    internal: ["listCollectionsWhere"],
+  },
   // Public whole: how a page and the regions of its Layout share one site
   // sheet and keep their styles apart, asked by the published route and the
   // editor's canvas alike.
@@ -266,7 +274,16 @@ const SOURCE_MODULES: ReadonlyArray<{
     // `pruneNodes` is the shared walk the three passes share so their identity
     // behaviour cannot diverge. It is a shape, not a policy, and a consumer
     // reaching for it is writing a fourth pass this package cannot account for.
-    internal: ["drawsNothing", "isUnconditional", "pruneNodes"],
+    // `entrySubjectOf` is the route's reading of its own read bindings: the
+    // entry a page's conditions judge. It lives beside the gate so the rule
+    // sits with the evaluator, and only the `./next` route, which made that
+    // read, has the bindings to hand it.
+    internal: [
+      "drawsNothing",
+      "entrySubjectOf",
+      "isUnconditional",
+      "pruneNodes",
+    ],
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   {
@@ -428,6 +445,10 @@ describe("the root entry", () => {
       "SLOTS_ATTRIBUTE",
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
+      // Added deliberately: binding sources read on a server, carried to the
+      // editor's canvas and read back there, by one pair of functions.
+      "bindingsFromWire",
+      "bindingsToWire",
       "createBlockResolver",
       // The provider a route reads its lists through when given none, public
       // so a route's own `data` can narrow it rather than rewrite it.
@@ -448,7 +469,13 @@ describe("the root entry", () => {
       // Which part of a page drawn inside its Layout emits the site sheet, and
       // the scope each part compiles under.
       "layoutPartSheets",
+      // The collections a page's lists draw: the published route and the
+      // editor's canvas ask one walk which lists a page holds.
+      "listCollections",
       "migrationSourceFor",
+      // Whether a recorded lookup found no field a visitor may read, so the
+      // editor can say a whole source is hidden from visitors.
+      "noPublicFields",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
@@ -655,6 +682,10 @@ describe("the next entry", () => {
       "createPublicBlocksPage",
       "createPublicSinglePage",
       "createSinglePage",
+      // Added deliberately: what a page's bindings read, through whichever
+      // reader a route passes, so the editor's canvas reads its binding
+      // sources by the published page's own implementation.
+      "readBindingSources",
     ]);
   });
 });

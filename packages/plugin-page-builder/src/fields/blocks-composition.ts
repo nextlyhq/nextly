@@ -175,6 +175,13 @@ export interface CompositionSetup {
   readonly limits: DocumentLimits;
   /** Who places a component; absent where the index cannot be reached. */
   readonly hostsOf?: HostFinder;
+  /**
+   * Whether {@link hostsOf} reads the index on the write's own transaction, so
+   * a save made inside one can list its hosts. Otherwise a save inside a
+   * transaction lists none: a read on another connection can wait on the one
+   * the transaction holds.
+   */
+  readonly hostsInTransaction?: boolean;
   /** Told about hosts a component save could not judge. */
   readonly onUnjudged?: (unjudged: UnjudgedHosts) => void;
   /**
@@ -419,6 +426,140 @@ export async function compositionIssues(
   }
   tally.flush(report);
   return report.issues;
+}
+
+/**
+ * The composition graph's rules judged again on a value already stored, from
+ * inside the write's transaction while it holds the graph lock
+ * (`composition-graph-lock`): no component loop, the composed nesting and
+ * depth of the document, and, for a component, of every document the index
+ * lists as placing it.
+ *
+ * {@link compositionIssues} judges the write before its transaction opens, so
+ * two writes can each pass against the graph as it stood before the other.
+ * Under the lock every definition is read as last committed, through `write`
+ * (bound to the transaction), and this write's own value is the one stored.
+ *
+ * `before` is the value as it stood before this write, which the store no
+ * longer holds: a nesting break it already composed to is kept, as the first
+ * judgement keeps one the stored forms hold, and a component's hosts are
+ * judged against it. A slot lock a placed component holds is judged here too,
+ * measured against the same value: a component can tighten one while a page
+ * fills that slot. Nothing that does not depend on other documents is judged
+ * again.
+ */
+export async function compositionGraphIssues(
+  value: unknown,
+  args: {
+    /** The write, bound to its transaction. */
+    readonly write: PluginFieldWrite;
+    /** The blocks field's path. */
+    readonly path: string;
+    /** The status the stored document is in, deciding the forms judged. */
+    readonly nextStatus: string | undefined;
+    /** The value before this write; undefined for a create. */
+    readonly before: unknown;
+  },
+  setup: CompositionSetup
+): Promise<Issue[]> {
+  if (!isForest(value)) return [];
+  const { write, nextStatus } = args;
+  const document = value as BlockDocument;
+  const source = storedComponentSource(write, setup.store);
+  const self = componentSaved(write, args.path, setup.store);
+  const report = issueReport(args.path);
+  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
+  if (self !== undefined) {
+    const cycle = await componentCycleRefusal({
+      self,
+      document,
+      nextStatus,
+      source,
+      limits: setup.limits,
+      work,
+    });
+    if (cycle !== null) {
+      report.add("COMPONENT_CYCLE", cycle);
+      return report.issues;
+    }
+  }
+  if (!setup.composesDocuments) return report.issues;
+
+  const before = isForest(args.before)
+    ? (args.before as BlockDocument)
+    : undefined;
+  const stored = (): Promise<StoredRead> =>
+    Promise.resolve({
+      forms: before === undefined ? [] : [before],
+      readable: true,
+    });
+  const tally = hostTally(self ?? "", setup);
+  for (const draft of formsChangedBy(nextStatus)) {
+    const read = documentReader(source, draft);
+    await judgeGraph({ document, self, read, setup, work, report, stored });
+    if (self !== undefined) {
+      await judgeHosts({
+        self,
+        document,
+        draft,
+        source,
+        read,
+        write,
+        setup,
+        work,
+        tally,
+        stored: { document: before },
+      });
+    }
+  }
+  tally.flush(report);
+  return report.issues;
+}
+
+/**
+ * The graph half of {@link judgeOwnComposition}: the document's composed
+ * nesting, depth and slot locks, a nesting or lock break measured against
+ * `stored`.
+ */
+async function judgeGraph(args: {
+  document: BlockDocument;
+  self: string | undefined;
+  read: BoundedReader;
+  setup: CompositionSetup;
+  work: WorkAllowance;
+  report: Report;
+  stored: () => Promise<StoredRead>;
+}): Promise<void> {
+  const { document, self, read, setup, work, report } = args;
+  const library = heldLibrary(
+    self === undefined ? undefined : new Map([[self, document]])
+  );
+  const composed = await composeWithReads({
+    host: document,
+    library,
+    read,
+    limits: setup.limits,
+    work,
+  });
+  if (read.exhausted() || work.left <= 0) {
+    report.add("COMPOSITION_UNCHECKED", OUTGROWN);
+    return;
+  }
+  const faults = await measuredAgainstStored(
+    faultsIn(document, composed.composition, setup, {
+      components: lookupOf(library),
+    }),
+    {
+      document,
+      composition: composed.composition,
+      setup,
+      reading: { library, read, limits: setup.limits, work },
+      stored: args.stored,
+      field: undefined,
+      writtenTo: undefined,
+    }
+  );
+  for (const fault of faults) report.add(fault.code, fault.message);
 }
 
 /**
@@ -1126,29 +1267,29 @@ async function judgeHosts(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   tally: Tally;
+  /**
+   * The component as it stood before this write, for a judgement made after
+   * the write stored it, when the store already holds the new document.
+   * Absent, it is read from the store.
+   */
+  stored?: { readonly document: BlockDocument | undefined };
 }): Promise<void> {
   const { self, document, draft, source, read, write, setup, work, tally } =
     args;
-  const before = await source(self, draft);
+  const before = args.stored ?? (await storedBefore(source, self, draft));
   // Not stored in this form yet: a create under a caller's own id, which pages
   // may already place. Nothing to compare against, so every host is judged.
   const was =
-    before.kind === "document" && isForest(before.document)
-      ? await footprintOf(
-          self,
-          before.document as BlockDocument,
-          read,
-          setup,
-          work
-        )
-      : undefined;
+    before.document === undefined
+      ? undefined
+      : await footprintOf(self, before.document, read, setup, work);
   const now = await footprintOf(self, document, read, setup, work);
   if (was !== undefined && !mayWorsen(was, now)) return;
 
-  // The index is read through the Direct API, on a connection of its own. Inside
-  // a transaction that read can wait on the connection the transaction holds,
-  // and the rows the batch wrote are not in it anyway.
-  if (write.inTransaction) {
+  // Unless the index is read on this transaction, it is read on a connection
+  // of its own. Inside a transaction that read can wait on the connection the
+  // transaction holds, and the rows the batch wrote are not in it anyway.
+  if (write.inTransaction && setup.hostsInTransaction !== true) {
     tally.incomplete(
       "it was saved inside a transaction, where the usage index is not read"
     );
@@ -1173,6 +1314,7 @@ async function judgeHosts(args: {
       host,
       self,
       document,
+      was: before.document,
       draft,
       read,
       write,
@@ -1182,6 +1324,21 @@ async function judgeHosts(args: {
       listFields,
     });
   }
+}
+
+/** The component as the store holds it in one form, where it holds a forest. */
+async function storedBefore(
+  source: ComponentSource,
+  self: string,
+  draft: boolean
+): Promise<{ readonly document: BlockDocument | undefined }> {
+  const before = await source(self, draft);
+  return {
+    document:
+      before.kind === "document" && isForest(before.document)
+        ? (before.document as BlockDocument)
+        : undefined,
+  };
 }
 
 /**
@@ -1429,6 +1586,8 @@ async function judgeOneHost(args: {
   host: HostRef;
   self: string;
   document: BlockDocument;
+  /** The component before this save, or undefined where it held none. */
+  was: BlockDocument | undefined;
   draft: boolean;
   read: BoundedReader;
   write: PluginFieldWrite;
@@ -1464,7 +1623,11 @@ async function judgeOneHost(args: {
     });
     return { ...composed, components: lookupOf(library) };
   };
-  const before = await compose(undefined);
+  // Seeded with the component as it was, which the store no longer holds once
+  // the write has stored it; where it held none, the host composes without it.
+  const before = await compose(
+    args.was === undefined ? undefined : new Map([[self, args.was]])
+  );
   const after = await compose(new Map([[self, document]]));
   if (read.exhausted() || work.left <= 0) {
     tally.host(

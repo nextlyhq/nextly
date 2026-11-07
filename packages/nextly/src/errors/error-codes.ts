@@ -180,6 +180,10 @@ export const NEXTLY_ERROR_STATUS = {
   // A plugin's document view cannot be routed: a malformed or reserved path,
   // or one two declarations claim on the same document. Refused at boot.
   NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,
+  // A plugin's override of a document action, or a section it adds to the
+  // document panel, cannot be drawn: an unknown action, nothing to draw, or
+  // one action two plugins override on one collection. Refused at boot.
+  NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin schema lifecycle. All 409: each is a state

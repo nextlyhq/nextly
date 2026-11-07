@@ -899,9 +899,9 @@ exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
-"✗ \`20261020_120000_add_posts.sql\` is recorded as applied, but its file is not in the migrations folder.
-  Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
-  Next: Restore the file from version control, or deploy the build that has it, then run \`nextly migrate\` again.
+"✗ The ledger records 1 applied migration this build's migrations folder lacks (\`20261020_120000_add_posts.sql\`), so \`nextly migrate\` ran nothing.
+  Why:  A newer build has migrated this database, or a file was removed from the folder after it ran.
+  Next: Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with \`nextly migrate:resolve --removed <file>\`: the migration stays applied, and is never run again if its file returns.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)"
 `;
 
@@ -1140,6 +1140,20 @@ exports[`each code, as a command ends with it > PLUGIN_DISABLED 1`] = `
   Why:  A disabled plugin's hooks do not run, so an install or uninstall of it could record a state its hook never produced. Nothing was changed.
   Next: Enable it in the config to install or uninstall it.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-disabled  (PLUGIN_DISABLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_COLLISION 1`] = `
+"✗ Plugin "archive" overrides the "delete" action on "pages", which "layouts" already overrides.
+  Why:  One action can be drawn one way.
+  Next: Drop one of the two overrides.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-collision  (PLUGIN_DOCUMENT_SURFACE_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_SURFACE_INVALID 1`] = `
+"✗ Plugin "layouts" replaces the "delete" action on "pages" with no component to open.
+  Why:  A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.
+  Next: Correct the override or section the message names in the plugin's \`contributes.admin.views\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-invalid  (PLUGIN_DOCUMENT_SURFACE_INVALID)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_COLLISION 1`] = `
@@ -1592,8 +1606,8 @@ exports[`each code, as a command ends with it > RESOLVE_LOCK_RELEASED 1`] = `
 
 exports[`each code, as a command ends with it > RESOLVE_MODE_REQUIRED 1`] = `
 "✗ \`nextly migrate:resolve\` needs exactly one thing to record.
-  Why:  It was given none of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.
-  Next: Provide exactly one of --applied, --rolled-back, or --failed-cleanup.
+  Why:  It was given none of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.
+  Next: Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.
   Docs: https://nextlyhq.com/docs/cli/errors/resolve-mode-required  (RESOLVE_MODE_REQUIRED)"
 `;
 

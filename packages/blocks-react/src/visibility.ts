@@ -1,10 +1,18 @@
 import {
+  conditionScopeIn,
   declaresNoMarkup,
+  evaluateConditions,
   isConditionGated,
   type BlockDocument,
   type BlockNode,
+  type ConditionDayStart,
+  type ConditionIssue,
+  type ConditionScope,
+  type ConditionSubject,
 } from "@nextlyhq/blocks-engine";
 
+import { conditionDayStart } from "./blocks/list-read";
+import type { PageBindings, PageContext } from "./context";
 import type { BlockResolver } from "./resolver";
 
 /**
@@ -75,12 +83,32 @@ export function pruneNodes(
   document: BlockDocument,
   keep: (node: BlockNode) => boolean
 ): BlockDocument {
+  return pruneNodesIn(
+    document,
+    undefined,
+    node => keep(node),
+    () => undefined
+  );
+}
+
+/**
+ * {@link pruneNodes}, with each node judged in the scope it sits in: `within`
+ * says what a child of a node, in one of its slots, sits in. The one pruning
+ * walk, so a pass that needs to know where a node sits drops it exactly as
+ * the others do.
+ */
+function pruneNodesIn<Scope>(
+  document: BlockDocument,
+  root: Scope,
+  keep: (node: BlockNode, scope: Scope) => boolean,
+  within: (node: BlockNode, slot: string, scope: Scope) => Scope
+): BlockDocument {
   let changed = false;
 
-  const prune = (nodes: BlockNode[]): BlockNode[] => {
+  const prune = (nodes: BlockNode[], scope: Scope): BlockNode[] => {
     const kept: BlockNode[] = [];
     for (const node of nodes) {
-      if (!keep(node)) {
+      if (!keep(node, scope)) {
         changed = true;
         continue;
       }
@@ -94,7 +122,7 @@ export function pruneNodes(
       let slotsChanged = false;
       const nextSlots: Record<string, BlockNode[]> = {};
       for (const [name, children] of Object.entries(slots)) {
-        const prunedChildren = prune(children);
+        const prunedChildren = prune(children, within(node, name, scope));
         if (prunedChildren !== children) slotsChanged = true;
         nextSlots[name] = prunedChildren;
       }
@@ -103,8 +131,80 @@ export function pruneNodes(
     return changed ? kept : nodes;
   };
 
-  const nodes = prune(document.nodes);
+  const nodes = prune(document.nodes, root);
   return changed ? { ...document, nodes } : document;
+}
+
+/**
+ * What a page's conditions are decided against once its entry is known.
+ *
+ * @experimental
+ */
+export interface ConditionGate {
+  /**
+   * The entry the page shows, its fields and values as the public reads them.
+   * Absent when the page has none, and every condition on it fails closed.
+   */
+  readonly entry?: ConditionSubject;
+  /** When a day starts, for a condition ordering a date; UTC when absent. */
+  readonly dayStart?: ConditionDayStart;
+}
+
+/**
+ * A document gated by its entry, the blocks whose conditions held, and what
+ * could not be checked.
+ *
+ * @experimental
+ */
+export interface GatedDocument {
+  readonly document: BlockDocument;
+  /** The entry-scoped blocks kept because their conditions held, by id. */
+  readonly held: ReadonlySet<string>;
+  readonly issues: readonly ConditionIssue[];
+}
+
+/**
+ * Removes every block whose conditions read the page's entry and do not hold
+ * for it, or cannot be checked, and names the blocks whose conditions held.
+ *
+ * A block in a list's per-entry slot is left in place: its conditions read
+ * the list's item, which only the list knows as it draws each one, so the
+ * list decides it there. `"keep-all"` removes nothing, for the reads a route
+ * makes before it knows the entry: a block that may show still asks for what
+ * it binds.
+ *
+ * Returns the ORIGINAL document when nothing was removed, as every pruning
+ * pass does.
+ *
+ * @experimental
+ */
+export function gateByConditions(
+  document: BlockDocument,
+  gate: ConditionGate | "keep-all"
+): GatedDocument {
+  if (gate === "keep-all") {
+    return { document, held: new Set(), issues: [] };
+  }
+  const held = new Set<string>();
+  const issues: ConditionIssue[] = [];
+  const page: ConditionScope = { source: "entry", collection: undefined };
+  const gated = pruneNodesIn(
+    document,
+    page,
+    (node, scope) => {
+      if (!isConditionGated(node) || scope.source === "item") return true;
+      const evaluation = evaluateConditions(node, {
+        source: "entry",
+        ...(gate.entry === undefined ? {} : { subject: gate.entry }),
+        ...(gate.dayStart === undefined ? {} : { dayStart: gate.dayStart }),
+      });
+      issues.push(...evaluation.issues);
+      if (evaluation.shown) held.add(node.id);
+      return evaluation.shown;
+    },
+    (node, slot, scope) => conditionScopeIn(node, slot, scope)
+  );
+  return { document: gated, held, issues };
 }
 
 /**
@@ -121,4 +221,118 @@ export function drawsNothing(
   resolver: BlockResolver
 ): boolean {
   return declaresNoMarkup(node, type => resolver.get(type));
+}
+
+/**
+ * Whether a block is served where it is being drawn, by its visibility
+ * conditions.
+ *
+ * A block without conditions, or whose conditions restrict nobody, is. One
+ * the route kept because its conditions held for the page's entry is
+ * (`decided.held`). Any other conditioned block that reaches a render is
+ * one a list's item decides, since the route removed every entry-scoped one
+ * that did not hold: inside a list it is decided now, against the item being
+ * drawn and its collection's public fields, and reported through
+ * `decided.report` when it cannot be checked. Outside a list nothing can decide it, so it
+ * stays out.
+ *
+ * @experimental
+ */
+export function conditionAllows(
+  node: BlockNode,
+  context: Pick<
+    PageContext,
+    "item" | "itemSource" | "fieldShapes" | "timeZone"
+  >,
+  decided: {
+    /** The blocks the route kept because their conditions held, by id. */
+    readonly held?: ReadonlySet<string>;
+    readonly report?: (issues: readonly ConditionIssue[]) => void;
+  } = {}
+): boolean {
+  if (!isConditionGated(node)) return true;
+  if (decided.held?.has(node.id) === true) return true;
+  if (context.item === undefined) return false;
+  const evaluation = evaluateConditions(node, {
+    source: "item",
+    ...itemSubject(context),
+    dayStart: conditionDayStart(context.timeZone),
+  });
+  if (evaluation.issues.length > 0) decided.report?.(evaluation.issues);
+  return evaluation.shown;
+}
+
+/**
+ * The item being drawn as a condition reads it: its values, and its
+ * collection's fields as the public sees them. Nothing when the collection
+ * or its fields are not known, so its conditions fail closed.
+ */
+function itemSubject(
+  context: Pick<PageContext, "item" | "itemSource" | "fieldShapes">
+): { subject?: ConditionSubject } {
+  const source = context.itemSource;
+  const readable =
+    context.item === undefined || source === undefined || source === ""
+      ? undefined
+      : context.fieldShapes?.fieldsOf({ collection: source });
+  if (readable === undefined || context.item === undefined) return {};
+  return {
+    subject: {
+      // The public's fields are all a page is handed, so a field outside them
+      // reads as one the collection lacks; either way it fails closed.
+      fields: {
+        declared: new Set(readable.map(field => field.name)),
+        readable,
+      },
+      values: context.item,
+    },
+  };
+}
+
+/**
+ * The blocks of a gated document whose conditions read the page's entry, by
+ * id: after {@link gateByConditions} has removed every one that did not hold,
+ * exactly the ones that did. Read off the tree that is drawn, so a block a
+ * later pass removed, such as a duplicate address, names nothing.
+ *
+ * @experimental
+ */
+export function entryConditionedIn(document: BlockDocument): Set<string> {
+  const held = new Set<string>();
+  const visit = (nodes: readonly BlockNode[], scope: ConditionScope): void => {
+    for (const node of nodes) {
+      if (scope.source === "entry" && isConditionGated(node)) held.add(node.id);
+      for (const [slot, children] of Object.entries(node.slots ?? {})) {
+        visit(children, conditionScopeIn(node, slot, scope));
+      }
+    }
+  };
+  visit(document.nodes, { source: "entry", collection: undefined });
+  return held;
+}
+
+/** The page's entry as a condition reads it, when the public may read it. */
+export function entrySubjectOf(bindings: PageBindings | undefined): {
+  entry?: ConditionSubject;
+} {
+  const values = bindings?.entry;
+  const ref = bindings?.entryRef;
+  // Whether the page has an entry to judge is the route's to decide, before
+  // it reads: a Single's page never reaches here (see `readPageInputs`).
+  if (ref === undefined) return {};
+  const readable = bindings?.fieldShapes?.fieldsOf(ref);
+  if (values === undefined || values === null || readable === undefined) {
+    return {};
+  }
+  return {
+    entry: {
+      // The public's fields are all a page is handed, so a field outside them
+      // reads as one the entry lacks; either way it fails closed.
+      fields: {
+        declared: new Set(readable.map(field => field.name)),
+        readable,
+      },
+      values,
+    },
+  };
 }

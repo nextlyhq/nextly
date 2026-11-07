@@ -257,7 +257,7 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
 
     await handle().nextly.updateSingle({
       slug: BANNER,
-      data: { headline: "hello" },
+      data: { headline: "hello", _overwrite: true },
     });
 
     expect(seen).toEqual([{ collection: BANNER_KEY, operation: "update" }]);
@@ -286,11 +286,11 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
 
     await handle().nextly.updateSingle({
       slug: BANNER,
-      data: { headline: "first" },
+      data: { headline: "first", _overwrite: true },
     });
     await handle().nextly.updateSingle({
       slug: BANNER,
-      data: { headline: "second" },
+      data: { headline: "second", _overwrite: true },
     });
 
     // Not handed the first save, assembled for no handler; run on the next.
@@ -304,13 +304,16 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
     const ctx = await boot(dialect);
     await handle().nextly.updateSingle({
       slug: BANNER,
-      data: { headline: "kept" },
+      data: { headline: "kept", _overwrite: true },
     });
     ctx.hooks.onInTransaction(BANNER_KEY, keepLedger);
     ctx.hooks.onInTransaction(BANNER_KEY, refuseAll);
 
     await expect(
-      handle().nextly.updateSingle({ slug: BANNER, data: { headline: "lost" } })
+      handle().nextly.updateSingle({
+        slug: BANNER,
+        data: { headline: "lost", _overwrite: true },
+      })
     ).rejects.toMatchObject({ statusCode: 403 });
 
     const stored = await handle().nextly.findSingle({ slug: BANNER });
@@ -334,7 +337,7 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
 
     await handle().nextly.updateSingle({
       slug: BANNER,
-      data: { headline: "after" },
+      data: { headline: "after", _overwrite: true },
     });
 
     expect(attempts).toBe(2);
@@ -381,6 +384,7 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
 
     const published = await singles().publishAllLocales(PROMO, {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(published.success).toBe(true);
@@ -391,20 +395,24 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
     const ctx = await boot(dialect);
     await handle().nextly.updateSingle({
       slug: BANNER,
-      data: { headline: "draft" },
+      data: { headline: "draft", _overwrite: true },
     });
     ctx.hooks.onInTransaction(BANNER_KEY, keepLedger);
     ctx.hooks.onInTransaction(BANNER_KEY, refuseAll);
 
     // A Single's publish throws its refusal rather than returning it.
     await expect(
-      singles().publishAllLocales(BANNER, { overrideAccess: true })
+      singles().publishAllLocales(BANNER, {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      })
     ).rejects.toMatchObject({ statusCode: 403 });
     expect(await ledgerRows(ctx)).toEqual([]);
 
     ctx.hooks.offInTransaction(BANNER_KEY, refuseAll);
     const published = await singles().publishAllLocales(BANNER, {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(published.success).toBe(true);
     expect(await ledgerRows(ctx)).toEqual([
@@ -431,6 +439,7 @@ describeEachDialect(
         collectionName: "articles",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(refused).toMatchObject({ success: false, statusCode: 403 });
       expect(await ledgerRows(ctx)).toEqual([]);
@@ -440,6 +449,7 @@ describeEachDialect(
         collectionName: "articles",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.success).toBe(true);
       expect(await ledgerRows(ctx)).toEqual([
@@ -479,6 +489,7 @@ describeEachDialect(
         collectionName: "features",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       expect(published.success).toBe(true);
@@ -536,8 +547,8 @@ describeEachDialect("the in-transaction phase in a batch", dialect => {
     const result = await entries().updateEntries(
       { collectionName: "items", overrideAccess: true },
       [
-        { id: first, data: { title: "changed" } },
-        { id: second, data: { title: "bad" } },
+        { id: first, data: { title: "changed", _overwrite: true } },
+        { id: second, data: { title: "bad", _overwrite: true } },
       ],
       { stopOnError: false }
     );
@@ -576,7 +587,7 @@ describeEachDialect("the in-transaction phase in a batch", dialect => {
     const result = await entries().bulkUpdateEntries({
       collectionName: "items",
       ids: [first, second],
-      data: { title: "same" },
+      data: { title: "same", _overwrite: true },
       overrideAccess: true,
     });
 

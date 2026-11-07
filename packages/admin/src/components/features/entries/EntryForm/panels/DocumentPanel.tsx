@@ -3,8 +3,12 @@
 import type React from "react";
 
 import { Clock, Hash } from "@admin/components/icons";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { Skeleton } from "@admin/components/ui";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import type { DocumentPanelSectionProps } from "@admin/lib/plugins/component-registry";
+import type { PluginPanelSectionEntry } from "@admin/lib/plugins/document-surfaces";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import { useEntryLocale } from "../../EntryLocaleContext";
@@ -17,7 +21,8 @@ import { PublishingSection } from "./PublishingSection";
 import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 
 // The document panel's sections, in the one order both editors draw them:
-// Status, then Publishing, then Language, then Details. Each section decides
+// Status, then Publishing, then Language, then Details, then any a plugin
+// adds for the collection. Each section decides
 // whether it applies and draws nothing where it does not, so a document
 // without a lifecycle or languages reads the sections it has, in that order.
 
@@ -51,6 +56,16 @@ export interface DocumentPanelProps {
   navigationDisabled?: boolean;
   /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
   publishAllDisabled?: boolean;
+  /**
+   * Sections plugins add for this collection, drawn after Details under the
+   * heading the panel draws for its own sections.
+   */
+  pluginSections?: readonly PluginPanelSectionEntry[];
+  /**
+   * What each plugin section is handed. Absent, none is drawn: a section
+   * needs the document it is about.
+   */
+  pluginSectionProps?: DocumentPanelSectionProps;
 }
 
 export function DocumentPanel({
@@ -64,6 +79,8 @@ export function DocumentPanel({
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
   publishAllDisabled = actionsDisabled,
+  pluginSections = [],
+  pluginSectionProps,
 }: DocumentPanelProps): React.ReactElement | null {
   // Nothing to say until the document exists.
   if (mode === "create") return null;
@@ -99,6 +116,31 @@ export function DocumentPanel({
           <TimestampRows entry={entry} />
         </dl>
       </PanelSection>
+      {pluginSectionProps === undefined
+        ? null
+        : pluginSections.map(section => (
+            // The panel's own section, so its heading, padding and divider
+            // are the built-in ones in either scheme; the plugin draws the
+            // body, inside its own error boundary.
+            <PanelSection
+              key={`${section.plugin}:${section.component}:${section.title}`}
+              title={section.title}
+            >
+              {section.loading === true ? (
+                // The panel's own loading look, as the Publishing section
+                // draws it, until the component has arrived.
+                <div aria-busy="true">
+                  <span className="sr-only">Loading {section.title}</span>
+                  <Skeleton className="h-4 w-40" />
+                </div>
+              ) : (
+                <PluginSlot
+                  path={section.component}
+                  props={pluginSectionProps}
+                />
+              )}
+            </PanelSection>
+          ))}
     </div>
   );
 }

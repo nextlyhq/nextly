@@ -127,6 +127,11 @@ export function pagesCollection(
   return defineCollection({
     slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
+    // A page's address may sit beneath another (`docs/getting-started`),
+    // each part normalised as a one-part address is. A rule about the stored
+    // value only, outside the schema, so an existing site migrates nothing
+    // and every one-part address it holds stays as it is.
+    db: { slugPaths: true },
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),
@@ -194,7 +199,10 @@ export function pagesCollection(
         ? {}
         : {
             preview: {
-              url: previewUrlFromTemplate(previewPath),
+              // The slug is a path (`db.slugPaths`), so its `/` stays.
+              url: previewUrlFromTemplate(previewPath, {
+                pathFields: ["slug"],
+              }),
               // Spread rather than set to `undefined`, so a collection that
               // declares none has no `breakpoints` key at all — which is what
               // `resolvePreviewViewports` reads as "offer nothing" without

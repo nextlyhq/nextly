@@ -31,6 +31,7 @@
  */
 import {
   tokenIdentity,
+  type NamedClass,
   type SiteToken,
   type SiteTokenSet,
   type SpacingMode,
@@ -61,7 +62,7 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
-import { ShowMore } from "./panel-actions";
+import { ShowMore, withOpenRow } from "./panel-actions";
 import { usePrefersDark } from "./prefers-dark";
 import { SpacingModeChoice } from "./spacing-mode-choice";
 import { colourHexOf, colourPairOf } from "./style-colour";
@@ -77,6 +78,18 @@ import {
 } from "./tokens-studio";
 import { VariableEditor } from "./variable-editor";
 import { ColourPair, swatchStyle } from "./variable-swatch";
+import {
+  combinedReach,
+  variableCount,
+  type VariableReach,
+  type VariablesAccess,
+} from "./variable-usage";
+import {
+  CountTip,
+  useVariableUsage,
+  VariableRowCount,
+  type VariableUsageHere,
+} from "./variable-usage-view";
 import { useVariablesTransfer } from "./variables-transfer";
 
 export interface TokensPanelProps {
@@ -143,6 +156,21 @@ export interface TokensPanelProps {
    * spacing variables. Absent, the choice is not drawn.
    */
   spacing?: SpacingModeControl;
+  /**
+   * How widely each variable is used, read through the host: a count at the
+   * end of each row, and Remove refusing in place while a variable is used.
+   * Absent: no counts, and Remove confirms as it always has.
+   *
+   * @experimental Settles with the Variables tab's usage.
+   */
+  usage?: VariablesAccess;
+  /**
+   * The site's shared styles, so a shared style using a variable says what
+   * it sets with it ("sets text colour"). Absent: it says it uses it.
+   *
+   * @experimental Settles with the Variables tab's usage.
+   */
+  classes?: readonly NamedClass[];
 }
 
 /** The site's spacing model as the Variables view offers it. */
@@ -238,6 +266,7 @@ function VariablesView({
   header,
   placed,
   spacing,
+  ...hosted
 }: TokensPanelProps & {
   header: VariablesHeader;
   /** Whether this view draws the header's controls and reports itself. */
@@ -245,43 +274,13 @@ function VariablesView({
 }): React.JSX.Element {
   const { mode } = header;
   const [query, setQuery] = React.useState("");
-  const { root, openKey, toggle, add, forget } = useOpenVariable({
+  const { root, openKey, toggle, add, forget, commitFrom } = useOpenVariable({
     tokens,
     onChange,
     currentTokens,
     onAdded: () => setQuery(""),
     onSettle,
   });
-  // Going away ends the author's work here as closing an editor does: a tab
-  // change or the panel closing. The latest callback, so the effect runs
-  // only on unmount rather than on every render that hands a new one.
-  const settle = React.useRef(onSettle);
-  settle.current = onSettle;
-  // Which editor is open as of the latest render, and whether the panel is
-  // still mounted: read when an editor commits, which it may do as it goes
-  // away, after the close or the unmount has already settled.
-  const openNow = React.useRef(openKey);
-  openNow.current = openKey;
-  const mounted = React.useRef(true);
-  React.useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      settle.current?.();
-    };
-  }, []);
-  /*
-   * An edit committed by an editor that is already closed, such as a colour
-   * picker writing what it held as it unmounts, comes after the settle its
-   * closing made, so it settles again rather than wait for a pause the
-   * author has already ended.
-   */
-  const commitFrom =
-    (key: string) =>
-    (next: SiteTokenSet): void => {
-      onChange(next);
-      if (!mounted.current || openNow.current !== key) settle.current?.();
-    };
   const search = React.useRef<HTMLInputElement>(null);
 
   const groups = React.useMemo(
@@ -290,6 +289,7 @@ function VariablesView({
   );
   const needle = query.trim().toLowerCase();
   const shown = searched(groups, needle);
+  const usage = useUsageOfRows(hosted, groups, issue);
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -321,49 +321,213 @@ function VariablesView({
       <div className="nx-vars__body">
         <PanelNotes readOnly={readOnly} issue={issue} />
         {placed ? header.overlays : null}
-        {shown.length === 0 ? (
-          <p className="nx-vars__note">No variables match this search.</p>
-        ) : (
-          shown.map(group => (
-            <React.Fragment key={group.group}>
-              <SpacingModeAbove
-                group={group.group}
-                spacing={spacing}
-                readOnly={readOnly}
-              />
-              <Group
-                group={group.group}
-                heading={group.heading}
-                entries={group.entries}
-                searching={needle !== ""}
-                readOnly={readOnly}
-                openKey={openKey}
-                onAdd={add}
-              >
-                {(entry: VariableEntry) => (
-                  <VariableRow
-                    key={entry.row.key}
-                    entry={entry}
-                    tokens={tokens}
-                    mode={mode}
-                    suppliedOf={identity => suppliedFor(supplied, identity)}
-                    readOnly={readOnly}
-                    open={openKey === entry.row.key}
-                    onOpenChange={open => toggle(entry.row.key, open)}
-                    onChange={commitFrom(entry.row.key)}
-                    onRemoved={() => {
-                      forget(entry.row.key);
-                      search.current?.focus();
-                    }}
-                  />
-                )}
-              </Group>
-            </React.Fragment>
-          ))
-        )}
+        <VariableGroups
+          shown={shown}
+          searching={needle !== ""}
+          spacing={spacing}
+          onAdd={add}
+          rows={{
+            tokens,
+            mode,
+            readOnly,
+            openKey,
+            suppliedOf: identity => suppliedFor(supplied, identity),
+            toggle,
+            commitFrom,
+            usage,
+            onRemoved: key => {
+              forget(key);
+              search.current?.focus();
+            },
+          }}
+        />
       </div>
     </div>
   );
+}
+
+/** What every row of the view is drawn from, and what its editor reports to. */
+interface RowsHost {
+  readonly tokens: SiteTokenSet;
+  readonly mode: TokenMode;
+  readonly readOnly: boolean;
+  /** The row whose editor is open. */
+  readonly openKey: string | null;
+  readonly suppliedOf: (identity: string) => SiteToken | undefined;
+  readonly toggle: (key: string, open: boolean) => void;
+  readonly commitFrom: (key: string) => (next: SiteTokenSet) => void;
+  /** Usage, where the host reads it. */
+  readonly usage: VariableUsageHere | undefined;
+  /** The variable whose row this is was removed. */
+  readonly onRemoved: (key: string) => void;
+}
+
+/** The groups a search leaves, each under its spacing choice, or that none match. */
+function VariableGroups({
+  shown,
+  searching,
+  spacing,
+  onAdd,
+  rows,
+}: {
+  shown: readonly {
+    readonly group: VariableGroup;
+    readonly heading: string;
+    readonly entries: readonly VariableEntry[];
+  }[];
+  searching: boolean;
+  spacing: SpacingModeControl | undefined;
+  onAdd: (what: NewVariable) => void;
+  rows: RowsHost;
+}): React.JSX.Element {
+  if (shown.length === 0) {
+    return <p className="nx-vars__note">No variables match this search.</p>;
+  }
+  return (
+    <>
+      {shown.map(group => (
+        <React.Fragment key={group.group}>
+          <SpacingModeAbove
+            group={group.group}
+            spacing={spacing}
+            readOnly={rows.readOnly}
+          />
+          <Group
+            group={group.group}
+            heading={group.heading}
+            entries={group.entries}
+            searching={searching}
+            readOnly={rows.readOnly}
+            openKey={rows.openKey}
+            onAdd={onAdd}
+          >
+            {(entry: VariableEntry) => (
+              <VariableRow
+                key={entry.row.key}
+                entry={entry}
+                tokens={rows.tokens}
+                mode={rows.mode}
+                suppliedOf={rows.suppliedOf}
+                readOnly={rows.readOnly}
+                open={rows.openKey === entry.row.key}
+                onOpenChange={open => rows.toggle(entry.row.key, open)}
+                onChange={rows.commitFrom(entry.row.key)}
+                usage={rows.usage}
+                onRemoved={() => rows.onRemoved(entry.row.key)}
+              />
+            )}
+          </Group>
+        </React.Fragment>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Each editor's commit, settling where the author's work has already ended,
+ * and a settle when the view goes away.
+ *
+ * Going away ends the author's work here as closing an editor does: a tab
+ * change or the panel closing. An edit committed by an editor that is
+ * already closed, such as a colour picker writing what it held as it
+ * unmounts, comes after the settle its closing made, so it settles again
+ * rather than wait for a pause the author has already ended.
+ */
+function useCommitsSettled(
+  onChange: (tokens: SiteTokenSet) => void,
+  onSettle: (() => void) | undefined,
+  openKey: string | null
+): (key: string) => (next: SiteTokenSet) => void {
+  // The latest callback, so the effect runs only on unmount rather than on
+  // every render that hands a new one.
+  const settle = React.useRef(onSettle);
+  settle.current = onSettle;
+  // Which editor is open as of the latest render, and whether the panel is
+  // still mounted: read when an editor commits, which it may do as it goes
+  // away, after the close or the unmount has already settled.
+  const openNow = React.useRef(openKey);
+  openNow.current = openKey;
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      settle.current?.();
+    };
+  }, []);
+  return key => next => {
+    onChange(next);
+    if (!mounted.current || openNow.current !== key) settle.current?.();
+  };
+}
+
+/**
+ * How widely every variable listed is used, read once for all the groups:
+ * each row's variable and, for a type size, its line height, which has no
+ * row of its own and is removed from here or nowhere; and what the rows and
+ * their editors are handed of it. Nothing without the host's access.
+ *
+ * A save refused (`issue` coming to say why) is read as a sign the counts
+ * are behind: a removal the server refused because the variable is in use,
+ * which these counts called unused. Every listed variable is read again,
+ * since the panel cannot tell which ones the refused save dropped, so the
+ * next Remove says why it waits rather than confirming again.
+ */
+function useUsageOfRows(
+  {
+    usage: access,
+    classes,
+  }: {
+    readonly usage?: VariablesAccess | undefined;
+    readonly classes?: readonly NamedClass[] | undefined;
+  },
+  groups: readonly { readonly entries: readonly VariableEntry[] }[],
+  issue: string | undefined
+): VariableUsageHere | undefined {
+  const identities = React.useMemo(
+    () => groups.flatMap(group => group.entries.flatMap(rowIdentities)),
+    [groups]
+  );
+  const reads = useVariableUsage(access, identities);
+  const { values, counter, reread, readAgain } = reads;
+  // The identities as of the latest render, read when a refusal arrives
+  // rather than closed over, so the effect follows the issue alone.
+  const listed = React.useRef(identities);
+  listed.current = identities;
+  React.useEffect(() => {
+    // A fresh list each time: the same list again would be no new state,
+    // and a second refusal would read nothing.
+    if (issue !== undefined) reread([...listed.current]);
+  }, [issue, reread]);
+  return React.useMemo(
+    () =>
+      access === undefined
+        ? undefined
+        : {
+            reachOf: id => values.get(id),
+            readAgain,
+            access,
+            counter,
+            classes,
+          },
+    [access, values, readAgain, counter, classes]
+  );
+}
+
+/** The variables a row stands for: its own, and a type size's line height. */
+function rowIdentities(entry: VariableEntry): string[] {
+  return entry.lineHeight === undefined
+    ? [entry.row.identity]
+    : [entry.row.identity, entry.lineHeight.identity];
+}
+
+/** A row's count: every variable it stands for, together. */
+function rowReach(
+  entry: VariableEntry,
+  usage: VariableUsageHere | undefined
+): VariableReach | undefined {
+  if (usage === undefined) return undefined;
+  return combinedReach(rowIdentities(entry).map(usage.reachOf));
 }
 
 /**
@@ -448,7 +612,8 @@ function PanelNotes({
 }
 
 /**
- * Which variable's editor is open, and what opening and closing one does.
+ * Which variable's editor is open, what opening and closing one does, and
+ * each editor's commit, which settles once the editor has closed.
  *
  * A variable added from a "+" opens straight away, and is "fresh" until its
  * editor closes: nothing can reference it yet, so its code name may still
@@ -475,6 +640,8 @@ function useOpenVariable({
   toggle: (key: string, open: boolean) => void;
   add: (what: NewVariable) => void;
   forget: (key: string) => void;
+  /** Each row editor's commit; see {@link useCommitsSettled}. */
+  commitFrom: (key: string) => (next: SiteTokenSet) => void;
 } {
   const root = React.useRef<HTMLDivElement>(null);
   const [openKey, setOpenKey] = React.useState<string | null>(null);
@@ -527,7 +694,8 @@ function useOpenVariable({
     else close(key);
   };
 
-  return { root, openKey, toggle, add, forget };
+  const commitFrom = useCommitsSettled(onChange, onSettle, openKey);
+  return { root, openKey, toggle, add, forget, commitFrom };
 }
 
 /**
@@ -674,7 +842,14 @@ function Group({
 }): React.JSX.Element {
   const id = React.useId();
   const [pages, setPages] = React.useState(1);
-  const shown = withOpenRow(entries, pages * PAGE_SIZE, openKey);
+  // A variable is added at the end of its group, so in a group longer than a
+  // page its row would not mount and the editor opened for it would have
+  // nothing to open beside.
+  const shown = withOpenRow(
+    entries,
+    pages * PAGE_SIZE,
+    entry => entry.row.key === openKey
+  );
   const hidden = entries.length - shown.length;
   const adds = ADDS[group];
   return (
@@ -743,28 +918,6 @@ function EmptyGroup({
   );
 }
 
-/**
- * The rows a page shows, and the open row as well when it lies past them.
- *
- * A variable is added at the end of its group, so in a group longer than a
- * page its row would not mount and the editor opened for it would have
- * nothing to open beside. It is drawn on its own after the page rather than
- * by raising the page, which would mount every row before it.
- */
-function withOpenRow(
-  entries: readonly VariableEntry[],
-  limit: number,
-  openKey: string | null
-): readonly VariableEntry[] {
-  const page = entries.slice(0, limit);
-  const at =
-    openKey === null
-      ? -1
-      : entries.findIndex(entry => entry.row.key === openKey);
-  const open = at >= limit ? entries[at] : undefined;
-  return open === undefined ? page : [...page, open];
-}
-
 /** A group's "+": a button for one kind, a menu for several. */
 function AddButton({
   adds,
@@ -829,6 +982,7 @@ function VariableRow({
   onOpenChange,
   onChange,
   onRemoved,
+  usage,
 }: {
   entry: VariableEntry;
   tokens: SiteTokenSet;
@@ -839,31 +993,52 @@ function VariableRow({
   onOpenChange: (open: boolean) => void;
   onChange: (tokens: SiteTokenSet) => void;
   onRemoved: () => void;
+  /** How widely it is used, where the host reads it. */
+  usage: VariableUsageHere | undefined;
 }): React.JSX.Element {
   const token = tokens.tokens[entry.row.at];
+  const reach = rowReach(entry, usage);
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="nx-vars__row"
-            data-variable-key={entry.row.key}
-            // The visible name first, then the values the swatches show, so
-            // a screen reader hears both and speech input still matches.
-            aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}`}
-            data-kind={entry.row.kind}
-          >
-            <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
-            <span className="nx-vars__name">
-              {entry.label}
-              {entry.kindWord === undefined ? null : (
-                <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
-              )}
-            </span>
-            <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
-          </button>
-        </PopoverTrigger>
+        <CountTip reach={reach}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="nx-vars__row"
+              data-variable-key={entry.row.key}
+              // The visible name first, then the values the swatches show, so
+              // a screen reader hears both and speech input still matches.
+              aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
+              data-kind={entry.row.kind}
+              // A fourth column for the count, only where usage is read.
+              data-counted={usage === undefined ? undefined : ""}
+              // Drawn as chosen while its editor is open. Its own mark: the
+              // row's tooltip sets `data-state` too, over the popover's.
+              data-open={open ? "" : undefined}
+            >
+              <RowLead
+                entry={entry}
+                token={token}
+                tokens={tokens}
+                mode={mode}
+              />
+              <span className="nx-vars__name">
+                {entry.label}
+                {entry.kindWord === undefined ? null : (
+                  <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
+                )}
+              </span>
+              <RowTail
+                entry={entry}
+                token={token}
+                tokens={tokens}
+                mode={mode}
+              />
+              <VariableRowCount reach={reach} />
+            </button>
+          </PopoverTrigger>
+        </CountTip>
         <PopoverContent
           side="right"
           align="start"
@@ -878,11 +1053,17 @@ function VariableRow({
             readOnly={readOnly}
             onChange={onChange}
             onRemoved={onRemoved}
+            {...(usage === undefined ? {} : { usage })}
           />
         </PopoverContent>
       </Popover>
     </li>
   );
+}
+
+/** The row's count in words, after its name and values, once it is read. */
+function countWords(reach: VariableReach | undefined): string {
+  return reach === undefined ? "" : `. ${variableCount(reach).words}`;
 }
 
 /**

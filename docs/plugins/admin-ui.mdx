@@ -88,7 +88,11 @@ import { checkAdminComponents } from "nextly/runtime";
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <Suspense fallback={null}>
       <ForThisRequest>{children}</ForThisRequest>
@@ -314,7 +318,11 @@ The admin keeps the document's own behaviour around your view, so you don't
 build any of it yourself:
 
 - It loads the document and holds its form state.
-- It holds the document's soft lock, and shows who else is editing.
+- It holds the document's soft lock, and shows who else is editing (see
+  [Editing with others](/docs/admin/editing-together)).
+- It saves with the version of the document the form started from. A save
+  refused because someone changed the document since opens the admin's conflict dialog (see
+  [When your save is refused](/docs/admin/editing-together#when-your-save-is-refused)).
 - It offers unsaved work recovered after a crash or a reload. Restoring it
   unmounts your view, replaces the form's values, then mounts your view again.
   A view that keeps its own copy of the document, read when it mounts, starts
@@ -377,6 +385,85 @@ Place `<DocumentSaveIndicator />` and `<DocumentPrimaryAction />`, from
 
 Both are the admin's own controls, run through the same actions as the
 header. Outside a document they render nothing.
+
+### Document actions and panel sections
+
+> **Experimental.** `documentActions`, `panelSections` and the props below may
+> change before they are marked stable. Collections only: a Single's document
+> screen is not changed by them yet.
+
+Two more keys under `views[slug]` change what a collection's document screen
+offers, for that collection only. Every other collection keeps the admin's own
+screen.
+
+`documentActions` hides or replaces a built-in action in the document's
+**More actions** menu. It takes `delete` and `unpublish`, each set to
+`"hidden"` or to `{ component, label? }`. For example,
+`documentActions: { unpublish: "hidden", delete: { component: "@acme/plugin-layouts/admin#RemoveLayoutDialog", label: "Remove layout…" } }`
+takes Unpublish away and routes Delete to the plugin's own dialog.
+
+- A hidden action is not offered at all, from the menu or from
+  `useDocumentActions().run`, which refuses it as not offered.
+- A replaced action keeps its row: its place, the permission it needs, and
+  every reason it can't run right now (a colleague holding the document, a past
+  version on screen) still apply. Choosing it mounts your component instead of
+  the admin's own confirmation and write, so a dialog renders open. Running it
+  with `run("delete")` opens your component too, and answers once it closes.
+
+Until the admin has loaded which plugins are installed, Delete and Unpublish
+can't be chosen on any collection's document, because a plugin that hides or
+replaces one isn't known yet and the built-in write must not run in the
+meantime. Each row says why:
+
+- While the list loads, the row reads "Loading this collection's plugin
+  actions…" and clears itself once the list arrives.
+- If the list failed to load, the row names its action, for example "Couldn't
+  load this collection's plugin actions, so Delete is paused.", with a
+  **Retry** row under it. Retry asks for the list again, the row reads as
+  loading while it does, and then the plugin's own override applies.
+
+`useDocumentActions().run` refuses the action with the same words. Running a
+replaced action that is already open joins it, and both callers get the same
+answer when it closes.
+
+Your component receives `DocumentActionReplacementProps` from
+`@nextlyhq/plugin-sdk/admin`:
+
+| Prop                         | What it is                                                                                                                                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `action`                     | Which action the author chose: `"delete"` or `"unpublish"`.                                                                                                                                                                                     |
+| `collectionSlug`, `entryId`  | The document.                                                                                                                                                                                                                                   |
+| `documentLock`, `mayWrite()` | What holds the document, kept current while your component is open, and whether it may be written right now. Call `mayWrite()` immediately before your write, after anything you awaited: the document can change hands while a dialog is open. |
+| `close(result?)`             | Ends it. `close("deleted")` leaves the document for its collection's list, as the built-in Delete does. `close("changed")` reads the document again. `close()` means the author backed out.                                                     |
+
+Both your replacement and your panel section are drawn inside the document's
+editor, so `useDocumentLocale()` names the language being edited (the one a
+replaced Unpublish of a translation acts on) and `useDocumentActions()` answers
+for the same document.
+
+If your component isn't registered, or throws while drawing, the admin closes
+it, tells the author the action couldn't open, and answers a waiting
+`run("delete")` as cancelled. When you report `"changed"`, the document is read
+again and the author's unsaved edits stay over it, as after their own save.
+
+`panelSections` adds sections to the document panel, after **Details**, in the
+order given: `panelSections: [{ title: "Used by", component: "@acme/plugin-layouts/admin#LayoutUsage" }]`.
+The admin draws each section's heading, spacing and divider, as it does for its
+own sections, so the section reads as part of the panel in light and dark. Your
+component draws only what goes under the heading. Nothing is drawn while a
+document is being created. It receives `DocumentPanelSectionProps`:
+
+| Prop                        | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectionSlug`, `entryId` | The document.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `documentLock`              | `{ readOnly, actionsDisabled }`, what holds the document right now. `readOnly` follows the fields: a colleague's claim, a past version on screen, a reader's page, or the editor still readying the document. `actionsDisabled` follows the built-in Delete: a colleague's claim, a past version, a collection removed from code, or the editor readying it. A reader's page alone doesn't hold your writes, because your route judges its own permission. Hold your writes while `actionsDisabled`. |
+| `mayWrite()`                | Whether the document may be written right now. Call it immediately before a write, after anything you awaited.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `documentChanged(result)`   | Tell the editor your section changed the document: `"deleted"` leaves for the collection's list, `"changed"` reads the document again.                                                                                                                                                                                                                                                                                                                                                               |
+
+Startup is refused, naming the plugins involved, when an override names an
+action other than `delete` or `unpublish`, when a replacement or a section has
+no component (or a section no title), or when two plugins override the same
+action on the same collection.
 
 ### Who is signed in
 

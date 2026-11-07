@@ -378,6 +378,13 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  */
 export { EmptyContainerAppenders } from "./empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+/**
+ * The badge on a block whose bound value a visitor will not see, drawn in the
+ * canvas's overlay from the host's `visitorUnreadableBindings` answer.
+ */
+export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
+export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
+export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";
 
@@ -555,6 +562,18 @@ export type {
   TokensPanelProps,
   VariablesHeader,
 } from "./tokens-panel";
+/*
+ * How widely variables are used, as a host reads it for the Variables view.
+ * Experimental, as the view's `usage` is.
+ */
+export type {
+  VariableReach,
+  VariablesAccess,
+  VariablesUsage,
+  VariableUse,
+  VariableUseKind,
+  VariableUsesPage,
+} from "./variable-usage";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*
