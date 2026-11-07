@@ -30,6 +30,7 @@ import { asOverwrite } from "../document-version";
 
 import {
   claimKey,
+  holderLockKey,
   pathOf,
   servedAddress,
   spaceHolding,
@@ -342,13 +343,50 @@ async function lock(
   tx: Tx,
   list: ServedAddress
 ): Promise<void> {
-  if (claims.dialect === "sqlite") return;
   const key = claimKey("lock", list);
+  await holdLockRow(claims, tx, key, columns("lock", key, list, null), {
+    path: pathOf(list),
+  });
+}
+
+/**
+ * Hold `holder`'s own lock row until this transaction ends, so whatever else
+ * reconciles that holder's claims waits for this transaction, then reads
+ * what it left. The start-up pass takes it before it reads the page it
+ * reconciles, and a save of that page takes it while the pass runs, so the
+ * pass never reconciles a page from a row a save has since changed. Taken
+ * before any address's lock, in both.
+ */
+export async function lockHolder(
+  claims: Claims,
+  tx: Tx,
+  holder: Holder
+): Promise<void> {
+  const key = holderLockKey(holder);
+  await holdLockRow(
+    claims,
+    tx,
+    key,
+    { claimKey: storedKey(key), kind: "lock" },
+    { kind: "lock" }
+  );
+}
+
+/**
+ * Hold the lock row keyed `key`, created with `created` where none is stored
+ * yet, and otherwise held by writing `touched` over it (see {@link lock}).
+ */
+async function holdLockRow(
+  claims: Claims,
+  tx: Tx,
+  key: string,
+  created: Record<string, unknown>,
+  touched: Record<string, unknown>
+): Promise<void> {
+  if (claims.dialect === "sqlite") return;
   let [row] = await keyed(claims, tx, [key]);
   if (row === undefined) {
-    if ((await insert(claims, tx, columns("lock", key, list, null))) !== null) {
-      return;
-    }
+    if ((await insert(claims, tx, created)) !== null) return;
     [row] = await keyed(claims, tx, [key]);
     if (row === undefined) {
       throw NextlyError.internal({
@@ -362,7 +400,7 @@ async function lock(
     tx,
     claims.slug,
     row.id,
-    asOverwrite({ path: pathOf(list) })
+    asOverwrite(touched)
   );
 }
 

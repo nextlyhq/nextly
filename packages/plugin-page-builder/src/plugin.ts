@@ -32,6 +32,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   backfillPageClaims,
+  publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
 import { claimLocales } from "./address-claims/page-claims";
@@ -1995,26 +1996,15 @@ export const pageBuilder = (
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
         backfillDone: () => pageClaimsBackfilled,
-        pagesUnder: async prefix => {
+        publishedPages: async function* () {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          const found = await nextly.find({
-            collection: pagesSlug,
-            where: {
-              status: { equals: "published" },
-              slug: { contains: prefix },
-            },
-            sort: "createdAt",
-            limit: 500,
-            overrideAccess: true,
-            depth: 0,
-          });
-          return found.items as readonly Readonly<Record<string, unknown>>[];
+          yield* publishedPages(nextly, pagesSlug);
         },
       });
       pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-        await backfillPageClaims({
+        const complete = await backfillPageClaims({
           pages: pagesSlug,
           claims: claimsStore,
           locales: siteLocales(),
@@ -2026,7 +2016,11 @@ export const pageBuilder = (
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
         });
-        pageClaimsBackfilled = true;
+        // Only a pass that settled every page ends the saves' part in it: a
+        // page it failed to read or claim is still unclaimed, so saves keep
+        // claiming the pages in a list's way until a later boot's pass
+        // finishes.
+        if (complete) pageClaimsBackfilled = true;
       };
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
