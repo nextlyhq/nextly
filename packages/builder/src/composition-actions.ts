@@ -307,11 +307,19 @@ export type DefinitionAction =
 
 const id = z.string().min(1).max(512);
 
+/**
+ * A binding's format: a plain object, judged by a function. Named so the JSON
+ * Schema form can state it as an object rather than as any value.
+ */
+const bindingFormatSchema = z.custom<BindingFormat>(value =>
+  isPlainRecord(value)
+);
+
 /** A binding as a block stores it; whether it fits is the write's to judge. */
 const bindingShape = {
   $bind: z.string().min(1).max(512),
   fallback: z.unknown().optional(),
-  format: z.custom<BindingFormat>(value => isPlainRecord(value)).optional(),
+  format: bindingFormatSchema.optional(),
 };
 const bindingSchema: z.ZodType<Binding> = z.union([
   z.strictObject({
@@ -585,10 +593,23 @@ export const DEFINITION_ACTION_KINDS: readonly DefinitionAction["kind"][] =
  * The JSON Schema form of a page action, as a client that does not run zod
  * reads it: the input the schema accepts, before the parse normalises it.
  *
+ * A binding's `format` and an unbind's kept `value` are judged by a function,
+ * which JSON Schema cannot state; the converter refuses such a schema outright
+ * otherwise, and the manifest that carries this form with it. A format is
+ * written as an object, which is what its function asks; a kept value as any
+ * value (`{}`), since it may be any JSON. Each stays required where the action
+ * requires it, and is judged by the route.
+ *
  * @experimental Settles when the composition API ships.
  */
 export function pageActionJsonSchema(): Record<string, unknown> {
-  return z.toJSONSchema(pageActionSchema, { io: "input" });
+  return z.toJSONSchema(pageActionSchema, {
+    io: "input",
+    unrepresentable: "any",
+    override: ({ zodSchema, jsonSchema }) => {
+      if (zodSchema === bindingFormatSchema) jsonSchema.type = "object";
+    },
+  });
 }
 
 /**
