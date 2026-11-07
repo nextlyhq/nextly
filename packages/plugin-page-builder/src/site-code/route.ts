@@ -40,14 +40,26 @@ import {
 } from "../library-contract";
 import { sha256Hex } from "../sha256-hex";
 
-import { checkSiteCodeAgainstCsp, cspHash, siteCodeFacts } from "./csp";
+import {
+  checkSiteCodeAgainstCsp,
+  cspHash,
+  siteCodeFacts,
+  siteCodePolicyAdditions,
+  type CspCheck,
+  type SiteCodeFacts,
+} from "./csp";
+import { describeSiteCode } from "./describe";
 import {
   SITE_CODE_LIMITS,
   siteCodeScriptKind,
   type SiteCodeEntry,
 } from "./rules";
 import { sanitiseSiteCode, type SanitisedSiteCode } from "./sanitise";
-import { SITE_CODE_SLUG, SITE_CODE_WRITE_CONTEXT } from "./storage";
+import {
+  SITE_CODE_SLUG,
+  SITE_CODE_WRITE_CONTEXT,
+  storedSiteCodeEntries,
+} from "./storage";
 
 /**
  * How a site tells the plugin about the policy its pages are served with, so
@@ -102,6 +114,11 @@ export interface SiteCodeRouteDeps {
   readonly options: PageBuilderSiteCodeOptions | undefined;
   /** The permission the route asks for: the site settings one. */
   readonly permission: string;
+  /**
+   * The name of the person with this id, for "Last changed by"; `null` when
+   * it can't be read. Absent, no name is given.
+   */
+  readonly personName?: (id: string) => Promise<string | null>;
 }
 
 /** The audit kind a save writes. */
@@ -173,6 +190,33 @@ function textOf(doc: Record<string, unknown> | null, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+/** When a stored document was last saved, as an ISO date. */
+function changedAtOf(doc: Record<string, unknown> | null): string | null {
+  const value = doc?.updatedAt;
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * The name of the person who saved the code last, from its `user:<id>`
+ * marker; `null` when there is none or the name can't be read, which never
+ * fails the read.
+ */
+async function changedByOf(
+  doc: Record<string, unknown> | null,
+  deps: SiteCodeRouteDeps
+): Promise<string | null> {
+  const marker = textOf(doc, "changedBy");
+  if (!marker.startsWith("user:") || deps.personName === undefined) {
+    return null;
+  }
+  try {
+    return await deps.personName(marker.slice("user:".length));
+  } catch {
+    return null;
+  }
+}
+
 /** The site code as Settings reads it, to edit. */
 async function readSiteCode(
   ctx: SiteCodeRouteContext,
@@ -184,6 +228,13 @@ async function readSiteCode(
     body: textOf(doc, "bodySource"),
     version: documentVersionOf(doc) ?? null,
     policyDeclared: deps.options?.csp !== undefined,
+    // From the entries pages render, so the summary names what runs.
+    described: {
+      head: describeSiteCode(storedSiteCodeEntries(doc, "head")),
+      body: describeSiteCode(storedSiteCodeEntries(doc, "body")),
+    },
+    changedAt: changedAtOf(doc),
+    changedBy: await changedByOf(doc, deps),
   } satisfies SiteCodeRead);
 }
 
@@ -204,6 +255,43 @@ async function declaredPolicy(
   return typeof csp === "function" ? await csp() : csp;
 }
 
+/** One policy to check against, as the route knows it. */
+interface KnownPolicy {
+  readonly source: SiteCodePolicyChecked["source"];
+  readonly policy: string | undefined;
+  readonly reportOnly: boolean;
+}
+
+/**
+ * The check against one policy, and what to add to it where it blocks
+ * something: the person is told exactly what the merge would add.
+ */
+async function policyChecked(
+  known: KnownPolicy,
+  entries: { head: SiteCodeEntry[]; body: SiteCodeEntry[] },
+  facts: SiteCodeFacts,
+  siteNonce: boolean
+): Promise<SiteCodePolicyChecked> {
+  const check: CspCheck = await checkSiteCodeAgainstCsp(
+    {
+      ...(known.policy === undefined ? {} : { policy: known.policy }),
+      reportOnly: known.reportOnly,
+      siteOrigin: facts.siteOrigin,
+      siteNonce,
+    },
+    entries
+  );
+  const blocks =
+    check.checked && check.findings.length > 0 && known.policy !== undefined;
+  return {
+    source: known.source,
+    check,
+    additions: blocks
+      ? siteCodePolicyAdditions(known.policy ?? "", facts, { siteNonce })
+      : [],
+  };
+}
+
 /** The checks against each policy known: the declared one, and the live one. */
 async function policyChecks(
   entries: { head: SiteCodeEntry[]; body: SiteCodeEntry[] },
@@ -212,36 +300,27 @@ async function policyChecks(
   options: PageBuilderSiteCodeOptions | undefined
 ): Promise<SiteCodePolicyChecked[]> {
   const siteNonce = options?.siteNonce === true;
-  const declared = await declaredPolicy(options);
-  const checks: SiteCodePolicyChecked[] = [
+  const facts = await siteCodeFacts(
+    [...entries.head, ...entries.body],
+    siteOrigin
+  );
+  const known: KnownPolicy[] = [
     {
       source: "declared",
-      check: await checkSiteCodeAgainstCsp(
-        {
-          ...(declared === undefined ? {} : { policy: declared }),
-          reportOnly: options?.reportOnly === true,
-          siteOrigin,
-          siteNonce,
-        },
-        entries
-      ),
+      policy: await declaredPolicy(options),
+      reportOnly: options?.reportOnly === true,
     },
   ];
   if (body.livePolicy !== undefined) {
-    checks.push({
+    known.push({
       source: "live",
-      check: await checkSiteCodeAgainstCsp(
-        {
-          policy: body.livePolicy.policy,
-          reportOnly: body.livePolicy.reportOnly,
-          siteOrigin,
-          siteNonce,
-        },
-        entries
-      ),
+      policy: body.livePolicy.policy,
+      reportOnly: body.livePolicy.reportOnly,
     });
   }
-  return checks;
+  return Promise.all(
+    known.map(policy => policyChecked(policy, entries, facts, siteNonce))
+  );
 }
 
 /**
@@ -328,9 +407,7 @@ function refuseUnsaveable(judged: Judged, body: SiteCodeBodyValue): void {
 }
 
 /** The origins the code loads scripts from, as one audit value. */
-function scriptOriginsOf(
-  facts: Awaited<ReturnType<typeof siteCodeFacts>>
-): string {
+function scriptOriginsOf(facts: SiteCodeFacts): string {
   const origins = new Set<string>();
   for (const load of facts.loads) {
     if (load.kind !== "script") continue;

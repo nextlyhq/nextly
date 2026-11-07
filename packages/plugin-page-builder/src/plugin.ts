@@ -2783,6 +2783,15 @@ export const pageBuilder = (
           },
           options: opts.siteCode,
           permission: MANAGE_SITE_PERMISSION,
+          // Read as the server, for "Last changed by": the name only.
+          personName: async id => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            const person = await nextly.users.findByID({ id });
+            return typeof person?.name === "string" && person.name !== ""
+              ? person.name
+              : null;
+          },
         }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,

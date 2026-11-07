@@ -22,8 +22,10 @@
  *
  * Scripts it builds run in order, as the page finishes parsing, rather than
  * as the parser reaches them: each external script that isn't `async` is
- * loaded before anything after it starts, as the parser would, but a script
- * that writes into the page as it loads (`document.write`) can't be site code.
+ * loaded before anything after it starts, as the parser would, and the
+ * head's code finishes so before the body's starts. A script that writes
+ * into the page as it loads (`document.write`) can't be site code, and a
+ * stylesheet isn't waited for.
  *
  * A path is skipped when any `<SiteCode>` on the page skips it: each loader
  * reads every data block's list, so the head and the end of the body never
@@ -66,6 +68,14 @@ export function isGatedSiteCode(entry: SiteCodeEntry): boolean {
 export const SITE_CODE_DATA_ATTRIBUTE = "data-nx-site-code";
 
 /**
+ * Where the loaders keep one queue for the document, on its root element:
+ * each place's code starts once the place before it has finished, so a
+ * script the head waits on has loaded before the body's code starts, as it
+ * would have had both been written in the page.
+ */
+const QUEUE_PROPERTY = "nxSiteCodeQueue";
+
+/**
  * The loader, as it is written to every page carrying gated site code. It
  * reads the data block just before it, and builds each entry where its slot
  * says, once the page has parsed. Its text is fixed: a policy allows it by
@@ -93,18 +103,18 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
     });
     return paths;
   }
-  function skipped() {
-    return skipList().some(function (path) {
+  function skippedIn(paths) {
+    return paths.some(function (path) {
       return location.pathname === path || location.pathname.indexOf(path + "/") === 0;
     });
   }
-  function guardNavigation() {
+  function guardNavigation(paths) {
     var root = document.documentElement;
     if (root.hasAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard")) return;
     root.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard", "");
-    var wasSkipped = skipped();
+    var wasSkipped = skippedIn(paths);
     function leaveIfSkipped() {
-      if (skipped() !== wasSkipped) location.reload();
+      if (skippedIn(paths) !== wasSkipped) location.reload();
     }
     ["pushState", "replaceState"].forEach(function (name) {
       var original = history[name];
@@ -128,29 +138,43 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
   }
   function start() {
     if (framedBySite() || document.querySelector("[${CANVAS_MOUNT_ATTRIBUTE}]")) return;
-    guardNavigation();
-    if (skipped()) return;
-    document.documentElement.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-" + data.slot, "started");
+    // Read once the page has parsed, before any code starts, so code that
+    // later edits or removes the data blocks never changes where it may run.
+    var paths = skipList();
+    guardNavigation(paths);
+    if (skippedIn(paths)) return;
+    var root = document.documentElement;
+    root.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-" + data.slot, "started");
     var into = data.slot === "head" ? document.head : document.body;
     var entries = data.entries || [];
-    function next(index) {
-      if (index >= entries.length) return;
-      var entry = entries[index];
-      var attrs = entry.attrs || {};
-      var element = build(entry);
-      var waits = entry.tag === "script" && attrs.src !== undefined && attrs.async === undefined;
-      if (waits) {
-        element.async = false;
-        var go = function () {
-          next(index + 1);
-        };
-        element.addEventListener("load", go);
-        element.addEventListener("error", go);
+    function run(done) {
+      function next(index) {
+        if (index >= entries.length) return done();
+        var entry = entries[index];
+        var attrs = entry.attrs || {};
+        var element = build(entry);
+        var waits = entry.tag === "script" && attrs.src !== undefined && attrs.async === undefined;
+        if (waits) {
+          element.async = false;
+          var go = function () {
+            next(index + 1);
+          };
+          element.addEventListener("load", go);
+          element.addEventListener("error", go);
+        }
+        into.appendChild(element);
+        if (!waits) next(index + 1);
       }
-      into.appendChild(element);
-      if (!waits) next(index + 1);
+      try {
+        next(0);
+      } catch (e) {
+        done();
+      }
     }
-    next(0);
+    var queue = root.${QUEUE_PROPERTY} || Promise.resolve();
+    root.${QUEUE_PROPERTY} = queue.then(function () {
+      return new Promise(run);
+    });
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();

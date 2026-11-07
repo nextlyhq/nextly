@@ -347,6 +347,11 @@ export interface SiteCodeLoad {
    * which carries no nonce.
    */
   readonly nonceable?: true;
+  /**
+   * Started by a script element the loader builds, never one the parser
+   * writes: under `'strict-dynamic'` it runs once the loader does.
+   */
+  readonly built?: true;
 }
 
 /** What a load is judged with besides the policy. */
@@ -361,7 +366,7 @@ interface LoadContext {
  * Whether a list lets a load at `url` happen. A script or style the site
  * passes its nonce to loads under a list naming a nonce; a script whose
  * integrity the list names in full loads too. Under `'strict-dynamic'` a
- * script's host sources are ignored.
+ * script's host sources are ignored, and a script the loader builds loads.
  */
 function allowsLoad(
   sources: readonly string[],
@@ -374,7 +379,9 @@ function allowsLoad(
   }
   if (load.kind === "script") {
     if (integrityMatches(sources, load.integrity)) return true;
-    if (holds(sources, "'strict-dynamic'")) return false;
+    // A script the loader builds is trusted through the loader, whose own
+    // block is told on its own; one the page writes needs its own source.
+    if (holds(sources, "'strict-dynamic'")) return load.built === true;
   }
   return sources.some(source => sourceMatches(source, url, context.siteOrigin));
 }
@@ -398,6 +405,8 @@ interface Inline {
   readonly text: string;
   /** Whether a nonce on its element can allow it (see `nonceableAttrs`). */
   readonly nonceable: boolean;
+  /** A script the loader builds, which `'strict-dynamic'` trusts through it. */
+  readonly built?: true;
 }
 
 /**
@@ -477,6 +486,7 @@ function scriptParts(attrs: SiteCodeAttrs, text?: string): Parts {
         {
           ...withIntegrity({ kind: "script", url: attrs.src }, attrs),
           ...(nonceableAttrs(attrs) ? { nonceable: true as const } : {}),
+          built: true,
         },
       ],
       inline: [],
@@ -485,7 +495,12 @@ function scriptParts(attrs: SiteCodeAttrs, text?: string): Parts {
   return {
     loads: [],
     inline: [
-      { kind: "script", text: text ?? "", nonceable: nonceableAttrs(attrs) },
+      {
+        kind: "script",
+        text: text ?? "",
+        nonceable: nonceableAttrs(attrs),
+        built: true,
+      },
     ],
   };
 }
@@ -578,6 +593,12 @@ export interface SiteCodeFacts {
    * facts written before it existed still type; none when absent.
    */
   readonly unnonceable?: readonly string[];
+  /**
+   * The loader's hash, when there is code for it to start: under
+   * `'strict-dynamic'` the only inline script a policy must allow, since what
+   * the loader builds is trusted through it. Optional, as `unnonceable` is.
+   */
+  readonly loader?: string;
   /** Every resource it loads, each once, as written. */
   readonly loads: readonly SiteCodeLoad[];
 }
@@ -611,9 +632,10 @@ export async function siteCodeFacts(
     }
   }
   // The loader that starts gated code is an inline script of its own.
-  if (entries.some(isGatedSiteCode)) {
-    hashes.script.add(await cspHash(SITE_CODE_BOOTSTRAP));
-  }
+  const loader = entries.some(isGatedSiteCode)
+    ? await cspHash(SITE_CODE_BOOTSTRAP)
+    : undefined;
+  if (loader !== undefined) hashes.script.add(loader);
   return {
     siteOrigin,
     hashes: {
@@ -622,6 +644,7 @@ export async function siteCodeFacts(
       "style-attr": [...hashes["style-attr"]],
     },
     unnonceable: [...unnonceable],
+    ...(loader === undefined ? {} : { loader }),
     loads: [...loads.values()],
   };
 }
@@ -678,6 +701,18 @@ function inlineBlocked(kind: SiteCodeInlineKind, hash: string): string {
 }
 
 /** The inline code a policy would block. */
+/**
+ * Whether inline code runs once the loader does: a script the loader builds,
+ * under `'strict-dynamic'`, which trusts a script a trusted script builds,
+ * inline or loaded (Chrome and Firefox do, as the Web Platform Tests hold).
+ */
+function trustedThroughLoader(
+  code: Inline,
+  sources: readonly string[]
+): boolean {
+  return code.built === true && holds(sources, "'strict-dynamic'");
+}
+
 async function inlineFindings(
   inline: readonly Inline[],
   policy: CspPolicy,
@@ -686,7 +721,9 @@ async function inlineFindings(
   const findings: Blocked[] = [];
   for (const code of inline) {
     const rule = governing(policy, code.kind);
-    if (rule === undefined) continue;
+    if (rule === undefined || trustedThroughLoader(code, rule.sources)) {
+      continue;
+    }
     const hash = await cspHash(code.text);
     const elementNonce = code.nonceable ? nonce : undefined;
     if (allowsInline(rule.sources, hash, elementNonce, code.kind)) continue;
@@ -841,19 +878,29 @@ async function policyFindings(
       }
     }
   }
-  const loader = firstGated(slots);
-  const blocked =
-    loader === undefined ? undefined : await loaderBlocked(policy, context);
-  if (loader !== undefined && blocked !== undefined) {
-    found.push({ ...loader, level, ...blocked });
-  }
-  const script = firstGated(slots, entry => entry.tag === "script");
-  const untrusted =
-    script === undefined ? undefined : trustedTypesBlocked(policy);
-  if (script !== undefined && untrusted !== undefined) {
-    found.push({ ...script, level, ...untrusted });
-  }
-  return found;
+  return [
+    ...found,
+    ...toldOnce(firstGated(slots), await loaderBlocked(policy, context), level),
+    ...toldOnce(
+      firstGated(slots, entry => entry.tag === "script"),
+      trustedTypesBlocked(policy),
+      level
+    ),
+  ];
+}
+
+/**
+ * A block of everything the loader starts, told once, on the first entry it
+ * concerns; nothing when there is no such entry or no block.
+ */
+function toldOnce(
+  at: { slot: SiteCodeSlot; index: number } | undefined,
+  blocked: Blocked | undefined,
+  level: CspFinding["level"]
+): CspFinding[] {
+  return at === undefined || blocked === undefined
+    ? []
+    : [{ ...at, level, ...blocked }];
 }
 
 /**
@@ -965,8 +1012,15 @@ function inlineNeeds(
   if (rule === undefined) return [];
   // Code no nonce can allow needs its hash, whatever nonce the site passes.
   const unnonceable = new Set(facts.unnonceable ?? []);
+  // Under 'strict-dynamic' what the loader builds runs once it does, so of
+  // the inline scripts only the loader needs allowing.
+  const throughLoader =
+    kind === "script" &&
+    facts.loader !== undefined &&
+    holds(rule.sources, "'strict-dynamic'");
   const blocked = facts.hashes[kind].filter(
     hash =>
+      !(throughLoader && hash !== facts.loader) &&
       !allowsInline(
         rule.sources,
         hash,
@@ -1011,6 +1065,45 @@ function loadNeeds(
     return selfMatches(url, context.siteOrigin) ? ["'self'"] : [];
   }
   return [exactSource(url)];
+}
+
+/** The sources one directive of a policy needs for site code to run. */
+export interface CspAddition {
+  readonly directive: string;
+  readonly sources: readonly string[];
+}
+
+/**
+ * What `mergeSiteCodeIntoCsp` adds to a policy, per directive: the sources a
+ * directive lacks, or the directive whole where the policy doesn't name it
+ * yet, as it must then be added. Read from the merge itself, so what a person
+ * is told to add is exactly what the merge would.
+ */
+export function siteCodePolicyAdditions(
+  header: string,
+  facts: SiteCodeFacts,
+  options: { readonly siteNonce?: boolean | string } = {}
+): CspAddition[] {
+  const policies = parsePolicies(header);
+  const context = {
+    siteOrigin: facts.siteOrigin,
+    nonce: elementNonce(options.siteNonce, policies),
+  };
+  const added = new Map<string, readonly string[]>();
+  for (const parsed of policies) {
+    for (const [directive, sources] of mergedPolicy(parsed, facts, context)) {
+      const had = parsed.get(directive);
+      const fresh =
+        had === undefined
+          ? sources
+          : sources.filter(source => !had.includes(source));
+      if (fresh.length === 0) continue;
+      added.set(directive, [
+        ...new Set([...(added.get(directive) ?? []), ...fresh]),
+      ]);
+    }
+  }
+  return [...added].map(([directive, sources]) => ({ directive, sources }));
 }
 
 /**

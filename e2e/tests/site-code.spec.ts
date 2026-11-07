@@ -19,6 +19,7 @@ import {
 
 import { gotoAdmin } from "./support/admin";
 import { canvasFrame, CANVAS_FRAME } from "./support/canvas-frame";
+import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { olderPreviewToken } from "./support/preview-links";
 import { test } from "./support/test";
@@ -162,5 +163,90 @@ test("site code runs on a public page, and never in the admin, the canvas or a p
     expect(await ran(page)).toBeUndefined();
   } finally {
     await saveSiteCode(page.request, "");
+  }
+});
+
+test("adds site code from Settings, says what it is, and it runs on a public page", async ({
+  page,
+}) => {
+  await saveSiteCode(page.request, "");
+  try {
+    await gotoAdmin(page, "/singles/homepage");
+    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await expect(canvasFrame(page).locator(".nx-canvas")).toBeVisible({
+      timeout: 30_000,
+    });
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Settings" })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await dialog.getByRole("tab", { name: "Site" }).click();
+    const section = dialog.getByRole("region", { name: "Code" });
+    await expect(section.getByText("Nothing yet")).toHaveCount(2);
+    await section.getByRole("button", { name: "Add code" }).click();
+    const head = section.getByRole("textbox", { name: "Head" });
+
+    // What can't be stored is named, focused, and nothing is saved.
+    await head.fill('<img src="https://px.example/p.gif">');
+    await section.getByRole("button", { name: "Save code" }).click();
+    await expect(section.getByText("This can't be saved yet")).toBeVisible();
+    await expect(section.getByText("Nothing was saved.")).toBeVisible();
+    await expect(section.locator("li:focus")).toHaveCount(1);
+
+    // The playground declares no policy and sends none: said plainly first.
+    await head.fill(CODE);
+    await section.getByRole("button", { name: "Save code" }).click();
+    await expect(
+      section.getByText(
+        "No security policy is known for this site, so nothing was checked against one"
+      )
+    ).toBeVisible();
+    await section.getByRole("button", { name: "Save code" }).click();
+    await expect(section.getByText("Site code saved")).toBeVisible();
+    await expect(section.getByText("An inline script")).toBeVisible();
+
+    // And it runs on a public page.
+    const visitor = await page.context().newPage();
+    try {
+      await expect
+        .poll(
+          async () => {
+            await visitor.goto("/");
+            return ran(visitor);
+          },
+          { timeout: 30_000 }
+        )
+        .toBe(1);
+    } finally {
+      await visitor.close();
+    }
+  } finally {
+    await saveSiteCode(page.request, "");
+  }
+});
+
+test("refuses site code to a role that may not manage the site's settings", async ({
+  browser,
+  page,
+}, testInfo) => {
+  const baseURL = testInfo.project.use.baseURL;
+  if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
+  const author = await signInAsLimitedUser(browser, page.request, baseURL, [
+    "read-pages",
+    "update-pages",
+  ]);
+  try {
+    const request = author.context.request;
+    expect((await request.get(ROUTE)).status()).toBe(403);
+    const csrf = await request.get("/admin/api/auth/csrf");
+    const { token } = (await csrf.json()) as { token: string };
+    const refused = await request.post(ROUTE, {
+      data: { head: CODE, body: "" },
+      headers: { "x-csrf-token": token, origin: new URL(csrf.url()).origin },
+    });
+    expect(refused.status()).toBe(403);
+  } finally {
+    await author.context.close();
   }
 });
