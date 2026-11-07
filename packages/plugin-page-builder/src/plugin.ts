@@ -24,6 +24,7 @@ import {
   type HookContext,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
   type PluginVersionPinHolder,
@@ -71,6 +72,8 @@ import {
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
@@ -239,17 +242,17 @@ import {
   siteBreakpointUndoRoute,
 } from "./site-breakpoint-undo";
 import {
-  resolveFontOptions,
-  type PageBuilderFontOptions,
-} from "./site-fonts/options";
-import { siteFontRoutes } from "./site-fonts/routes";
-import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
   siteCodeRoutes,
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
@@ -414,6 +417,79 @@ function componentStoreOf(opts: PageBuilderOptions): ComponentStore {
       : { collection: readiness.collection }),
     field: readiness.field ?? COMPONENT_DOCUMENT_FIELD,
   };
+}
+
+/**
+ * Whether the plugin's own Components collection is the component store: no
+ * host store is named, or the one named is it.
+ */
+function storeIsOwn(store: ComponentStore): boolean {
+  return store.collection === undefined || store.collection === COMPONENTS_SLUG;
+}
+
+/**
+ * The admin views that route a component's delete through Delete component,
+ * on the store's collection and no other: the plugin's own when no host store
+ * is named, else the host's.
+ */
+function deleteComponentViews(
+  store: ComponentStore
+): Record<string, PluginCollectionView> {
+  const replaced = {
+    documentActions: {
+      delete: {
+        component: DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+        label: "Delete component…",
+      },
+    },
+  };
+  return store.collection === undefined || storeIsOwn(store)
+    ? { [COMPONENTS_SLUG]: replaced }
+    : { [store.collection]: replaced };
+}
+
+/**
+ * Refuse a component store that shares a slug with a collection this plugin
+ * declares, other than naming its own Components collection.
+ *
+ * The delete's surfaces are keyed by the store's slug, and a key that is one
+ * of the plugin's own slugs is read as that plugin collection, through any
+ * rename: a host store named `patterns` would get Delete component on the
+ * plugin's Patterns, and one named `components` while the plugin's own is
+ * renamed would get it on the renamed collection, while the delete itself
+ * acts on the host's. Ambiguous either way, so refused, naming both, rather
+ * than guessed. `resolved` is the plugin's collections as the site renamed
+ * them, known from `init`; without it, only the declared names are judged.
+ */
+function refuseStoreSharingAPluginSlug(
+  store: ComponentStore,
+  declared: readonly string[],
+  resolved?: Readonly<Record<string, string | undefined>>
+): void {
+  const slug = store.collection;
+  if (slug === undefined) return;
+  if (slug === COMPONENTS_SLUG) {
+    const renamed = resolved?.[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+    if (renamed === COMPONENTS_SLUG) return;
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", but the Page Builder's own Components collection is renamed to "${renamed}". Leave componentReadiness.collection unset to keep components in the plugin's collection, or give the host's store a slug the Page Builder does not declare.`
+    );
+  }
+  if (declared.includes(slug)) {
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", which is also a collection the Page Builder declares. A component store of the host's own needs a slug of its own: rename the host's collection, or leave componentReadiness.collection unset to use the plugin's Components collection.`
+    );
+  }
+}
+
+/**
+ * A host's own component store's slug, or `undefined` when the store is the
+ * plugin's own collection.
+ */
+function hostStoreOf(store: ComponentStore): string | undefined {
+  return store.collection === undefined || storeIsOwn(store)
+    ? undefined
+    : store.collection;
 }
 
 /**
@@ -788,6 +864,11 @@ function adminClientConfig(
       ? {}
       : { remotePatterns: opts.remotePatterns }),
     ...(opts.checklist === undefined ? {} : { checklist: opts.checklist }),
+    // A host's own component store, by slug, for the delete tools the header
+    // draws for its list. A slug, nothing secret.
+    ...(hostStoreOf(componentStoreOf(opts)) === undefined
+      ? {}
+      : { componentStore: hostStoreOf(componentStoreOf(opts)) }),
     // The canvas route's path, which the editor loads its frame from. A path,
     // never a secret: the route serves an empty page.
     ...(canvasPath === undefined ? {} : { canvasPath }),
@@ -1836,6 +1917,13 @@ export const pageBuilder = (
     // because the factory is memoized for the boot and clears only on its
     // first resolution.
     init: ctx => {
+      // The store judged again against the site's renames, before anything
+      // is wired to it.
+      refuseStoreSharingAPluginSlug(
+        componentStoreOf(opts),
+        [],
+        ctx.self.collections
+      );
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
@@ -2491,7 +2579,10 @@ export const pageBuilder = (
           )
         ),
         patternsCollection(),
-        componentsCollection(),
+        // The plugin's own collection is the store unless the host names one.
+        componentsCollection({
+          isStore: storeIsOwn(componentStoreOf(opts)),
+        }),
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
@@ -2937,6 +3028,22 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // Delete component on the component store, wherever it is: the
+        // plugin's own collection (followed through a rename, as every view
+        // key is), or the host's store named by `componentReadiness`. The
+        // document's own Delete opens the Delete component dialog in its
+        // place, keeping its row, its permission and every reason it can't
+        // run (a past version on screen, a colleague's claim). A host's store
+        // also gets the delete tools above its list, for the row action; the
+        // plugin's own collection declares them itself.
+        views: deleteComponentViews(componentStoreOf(opts)),
+        // A host's own store's list gets Delete component on each row through
+        // tools drawn in the header, which is on every page: the slot above a
+        // list is the host's own to fill, and a second one there would be
+        // dropped. Its slug reaches them through `clientConfig`.
+        ...(hostStoreOf(componentStoreOf(opts)) === undefined
+          ? {}
+          : { header: { slot: COMPONENT_STORE_DELETE_HOST_COMPONENT } }),
         menu: [
           {
             label: "Patterns",
@@ -2973,5 +3080,12 @@ export const pageBuilder = (
   sitesQueries.set(plugin, {
     definitionOf: name => namedQueries.definitionOf(name),
   });
+  // A host's component store must not share a slug with the plugin's own
+  // collections: refused while the config is read, before anything is keyed
+  // by it. A rename is judged again in `init`, once it is known.
+  refuseStoreSharingAPluginSlug(
+    componentStoreOf(opts),
+    (plugin.contributes?.collections ?? []).map(collection => collection.slug)
+  );
   return plugin;
 };

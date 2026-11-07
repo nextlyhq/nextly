@@ -849,6 +849,14 @@ export const SHARED_STYLE_UNCOUNTABLE_REMOVAL =
 export const SHARED_STYLE_UNUSED_UNCERTAIN =
   "Some uses could not all be counted, so some styles can't be called unused yet.";
 
+/**
+ * What a removal's confirmation says the count cannot see. The count reads
+ * only the styles chosen in the editor; a class written by hand elsewhere is
+ * invisible to it, so a zero is what the editor knows, not a promise.
+ */
+export const SHARED_STYLE_UNCOUNTED_USES =
+  "A class written by hand, in custom code, an HTML attribute or another plugin, isn't counted.";
+
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =
   "Some pages haven't been counted yet, so these numbers are minimums.";

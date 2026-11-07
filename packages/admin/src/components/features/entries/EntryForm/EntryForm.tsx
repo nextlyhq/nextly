@@ -860,7 +860,12 @@ export function EntryForm({
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
   // field, not through the route guard the full editor sits behind.
-  const canDelete = useCan(`delete-${collectionSlug}`);
+  // A collection whose entries are deleted through an action of their own
+  // (`admin.disableDelete`) is offered no Delete of its own here, unless a
+  // plugin replaces that Delete with its action (below): the server refuses
+  // the plain delete.
+  const mayDelete = useCan(`delete-${collectionSlug}`);
+  const canDelete = mayDelete && collection.admin?.disableDelete !== true;
   // The modals send no language, so the server writes the default one: a
   // create is answered so already, and an update by its own cell.
   const canCreate = useCan(`create-${collectionSlug}`);
@@ -1150,7 +1155,12 @@ export function EntryForm({
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
     // No handler, no Delete: the action bar draws no action it cannot run.
-    ...(canDelete ? { onDelete: handleDelete } : {}),
+    // A plugin's replacement keeps the row (and its permission and holds),
+    // so it needs the built-in Delete to replace.
+    ...(canDelete ||
+    (mayDelete && pluginSurfaces.actionOverrides.delete?.kind === "replaced")
+      ? { onDelete: handleDelete }
+      : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
 
