@@ -146,6 +146,14 @@ export type {
   PublicSourceReader,
 } from "./runtime/routing/public-reader";
 
+// The frame a page builder named query's `run` executes in: inside it, the
+// Direct API refuses every call, and only the reader handed to the query
+// reads, through the frame's door. `@experimental` with named queries.
+export {
+  openNamedQueryFrame,
+  type NamedQueryFrame,
+} from "./auth/named-query-scope";
+
 // The reader a page builder's canvas reads the same lists with: the same
 // queries, read as the person editing, drafts included. `@experimental` with
 // the public reader.

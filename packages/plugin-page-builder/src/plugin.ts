@@ -1,15 +1,23 @@
 import {
   allBlocks,
+  createNamedQueryRegistry,
   breakpointContexts,
   DEFAULT_LIMITS,
+  namedQueryDeclaration,
   resolveSiteTokens,
   tokenIdentity,
   type DocumentLimits,
   type NamedClass,
+  type NamedQueryDefinition,
+  type NamedQueryRegistry,
+  type NamedQuerySource,
   type RemotePattern,
   type RetiredExposures,
 } from "@nextlyhq/blocks-engine";
-import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
+import {
+  COMPONENT_DOCUMENT_FIELD,
+  type NamedQueryLookup,
+} from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   NextlyError,
@@ -159,6 +167,7 @@ import {
 } from "./library-route";
 import { listEntriesRoute } from "./list-entries-route";
 import { loopCollectionsRoute } from "./loop-collections-route";
+import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pageActionsRoute } from "./page-actions-route";
@@ -480,6 +489,14 @@ export interface PageBuilderOptions {
    * Left unset, both use the engine defaults and agree by construction.
    */
   limits?: DocumentLimits;
+  /**
+   * The site's named queries: a collection list's custom sources, made with
+   * `defineNamedQuery` from `@nextlyhq/plugin-sdk/blocks`. Registered on each
+   * boot beside the ones plugins declare, all or nothing.
+   *
+   * @experimental
+   */
+  namedQueries?: readonly NamedQueryDefinition[];
   /**
    * Where component definitions live: what publishing a page checks when it
    * warns that some are not live, and what the EDITOR reads to draw them.
@@ -1241,6 +1258,28 @@ function singlesDeclaringBlocksIn(
   return found;
 }
 
+/** The named queries each page builder this process made registers. */
+const sitesQueries = new WeakMap<PluginDefinition, NamedQueryLookup>();
+
+/**
+ * The named queries the page builder `plugin` registers for its site, run
+ * functions included: what a route rendering that site's pages takes as its
+ * `namedQueries`. Bound to that one page builder, so two sites served from
+ * one process never resolve each other's queries. Nothing for a plugin that
+ * is not a page builder.
+ *
+ * ```ts
+ * export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
+ * // app/[...slug]/page.tsx
+ * createBlocksPage({ ..., namedQueries: namedQueriesOf(builder) });
+ * ```
+ *
+ * @experimental
+ */
+export function namedQueriesOf(plugin: PluginDefinition): NamedQueryLookup {
+  return sitesQueries.get(plugin) ?? { definitionOf: () => undefined };
+}
+
 export const pageBuilder = (
   opts: PageBuilderOptions = {}
 ): PluginDefinition => {
@@ -1259,6 +1298,19 @@ export const pageBuilder = (
    * and every pass resolves the API itself.
    */
   let installed: BackfillHost | null = null;
+  // This page builder's named queries: the site's own from the start, so a
+  // route built before boot already knows them, and rebuilt with the ones
+  // plugins declare on each boot. Its own, so two sites in one process never
+  // resolve each other's.
+  let namedQueries: NamedQueryRegistry = createNamedQueryRegistry();
+  namedQueries.register(opts.namedQueries ?? [], {
+    source: "pageBuilder({ namedQueries })",
+  });
+  const namedQuerySource: NamedQuerySource = {
+    declarationOf: name => namedQueries.declarationOf(name),
+  };
+  const namedQueryDeclarations = () =>
+    namedQueries.all().map(namedQueryDeclaration);
 
   /**
    * What the default-Layout repair needs from the installed plugin: the
@@ -1620,7 +1672,7 @@ export const pageBuilder = (
         removalLogger?.error(message, meta),
     },
   };
-  return definePlugin({
+  const plugin = definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
@@ -1674,6 +1726,9 @@ export const pageBuilder = (
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // The site's named queries and the ones plugins declare, into a
+      // registry emptied for this boot.
+      namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
       refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
@@ -1802,6 +1857,8 @@ export const pageBuilder = (
         // collection's declared fields from its record, and the ones the
         // public may read as a published page's bindings are judged. Read per
         // write, so a field hidden a moment ago is refused at the next save.
+        // This site's named queries, for a list whose source is one.
+        namedQueries: namedQuerySource,
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -2169,6 +2226,7 @@ export const pageBuilder = (
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
             templates: { guard: requireTemplateGuard },
+            namedQueries: namedQueryDeclarations,
           }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
@@ -2432,6 +2490,7 @@ export const pageBuilder = (
         manifestRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          namedQueries: namedQueryDeclarations,
         }),
         // Detach, duplicate and update a pattern, each with a dry run.
         ...componentActionRoutes({
@@ -2451,6 +2510,9 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
+        // The site's named queries, without their run functions: what the
+        // editor offers as a list's custom sources.
+        namedQueriesRoute(namedQueryDeclarations),
         // A collection list's entries on the canvas, read as the author asking
         // reads them, drafts included, for a collection they may read.
         listEntriesRoute(),
@@ -2672,4 +2734,11 @@ export const pageBuilder = (
       },
     },
   });
+  // The route a site renders its pages with reads this page builder's own
+  // queries through `namedQueriesOf`: bound to this definition, never to a
+  // registry another site's boot can replace.
+  sitesQueries.set(plugin, {
+    definitionOf: name => namedQueries.definitionOf(name),
+  });
+  return plugin;
 };

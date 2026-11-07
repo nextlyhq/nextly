@@ -40,6 +40,10 @@ The manifest describes what the caller may compose with, read as the caller:
   choose it.
 - **`actions`**: the actions below, each with its `path`, every `kind` it takes and the
   JSON Schema of its `request` body.
+- **`namedQueries`**: the site's [named queries](/docs/page-builder/named-queries), each
+  with its `name`, `label`, `description`, the JSON Schema of the `params` a list may set
+  for it, its `rows` (a collection, or a `key` and `fields`) and whether it counts its
+  `total`. The run function is never included.
 
 Each part says whether the caller could read it. A part whose collection the caller may
 not read answers `readable: false` with no items, and the rest is still answered.
@@ -107,15 +111,15 @@ on the page's collection. A collection with a Draft/Published lifecycle but no w
 drafts saves an edit straight onto the published entry, so there the caller needs
 **publish** too. `action` is one of:
 
-| `kind`                 | Fields                                      | What it does                                                                                                                    |
-| ---------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `insert-pattern`       | `patternId`, `at?`                          | Copies a published pattern's blocks into the page, as the editor's insert panel does.                                           |
-| `place-component`      | `componentId`, `variant?`, `values?`, `at?` | Places a component by reference, with a variant's id and values keyed by exposed field id.                                      |
-| `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                               |
-| `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                            |
-| `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
-| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`. See below.       |
-| `set-conditions`       | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                              |
+| `kind`                 | Fields                                      | What it does                                                                                                                            |
+| ---------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `insert-pattern`       | `patternId`, `at?`                          | Copies a published pattern's blocks into the page, as the editor's insert panel does.                                                   |
+| `place-component`      | `componentId`, `variant?`, `values?`, `at?` | Places a component by reference, with a variant's id and values keyed by exposed field id.                                              |
+| `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                                       |
+| `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                                    |
+| `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only.         |
+| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`, `namedQuery`. See below. |
+| `set-conditions`       | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                                      |
 
 `at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
 inside a block; without it the block goes at the end of the page. The answer holds the
@@ -140,6 +144,15 @@ field holding several values, a related list nested more than one level deep, an
 into pages the page cannot serve (a second list split into pages, one inside another list,
 one of related entries, one in a component or a Layout region) are refused, in the words the
 editor shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
+
+`namedQuery` is a custom source: `{ "name", "params" }`, a [named query](/docs/page-builder/named-queries)
+the site registers and a text, number or yes-or-no value for each of its inputs, replaced
+whole rather than merged. It is the list's whole source, so setting it removes
+`collection`, `relation`, `filters` and `sort` in the same write, and a change that sets
+both is refused. Setting `collection` or `relation` removes it. A missing required input,
+a value an input does not take and a query the site does not register are refused, for
+example `Choose a city. Upcoming events needs one to run.` A plugin makes the same change
+through the `composition` service's `pageAction`.
 
 `set-conditions` sets the visibility conditions of the block whose id is `nodeId`.
 `conditions` is a list of groups, each a list of `{ "field", "op", "value"? }`: the block

@@ -919,6 +919,9 @@ function sourceHiddenFromVisitors(
   shapes: BlocksFieldShapes,
   ref: BindingSchemaRef
 ): boolean {
+  // A custom source's rows are read as visitors read them and cut to the
+  // fields its query declares, so they are never a source visitors can't see.
+  if ("query" in ref) return false;
   if ("site" in ref || !noPublicFields(shapes, ref)) return false;
   if ("single" in ref) {
     return (bindings.singles?.get(ref.single) ?? null) !== null;

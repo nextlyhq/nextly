@@ -28,6 +28,8 @@ import {
   type ComponentDocument,
   type DocumentLimits,
   type RegionArea,
+  namedQueryDeclaration,
+  type NamedQueryDeclaration,
 } from "@nextlyhq/blocks-engine";
 import {
   DEFINITION_ACTION_KINDS,
@@ -61,6 +63,7 @@ import {
   readPatternLibrary,
   type ComponentStore,
 } from "./library-route";
+import { namedQueryParamsSchema } from "./named-queries";
 import { pageActionRequestJsonSchema } from "./page-actions-route";
 import { TEMPLATE_ACTIONS_ROUTE_PATH } from "./templates/template-actions-contract";
 import { templateActionRequestJsonSchema } from "./templates/template-actions-route";
@@ -151,6 +154,32 @@ export interface ManifestAction {
   readonly request: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * One named query a `set-list-query` action may set as a list's custom
+ * source, without its run function: its inputs as a JSON Schema object, and
+ * what its rows are.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ManifestNamedQuery {
+  readonly name: string;
+  readonly label: string;
+  readonly description?: string;
+  /** What a list's `namedQuery.params` may hold. */
+  readonly params: Readonly<Record<string, unknown>>;
+  readonly rows:
+    | { readonly collection: string }
+    | {
+        readonly key: string;
+        readonly fields: readonly {
+          readonly name: string;
+          readonly type: string;
+        }[];
+      };
+  /** Whether it returns how many rows match before the window. */
+  readonly total: boolean;
+}
+
 /** @experimental Settles when the composition API ships. */
 export interface CompositionManifest {
   readonly formatVersion: typeof MANIFEST_FORMAT_VERSION;
@@ -170,6 +199,8 @@ export interface CompositionManifest {
     readonly defaultLayout: string | null;
   };
   readonly actions: readonly ManifestAction[];
+  /** The site's named queries, which a list's `namedQuery` may name. */
+  readonly namedQueries: readonly ManifestNamedQuery[];
 }
 
 const text = z.string();
@@ -251,12 +282,30 @@ export const compositionManifestSchema: z.ZodType<CompositionManifest> =
         request: z.record(z.string(), z.unknown()),
       })
     ),
+    namedQueries: z.array(
+      z.strictObject({
+        name: id,
+        label: text,
+        description: text.optional(),
+        params: z.record(z.string(), z.unknown()),
+        rows: z.union([
+          z.strictObject({ collection: id }),
+          z.strictObject({
+            key: id,
+            fields: z.array(z.strictObject({ name: id, type: text })),
+          }),
+        ]),
+        total: z.boolean(),
+      })
+    ),
   });
 
 /** What the manifest reads with besides the caller. */
 export interface ManifestSetup {
   readonly store?: ComponentStore;
   readonly limits?: () => DocumentLimits;
+  /** This site's named queries; none are listed when absent. */
+  readonly namedQueries?: () => readonly NamedQueryDeclaration[];
 }
 
 /** What a manifest read is asked for. */
@@ -304,6 +353,34 @@ export async function readCompositionManifest(
     components,
     layouts: { defaultLayout: null, ...layouts },
     actions: manifestActions(),
+    namedQueries: (setup.namedQueries?.() ?? []).map(manifestNamedQuery),
+  };
+}
+
+/** One registered query as the manifest lists it, without its run function. */
+function manifestNamedQuery(
+  definition: NamedQueryDeclaration
+): ManifestNamedQuery {
+  const declaration = namedQueryDeclaration(definition);
+  const rows = declaration.rows;
+  return {
+    name: declaration.name,
+    label: declaration.label,
+    ...(declaration.description === undefined
+      ? {}
+      : { description: declaration.description }),
+    params: namedQueryParamsSchema(declaration),
+    rows:
+      "fields" in rows
+        ? {
+            key: rows.key,
+            fields: rows.fields.map(field => ({
+              name: field.name,
+              type: field.type,
+            })),
+          }
+        : { collection: rows.collection },
+    total: declaration.total === true,
   };
 }
 
