@@ -375,6 +375,7 @@ describe("every default the core library declares", () => {
       "core/quote#attribution",
       "core/quote#quotation",
       "core/table-of-contents#item",
+      "core/table-of-contents#link",
       "core/table-of-contents#list",
       "core/table-of-contents#note",
       "core/table-of-contents#sublist",
