@@ -115,6 +115,7 @@ import {
   ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
@@ -4166,6 +4167,12 @@ export const pageBuilder = (
               {
                 title: "Own designs",
                 component: TEMPLATE_OWN_DESIGNS_COMPONENT,
+              },
+              // On an own design instead: the entry it serves and the
+              // template it was copied from, which the form does not draw.
+              {
+                title: "Own design",
+                component: TEMPLATE_DESIGN_DETAILS_COMPONENT,
               },
             ],
           },

@@ -54,6 +54,7 @@ import { useMemo, useState, type JSX, type ReactNode } from "react";
 
 import type { TemplateAction } from "../templates/template-actions-contract";
 
+import { DESTRUCTIVE_CONFIRM_CLASS } from "./destructive-confirm";
 import { DryRunVerdictWords, useDryRunVerdict } from "./dry-run-verdict";
 import {
   builderHref,
@@ -434,6 +435,8 @@ function OwnDesign({
             <Button
               type="button"
               variant="destructive"
+              // The page builder's confirming red, as its other dialogs take.
+              className={DESTRUCTIVE_CONFIRM_CLASS}
               // Offered only once the dry run says the site would accept it,
               // and never while the document's changes are held.
               disabled={removing || held || verdict.kind !== "allowed"}

@@ -33,6 +33,12 @@ export const TEMPLATE_ENTRY_COLLECTION_FIELD = "entryCollection";
 /** The field an entry's own design names the one entry it serves in, by id. */
 export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
 
+/** The field holding the key of the entry an own design serves, unique. */
+export const TEMPLATE_ENTRY_FIELD = "entry";
+
+/** The field naming the template an own design was copied from. */
+export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
+
 /**
  * The fields a template names the collection it draws in, in order: a
  * collection's template by `collection`, an entry's own design by
@@ -42,6 +48,14 @@ export const TEMPLATE_TARGET_FIELDS: readonly string[] = [
   TEMPLATE_COLLECTION_FIELD,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
 ];
+
+/**
+ * The text field whose value is an entry's part of its address: a collection
+ * with none has nothing to serve an entry at, so it may have no template. The
+ * guard refuses one by it, and the template form offers only the collections
+ * that declare it.
+ */
+export const TEMPLATE_ENTRY_ADDRESS_FIELD = "slug";
 
 /** Where the entries a template may preview are listed. */
 export const TEMPLATE_PREVIEW_ENTRIES_PATH = "/template-preview/entries";

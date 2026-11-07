@@ -21,7 +21,9 @@ import { blocks } from "../fields/blocksHelper";
 import {
   TEMPLATE_COLLECTION_FIELD,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_FIELD,
   TEMPLATE_ENTRY_ID_FIELD,
+  TEMPLATE_FORKED_FROM_FIELD,
 } from "../templates/template-preview-contract";
 import {
   mayManageTemplateRouting,
@@ -53,10 +55,10 @@ export const TEMPLATE_CONTENT_FIELD = "content";
  * so a collection's own designs are one query. `forkedFrom` is the base
  * template it was copied from, emptied when that template is deleted.
  */
-export const TEMPLATE_ENTRY_FIELD = "entry";
+export { TEMPLATE_ENTRY_FIELD };
 export { TEMPLATE_ENTRY_COLLECTION_FIELD };
 export { TEMPLATE_ENTRY_ID_FIELD };
-export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
+export { TEMPLATE_FORKED_FROM_FIELD };
 
 /**
  * The key an entry's own design is held under: its collection and id, each
@@ -72,6 +74,14 @@ export function entryDesignKey(collection: string, id: string): string {
  */
 export const TEMPLATE_ADDRESS_FIELD_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#TemplateAddressField";
+
+/**
+ * The control the template form draws its collection with: the collection's
+ * name, read-only once the template exists, and a choice of collections by
+ * name while it is being made.
+ */
+export const TEMPLATE_COLLECTION_FIELD_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#TemplateCollectionField";
 
 export function templatesCollection(): CollectionConfig {
   return defineCollection({
@@ -92,10 +102,21 @@ export function templatesCollection(): CollectionConfig {
         // plugin's: the database refuses a second template for a collection.
         unique: true,
         admin: {
+          // Drawn by its name ("Posts") rather than its slug.
+          component: TEMPLATE_COLLECTION_FIELD_COMPONENT,
+          // A collection's template only: an entry's own design names no
+          // collection, and its panel says whose entry it serves.
+          condition: { field: TEMPLATE_ENTRY_FIELD, equals: "" },
           description:
             "The collection whose entries this template draws. A collection has one template, and it cannot be changed once the template exists.",
         },
       }),
+      // The four fields below are the plugin's own bookkeeping, written as the
+      // system when an own design is made and when its template is deleted,
+      // and never by an author. So the form does not draw them: `hidden` is
+      // the form's alone, and every write path, the guard and the reads keep
+      // them as before. An own design's panel shows them, read-only, under
+      // "Own design".
       text({
         name: TEMPLATE_ENTRY_FIELD,
         label: "Entry",
@@ -103,6 +124,7 @@ export function templatesCollection(): CollectionConfig {
         // whichever path the write takes.
         unique: true,
         admin: {
+          hidden: true,
           description:
             "The entry this design serves, when it is an entry's own design rather than its collection's template. Set when it is made, and never changed.",
         },
@@ -111,13 +133,19 @@ export function templatesCollection(): CollectionConfig {
         name: TEMPLATE_ENTRY_COLLECTION_FIELD,
         label: "Entry's collection",
         index: true,
+        admin: { hidden: true },
       }),
-      text({ name: TEMPLATE_ENTRY_ID_FIELD, label: "Entry id" }),
+      text({
+        name: TEMPLATE_ENTRY_ID_FIELD,
+        label: "Entry id",
+        admin: { hidden: true },
+      }),
       // Indexed: deleting a template finds the designs copied from it by it.
       text({
         name: TEMPLATE_FORKED_FROM_FIELD,
         label: "Copied from",
         index: true,
+        admin: { hidden: true },
       }),
       text({
         name: TEMPLATE_ADDRESS_FIELD,

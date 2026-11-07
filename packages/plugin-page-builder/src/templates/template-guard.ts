@@ -38,7 +38,10 @@ import {
   isEntryDesign,
   withoutEmptyEntryFields,
 } from "./entry-designs";
-import { TEMPLATE_TARGET_FIELDS } from "./template-preview-contract";
+import {
+  TEMPLATE_ENTRY_ADDRESS_FIELD,
+  TEMPLATE_TARGET_FIELDS,
+} from "./template-preview-contract";
 import { templateTargetOf } from "./template-target";
 import {
   addressRefusal,
@@ -253,7 +256,7 @@ export type CollectionRecordRead = (
 ) => Promise<Record<string, unknown> | null>;
 
 /** The field whose value is an entry's part of its address. */
-const ENTRY_ADDRESS_FIELD = "slug";
+const ENTRY_ADDRESS_FIELD = TEMPLATE_ENTRY_ADDRESS_FIELD;
 
 /**
  * Why `collection` cannot have a template, or `null` when it can.
