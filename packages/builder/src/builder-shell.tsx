@@ -274,8 +274,9 @@ export interface BuilderShellProps {
    * A strip pinned along the top of the canvas, above the page and outside
    * the region that scrolls it, so it stays in view while the page scrolls
    * under it: what the canvas is drawn with, where that is the author's to
-   * choose (the entry a template is previewed with). Absent, the canvas
-   * keeps the whole region.
+   * choose (the entry a template is previewed with). Absent, or a node that
+   * draws nothing (`null`, `false`), the canvas keeps the whole region, so
+   * conditional JSX never leaves an empty band.
    *
    * @experimental Settles when collection templates ship.
    */
@@ -1505,6 +1506,15 @@ function CanvasRegion({
 }
 
 /**
+ * Whether a host's node draws anything: `undefined`, `null` and a boolean
+ * (what `cond && <Strip />` leaves) draw nothing, so no slot is made for
+ * them.
+ */
+function drawsSomething(node: React.ReactNode): boolean {
+  return node !== undefined && node !== null && typeof node !== "boolean";
+}
+
+/**
  * The canvas panel's contents: the strip, where the host gives one, above the
  * canvas's region rather than inside it (the region is what scrolls, so the
  * strip stays pinned while the page scrolls under it, inset by the canvas's
@@ -1524,7 +1534,7 @@ function CanvasPanelBody({
 }): React.JSX.Element {
   return (
     <div className="flex h-full flex-col">
-      {canvasStrip === undefined ? null : (
+      {!drawsSomething(canvasStrip) ? null : (
         <div
           className="nx-canvas-strip-slot shrink-0"
           style={{
