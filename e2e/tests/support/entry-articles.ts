@@ -82,10 +82,37 @@ export async function articlesTemplate(
   }
   if (id === undefined) throw new Error("[e2e] No entry-articles template.");
   const designed = await api.patch(`${TEMPLATES}/${id}`, {
-    data: { content, ...(publish ? { status: "published" } : {}) },
+    data: {
+      content,
+      ...(publish ? { status: "published" } : {}),
+      // The version this change is made from, read just before it: an
+      // update says which version it changes, or is refused as unversioned.
+      _rev: await templateVersion(api, id),
+    },
   });
   expect(designed.ok(), await designed.text()).toBe(true);
   return id;
+}
+
+/** The template `id`'s version as stored now, its `_rev`. */
+async function templateVersion(
+  api: APIRequestContext,
+  id: string
+): Promise<string> {
+  const read = await api.get(`${TEMPLATES}/${id}`);
+  expect(read.ok(), await read.text()).toBe(true);
+  // The entry as the route answers it, bare or in a mutation's envelope.
+  const body = (await read.json()) as {
+    _rev?: unknown;
+    item?: { _rev?: unknown };
+  };
+  const rev = body.item?._rev ?? body._rev;
+  if (typeof rev !== "string") {
+    throw new Error(
+      "[e2e] The entry-articles template was read with no version."
+    );
+  }
+  return rev;
 }
 
 /** A published article, with its blocks fields as given; its id. */
