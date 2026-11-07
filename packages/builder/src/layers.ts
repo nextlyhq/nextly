@@ -43,11 +43,12 @@ import {
   COLLECTION_LIST_TYPE,
   hiddenOnDevice,
   isComponentInstance,
-  isConditionGated,
   type BlockDocument,
   type BlockNode,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
+
+import { gatedAsStored } from "./condition-gate";
 
 import { blockLabel, type SavedComponent } from "./inserter";
 import { storedComponentId } from "./placement-props";
@@ -224,7 +225,7 @@ function hiddenAtSomeBreakpoint(node: BlockNode): boolean {
  * through) not.
  */
 function hasConditions(node: BlockNode): boolean {
-  return isConditionGated(node);
+  return gatedAsStored(node);
 }
 
 /**

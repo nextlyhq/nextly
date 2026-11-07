@@ -20,7 +20,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { Canvas } from "./canvas";
+import { CANVAS_ROOT_CLASS, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import { markLookReach } from "./look-reach";
@@ -353,6 +353,79 @@ describe("selection marks", () => {
       "Conditional",
       "Can’t be checked",
     ]);
+  });
+
+  it("draws one badge for a conditioned placement whose definition has several roots", async () => {
+    // A placement is drawn as its definition's roots, each carrying the
+    // placement's address and each outermost for it, with no wrapper: marked
+    // here as the canvas marks them.
+    const part = (id: string) =>
+      createElement("div", {
+        key: id,
+        [NODE_ID_ATTRIBUTE]: id,
+        [INSTANCE_ATTRIBUTE]: "place",
+        [CONDITIONED_ATTRIBUTE]: "conditional",
+      });
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {part("root-1")}
+        {part("root-2")}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+      ).toHaveLength(1)
+    );
+  });
+
+  it("puts a tall block's badge inside its top when neither edge outside it is on screen", async () => {
+    // The screen shows 500px; the block starts at its top and runs past its
+    // bottom, so a badge above or below it would be off screen.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 1000, 500);
+        }
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "tall") return new DOMRect(0, 4, 1000, 1800);
+        if (id === "short") return new DOMRect(0, 200, 1000, 50);
+        return new DOMRect(0, 0, 1000, 2000);
+      }
+    );
+    const gated = (id: string) => ({
+      id,
+      type: "acme/leaf",
+      version: 1,
+      props: {},
+      visibility: {
+        conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+      },
+    });
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <Canvas
+          document={{
+            formatVersion: 1,
+            kind: "page",
+            nodes: [gated("tall"), gated("short")] as never,
+          }}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={<CanvasMarks />}
+        />
+      </div>
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+      );
+    await waitFor(() => expect(badges()).toHaveLength(2));
+    expect(
+      badges().map(badge => badge.getAttribute("data-condition-tag"))
+    ).toEqual(["inside", "above"]);
   });
 
   it("draws a dashed reach mark on each block a look edit reaches, and clears it", async () => {

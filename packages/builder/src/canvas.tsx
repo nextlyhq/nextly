@@ -31,7 +31,6 @@
 
 import {
   findNode,
-  isConditionGated,
   PAGE_ROOT_CLASS,
   previewStateClass,
   resolveSiteTokens,
@@ -75,7 +74,12 @@ import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { guardCanvasNavigation } from "./canvas-link-guard";
-import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
+import {
+  CANVAS_REGION_CLASS,
+  CanvasRegionFrame,
+  type CanvasRegion,
+} from "./canvas-regions";
+import { gatedAsStored } from "./condition-gate";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import {
@@ -172,7 +176,7 @@ function conditionMarksOf(
 ): Map<string, ConditionMark> {
   const marks = new Map<string, ConditionMark>();
   walkNodes(document.nodes, node => {
-    if (!isConditionGated(node)) return;
+    if (!gatedAsStored(node)) return;
     marks.set(
       node.id,
       unchecked?.has(node.id) === true ? "unchecked" : "conditional"
@@ -726,10 +730,13 @@ function useCanvasMarkers(
         );
         // On the block's own outermost element, so a block a list draws once
         // per entry is marked once per copy and its parts are not marked again.
+        // The page's blocks only: a Layout region drawn around it is a
+        // document of its own, whose ids may repeat the page's.
         setMark(
           element,
           CONDITIONED_ATTRIBUTE,
           address === null ||
+            element.closest(`.${CANVAS_REGION_CLASS}`) !== null ||
             !isOutermostForAddress(element, address, container)
             ? undefined
             : conditionMarks.get(address)

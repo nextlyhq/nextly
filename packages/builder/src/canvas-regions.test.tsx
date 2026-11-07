@@ -13,6 +13,7 @@ import {
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useBlockEnvironment } from "@nextlyhq/blocks-react/environment";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -30,8 +31,8 @@ import {
   vi,
 } from "vitest";
 
-import { CHROME_ATTRIBUTE, Canvas } from "./canvas";
-import type { CanvasRegion } from "./canvas-regions";
+import { CHROME_ATTRIBUTE, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
+import { CANVAS_REGION_CLASS, type CanvasRegion } from "./canvas-regions";
 
 afterEach(cleanup);
 
@@ -166,6 +167,42 @@ describe("the regions of a page's Layout on the canvas", () => {
     expect(text.indexOf("Top")).toBeGreaterThanOrEqual(0);
     expect(text.indexOf("Top")).toBeLessThan(text.indexOf("Page body"));
     expect(text.indexOf("Bottom")).toBeGreaterThan(text.indexOf("Page body"));
+  });
+
+  it("keeps the page's condition badges off a region whose block shares a page block's id", async () => {
+    // Ids are unique within a document, not across the page and its Layout:
+    // the header's block is "t", and so is the page's conditioned one.
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "t",
+                type: "acme/text",
+                version: 1,
+                props: { text: "Conditioned body" },
+                visibility: {
+                  conditions: [[{ field: "tier", op: "exists" }]],
+                },
+              },
+            ],
+          } as unknown as BlockDocument
+        }
+        siteStyles={sheet as never}
+        regions={[regionOf("header", "Top")]}
+        render={{ styleContext: sheet } as never}
+      />
+    );
+    await act(async () => undefined);
+    const marked = Array.from(
+      document.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    );
+    // CONTROL: the page's own block is marked.
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.closest(`.${CANVAS_REGION_CLASS}`)).toBeNull();
   });
 
   it("emits the site sheet once, from the first part drawn", () => {

@@ -3937,6 +3937,13 @@
   bottom: auto;
 }
 
+/* A block taller than what's on screen: inside its top edge, so it's seen. */
+.nx-canvas-mark[data-condition-tag="inside"] > .nx-canvas-mark__condition {
+  top: 4px;
+  right: 4px;
+  bottom: auto;
+}
+
 .nx-canvas-mark[data-condition="unchecked"] > .nx-canvas-mark__condition {
   border-color: var(--nx-destructive);
   color: var(--nx-destructive);

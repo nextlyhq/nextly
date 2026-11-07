@@ -150,8 +150,8 @@ interface Mark {
   readonly hoverTagInside?: boolean;
   /** A conditioned block's badge: conditional, or conditions it can't check. */
   readonly condition?: "conditional" | "unchecked";
-  /** Where its badge goes: above the block, or below when there's no room. */
-  readonly conditionTag?: "above" | "below";
+  /** Where its badge goes: above the block, below it, or inside its top. */
+  readonly conditionTag?: "above" | "below" | "inside";
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -513,13 +513,7 @@ function gatherPlacement(
   part: Outline,
   look: RingLook
 ): void {
-  const parent = marked.parentElement;
-  let copy = copies.get(parent);
-  if (copy === undefined) {
-    copy = copies.size;
-    copies.set(parent, copy);
-  }
-  const key = `${String(copy)}\u0000${placement}`;
+  const key = `${String(copyOf(copies, marked))}\u0000${placement}`;
   const gathered = placements.get(key);
   if (gathered === undefined) {
     placements.set(key, { placement, parts: [part], ...look });
@@ -740,14 +734,33 @@ function conditionedMarks(
   space: OverlaySpace,
   onScreen: Rect
 ): Mark[] {
-  const found: Mark[] = [];
+  const badges = new Map<
+    string,
+    { condition: "conditional" | "unchecked"; parts: Outline[] }
+  >();
+  const copies = new Map<Element | null, number>();
   root.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`).forEach(element => {
     if (element.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
-    const value = element.getAttribute(CONDITIONED_ATTRIBUTE);
-    if (value !== "conditional" && value !== "unchecked") return;
+    const condition = element.getAttribute(CONDITIONED_ATTRIBUTE);
+    if (condition !== "conditional" && condition !== "unchecked") return;
     const outline = outlineOf(element, root, space);
     if (outline === null) return;
-    found.push({
+    // One badge per copy of a placement, as one frame is drawn round a
+    // selected one: each of a definition's roots is outermost for the
+    // placement's address, and they are one block on the page.
+    const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
+    const key =
+      placement === ""
+        ? `block\u0000${String(badges.size)}`
+        : `${String(copyOf(copies, element))}\u0000${placement}`;
+    const gathered = badges.get(key);
+    if (gathered === undefined)
+      badges.set(key, { condition, parts: [outline] });
+    else gathered.parts.push(outline);
+  });
+  return [...badges.values()].map(({ condition, parts }) => {
+    const outline = placementOutline(parts);
+    return {
       ...outline,
       kind: "conditioned",
       secondary: false,
@@ -757,12 +770,37 @@ function conditionedMarks(
       tag: "below",
       tagEdge: "right",
       tagInset: NO_INSET,
-      condition: value,
-      conditionTag:
-        outline.rect.y - onScreen.y < MARK_TAG_HEIGHT ? "below" : "above",
-    });
+      condition,
+      conditionTag: conditionTagOf(outline.rect, onScreen),
+    };
   });
-  return found;
+}
+
+/** Which copy of a placement an element is part of: its parent, numbered. */
+function copyOf(copies: Map<Element | null, number>, element: Element): number {
+  const parent = element.parentElement;
+  let copy = copies.get(parent);
+  if (copy === undefined) {
+    copy = copies.size;
+    copies.set(parent, copy);
+  }
+  return copy;
+}
+
+/**
+ * Where a conditioned block's badge goes: above it where there's room on
+ * screen, else below it, else, for a block taller than what's on screen,
+ * inside its top edge, so the badge is always seen.
+ */
+function conditionTagOf(
+  rect: Rect,
+  onScreen: Rect
+): "above" | "below" | "inside" {
+  if (rect.y - onScreen.y >= MARK_TAG_HEIGHT) return "above";
+  if (rect.y + rect.height + MARK_TAG_HEIGHT <= onScreen.y + onScreen.height) {
+    return "below";
+  }
+  return "inside";
 }
 
 /** A conditioned block's badge: what the canvas says about who sees it. */

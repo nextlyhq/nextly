@@ -361,6 +361,30 @@ type ContentServices = NonNullable<
 
 let contentServices: ContentServices | undefined;
 
+/** Each language's read of the loop collections, one function per language. */
+const loopCollectionReads = new Map<
+  string,
+  NonNullable<ContentServices["listLoopCollections"]>
+>();
+
+/**
+ * The read of the collections a list or condition may name, in a language:
+ * the same function for every caller, so the inspector and the canvas's
+ * condition badges share one read and one answer (`useLoopCollections`
+ * shares a read by the function's identity).
+ */
+function loopCollectionsIn(
+  locale: string | undefined
+): NonNullable<ContentServices["listLoopCollections"]> {
+  const key = locale ?? "";
+  let read = loopCollectionReads.get(key);
+  if (read === undefined) {
+    read = () => listLoopCollections(locale);
+    loopCollectionReads.set(key, read);
+  }
+  return read;
+}
+
 /**
  * What the inspector's Content tab borrows from the admin: the media library,
  * to choose an image, the shared rich-text editor, and the page builder's
@@ -424,7 +448,7 @@ function servicesFor(
       // as the author reads it.
       findLinkTargets: findLinkTargetsIn(locale),
       // The fields a list may name, as a save in this language judges them.
-      listLoopCollections: () => listLoopCollections(locale),
+      listLoopCollections: loopCollectionsIn(locale),
       // The selected list's "N entries match, so M show", taken from the
       // canvas's own read of the list in this language.
       countListEntries: canvasListReadsIn(locale, userId).count,
@@ -1125,7 +1149,8 @@ function EditorBody<TFieldValues extends FieldValues>({
   // judged with the collections the inspector lists, in this language.
   const conditionServices = useMemo(
     () => ({
-      listLoopCollections: () => listLoopCollections(mount.locale),
+      // The inspector's own function, so both share one read of the list.
+      listLoopCollections: loopCollectionsIn(mount.locale),
       ...(entryCollection === undefined ? {} : { entryCollection }),
     }),
     [mount.locale, entryCollection]

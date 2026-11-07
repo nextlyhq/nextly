@@ -9,8 +9,8 @@
  */
 import {
   conditionIssues,
-  isConditionGated,
   isPlainRecord,
+  walkNodes,
   type BlockDocument,
   type BlockNode,
   type Condition,
@@ -19,6 +19,7 @@ import * as React from "react";
 
 import { useLoopCollections } from "./collection-loop-controls";
 import type { ContentServices, LoopCollection } from "./content-controls";
+import { gatedAsStored } from "./condition-gate";
 import { fieldSourceOf } from "./list-query-controls";
 
 /** Whether a stored value is a condition a row can show: a field and an operator. */
@@ -71,17 +72,13 @@ export function uncheckedConditionIds(
   entryCollection: string | null | undefined
 ): ReadonlySet<string> {
   const found = new Set<string>();
-  const walk = (forest: readonly BlockNode[]): void => {
-    for (const node of forest) {
-      if (isConditionGated(node) && storedGroups(node) === undefined) {
-        found.add(node.id);
-      }
-      for (const children of Object.values(node.slots ?? {})) {
-        if (Array.isArray(children)) walk(children);
-      }
+  // The engine's guarded walk, which tolerates a malformed entry and a tree
+  // deeper than a call stack, as a stored document may be.
+  walkNodes([...nodes], node => {
+    if (gatedAsStored(node) && storedGroups(node) === undefined) {
+      found.add(node.id);
     }
-  };
-  walk(nodes);
+  });
   if (collections === undefined) return found;
   for (const issue of conditionIssues(nodes, {
     fields: fieldSourceOf(collections),

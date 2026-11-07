@@ -6,6 +6,7 @@ import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { uncheckedConditionIds } from "./condition-checks";
+import { gatedAsStored } from "./condition-gate";
 import type { LoopCollection } from "./content-controls";
 
 const POSTS: LoopCollection = {
@@ -43,5 +44,22 @@ describe("the blocks whose conditions the page can't check", () => {
     expect([...uncheckedConditionIds(nodes, undefined, "posts")]).toEqual([
       "unreadable",
     ]);
+  });
+});
+
+describe("whether a stored block's conditions decide who sees it", () => {
+  it("ignores placement gates a stored document holds, as the published page does", () => {
+    const stored = {
+      id: "a",
+      type: "core/text",
+      version: 1,
+      props: {},
+      visibility: { within: ["hidden"] },
+    } as unknown as BlockNode;
+    expect(gatedAsStored(stored)).toBe(false);
+    // CONTROL: its own conditions still decide.
+    expect(
+      gatedAsStored(gated("b", [[{ field: "title", op: "exists" }]]))
+    ).toBe(true);
   });
 });
