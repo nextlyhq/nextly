@@ -127,9 +127,11 @@ export interface EntryClaimsDeps {
   ) => string | null;
   /**
    * Whether `collection` has a Draft/Published lifecycle: without one,
-   * every entry is live, whatever a field named `status` holds.
+   * every entry is live, whatever a field named `status` holds. Read on
+   * `tx`, the write's own transaction, so a save asking takes no second
+   * connection from the pool while it holds one.
    */
-  readonly lifecycle: (collection: string) => Promise<boolean>;
+  readonly lifecycle: (collection: string, tx: Tx) => Promise<boolean>;
   /** The Pages collection's slug, as the host named it. */
   readonly pages: string;
   /** Whether the start-up pass has claimed every existing page. */
@@ -353,7 +355,7 @@ async function claimEntry(
   const wanted =
     address === null
       ? []
-      : await wantedAddresses(deps, holder.collection, address, data);
+      : await wantedAddresses(deps, tx, holder.collection, address, data);
   await claimPagesAt(deps, tx, wanted, "refuse");
   await reconcileHolder(
     deps.claims,
@@ -391,6 +393,7 @@ function servingAddress(
  */
 async function wantedAddresses(
   deps: EntryClaimsDeps,
+  tx: Tx,
   collection: string,
   address: readonly string[],
   data: Row
@@ -399,7 +402,7 @@ async function wantedAddresses(
     data,
     address,
     deps.locales(),
-    await deps.lifecycle(collection)
+    await deps.lifecycle(collection, tx)
   );
   if (wanted === NO_ADDRESS) throw noAddressRefusal(collection, address);
   return wanted;
@@ -596,7 +599,7 @@ async function settleEntries(
 ): Promise<void> {
   const locales = deps.locales();
   await lockCollection(deps.claims, tx, collection);
-  const lifecycle = await deps.lifecycle(collection);
+  const lifecycle = await deps.lifecycle(collection, tx);
   for (let page = 1; ; page += 1) {
     const rows = await deps.publishedEntries(collection, page, BATCH);
     for (const row of rows) {
