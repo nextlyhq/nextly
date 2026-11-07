@@ -152,6 +152,8 @@ interface Mark {
   readonly condition?: "conditional" | "unchecked";
   /** Where its badge goes: above the block, below it, or inside its top. */
   readonly conditionTag?: "above" | "below" | "inside";
+  /** Whether the block is selected, so its ring stands for the outline. */
+  readonly conditionSelected?: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -238,6 +240,7 @@ function markKey(mark: Mark): string {
     hoverTagInside,
     condition,
     conditionTag,
+    conditionSelected,
     radius,
     rect,
   } = mark;
@@ -261,6 +264,7 @@ function markKey(mark: Mark): string {
     hoverTagInside,
     condition,
     conditionTag,
+    conditionSelected === true,
     radius,
     rect.x,
     rect.y,
@@ -736,7 +740,11 @@ function conditionedMarks(
 ): Mark[] {
   const badges = new Map<
     string,
-    { condition: "conditional" | "unchecked"; parts: Outline[] }
+    {
+      condition: "conditional" | "unchecked";
+      parts: Outline[];
+      selected: boolean;
+    }
   >();
   const copies = new Map<Element | null, number>();
   root.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`).forEach(element => {
@@ -753,12 +761,16 @@ function conditionedMarks(
       placement === ""
         ? `block\u0000${String(badges.size)}`
         : `${String(copyOf(copies, element))}\u0000${placement}`;
+    const selected = element.hasAttribute(SELECTED_ATTRIBUTE);
     const gathered = badges.get(key);
-    if (gathered === undefined)
-      badges.set(key, { condition, parts: [outline] });
-    else gathered.parts.push(outline);
+    if (gathered === undefined) {
+      badges.set(key, { condition, parts: [outline], selected });
+    } else {
+      gathered.parts.push(outline);
+      gathered.selected ||= selected;
+    }
   });
-  return [...badges.values()].map(({ condition, parts }) => {
+  return [...badges.values()].map(({ condition, parts, selected }) => {
     const outline = placementOutline(parts);
     return {
       ...outline,
@@ -772,6 +784,7 @@ function conditionedMarks(
       tagInset: NO_INSET,
       condition,
       conditionTag: conditionTagOf(outline.rect, onScreen),
+      ...(selected ? { conditionSelected: true } : {}),
     };
   });
 }
@@ -816,6 +829,21 @@ function ConditionBadge({
       {condition === "unchecked" ? "Can’t be checked" : "Conditional"}
     </span>
   );
+}
+
+/** A conditioned block's badge state, as the stylesheet reads it. */
+function conditionAttributes(mark: Mark): Record<string, string> {
+  return {
+    ...(mark.condition === undefined
+      ? {}
+      : { "data-condition": mark.condition }),
+    ...(mark.conditionTag === undefined
+      ? {}
+      : { "data-condition-tag": mark.conditionTag }),
+    ...(mark.conditionSelected === true
+      ? { "data-condition-selected": "" }
+      : {}),
+  };
 }
 
 /** An exposed part's editing state, as the stylesheet reads it. */
@@ -950,8 +978,7 @@ export function CanvasMarks({
               : nameOf?.(mark.hoveredAddress)?.trim() || undefined
           }
           data-hover-tag-inside={mark.hoverTagInside === true ? "" : undefined}
-          data-condition={mark.condition}
-          data-condition-tag={mark.conditionTag}
+          {...conditionAttributes(mark)}
           style={markStyle(mark)}
         >
           {mark.condition === undefined ? null : (
