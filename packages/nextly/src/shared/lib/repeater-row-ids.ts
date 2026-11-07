@@ -35,10 +35,8 @@
 
 import { randomUUID } from "node:crypto";
 
-import { declaresOwnId } from "../../collections/fields/repeater-row-identity";
 import { extractFieldGroupReferences } from "../../domains/field-groups/storage/field-group-field-type";
 
-import { rowId } from "./denied-change";
 import {
   instanceFields,
   instanceFieldsFor,
@@ -50,6 +48,9 @@ import {
   type FieldGroupReach,
   type NamedField,
 } from "./password-fields";
+import { declaresOwnId } from "../../collections/fields/repeater-row-identity";
+
+import { rowId } from "./denied-change";
 import { sameApartFromIds, type InstanceFieldsOf } from "./same-apart-from-ids";
 
 /** What one walk carries through every level. */

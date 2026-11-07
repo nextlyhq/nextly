@@ -36,8 +36,6 @@ import { AlertCircle, FileText, Plus, Repeat } from "lucide-react";
 import * as React from "react";
 
 import { LoopPicker, useLoopCollections } from "./collection-loop-controls";
-import { storedGroups } from "./condition-checks";
-import { gatedAsStored } from "./condition-gate";
 import {
   asListField,
   booleanValueOf,
@@ -52,6 +50,8 @@ import {
   type ConditionField,
   type DraftCondition,
 } from "./condition-model";
+import { storedGroups } from "./condition-checks";
+import { gatedAsStored } from "./condition-gate";
 import { conditionsOp } from "./condition-ops";
 import type {
   ContentServices,

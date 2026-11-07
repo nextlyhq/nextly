@@ -50,6 +50,7 @@ import {
   TEMPLATE_ENTRY_ID_FIELD,
   TEMPLATE_FORKED_FROM_FIELD,
 } from "../collections/templates";
+import { titleFieldIn } from "../entries-route";
 import {
   actingCaller,
   asCaller,
@@ -65,7 +66,6 @@ import {
   documentVersionOf,
   withVersionFrom,
 } from "../document-version";
-import { titleFieldIn } from "../entries-route";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
 import { readingAsUser } from "../library-route";
