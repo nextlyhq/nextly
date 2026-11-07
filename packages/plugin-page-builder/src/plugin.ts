@@ -2884,15 +2884,20 @@ export const pageBuilder = (
       // Named as a page's save names the document in its way.
       const describeHolder = (tx: Tx) =>
         describeFor({ pages: pagesSlug, readPage }, tx);
-      // A collection's record as the registry answers it, or null.
+      // A collection's record as the registry answers it, or null. Given a
+      // write's transaction, read on that transaction's own connection, so
+      // a save holding the pool's last connection never waits for another.
       const collectionRecord = async (
-        slug: string
+        slug: string,
+        tx?: Tx
       ): Promise<Record<string, unknown> | null> => {
         try {
-          return (await ctx.services.collections.getCollection(
-            slug,
-            undefined as never
-          )) as unknown as Record<string, unknown>;
+          return (await (tx === undefined
+            ? ctx.services.collections.getCollection(slug, undefined as never)
+            : ctx.services.collections.getCollectionInTransaction(
+                tx,
+                slug
+              ))) as unknown as Record<string, unknown>;
         } catch (error) {
           if (NextlyError.isNotFound(error)) return null;
           throw error;
@@ -2936,8 +2941,9 @@ export const pageBuilder = (
         pagesBackfilled: () => pageClaimsBackfilled,
         // The registry's record says whether the collection's entries carry
         // a Draft/Published status, which a field named `status` does not.
-        lifecycle: async collection =>
-          (await collectionRecord(collection))?.status === true,
+        // Asked inside a write's transaction, so read on it.
+        lifecycle: async (collection, tx) =>
+          (await collectionRecord(collection, tx))?.status === true,
         pagesWithSlugs: async slugs => {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;
