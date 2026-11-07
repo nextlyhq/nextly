@@ -19,7 +19,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import type { BlockRenderArgs, PageContext } from "../context";
+import type {
+  BlockRenderArgs,
+  PageContext,
+  ReadClaim,
+  ResolvedMedia,
+} from "../context";
 
 import { MEDIA } from "./categories";
 import { imageLooks } from "./looks";
@@ -31,6 +36,7 @@ import {
   LINK_PROPS,
   linkFor,
   oneOf,
+  readClaimOf,
   text,
   url,
   type LinkAttributes,
@@ -55,19 +61,34 @@ export interface ImageProps extends LinkProps {
   caption?: string;
 }
 
+/**
+ * The media record an image names, or `null` for none. A resolver that
+ * throws must not take the page with it: media lives behind a network call
+ * for a signed-URL host, and one unreachable image is not a reason to lose
+ * the article around it.
+ */
+async function mediaRecordOf(
+  ctx: PageContext,
+  mediaId: string,
+  claim: ReadClaim | undefined
+): Promise<ResolvedMedia | null> {
+  return mediaId === ""
+    ? null
+    : await ctx.resolveMedia(mediaId, claim).catch(() => null);
+}
+
 export async function renderImage({
   props,
   className,
   ctx,
+  node,
   hostPolicy,
   partClass,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
-  const mediaId = text(props.mediaId);
-  // A resolver that throws must not take the page with it: media lives behind
-  // a network call for a signed-URL host, and one unreachable image is not a
-  // reason to lose the article around it.
-  const record =
-    mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
+  // Each read this block makes is claimed as its own, so a page past its
+  // allowance names it among the blocks drawn without their data.
+  const claim = readClaimOf(node);
+  const record = await mediaRecordOf(ctx, text(props.mediaId), claim);
 
   // A candidate has to clear BOTH filters, and both are asked before the two are
   // chosen between rather than after.
@@ -121,7 +142,7 @@ export async function renderImage({
   // Where the picture links, read as the button reads it; the alt text is
   // what names the link.
   const link = await linkFor(props, (collection, id) =>
-    ctx.resolveEntryPath(collection, id)
+    ctx.resolveEntryPath(collection, id, claim)
   );
 
   const image = (

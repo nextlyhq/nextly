@@ -42,6 +42,7 @@ import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
+import { withReadAhead } from "./list-batch";
 import { ListPages } from "./list-pages";
 import {
   listPagesOf,
@@ -428,8 +429,19 @@ export async function renderCollectionLoop({
   // renderer is not counting, which is the editor drawing a single block.
   // The list a route pages had its first read claimed for it before any
   // block was drawn, so it does not claim again.
-  if (paging?.claimed !== true && ctx.queries?.take() === false) {
-    return <div className={className} />;
+  // Past the allowance the list draws what visitors see when nothing
+  // matches, its designed empty state, as a list whose data is missing does.
+  const claim = { kind: "entries", nodeId: node.id } as const;
+  if (paging?.claimed !== true && ctx.queries?.take(claim) === false) {
+    return (
+      <div
+        className={className}
+        {...emptyMarks(ctx, "none")}
+        {...stillMarks(ctx, node.id)}
+      >
+        {renderSlot("empty")}
+      </div>
+    );
   }
   // The count of matching entries, as the read reports it, for the links.
   let matching: number | undefined;
@@ -448,10 +460,13 @@ export async function renderCollectionLoop({
         matching = wholeCount(result.total);
         return Array.isArray(result.items) ? [...result.items] : [];
       },
-      claim: () => ctx.queries?.take() !== false,
+      claim: () => ctx.queries?.take(claim) !== false,
     },
     paging?.page
   );
+  // What the entries' template reads, read ahead for all of them at once, so
+  // the list's cost does not grow with its length.
+  const read = await withReadAhead(outcome, node, ctx, collection);
   // The links between pages, under the entries, when the route pages this
   // list and its read said how many entries it matches.
   const pages = pageLinks(
@@ -462,7 +477,7 @@ export async function renderCollectionLoop({
   );
   return drawList(
     {
-      outcome,
+      outcome: read,
       // An ordinary entry: the item is no named query's row, whatever the
       // list around this one shows.
       itemContext: item => ({

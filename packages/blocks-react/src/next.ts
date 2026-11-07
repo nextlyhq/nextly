@@ -26,6 +26,7 @@ import {
   hashId,
   isFetchableUrl,
   isListDay,
+  isPlainRecord,
   DOCUMENT_FORMAT_VERSION,
   mayPaginateList,
   paginatedList,
@@ -89,6 +90,7 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
+import { itemFollowsIn } from "./blocks/list-batch";
 import {
   conditionDayStart,
   listEntryCount,
@@ -130,8 +132,11 @@ import type {
   NamedQueryHost,
   NamedQueryLookup,
   PageBindings,
+  ListBatchReads,
   PageContext,
   QueryBudget,
+  ReadClaim,
+  ReadKind,
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
@@ -677,7 +682,7 @@ function claimedListPage(
   if (namedListBase(list.props) !== undefined) {
     return listPageFor(list, context);
   }
-  if (!budget.take()) return undefined;
+  if (!budget.take({ kind: "entries", nodeId: list.id })) return undefined;
   const page = listPageFor(list, context);
   return page === undefined ? undefined : { ...page, claimed: true };
 }
@@ -1510,7 +1515,8 @@ function componentSource(
     // bounds the reader we wrote while leaving unbounded the one a site
     // supplies. A nested chain asks it once per level, so an uncharged source
     // is `MAX_COMPOSED_DEPTH` unbounded reads on a route that stated a limit.
-    return async ids => (budget.take() ? await custom(ids) : EMPTY_DEFINITIONS);
+    return async ids =>
+      budget.take(COMPONENT_CLAIM) ? await custom(ids) : EMPTY_DEFINITIONS;
   }
   const collection = config.componentCollection ?? COMPONENT_TAG_COLLECTION;
   const field = config.componentField ?? COMPONENT_DOCUMENT_FIELD;
@@ -1543,7 +1549,7 @@ function componentSource(
       // read because that is what it costs; charging per definition would
       // refuse a page for an allowance it never spent, and charging nothing
       // would leave the read on this path that grows with the page unbounded.
-      if (!budget.take()) break;
+      if (!budget.take(COMPONENT_CLAIM)) break;
       const page = await readRowsChunk(chunk, {
         reader,
         collection,
@@ -1639,7 +1645,7 @@ function layoutRowReader(
         depth: 0,
       });
     }
-    if (!budget.take()) return [];
+    if (!budget.take(COMPONENT_CLAIM)) return [];
     const found = await readRowsChunk(wanted, {
       reader,
       collection,
@@ -1681,6 +1687,9 @@ function layoutRowReader(
  * extra query per 128, which is the honest price of staying invalidatable.
  */
 const COMPONENT_BATCH_SIZE = 128;
+
+/** What a read of components or Layout rows claims as. */
+const COMPONENT_CLAIM: ReadClaim = { kind: "component" };
 
 /**
  * The caps this route holds its documents to, resolved the way the pipeline
@@ -1893,10 +1902,125 @@ function definitionsById(
   return found;
 }
 
+/**
+ * How one render reads its images, by id, as each image block asks: one
+ * answer per id per render, so an image the page draws twice, or a list's
+ * template image drawn for each entry, is read once.
+ *
+ * There is no batch: the system media library's Direct API reads one id at a
+ * time, and a bound image is filled only once it carries its whole media
+ * object, which is a relation read, not this one.
+ */
+interface MediaReads {
+  readonly resolve: (
+    id: string,
+    claim?: ReadClaim
+  ) => Promise<ResolvedMedia | null>;
+}
+
 function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader,
   budget: QueryBudget
+): MediaReads {
+  const known = new Map<string, Promise<ResolvedMedia | null>>();
+  const readOne = mediaReadOne(config, reader);
+  return {
+    resolve: (id: string, claim?: ReadClaim) => {
+      const kept = known.get(id);
+      if (kept !== undefined) return kept;
+      // A read is a read: a page whose images all resolve through the media
+      // library spends the same budget a loop does, and an exhausted budget
+      // resolves to no picture rather than to an unbounded page. A refusal
+      // is not kept, so each block it reaches is named as unread.
+      if (!budget.take({ ...claim, kind: "image" })) {
+        return Promise.resolve(null);
+      }
+      const reading = readOne(id);
+      known.set(id, reading);
+      return reading;
+    },
+  };
+}
+
+/** How many ids one read ahead asks for: the readers' own page cap. */
+const AHEAD_BATCH_SIZE = 100;
+
+/**
+ * A batch's rows by the ids asked for, or `undefined` when they cannot be
+ * matched to those ids with certainty: the database's own count must equal
+ * the rows returned, and every row must carry a distinct id that was asked
+ * for. A read hook that rewrote or dropped an id fails that, and the batch
+ * is not trusted; the per-id path, which never matches by a returned id,
+ * answers instead.
+ */
+function rowsById(
+  found: { readonly items: readonly unknown[]; readonly meta?: unknown },
+  asked: readonly string[]
+): Map<string, Record<string, unknown>> | undefined {
+  const total = isPlainRecord(found.meta) ? found.meta.total : undefined;
+  if (typeof total !== "number" || total !== found.items.length) {
+    return undefined;
+  }
+  const wanted = new Set(asked);
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const item of found.items) {
+    if (!isPlainRecord(item)) return undefined;
+    const id = item.id;
+    if (typeof id !== "string" && typeof id !== "number") return undefined;
+    const key = String(id);
+    if (!wanted.has(key) || rows.has(key)) return undefined;
+    rows.set(key, item);
+  }
+  return rows;
+}
+
+/**
+ * The lifecycle and identity a named media collection is read under, by id or
+ * in a batch alike.
+ */
+function mediaPosture(config: BlocksPageConfig): {
+  status: "published" | "draft" | "all";
+  overrideAccess: true;
+  disableErrors: true;
+  user: undefined;
+  req: undefined;
+  locale?: string;
+} {
+  return {
+    // The SAME scope the entry and reference reads use, not a second
+    // opinion. A route configured `draft: true` widens its entry reads,
+    // and a preview referencing a never-published image would otherwise
+    // render no picture on a page explicitly serving drafts.
+    status: config.status ?? (config.draft === true ? "all" : "published"),
+    overrideAccess: true,
+    disableErrors: true,
+    // Cleared for the same reason the entry and reference reads clear it:
+    // `mergeConfig` spreads the reader's defaults under the call, so an
+    // omitted `user` restores whatever identity the reader was booted
+    // with. On an `overrideAccess: true` route a user-sensitive
+    // `afterRead` hook would then bake a personalized URL or alt text
+    // into the PUBLIC cached page.
+    user: undefined,
+    // Both identity channels, not just the obvious one. Access rules
+    // are written against `req.user`, and `mergeConfig` spreads the
+    // instance's defaults UNDER the call — so an omitted `req`
+    // restores whatever identity the instance was booted with, on a
+    // read this route performs for an anonymous visitor.
+    req: undefined,
+    // A named collection is an ordinary collection, so its URL and alt
+    // fields can be localized. Omitting the locale reads the DEFAULT
+    // one's record on a route configured for another — the wrong file, or
+    // alt text in the wrong language. The entry and reference reads pass
+    // it for the same reason.
+    ...(config.locale ? { locale: config.locale } : {}),
+  };
+}
+
+/** One image's read by id, claimed by the caller. */
+function mediaReadOne(
+  config: BlocksPageConfig,
+  reader: NextlyContentReader
 ): (id: string) => Promise<ResolvedMedia | null> {
   if (config.resolveMedia) {
     const custom = config.resolveMedia;
@@ -1912,16 +2036,11 @@ function mediaResolver(
     // emitted it, so the preview picture and the page picture disagreed. The
     // usability rule has to live where both callers meet it.
     return async (id: string) => {
-      if (!budget.take()) return null;
       const record = await custom(id);
       return usableMedia(record) ? record : null;
     };
   }
   return async (id: string) => {
-    // A read is a read: a page whose images all resolve through the media
-    // library spends the same budget a loop does, and an exhausted budget
-    // resolves to no picture rather than to an unbounded page.
-    if (!budget.take()) return null;
     // `disableErrors` on both paths, because `PageContext.resolveMedia`
     // promises `null` for an id it cannot resolve and the readers THROW
     // not-found otherwise. The core image block happens to catch that, so the
@@ -1938,49 +2057,61 @@ function mediaResolver(
         await mediaByQuery(reader, {
           collection: config.mediaCollection,
           id,
-          // The SAME scope the entry and reference reads use, not a second
-          // opinion. A route configured `draft: true` widens its entry reads,
-          // and a preview referencing a never-published image would otherwise
-          // render no picture on a page explicitly serving drafts.
-          status:
-            config.status ?? (config.draft === true ? "all" : "published"),
-          overrideAccess: true,
-          disableErrors: true,
-          // Cleared for the same reason the entry and reference reads clear it:
-          // `mergeConfig` spreads the reader's defaults under the call, so an
-          // omitted `user` restores whatever identity the reader was booted
-          // with. On an `overrideAccess: true` route a user-sensitive
-          // `afterRead` hook would then bake a personalized URL or alt text
-          // into the PUBLIC cached page.
-          user: undefined,
-          // Both identity channels, not just the obvious one. Access rules
-          // are written against `req.user`, and `mergeConfig` spreads the
-          // instance's defaults UNDER the call — so an omitted `req`
-          // restores whatever identity the instance was booted with, on a
-          // read this route performs for an anonymous visitor.
-          req: undefined,
-          // A named collection is an ordinary collection, so its URL and alt
-          // fields can be localized. Omitting the locale reads the DEFAULT
-          // one's record on a route configured for another — the wrong file, or
-          // alt text in the wrong language. The entry and reference reads pass
-          // it for the same reason.
-          ...(config.locale ? { locale: config.locale } : {}),
+          ...mediaPosture(config),
         })
       : await mediaNamespaceOf(reader)?.findByID({ id, disableErrors: true });
-    if (!record) return null;
-    const { url, altText, width, height } = record;
-    // Blank counts as unresolved, not as resolved-to-nothing. A record with an
-    // empty URL would otherwise be preferred over the block's own `src`, and an
-    // `<img src="">` re-requests the current page in some browsers; metadata
-    // would likewise stop here instead of trying the next candidate.
-    if (typeof url !== "string" || url.trim() === "") return null;
-    return {
-      url,
-      ...(typeof altText === "string" ? { alt: altText } : {}),
-      ...(typeof width === "number" ? { width } : {}),
-      ...(typeof height === "number" ? { height } : {}),
-    };
+    return record ? drawnMedia(record) : null;
   };
+}
+
+/** A media record as an image draws it, or `null` for one with no address. */
+function drawnMedia(record: Record<string, unknown>): ResolvedMedia | null {
+  const { url, altText, width, height } = record;
+  // Blank counts as unresolved, not as resolved-to-nothing. A record with an
+  // empty URL would otherwise be preferred over the block's own `src`, and an
+  // `<img src="">` re-requests the current page in some browsers; metadata
+  // would likewise stop here instead of trying the next candidate.
+  if (typeof url !== "string" || url.trim() === "") return null;
+  return {
+    url,
+    ...(typeof altText === "string" ? { alt: altText } : {}),
+    ...(typeof width === "number" ? { width } : {}),
+    ...(typeof height === "number" ? { height } : {}),
+  };
+}
+
+/**
+ * How one render settles its links to entries: one link at a time, as each
+ * linking block asks, and in batches, as a list asks for its entries' links
+ * before drawing them. One answer per entry per render, which a batch fills.
+ */
+interface EntryPathReads {
+  readonly resolve: (
+    collection: string,
+    id: string,
+    claim?: ReadClaim
+  ) => Promise<string | null>;
+  readonly ahead: (
+    refs: readonly { readonly collection: string; readonly id: string }[],
+    claim: ReadClaim
+  ) => Promise<void>;
+}
+
+/** A filter as the route's trusted reader takes it. */
+type RouteWhere = NonNullable<
+  Parameters<NextlyContentReader["find"]>[0]["where"]
+>;
+
+/** A link whose path waits on the ownership checks. */
+interface LinkCandidate {
+  readonly id: string;
+  readonly slug: string;
+  readonly path: string;
+}
+
+/** The key one entry's path is kept under for a render. */
+function entryKey(collection: string, id: string): string {
+  return `${collection}\u0000${id}`;
 }
 
 /**
@@ -1995,17 +2126,21 @@ function entryPathResolver(
   isPublic: boolean,
   reader: NextlyContentReader,
   budget: QueryBudget
-): (collection: string, id: string) => Promise<string | null> {
+): EntryPathReads {
   if (config.resolveEntryPath) {
     const custom = config.resolveEntryPath;
     // Charged against the budget like the built-in path. A custom resolver is
     // usually database-backed, and it is called once per reference — so a
     // template inside a nested loop invokes it thousands of times. Exempting it
     // would bound the resolver we wrote and leave unbounded the one a site
-    // supplies, which is the wrong way round.
-    return async (collection: string, id: string) => {
-      if (!budget.take()) return null;
-      return custom(collection, id);
+    // supplies, which is the wrong way round. It takes one reference, so it
+    // has no batch.
+    return {
+      resolve: async (collection, id, claim) => {
+        if (!budget.take({ ...claim, kind: "link" })) return null;
+        return custom(collection, id);
+      },
+      ahead: () => Promise.resolve(),
     };
   }
   const slugField = config.slugField ?? "slug";
@@ -2029,75 +2164,77 @@ function entryPathResolver(
   // "published" }` being the case that shows it.
   const scope = config.status ?? (alwaysDraft ? "all" : "published");
 
-  return async (collection: string, id: string) => {
-    // A collection this route does not serve has no path THIS route can
-    // produce: `createContentRoute` searches only its configured collections,
-    // so the href would 404 or open an unrelated entry that happens to share
-    // the slug. Mapping across routes is what `resolveEntryPath` is for.
-    if (!routeCollections.includes(collection)) return null;
+  // Every read on this path, by id or in a batch, under the ROUTE's own
+  // policy, not with access overridden. A link is only useful if the path it
+  // names resolves, and this route resolves published entries anonymously by
+  // default — so a reference to an unpublished or restricted entry would
+  // otherwise emit an href that the same route answers with `notFound()`.
+  // `find` rather than `findByID`, because the lifecycle scope has to be
+  // applied BY THE READER: judging a returned `status` property would treat
+  // an ordinary string field named `status` as the lifecycle column.
+  const routeFind = async (
+    collection: string,
+    // Taken from the reader's own signature rather than restated, so a filter
+    // this package builds cannot drift from the one the reader accepts.
+    where: NonNullable<Parameters<NextlyContentReader["find"]>[0]["where"]>,
+    limit: number
+  ) =>
+    await reader.find({
+      collection,
+      where,
+      limit,
+      status: scope,
+      overrideAccess,
+      // Passed explicitly, even as `undefined`. `mergeConfig` spreads the
+      // reader's defaults under the call's arguments, so OMITTING this
+      // inherits whatever identity the reader was booted with — and this
+      // route resolves anonymously. `resolveContent` passes it likewise.
+      user: undefined,
+      // Both identity channels, not just the obvious one. Access rules
+      // are written against `req.user`, and `mergeConfig` spreads the
+      // instance's defaults UNDER the call — so an omitted `req`
+      // restores whatever identity the instance was booted with, on a
+      // read this route performs for an anonymous visitor.
+      req: undefined,
+      // A localized slug is read per locale, so omitting this returns the
+      // DEFAULT-locale slug while the route resolves paths in the configured
+      // one — a link to a path this very route cannot find.
+      ...(config.locale ? { locale: config.locale } : {}),
+    });
 
-    // Read under the ROUTE's own policy, not with access overridden. A link is
-    // only useful if the path it names resolves, and this route resolves
-    // published entries anonymously by default — so a reference to an
-    // unpublished or restricted entry would otherwise emit an href that the
-    // same route answers with `notFound()`. No path is a better answer than a
-    // broken one, and it also stops a restricted entry's slug from being
-    // published to anyone who loads the page.
-    // `find` rather than `findByID`, because the lifecycle scope has to be
-    // applied BY THE READER. Reading the row and then judging its `status`
-    // property treats an ordinary string field named `status` — which Nextly
-    // explicitly supports on a status-less collection — as the lifecycle
-    // column, so an entry the route happily serves lost its link for holding
-    // `status: "archived"`. Through the reader the scope is a no-op exactly
-    // where it should be.
-    //
-    // Also never throws: a stale reference resolves to no rows rather than a
+  /**
+   * The path a slug renders at, or `null` for none: a slug is stored TEXT, so
+   * it can start with `/` — and `//evil.example` interpolates to
+   * `///evil.example`, which every browser reads as a protocol-relative URL to
+   * another host. Refused rather than stripped: a slug shaped like an address
+   * is not a path this route serves under any reading. Then the route's own
+   * rule decides, which also refuses the reserved paths `ContentPage` will not
+   * serve, the `.`/`..` segments URL resolution removes, and the slugs whose
+   * normalized form the lookup would not match.
+   */
+  const pathOf = (slug: unknown): string | null => {
+    if (typeof slug !== "string" || slug.startsWith("/")) return null;
+    return emitPath(slug);
+  };
+
+  const one = async (
+    collection: string,
+    id: string,
+    take: () => boolean
+  ): Promise<string | null> => {
+    // Never throws: a stale reference resolves to no rows rather than a
     // rejection, which is what `resolveEntryPath` promises its callers.
-    if (!budget.take()) return null;
-    const found = await reader
-      .find({
-        collection,
-        where: { id: { equals: id } },
-        limit: 1,
-        status: scope,
-        overrideAccess,
-        // Passed explicitly, even as `undefined`. `mergeConfig` spreads the
-        // reader's defaults under the call's arguments, so OMITTING this
-        // inherits whatever identity the reader was booted with — and this
-        // route resolves anonymously. `resolveContent` passes it likewise.
-        user: undefined,
-        // Both identity channels, not just the obvious one. Access rules
-        // are written against `req.user`, and `mergeConfig` spreads the
-        // instance's defaults UNDER the call — so an omitted `req`
-        // restores whatever identity the instance was booted with, on a
-        // read this route performs for an anonymous visitor.
-        req: undefined,
-        // A localized slug is read per locale, so omitting this returns the
-        // DEFAULT-locale slug while the route resolves paths in the configured
-        // one — a link to a path this very route cannot find.
-        ...(config.locale ? { locale: config.locale } : {}),
-      })
-      .catch(() => ({ items: [] as Record<string, unknown>[] }));
+    if (!take()) return null;
+    const found = await routeFind(collection, { id: { equals: id } }, 1).catch(
+      () => ({ items: [] as Record<string, unknown>[] })
+    );
     const record = found.items[0];
     if (!record) return null;
     const slug = record[slugField];
-    if (typeof slug !== "string") return null;
-
-    // A slug is stored TEXT, so it can start with `/` — and `//evil.example`
-    // interpolates to `///evil.example`, which every browser reads as a
-    // protocol-relative URL to another host. An "internal" entry reference then
-    // navigates off-site. Refused rather than stripped: a slug shaped like an
-    // address is not a path this route serves under any reading, and silently
-    // rewriting it would invent a destination the author never wrote.
-    if (slug.startsWith("/")) return null;
-
-    // Where this slug renders, decided by the route's own rule — which also
-    // refuses the reserved paths `ContentPage` will not serve, the `.`/`..`
-    // segments URL resolution removes, and the slugs whose normalized form the
-    // lookup would not match. Asked BEFORE the ownership probes below, so an
-    // unaddressable slug costs no queries.
-    const path = emitPath(slug);
-    if (path === null) return null;
+    const path = pathOf(slug);
+    // Asked BEFORE the ownership probes below, so an unaddressable slug
+    // costs no queries.
+    if (path === null || typeof slug !== "string") return null;
 
     // Which entry a URL opens is settled entirely on STORED columns from here
     // down. Every read on this path returns rows through `afterRead`, so any
@@ -2115,32 +2252,16 @@ function entryPathResolver(
     // whose own read succeeded.
     const probe = async (
       collectionName: string,
-      // Taken from the reader's own signature rather than restated, so a filter
-      // this package builds cannot drift from the one the reader accepts.
       where: NonNullable<Parameters<NextlyContentReader["find"]>[0]["where"]>
     ): Promise<boolean> => {
       // Each probe is its own read. An exhausted budget answers "something else
       // owns this slug", which withholds the link — the same direction every
       // other uncertainty here takes, since no link beats a wrong one.
-      if (!budget.take()) return true;
-      const found = await reader
-        .find({
-          collection: collectionName,
-          where,
-          limit: 1,
-          status: scope,
-          overrideAccess,
-          user: undefined,
-          // Both identity channels, not just the obvious one. Access rules
-          // are written against `req.user`, and `mergeConfig` spreads the
-          // instance's defaults UNDER the call — so an omitted `req`
-          // restores whatever identity the instance was booted with, on a
-          // read this route performs for an anonymous visitor.
-          req: undefined,
-          ...(config.locale ? { locale: config.locale } : {}),
-        })
-        .catch(() => ({ items: [] as Record<string, unknown>[] }));
-      return found.items.length > 0;
+      if (!take()) return true;
+      const probed = await routeFind(collectionName, where, 1).catch(() => ({
+        items: [] as Record<string, unknown>[],
+      }));
+      return probed.items.length > 0;
     };
 
     // 1. This row really is stored at this slug. It is the returned slug that
@@ -2173,14 +2294,193 @@ function entryPathResolver(
     //    collections in order and serves the first match, so a slug an earlier
     //    one owns belongs to that one, and this link would navigate to a
     //    different document under the same URL.
-    for (const earlier of routeCollections.slice(
-      0,
-      routeCollections.indexOf(collection)
-    )) {
+    for (const earlier of earlierThan(collection)) {
       if (await probe(earlier, { [slugField]: { equals: slug } })) return null;
     }
 
     return path;
+  };
+
+  const earlierThan = (collection: string): string[] =>
+    routeCollections.slice(0, routeCollections.indexOf(collection));
+
+  /**
+   * How many stored rows match, as the database counts them: the count is
+   * made on stored columns, so it answers the probes' questions for many
+   * links at once without matching any returned value to a link. `undefined`
+   * when the read fails or reports no count, which settles nothing.
+   */
+  const storedCount = async (
+    collection: string,
+    where: RouteWhere
+  ): Promise<number | undefined> => {
+    const found = await routeFind(collection, where, 1).catch(() => undefined);
+    const meta: unknown = found?.meta;
+    const total = isPlainRecord(meta) ? meta.total : undefined;
+    return typeof total === "number" ? total : undefined;
+  };
+
+  /**
+   * Many links' rows split into those with no path (no row this route can
+   * read, or a slug it does not serve) and those whose path the ownership
+   * checks must still clear. The database counted exactly these rows, so an
+   * id with no row is an entry this route cannot read: no link, as `one`
+   * answers.
+   */
+  const linkRows = (
+    rows: ReadonlyMap<string, Record<string, unknown>>,
+    ids: readonly string[]
+  ): { settled: Map<string, string | null>; candidates: LinkCandidate[] } => {
+    const settled = new Map<string, string | null>();
+    const candidates: LinkCandidate[] = [];
+    for (const id of ids) {
+      const slug = rows.get(id)?.[slugField];
+      const path = pathOf(slug);
+      if (path === null || typeof slug !== "string") settled.set(id, null);
+      else candidates.push({ id, slug, path });
+    }
+    return { settled, candidates };
+  };
+
+  /**
+   * The three ownership checks of `one`, asked for many links into one
+   * collection at once, each as a count the database must answer with
+   * `expected`:
+   * 1. every (slug, id) pair is stored as read: as many stored rows match
+   *    the pairs as there are pairs, each id naming one row;
+   * 2. no lower id in this collection shares any of the slugs;
+   * 3. no earlier collection of the route carries any of them.
+   */
+  const ownershipChecks = (
+    collection: string,
+    candidates: readonly LinkCandidate[]
+  ): { collection: string; where: RouteWhere; expected: number }[] => {
+    const slugs = [...new Set(candidates.map(({ slug }) => slug))];
+    return [
+      {
+        collection,
+        expected: candidates.length,
+        where: {
+          or: candidates.map(({ id, slug }) => ({
+            [slugField]: { equals: slug },
+            id: { equals: id },
+          })),
+        },
+      },
+      {
+        collection,
+        expected: 0,
+        where: {
+          or: candidates.map(({ id, slug }) => ({
+            [slugField]: { equals: slug },
+            id: { less_than: id },
+          })),
+        },
+      },
+      ...earlierThan(collection).map(earlier => ({
+        collection: earlier,
+        expected: 0,
+        where: { [slugField]: { in: slugs } },
+      })),
+    ];
+  };
+
+  /** Whether every check holds, each one read; `spent` once reads run out. */
+  const allHold = async (
+    checks: readonly {
+      collection: string;
+      where: RouteWhere;
+      expected: number;
+    }[],
+    take: () => boolean
+  ): Promise<boolean | "spent"> => {
+    for (const check of checks) {
+      if (!take()) return "spent";
+      const count = await storedCount(check.collection, check.where);
+      if (count !== check.expected) return false;
+    }
+    return true;
+  };
+
+  /**
+   * The paths of many links into one collection, settled with a constant
+   * number of reads: their rows by `id in`, then each ownership check asked
+   * for all of them at once, as a count. Only a batch every count clears is
+   * kept; any other leaves each link to `one`, which asks the checks link by
+   * link, so a batch never answers differently from it.
+   */
+  const batch = async (
+    collection: string,
+    ids: readonly string[],
+    take: () => boolean,
+    known: Map<string, Promise<string | null>>
+  ): Promise<"spent" | undefined> => {
+    if (!take()) return "spent";
+    const found = await routeFind(
+      collection,
+      { id: { in: [...ids] } },
+      ids.length
+    ).catch(() => undefined);
+    const rows = found === undefined ? undefined : rowsById(found, ids);
+    if (rows === undefined) return undefined;
+    const { settled, candidates } = linkRows(rows, ids);
+    if (candidates.length > 0) {
+      const held = await allHold(ownershipChecks(collection, candidates), take);
+      if (held !== true) return held === "spent" ? "spent" : undefined;
+      for (const { id, path } of candidates) settled.set(id, path);
+    }
+    for (const [id, path] of settled) {
+      known.set(entryKey(collection, id), Promise.resolve(path));
+    }
+    return undefined;
+  };
+
+  const known = new Map<string, Promise<string | null>>();
+  return {
+    resolve: (collection, id, claim) => {
+      // A collection this route does not serve has no path THIS route can
+      // produce: `createContentRoute` searches only its configured
+      // collections, so the href would 404 or open an unrelated entry that
+      // happens to share the slug. Mapping across routes is what
+      // `resolveEntryPath` is for.
+      if (!routeCollections.includes(collection)) return Promise.resolve(null);
+      const key = entryKey(collection, id);
+      const kept = known.get(key);
+      if (kept !== undefined) return kept;
+      // Kept for the render, and dropped again when a read it needed was
+      // refused: a refused probe withholds the link, which is this render's
+      // answer for want of reads, not the entry's.
+      let refused = false;
+      const reading = one(collection, id, () => {
+        const granted = budget.take({ ...claim, kind: "link" });
+        if (!granted) refused = true;
+        return granted;
+      });
+      known.set(key, reading);
+      void reading.then(
+        () => {
+          if (refused) known.delete(key);
+        },
+        () => known.delete(key)
+      );
+      return reading;
+    },
+    ahead: async (refs, claim) => {
+      const take = () => budget.take({ ...claim, kind: "link" });
+      const byCollection = new Map<string, Set<string>>();
+      for (const { collection, id } of refs) {
+        if (!routeCollections.includes(collection) || id.trim() === "")
+          continue;
+        if (known.has(entryKey(collection, id))) continue;
+        const ids = byCollection.get(collection) ?? new Set<string>();
+        byCollection.set(collection, ids.add(id));
+      }
+      for (const [collection, ids] of byCollection) {
+        for (const chunk of chunked([...ids], AHEAD_BATCH_SIZE)) {
+          if ((await batch(collection, chunk, take, known)) === "spent") return;
+        }
+      }
+    },
   };
 }
 
@@ -2284,9 +2584,10 @@ async function readById(
   reads: SourceReads,
   collection: string,
   id: string | number,
-  fields: readonly string[]
+  fields: readonly string[],
+  kind: ReadKind
 ): Promise<PublicRecord> {
-  if (!reads.budget.take()) return undefined;
+  if (!reads.budget.take({ kind })) return undefined;
   try {
     // An editor's reader reads by id, which alone returns the working draft
     // of an entry with one pending; a published page's reads as a list does.
@@ -2316,7 +2617,7 @@ async function readSingle(
   fields: readonly string[]
 ): Promise<PublicRecord> {
   const findSingle = reads.reader.findSingle?.bind(reads.reader);
-  if (findSingle === undefined || !reads.budget.take()) {
+  if (findSingle === undefined || !reads.budget.take({ kind: "page" })) {
     return undefined;
   }
   try {
@@ -2363,7 +2664,7 @@ async function withRelations(
     const id = record[name];
     if (target === undefined) continue;
     if (typeof id !== "string" && typeof id !== "number") continue;
-    const related = await readById(reads, target, id, inner);
+    const related = await readById(reads, target, id, inner, "related");
     if (related !== undefined) followed = { ...followed, [name]: related };
   }
   return followed;
@@ -2392,7 +2693,7 @@ async function readPublicEntry(args: {
   } else {
     const id = args.entryId;
     if (typeof id !== "string" && typeof id !== "number") return undefined;
-    record = await readById(reads, slug, id, demand.fields);
+    record = await readById(reads, slug, id, demand.fields, "page");
   }
   return await withRelations(record, demand, args.entryRef, reads);
 }
@@ -2701,7 +3002,9 @@ async function readFieldShapes(
   entryRef: BlocksFieldShapeRef,
   demand: BindingDemand,
   lists: readonly string[],
-  cache: ReadCache
+  cache: ReadCache,
+  /** The relations the lists' items follow, whose targets are read too. */
+  itemFollows: ReadonlySet<string> = new Set()
 ): Promise<BlocksFieldShapes> {
   const known = new Map<string, readonly BindingFieldShape[] | undefined>();
   // Lookups that failed: asked once, and not recorded. A recorded `undefined`
@@ -2737,7 +3040,13 @@ async function readFieldShapes(
     }
   }
   for (const collection of lists) {
-    await fetch({ collection });
+    const fields = await fetch({ collection });
+    // A list item's binding through a relation is judged by the related
+    // collection's public shapes, as the entry's is.
+    for (const name of itemFollows) {
+      const target = relationTarget(fields, name);
+      if (target !== undefined) await fetch({ collection: target });
+    }
   }
   // Recorded, so the shapes read can be sent whole to an editor's canvas.
   return recordedFieldShapes(known);
@@ -2859,11 +3168,17 @@ export async function readBindingSources(
   const lists = args.lists ?? [
     ...listCollections(args.documents, args.namedQueries),
   ];
-  const shapes = await readFieldShapes(entryRef, demand, lists, {
-    scope: args.cacheScope ?? "",
-    locale: args.locale,
-    window: args.window,
-  });
+  const shapes = await readFieldShapes(
+    entryRef,
+    demand,
+    lists,
+    {
+      scope: args.cacheScope ?? "",
+      locale: args.locale,
+      window: args.window,
+    },
+    itemFollowsIn(args.documents)
+  );
   const reads: SourceReads = {
     reader: args.reader,
     budget: args.budget,
@@ -3215,6 +3530,95 @@ function decideConditions(
  * How a route reports the bindings a render could not use: one warning per
  * report, naming the page and counting each problem, never a value.
  */
+/**
+ * The page's overrun, said in the server log once its refusals go quiet:
+ * the page, its cap, how many reads were refused and which blocks were drawn
+ * as if their data were missing, by id. Never a value.
+ *
+ * Refusals come as the page streams, block by block, so the line waits for a
+ * short quiet rather than for a render end it cannot see. A page whose later
+ * blocks are refused after that says so in another line, naming only those.
+ */
+function overrunLog(context: RenderContext): {
+  refused(budget: QueryBudget): void;
+} {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let told = 0;
+  let named = new Set<string>();
+  return {
+    refused: budget => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = undefined;
+        const report = budget.report?.();
+        if (report === undefined || report.refused === told) return;
+        // Each block once, whatever it missed.
+        const fresh = [
+          ...new Set(report.unread.map(block => block.nodeId)),
+        ].filter(id => !named.has(id));
+        named = new Set([...named, ...fresh]);
+        const refusedNow = report.refused - told;
+        told = report.refused;
+        const blocks =
+          fresh.length === 0
+            ? "no block could be named"
+            : `${String(fresh.length)} block(s) drawn as if their data were missing: ${fresh.join(", ")}`;
+        console.warn(
+          `[blocks] "${context.collection}" page "${context.slug}" needed more than its ${String(report.cap)} reads: ${String(refusedNow)} read(s) refused; ${blocks}.`
+        );
+      }, OVERRUN_QUIET_MS);
+      // Never what keeps a process alive.
+      if (typeof timer === "object" && "unref" in timer) timer.unref();
+    },
+  };
+}
+
+/** How long a page's refusals must go quiet before its overrun is logged. */
+const OVERRUN_QUIET_MS = 50;
+
+/**
+ * What a page's lists read ahead for their entries: relations through the
+ * public reader, as the page's own bindings read them, judged by the public's
+ * field shapes; links through the page's own resolver, whose answers the
+ * entries' blocks then take without a read of their own.
+ */
+function listBatchReads(args: {
+  readonly reader: BlocksPublicReader;
+  readonly shapes: BlocksFieldShapes | undefined;
+  readonly budget: QueryBudget;
+  readonly entryPaths: EntryPathReads;
+}): ListBatchReads {
+  const { reader, shapes, budget } = args;
+  return {
+    related: async (collection, field, ids, fields, claim) => {
+      // Only a relation the public's shapes say is a to-one relation to one
+      // collection, as an entry binding's path may follow.
+      const target = relationTarget(shapes?.fieldsOf({ collection }), field);
+      if (target === undefined) return undefined;
+      const wanted = [...new Set(ids.map(String))];
+      const found = new Map<string, Readonly<Record<string, unknown>>>();
+      for (const chunk of chunked(wanted, AHEAD_BATCH_SIZE)) {
+        if (!budget.take({ ...claim, kind: "related" })) break;
+        const page = await reader
+          .find({
+            collection: target,
+            filters: [{ field: "id", op: "in", value: chunk }],
+            limit: chunk.length,
+            select: [...fields],
+          })
+          .catch(() => undefined);
+        // Rows matched to ids only with certainty; otherwise these items
+        // keep their ids, and their bindings show their fallbacks.
+        const rows = page === undefined ? undefined : rowsById(page, chunk);
+        if (rows === undefined) continue;
+        for (const [id, row] of rows) found.set(id, row);
+      }
+      return found;
+    },
+    entryPaths: args.entryPaths.ahead,
+  };
+}
+
 function bindingIssueLog(context: RenderContext): BindingIssuesHandler {
   return (issues: readonly PageIssue[]) => {
     const page = `on "${context.collection}" page "${context.slug}"`;
@@ -3400,7 +3804,7 @@ function blocksRouteConfig(
             const derived = await derivePageSeo(
               document,
               resolver,
-              mediaResolver(config, readerFor(config), budget),
+              mediaResolver(config, readerFor(config), budget).resolve,
               // A later page of the page's list is its own address, so its
               // canonical names it rather than the list's first page.
               listPageSlug(context.slug, context.page),
@@ -3492,12 +3896,13 @@ function blocksRouteConfig(
       if (namedPages !== undefined) return namedPages;
       // The list's first read, claimed where the render claims it: after
       // the page's inputs and day terms, before any block is drawn.
-      if (!budget.take()) return 1;
+      const claim: ReadClaim = { kind: "entries", nodeId: list.id };
+      if (!budget.take(claim)) return 1;
       const counted = await listEntryCount(
         list.props,
         { locale: context.locale, ...days },
         dataFor(data, config, context.locale, listWindow),
-        () => budget.take()
+        () => budget.take(claim)
       ).catch(() => undefined);
       // A list whose read cannot say how many entries it matches shows its
       // first page alone, as a list that fails to read shows its empty state.
@@ -3517,11 +3922,15 @@ function blocksRouteConfig(
       // through `resolveEntryPath`, which is exactly the amplification this
       // bounds — and a budget only the loop claimed from would have counted the
       // one read that multiplies while ignoring the ones it multiplies INTO.
+      // It says when it is outrun, so the page's overrun is logged once,
+      // naming the page, the cap and the blocks drawn without their data.
+      const overrun = overrunLog(context);
       const budget = createQueryBudget(
-        config.maxQueries ?? DEFAULT_MAX_QUERIES
+        config.maxQueries ?? DEFAULT_MAX_QUERIES,
+        { onRefused: () => overrun.refused(budget) }
       );
-      const resolveMedia = mediaResolver(config, readerFor(config), budget);
-      const resolveEntryPath = entryPathResolver(
+      const media = mediaResolver(config, readerFor(config), budget);
+      const entryPaths = entryPathResolver(
         config,
         isPublic,
         readerFor(config),
@@ -3555,8 +3964,8 @@ function blocksRouteConfig(
         // check is `ctx.queries?.take() === false` — so a routed page without
         // one is unbounded by construction.
         queries: budget,
-        resolveMedia,
-        resolveEntryPath,
+        resolveMedia: media.resolve,
+        resolveEntryPath: entryPaths.resolve,
         // The published page draws the Lucide set, vendored with this package.
         resolveIcon: resolveLucideIcon,
         // A list whose source is a named query runs it as a visitor reads.
@@ -3644,11 +4053,21 @@ function blocksRouteConfig(
           : pageBindingRun(bindings, context.locale, resolver)
       );
       const listPage = claimedListPage(pagedList, context, budget);
+      // What a list reads ahead for its entries, through the page's own
+      // reads: relations as the public reads them, links as the blocks drawn
+      // inside the entries would read them one by one.
+      const listReads = listBatchReads({
+        reader: publicReaderFor(config, context.locale, listWindow),
+        shapes: bindings?.fieldShapes,
+        budget,
+        entryPaths,
+      });
       const shared: SharedRendererProps = {
         context: {
           ...pageContext,
           ...listDays,
           ...(listPage === undefined ? {} : { listPage }),
+          listReads,
         },
         blocks: resolver,
         styleContext,

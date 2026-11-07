@@ -19,7 +19,14 @@ import type { BlockRenderArgs, PageContext, ResolvedIcon } from "../context";
 
 import { MEDIA } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
-import { canLink, LINK_PROPS, linkFor, text, type LinkProps } from "./props";
+import {
+  canLink,
+  LINK_PROPS,
+  linkFor,
+  readClaimOf,
+  text,
+  type LinkProps,
+} from "./props";
 
 export interface IconProps extends LinkProps {
   /** The icon, as `<set>:<name>`: `lucide:star`. */
@@ -83,6 +90,7 @@ export async function renderIcon({
   props,
   className,
   ctx,
+  node,
 }: BlockRenderArgs<IconProps>): Promise<ReactElement> {
   const id = text(props.icon);
   // A resolver that fails is the same as one that draws no such icon: the
@@ -99,8 +107,9 @@ export async function renderIcon({
     return <span className={className} aria-hidden="true" />;
   }
   const label = text(props.label);
+  // Claimed as this block's, so a page past its allowance names it.
   const link = await linkFor(props, (collection, entryId) =>
-    ctx.resolveEntryPath(collection, entryId)
+    ctx.resolveEntryPath(collection, entryId, readClaimOf(node))
   );
   if (link === undefined) {
     return renderIconSvg(resolved, { label, className });
