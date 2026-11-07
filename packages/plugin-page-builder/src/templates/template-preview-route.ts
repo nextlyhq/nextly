@@ -184,13 +184,15 @@ async function templatedRecord(
   judge: CollectionJudge,
   route: string
 ): Promise<Record<string, unknown>> {
+  // Read once: the guard's rule reads the record, and so does the route.
+  let read: Promise<Record<string, unknown> | null> | undefined;
+  const once = (slug: string) => (read ??= judge.readCollection(slug));
   const problem = await templateCollectionProblem(
     collection,
-    judge.readCollection,
+    once,
     judge.ownCollections()
   );
-  const record =
-    problem === null ? await judge.readCollection(collection) : null;
+  const record = problem === null ? await once(collection) : null;
   if (record === null) throw previewRefusal(route, collection);
   return record;
 }

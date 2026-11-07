@@ -255,7 +255,9 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
   );
   return {
     collection,
-    labels: list.labels ?? labelsFromSlug(collection ?? ""),
+    // A template always names its collection; "entries" only stands in
+    // until its form has the value.
+    labels: list.labels ?? labelsFromSlug(collection ?? "entries"),
     language: locale,
     list,
     chip,
