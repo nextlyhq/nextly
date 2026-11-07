@@ -133,10 +133,7 @@ import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
 import type { HostAddress } from "./host-rewrite/contract";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
-import {
-  FIELD_GROUPS_PER_PAGE,
-  readSiteFieldGroups,
-} from "./host-rewrite/field-groups";
+import { readSiteFieldGroups } from "./host-rewrite/field-groups";
 import { registerInTransactionFence } from "./host-rewrite/in-transaction";
 import {
   COMPONENT_DELETE_REWRITE_SERVICE,
@@ -1243,11 +1240,8 @@ function siteFieldGroups(
   const inCode = declaredFieldGroups(ctx);
   return () =>
     readSiteFieldGroups({
-      page: async offset =>
-        (await nextly()).fieldGroups.find({
-          limit: FIELD_GROUPS_PER_PAGE,
-          offset,
-        }),
+      page: async (offset, limit) =>
+        (await nextly()).fieldGroups.find({ limit, offset }),
       inCode,
       warn: (message, meta) => ctx.logger.warn(message, meta),
     });

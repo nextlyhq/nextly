@@ -41,6 +41,14 @@ import {
 import { getService } from "../../../di";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { resolvePublishTransition } from "../../../lib/status-transition";
+import { readCompanionLocaleStatus } from "../../i18n/companion-join";
+import { appLocalization } from "../../i18n/configured-locales";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
+import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import type { UserContext } from "../types";
 
 import { checkSingleAccess } from "./single-query-service";
@@ -204,12 +212,68 @@ export async function singleDocumentStatusMoveAllowed(
   if (!record?.tableName) return false;
   const document = await storedRow(slug, record.tableName);
   if (!document) return false;
-  const stored = document.status;
-  const move = resolvePublishTransition(
-    typeof stored === "string" ? stored : null,
-    nextStatus
+  const moves = new Set<"publish" | "unpublish">();
+  for (const prior of await statusesMovedFrom(
+    record,
+    document,
+    subject.locale
+  )) {
+    const move = resolvePublishTransition(prior, nextStatus);
+    if (move !== null) moves.add(move);
+  }
+  for (const move of moves) {
+    if (!(await storedSingleDocumentAllows(slug, move, subject))) return false;
+  }
+  return true;
+}
+
+/**
+ * The statuses a write in `locale` is judged moving from, as the Single's own
+ * update judges them: where the Single keeps its status per language, a
+ * write in another language than the default moves only that language's
+ * companion `_status` (none stored reads as no status), and one in the
+ * default language moves both the main row's and its companion `_status`; a
+ * Single without per-language status, or a write naming no language, moves
+ * the main row's alone.
+ */
+async function statusesMovedFrom(
+  record: {
+    readonly slug: string;
+    readonly tableName: string;
+    readonly fields?: unknown;
+    readonly localized?: unknown;
+    readonly status?: unknown;
+  },
+  document: Record<string, unknown>,
+  locale: string | undefined
+): Promise<(string | null)[]> {
+  const main = typeof document.status === "string" ? document.status : null;
+  const localization = appLocalization();
+  if (
+    locale === undefined ||
+    !localization ||
+    !storesPerLanguage(record) ||
+    !publishesPerLanguage(record)
+  ) {
+    return [main];
+  }
+  const adapter = getService("adapter");
+  const companion = buildCompanionSchema({
+    slug: record.slug,
+    tableName: record.tableName,
+    fields: (record.fields ?? []) as { name: string; type: string }[],
+    dialect: adapter.dialect,
+    status: true,
+  });
+  if (companion?.hasStatus !== true) return [main];
+  const inLocale = await readCompanionLocaleStatus(
+    adapter.getDrizzle<Parameters<typeof readCompanionLocaleStatus>[0]>(),
+    companion.table,
+    String(document.id),
+    locale,
+    cachedCompanionReadiness(adapter, companion.companionTableName)
   );
-  return move === null || storedSingleDocumentAllows(slug, move, subject);
+  return locale === localization.defaultLocale ? [main, inLocale] : [inLocale];
 }
 
 export async function singleStoredDocumentReadable(

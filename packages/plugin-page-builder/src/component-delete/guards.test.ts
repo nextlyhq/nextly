@@ -63,3 +63,41 @@ describe("the component guards with numeric ids", () => {
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });
+
+/**
+ * A store that keeps its status per language: core names the status stored in
+ * the language the write names as `storedStatus`, and the guard judges the
+ * unpublish from that rather than from the main row's.
+ */
+describe("the unpublish guard on a store that keeps its status per language", () => {
+  const save = (storedStatus: unknown, mainStatus: string) => ({
+    operation: "update",
+    originalData: { id: 7, status: mainStatus },
+    storedStatus,
+    data: { status: "draft" },
+  });
+
+  it("judges a published translation saved as a draft while the main row is a draft", async () => {
+    const { handlers } = guards("idle", false);
+
+    await expect(
+      handlers.get("beforeChange")?.(save("published", "draft"))
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("lets a draft translation's draft save through while the main row is published", async () => {
+    const { handlers } = guards("idle", false);
+
+    await expect(
+      handlers.get("beforeChange")?.(save("draft", "published"))
+    ).resolves.toBeUndefined();
+  });
+
+  it("runs the check when the language's status cannot be read", async () => {
+    const { handlers } = guards("idle", false);
+
+    await expect(
+      handlers.get("beforeChange")?.(save(1, "draft"))
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});

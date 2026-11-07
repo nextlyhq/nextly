@@ -80,7 +80,7 @@ export interface RewriteDirectApi extends LayoutGuardDirectApi {
   fieldGroups: {
     find(args: { limit?: number; offset?: number }): Promise<{
       items: readonly { slug: string; fields?: unknown }[];
-      meta: { hasNext: boolean };
+      meta: { total: number; hasNext: boolean };
     }>;
   };
 }
