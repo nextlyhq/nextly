@@ -242,17 +242,17 @@ import {
   siteBreakpointUndoRoute,
 } from "./site-breakpoint-undo";
 import {
-  resolveFontOptions,
-  type PageBuilderFontOptions,
-} from "./site-fonts/options";
-import { siteFontRoutes } from "./site-fonts/routes";
-import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
   siteCodeRoutes,
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
@@ -446,6 +446,40 @@ function deleteComponentViews(
   return store.collection === undefined || storeIsOwn(store)
     ? { [COMPONENTS_SLUG]: replaced }
     : { [store.collection]: replaced };
+}
+
+/**
+ * Refuse a component store that shares a slug with a collection this plugin
+ * declares, other than naming its own Components collection.
+ *
+ * The delete's surfaces are keyed by the store's slug, and a key that is one
+ * of the plugin's own slugs is read as that plugin collection, through any
+ * rename: a host store named `patterns` would get Delete component on the
+ * plugin's Patterns, and one named `components` while the plugin's own is
+ * renamed would get it on the renamed collection, while the delete itself
+ * acts on the host's. Ambiguous either way, so refused, naming both, rather
+ * than guessed. `resolved` is the plugin's collections as the site renamed
+ * them, known from `init`; without it, only the declared names are judged.
+ */
+function refuseStoreSharingAPluginSlug(
+  store: ComponentStore,
+  declared: readonly string[],
+  resolved?: Readonly<Record<string, string | undefined>>
+): void {
+  const slug = store.collection;
+  if (slug === undefined) return;
+  if (slug === COMPONENTS_SLUG) {
+    const renamed = resolved?.[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+    if (renamed === COMPONENTS_SLUG) return;
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", but the Page Builder's own Components collection is renamed to "${renamed}". Leave componentReadiness.collection unset to keep components in the plugin's collection, or give the host's store a slug the Page Builder does not declare.`
+    );
+  }
+  if (declared.includes(slug)) {
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", which is also a collection the Page Builder declares. A component store of the host's own needs a slug of its own: rename the host's collection, or leave componentReadiness.collection unset to use the plugin's Components collection.`
+    );
+  }
 }
 
 /**
@@ -1878,6 +1912,13 @@ export const pageBuilder = (
     // because the factory is memoized for the boot and clears only on its
     // first resolution.
     init: ctx => {
+      // The store judged again against the site's renames, before anything
+      // is wired to it.
+      refuseStoreSharingAPluginSlug(
+        componentStoreOf(opts),
+        [],
+        ctx.self.collections
+      );
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
@@ -3028,5 +3069,12 @@ export const pageBuilder = (
   sitesQueries.set(plugin, {
     definitionOf: name => namedQueries.definitionOf(name),
   });
+  // A host's component store must not share a slug with the plugin's own
+  // collections: refused while the config is read, before anything is keyed
+  // by it. A rename is judged again in `init`, once it is known.
+  refuseStoreSharingAPluginSlug(
+    componentStoreOf(opts),
+    (plugin.contributes?.collections ?? []).map(collection => collection.slug)
+  );
   return plugin;
 };

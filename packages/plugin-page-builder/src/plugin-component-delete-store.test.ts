@@ -18,6 +18,7 @@ import {
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
 } from "./builder-view";
 import { COMPONENTS_SLUG } from "./collections/components";
+import { PATTERNS_SLUG } from "./collections/patterns";
 import { pageBuilder } from "./plugin";
 import { TRANSFER_IMPORT_COMPONENT } from "./transfer/transfer-contract";
 
@@ -77,5 +78,32 @@ describe("Delete component's admin wiring", () => {
       disableDelete: false,
       components: { BeforeListTable: TRANSFER_IMPORT_COMPONENT },
     });
+  });
+
+  it("refuses a host store that shares a slug with a collection the plugin declares", () => {
+    // Keyed by that slug, the delete's surfaces would land on the plugin's
+    // own Patterns rather than on the host's store.
+    expect(() =>
+      pageBuilder({ componentReadiness: { collection: PATTERNS_SLUG } })
+    ).toThrow(
+      /componentReadiness\.collection names "patterns", which is also a collection the Page Builder declares/
+    );
+    // Naming the plugin's own Components is not a host store, and stands.
+    expect(() =>
+      pageBuilder({ componentReadiness: { collection: COMPONENTS_SLUG } })
+    ).not.toThrow();
+  });
+
+  it("refuses naming `components` as the store once the plugin's own Components is renamed", () => {
+    const plugin = pageBuilder({
+      componentReadiness: { collection: COMPONENTS_SLUG },
+    });
+    // Judged first in init, before anything reads the rest of the context.
+    const ctx = {
+      self: { collections: { [COMPONENTS_SLUG]: "site-components" } },
+    };
+    expect(() => plugin.init?.(ctx as never)).toThrow(
+      /Components collection is renamed to "site-components"/
+    );
   });
 });
