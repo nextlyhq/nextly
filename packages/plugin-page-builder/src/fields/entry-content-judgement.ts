@@ -53,6 +53,9 @@ const OUTSIDE_TEMPLATES_CODE = "ENTRY_CONTENT_OUTSIDE_TEMPLATES";
 /** The refusal of a field that is not a top-level blocks field of the collection. */
 const FIELD_UNKNOWN_CODE = "ENTRY_CONTENT_FIELD_UNKNOWN";
 
+/** The refusal of a template save whose collection's fields could not be read. */
+const FIELD_UNCHECKED_CODE = "ENTRY_CONTENT_FIELD_UNCHECKED";
+
 /** The refusal of an Entry content block that names no field. */
 const FIELD_UNSET_CODE = "ENTRY_CONTENT_FIELD_UNSET";
 
@@ -141,21 +144,62 @@ async function targetOf(
 }
 
 /**
- * Whether the stored template already chose `field` on this block, or its
- * stored forms can't be read, so nothing can tell this write's choice from
- * the one saved.
+ * Whether the stored template drew `target` too: a choice it held for
+ * another collection is no choice for this one. Read as the system outside a
+ * transaction. Inside one the stored row cannot be read, and there the
+ * template guard holds the collection the write carries to the stored one,
+ * so the two are the same.
+ */
+async function storedTargetIs(
+  args: PluginFieldValidateArgs,
+  templates: TemplateTargets | undefined,
+  target: string
+): Promise<boolean> {
+  const write = args.write;
+  if (write === undefined || templates === undefined) return false;
+  if (write.inTransaction) return true;
+  if (write.id === undefined) return false;
+  const stored = await templates.storedTargetsOf([write.id]);
+  return stored.get(write.id) === target;
+}
+
+/**
+ * Whether the stored template already chose `field` on this block for the
+ * same collection, or its stored forms can't be read, so nothing can tell
+ * this write's choice from the one saved. A template retargeted to another
+ * collection has its field judged afresh.
  */
 async function keptAsStored(
   site: EntryContentJudging,
+  args: PluginFieldValidateArgs,
+  target: string,
   nodeId: string,
   field: string
 ): Promise<boolean> {
   const snapshot = await site.storedForms?.();
   if (snapshot === undefined) return false;
-  return (
+  const held =
     !snapshot.readable ||
-    storedHeld(snapshot.forms, nodeId, field, site.maxNodes)
-  );
+    storedHeld(snapshot.forms, nodeId, field, site.maxNodes);
+  return held && (await storedTargetIs(args, site.templates, target));
+}
+
+/**
+ * The refusal of a template save whose collection's fields could not be
+ * read, so its Entry content field could not be checked: refused rather
+ * than stored unchecked.
+ */
+function uncheckedIssue(
+  first: EntryContentPlacement,
+  args: PluginFieldValidateArgs,
+  label: string,
+  target: string
+): PluginFieldIssue {
+  return {
+    path: args.path,
+    code: FIELD_UNCHECKED_CODE,
+    message: `${label}${first.path}: the fields of "${target}" couldn't be read to check which one Entry content shows, so this save is refused. Try again.`,
+  };
 }
 
 /**
@@ -165,6 +209,7 @@ async function keptAsStored(
 async function fieldIssues(
   first: EntryContentPlacement,
   collection: NonNullable<Awaited<ReturnType<EntryBlocksFieldsReader>>>,
+  target: string,
   args: PluginFieldValidateArgs,
   label: string,
   site: EntryContentJudging
@@ -187,7 +232,7 @@ async function fieldIssues(
   if (collection.fields.some(each => each.name === field)) return [];
   // A choice the template already held as saved is kept: the field was
   // removed from the collection since, by nobody editing this template.
-  if (await keptAsStored(site, first.node.id, field)) return [];
+  if (await keptAsStored(site, args, target, first.node.id, field)) return [];
   return [
     {
       path: args.path,
@@ -232,7 +277,15 @@ export async function newEntryContentIssues(
   }
   const target = await targetOf(value, args, site.templates);
   if (target === undefined || site.blocksFieldsOf === undefined) return [];
-  const collection = await site.blocksFieldsOf(target);
+  // Fail closed: a read that fails is a save refused, never a field let
+  // through unchecked. A collection the site does not have is the template
+  // guard's to refuse, in its words.
+  let collection: Awaited<ReturnType<EntryBlocksFieldsReader>>;
+  try {
+    collection = await site.blocksFieldsOf(target);
+  } catch {
+    return [uncheckedIssue(first, args, label, target)];
+  }
   if (collection === undefined) return [];
-  return fieldIssues(first, collection, args, label, site);
+  return fieldIssues(first, collection, target, args, label, site);
 }

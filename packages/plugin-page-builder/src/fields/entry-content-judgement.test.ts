@@ -145,6 +145,38 @@ describe("a template's Entry content field, at save", () => {
     ]);
   });
 
+  it("judges afresh a template retargeted to another collection, whatever it stored", async () => {
+    // Stored as Posts' template choosing Body; now written as Notes', which
+    // has no Body. A choice made for another collection is no choice here.
+    const stored = async (): Promise<StoredForms> => ({
+      forms: [templateOf("body")] as never,
+      readable: true,
+    });
+    const retargeted = await judge(templateOf("body"), {}, stored, {
+      collection: "notes",
+    });
+    expect(retargeted.map(issue => issue.code)).toEqual([
+      "ENTRY_CONTENT_FIELD_UNKNOWN",
+    ]);
+    expect(retargeted[0]?.message).toContain("Notes");
+  });
+
+  it("refuses the save when the collection's fields can't be read, and judges them once they can (the control)", async () => {
+    const failing: EntryBlocksFieldsReader = () =>
+      Promise.reject(new Error("the registry is down"));
+    const refused = await newEntryContentIssues(
+      templateOf("body"),
+      args({}),
+      "Template",
+      { templates, blocksFieldsOf: failing, storedForms: nothingStored }
+    );
+    expect(refused.map(issue => issue.code)).toEqual([
+      "ENTRY_CONTENT_FIELD_UNCHECKED",
+    ]);
+    // The same write against a reader that answers is judged, and passes.
+    expect(await judge(templateOf("body"))).toEqual([]);
+  });
+
   it("reads the stored forms only once a field is not one of the collection's", async () => {
     const stored = vi.fn(nothingStored);
     await judge(templateOf("body"), {}, stored);

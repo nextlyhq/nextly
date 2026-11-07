@@ -126,7 +126,6 @@ import {
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
-import { labelOf, pluralLabelOf } from "./collection-labels";
 import {
   ADDRESS_CLAIMS_SLUG,
   addressClaimsCollection,
@@ -341,7 +340,7 @@ import {
   holdTemplateCollection,
   templateCollectionDelete,
 } from "./templates/collection-delete";
-import { entryBlocksFieldsOf } from "./templates/entry-content-fields";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
 import {
   designUnderWhere,
   registerEntryDesignCascade,
@@ -2642,18 +2641,10 @@ export const pageBuilder = (
         // A collection's top-level blocks fields, for the field a template's
         // Entry content block draws: read per write, so a field removed a
         // moment ago is refused at the next save that newly chooses it.
-        entryBlocksFields: async collection => {
-          const record: unknown = await ctx.services.collections
-            .getCollection(collection, {})
-            .catch(() => undefined);
-          if (typeof record !== "object" || record === null) return undefined;
-          const named = record as Record<string, unknown>;
-          return {
-            fields: entryBlocksFieldsOf(named),
-            label:
-              pluralLabelOf(named).pluralLabel ?? labelOf(named, collection),
-          };
-        },
+        // A failed read is thrown, so the save refuses rather than storing
+        // a field nobody checked.
+        entryBlocksFields: collection =>
+          readEntryBlocksFields(ctx.services.collections, collection),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),

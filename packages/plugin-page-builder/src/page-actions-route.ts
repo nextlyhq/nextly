@@ -95,7 +95,7 @@ import {
   storedFingerprint,
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
-import { entryBlocksFieldsOf } from "./templates/entry-content-fields";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
 import {
   carryingTemplateTarget,
   templateTargetOf,
@@ -621,10 +621,13 @@ async function onlyBlocksFieldOf(
   templateTarget: string | undefined
 ): Promise<string | undefined> {
   if (templateTarget === undefined) return undefined;
-  const record = await ctx.services.collections
-    .getCollection(templateTarget, {})
-    .catch(() => undefined);
-  const fields = entryBlocksFieldsOf(record);
+  // A failed read aborts the action rather than placing the block with a
+  // guess; a collection the site does not have offers no field to choose.
+  const read = await readEntryBlocksFields(
+    ctx.services.collections,
+    templateTarget
+  );
+  const fields = read?.fields ?? [];
   return fields.length === 1 ? fields[0]?.name : undefined;
 }
 

@@ -17,8 +17,13 @@
  * @experimental Settles when collection templates ship.
  * @module templates/entry-content-fields
  */
-import { addressableFields, humanizeFieldName } from "@nextlyhq/plugin-sdk";
+import {
+  addressableFields,
+  humanizeFieldName,
+  NextlyError,
+} from "@nextlyhq/plugin-sdk";
 
+import { labelOf, pluralLabelOf } from "../collection-labels";
 import { isBlocksField } from "../fields/blocksHelper";
 
 /** One top-level blocks field: its name, and what the admin calls it. */
@@ -55,4 +60,44 @@ export function entryBlocksFieldsOf(record: unknown): EntryBlocksField[] {
     });
   }
   return found;
+}
+
+/** A collection's blocks fields and its name, as the save names it. */
+export interface EntryBlocksFieldsRead {
+  readonly fields: readonly EntryBlocksField[];
+  /** The collection's name, as the editor names it: "Posts". */
+  readonly label: string;
+}
+
+/**
+ * `collection`'s top-level blocks fields and its name, read from its
+ * registry record; `undefined` for a collection the site does not have.
+ *
+ * Any other failure to read it is thrown, never answered as "no fields": the
+ * save judging a template's Entry content then refuses rather than letting an
+ * unchecked field be stored (fail closed), and an API action placing one is
+ * refused rather than placed naming a guess.
+ */
+export async function readEntryBlocksFields(
+  collections: {
+    getCollection(
+      name: string,
+      context: Record<string, never>
+    ): Promise<unknown>;
+  },
+  collection: string
+): Promise<EntryBlocksFieldsRead | undefined> {
+  let record: unknown;
+  try {
+    record = await collections.getCollection(collection, {});
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return undefined;
+    throw error;
+  }
+  if (typeof record !== "object" || record === null) return undefined;
+  const named = record as Record<string, unknown>;
+  return {
+    fields: entryBlocksFieldsOf(named),
+    label: pluralLabelOf(named).pluralLabel ?? labelOf(named, collection),
+  };
 }
