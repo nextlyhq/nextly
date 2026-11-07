@@ -6,7 +6,7 @@
  *
  * @module site-code/bootstrap.test
  */
-import { JSDOM, VirtualConsole } from "jsdom";
+import { JSDOM, ResourceLoader, VirtualConsole } from "jsdom";
 import { describe, expect, it } from "vitest";
 
 import { CANVAS_MOUNT_ATTRIBUTE } from "../canvas/attributes";
@@ -130,6 +130,150 @@ describe("the loader, in order and kept out of the admin", () => {
     expect(window.ran).toEqual(["library", "object"]);
   });
 
+  it("finishes the head's code before the body's starts", async () => {
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {
+            src: "data:text/javascript,window.ran=(window.ran||[]).concat('head library')",
+          },
+        },
+      ],
+    });
+    const body = JSON.stringify({
+      slot: "body",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {},
+          text: "window.ran = (window.ran || []).concat('body')",
+        },
+      ],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="body">${body}</script><script>${SITE_CODE_BOOTSTRAP}</script></body></html>`,
+      {
+        url: "https://acme.example/",
+        runScripts: "dangerously",
+        resources: "usable",
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    // Each loader on its own would start the body's script while the head's
+    // library is still loading.
+    expect((dom.window as unknown as { ran?: string[] }).ran).toEqual([
+      "head library",
+      "body",
+    ]);
+  });
+
+  it("still waits on a module script that says nomodule, which is fetched", async () => {
+    // The module bundle never answers, so whatever follows must wait.
+    class NeverForModule extends ResourceLoader {
+      override fetch(
+        url: string,
+        options: Parameters<ResourceLoader["fetch"]>[1]
+      ) {
+        if (url.includes("bundle")) {
+          return Object.assign(new Promise<Buffer>(() => undefined), {
+            abort: () => undefined,
+          });
+        }
+        return super.fetch(url, options);
+      }
+    }
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {
+            src: "https://cdn.example/bundle.js",
+            type: "module",
+            nomodule: "",
+          },
+        },
+        { tag: "script", attrs: {}, text: "window.ran = ['after']" },
+      ],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body></body></html>`,
+      {
+        url: "https://acme.example/",
+        runScripts: "dangerously",
+        resources: new NeverForModule(),
+        beforeParse: window => {
+          Object.defineProperty(
+            window.HTMLScriptElement.prototype,
+            "noModule",
+            { configurable: true, get: () => false }
+          );
+        },
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect((dom.window as unknown as { ran?: string[] }).ran).toBeUndefined();
+  });
+
+  it("waits on no nomodule script where modules run, which is never fetched there", async () => {
+    // A loader that never answers for the legacy bundle, as a module-capable
+    // browser never fetches it: no load or error ever comes.
+    class NeverForLegacy extends ResourceLoader {
+      override fetch(
+        url: string,
+        options: Parameters<ResourceLoader["fetch"]>[1]
+      ) {
+        if (url.includes("legacy")) {
+          return Object.assign(new Promise<Buffer>(() => undefined), {
+            abort: () => undefined,
+          });
+        }
+        return super.fetch(url, options);
+      }
+    }
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: { src: "https://cdn.example/legacy.js", nomodule: "" },
+        },
+      ],
+    });
+    const body = JSON.stringify({
+      slot: "body",
+      skip: ["/admin"],
+      entries: [{ tag: "script", attrs: {}, text: "window.ran = ['body']" }],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="body">${body}</script><script>${SITE_CODE_BOOTSTRAP}</script></body></html>`,
+      {
+        url: "https://acme.example/",
+        runScripts: "dangerously",
+        resources: new NeverForLegacy(),
+        // A browser that runs modules has noModule on its scripts.
+        beforeParse: window => {
+          Object.defineProperty(
+            window.HTMLScriptElement.prototype,
+            "noModule",
+            {
+              configurable: true,
+              get: () => false,
+            }
+          );
+        },
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect((dom.window as unknown as { ran?: string[] }).ran).toEqual(["body"]);
+  });
+
   it("loads the admin afresh when the page moves into it within the app", async () => {
     const errors: string[] = [];
     const virtualConsole = new VirtualConsole();
@@ -145,6 +289,29 @@ describe("the loader, in order and kept out of the admin", () => {
     expect(errors.filter(message => message.includes("navigation"))).toEqual(
       []
     );
+    window.history.pushState({}, "", "/admin/collections/pages");
+    expect(errors.some(message => message.includes("navigation"))).toBe(true);
+  });
+
+  it("keeps the paths it skips when code removes the data blocks", async () => {
+    const errors: string[] = [];
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", error => errors.push(error.message));
+    const window = await pageWith(
+      "https://acme.example/pricing",
+      [
+        {
+          tag: "script",
+          attrs: {},
+          text: "document.querySelectorAll('script[type=\"application/json\"]').forEach(function (block) { block.remove(); })",
+        },
+      ],
+      virtualConsole
+    );
+    expect(
+      window.document.querySelectorAll('script[type="application/json"]')
+    ).toHaveLength(0);
+    // The guard read /admin before the code ran, so moving in still reloads.
     window.history.pushState({}, "", "/admin/collections/pages");
     expect(errors.some(message => message.includes("navigation"))).toBe(true);
   });

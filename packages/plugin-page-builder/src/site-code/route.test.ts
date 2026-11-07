@@ -9,6 +9,7 @@
 import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
+import { cspHash } from "./csp";
 import {
   SITE_CODE_SAVED_AUDIT,
   siteCodeRoutes,
@@ -55,12 +56,14 @@ function routeOf(
   method: "GET" | "POST",
   nextly: SiteCodeDirectApi,
   csp?: string,
-  reportOnly = false
+  reportOnly = false,
+  personName?: (id: string) => Promise<string | null>
 ): PluginRoute {
   const route = siteCodeRoutes({
     nextly: async () => nextly,
     options: csp === undefined ? undefined : { csp, reportOnly },
     permission: "manage-page-builder-site",
+    ...(personName === undefined ? {} : { personName }),
   }).find(candidate => candidate.method === method);
   if (route === undefined) throw new Error(`no ${method} route`);
   return route;
@@ -150,6 +153,42 @@ describe("saving site code", () => {
       ctx
     );
     expect(updates).toHaveLength(1);
+  });
+
+  it("says exactly what to add to a policy that blocks the code", async () => {
+    const { nextly } = store();
+    const { ctx } = contextFor("session");
+    const route = routeOf("POST", nextly, "script-src 'self'");
+    const checked = (await (
+      await call(
+        route,
+        post({ head: "<script>a()</script>", body: "", dryRun: true }),
+        ctx
+      )
+    ).json()) as {
+      item: {
+        csp: { additions: { directive: string; sources: string[] }[] }[];
+      };
+    };
+    // A directive the policy doesn't name comes whole: its fallback's
+    // sources, the inline script's hash and the loader's.
+    const [addition] = checked.item.csp[0]?.additions ?? [];
+    expect(addition?.directive).toBe("script-src-elem");
+    expect(addition?.sources).toContain("'self'");
+    expect(addition?.sources).toContain(`'${await cspHash("a()")}'`);
+  });
+
+  it("adds nothing to a policy that blocks nothing", async () => {
+    const { nextly } = store();
+    const { ctx } = contextFor("session");
+    const checked = (await (
+      await call(
+        routeOf("POST", nextly, "script-src 'self' 'unsafe-inline'"),
+        post({ head: "<script>a()</script>", body: "", dryRun: true }),
+        ctx
+      )
+    ).json()) as { item: { csp: { additions: unknown[] }[] } };
+    expect(checked.item.csp[0]?.additions).toEqual([]);
   });
 
   it("shows a Report-Only policy's findings but asks no acknowledgement for them", async () => {
@@ -290,15 +329,22 @@ describe("the version a save is made from", () => {
 });
 
 describe("reading site code", () => {
-  it("answers what was written, its version, and whether a policy is declared", async () => {
+  it("answers what was written, its version, whether a policy is declared, and who changed it when", async () => {
     const { nextly } = store({
       headSource: "<script>a()</script>",
       bodySource: "",
+      head: [{ tag: "script", attrs: {}, text: "a()" }],
+      body: [],
+      changedBy: "user:user-1",
+      updatedAt: "2026-11-06T09:30:00.000Z",
       _rev: "rev-7",
     });
     const { ctx } = contextFor("session");
+    const names = vi.fn(async (id: string) =>
+      id === "user-1" ? "Ada Lovelace" : null
+    );
     const answer = await call(
-      routeOf("GET", nextly, "script-src 'self'"),
+      routeOf("GET", nextly, "script-src 'self'", false, names),
       new Request(`${SITE}/x`),
       ctx
     );
@@ -307,6 +353,26 @@ describe("reading site code", () => {
       body: "",
       version: "rev-7",
       policyDeclared: true,
+      described: { head: ["An inline script"], body: [] },
+      changedAt: "2026-11-06T09:30:00.000Z",
+      changedBy: "Ada Lovelace",
+    });
+  });
+
+  it("answers no name where it can't be read, and never fails the read", async () => {
+    const { nextly } = store({ changedBy: "user:gone", _rev: "rev-1" });
+    const { ctx } = contextFor("session");
+    const answer = await call(
+      routeOf("GET", nextly, undefined, false, async () => {
+        throw new Error("no such user");
+      }),
+      new Request(`${SITE}/x`),
+      ctx
+    );
+    expect(await answer.json()).toMatchObject({
+      changedBy: null,
+      changedAt: null,
+      described: { head: [], body: [] },
     });
   });
 });

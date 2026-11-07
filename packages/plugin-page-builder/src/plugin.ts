@@ -45,10 +45,7 @@ import {
   type PagesReader,
 } from "./address-claims/backfill";
 import { claimLocales } from "./address-claims/page-claims";
-import {
-  registerPageAddressClaims,
-  type ReadsById,
-} from "./address-claims/page-claims-hook";
+import { registerPageAddressClaims } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
@@ -114,6 +111,7 @@ import { componentActionRoutes } from "./component-actions-route";
 import {
   registerComponentGuards,
   storedUseCheck,
+  storeLifecycle,
 } from "./component-delete/guards";
 import { componentDeleteRoutes } from "./component-delete/route";
 import { componentDeleteJob } from "./component-delete/sweep";
@@ -2248,12 +2246,22 @@ export const pageBuilder = (
         pages: pagesSlug,
         claims: claimsStore,
         locales: siteLocales,
-        nextly: async () => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          return (await getCachedNextly()) as unknown as ReadsById;
+        // On the save's own connection, so naming a refusal takes no second
+        // connection from the pool while the save holds one.
+        readPage: async (tx, id) => {
+          try {
+            const found =
+              await ctx.services.ownCollections.findEntryByIdInTransaction(
+                tx,
+                pagesSlug,
+                id
+              );
+            return found as unknown as Readonly<Record<string, unknown>>;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return null;
+            throw error;
+          }
         },
-        collection: slug =>
-          ctx.services.collections.getCollection(slug, undefined as never),
         ...(opts.pagePreviewPath === undefined
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
@@ -2388,14 +2396,26 @@ export const pageBuilder = (
       // so a component a Layout uses is refused naming the Layout first.
       {
         const placing = composition.hostsOf;
+        const store = composition.store.collection;
+        // The registry's record of the collection, which a store made in the
+        // admin changes there; never read inside a caller's transaction.
+        const lifecycle = storeLifecycle(
+          async () =>
+            (
+              (await ctx.services.collections.getCollection(store, {})) as {
+                status?: unknown;
+              } | null
+            )?.status === true
+        );
         registerComponentGuards({
           ctx,
-          components: composition.store.collection,
+          components: store,
           runs: () => fenceStore(ctx.db, ctx.dialect),
           hostsOf: () => placing,
           confirmUnused: storedUseCheck(() =>
             componentDeleteRewriteService(requireRewriteInstall)
           ),
+          lifecycle,
         });
       }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
@@ -2910,6 +2930,15 @@ export const pageBuilder = (
           },
           options: opts.siteCode,
           permission: MANAGE_SITE_PERMISSION,
+          // Read as the server, for "Last changed by": the name only.
+          personName: async id => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            const person = await nextly.users.findByID({ id });
+            return typeof person?.name === "string" && person.name !== ""
+              ? person.name
+              : null;
+          },
         }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
