@@ -14,13 +14,20 @@ import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
 import {
   conditionedBlocksIn,
   useComposedEntryContent,
+  type PreviewedEntry,
 } from "@nextlyhq/builder/shell";
 import { useMemo } from "react";
 
-import type { TemplatePreview } from "./use-template-preview";
+import { useSettledEntry, type TemplatePreview } from "./use-template-preview";
 
 /** The page as drawn, and which of its blocks are conditioned. */
 export interface ConditionedPage {
+  /**
+   * The entry the page is drawn and its conditions judged with
+   * (`useSettledEntry`): the one named, or, while a refresh reads that same
+   * entry again, the entry as last read; `undefined` outside a template.
+   */
+  readonly entry: PreviewedEntry | undefined;
   /**
    * The page as the canvas draws it: a template's with the previewed entry's
    * own blocks composed into its Entry content; any other document as it is.
@@ -32,21 +39,23 @@ export interface ConditionedPage {
 
 /**
  * `document` as the canvas draws it, under `limits`, and its conditioned
- * blocks. Composed from the entry as its latest read has it (`latest`), never
- * only once a refresh has answered: while the window's refresh reads the
- * entry again, the page keeps the entry's blocks, and their conditions, as
- * they were, rather than drawing the bare template and dropping their count
- * until the read is back.
+ * blocks. Composed from the settled entry (`useSettledEntry`): while the
+ * window's refresh reads the same entry again, the page keeps its blocks,
+ * and their conditions, as they were, rather than drawing the bare template
+ * and dropping their count until the reads are back; a switch to another
+ * entry draws none of it until both its reads have answered, so its bound
+ * values never draw as fallbacks first, and a failed read draws none.
  */
 export function useConditionedPage(
   document: BlockDocument,
   preview: TemplatePreview | undefined,
   limits: DocumentLimits | undefined
 ): ConditionedPage {
-  const composed = useComposedEntryContent(document, preview?.latest, limits);
+  const entry = useSettledEntry(preview);
+  const composed = useComposedEntryContent(document, entry, limits);
   const held = useMemo(
     () => conditionedBlocksIn(composed, limits),
     [composed, limits]
   );
-  return { composed, held };
+  return { entry, composed, held };
 }

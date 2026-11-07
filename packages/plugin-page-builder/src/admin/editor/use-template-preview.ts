@@ -348,6 +348,62 @@ function roundPreviewed(
 const CANVAS_LOADING: PreviewedEntry = { kind: "none", reason: "loading" };
 
 /**
+ * The entry the editor's page goes on drawing, and judging conditions with,
+ * from the preview as the strip says it (`followingCanvas`) and the id of the
+ * entry it last named (`shownId`).
+ *
+ * The entry named, once named. While a REFRESH of that same entry is read
+ * again (the strip names no entry yet, and still names that one in its
+ * chip), the entry as last read (`latest`), so the page keeps its blocks and
+ * the conditions it was judged by rather than dropping them until the reads
+ * are back. Anything else as the strip says it: a SWITCH to another entry
+ * draws none of the new entry until both its reads have answered, and an
+ * entry whose read failed draws none at all.
+ */
+function settledEntry(
+  preview: TemplatePreview | undefined,
+  shownId: string | undefined
+): PreviewedEntry | undefined {
+  if (preview === undefined) return undefined;
+  const { previewed, latest } = preview;
+  const reading = previewed.kind === "none" && previewed.reason === "loading";
+  return reading && rereads(preview, shownId) ? latest : previewed;
+}
+
+/**
+ * Whether the preview reads again the entry it last named (`shownId`): the
+ * chip still names it, readable, and the latest read is of it.
+ */
+function rereads(
+  preview: TemplatePreview,
+  shownId: string | undefined
+): boolean {
+  const { latest, chip } = preview;
+  if (shownId === undefined || chip === undefined || chip.unavailable) {
+    return false;
+  }
+  return (
+    chip.id === shownId && latest.kind === "entry" && latest.id === shownId
+  );
+}
+
+/**
+ * {@link settledEntry} for the preview as it changes: the id of the entry it
+ * last named is kept from render to render, so a refresh of that entry is
+ * told apart from a switch to another.
+ */
+export function useSettledEntry(
+  preview: TemplatePreview | undefined
+): PreviewedEntry | undefined {
+  const named =
+    preview?.previewed.kind === "entry" ? preview.previewed.id : undefined;
+  const [shownId, setShownId] = useState(named);
+  // Kept as soon as the strip names an entry, in this very render.
+  if (named !== undefined && named !== shownId) setShownId(named);
+  return settledEntry(preview, named ?? shownId);
+}
+
+/**
  * The preview as the strip and the seam say it: an entry is named as the
  * one previewed only once both its own read and the canvas's read of it
  * have answered, so neither claims an entry the canvas is not drawing. A

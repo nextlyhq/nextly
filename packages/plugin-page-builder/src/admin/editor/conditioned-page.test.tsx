@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 /**
- * The page the editor's canvas draws, and its conditioned blocks, while the
- * window's refresh reads the previewed entry again: the seam names no entry
- * until that read is back (`previewed` loading), and the page keeps the
- * entry's blocks as last read (`latest`), so the Body and the conditions it
- * holds stay drawn and counted rather than dropping out mid-refresh.
+ * The page the editor's canvas draws, and the entry its conditions are
+ * judged with, while the strip names no entry yet: a REFRESH of the entry it
+ * named keeps that entry's blocks and its subject (`latest`), so nothing
+ * drops out or shows that its conditions hide; a SWITCH to another entry, or
+ * a read that failed, draws none of the entry until both reads have answered.
  *
  * @module admin/editor/conditioned-page.test
  */
@@ -13,12 +13,15 @@ import {
   ENTRY_CONTENT_SLOT,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import type { PreviewedEntry } from "@nextlyhq/builder/shell";
+import {
+  useAppliedConditions,
+  type PreviewedEntry,
+} from "@nextlyhq/builder/shell";
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { useConditionedPage } from "./conditioned-page";
-import type { TemplatePreview } from "./use-template-preview";
+import type { PreviewChip, TemplatePreview } from "./use-template-preview";
 
 /** The articles template: Entry content drawing Body, unconditioned. */
 const TEMPLATE: BlockDocument = {
@@ -57,14 +60,36 @@ const ARTICLE: PreviewedEntry = {
       ],
     },
   },
-  publicValues: null,
-  fields: [],
+  // A visitor reads it as a free article, so the VIP block is hidden.
+  publicValues: { tier: "free" },
+  fields: [{ name: "tier", type: "text" }],
 };
+
+/** Another article, its Body holding a block of its own. */
+const OTHER: PreviewedEntry = {
+  ...ARTICLE,
+  id: "a2",
+  title: "Writing alt text that helps",
+};
+
+const LOADING: PreviewedEntry = { kind: "none", reason: "loading" };
+
+/** The chip naming `entry`, read or not. */
+function chipOf(entry: PreviewedEntry, unavailable = false): PreviewChip {
+  return {
+    id: entry.kind === "entry" ? entry.id : "",
+    title: entry.kind === "entry" ? entry.title : "",
+    status: "published",
+    unavailable,
+    loading: !unavailable,
+  };
+}
 
 /** A preview naming `previewed` while its latest read is `latest`. */
 function previewOf(
   previewed: PreviewedEntry,
-  latest: PreviewedEntry
+  latest: PreviewedEntry,
+  chip: PreviewChip | undefined = undefined
 ): TemplatePreview {
   return {
     collection: "articles",
@@ -73,7 +98,7 @@ function previewOf(
     blocksFields: [{ name: "body", label: "Body" }],
     language: undefined,
     list: { state: "ready", items: [], mayCreate: false },
-    chip: undefined,
+    chip,
     previewed,
     latest,
     choose: vi.fn(),
@@ -87,26 +112,77 @@ function drawnIn(page: BlockDocument): number {
   return page.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT]?.length ?? 0;
 }
 
-describe("the page the canvas draws while the entry is read again", () => {
-  it("keeps the entry's Body, and its conditioned block, from the latest read", () => {
-    // Mid-refresh: the seam names no entry, the latest read still holds it.
-    const { result } = renderHook(() =>
-      useConditionedPage(
-        TEMPLATE,
-        previewOf({ kind: "none", reason: "loading" }, ARTICLE),
-        undefined
-      )
-    );
-    expect(drawnIn(result.current.composed)).toBe(1);
-    expect(result.current.held).toEqual({ any: true, readingEntry: true });
+/**
+ * The page and its conditions applied for the settled entry, as the editor
+ * draws them, over a preview that changes from render to render.
+ */
+function drawnOver(first: TemplatePreview) {
+  return renderHook(
+    ({ preview }: { preview: TemplatePreview }) => {
+      const page = useConditionedPage(TEMPLATE, preview, undefined);
+      const applied = useAppliedConditions(page.composed, page.entry, {
+        noun: "article",
+      });
+      return { page, applied };
+    },
+    { initialProps: { preview: first } }
+  );
+}
+
+/** The article named, both its reads answered. */
+const NAMED = previewOf(ARTICLE, ARTICLE, {
+  ...chipOf(ARTICLE),
+  loading: false,
+});
+
+describe("the page the canvas draws while the strip names no entry yet", () => {
+  it("keeps the entry's Body, and its conditioned block, through a refresh of that entry", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    expect(drawnIn(result.current.page.composed)).toBe(1);
+    // The window's refresh: the same entry, read again, named by no one yet.
+    rerender({ preview: previewOf(LOADING, ARTICLE, chipOf(ARTICLE)) });
+    expect(drawnIn(result.current.page.composed)).toBe(1);
+    expect(result.current.page.held).toEqual({
+      any: true,
+      readingEntry: true,
+    });
   });
 
-  it("is the bare template where no entry was ever read (the control)", () => {
-    const loading: PreviewedEntry = { kind: "none", reason: "loading" };
-    const { result } = renderHook(() =>
-      useConditionedPage(TEMPLATE, previewOf(loading, loading), undefined)
-    );
-    expect(result.current.composed).toBe(TEMPLATE);
-    expect(result.current.held).toEqual({ any: false, readingEntry: false });
+  it("draws none of a newly chosen entry while its canvas read is on its way", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    // The new entry's own read has answered; the canvas's has not.
+    rerender({ preview: previewOf(LOADING, OTHER, chipOf(OTHER)) });
+    expect(result.current.page.composed).toBe(TEMPLATE);
+  });
+
+  it("draws no Body for an entry whose canvas read failed", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    rerender({
+      preview: previewOf(
+        { kind: "none", reason: "unavailable" },
+        ARTICLE,
+        chipOf(ARTICLE, true)
+      ),
+    });
+    expect(result.current.page.composed).toBe(TEMPLATE);
+  });
+
+  it("is the bare template where no entry was ever named (the control)", () => {
+    const { result } = drawnOver(previewOf(LOADING, LOADING));
+    expect(result.current.page.composed).toBe(TEMPLATE);
+    expect(result.current.page.held).toEqual({
+      any: false,
+      readingEntry: false,
+    });
+  });
+});
+
+describe("conditions applied through a refresh of the same entry", () => {
+  it("keeps a block they hide hidden while the entry is read again", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    // The control: named, the VIP block is hidden for a free article.
+    expect(result.current.applied?.hidden).toHaveLength(1);
+    rerender({ preview: previewOf(LOADING, ARTICLE, chipOf(ARTICLE)) });
+    expect(result.current.applied?.hidden).toHaveLength(1);
   });
 });
