@@ -123,6 +123,45 @@ function guardedResult(value: unknown, path: string): unknown {
     : refusingInsideNamedQuery(value, path);
 }
 
+/**
+ * A proxy over `value` whose traps read `value` itself, built on a stand-in
+ * of the same kind and prototype. A proxy's answers are held to its target's
+ * frozen properties (a frozen method must read as itself, so it could not
+ * come back guarded), and the stand-in holds none: a frozen service, or
+ * frozen data, is guarded like any other. Every trap a reader reaches reads
+ * through to `value`; a descriptor is reported configurable, as the stand-in
+ * holds no property it could contradict.
+ */
+function proxyOver(
+  value: object,
+  get: (real: object, prop: PropertyKey) => unknown,
+  describe: (
+    real: object,
+    prop: PropertyKey
+  ) => PropertyDescriptor | undefined = (real, prop) =>
+    Reflect.getOwnPropertyDescriptor(real, prop)
+): object {
+  const standIn: object = Array.isArray(value)
+    ? []
+    : (Object.create(Object.getPrototypeOf(value) as object | null) as object);
+  return new Proxy(standIn, {
+    get: (_standIn, prop) => get(value, prop),
+    getOwnPropertyDescriptor: (stood, prop) => {
+      const descriptor = describe(value, prop);
+      if (descriptor === undefined) return undefined;
+      // An array stand-in's own `length` is fixed in place: reported as the
+      // stand-in holds it, with the real array's length.
+      const own = Reflect.getOwnPropertyDescriptor(stood, prop);
+      if (own !== undefined && own.configurable === false) {
+        return { ...own, value: Reflect.get(value, prop) as unknown };
+      }
+      return { ...descriptor, configurable: true };
+    },
+    has: (_standIn, prop) => Reflect.has(value, prop),
+    ownKeys: () => Reflect.ownKeys(value),
+  });
+}
+
 /** Each plain record or array already traversed, so one read twice is one proxy. */
 const traversedPlain = new WeakMap<object, object>();
 
@@ -136,16 +175,16 @@ const traversedPlain = new WeakMap<object, object>();
 function plainDataGuarded(value: object, path: string): object {
   const known = traversedPlain.get(value);
   if (known !== undefined) return known;
-  const proxy = new Proxy(value, {
-    get(target, prop, receiver) {
-      if (!Object.hasOwn(target, prop)) {
-        return Reflect.get(target, prop, receiver) as unknown;
-      }
-      return guardedResult(
-        Reflect.get(target, prop, target),
-        `${path}.${String(prop)}`
-      );
-    },
+  const proxy = proxyOver(value, (target, prop) => {
+    // An inherited member, such as an array's `map`, read as it is, with
+    // this proxy as its receiver so what it reads comes back guarded.
+    if (!Object.hasOwn(target, prop)) {
+      return Reflect.get(target, prop, proxy) as unknown;
+    }
+    return guardedResult(
+      Reflect.get(target, prop, target),
+      `${path}.${String(prop)}`
+    );
   });
   traversedPlain.set(value, proxy);
   return proxy;
@@ -174,8 +213,9 @@ export function refusingInsideNamedQuery<T>(value: T, path: string): T {
   if (typeof value !== "object" || value === null) return value;
   const known = guardedObjects.get(value);
   if (known !== undefined) return known as T;
-  const proxy = new Proxy(value, {
-    get(target, prop) {
+  const proxy = proxyOver(
+    value,
+    (target, prop) => {
       // Refused before the property is read, since reading one runs its
       // getter, which can read data as a method can.
       const at = `${path}.${String(prop)}`;
@@ -196,12 +236,12 @@ export function refusingInsideNamedQuery<T>(value: T, path: string): T {
     },
     // A property's descriptor hands out its getter itself, to be called
     // with any receiver: refused inside the frame for the same reason.
-    getOwnPropertyDescriptor(target, prop) {
+    (target, prop) => {
       const refused = refusedInsideNamedQuery(`${path}.${String(prop)}`);
       if (refused !== undefined) throw refused;
       return Reflect.getOwnPropertyDescriptor(target, prop);
-    },
-  });
+    }
+  );
   guardedObjects.set(value, proxy);
-  return proxy;
+  return proxy as T;
 }

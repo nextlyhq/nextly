@@ -207,6 +207,34 @@ describe("plugin services inside a named query's frame", () => {
     expect(opened.deep.list[0]?.read()).toEqual(["SENTINEL"]);
   });
 
+  it("read a frozen service and frozen data as they are outside the frame, and refuse them inside", () => {
+    registerPluginService(PLUGIN, "frozen", () =>
+      Object.freeze({
+        read: () => ["SENTINEL"],
+        open: () => Object.freeze({ read: () => ["SENTINEL"], count: 2 }),
+      })
+    );
+    const service = services().frozen as unknown as {
+      read: () => string[];
+      open: () => { read: () => string[]; count: number };
+    };
+    // Outside the frame: no proxy invariant is broken, and all works.
+    expect(service.read()).toEqual(["SENTINEL"]);
+    const opened = service.open();
+    expect(opened.read()).toEqual(["SENTINEL"]);
+    expect(opened.count).toBe(2);
+    // Inside it: the frozen method, and a handle in frozen data, refuse.
+    const frame = openNamedQueryFrame("notes.all");
+    expect(outcome(() => frame.run(() => service.read()))).toBe(
+      "named-query-trusted-read"
+    );
+    expect(outcome(() => frame.run(() => opened.read()))).toBe(
+      "named-query-trusted-read"
+    );
+    // Plain values in frozen data still read.
+    expect(frame.run(() => opened.count)).toBe(2);
+  });
+
   it("answer through the frame's own door", () => {
     const frame = openNamedQueryFrame("notes.all");
     expect(frame.run(() => frame.read(() => services().store?.read()))).toEqual(

@@ -246,6 +246,11 @@ describe("a named query's declaration", () => {
       "not a safe whole number",
     ],
     [
+      "an input key longer than a list's action takes",
+      { params: { ["k".repeat(65)]: param.text({ label: "K" }) } },
+      "at most 64 characters",
+    ],
+    [
       "a choice value no list could store",
       {
         params: {

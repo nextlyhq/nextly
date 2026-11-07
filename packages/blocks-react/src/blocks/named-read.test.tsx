@@ -834,6 +834,37 @@ describe("a list whose source is a named query", () => {
     expect(listItemKey({ slug: "b" }, 0)).toBe(0);
   });
 
+  it("keeps a result for one day only, whatever the query declares", async () => {
+    const keys: string[] = [];
+    const cache: NamedQueryHost["cache"] = async ({ key, read }) => {
+      keys.push(key.join("|"));
+      return await read();
+    };
+    const query = eventsQuery(() => Promise.resolve({ rows: [] }));
+    for (const day of ["2026-11-06", "2026-11-07"]) {
+      await draw(query, {
+        host: { cache, today: () => Promise.resolve(day) },
+      });
+    }
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+
+  it("draws the empty state though the log it reports to fails", async () => {
+    const { element } = await draw(
+      eventsQuery(() => Promise.reject(new Error("boom"))),
+      {
+        host: {
+          report: () => {
+            throw new Error("the log is down");
+          },
+        },
+      }
+    );
+    expect(emptyShown(element)).toBe(true);
+    expect(note(element)).toContain("Upcoming events stopped with an error");
+  });
+
   it("logs a failure by its code and reference, never the error's words", () => {
     const line = namedQueryFailureLine(
       {

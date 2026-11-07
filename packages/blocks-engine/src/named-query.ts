@@ -1077,8 +1077,8 @@ function paramsProblem(
     return `it declares ${String(entries.length)} inputs; at most ${String(NAMED_QUERY_MAX_PARAMS)} are allowed`;
   }
   for (const [key, each] of entries) {
-    if (!isNamedQueryParamKey(key)) {
-      return `its input "${describeValue(key)}" is not a key of letters, digits and underscores`;
+    if (!isNamedQueryParamKey(key) || key.length > NAMED_QUERY_NAME_MAX) {
+      return `its input "${describeValue(key)}" is not a key of letters, digits and underscores, of at most ${String(NAMED_QUERY_NAME_MAX)} characters`;
     }
     const problem = paramShapeProblem(key, each, collections);
     if (problem !== undefined) return problem;
