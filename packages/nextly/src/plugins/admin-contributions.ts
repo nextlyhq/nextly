@@ -426,7 +426,17 @@ export interface AdminTabContribution extends AdminContributionBase {
   component: ComponentPath;
 }
 
-/** @experimental A section of the edit page's side panel. */
+/**
+ * @experimental A section of the edit page's side panel.
+ *
+ * On a collection entry's edit page (`collection.edit`) the admin draws it
+ * where it is placed among the panel's own sections (`status`, `publishing`,
+ * `language`, `details`), under `label` as its heading, framed as they are;
+ * the component draws the body and receives `DocumentPanelSectionProps`. A
+ * component that draws nothing for an entry leaves no section, heading
+ * included, so a section may apply to some entries and not others. Not drawn
+ * while an entry is being created, nor yet on a Single's edit page.
+ */
 export interface AdminSidebarSectionContribution extends AdminContributionBase {
   kind: "sidebarSection";
   label: string;

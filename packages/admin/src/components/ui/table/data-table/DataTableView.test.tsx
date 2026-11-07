@@ -1,7 +1,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { act, render, screen, within } from "@admin/__tests__/utils";
 
 import { DataTableView } from "./DataTableView";
 import type { DataTableSelection } from "./DataTableView";
@@ -158,6 +158,26 @@ describe("DataTableView", () => {
     );
     await user.click(table().getByRole("checkbox", { name: "Select all" }));
     expect(onToggleAll).toHaveBeenCalledWith(rows, false);
+  });
+
+  it("draws a plugin column registered while the list is already on screen", () => {
+    clearDataTablePlugins();
+    render(
+      <DataTableView columns={columns} rows={rows} registryKey="late-list" />
+    );
+    expect(table().queryByText("Late")).toBeNull();
+
+    // A plugin that decides after a read of its own registers once the list
+    // is drawn: the list redraws with the column, rather than missing it
+    // until it is opened again.
+    act(() => {
+      registerColumns("late-list", () => [
+        { name: "late", header: "Late", cell: () => "LATE_CELL" },
+      ]);
+    });
+
+    expect(table().getByText("Late")).toBeInTheDocument();
+    expect(table().getAllByText("LATE_CELL").length).toBe(rows.length);
   });
 
   it("merges plugin-registered columns and row actions via registryKey", async () => {

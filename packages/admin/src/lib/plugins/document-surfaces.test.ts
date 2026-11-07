@@ -3,9 +3,11 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { AdminContributionsMeta } from "nextly/config";
+
 import type { PluginMetadata } from "@admin/types/branding";
 
-import { documentSurfacesFor } from "./document-surfaces";
+import { documentSurfacesFor, panelOrderFor } from "./document-surfaces";
 
 const plugins = [
   {
@@ -54,5 +56,79 @@ describe("documentSurfacesFor", () => {
       actions: {},
       sections: [],
     });
+  });
+});
+
+describe("panelOrderFor", () => {
+  const contributions = {
+    "collection.edit": {
+      sidebarSection: [
+        {
+          id: "acme.design",
+          kind: "sidebarSection",
+          plugin: "@acme/designs",
+          label: "Design",
+          component: "a#Design",
+        },
+        { builtIn: "status" },
+        {
+          id: "acme.seo",
+          kind: "sidebarSection",
+          plugin: "@acme/seo",
+          label: "SEO",
+          component: "s#Seo",
+          collections: ["pages"],
+        },
+        {
+          id: "acme.featured",
+          kind: "sidebarSection",
+          plugin: "@acme/designs",
+          label: "Featured",
+          component: "a#Featured",
+          visibleWhen: { field: "featured", equals: true },
+        },
+        { builtIn: "details" },
+      ],
+    },
+  } as unknown as AdminContributionsMeta;
+
+  it("keeps the server's order, built-ins and sections together", () => {
+    expect(panelOrderFor(contributions, "pages", { featured: true })).toEqual([
+      {
+        kind: "section",
+        id: "acme.design",
+        plugin: "@acme/designs",
+        title: "Design",
+        component: "a#Design",
+      },
+      { kind: "builtIn", name: "status" },
+      {
+        kind: "section",
+        id: "acme.seo",
+        plugin: "@acme/seo",
+        title: "SEO",
+        component: "s#Seo",
+      },
+      {
+        kind: "section",
+        id: "acme.featured",
+        plugin: "@acme/designs",
+        title: "Featured",
+        component: "a#Featured",
+      },
+      { kind: "builtIn", name: "details" },
+    ]);
+  });
+
+  it("leaves out a section narrowed to other collections, or whose rule fails on the entry", () => {
+    const ids = panelOrderFor(contributions, "posts", { featured: false })?.map(
+      part => (part.kind === "section" ? part.id : part.name)
+    );
+    expect(ids).toEqual(["acme.design", "status", "details"]);
+  });
+
+  it("answers nothing when the place has no list, so the panel keeps its own order", () => {
+    expect(panelOrderFor({}, "posts", {})).toBeUndefined();
+    expect(panelOrderFor(undefined, "posts", {})).toBeUndefined();
   });
 });

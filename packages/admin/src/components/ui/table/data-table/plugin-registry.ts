@@ -7,7 +7,8 @@
  * a list key such as a collection slug, `"users"`, `"media"`, or `"*"` (every
  * list). Mirrors the Map-singleton convention of `component-registry` and
  * `cell-registry` (last write wins, warn-never-throw), and is re-exported through
- * `@nextlyhq/plugin-sdk/admin`.
+ * `@nextlyhq/plugin-sdk/admin`. A registration made while a list is on screen
+ * reaches it: the lists subscribe to the registrations.
  *
  * @module components/ui/table/data-table/plugin-registry
  */
@@ -36,24 +37,69 @@ export type ColumnTransform = (
 ) => NextlyColumn[];
 
 // ============================================================================
-// Registries (module-level singletons)
+// Registries (module-level, replaced whole on every change)
 // ============================================================================
 
-const columnProviders = new Map<DataTableTarget, ColumnProvider[]>();
-const columnTransforms = new Map<DataTableTarget, ColumnTransform[]>();
-const rowActionRegistry = new Map<DataTableTarget, RowAction[]>();
-const bulkActionRegistry = new Map<DataTableTarget, BulkAction[]>();
-
-function push<T>(map: Map<string, T[]>, key: string, value: T): void {
-  const existing = map.get(key);
-  if (existing) existing.push(value);
-  else map.set(key, [value]);
+/**
+ * Every registration, as one value replaced whole on each change rather than
+ * mutated, so a list on screen can subscribe to it: a column or action a
+ * plugin registers once the list is drawn (after a read of its own, say)
+ * joins that list instead of waiting for the next time it is opened.
+ */
+export interface DataTablePluginRegistrations {
+  readonly columnProviders: ReadonlyMap<DataTableTarget, ColumnProvider[]>;
+  readonly columnTransforms: ReadonlyMap<DataTableTarget, ColumnTransform[]>;
+  readonly rowActions: ReadonlyMap<DataTableTarget, RowAction[]>;
+  readonly bulkActions: ReadonlyMap<DataTableTarget, BulkAction[]>;
 }
 
-function collect<T>(map: Map<string, T[]>, target: DataTableTarget): T[] {
+const EMPTY: DataTablePluginRegistrations = {
+  columnProviders: new Map(),
+  columnTransforms: new Map(),
+  rowActions: new Map(),
+  bulkActions: new Map(),
+};
+
+let registrations: DataTablePluginRegistrations = EMPTY;
+const listeners = new Set<() => void>();
+
+/** Replace the registrations, and tell every list drawn from them. */
+function replace(next: DataTablePluginRegistrations): void {
+  registrations = next;
+  for (const listener of listeners) listener();
+}
+
+/** `map` with `value` appended under `key`, as a new map. */
+function appended<T>(
+  map: ReadonlyMap<string, T[]>,
+  key: string,
+  value: T
+): Map<string, T[]> {
+  const next = new Map(map);
+  next.set(key, [...(map.get(key) ?? []), value]);
+  return next;
+}
+
+function collect<T>(
+  map: ReadonlyMap<string, T[]>,
+  target: DataTableTarget
+): T[] {
   const wildcard = map.get("*") ?? [];
   const scoped = target === "*" ? [] : (map.get(target) ?? []);
   return [...wildcard, ...scoped];
+}
+
+/** The registrations as they stand, for `useSyncExternalStore`. */
+export function dataTablePluginRegistrations(): DataTablePluginRegistrations {
+  return registrations;
+}
+
+/** Be told when a registration changes; returns the unsubscribe. */
+export function subscribeToDataTablePlugins(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 // ============================================================================
@@ -76,7 +122,10 @@ export function registerColumns(
     console.warn("registerColumns: a target is required.");
     return;
   }
-  push(columnProviders, target, provider);
+  replace({
+    ...registrations,
+    columnProviders: appended(registrations.columnProviders, target, provider),
+  });
 }
 
 /** Transform (reorder / filter / edit) a list's columns after they are built. */
@@ -88,7 +137,14 @@ export function transformColumns(
     console.warn("transformColumns: a target is required.");
     return;
   }
-  push(columnTransforms, target, transform);
+  replace({
+    ...registrations,
+    columnTransforms: appended(
+      registrations.columnTransforms,
+      target,
+      transform
+    ),
+  });
 }
 
 /** Add a per-row action (rendered in the row's three-dots menu). */
@@ -100,7 +156,10 @@ export function registerRowAction<Row extends object = Record<string, unknown>>(
     console.warn("registerRowAction: a target is required.");
     return;
   }
-  push(rowActionRegistry, target, action as RowAction);
+  replace({
+    ...registrations,
+    rowActions: appended(registrations.rowActions, target, action as RowAction),
+  });
 }
 
 /** Add a bulk action (rendered in the selection bar). */
@@ -111,7 +170,14 @@ export function registerBulkAction<
     console.warn("registerBulkAction: a target is required.");
     return;
   }
-  push(bulkActionRegistry, target, action as BulkAction);
+  replace({
+    ...registrations,
+    bulkActions: appended(
+      registrations.bulkActions,
+      target,
+      action as BulkAction
+    ),
+  });
 }
 
 // ============================================================================
@@ -124,19 +190,20 @@ export function registerBulkAction<
  */
 export function resolvePluginColumns<Row extends object>(
   target: DataTableTarget,
-  base: NextlyColumn<Row>[]
+  base: NextlyColumn<Row>[],
+  from: DataTablePluginRegistrations = registrations
 ): NextlyColumn<Row>[] {
   const ctx: DataTableContext = { target };
   let columns = [...(base as NextlyColumn[])];
 
-  for (const provider of collect(columnProviders, target)) {
+  for (const provider of collect(from.columnProviders, target)) {
     try {
       columns = [...columns, ...provider(ctx)];
     } catch (error) {
       console.warn(`registerColumns provider for "${target}" failed:`, error);
     }
   }
-  for (const transform of collect(columnTransforms, target)) {
+  for (const transform of collect(from.columnTransforms, target)) {
     try {
       // Transform a copy and only commit an array result, so a transform that
       // mutates its input then throws (or returns a non-array) cannot leave the
@@ -158,16 +225,18 @@ export function resolvePluginColumns<Row extends object>(
 
 /** Row actions registered for a target (plus `"*"`). */
 export function getPluginRowActions<Row extends object>(
-  target: DataTableTarget
+  target: DataTableTarget,
+  from: DataTablePluginRegistrations = registrations
 ): RowAction<Row>[] {
-  return collect(rowActionRegistry, target) as RowAction<Row>[];
+  return collect(from.rowActions, target) as RowAction<Row>[];
 }
 
 /** Bulk actions registered for a target (plus `"*"`). */
 export function getPluginBulkActions<Row extends object>(
-  target: DataTableTarget
+  target: DataTableTarget,
+  from: DataTablePluginRegistrations = registrations
 ): BulkAction<Row>[] {
-  return collect(bulkActionRegistry, target) as BulkAction<Row>[];
+  return collect(from.bulkActions, target) as BulkAction<Row>[];
 }
 
 // ============================================================================
@@ -176,8 +245,5 @@ export function getPluginBulkActions<Row extends object>(
 
 /** Clear every DataTable plugin registry (tests only). */
 export function clearDataTablePlugins(): void {
-  columnProviders.clear();
-  columnTransforms.clear();
-  rowActionRegistry.clear();
-  bulkActionRegistry.clear();
+  replace(EMPTY);
 }

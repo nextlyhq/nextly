@@ -42,6 +42,7 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -60,6 +61,7 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
+import { panelOrderFor } from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -1123,6 +1125,14 @@ export function EntryForm({
     onOwnChange: expectOwnChange,
     locale,
   });
+  // The panel's sections in the order the server placed them, with the side
+  // panel sections plugins declared for this collection's entries among them,
+  // each judged on the entry as this reader's read returned it.
+  const { contributions } = useBranding();
+  const panelOrder = useMemo(
+    () => panelOrderFor(contributions, collection.name, entry),
+    [contributions, collection.name, entry]
+  );
 
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
@@ -1690,6 +1700,9 @@ export function EntryForm({
                                     // A reader may still open the other languages.
                                     navigationDisabled={navigationHeld}
                                     pluginSections={pluginSurfaces.sections}
+                                    {...(panelOrder === undefined
+                                      ? {}
+                                      : { panelOrder })}
                                     {...(pluginSurfaces.sectionProps ===
                                     undefined
                                       ? {}

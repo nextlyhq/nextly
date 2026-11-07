@@ -39,7 +39,12 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { MoreHorizontal } from "lucide-react";
-import { useMemo, type KeyboardEvent, type JSX } from "react";
+import {
+  useMemo,
+  useSyncExternalStore,
+  type KeyboardEvent,
+  type JSX,
+} from "react";
 
 import { Pagination } from "@admin/components/shared/pagination";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
@@ -47,7 +52,12 @@ import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 
 import { resolveCellRenderer } from "./cell-registry";
-import { getPluginRowActions, resolvePluginColumns } from "./plugin-registry";
+import {
+  dataTablePluginRegistrations,
+  getPluginRowActions,
+  resolvePluginColumns,
+  subscribeToDataTablePlugins,
+} from "./plugin-registry";
 import type { CellContext, NextlyColumn, RowAction } from "./types";
 
 /** Controlled selection contract. When supplied, a checkbox column is shown. */
@@ -166,14 +176,25 @@ export function DataTableView<Row extends object>({
   bordered = true,
   className,
 }: DataTableViewProps<Row>): JSX.Element {
+  // The plugins' registrations as they stand, read again when one changes, so
+  // a column or action registered while this list is on screen joins it.
+  const registered = useSyncExternalStore(
+    subscribeToDataTablePlugins,
+    dataTablePluginRegistrations,
+    dataTablePluginRegistrations
+  );
   // Merge plugin-contributed columns (and transforms) for this list, if any.
   const resolvedColumns = useMemo(
-    () => (registryKey ? resolvePluginColumns(registryKey, columns) : columns),
-    [registryKey, columns]
+    () =>
+      registryKey
+        ? resolvePluginColumns(registryKey, columns, registered)
+        : columns,
+    [registryKey, columns, registered]
   );
   const pluginRowActions = useMemo(
-    () => (registryKey ? getPluginRowActions<Row>(registryKey) : []),
-    [registryKey]
+    () =>
+      registryKey ? getPluginRowActions<Row>(registryKey, registered) : [],
+    [registryKey, registered]
   );
 
   const visibleColumns = useMemo(

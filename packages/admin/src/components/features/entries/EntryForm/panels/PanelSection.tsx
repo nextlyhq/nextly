@@ -20,12 +20,20 @@ import { cn } from "@admin/lib/utils";
 export function PanelSection({
   title,
   titleHidden = false,
+  collapsesWhenEmpty = false,
   focusTarget,
   children,
 }: {
   title: string;
   /** Says the heading only to assistive technology. */
   titleHidden?: boolean;
+  /**
+   * Leaves no section, heading included, while its content draws nothing:
+   * for a plugin's section, which may apply to some documents and not
+   * others and knows which only once it has read something. Hidden by the
+   * browser as the content changes, so the section needs no state of its own.
+   */
+  collapsesWhenEmpty?: boolean;
   /**
    * Lets the section take focus from script, marked with the given data
    * attribute: for a section whose control goes away when it has done its
@@ -46,7 +54,9 @@ export function PanelSection({
         // A section handed focus shows it with the ring the editor's controls
         // use, drawn inside so the panel's edges do not clip it.
         focusTarget !== undefined &&
-          "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        // `display: none`, so the empty section leaves the reading order too.
+        collapsesWhenEmpty && "has-[>[data-panel-section-body]:empty]:hidden"
       )}
       {...focusable}
     >
@@ -59,7 +69,11 @@ export function PanelSection({
       >
         {title}
       </h3>
-      {children}
+      {collapsesWhenEmpty ? (
+        <div data-panel-section-body="">{children}</div>
+      ) : (
+        children
+      )}
     </section>
   );
 }
