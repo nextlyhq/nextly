@@ -277,4 +277,17 @@ describe("Show when", () => {
       )
     ).toBeTruthy();
   });
+
+  it("offers conditions stored as null for removal, without saying visitors never see the block", async () => {
+    // The page reads `null` as no restriction; the save refuses it.
+    await shown(withConditions(null));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/Visitors see this block/)).toBeTruthy();
+    act(() => {
+      screen.getByRole("button", { name: "Remove conditions" }).click();
+    });
+    expect(
+      findNode(editorRef!.document.nodes, "a")?.visibility
+    ).toBeUndefined();
+  });
 });

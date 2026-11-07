@@ -42,10 +42,12 @@ import {
   tokenIdentity,
   walkNodes,
   DEFAULT_LIMITS,
+  componentIdsIn,
   resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
   type DefinitionsById,
+  type DocumentLimits,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -165,6 +167,13 @@ export function lockMarksOf(document: BlockDocument): Map<string, LockMark> {
  */
 export const CONDITIONED_ATTRIBUTE = "data-nx-conditioned";
 
+/**
+ * Marks an element whose condition mark is its own block's, a block of a
+ * placed component's definition, rather than its placement's: the marks
+ * badge each such block apart, where a placement's roots share one badge.
+ */
+export const CONDITIONED_OWN_ATTRIBUTE = "data-nx-conditioned-own";
+
 /** How a conditioned block is marked on the canvas. */
 type ConditionMark = "conditional" | "unchecked";
 
@@ -177,7 +186,7 @@ type ConditionMark = "conditional" | "unchecked";
 function conditionMarksOf(
   document: BlockDocument,
   unchecked: ReadonlySet<string> | undefined,
-  composed: { definitions?: DefinitionsById; maxNodes?: number }
+  composed: { definitions?: DefinitionsById; limits?: DocumentLimits }
 ): Map<string, ConditionMark> {
   const marks = new Map<string, ConditionMark>();
   const mark = (node: BlockNode): void => {
@@ -187,7 +196,9 @@ function conditionMarksOf(
       unchecked?.has(node.id) === true ? "unchecked" : "conditional"
     );
   };
-  const bound = { maxNodes: composed.maxNodes ?? DEFAULT_LIMITS.maxNodes };
+  const bound = {
+    maxNodes: composed.limits?.maxNodes ?? DEFAULT_LIMITS.maxNodes,
+  };
   // The page's own blocks, a placement among them, by their ids, which are
   // the addresses the canvas draws them with.
   walkNodes(document.nodes, mark, bound);
@@ -195,12 +206,44 @@ function conditionMarksOf(
   // composed tree gives them, which the canvas draws them with: composed as
   // the renderer composes, each conditioned placement expanded too.
   if (composed.definitions !== undefined && composed.definitions.size > 0) {
+    // Under the limits the canvas renders with, so a page the site allows
+    // past the default is composed here as it is drawn.
     const tree = resolveComponentInstances(document, composed.definitions, {
       conditioned: "carry",
+      ...(composed.limits === undefined ? {} : { limits: composed.limits }),
     }).document;
     walkNodes(tree.nodes, mark, bound);
   }
   return marks;
+}
+
+/**
+ * The definitions a page reaches, the components it places and those they
+ * place, with each one's conditions lifted so the canvas draws its
+ * conditioned blocks; every other definition as it is. Only the reached ones
+ * are walked, so a large component library costs nothing on a page that
+ * places none of it.
+ */
+function revealedDefinitions(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): DefinitionsById {
+  const reached = new Set<string>();
+  const queue = componentIdsIn(document.nodes, maxNodes);
+  for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
+    const definition = definitions.get(id);
+    if (reached.has(id) || definition === undefined) continue;
+    reached.add(id);
+    queue.push(...componentIdsIn(definition.nodes, maxNodes));
+  }
+  if (reached.size === 0) return definitions;
+  const next = new Map(definitions);
+  for (const id of reached) {
+    const definition = definitions.get(id);
+    if (definition !== undefined) next.set(id, revealConditioned(definition));
+  }
+  return next;
 }
 
 /**
@@ -213,16 +256,17 @@ function conditionMarkFor(
   element: Element,
   container: HTMLElement,
   marks: ReadonlyMap<string, ConditionMark>
-): ConditionMark | undefined {
+): { mark: ConditionMark; own: boolean } | undefined {
   const address = nodeAddressOf(element);
   if (address === null) return undefined;
   if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
   const id = element.getAttribute(NODE_ID_ATTRIBUTE);
   const own = id !== null && id !== address ? marks.get(id) : undefined;
-  if (own !== undefined) return own;
-  return isOutermostForAddress(element, address, container)
+  if (own !== undefined) return { mark: own, own: true };
+  const placed = isOutermostForAddress(element, address, container)
     ? marks.get(address)
     : undefined;
+  return placed === undefined ? undefined : { mark: placed, own: false };
 }
 
 /**
@@ -688,6 +732,7 @@ function useCanvasMarkers(
             `[${DROP_REFUSED_ATTRIBUTE}]`,
             `[${LOCKED_ATTRIBUTE}]`,
             `[${CONDITIONED_ATTRIBUTE}]`,
+            `[${CONDITIONED_OWN_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
@@ -770,11 +815,9 @@ function useCanvasMarkers(
         );
         // On the block's own outermost element, so a block a list draws once
         // per entry is marked once per copy and its parts are not marked again.
-        setMark(
-          element,
-          CONDITIONED_ATTRIBUTE,
-          conditionMarkFor(element, container, conditionMarks)
-        );
+        const condition = conditionMarkFor(element, container, conditionMarks);
+        setMark(element, CONDITIONED_ATTRIBUTE, condition?.mark);
+        setFlag(element, CONDITIONED_OWN_ATTRIBUTE, condition?.own === true);
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
         }
@@ -2006,14 +2049,13 @@ function useDrawnPage({
         ? rendered
         : {
             ...rendered,
-            definitions: new Map(
-              [...rendered.definitions].map(([id, definition]) => [
-                id,
-                revealConditioned(definition),
-              ])
+            definitions: revealedDefinitions(
+              document,
+              rendered.definitions,
+              rendered.limits?.maxNodes
             ),
           },
-    [rendered]
+    [rendered, document]
   );
   const page = useMemo(
     () => (
@@ -2101,9 +2143,7 @@ export function Canvas({
         ...(render?.definitions === undefined
           ? {}
           : { definitions: render.definitions }),
-        ...(render?.limits?.maxNodes === undefined
-          ? {}
-          : { maxNodes: render.limits.maxNodes }),
+        ...(render?.limits === undefined ? {} : { limits: render.limits }),
       }),
     [document, conditionsUnchecked, render?.definitions, render?.limits]
   );

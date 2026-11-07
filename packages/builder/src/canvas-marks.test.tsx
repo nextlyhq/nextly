@@ -23,6 +23,7 @@ import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
+  CONDITIONED_OWN_ATTRIBUTE,
   Canvas,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
@@ -434,6 +435,69 @@ describe("selection marks", () => {
     expect(badges()[1]?.style.getPropertyValue("--nx-tag-inset-side")).toBe(
       "500px"
     );
+  });
+
+  it("badges a component's two conditioned blocks apart, though they share its address", async () => {
+    // Each is the definition's own block, marked by its composed id.
+    const own = (id: string) =>
+      createElement("div", {
+        key: id,
+        [NODE_ID_ATTRIBUTE]: id,
+        [INSTANCE_ATTRIBUTE]: "place",
+        [CONDITIONED_ATTRIBUTE]: "conditional",
+        [CONDITIONED_OWN_ATTRIBUTE]: "",
+      });
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {own("block-1")}
+        {own("block-2")}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+      ).toHaveLength(2)
+    );
+  });
+
+  it("keeps the tab on screen when the screen cuts a block's left side", async () => {
+    // Only the block's rightmost 100px show, less than the tab's width.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 500, 500);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "cut") {
+          return new DOMRect(-900, 200, 1000, 50);
+        }
+        return new DOMRect(-900, 0, 2000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <div className={CANVAS_ROOT_CLASS}>
+          {createElement("div", {
+            [NODE_ID_ATTRIBUTE]: "cut",
+            [CONDITIONED_ATTRIBUTE]: "conditional",
+          })}
+          <CanvasMarks />
+        </div>
+      </div>
+    );
+    await act(async () => undefined);
+    const badge = () =>
+      container.querySelector<HTMLElement>(
+        '.nx-canvas-mark[data-mark="conditioned"]'
+      );
+    await waitFor(() => expect(badge()).not.toBeNull());
+    // Moved out past the block's right edge, a negative inset, so its left
+    // starts on screen.
+    const inset = Number.parseFloat(
+      badge()?.style.getPropertyValue("--nx-tag-inset-side") ?? "0"
+    );
+    expect(inset).toBeLessThan(0);
   });
 
   it("puts a tall block's badge inside its top when neither edge outside it is on screen", async () => {

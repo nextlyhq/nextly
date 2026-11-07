@@ -10,11 +10,13 @@
 import {
   conditionIssues,
   DEFAULT_LIMITS,
+  resolveComponentInstances,
   isPlainRecord,
   walkNodes,
   type BlockDocument,
   type BlockNode,
   type Condition,
+  type DefinitionsById,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
@@ -47,7 +49,11 @@ export function storedGroups(
   // reads as a restriction it can't check.
   if (!isPlainRecord(envelope)) return undefined;
   const groups: unknown = envelope.conditions;
-  if (groups === undefined || groups === null) return [];
+  if (groups === undefined) return [];
+  // Stored as `null`, which the save refuses as malformed although the page
+  // reads it as no restriction: offered for removal, as any shape no row can
+  // show is.
+  if (groups === null) return undefined;
   if (!Array.isArray(groups)) return undefined;
   const read: Condition[][] = [];
   for (const group of groups as unknown[]) {
@@ -103,14 +109,21 @@ export function uncheckedConditionIds(
   return found;
 }
 
-/** {@link uncheckedConditionIds} for a document, as an editor's services list the collections. */
+/**
+ * {@link uncheckedConditionIds} for a document, as an editor's services list
+ * the collections: its own blocks, and with `definitions` the blocks its
+ * placed components hold too, judged in the tree composed as the canvas
+ * draws it, by the ids the canvas draws them with.
+ */
 export function useConditionsUnchecked(
   document: BlockDocument,
   services:
     | Pick<ContentServices, "listLoopCollections" | "entryCollection">
     | undefined,
   /** The document limit the host renders and saves under. */
-  maxNodes?: number
+  maxNodes?: number,
+  /** The definitions of the components the document places. */
+  definitions?: DefinitionsById
 ): ReadonlySet<string> {
   const listed = useLoopCollections(services?.listLoopCollections);
   const collections =
@@ -120,14 +133,29 @@ export function useConditionsUnchecked(
         ? "loading"
         : listed.collections;
   const entryCollection = services?.entryCollection;
-  return React.useMemo(
-    () =>
-      uncheckedConditionIds(
-        document.nodes,
+  return React.useMemo(() => {
+    const own = uncheckedConditionIds(
+      document.nodes,
+      collections,
+      entryCollection,
+      maxNodes
+    );
+    if (definitions === undefined || definitions.size === 0) return own;
+    const composed = resolveComponentInstances(document, definitions, {
+      conditioned: "carry",
+      limits: {
+        ...DEFAULT_LIMITS,
+        maxNodes: maxNodes ?? DEFAULT_LIMITS.maxNodes,
+      },
+    }).document;
+    return new Set([
+      ...own,
+      ...uncheckedConditionIds(
+        composed.nodes,
         collections,
         entryCollection,
         maxNodes
       ),
-    [document, collections, entryCollection, maxNodes]
-  );
+    ]);
+  }, [document, collections, entryCollection, maxNodes, definitions]);
 }

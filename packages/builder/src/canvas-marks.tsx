@@ -31,6 +31,7 @@ import { deviceLabel } from "./breakpoint-switcher";
 import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
+  CONDITIONED_OWN_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   isOutermostForAddress,
@@ -179,6 +180,9 @@ const NO_INSET = { bottom: TAG_GAP, side: TAG_GAP } as const;
 function tagWidthOf(label: string): number {
   return label.length * 7 + 12;
 }
+
+/** The room a condition tab's icon and its gap take beside the words. */
+const CONDITION_ICON_ROOM = 16;
 
 /** @experimental */
 export interface CanvasMarksProps {
@@ -723,7 +727,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  found.push(...conditionedMarks(root, space, onScreen));
+  found.push(...conditionedMarks(root, space, onScreen, toolbarAbove));
   return dimmedBesideEditing(found);
 }
 
@@ -737,17 +741,10 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
 function conditionedMarks(
   root: HTMLElement,
   space: OverlaySpace,
-  onScreen: Rect
+  onScreen: Rect,
+  toolbarAbove: (rect: Rect) => boolean
 ): Mark[] {
-  const badges = new Map<
-    string,
-    {
-      condition: "conditional" | "unchecked";
-      parts: Outline[];
-      selected: boolean;
-      placement: boolean;
-    }
-  >();
+  const badges = new Map<string, ConditionBadge>();
   const copies = new Map<Element | null, number>();
   root.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`).forEach(element => {
     if (element.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
@@ -755,58 +752,106 @@ function conditionedMarks(
     if (condition !== "conditional" && condition !== "unchecked") return;
     const outline = outlineOf(element, root, space);
     if (outline === null) return;
-    // One badge per copy of a placement, as one frame is drawn round a
-    // selected one: each of a definition's roots is outermost for the
-    // placement's address, and they are one block on the page.
-    const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
-    const key =
-      placement === ""
-        ? `block\u0000${String(badges.size)}`
-        : `${String(copyOf(copies, element))}\u0000${placement}`;
-    const selected = element.hasAttribute(SELECTED_ATTRIBUTE);
+    const key = badgeKey(element, copies, badges.size);
+    const selected = element.getAttribute(SELECTED_ATTRIBUTE);
     const gathered = badges.get(key);
     if (gathered === undefined) {
       badges.set(key, {
         condition,
         parts: [outline],
-        selected,
-        placement: placement !== "",
+        selected: selected !== null,
+        primary: selected === "primary",
+        placement: (element.getAttribute(INSTANCE_ATTRIBUTE) ?? "") !== "",
       });
     } else {
       gathered.parts.push(outline);
-      gathered.selected ||= selected;
+      gathered.selected ||= selected !== null;
+      gathered.primary ||= selected === "primary";
     }
   });
-  return [...badges.values()].map(
-    ({ condition, parts, selected, placement }) => {
-      const outline = placementOutline(parts);
-      // A selected placement's frame names it in a tab on the same corner, so
-      // the condition tab takes the bottom edge instead of covering the name.
-      const tag = conditionTagOf(outline.rect, onScreen, selected && placement);
-      return {
-        ...outline,
-        kind: "conditioned",
-        secondary: false,
-        component: false,
-        locked: false,
-        hidden: false,
-        tag: "below",
-        tagEdge: "right",
-        // Moved in from the right when the screen cuts the block's right edge,
-        // so the tab stays on what's seen.
-        tagInset: {
-          bottom: 0,
-          side: Math.max(
-            0,
-            outline.rect.x + outline.rect.width - (onScreen.x + onScreen.width)
-          ),
-        },
-        condition,
-        conditionTag: tag,
-        ...(selected ? { conditionSelected: true } : {}),
-      };
-    }
+  return [...badges.values()].map(badge =>
+    conditionedMark(badge, onScreen, toolbarAbove)
   );
+}
+
+/** A conditioned block's parts, gathered to draw one outline and one tab. */
+interface ConditionBadge {
+  readonly condition: "conditional" | "unchecked";
+  readonly parts: Outline[];
+  selected: boolean;
+  primary: boolean;
+  readonly placement: boolean;
+}
+
+/**
+ * Which badge an element's outline joins: a block of a placed component's
+ * definition its own, by its composed id; the roots of one copy of a
+ * conditioned placement one together, as one frame is drawn round a selected
+ * one; any other block its own.
+ */
+function badgeKey(
+  element: Element,
+  copies: Map<Element | null, number>,
+  index: number
+): string {
+  if (element.hasAttribute(CONDITIONED_OWN_ATTRIBUTE)) {
+    return `own\u0000${element.getAttribute(NODE_ID_ATTRIBUTE) ?? String(index)}`;
+  }
+  const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
+  return placement === ""
+    ? `block\u0000${String(index)}`
+    : `${String(copyOf(copies, element))}\u0000${placement}`;
+}
+
+/** One conditioned block's mark: its outline and where its tab goes. */
+function conditionedMark(
+  badge: ConditionBadge,
+  onScreen: Rect,
+  toolbarAbove: (rect: Rect) => boolean
+): Mark {
+  const outline = placementOutline(badge.parts);
+  // The top is taken by a selected placement's name, or by the block
+  // toolbar above the primary block: the tab then takes the bottom edge.
+  const topTaken =
+    (badge.selected && badge.placement) ||
+    (badge.primary && toolbarAbove(outline.rect));
+  return {
+    ...outline,
+    kind: "conditioned",
+    secondary: false,
+    component: false,
+    locked: false,
+    hidden: false,
+    tag: "below",
+    tagEdge: "right",
+    tagInset: {
+      bottom: 0,
+      side: tabInset(outline.rect, onScreen, badge.condition),
+    },
+    condition: badge.condition,
+    conditionTag: conditionTagOf(outline.rect, onScreen, topTaken),
+    ...(badge.selected ? { conditionSelected: true } : {}),
+  };
+}
+
+/**
+ * How far the right-anchored tab moves in from the block's right edge so it
+ * is on screen: in by what the screen cuts off the right, or out past the
+ * edge, a negative inset, when the screen cuts the block's left so little of
+ * it shows that the tab would run off the left.
+ */
+function tabInset(
+  rect: Rect,
+  onScreen: Rect,
+  condition: "conditional" | "unchecked"
+): number {
+  const right = rect.x + rect.width;
+  const cutRight = Math.max(0, right - (onScreen.x + onScreen.width));
+  const width =
+    tagWidthOf(condition === "unchecked" ? "Can’t be checked" : "Conditional") +
+    CONDITION_ICON_ROOM;
+  const fitsLeft = right - onScreen.x - width;
+  return Math.min(cutRight, fitsLeft);
 }
 
 /** Which copy of a placement an element is part of: its parent, numbered. */

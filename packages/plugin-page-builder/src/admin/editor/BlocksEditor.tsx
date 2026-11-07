@@ -1181,7 +1181,10 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentView.preview.document,
     conditionServices,
     // The limit the canvas draws and the save surveys under.
-    canvas.canvasRender.limits?.maxNodes
+    canvas.canvasRender.limits?.maxNodes,
+    // The placed components' definitions, whose own conditions are judged
+    // in the tree the canvas composes.
+    canvas.canvasRender.definitions
   );
   const view: EditorView = {
     ...mount,
