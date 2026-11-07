@@ -23,9 +23,11 @@
  */
 import {
   composeEntryContent,
+  DOCUMENT_FORMAT_VERSION,
   entryBlocksDocumentOf,
   entryContentPlacements,
   type BlockDocument,
+  type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 import type {
   EntryContentCanvas,
@@ -119,7 +121,7 @@ export function useEntryContentDrawing(
   const own = useComposedEntryContent(
     document,
     composed === undefined ? previewed : undefined,
-    render?.limits
+    entryContentLimitsOf(render)
   );
   const drawn = composed ?? own;
   const context = render?.context;
@@ -132,6 +134,54 @@ export function useEntryContentDrawing(
     return { ...render, context: { ...base, entryContentCanvas: canvas } };
   }, [render, context, previewed, collection, holds]);
   return { document: drawn, render: drawnRender };
+}
+
+/**
+ * The page the canvas draws while conditions are applied (`applied`, the
+ * page as they leave it): as it is where the host composed the entry into it
+ * (`composed` given), else with the entry the seam names composed into it
+ * here, as a host that applies conditions to the stored template expects.
+ * `undefined` while no conditions are applied.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function useAppliedDrawing(
+  applied: BlockDocument | undefined,
+  composed: BlockDocument | undefined,
+  render: CanvasRender | undefined
+): BlockDocument | undefined {
+  const previewed = usePreviewedEntry();
+  const composesHere = applied !== undefined && composed === undefined;
+  const drawn = useComposedEntryContent(
+    applied ?? EMPTY_PAGE,
+    composesHere ? previewed : undefined,
+    entryContentLimitsOf(render)
+  );
+  return applied === undefined ? undefined : drawn;
+}
+
+/** No page, for the composition asked while no conditions are applied. */
+const EMPTY_PAGE: BlockDocument = {
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: [],
+};
+
+/**
+ * What the canvas composes an entry's content under: its limits, and the
+ * definitions of the components the page places. Held by what it reads, so
+ * a render handing the same inputs composes nothing again.
+ */
+function entryContentLimitsOf(
+  render: CanvasRender | undefined
+): EntryContentLimits {
+  const limits = render?.limits;
+  const definitions = render?.definitions;
+  return {
+    ...(limits === undefined ? {} : { maxNodes: limits.maxNodes }),
+    ...(limits === undefined ? {} : { maxDepth: limits.maxDepth }),
+    ...(definitions === undefined ? {} : { definitions }),
+  };
 }
 
 /** Whether `document` holds an Entry content block, asked once per document. */
@@ -168,12 +218,15 @@ export function useComposedEntryContent(
   previewed: PreviewedEntry | undefined,
   /**
    * The limits the canvas draws under: the entry's blocks past its node cap
-   * or below its depth are never read. The format's own where absent.
+   * or below its depth are never read, and, given the definitions of the
+   * components the page places, the template is charged what it draws once
+   * they are expanded. A number is the node cap alone, as this took before.
+   * The format's own limits where absent.
    */
-  limits?: { readonly maxNodes?: number; readonly maxDepth?: number }
+  limits?: number | EntryContentLimits
 ): BlockDocument {
-  const maxNodes = limits?.maxNodes;
-  const maxDepth = limits?.maxDepth;
+  const { maxNodes, maxDepth, definitions } =
+    typeof limits === "number" ? { maxNodes: limits } : (limits ?? {});
   const holds = useHoldsEntryContent(document, maxNodes);
   return useMemo(
     () =>
@@ -187,7 +240,20 @@ export function useComposedEntryContent(
               entryBlocksDocumentOf(previewed.editorValues[name]) ?? undefined,
             ...(maxNodes === undefined ? {} : { maxNodes }),
             ...(maxDepth === undefined ? {} : { maxDepth }),
+            ...(definitions === undefined ? {} : { definitions }),
           }),
-    [document, previewed, holds, maxNodes, maxDepth]
+    [document, previewed, holds, maxNodes, maxDepth, definitions]
   );
+}
+
+/**
+ * What a composition of an entry's content is held to: the page's node cap
+ * and depth, and the definitions of the components it places.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface EntryContentLimits {
+  readonly maxNodes?: number;
+  readonly maxDepth?: number;
+  readonly definitions?: ComponentLookup;
 }

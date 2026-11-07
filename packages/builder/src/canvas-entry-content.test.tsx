@@ -214,11 +214,13 @@ function composedFor(
 function appliedFor(
   tier: string,
   template: BlockDocument = TEMPLATE,
-  article: PreviewedEntry = ARTICLE
+  article: PreviewedEntry = ARTICLE,
+  /** The page they are applied to: the template as drawn, by default. */
+  page: BlockDocument = composedFor(template, article)
 ) {
   const fields = [{ name: "tier", type: "text" }] as const;
   return appliedConditionsOf(
-    composedFor(template, article),
+    page,
     {
       subject: {
         fields: { declared: new Set(["tier"]), readable: fields },
@@ -240,7 +242,12 @@ function appliedFor(
 async function drawn(
   applied?: ReturnType<typeof appliedFor>,
   template: BlockDocument = TEMPLATE,
-  article: PreviewedEntry = ARTICLE
+  article: PreviewedEntry = ARTICLE,
+  /**
+   * The page as the host composed it, handed with conditions applied to
+   * it, as the editor hands both; `null` hands none.
+   */
+  composed: BlockDocument | null = composedFor(template, article)
 ): Promise<HTMLElement> {
   const { container } = render(
     <PreviewedEntryProvider value={article} collection={ARTICLES}>
@@ -248,6 +255,7 @@ async function drawn(
         document={template}
         siteStyles={{ breakpoints: { viewport: [], container: [] } }}
         {...(applied === undefined ? {} : { conditionsApplied: applied })}
+        {...(applied === undefined || composed === null ? {} : { composed })}
       />
     </PreviewedEntryProvider>
   );
@@ -421,5 +429,30 @@ describe("a canvas drawn inside another", () => {
     rerender(tree("n"));
     await act(async () => undefined);
     expect(bodyLink()?.closest("[inert]")).not.toBeNull();
+  });
+});
+
+describe("a Canvas handed conditions applied, and no composed page", () => {
+  it("composes the entry's Body into the page the conditions leave", async () => {
+    // A host applying conditions to the template as stored, as before the
+    // canvas took a composed page: the Body is composed in by the canvas.
+    const applied = appliedFor("vip", TEMPLATE, ARTICLE, TEMPLATE);
+    expect(applied.shown.has("ec")).toBe(true);
+    const container = await drawn(applied, TEMPLATE, ARTICLE, null);
+    expect(container.textContent).toContain(BODY_WORDS);
+    expect(container.textContent).not.toContain("has no Body content yet");
+  });
+
+  it("draws the host's page as it is where it hands one (the control)", async () => {
+    // Applied to the page as composed, a Body block hidden for the entry is
+    // its line: the canvas composes nothing over it.
+    const applied = appliedFor("free", PLAIN, GATED_ARTICLE);
+    const container = await drawn(applied, PLAIN, GATED_ARTICLE);
+    expect(container.querySelector(".nx-condition-hidden")).not.toBeNull();
+    // Composed over again, the hidden block would draw as itself.
+    const drawnAsItself = Array.from(container.querySelectorAll("p")).some(
+      element => element.textContent === "Members' worksheet"
+    );
+    expect(drawnAsItself).toBe(false);
   });
 });

@@ -100,7 +100,10 @@ import {
 import { withConditionHiddenBlock } from "./condition-hidden-block";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
-import { useEntryContentDrawing } from "./entry-content-canvas";
+import {
+  useAppliedDrawing,
+  useEntryContentDrawing,
+} from "./entry-content-canvas";
 import {
   canvasContentRect,
   canvasScroller,
@@ -2404,23 +2407,28 @@ export function Canvas({
 
   const environment = useCanvasEnvironment(root);
   // The page as the conditions leave it while they are applied for the
-  // previewed entry (a hidden block as its marker, the entry's blocks
-  // already composed in), else the page itself.
+  // previewed entry (a hidden block as its marker), else the page itself.
   const shownDocument = conditionsApplied?.document ?? document;
   // A template draws its previewed entry's own blocks in its Entry content
   // block; only the drawn page carries them, never the document edited.
   // Composed once: by the host where it hands the page as drawn
-  // (`composed`), else here. Conditions applied, the host's page as they
-  // leave it is drawn instead, the entry's blocks composed in already.
+  // (`composed`), else here.
   const entryDrawing = useEntryContentDrawing(document, render, composed);
   // The page as composed, before any conditions are applied: what its
   // conditioned blocks, the entry's among them, are badged on.
   const composedPage = entryDrawing.document;
+  // Conditions applied, the page as they leave it, the entry composed into
+  // it here unless the host handed the page as composed.
+  const appliedDrawing = useAppliedDrawing(
+    conditionsApplied?.document,
+    composed,
+    render
+  );
   const { drawn, page } = useDrawnPage({
     regions,
     rendered: entryDrawing.render,
     sheet: siteStyles,
-    document: conditionsApplied?.document ?? composedPage,
+    document: appliedDrawing ?? composedPage,
     environment,
     applied: conditionsApplied,
   });
