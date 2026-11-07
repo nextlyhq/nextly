@@ -161,13 +161,23 @@ export function blockAddress(href: string, blockId: string): string {
   return `${path}?${params.toString()}`;
 }
 
+/** Where an address opens the builder: a section of the page, or a block. */
+export interface OpenAt {
+  /** A top-level block, as the entry screen links each section. */
+  readonly sectionId?: string;
+  /** A block at any depth, as the bindings report links each binding. */
+  readonly blockId?: string;
+}
+
 /**
- * The block an address opens the builder at: the section it names, else the
- * block; `undefined` where it names neither.
+ * Where an address opens the builder: the section it names, else the block;
+ * neither where it names neither.
  */
-export function openAtFromSearch(search: string): string | undefined {
+export function openAtFromSearch(search: string): OpenAt {
+  const section = sectionFromSearch(search);
+  if (section !== undefined) return { sectionId: section };
   const block = new URLSearchParams(search).get(BLOCK_PARAM);
-  return sectionFromSearch(search) ?? (block === null || block === "" ? undefined : block);
+  return block === null || block === "" ? {} : { blockId: block };
 }
 
 /**

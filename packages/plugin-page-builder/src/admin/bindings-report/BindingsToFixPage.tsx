@@ -306,7 +306,9 @@ function ReportBody({
   return (
     <>
       <Tabs value={place} onValueChange={onPlace}>
-        <TabsList aria-label="Show bindings in">
+        {/* Scrolling sideways on a narrow screen, where every place's tab
+            together is wider than the report. */}
+        <TabsList aria-label="Show bindings in" scrollable>
           <TabsTrigger value="all">
             All
             <span className="ml-1.5 text-muted-foreground">

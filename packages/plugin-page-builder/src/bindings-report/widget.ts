@@ -19,6 +19,8 @@ import {
 
 import { BINDINGS_TO_FIX_CARD_COMPONENT } from "../builder-view";
 
+import { BINDINGS_TO_FIX_ADMIN_PATH } from "./contract";
+
 /** The permission the card, the page and the route ask for. */
 export const EDIT_PAGES_PERMISSION = "update-pages";
 
@@ -40,7 +42,7 @@ export function bindingsToFixAttention(
     label: "Bindings to fix",
     reason: "Bindings whose field or block changed after they were saved",
     permission: EDIT_PAGES_PERMISSION,
-    link: "plugins/nextlyhq-plugin-page-builder/bindings-to-fix",
+    link: BINDINGS_TO_FIX_ADMIN_PATH,
     count: ({ user }) => visible(user),
   });
 }

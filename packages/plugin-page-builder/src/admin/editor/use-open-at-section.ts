@@ -36,6 +36,11 @@ import { useEffect, useRef } from "react";
 export interface OpenAtSectionArgs {
   /** The section the address names, or `undefined` where it names none. */
   sectionId: string | undefined;
+  /**
+   * The block the address names (`?block=`), at any depth, where it names no
+   * section: the bindings report's link to the block holding a binding.
+   */
+  blockId?: string | undefined;
   /** The editor, for the document it holds and the way to select in it. */
   editor: {
     document: Pick<BlockDocument, "nodes">;
@@ -48,9 +53,8 @@ export interface OpenAtSectionArgs {
 }
 
 /**
- * Whether the document holds a block of this id, at any depth: a section is a
- * top-level block, and a report's link names the block holding a binding,
- * wherever it sits.
+ * Whether the document holds a block of this id, at any depth: a report's
+ * link names the block holding a binding, wherever it sits.
  */
 function holds(document: Pick<BlockDocument, "nodes">, id: string): boolean {
   let found = false;
@@ -60,8 +64,29 @@ function holds(document: Pick<BlockDocument, "nodes">, id: string): boolean {
   return found;
 }
 
+/**
+ * The block the address opens at, if the document has it: a section only at
+ * the top of the page, which is where the entry screen's sections are; a
+ * block at any depth.
+ */
+function targetOf(
+  document: Pick<BlockDocument, "nodes">,
+  sectionId: string | undefined,
+  blockId: string | undefined
+): string | undefined {
+  if (sectionId !== undefined) {
+    return document.nodes.some(node => node.id === sectionId)
+      ? sectionId
+      : undefined;
+  }
+  return blockId !== undefined && holds(document, blockId)
+    ? blockId
+    : undefined;
+}
+
 export function useOpenAtSection({
   sectionId,
+  blockId,
   editor,
   canvas,
   requestPanel,
@@ -75,18 +100,19 @@ export function useOpenAtSection({
   // The arguments the editor OPENED with, which are the only ones this acts
   // on: see the module docblock. Held from the first render so a later one
   // cannot re-run the selection with its own.
-  const opened = useRef({ sectionId, editor, requestPanel });
+  const opened = useRef({ sectionId, blockId, editor, requestPanel });
 
   useEffect(() => {
     if (pending.current !== undefined) return;
-    const {
-      sectionId: id,
-      editor: atOpen,
-      requestPanel: open,
-    } = opened.current;
-    // A section is a block at the top of the page; an id naming anything else
-    // names no section the entry screen offered.
-    if (id === undefined || !holds(atOpen.document, id)) {
+    const { editor: atOpen, requestPanel: open } = opened.current;
+    // A section is a block at the top of the page; a section id naming
+    // anything else names no section the entry screen offered.
+    const id = targetOf(
+      atOpen.document,
+      opened.current.sectionId,
+      opened.current.blockId
+    );
+    if (id === undefined) {
       pending.current = null;
       return;
     }

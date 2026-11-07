@@ -10,10 +10,15 @@ import type { BindingReportRow } from "./rows";
 export const BINDINGS_TO_FIX_ROUTE_PATH = "/bindings-to-fix";
 
 /**
- * Where the "Bindings to fix" page is in the admin: the plugin's admin page
- * at the same path, linked from its menu entry, its card and the editor.
+ * Where the "Bindings to fix" page is, relative to the admin: the plugin's
+ * admin page at the same path. One spelling, which the dashboard's attention
+ * line links as given and the menu, the card and the editor link from the
+ * admin's root.
  */
-export const BINDINGS_TO_FIX_PAGE_HREF = `/admin/plugins/nextlyhq-plugin-page-builder${BINDINGS_TO_FIX_ROUTE_PATH}`;
+export const BINDINGS_TO_FIX_ADMIN_PATH = `plugins/nextlyhq-plugin-page-builder${BINDINGS_TO_FIX_ROUTE_PATH}`;
+
+/** The page's address from the admin's root. */
+export const BINDINGS_TO_FIX_PAGE_HREF = `/admin/${BINDINGS_TO_FIX_ADMIN_PATH}`;
 
 /** How many documents one page of the answer lists. */
 export const BINDINGS_TO_FIX_PAGE_SIZE = 100;

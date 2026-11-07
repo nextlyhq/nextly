@@ -87,6 +87,7 @@ import {
 } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
+import type { OpenAt } from "./builder-address";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import {
   editorPanelRenderer,
@@ -1027,8 +1028,11 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   onClose: () => void;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
-  /** The section to open at, as the address names it; none opens at the top. */
-  openAt?: string | undefined;
+  /**
+   * The section or block to open at, as the address names it; none opens at
+   * the top.
+   */
+  openAt?: OpenAt | undefined;
 }
 
 export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
@@ -1226,7 +1230,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     conditionsUnchecked,
   };
   useOpenAtSection({
-    sectionId: openAt,
+    sectionId: openAt?.sectionId,
+    blockId: openAt?.blockId,
     editor,
     canvas: canvas.canvasElement,
     requestPanel: panels.requestPanel,
