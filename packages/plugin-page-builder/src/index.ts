@@ -109,6 +109,18 @@ export type {
   PageBuilderLayoutsOptions,
   PageBuilderLayoutsProvider,
 } from "./page-layouts";
+// What the site's one content route takes to serve pages and collections'
+// entries from the address store: who holds a path, the addresses to
+// pre-render, and each collection's published template.
+export { pageBuilderContent } from "./page-content";
+export type {
+  ContentAddressHolder,
+  PageBuilderContentDirectApi,
+  PageBuilderContentOptions,
+  PageBuilderContentProvider,
+  PageBuilderContentTemplate,
+} from "./page-content";
+export type { PageBuilderTemplateOptions } from "./templates/template-addresses";
 
 // The class-usage index, the derivation behind it, and the walk that repairs
 // it.
@@ -309,8 +321,10 @@ export {
   mergeSiteCodeIntoCsp,
   parseCsp,
   siteCodeFacts,
+  siteCodePolicyAdditions,
 } from "./site-code/csp";
 export type {
+  CspAddition,
   CspCheck,
   CspCheckInput,
   CspFinding,

@@ -141,17 +141,24 @@ export interface RewriteReport {
    */
   readonly caughtByFinalWalk: readonly HostAddress[];
   /**
-   * The status each write names, for the hosts whose write names one: a
-   * public live row with no pending draft, published again in the state it
-   * was read in. In a dry run, the ones a real run would write, so a caller
-   * can ask before it starts whether each write is allowed.
+   * In a dry run, each write a real run would make: its host, the value it
+   * writes there, and the status it names where it names one (a public live
+   * row with no pending draft, published again in the state it was read in).
+   * A caller asks with them, before it starts, whether each write as it
+   * would be sent is allowed.
    */
-  readonly statuses?: readonly {
-    readonly host: HostAddress;
-    readonly status: string;
-  }[];
+  readonly writes?: readonly PlannedHostWrite[];
   /** Whether the run has walked every host to the end, twice. */
   readonly finished: boolean;
+}
+
+/** One write a dry run found a real run would make. */
+export interface PlannedHostWrite {
+  readonly host: HostAddress;
+  /** The value written at the host's top-level field. */
+  readonly value: unknown;
+  /** The status the write names, where it names one. */
+  readonly status?: string;
 }
 
 /** The character joining a key's parts; no slug, id, key or locale holds it. */

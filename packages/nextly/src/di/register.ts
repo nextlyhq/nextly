@@ -4552,6 +4552,9 @@ async function initializePlugins(
       | EmailService
       | VersionsService
       | SingleRegistryService
+      | SingleEntryService
+      | CollectionRegistryService
+      | FieldGroupRegistryService
       | DatabaseInstance
       | AnyRelations
       | SupportedDialect
@@ -4573,6 +4576,16 @@ async function initializePlugins(
       services.container.get<VersionsService>("versionsService"),
     singleRegistryService: () =>
       services.container.get<SingleRegistryService>("singleRegistryService"),
+    singleEntryService: () =>
+      services.container.get<SingleEntryService>("singleEntryService"),
+    collectionRegistryService: () =>
+      services.container.get<CollectionRegistryService>(
+        "collectionRegistryService"
+      ),
+    fieldGroupRegistryService: () =>
+      services.container.get<FieldGroupRegistryService>(
+        "fieldGroupRegistryService"
+      ),
     db: () => adapterDrizzleDb,
     // The adapter's own answer. Everything that turns a plugin's settings into
     // SQL picks its table metadata and its upsert spelling from this, and the

@@ -119,6 +119,41 @@ export interface ComponentGuardArgs {
   readonly hostsOf?: () => HostFinder | undefined;
   /** Every document read as stored, within a budget: who places it. */
   readonly confirmUnused: (componentId: string) => Promise<UseCheck>;
+  /**
+   * Whether the store has the Draft/Published lifecycle (see
+   * {@link storeLifecycle}), told whether the save runs inside a caller's
+   * transaction. Without one, `status` is an ordinary field of the host's,
+   * and no save unpublishes a component.
+   */
+  readonly lifecycle: (inATransaction: boolean) => Promise<boolean>;
+}
+
+/**
+ * Whether the component store has the Draft/Published lifecycle, as its
+ * registry record says.
+ *
+ * A save made on its own runs its `beforeChange` hooks before its
+ * transaction opens, so there the record is read afresh, on the pool, with
+ * no connection of the write's held, and only that fresh answer can let a
+ * save through. A save inside a caller's transaction holds one, and a read
+ * on the pool could wait behind it for ever on a pool of one, so there
+ * nothing is read and the store counts as having a lifecycle: the check
+ * runs. A read that fails counts the same way. The cost is that, inside a
+ * caller's transaction, a host store without a lifecycle has an edit of its
+ * own `status` field refused as an unpublish where a component it holds is
+ * used.
+ */
+export function storeLifecycle(
+  read: () => Promise<boolean>
+): (inATransaction: boolean) => Promise<boolean> {
+  return async inATransaction => {
+    if (inATransaction) return true;
+    try {
+      return await read();
+    } catch {
+      return true;
+    }
+  };
 }
 
 /** What reading every document as stored found. */
@@ -155,8 +190,25 @@ export function registerComponentGuards(args: ComponentGuardArgs): void {
   // hook, so a status another hook sets is the status judged.
   args.ctx.hooks.on("beforeChange", args.components, async context => {
     if (!unpublishes(context)) return;
-    await refuseUnpublishWhileUsed(args, context as GuardHookContext);
+    const hook = context as GuardHookContext;
+    if (!(await hasLifecycle(args, hook.executor !== undefined))) return;
+    await refuseUnpublishWhileUsed(args, hook);
   });
+}
+
+/**
+ * Whether the store has a lifecycle, asked only of a save that would
+ * unpublish. One that can't be read counts as having one, so the check runs.
+ */
+async function hasLifecycle(
+  args: ComponentGuardArgs,
+  inATransaction: boolean
+): Promise<boolean> {
+  try {
+    return await args.lifecycle(inATransaction);
+  } catch {
+    return true;
+  }
 }
 
 /** Let through only the delete's own write, at its delete step. */

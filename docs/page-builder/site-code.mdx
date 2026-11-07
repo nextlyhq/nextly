@@ -9,10 +9,34 @@ for the whole site, in its head and at the end of its body, and it never runs in
 the admin.
 
 <Callout type="warn">
-  Site code is experimental: the route, `<SiteCode>` and the CSP helpers may change
-  before it is stable. This release saves code through the site code route; there is
-  no editor for it in Settings yet.
+  Site code is experimental: the route, `<SiteCode>`, the CSP helpers and the
+  Settings editor may change before it is stable.
 </Callout>
+
+## Add it in Settings
+
+In the page builder, open **Settings → Site → Code**. The section says what each place
+holds in plain words ("A script from www.googletagmanager.com, an inline script") and
+who changed it last. **Add code** or **Edit code** opens the code itself, one box for
+the head and one for the end of the body.
+
+**Save code** checks the code on the server before anything is saved:
+
+- What can't be stored is listed under the place it is in, with the reason, and
+  nothing is saved. Your text stays as you typed it.
+- What your site's security policy would block is listed with the directive that
+  blocks it and the policy that does. The section shows what to add to your policy,
+  with a **Copy** button. **Save anyway** is enabled once you tick that you understand
+  the blocked code won't run until the policy allows it.
+- Before saving, the section also shows what won't be kept (an HTML comment, say)
+  and what a Report-Only policy would report. With no policy known, it says so
+  rather than reading as a pass.
+
+The check reads the policy your home page is sent with, as a visitor gets it, from the
+address the admin is open on: `<SiteCode>` renders in the same app as the admin, so
+that is where your pages are served. It is checked as well as the policy you declare
+(below), which is the one to rely on if a proxy sends a different policy on another
+domain. Leaving Settings with unsaved code asks first.
 
 ## Who can add it
 
@@ -91,8 +115,9 @@ but after the page's own markup. Two things follow:
 
 - A script that writes into the page as it loads (`document.write`) doesn't work as
   site code.
-- The loader waits for an external script before starting the next entry, but not
-  for a stylesheet. A script that reads the styles a stylesheet in site code sets
+- The loader waits for an external script before starting the next entry, and the
+  head's code finishes so before the end of the body's starts. It doesn't wait for a
+  stylesheet. A script that reads the styles a stylesheet in site code sets
   should wait for that stylesheet's `load` event, or come from your own code.
 
 ## Your Content Security Policy
@@ -128,6 +153,8 @@ How each kind of policy takes site code:
   policy already does.
 - **Hashes:** add the hash of each inline script and style, and the loader's own
   hash, which never changes. The check names every one it is missing.
+- **`'strict-dynamic'`:** allow the loader, by its hash or the nonce. Every script it
+  builds then runs, inline or loaded, so they need no hashes or hosts of their own.
 
 `mergeSiteCodeIntoCsp` adds what site code needs to a policy and nothing more. It
 adds only what the policy blocks now. It never adds a hash where the policy relies on

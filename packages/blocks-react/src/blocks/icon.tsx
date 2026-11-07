@@ -21,6 +21,7 @@ import { MEDIA } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
 import {
   canLink,
+  isPresent,
   LINK_PROPS,
   linkFor,
   readClaimOf,
@@ -86,6 +87,20 @@ function renderIconSvg(
   );
 }
 
+/** The icon block's type, which a list reading its links ahead asks by. */
+export const ICON_TYPE = "core/icon";
+
+/**
+ * Whether an icon names one to draw, and so a link to follow. `has` says
+ * whether a prop holds a value (or, for a list reading its links ahead, is
+ * bound to one). Asked by the render before it resolves the icon, and by a
+ * list before it reads this icon's link ahead, so the two agree on which
+ * icons link. An icon the host then cannot draw still reads no link.
+ */
+export function iconMayDraw(has: (prop: string) => boolean): boolean {
+  return has("icon");
+}
+
 export async function renderIcon({
   props,
   className,
@@ -96,7 +111,8 @@ export async function renderIcon({
   // A resolver that fails is the same as one that draws no such icon: the
   // page still renders, without the icon, rather than failing whole.
   const resolved =
-    id === "" || ctx.resolveIcon === undefined
+    !iconMayDraw(prop => isPresent(props, prop)) ||
+    ctx.resolveIcon === undefined
       ? null
       : await ctx.resolveIcon(id).catch(() => null);
   // An icon this host does not draw: an empty, unnamed element, so the block
@@ -144,7 +160,7 @@ const ICON_BASE_STYLES = {
 // library carries no dependency on the plugin SDK.
 export const icon: BlockDefinition<IconProps, PageContext> = libraryDefinition(
   defineBlock({
-    name: "core/icon",
+    name: ICON_TYPE,
     version: 1,
     description: "A symbol, decorative or labelled.",
     editor: {

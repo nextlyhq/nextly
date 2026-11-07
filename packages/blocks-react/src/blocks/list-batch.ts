@@ -30,6 +30,9 @@ import {
 import type { PageContext } from "../context";
 import { conditionAllows } from "../visibility";
 
+import { ICON_TYPE, iconMayDraw } from "./icon";
+import { IMAGE_TYPE, imageMayDraw } from "./image";
+
 /** Where a prop's value comes from: as set, or a list item's field path. */
 type ValueSource =
   | { readonly value: string }
@@ -125,10 +128,32 @@ function addFollows(node: BlockNode, follows: Map<string, Set<string>>): void {
   }
 }
 
+/**
+ * Whether a block draws what its link wraps, asked of what each prop holds
+ * or is bound to, by the block's own check, the one its render makes before
+ * it reads its link: an image with nothing to draw, or an icon naming none,
+ * reads no link. A block with no such check (a button) always may.
+ */
+const DRAWS_BEFORE_LINKING: Readonly<
+  Record<string, (has: (prop: string) => boolean) => boolean>
+> = {
+  [IMAGE_TYPE]: imageMayDraw,
+  [ICON_TYPE]: iconMayDraw,
+};
+
 /** Where a node's link to an entry comes from, when it links to one. */
 function linkOf(
   node: BlockNode
 ): { collection: ValueSource; id: ValueSource } | undefined {
+  const draws = Object.hasOwn(DRAWS_BEFORE_LINKING, node.type)
+    ? DRAWS_BEFORE_LINKING[node.type]
+    : undefined;
+  if (
+    draws !== undefined &&
+    !draws(prop => valueSource(node, prop) !== undefined)
+  ) {
+    return undefined;
+  }
   const collection = valueSource(node, LINK_COLLECTION_PROP);
   const id = valueSource(node, LINK_ID_PROP);
   return collection === undefined || id === undefined
@@ -201,13 +226,13 @@ export async function withReadAhead<
     ctx,
     { nodeId: list.id, collection, contextOf: read.itemContext }
   );
-  if (followed.size === 0) return read;
   return {
     ...read,
     // Each entry drawn with what was read for it beside it, its own values
-    // untouched.
+    // untouched, and never with what was read for an item of a list around
+    // this one: a context made from the outer item's carries its rows.
     itemContext: item => {
-      const drawn = read.itemContext(item);
+      const { itemFollowed: _outer, ...drawn } = read.itemContext(item);
       const rows = followed.get(item);
       return rows === undefined ? drawn : { ...drawn, itemFollowed: rows };
     },

@@ -33,15 +33,18 @@ function signature(finding: HeldFinding): string {
  * How many times each problem appears in the stored forms: the most any one
  * form holds, since the published and the draft forms are the same page.
  */
-function heldCounts<Finding extends HeldFinding>(
+function heldCounts<Finding extends HeldFinding, Forest>(
   stored: readonly unknown[] | undefined,
-  walk: (nodes: readonly unknown[]) => readonly Finding[]
+  walk: (forest: Forest) => readonly Finding[],
+  forestOf: (form: Readonly<Record<string, unknown>>) => Forest | undefined
 ): Map<string, number> {
   const held = new Map<string, number>();
   for (const form of stored ?? []) {
-    if (!isPlainRecord(form) || !Array.isArray(form.nodes)) continue;
+    if (!isPlainRecord(form)) continue;
+    const forest = forestOf(form);
+    if (forest === undefined) continue;
     const counts = new Map<string, number>();
-    for (const finding of walk(form.nodes)) {
+    for (const finding of walk(forest)) {
       const key = signature(finding);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
@@ -51,6 +54,18 @@ function heldCounts<Finding extends HeldFinding>(
   }
   return held;
 }
+
+/** A stored form's blocks, what a walk is handed unless told otherwise. */
+function blocksOf(
+  form: Readonly<Record<string, unknown>>
+): readonly unknown[] | undefined {
+  return Array.isArray(form.nodes) ? form.nodes : undefined;
+}
+
+/** A finding with the severity its stored forms give it. */
+type Judged<Finding extends HeldFinding> = Pick<Finding, keyof HeldFinding> & {
+  readonly severity: "error" | "warning";
+};
 
 /**
  * Each finding with its severity: a warning when a stored form held the same
@@ -64,11 +79,22 @@ export function withHeldSeverity<Finding extends HeldFinding>(
   findings: readonly Finding[],
   stored: readonly unknown[] | undefined,
   walk: (nodes: readonly unknown[]) => readonly Finding[]
-): (Pick<Finding, keyof HeldFinding> & {
-  readonly severity: "error" | "warning";
-})[] {
+): Judged<Finding>[] {
+  return withHeldSeverityOf(findings, stored, walk, blocksOf);
+}
+
+/**
+ * {@link withHeldSeverity} for problems that sit outside a document's blocks
+ * too: `walk` is asked of what `forestOf` reads from each stored form.
+ */
+export function withHeldSeverityOf<Finding extends HeldFinding, Forest>(
+  findings: readonly Finding[],
+  stored: readonly unknown[] | undefined,
+  walk: (forest: Forest) => readonly Finding[],
+  forestOf: (form: Readonly<Record<string, unknown>>) => Forest | undefined
+): Judged<Finding>[] {
   if (findings.length === 0) return [];
-  const held = heldCounts(stored, walk);
+  const held = heldCounts(stored, walk, forestOf);
   return findings.map(finding => {
     const key = signature(finding);
     const left = held.get(key) ?? 0;

@@ -530,7 +530,13 @@ function publishes(
  * file's own ids here, which no check reads. The shared styles the import
  * adds are not in the site style until it applies, and a write may only add
  * a class the site holds, so the judging writes leave those classes off; the
- * documents written for real carry them, after the site style does.
+ * documents written for real carry them, after the site style does. The
+ * variables it adds are not in the site style yet either, and a write may only
+ * add a reference to a variable the site defines (`token-reference-judgement`).
+ * The documents are judged whole, every reference kept, with the import's new
+ * variables counted as defined for these writes only
+ * (`provisional-variables`), so any other variable a value names is still
+ * refused here rather than when the import applies.
  */
 async function judgeWrites(
   ctx: ImportContext,
@@ -550,8 +556,13 @@ async function judgeWrites(
       map: new Map([...plan.classes.map].filter(([, to]) => !added.has(to))),
     },
   };
+  // Loaded at call time: it imports `node:async_hooks`, and this route is in
+  // the graph of the package root, which a browser bundle reaches.
+  const { withProvisionalVariables } = await import("./provisional-variables");
   try {
-    await writeDocuments(ctx, file, judged, slugs, media);
+    await withProvisionalVariables(plan.tokens.create.map(tokenIdentity), () =>
+      writeDocuments(ctx, file, judged, slugs, media)
+    );
   } catch (error) {
     const verdict = verdictOf(error);
     if (verdict.refusal === null) return [];

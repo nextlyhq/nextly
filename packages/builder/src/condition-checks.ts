@@ -10,17 +10,23 @@
 import {
   conditionIssues,
   DEFAULT_LIMITS,
+  placementGatesOf,
+  revealConditioned,
+  resolveComponentInstances,
   isPlainRecord,
   walkNodes,
   type BlockDocument,
   type BlockNode,
   type Condition,
+  type DefinitionsById,
+  type DocumentLimits,
+  type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { useLoopCollections } from "./collection-loop-controls";
 import type { ContentServices, LoopCollection } from "./content-controls";
-import { gatedAsStored } from "./condition-gate";
+import { asStoredDefinitions, gatedAsStored } from "./condition-gate";
 import { fieldSourceOf } from "./list-query-controls";
 
 /** Whether a stored value is a condition a row can show: a field and an operator. */
@@ -47,7 +53,11 @@ export function storedGroups(
   // reads as a restriction it can't check.
   if (!isPlainRecord(envelope)) return undefined;
   const groups: unknown = envelope.conditions;
-  if (groups === undefined || groups === null) return [];
+  if (groups === undefined) return [];
+  // Stored as `null`, which the save refuses as malformed although the page
+  // reads it as no restriction: offered for removal, as any shape no row can
+  // show is.
+  if (groups === null) return undefined;
   if (!Array.isArray(groups)) return undefined;
   const read: Condition[][] = [];
   for (const group of groups as unknown[]) {
@@ -103,14 +113,71 @@ export function uncheckedConditionIds(
   return found;
 }
 
-/** {@link uncheckedConditionIds} for a document, as an editor's services list the collections. */
+/**
+ * A composed tree once for each depth of placement gates it carries. In the
+ * k-th, a block carrying more than k gates holds the k-th as its own
+ * visibility and every other block holds none, so each gate a placement
+ * nested in a component put on a block is judged as conditions are, where
+ * the block is drawn, inside the lists around it, and by the id the canvas
+ * draws it with.
+ */
+function placementGatePasses(nodes: readonly BlockNode[]): BlockNode[][] {
+  const passes: BlockNode[][] = [];
+  for (let depth = 0; ; depth += 1) {
+    const found = { any: false };
+    const pass = withGateAt(nodes, depth, found);
+    if (!found.any) return passes;
+    passes.push(pass);
+  }
+}
+
+/** A forest with each block's `depth`-th placement gate as its visibility. */
+function withGateAt(
+  nodes: readonly BlockNode[],
+  depth: number,
+  found: { any: boolean }
+): BlockNode[] {
+  return nodes.map(node => {
+    const gate = isPlainRecord(node.visibility)
+      ? placementGatesOf(node.visibility)[depth]
+      : undefined;
+    const next: BlockNode = { ...node };
+    if (gate === undefined) {
+      delete next.visibility;
+    } else {
+      found.any = true;
+      // As the placement stored it, an unreadable one included, which the
+      // judgement marks as it marks one stored on a block.
+      next.visibility = gate as NodeVisibility;
+    }
+    if (isPlainRecord(node.slots)) {
+      const slots: Record<string, BlockNode[]> = {};
+      for (const [name, children] of Object.entries(node.slots)) {
+        if (Array.isArray(children)) {
+          slots[name] = withGateAt(children, depth, found);
+        }
+      }
+      next.slots = slots;
+    }
+    return next;
+  });
+}
+
+/**
+ * {@link uncheckedConditionIds} for a document, as an editor's services list
+ * the collections: its own blocks, and with `definitions` the blocks its
+ * placed components hold too, judged in the tree composed as the canvas
+ * draws it, by the ids the canvas draws them with.
+ */
 export function useConditionsUnchecked(
   document: BlockDocument,
   services:
     | Pick<ContentServices, "listLoopCollections" | "entryCollection">
     | undefined,
-  /** The document limit the host renders and saves under. */
-  maxNodes?: number
+  /** The document limits the host renders and saves under. */
+  limits?: DocumentLimits,
+  /** The definitions of the components the document places. */
+  definitions?: DefinitionsById
 ): ReadonlySet<string> {
   const listed = useLoopCollections(services?.listLoopCollections);
   const collections =
@@ -120,14 +187,35 @@ export function useConditionsUnchecked(
         ? "loading"
         : listed.collections;
   const entryCollection = services?.entryCollection;
-  return React.useMemo(
-    () =>
-      uncheckedConditionIds(
-        document.nodes,
-        collections,
-        entryCollection,
-        maxNodes
-      ),
-    [document, collections, entryCollection, maxNodes]
-  );
+  const maxNodes = limits?.maxNodes;
+  return React.useMemo(() => {
+    const own = uncheckedConditionIds(
+      document.nodes,
+      collections,
+      entryCollection,
+      maxNodes
+    );
+    if (definitions === undefined || definitions.size === 0) return own;
+    // The page's own conditions lifted, as the canvas composes it, so a
+    // composed block holds only what its definition gave it.
+    const composed = resolveComponentInstances(
+      revealConditioned(document),
+      asStoredDefinitions(definitions, limits),
+      {
+        conditioned: "carry",
+        // Every limit the canvas composes under, so a site that raises the
+        // depth has its deeper blocks judged as they are drawn.
+        ...(limits === undefined ? {} : { limits }),
+      }
+    ).document;
+    const judged = (nodes: readonly BlockNode[]) => [
+      ...uncheckedConditionIds(nodes, collections, entryCollection, maxNodes),
+    ];
+    return new Set([
+      ...own,
+      ...judged(composed.nodes),
+      // And each gate a placement nested in a component put on its roots.
+      ...placementGatePasses(composed.nodes).flatMap(judged),
+    ]);
+  }, [document, collections, entryCollection, maxNodes, limits, definitions]);
 }

@@ -55,7 +55,7 @@ import {
   type PageCollectionsContext,
 } from "./pages-search-route";
 import {
-  readStoredSiteStyle,
+  readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
   type SiteStyleReader,
 } from "./site-style-storage";
@@ -297,7 +297,7 @@ export async function readSiteStyleForEditor(
       logContext: { reason: "site-style-read-needs-editing-rights" },
     });
   }
-  return readStoredSiteStyle({
+  const { stored, rev } = await readStoredSiteStyleVersioned({
     nextly,
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
     // Past the Single's own permission: the caller was admitted above.
@@ -306,6 +306,9 @@ export async function readSiteStyleForEditor(
     // services; this route is server-only, so it may import that read.
     bootedReader: bootedSpacingModeReader,
   });
+  // The version the same read gave, so the editor's saves made from this
+  // answer are refused rather than written over a save made in between.
+  return rev === undefined ? stored : { ...stored, _rev: rev };
 }
 
 /**
