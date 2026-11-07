@@ -342,7 +342,9 @@ function KeptDesigns({
 function KeptDesign({ item }: { item: EntryDesignItem }): JSX.Element {
   const shown = item.status === "published";
   return (
-    <li className="flex items-center justify-between gap-3 px-3 py-2">
+    // On a phone the status goes under the title rather than beside it, so the
+    // title keeps the row's whole width instead of a few letters of it.
+    <li className="flex flex-col gap-0.5 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       {/* Cut to one line in the dialog's narrow list, so the full title is
         offered on hover; the text itself stays whole for a screen reader. */}
       <span

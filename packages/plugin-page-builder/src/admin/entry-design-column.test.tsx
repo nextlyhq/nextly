@@ -238,9 +238,26 @@ describe("the Design column's place", () => {
     ]);
   });
 
-  it("stays where it was on a list with no Status column", () => {
-    const columns = [{ name: "title" }, { name: "excerpt" }, design];
-    expect(designAfterStatus(columns)).toEqual(columns);
+  it("sits right after the first column on a list with no Status column", () => {
+    expect(
+      designAfterStatus([
+        { name: "title" },
+        { name: "slug" },
+        { name: "createdAt" },
+        { name: "excerpt" },
+        design,
+      ]).map(column => column.name)
+    ).toEqual([
+      "title",
+      "__pageBuilderOwnDesign",
+      "slug",
+      "createdAt",
+      "excerpt",
+    ]);
+  });
+
+  it("stays the only column of a list that has no other", () => {
+    expect(designAfterStatus([design])).toEqual([design]);
   });
 
   it("leaves a list without the Design column as it came", () => {

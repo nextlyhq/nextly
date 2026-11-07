@@ -117,8 +117,12 @@ const STATUS_COLUMN_NAME = "status";
 
 /**
  * `columns` with the Design column moved to right after Status, so it is on
- * screen beside the lifecycle rather than after every field. A list without
- * a Status column, or without the Design column, is returned as it came.
+ * screen beside the lifecycle rather than after every field. A list with no
+ * Status column (one whose lifecycle is drawn elsewhere, or a collection
+ * without drafts) takes it right after its first column, the one naming each
+ * entry, for the same reason: appended, it sits past every field, off screen
+ * on a wide collection. A list without the Design column is returned as it
+ * came.
  */
 export function designAfterStatus<Column extends { name: string }>(
   columns: Column[]
@@ -127,8 +131,8 @@ export function designAfterStatus<Column extends { name: string }>(
   if (design === undefined) return columns;
   const rest = columns.filter(column => column !== design);
   const status = rest.findIndex(column => column.name === STATUS_COLUMN_NAME);
-  if (status === -1) return columns;
-  return [...rest.slice(0, status + 1), design, ...rest.slice(status + 1)];
+  const after = status === -1 ? Math.min(1, rest.length) : status + 1;
+  return [...rest.slice(0, after), design, ...rest.slice(after)];
 }
 
 /** A listed row's id, as text. */
