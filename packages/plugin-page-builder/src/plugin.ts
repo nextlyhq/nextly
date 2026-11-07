@@ -39,6 +39,15 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 import { version as PLUGIN_VERSION } from "../package.json";
 
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { schemaFingerprint } from "./bindings-report/fingerprint";
+import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
+import { bindingsToFixRoute } from "./bindings-report/route";
+import {
+  registerBindingReportOnWrite,
+  runFullCheck,
+  type BindingReportDeps,
+} from "./bindings-report/scan";
+import { bindingReportStore } from "./bindings-report/store";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -143,6 +152,8 @@ import {
   type RewriteInstall,
 } from "./host-rewrite/service";
 import {
+  siteHostReader,
+  siteWalkSource,
   singleToWalk,
   type RewriteDirectApi,
   type SingleToWalk,
@@ -847,6 +858,55 @@ async function* singlesRegistryPages(
 const REGISTRY_PAGE_SIZE = 100;
 
 /**
+ * Every collection's registry record, page by page, for the schema
+ * fingerprint the bindings report checks against. Refused when a page cannot
+ * be read, so a fingerprint is never taken over part of the registry.
+ */
+async function collectionRegistryRows(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed: unknown = await ctx.services.collections.listCollections(
+      { page, limit: REGISTRY_PAGE_SIZE, sortBy: "slug", sortOrder: "asc" },
+      undefined as never
+    );
+    const data = (listed as { data?: unknown }).data;
+    const hasMore = (listed as { pagination?: { hasMore?: unknown } })
+      .pagination?.hasMore;
+    if (!Array.isArray(data) || typeof hasMore !== "boolean") {
+      throw new Error(
+        "[page-builder] the collection registry could not be read for the bindings report"
+      );
+    }
+    rows.push(...data);
+    if (!hasMore || data.length === 0) return rows;
+  }
+}
+
+/** Every Single's registry record, for the same fingerprint. */
+async function singleRegistryRows(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for await (const page of singlesRegistryPages(ctx)) {
+    if (page === UNREADABLE_PAGE) {
+      throw new Error(
+        "[page-builder] the Singles registry could not be read for the bindings report"
+      );
+    }
+    rows.push(...page);
+  }
+  return rows;
+}
+
+/** How often a read of the bindings report may start a check, at most. */
+const BINDINGS_REFRESH_MS = 60_000;
+
+/** How long a check a read starts may run. */
+const BINDINGS_REFRESH_RUN_MS = 20_000;
+
+/**
  * How long a save removing breakpoints walks the site before it answers with
  * the run to carry on: short enough to answer well inside a request's time,
  * long enough that a small site finishes in the save itself.
@@ -1418,6 +1478,58 @@ export const pageBuilder = (
    * contributed before `init` runs and called long after it.
    */
   let rewriteInstall: RewriteInstall | null = null;
+  /**
+   * The installed plugin as the "Bindings to fix" report reads it, published
+   * by `init`: its job and its route are contributed before `init` runs.
+   */
+  let bindingReportCtx:
+    | Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+    | null = null;
+  const bindingReportDeps: BindingReportDeps = {
+    store: () =>
+      bindingReportCtx === null
+        ? null
+        : bindingReportStore(bindingReportCtx.db, bindingReportCtx.dialect),
+    // Each source's declared fields, as a save judges bindings by them.
+    shapesOf: async ref => {
+      const { declaredFieldShapes } = await import("nextly/runtime");
+      return declaredFieldShapes(ref);
+    },
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    placeOf: at => {
+      if (at.kind === "single") return "singles";
+      const own = bindingReportCtx?.self.collections ?? {};
+      const named = (slug: string) => own[slug] ?? slug;
+      if (at.slug === named(PAGES_SLUG)) return "pages";
+      if (at.slug === named(COMPONENTS_SLUG)) return "components";
+      if (at.slug === named(PATTERNS_SLUG)) return "patterns";
+      if (at.slug === named(LAYOUTS_SLUG)) return "layouts";
+      return "entries";
+    },
+  };
+  /** One pass of the report's check of every document, until `deadline`. */
+  const bindingReportPass = async (deadline: Date) => {
+    const ctx = bindingReportCtx;
+    const site = rewriteInstall?.site;
+    if (ctx === null || site === undefined) return "paused" as const;
+    const walk = siteWalkSource(site);
+    return runFullCheck(
+      {
+        documents: cursor => walk.documents(cursor),
+        cursorOf: document => walk.cursorOf(document),
+        read: siteHostReader(site),
+        fingerprint: () =>
+          schemaFingerprint({
+            collections: () => collectionRegistryRows(ctx),
+            singles: () => singleRegistryRows(ctx),
+            blocks: () => allBlocks(),
+          }),
+      },
+      bindingReportDeps,
+      deadline
+    );
+  };
+  let bindingsRefreshedAt = 0;
   const requireRewriteInstall = (): RewriteInstall => {
     if (rewriteInstall === null) {
       throw new Error(
@@ -2121,6 +2233,10 @@ export const pageBuilder = (
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
+      // The "Bindings to fix" report: each committed write's document judged
+      // again, and every document by the sweep once the schema changes.
+      bindingReportCtx = ctx;
+      registerBindingReportOnWrite(ctx, bindingReportDeps);
       // The breakpoints the write path judges a save against: one read of
       // the site's style, the same answer the blocks field gets. A removal's
       // walk, its locks and the write report all ask it, so they agree on
@@ -2285,6 +2401,9 @@ export const pageBuilder = (
         // The breakpoint removal a write opened again, which nobody is
         // waiting on: carried on each pass until it is done.
         breakpointRemovalJob(removalService),
+        // The check of every document for the bindings report, when the
+        // schema changed since the last complete one.
+        bindingsReportJob(bindingReportPass),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -2538,6 +2657,30 @@ export const pageBuilder = (
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),
+        // The documents whose bindings no longer fit, for those who edit
+        // pages, each listed only when the caller may read it.
+        bindingsToFixRoute({
+          store: bindingReportDeps.store,
+          names: (routeCtx, hosts) =>
+            nameDocumentsOnSite(removalSite(), routeCtx, hosts),
+          // A read starts a check when the schema may have changed, at most
+          // once a minute, and never waits for it.
+          refresh: routeCtx => {
+            const now = Date.now();
+            if (now - bindingsRefreshedAt < BINDINGS_REFRESH_MS) return;
+            bindingsRefreshedAt = now;
+            routeCtx.services.jobs
+              .runSweepNow(BINDINGS_REPORT_JOB, {
+                maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+              })
+              .catch((error: unknown) =>
+                bindingReportCtx?.logger.warn(
+                  "[page-builder] the bindings report's check could not start; the next jobs pass runs it.",
+                  { error }
+                )
+              );
+          },
+        }),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),

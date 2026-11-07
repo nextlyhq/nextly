@@ -50,7 +50,11 @@ export interface BindingReportRow {
   /** Each problem, as the engine's binding issue codes name them. */
   readonly codes: readonly string[];
   /** The field the path reaches, where the schema has one. */
-  readonly field?: { readonly name: string; readonly type: string };
+  readonly reaches?: { readonly name: string; readonly type: string };
+  /** The blocks field the binding is in, as a dotted path. */
+  readonly blocksField?: string;
+  /** The language of the value it is in, for a field stored per language. */
+  readonly locale?: string;
   readonly shows: BindingReportShows;
 }
 
@@ -136,6 +140,48 @@ function showsFor(
   return { kind: "own", value: own };
 }
 
+/** What a stored binding reads, as a row names it. */
+function readsOf(
+  binding: Readonly<Record<string, unknown>> & { readonly $bind: string }
+): BindingReportRow["binding"] {
+  return {
+    source:
+      typeof binding.source === "string"
+        ? binding.source
+        : DEFAULT_BINDING_SOURCE,
+    ...(typeof binding.sourceKey === "string"
+      ? { sourceKey: binding.sourceKey }
+      : {}),
+    path: binding.$bind,
+  };
+}
+
+/**
+ * Where a binding at `segments` sits: the prop it fills and its block, or
+ * `seo.<field>` and no block for the document's own metadata.
+ */
+function placeOf(
+  document: BindingDocument,
+  segments: readonly string[]
+): {
+  readonly prop: string;
+  readonly blockType: string;
+  readonly own: unknown;
+} {
+  if (segments[0] === "settings") {
+    return { prop: `seo.${segments[2] ?? ""}`, blockType: "", own: undefined };
+  }
+  // A block binding sits at `…/bindings/<prop>`, its node two steps up.
+  const prop = segments[segments.length - 1] ?? "";
+  const node = at(document, segments.slice(0, -2));
+  if (!isPlainRecord(node)) return { prop, blockType: "", own: undefined };
+  return {
+    prop,
+    blockType: typeof node.type === "string" ? node.type : "",
+    own: isPlainRecord(node.props) ? node.props[prop] : undefined,
+  };
+}
+
 /** One row, from the problems found at one binding's pointer. */
 function rowAt(
   document: BindingDocument,
@@ -154,41 +200,25 @@ function rowAt(
   if (!isPlainRecord(binding) || typeof binding.$bind !== "string") {
     return undefined;
   }
-  const metadata = segments[0] === "settings";
-  // A block binding sits at `…/bindings/<prop>`, its node two steps up.
-  const prop = metadata
-    ? `seo.${segments[2] ?? ""}`
-    : (segments[segments.length - 1] ?? "");
-  const node = metadata ? undefined : at(document, segments.slice(0, -2));
-  const props = isPlainRecord(node) ? node.props : undefined;
+  const bound = binding as Readonly<Record<string, unknown>> & {
+    readonly $bind: string;
+  };
+  const where = placeOf(document, segments);
   const field = fieldAt(
-    binding.$bind.split("."),
-    sourceFields(binding, context.entry, context.fieldsOf),
+    bound.$bind.split("."),
+    sourceFields(bound, context.entry, context.fieldsOf),
     context.fieldsOf
   );
   return {
     nodeId,
-    blockType: isPlainRecord(node) && typeof node.type === "string" ? node.type : "",
-    prop,
-    binding: {
-      source:
-        typeof binding.source === "string"
-          ? binding.source
-          : DEFAULT_BINDING_SOURCE,
-      ...(typeof binding.sourceKey === "string"
-        ? { sourceKey: binding.sourceKey }
-        : {}),
-      path: binding.$bind,
-    },
+    blockType: where.blockType,
+    prop: where.prop,
+    binding: readsOf(bound),
     codes,
     ...(field === undefined
       ? {}
-      : { field: { name: field.name, type: field.type } }),
-    shows: showsFor(
-      codes,
-      binding,
-      isPlainRecord(props) ? props[prop] : undefined
-    ),
+      : { reaches: { name: field.name, type: field.type } }),
+    shows: showsFor(codes, bound, where.own),
   };
 }
 

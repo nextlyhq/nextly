@@ -257,6 +257,28 @@ component's own document has no entry, so its bindings to the entry are checked
 when a page that places it is saved, against that page's entry, and named by
 the component.
 
+#### Documents whose bindings no longer fit
+
+The Page Builder keeps a report of every document holding a binding that no
+longer fits what it reads, so authors can find and fix them after a schema
+change. A document is judged again each time it is saved, and every document
+is checked again once a collection's or a Single's fields, or a block's props,
+change: a background job notices the change and walks the site, a part at a
+time. Each row says which block and prop the binding fills, what it reads, the
+codes above, and what a visitor sees instead: the binding's fallback, the
+block's own value, or nothing for a prop the block no longer has.
+
+```text
+GET /admin/api/plugins/@nextlyhq/plugin-page-builder/bindings-to-fix
+```
+
+It answers people who can update pages, listing only the documents the caller
+may read, each by its title. `?document=<key>` narrows it to one document and
+`?place=` to one place (`pages`, `components`, `patterns`, `layouts`,
+`entries` or `singles`). Its `meta` adds the number of broken bindings in each
+place (`byPlace`), their total (`bindings`), when every document was last
+checked (`checkedAt`), and whether a check is under way (`checking`).
+
 #### The document's own metadata
 
 `settings.seo` holds the title, description and social image a document states

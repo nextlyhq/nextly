@@ -20,9 +20,7 @@
  */
 import {
   bindingSchemaIssues,
-  componentPlacementsIn,
   isErrorIssue,
-  isPlainRecord,
   registryBlockSource,
   walkNodes,
   type BlockNode,
@@ -40,7 +38,11 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import type { StoredForms } from "./added-undefined-ids";
-import { asFieldIssues, nodesOf } from "./list-query-judgement";
+import {
+  asFieldIssues,
+  nodesOf,
+  placedComponents,
+} from "./list-query-judgement";
 
 /**
  * The declared fields of one source, or `undefined` for no such source; a
@@ -62,7 +64,9 @@ export interface BindingJudging {
 }
 
 /** A collection's or a Single's ref: the sources whose fields are read. */
-export type ReadRef = { readonly collection: string } | { readonly single: string };
+export type ReadRef =
+  | { readonly collection: string }
+  | { readonly single: string };
 
 /** A source's key in the read shapes. */
 function keyOf(ref: ReadRef): string {
@@ -96,7 +100,7 @@ const MAX_READ_ROUNDS = 3;
  * Single. A component's own document has none: a placed component reads the
  * entry of each page placing it.
  */
-export function entryOf(
+function entryOf(
   write: Pick<PluginFieldWrite, "kind" | "slug">,
   document: unknown
 ): BindingSchemaRef | undefined {
@@ -388,12 +392,7 @@ export async function composedBindingIssues(
   );
   if (overflowed) return [OVER_LIMIT];
   if (found.length === 0) return [];
-  const componentOf = new Map<string, string>();
-  for (const placement of componentPlacementsIn(host, site.maxNodes)
-    .placements) {
-    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
-    if (typeof id === "string") componentOf.set(id, placement.target);
-  }
+  const componentOf = placedComponents(host, site.maxNodes);
   return found.map(issue => {
     const component = componentOf.get(placedNodes.get(issue.nodeId) ?? "");
     return {

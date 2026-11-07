@@ -10,7 +10,7 @@
  *
  * @module bindings-report/store
  */
-import { desc, eq } from "@nextlyhq/plugin-sdk/db";
+import { desc, eq, lt } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -31,6 +31,8 @@ export interface FullCheck {
   readonly checking: string | null;
   /** The walk's cursor a check under way resumes after. */
   readonly cursor: string | null;
+  /** When the check under way started. */
+  readonly startedAt: Date | null;
   /** When the check last moved. */
   readonly at: Date | null;
 }
@@ -70,8 +72,10 @@ export interface BindingReportStore {
   fullCheck(): Promise<FullCheck>;
   /** Record where it stands now. */
   setFullCheck(
-    state: Pick<FullCheck, "checked" | "checking" | "cursor">
+    state: Pick<FullCheck, "checked" | "checking" | "cursor" | "startedAt">
   ): Promise<void>;
+  /** Drop the rows judged before `at`: documents a complete check no longer found. */
+  dropCheckedBefore(at: Date): Promise<void>;
 }
 
 type Dialect = Parameters<typeof isUniqueViolation>[0];
@@ -154,23 +158,42 @@ export function bindingReportStore(
       });
     },
 
+    dropCheckedBefore: async at => {
+      // A second earlier: a timestamp column may keep whole seconds, so a row
+      // judged in the check's first second can read as before its start.
+      const before = new Date(at.getTime() - 1000);
+      await db.delete(bindingIssues).where(lt(issues().updatedAt, before));
+    },
+
     fullCheck: async () => {
       const row = await db
         .select(bindingReportRuns)
         .where(eq(runs().name, FULL_CHECK))
         .first();
       if (row === null) {
-        return { checked: null, checking: null, cursor: null, at: null };
+        return {
+          checked: null,
+          checking: null,
+          cursor: null,
+          startedAt: null,
+          at: null,
+        };
       }
       const held = jsonOf(row.cursor);
-      const cursor =
+      const { after, startedAt } =
         typeof held === "object" && held !== null
-          ? (held as { after?: unknown }).after
-          : undefined;
+          ? (held as { after?: unknown; startedAt?: unknown })
+          : {};
+      const started =
+        typeof startedAt === "string" ? new Date(startedAt) : undefined;
       return {
         checked: row.checked,
         checking: row.checking,
-        cursor: typeof cursor === "string" ? cursor : null,
+        cursor: typeof after === "string" ? after : null,
+        startedAt:
+          started === undefined || Number.isNaN(started.getTime())
+            ? null
+            : started,
         at: row.updatedAt,
       };
     },
@@ -182,7 +205,13 @@ export function bindingReportStore(
         checking: state.checking,
         // Wrapped in an object: a bare string in a JSON column reads back
         // decoded on one dialect and as JSON text on another.
-        cursor: state.cursor === null ? null : { after: state.cursor },
+        cursor:
+          state.startedAt === null
+            ? null
+            : {
+                ...(state.cursor === null ? {} : { after: state.cursor }),
+                startedAt: state.startedAt.toISOString(),
+              },
         updatedAt: new Date(),
       };
       await upsert(
