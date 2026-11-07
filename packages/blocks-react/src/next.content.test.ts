@@ -118,6 +118,8 @@ function isPublicRead(args: Record<string, unknown>): boolean {
 /** A Direct API over one page, `about`, and the posts the public may read. */
 function instance(posts: Record<string, Record<string, unknown>>) {
   const find = vi.fn(async (args: Record<string, unknown>) => {
+    // A collection the public is refused outright, as the Direct API refuses.
+    if (args.collection === "denied") throw new Error("forbidden");
     const where = JSON.stringify(args.where ?? {});
     let items: Record<string, unknown>[] = [];
     if (args.collection === "pages") {
@@ -366,6 +368,12 @@ describe("the content route", () => {
       await element.props.context?.resolveEntryPath("posts", "restricted")
     ).toBeNull();
     expect(asked).not.toContain("restricted");
+    // Nor to one in a collection the public is refused outright: the
+    // refusal is no target, never an error a block must handle.
+    expect(
+      await element.props.context?.resolveEntryPath("denied", "d1")
+    ).toBeNull();
+    expect(asked).not.toContain("d1");
     // A public entry beside it still gets its address.
     expect(
       await element.props.context?.resolveEntryPath("posts", "other")

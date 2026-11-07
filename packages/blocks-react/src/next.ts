@@ -4285,9 +4285,13 @@ function buildContentRoute(
       : {
           ...config.pages,
           resolveEntryPath: async (collection, id) => {
-            if ((await publicRead(collection, id, ["id"])) === null) {
-              return null;
-            }
+            // A read the public is refused outright (a collection it may not
+            // read at all, or one that no longer exists) is no target either:
+            // a link resolver answers null where there is no path to draw.
+            const target = await publicRead(collection, id, ["id"]).catch(
+              () => null
+            );
+            if (target === null) return null;
             const locale = config.pages.locale;
             const read = () => entryPath(collection, id, locale);
             if (!isPublic) return await read();

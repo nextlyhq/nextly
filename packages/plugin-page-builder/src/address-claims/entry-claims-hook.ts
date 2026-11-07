@@ -373,23 +373,24 @@ async function settleTemplateClaims(
     write.operation === "create" ? null : recordOf(write.originalData)
   );
   for (const { collection, served } of changes) {
-    if (deps.addresses.has(collection)) {
-      await settleEntries(deps, write.transaction, collection, served);
-    }
+    const address = deps.addresses.get(collection);
+    if (address === undefined) continue;
+    await (served
+      ? settleEntries(deps, write.transaction, collection)
+      : releaseCollection(deps, write.transaction, collection, address));
   }
 }
 
 /**
  * Bring every published entry of `collection` to what it should hold while
- * its template is published (`served`) or not, in `tx`, a page of entries at
- * a time. An entry whose address is held waits for it; one with no address
- * holds nothing. Takes the collection's lock first.
+ * its template is published, in `tx`, a page of entries at a time. An entry
+ * whose address is held waits for it; one with no address holds nothing.
+ * Takes the collection's lock first.
  */
 async function settleEntries(
   deps: EntryClaimsDeps,
   tx: Tx,
-  collection: string,
-  served: boolean
+  collection: string
 ): Promise<void> {
   const address = deps.addresses.get(collection);
   if (address === undefined) return;
@@ -399,10 +400,7 @@ async function settleEntries(
   for (let page = 1; ; page += 1) {
     const rows = await deps.publishedEntries(collection, page, BATCH);
     for (const row of rows) {
-      await settleEntry(deps, tx, collection, address, locales, row, {
-        served,
-        lifecycle,
-      });
+      await settleEntry(deps, tx, collection, address, locales, row, lifecycle);
     }
     if (rows.length < BATCH) return;
   }
@@ -416,14 +414,13 @@ async function settleEntry(
   address: readonly string[],
   locales: readonly string[],
   row: Row,
-  state: { readonly served: boolean; readonly lifecycle: boolean }
+  lifecycle: boolean
 ): Promise<void> {
   const id = row.id;
   if (typeof id !== "string" && typeof id !== "number") return;
-  const found =
-    state.served && isPublished(row, state.lifecycle)
-      ? entryAddresses(row, address, locales, state.lifecycle)
-      : [];
+  const found = isPublished(row, lifecycle)
+    ? entryAddresses(row, address, locales, lifecycle)
+    : [];
   // An entry with no address holds nothing; its next save is refused,
   // which tells its author.
   const wanted = found === NO_ADDRESS ? [] : found;
@@ -470,7 +467,7 @@ export async function settleEntryClaimsAtStart(
         // An unpublished template's entries hold nothing already: its
         // unpublish gave their addresses up, and no save claims one since.
         if (!(await deps.templatePublished(collection))) return;
-        await settleEntries(deps, tx, collection, true);
+        await settleEntries(deps, tx, collection);
       });
     } catch (error) {
       deps.warn("Could not settle the addresses of a collection's entries.", {
@@ -495,28 +492,20 @@ export async function releaseUndeclared(
   deps: EntryClaimsPassDeps
 ): Promise<void> {
   const known = new Set([deps.pages, ...deps.addresses.keys()]);
-  const stale = new Map<string, Holder>();
+  let stale: readonly Holder[];
   try {
-    for (let page = 1; ; page += 1) {
-      const { rows, total } = await committedClaims(
-        deps.claims,
-        { kind: { in: ["address", "waiting"] } },
-        { limit: SWEEP_PAGE, page }
-      );
-      for (const row of rows) {
-        const holder = row.holder;
-        if (holder === null || known.has(holder.collection)) continue;
-        stale.set(`${holder.collection}\u0000${holder.id}`, holder);
-      }
-      if (rows.length === 0 || page * SWEEP_PAGE >= total) break;
-    }
+    stale = await committedHolders(
+      deps.claims,
+      {},
+      holder => !known.has(holder.collection)
+    );
   } catch (error) {
     deps.warn("Could not read the address claims to sweep.", {
       error: String(error),
     });
     return;
   }
-  for (const holder of stale.values()) {
+  for (const holder of stale) {
     try {
       await deps.withTransaction(tx => releaseClaims(deps.claims, tx, holder));
     } catch (error) {
@@ -526,5 +515,55 @@ export async function releaseUndeclared(
         error: String(error),
       });
     }
+  }
+}
+
+/**
+ * Every document holding an address or waiting for one, as committed, among
+ * the claims `where` narrows to, that `keep` accepts: each once.
+ */
+async function committedHolders(
+  claims: Claims,
+  where: Record<string, unknown>,
+  keep: (holder: Holder) => boolean
+): Promise<Holder[]> {
+  const holders = new Map<string, Holder>();
+  for (let page = 1; ; page += 1) {
+    const { rows, total } = await committedClaims(
+      claims,
+      { kind: { in: ["address", "waiting"] }, ...where },
+      { limit: SWEEP_PAGE, page }
+    );
+    for (const { holder } of rows) {
+      if (holder !== null && keep(holder)) {
+        holders.set(`${holder.collection}\u0000${holder.id}`, holder);
+      }
+    }
+    if (rows.length === 0 || page * SWEEP_PAGE >= total)
+      return [...holders.values()];
+  }
+}
+
+/**
+ * Give up every address `collection`'s entries hold or wait for, in `tx`,
+ * under the collection's lock: what a template's unpublish, delete or move
+ * to another collection does to the entries it served. Found by the claims
+ * themselves, never by reading the collection, so a collection renamed or
+ * deleted since is released all the same.
+ */
+async function releaseCollection(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  collection: string,
+  address: readonly string[]
+): Promise<void> {
+  await holdLocks(deps.claims, tx, collectionLock(address, deps.locales()));
+  const holders = await committedHolders(
+    deps.claims,
+    { holderCollection: { equals: collection } },
+    holder => holder.collection === collection
+  );
+  for (const holder of holders) {
+    await releaseClaims(deps.claims, tx, holder);
   }
 }
