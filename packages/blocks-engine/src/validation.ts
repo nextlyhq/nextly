@@ -685,6 +685,9 @@ export function validateDocument(
       // each judgement also carries is left to the editor that asks for it.
       ...listQueryIssues(envelope.nodes, {
         ...judgement,
+        ...(ctx.namedQueries === undefined
+          ? {}
+          : { namedQueries: ctx.namedQueries }),
         // So a list in a component or a Layout region, which shows on many
         // pages, is refused a split into pages of its own.
         ...(typeof envelope.kind === "string"
