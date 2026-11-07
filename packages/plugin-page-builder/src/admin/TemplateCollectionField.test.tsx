@@ -569,6 +569,20 @@ describe("the collection control", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
+  it("keeps a saved collection pending while a retarget answer that failed before is asked again", () => {
+    // The query keeps its earlier error beside the retry in flight, as after
+    // the address is cleared and the question is asked again.
+    retarget = {
+      data: undefined,
+      error: new Error("earlier failure"),
+      fetching: true,
+    };
+    renderField("articles", "t1");
+    const shown = screen.getByRole("textbox", { name: "Collection" });
+    expect(shown.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
   it("asks the retarget question by template, only where the list leaves its collection out", () => {
     renderField("posts", "t1");
     expect(retargetAsked()).toEqual([]);

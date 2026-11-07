@@ -392,6 +392,9 @@ function useCollectionRetarget(
     staleTime: 0,
   });
   useAskedAgainOn(savedAddress, ask, read.refetch);
+  // Asked again (after the address is cleared, say), it is pending whatever
+  // it answered last: the query keeps an earlier error beside the retry.
+  if (read.fetching) return "pending";
   if (read.error !== null) return "failed";
   const answer = freshAnswer(read);
   return answer === undefined ? "pending" : retargetOf(answer);
