@@ -54,6 +54,7 @@ import {
   clippedByAncestorRect,
   onScreenOf,
   overlaySpaceOf,
+  type OverlaySpace,
 } from "./geometry-dom";
 
 /** The badge's words: what the author needs to know, at a glance. */
@@ -73,9 +74,15 @@ const BADGE_HEIGHT_PX = 22;
 const BADGE_WIDTH_ESTIMATE_PX = 170;
 
 /** The badge's drawn width for `id`, or the estimate before it is drawn. */
-function badgeWidthOf(layer: HTMLElement | null, id: string): number {
+function badgeWidthOf(
+  layer: HTMLElement | null,
+  space: OverlaySpace,
+  id: string
+): number {
   const drawn = layer?.querySelector(`[data-badge-node="${CSS.escape(id)}"]`);
-  const width = drawn?.getBoundingClientRect().width ?? 0;
+  // In the chrome's coordinates, as the outline and the band are: measured
+  // through the overlay's own normalization, which a scaled canvas needs.
+  const width = drawn instanceof HTMLElement ? space.sizeOf(drawn).width : 0;
   return width > 0 ? width : BADGE_WIDTH_ESTIMATE_PX;
 }
 
@@ -188,7 +195,7 @@ export function VisitorUnreadableBadges({
         // either side keeps its whole badge in view.
         right: Math.max(
           Math.min(outline.x + outline.width, onScreen.x + onScreen.width),
-          onScreen.x + badgeWidthOf(element, id)
+          onScreen.x + badgeWidthOf(element, space, id)
         ),
         // Sitting on the outline's top edge, its border shared with the
         // outline's, so the two read as one mark of this block.
