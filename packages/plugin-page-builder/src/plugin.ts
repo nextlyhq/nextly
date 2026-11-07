@@ -225,8 +225,16 @@ import {
 } from "./site-fonts/options";
 import { siteFontRoutes } from "./site-fonts/routes";
 import {
+  SITE_CODE_SAVED_AUDIT,
+  SITE_CODE_SAVED_METADATA,
+  siteCodeRoutes,
+  type PageBuilderSiteCodeOptions,
+} from "./site-code/route";
+import { siteCodeSingle } from "./site-code/storage";
+import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
+  MANAGE_SITE_PERMISSION,
   siteBreakpointRemovalRoute,
   siteBreakpointRemovalStatusRoute,
   siteBreakpointsRoute,
@@ -694,6 +702,16 @@ export interface PageBuilderOptions {
    * false }` turns the catalogue off; uploading a font file still works.
    */
   fonts?: PageBuilderFontOptions;
+
+  /**
+   * Site code: the code people who may change the site's settings add to
+   * every published page, in Settings, under Site. Declare the site's
+   * Content Security Policy here (`csp`, a header value or a function read on
+   * each check) so code is checked against it before it is saved.
+   *
+   * @experimental
+   */
+  siteCode?: PageBuilderSiteCodeOptions;
 }
 
 /**
@@ -2181,6 +2199,11 @@ export const pageBuilder = (
             kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
             metadataKeys: [...BREAKPOINT_REMOVAL_UNDONE_METADATA],
           },
+          // One per site code save: hashes, sizes and counts, never the code.
+          {
+            kind: SITE_CODE_SAVED_AUDIT,
+            metadataKeys: [...SITE_CODE_SAVED_METADATA],
+          },
         ],
       },
       // The channel another plugin adds blocks through. Core carries no
@@ -2344,6 +2367,9 @@ export const pageBuilder = (
         // not any Layout exists yet, because the repair writes it on a site
         // that has none, and the make-default route writes it on every other.
         pageBuilderSettingsSingle(),
+        // The code every published page carries, written only by the site
+        // code route, which judges it first.
+        siteCodeSingle(),
       ],
       // One field type, where there were two. The other named the previous
       // editor's document — a shape this package defined itself, stored under a
@@ -2562,6 +2588,20 @@ export const pageBuilder = (
         siteBreakpointUndoRoute(breakpointRemoval),
         // Where one removal stands, read by its id.
         siteBreakpointRemovalStatusRoute(breakpointRemoval),
+        // The site's code, read, checked and saved under the site settings
+        // permission; saved by a signed-in person only.
+        ...siteCodeRoutes({
+          nextly: async () => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            return {
+              findSingle: args => nextly.findSingle(args),
+              updateSingle: args => nextly.updateSingle(args),
+            };
+          },
+          options: opts.siteCode,
+          permission: MANAGE_SITE_PERMISSION,
+        }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.

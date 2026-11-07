@@ -1,3 +1,5 @@
+import { SiteCode } from "@nextlyhq/plugin-page-builder/site";
+
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
@@ -36,6 +38,13 @@ import "./globals.css";
  * reader fetches is not, and a page in Cyrillic now gets its face instead of a
  * fallback.
  *
+ * ## Site code
+ *
+ * `<SiteCode>` is mounted here, in the root layout the admin shares, which the
+ * page builder's docs tell a site not to do: this harness carries it in the
+ * worst place on purpose, so the browser tests prove its own guard keeps the
+ * code out of the admin, the canvas and the preview wherever it is mounted.
+ *
  * @module app/layout
  */
 export default function RootLayout({
@@ -69,8 +78,12 @@ export default function RootLayout({
        *
        * @see https://react.dev/link/hydration-mismatch
        */}
+      <head>
+        <SiteCode slot="head" />
+      </head>
       <body className="antialiased" suppressHydrationWarning>
         {children}
+        <SiteCode slot="body" />
       </body>
     </html>
   );
