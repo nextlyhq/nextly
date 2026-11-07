@@ -146,6 +146,39 @@ describe("saving a section merged onto the newest copy", () => {
     expect(saved.conflicts?.refusal?.oneSaveBetween).toBe(false);
   });
 
+  it("names no one for a conflict the first copy already held, whatever save refused it", async () => {
+    // The newest copy already differs from the base on card when the save
+    // starts; the one save that refuses it changes hero, not card. Sam did
+    // not make the conflict, so no one is named.
+    const mine = { ...card, label: "Mine" };
+    const theirs = { ...card, label: "Theirs" };
+    const renamedHero = { ...hero, label: "Banner" };
+    const write = vi
+      .fn<(data: Record<string, unknown>) => Promise<VersionedSiteStyle>>()
+      .mockRejectedValueOnce(
+        new Stale({
+          currentVersion: "6",
+          changedBy: { kind: "person", name: "Sam" },
+        })
+      )
+      .mockImplementation(async data => at(data.classes, "7"));
+    const saved = await saveSectionMerged({
+      section: "classes",
+      base: [card, hero],
+      mine: [mine, hero],
+      prefer: "mine",
+      latest: at([theirs, hero], "5"),
+      read: async () => at([theirs, renamedHero], "6"),
+      write,
+      staleOf,
+    });
+    expect(saved.stored).toEqual([mine, renamedHero]);
+    expect(saved.conflicts).toEqual({
+      entries: [expect.objectContaining({ key: "c1", kind: "changed" })],
+      refusal: { oneSaveBetween: false },
+    });
+  });
+
   it("rejects with the last stale refusal after three refused writes", async () => {
     let version = 5;
     const refusals: Stale[] = [];
