@@ -55,6 +55,27 @@ export function recordedFieldShapes(
 }
 
 /**
+ * Whether a recorded lookup answered that the public may read none of a
+ * source's fields: the source was looked up, and no field is public (or there
+ * is no such source). A source never looked up, or one whose lookup failed,
+ * answers `false`: its shapes are unknown, not empty.
+ *
+ * @experimental Settles with the editor's binding sources.
+ */
+export function noPublicFields(
+  shapes: BlocksFieldShapes,
+  ref: BlocksFieldShapeRef
+): boolean {
+  const recorded = RECORDED.get(shapes);
+  const key = shapeRefKey(ref);
+  return (
+    recorded !== undefined &&
+    recorded.has(key) &&
+    recorded.get(key) === undefined
+  );
+}
+
+/**
  * Binding sources in a form JSON carries.
  *
  * @experimental Settles with the editor's binding sources.

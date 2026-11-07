@@ -15,10 +15,10 @@
  * counted, because the index records every node the compiler reads.
  *
  * Concurrency: each write here reads the class list and writes it back whole,
- * as the Design panel's own writes do. A concurrent change to another class
- * between the read and the write is overwritten. The Shared styles tab holds
- * its own route writes while one of its renames is pending, which covers one
- * editor; two editors writing at once remain the known limit.
+ * with the version of its read, so another save in between refuses it rather
+ * than being overwritten. The route then reads again, makes its checks on
+ * what is stored now and makes only its own change there ({@link
+ * stale-retry}), so a concurrent change to another class is kept.
  *
  * @module shared-styles-routes
  */
@@ -83,6 +83,7 @@ import {
   SITE_STYLE_SLUG,
   sharedStyleName,
 } from "./site-style-storage";
+import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import { USAGE_BACKFILL_JOB } from "./usage-backfill-job";
 import { documentCountOf, type DocumentsUsing } from "./usage-count";
@@ -202,7 +203,9 @@ const RemoveBody = z.strictObject({
  *
  * Authorized by the route's declared permission before this runs. A style the
  * site defines only in code has no stored entry to lock, and is refused rather
- * than given one, since a stored entry would override the code's.
+ * than given one, since a stored entry would override the code's. A write
+ * refused because the Single was saved meanwhile is made again on what is
+ * stored then, changing only this style's lock.
  */
 export async function lockSharedStyle(
   req: Request,
@@ -214,7 +217,19 @@ export async function lockSharedStyle(
     throw invalidRequest("Name the shared style with classId, and say locked.");
   }
   const { classId, locked } = parsed.data satisfies SharedStyleLockRequest;
-  const read = await store.read();
+  return retryOnStale(
+    () => store.read(),
+    read => lockOn(read, store, { classId, locked }, configClassIds)
+  );
+}
+
+/** One attempt at a lock: the style's lock set on `read`, and written from it. */
+async function lockOn(
+  read: SharedStyleRead,
+  store: SharedStyleStore,
+  { classId, locked }: SharedStyleLockRequest,
+  configClassIds: ReadonlySet<string>
+): Promise<Response> {
   const classes = read.entries;
   const at = classes.findIndex(entry => entry.id === classId);
   const entry = classes[at];
@@ -648,6 +663,12 @@ async function refuseStoredUses(
  * not locked, the usage index must be whole, and no document may use it,
  * first by the index and then by the stored documents themselves. One
  * refusal refuses the whole request, so nothing is half removed.
+ *
+ * A write refused because the Single was saved meanwhile is made again on
+ * what is stored then: the stored entries and the index are asked again, and
+ * only these styles are taken out of the newest list. The stored documents
+ * are walked again too: a page saved using a style between two attempts is
+ * one the index may not have counted, which is what the walk is there for.
  */
 export async function removeSharedStyles(
   req: Request,
@@ -665,25 +686,33 @@ export async function removeSharedStyles(
   const ids = [
     ...new Set(parsed.data.ids),
   ] satisfies SharedStyleRemoveRequest["ids"];
-  const read = await store.read();
-  const classes = read.entries;
-  const { reasons, removable } = storedRefusals(ids, classes, configClassIds);
-  // Read just before the write, never taken from what the panel showed.
-  reasons.push(...(await usageRefusals(removable, usage, "shared style")));
-  if (reasons.length > 0) {
-    throw removalRefusalOf(reasons, { classIds: ids });
-  }
-  // Only once the index found nothing: its refusals name every reason
-  // cheaply, and this read walks every document the builder opens.
-  await refuseStoredUses(ids, stillUsed);
   const gone = new Set(ids);
-  await store.write(
-    classes.filter(
-      entry => typeof entry.id !== "string" || !gone.has(entry.id)
-    ),
-    // Unmarked: only a lock change needs a route's mark.
-    {},
-    read
+  await retryOnStale(
+    () => store.read(),
+    async read => {
+      const classes = read.entries;
+      const { reasons, removable } = storedRefusals(
+        ids,
+        classes,
+        configClassIds
+      );
+      // Read just before the write, never taken from what the panel showed.
+      reasons.push(...(await usageRefusals(removable, usage, "shared style")));
+      if (reasons.length > 0) {
+        throw removalRefusalOf(reasons, { classIds: ids });
+      }
+      // Only once the index found nothing: its refusals name every reason
+      // cheaply, and this read walks every document the builder opens.
+      await refuseStoredUses(ids, stillUsed);
+      await store.write(
+        classes.filter(
+          entry => typeof entry.id !== "string" || !gone.has(entry.id)
+        ),
+        // Unmarked: only a lock change needs a route's mark.
+        {},
+        read
+      );
+    }
   );
   return respondMutation(
     ids.length === 1

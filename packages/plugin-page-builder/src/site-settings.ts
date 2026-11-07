@@ -67,7 +67,6 @@ import {
   type RewriteReport,
 } from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
-import { inCauses } from "./judged-writes";
 import {
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
   SITE_BREAKPOINT_REMOVAL_RUN_PARAM,
@@ -102,6 +101,7 @@ import {
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
 } from "./site-style-storage";
+import { isStaleVersion, retryOnStale } from "./stale-retry";
 import { readStoredJson, sameStoredValue } from "./stored-json";
 
 /** The permission a role needs to change the site's settings, in its parts. */
@@ -288,11 +288,6 @@ export function versionToWrite(stored: VersionedSiteStyle): string {
   throw NextlyError.internal({
     logContext: { reason: "site-style-read-without-version" },
   });
-}
-
-/** Whether a write was refused because the Single changed since it was read. */
-export function isStaleVersion(error: unknown): boolean {
-  return inCauses(error, NextlyError)?.code === "STALE_VERSION";
 }
 
 /**
@@ -619,22 +614,10 @@ export function removalAnswer<T>(
   );
 }
 
-/** How many times a removal's write is made again after another save. */
-const REMOVAL_WRITE_ATTEMPTS = 3;
-
 /** What a save is told when the breakpoints changed while it was made. */
 const BREAKPOINTS_CHANGED =
   "The site's breakpoints were changed while this was being saved. Reload to see them, then save again.";
 
-/**
- * Store a removal's set with the shared styles stripped, from the version read
- * before the removal was opened. Another save of the Single in between
- * (a shared style edited in Design, say) is not overwritten: the write is
- * refused, the Single read again, its shared styles stripped again, and the
- * write made from that version, a few times. A save in between that changed
- * the breakpoints themselves is a removal planned from a set no longer stored,
- * so it is refused for the person to reload.
- */
 /** What a removal's write of its set is handed. */
 interface RemovalSetWrite {
   breakpoints: SiteBreakpointsRequest["breakpoints"];
@@ -655,16 +638,15 @@ interface RemovalSetWrite {
 
 /**
  * One attempt at a removal's write, from the version `read`: what it takes
- * out of the shared styles kept first. `undefined` once written; the
- * refusal, when the write was refused as made from a replaced version, with
- * its row deleted again: the write was not made, so its row records a strip
- * that did not happen. Any other failure may have committed, so its row
- * stays and the failure is thrown.
+ * out of the shared styles kept first. A write refused as made from a
+ * replaced version has its row deleted again before the refusal is thrown:
+ * the write was not made, so its row records a strip that did not happen.
+ * Any other failure may have committed, so its row stays.
  */
 async function attemptRemovalSet(
   args: RemovalSetWrite,
   read: VersionedSiteStyle
-): Promise<{ readonly stale: unknown } | undefined> {
+): Promise<void> {
   const classes = strippedClassTier(
     read.classes,
     args.removal.defaults?.classes,
@@ -682,29 +664,38 @@ async function attemptRemovalSet(
       },
       versionToWrite(read)
     );
-    return undefined;
   } catch (error) {
-    if (!isStaleVersion(error)) throw error;
-    if (kept !== undefined) await args.discard(kept);
-    return { stale: error };
+    if (isStaleVersion(error) && kept !== undefined) await args.discard(kept);
+    throw error;
   }
 }
 
+/**
+ * Store a removal's set with the shared styles stripped, from the version read
+ * before the removal was opened. Another save of the Single in between
+ * (a shared style edited in Design, say) is not overwritten: the write is
+ * refused, the Single read again, its shared styles stripped again, and the
+ * write made from that version, as many times as {@link retryOnStale} tries.
+ * A save in between that changed the breakpoints themselves is a removal
+ * planned from a set no longer stored, so it is refused for the person to
+ * reload.
+ */
 async function writeRemovalSet(args: RemovalSetWrite): Promise<void> {
-  let read = args.stored;
-  for (let attempt = 1; ; attempt += 1) {
-    const refused = await attemptRemovalSet(args, read);
-    if (refused === undefined) return;
-    if (attempt >= REMOVAL_WRITE_ATTEMPTS) throw refused.stale;
-    read = await args.removal.stored(args.ctx);
-    if (!sameStoredValue(read.breakpoints, args.stored.breakpoints)) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message: BREAKPOINTS_CHANGED,
-        logContext: { reason: "breakpoint-removal-set-changed" },
-      });
-    }
-  }
+  await retryOnStale(
+    async () => {
+      const read = await args.removal.stored(args.ctx);
+      if (!sameStoredValue(read.breakpoints, args.stored.breakpoints)) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: BREAKPOINTS_CHANGED,
+          logContext: { reason: "breakpoint-removal-set-changed" },
+        });
+      }
+      return read;
+    },
+    read => attemptRemovalSet(args, read),
+    { read: args.stored }
+  );
 }
 
 /**

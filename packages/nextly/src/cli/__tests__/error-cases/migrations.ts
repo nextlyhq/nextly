@@ -23,6 +23,7 @@ import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapsh
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
 import { NextlyError } from "../../../errors/nextly-error";
+import { appliedFilesMissing } from "../../commands/migrate";
 import { refusalOf } from "../../commands/migrate-down";
 import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
@@ -208,12 +209,13 @@ export const MIGRATION_CASES = {
       why: "Its checksum no longer matches the one recorded when it ran on this database.",
       next: "Restore the file as it was when it ran, and put the change in a new migration with `nextly migrate:create`.",
     }),
+  // As `assertAppliedFilesPresent` in `cli/commands/migrate.ts` throws it.
   MIGRATION_MISSING: () =>
-    new CliError("MIGRATION_MISSING", {
-      what: "`20261020_120000_add_posts.sql` is recorded as applied, but its file is not in the migrations folder.",
-      why: "It ran on this database and no removal of it is recorded, so the folder may be from an older build.",
-      next: "Restore the file from version control, or deploy the build that has it, then run `nextly migrate` again.",
-    }),
+    appliedFilesMissing(
+      "nextly migrate",
+      ["20261020_120000_add_posts.sql"],
+      []
+    ),
   // As `baselineCore` in `cli/commands/migrate-baseline.ts` throws it.
   BASELINE_LOCK_RELEASED: () =>
     new NextlyError({

@@ -7,6 +7,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import { variableUsagePath, variableWhereUsedPath } from "./library-contract";
@@ -728,6 +729,10 @@ describe("the in-use check every removal makes", () => {
   });
 });
 
+/** A write refused because the Single was saved since its read. */
+const staleRefusal = () =>
+  NextlyError.staleVersion({ data: { currentVersion: "9" } });
+
 /** A store over the stored tokens section, recording each write. */
 function storeOf(section: Record<string, unknown>, rev?: string) {
   const read: VariableRead = {
@@ -874,7 +879,7 @@ describe("removing variables", () => {
           classes: [],
           rev: "8",
         }))
-        .mockRejectedValueOnce(new Error("stale version"));
+        .mockRejectedValueOnce(staleRefusal());
 
       expect(await removeAccentUsed(store)).toMatchObject({
         publicData: { errors: [{ code: "IN_USE" }] },
@@ -906,7 +911,7 @@ describe("removing variables", () => {
           classes: [],
           rev: "8",
         }))
-        .mockRejectedValueOnce(new Error("stale version"));
+        .mockRejectedValueOnce(staleRefusal());
 
       await removeAccentUsed(store);
       expect(write.mock.calls[2]?.[0]).toEqual({ tokens: [brand, again] });
@@ -914,7 +919,7 @@ describe("removing variables", () => {
 
     it("reports the restore's own failure after a bounded number of tries", async () => {
       const { store, write } = storeOf({ tokens: [accent] }, "7");
-      const stale = new Error("stale version");
+      const stale = staleRefusal();
       write
         .mockImplementationOnce(async section => ({
           section,
@@ -926,6 +931,113 @@ describe("removing variables", () => {
       expect(await removeAccentUsed(store)).toBe(stale);
       // The removal, then three restores.
       expect(write).toHaveBeenCalledTimes(4);
+    });
+
+    it("reports any other failure of the restore at once, since it may have been written", async () => {
+      const { store, write } = storeOf({ tokens: [accent] }, "7");
+      const lost = new Error("the connection was lost");
+      write
+        .mockImplementationOnce(async section => ({
+          section,
+          classes: [],
+          rev: "8",
+        }))
+        .mockRejectedValue(lost);
+
+      expect(await removeAccentUsed(store)).toBe(lost);
+      // The removal, then the one restore.
+      expect(write).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("a removal's write refused because the Single was saved meanwhile", () => {
+    const added = {
+      id: "t-new",
+      name: "color.new",
+      kind: "color",
+      values: { light: "#abcdef" },
+    };
+
+    /** A store read at version 7, then at 8 holding `newer`; 7's write refused. */
+    function savedMeanwhile(newer: VariableRead) {
+      const { store, write } = storeOf({ tokens: [brand, accent] }, "7");
+      store.read = vi
+        .fn<VariableStore["read"]>()
+        .mockResolvedValueOnce({
+          section: { tokens: [brand, accent] },
+          classes: [],
+          rev: "7",
+        })
+        .mockResolvedValue(newer);
+      write.mockRejectedValueOnce(staleRefusal());
+      return { store, write };
+    }
+
+    it("removes again from the newest section, keeping a variable added meanwhile", async () => {
+      const newer: VariableRead = {
+        section: { tokens: [brand, accent, added] },
+        classes: [],
+        rev: "8",
+      };
+      const { store, write } = savedMeanwhile(newer);
+      const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+      const response = await removeVariables(
+        post({ ids: ["t-accent"] }),
+        store,
+        supplied,
+        checksOf(inUse)
+      );
+      expect(response.status).toBe(200);
+      expect(write).toHaveBeenCalledTimes(2);
+      expect(write.mock.calls[1]).toEqual([{ tokens: [brand, added] }, newer]);
+      // Judged again on the newest read's shared styles.
+      expect(inUse).toHaveBeenLastCalledWith(
+        [{ id: "t-accent", name: "Accent" }],
+        newer.classes
+      );
+    });
+
+    it("refuses as the in-use check does when a shared style saved meanwhile uses the variable", async () => {
+      const naming = styleNaming("c-new", "New", "t-accent");
+      const { store, write } = savedMeanwhile({
+        section: { tokens: [brand, accent] },
+        classes: [naming],
+        rev: "8",
+      });
+      const inUseRefusal = new Error("in use by New");
+      const inUse = vi.fn<VariablesInUseCheck>(async (_removable, classes) => {
+        if (classes.includes(naming)) throw inUseRefusal;
+      });
+      expect(
+        await refusal(
+          removeVariables(
+            post({ ids: ["t-accent"] }),
+            store,
+            supplied,
+            checksOf(inUse)
+          )
+        )
+      ).toBe(inUseRefusal);
+      expect(write).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a variable removed meanwhile as one the site does not store", async () => {
+      const { store, write } = savedMeanwhile({
+        section: { tokens: [brand] },
+        classes: [],
+        rev: "8",
+      });
+      expect(
+        await refusal(
+          removeVariables(
+            post({ ids: ["t-accent"] }),
+            store,
+            supplied,
+            checksOf()
+          )
+        )
+      ).toMatchObject({ code: "NOT_FOUND" });
+      expect(write).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -226,29 +226,95 @@ export interface SentenceRows<Draft> {
   readonly remove: (row: ShownRow<Draft>) => number | undefined;
 }
 
+/** What the rows last asked of the stored list: a row written or removed. */
+type RowEdit =
+  | { readonly kind: "write"; readonly index: number }
+  | { readonly kind: "remove"; readonly index: number };
+
+/**
+ * The drafts over the stored rows after the stored list changed, by what
+ * changed it. A row written keeps every other draft where it is; a row removed
+ * moves the drafts after it up one. A change these rows didn't make, such as
+ * an undo, leaves no draft standing, since nothing says which row is which.
+ */
+function draftsAfter<Draft>(
+  drafts: ReadonlyMap<number, Draft>,
+  edit: RowEdit | undefined
+): ReadonlyMap<number, Draft> {
+  if (edit === undefined) return new Map();
+  const next = new Map<number, Draft>();
+  for (const [index, draft] of drafts) {
+    if (index === edit.index) continue;
+    next.set(
+      edit.kind === "remove" && index > edit.index ? index - 1 : index,
+      draft
+    );
+  }
+  return next;
+}
+
 /**
  * The rows of a stored list being edited: each stored row, with any draft
- * over it, then the new rows not yet complete. A draft is dropped once the
- * stored list changes, since the change is the draft written.
+ * over it, then the new rows not yet complete. A draft stays with its row
+ * when another row is written or removed through these rows, and goes once
+ * its own row is written, since the row then holds the draft; a change made
+ * elsewhere, such as an undo, clears them, as nothing says which row is
+ * which.
  */
 export function useSentenceRows<Stored, Draft>(
   stored: readonly Stored[],
   toDraft: (stored: Stored) => Draft,
   empty: Draft
 ): SentenceRows<Draft> {
-  const [overStored, setOverStored] = React.useState<
-    ReadonlyMap<number, Draft>
-  >(() => new Map());
+  // Drafts over stored rows, by index, with the stored list they were made
+  // over: a list that has since changed is read through `draftsAfter`.
+  const [overStored, setOverStored] = React.useState<{
+    readonly basis: string;
+    readonly drafts: ReadonlyMap<number, Draft>;
+  }>(() => ({ basis: JSON.stringify(stored), drafts: new Map() }));
   const [added, setAdded] = React.useState<
     ReadonlyArray<{ key: string; draft: Draft }>
   >([]);
   const [openKey, setOpenKey] = React.useState<string | null>(null);
+  // The edit these rows last asked for, with the stored list it was asked
+  // over, so it is read only for the change it makes.
+  const lastEdit = React.useRef<
+    { readonly edit: RowEdit; readonly over: string } | undefined
+  >(undefined);
   const storedText = JSON.stringify(stored);
-  React.useEffect(() => setOverStored(new Map()), [storedText]);
+  const current =
+    overStored.basis === storedText
+      ? overStored.drafts
+      : draftsAfter(overStored.drafts, lastEdit.current?.edit);
+  // Settled once the change is drawn, so the edit is read for it alone.
+  React.useEffect(() => {
+    setOverStored(state =>
+      state.basis === storedText
+        ? state
+        : {
+            basis: storedText,
+            drafts: draftsAfter(state.drafts, lastEdit.current?.edit),
+          }
+    );
+    lastEdit.current = undefined;
+  }, [storedText]);
+  // An edit that changed nothing, a row written back to what it held, is
+  // spent once drawn, so a later change made elsewhere isn't read as it.
+  React.useEffect(() => {
+    if (lastEdit.current?.over === storedText) lastEdit.current = undefined;
+  });
+  const setDraft = (index: number, draft: Draft | undefined): void => {
+    setOverStored(() => {
+      const drafts = new Map(current);
+      if (draft === undefined) drafts.delete(index);
+      else drafts.set(index, draft);
+      return { basis: storedText, drafts };
+    });
+  };
   const nextKey = React.useRef(0);
   const rows: ShownRow<Draft>[] = [
     ...stored.map((each, index) => {
-      const draft = overStored.get(index);
+      const draft = current.get(index);
       return {
         key: `stored:${String(index)}`,
         index,
@@ -277,11 +343,9 @@ export function useSentenceRows<Stored, Draft>(
     change: (row, draft, completed) => {
       const index = row.index ?? stored.length;
       if (completed) {
-        setOverStored(current => {
-          const next = new Map(current);
-          next.delete(index);
-          return next;
-        });
+        // The caller writes this row next; every other draft stays put.
+        lastEdit.current = { edit: { kind: "write", index }, over: storedText };
+        if (row.index !== undefined) setDraft(row.index, undefined);
         if (row.index === undefined) {
           setAdded(current => current.filter(each => each.key !== row.key));
           if (openKey === row.key) setOpenKey(`stored:${String(index)}`);
@@ -295,8 +359,7 @@ export function useSentenceRows<Stored, Draft>(
           )
         );
       } else {
-        const at = row.index;
-        setOverStored(current => new Map(current).set(at, draft));
+        setDraft(row.index, draft);
       }
       return index;
     },
@@ -304,6 +367,13 @@ export function useSentenceRows<Stored, Draft>(
       if (openKey === row.key) setOpenKey(null);
       if (row.index === undefined) {
         setAdded(current => current.filter(each => each.key !== row.key));
+      } else {
+        // The caller removes this row next; the rows after it move up.
+        lastEdit.current = {
+          edit: { kind: "remove", index: row.index },
+          over: storedText,
+        };
+        setDraft(row.index, undefined);
       }
       return row.index;
     },

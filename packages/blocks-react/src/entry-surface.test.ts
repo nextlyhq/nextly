@@ -473,6 +473,9 @@ describe("the root entry", () => {
       // editor's canvas ask one walk which lists a page holds.
       "listCollections",
       "migrationSourceFor",
+      // Whether a recorded lookup found no field a visitor may read, so the
+      // editor can say a whole source is hidden from visitors.
+      "noPublicFields",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",

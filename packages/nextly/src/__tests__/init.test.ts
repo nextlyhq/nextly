@@ -258,6 +258,7 @@ describe("init - Nextly API", () => {
       "permissions",
       "plugins",
       "principals",
+      "publicSiteSettings",
       "register",
       "releases",
       "resetPassword",
