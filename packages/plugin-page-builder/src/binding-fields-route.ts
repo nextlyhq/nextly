@@ -208,18 +208,27 @@ function groupRead(
   };
 }
 
+/** A field's shape as the public reads it, and whether a visitor may read it. */
+function visibilityOf(
+  shape: BindingFieldShape,
+  read: SourceRead
+): { readonly publicShape?: BindingFieldShape; readonly isPublic: boolean } {
+  const publicShape = read.publicShapes.find(
+    candidate => candidate.name === shape.name
+  );
+  if (publicShape !== undefined) return { publicShape, isPublic: true };
+  // The timestamps are read with the entry, so a visitor who may read the
+  // source reads them, though its field shapes never list them.
+  return {
+    isPublic: TIMESTAMPS.has(shape.name) && read.publicShapes.length > 0,
+  };
+}
+
 /** One field as the picker lists it, from its level's read; a group's inside it. */
 function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
   const { fields: _declaredInside, ...own } = shape;
   const value = read.row[shape.name];
-  const publicShape = read.publicShapes.find(
-    candidate => candidate.name === shape.name
-  );
-  // The timestamps are read with the entry, so a visitor who may read the
-  // source reads them, though its field shapes never list them.
-  const isPublic =
-    publicShape !== undefined ||
-    (TIMESTAMPS.has(shape.name) && read.publicShapes.length > 0);
+  const { publicShape, isPublic } = visibilityOf(shape, read);
   const draft = !sameJsonValue(value, read.published?.[shape.name]);
   const preview = isPublic && !draft ? previewOf(value) : undefined;
   const group = groupRead(shape, read, publicShape);
@@ -275,8 +284,9 @@ async function sourceFields(
       if (target === undefined || id === undefined) return field;
       if (budget.followed >= MOST_RELATIONS) return field;
       budget.followed += 1;
-      const related = await readSource({ collection: target, id }, reads);
-      if (related === undefined) return field;
+      const related = await readOrFailed({ collection: target, id }, reads);
+      // A relation whose entry can't be read lists none of its fields.
+      if (related === undefined || related === "failed") return field;
       return {
         ...field,
         fields: related.shapes.map(inner =>
@@ -285,6 +295,30 @@ async function sourceFields(
       };
     })
   );
+}
+
+/**
+ * One source read as {@link readSource} reads it, or `"failed"` where the read
+ * failed for a reason other than access: that source alone is reported, and
+ * the others still list.
+ */
+async function readOrFailed(
+  ref: FieldsRef,
+  reads: BindingFieldsReads
+): Promise<SourceRead | undefined | "failed"> {
+  try {
+    return await readSource(ref, reads);
+  } catch {
+    return "failed";
+  }
+}
+
+/** A source the picker names but could not read, with no fields. */
+function failedSource(
+  binding: PickerSource["binding"],
+  label: string
+): PickerSource {
+  return { binding, label, fields: [], readFailed: true };
 }
 
 /** Whether a visitor may read a field, or one inside it. */
@@ -310,6 +344,29 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
   };
 }
 
+/** The page's own entry as a source: read, named as failed, or none to list. */
+async function entrySource(
+  own: BindingFieldsRequest["source"],
+  ref: FieldsRef,
+  singles: readonly { readonly slug: string; readonly label: string }[],
+  reads: BindingFieldsReads,
+  budget: FollowBudget
+): Promise<PickerSource | undefined> {
+  // A Single's own label for a Single, a collection's for an entry.
+  const label =
+    own.kind === "single"
+      ? (singles.find(single => single.slug === own.slug)?.label ?? own.slug)
+      : await reads.collectionLabel(own.slug);
+  const read = await readOrFailed(ref, reads);
+  if (read === undefined) return undefined;
+  if (read === "failed") return failedSource({ source: "entry" }, label);
+  return {
+    binding: { source: "entry" },
+    label,
+    fields: await sourceFields(read, reads, budget),
+  };
+}
+
 /**
  * The picker's sources for the page being edited: its entry, when it has
  * one to read, each Single the caller may read, and the site settings.
@@ -329,36 +386,30 @@ export async function readBindingFields(
         ? undefined
         : { collection: own.slug, id: own.id };
   if (entryRef !== undefined) {
-    const read = await readSource(entryRef, reads);
-    if (read !== undefined) {
-      sources.push({
-        binding: { source: "entry" },
-        // A Single's own label for a Single, a collection's for an entry.
-        label:
-          own.kind === "single"
-            ? (singles.find(single => single.slug === own.slug)?.label ??
-              own.slug)
-            : await reads.collectionLabel(own.slug),
-        fields: await sourceFields(read, reads, budget),
-      });
-    }
+    const entry = await entrySource(own, entryRef, singles, reads, budget);
+    if (entry !== undefined) sources.push(entry);
   }
   const singleSources = await Promise.all(
     singles.map(async ({ slug, label }): Promise<PickerSource | undefined> => {
-      const read = await readSource({ single: slug }, reads);
-      return read === undefined
-        ? undefined
-        : {
-            binding: { source: "single", sourceKey: slug },
-            label,
-            fields: await sourceFields(read, reads, budget),
-          };
+      const binding = { source: "single" as const, sourceKey: slug };
+      const read = await readOrFailed({ single: slug }, reads);
+      if (read === undefined) return undefined;
+      if (read === "failed") return failedSource(binding, label);
+      return {
+        binding,
+        label,
+        fields: await sourceFields(read, reads, budget),
+      };
     })
   );
   // A Single no visitor may read any of can only ever show a binding's
-  // fallback, such as a plugin's own settings: it is left out.
+  // fallback, such as a plugin's own settings: it is left out. One that
+  // could not be read is named, so the picker can say so.
   for (const source of singleSources) {
-    if (source !== undefined && source.fields.some(isReachable)) {
+    if (
+      source !== undefined &&
+      (source.readFailed === true || source.fields.some(isReachable))
+    ) {
       sources.push(source);
     }
   }
