@@ -16,13 +16,17 @@ import {
 
 const TX = Object.freeze({}) as PluginCollectionTransaction;
 
-/** A write as core's in-transaction phase hands it to the cascade. */
+/**
+ * A write as core's in-transaction phase hands it to the cascade. A delete
+ * carries the document it removed in `data`, in the shape a read returns;
+ * `originalData` is an update's alone, so no delete here has one.
+ */
 interface Write {
   collection: string;
   operation: "create" | "update" | "delete";
   id: string;
   transaction: PluginCollectionTransaction;
-  originalData?: unknown;
+  data?: unknown;
 }
 
 /** The cascade over `designs` (key to design id), recording what it did. */
@@ -73,7 +77,13 @@ describe("a delete's cascade", () => {
       operation: "delete",
       id: "t1",
       transaction: TX,
-      originalData: { id: "t1", collection: "posts" },
+      data: {
+        id: "t1",
+        collection: "posts",
+        entry: null,
+        entryCollection: null,
+        entryId: null,
+      },
     });
 
     expect(unlinked).toEqual(["t1"]);
@@ -88,7 +98,13 @@ describe("a delete's cascade", () => {
       operation: "delete",
       id: "d1",
       transaction: TX,
-      originalData: { id: "d1", entry: "posts/p1" },
+      data: {
+        id: "d1",
+        collection: null,
+        entry: "posts/p1",
+        entryCollection: "posts",
+        entryId: "p1",
+      },
     });
 
     expect(unlinked).toEqual([]);

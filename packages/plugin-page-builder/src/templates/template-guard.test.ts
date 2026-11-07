@@ -11,6 +11,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  GUARDED_COLLECTIONS_CONTEXT,
   guardWrite,
   registerTemplateGuard,
   templateCollectionProblem,
@@ -418,5 +419,69 @@ describe("a collection's template without its collection", () => {
     expect(messagesOf(refused)).toEqual([
       "A template names the collection whose entries it draws.",
     ]);
+  });
+});
+
+describe("what the guard leaves for the write's transaction", () => {
+  /** The guard as registered, run on `hook`. */
+  async function guarded(hook: Record<string, unknown>): Promise<unknown> {
+    let guard: ((context: unknown) => unknown) | undefined;
+    registerTemplateGuard(
+      {
+        hooks: {
+          on: (_type, _collection, handler) => {
+            guard = handler;
+          },
+        },
+      },
+      setup()
+    );
+    if (!guard) throw new Error("the guard was not registered");
+    return guard(hook);
+  }
+
+  it("records the collections a create names, as it let them through", async () => {
+    const shared: Record<string, unknown> = {};
+
+    await guarded({
+      operation: "create",
+      data: { title: "Post page", collection: "posts", entryCollection: "" },
+      context: shared,
+    });
+
+    expect(shared[GUARDED_COLLECTIONS_CONTEXT]).toEqual({
+      collection: "posts",
+      entryCollection: null,
+    });
+  });
+
+  it("records the stored collection for an update that names none", async () => {
+    const shared: Record<string, unknown> = {};
+
+    await guarded({
+      operation: "update",
+      originalData: { id: "t1", title: "Post page", collection: "posts" },
+      data: { title: "Renamed" },
+      context: shared,
+    });
+
+    expect(shared[GUARDED_COLLECTIONS_CONTEXT]).toEqual({
+      collection: "posts",
+      entryCollection: null,
+    });
+  });
+
+  it("records nothing for a write it refuses", async () => {
+    const shared: Record<string, unknown> = {};
+
+    await refusalOf(() =>
+      guarded({
+        operation: "create",
+        data: { title: "Pages", collection: "pages" },
+        context: shared,
+      })
+    );
+
+    expect(shared).toEqual({});
   });
 });

@@ -11,6 +11,11 @@
  * - the shape of what the template serves ({@link designShapeProblem}), so a
  *   row naming both a collection and an entry, or an entry under a key it
  *   does not make, never commits;
+ * - the collection it newly names, as `collection` or as an own design's
+ *   `entryCollection`: the one the guard let through, which passed its
+ *   collection check (`templateCollectionProblem`), so a hook cannot point
+ *   it at the page builder's own collection, a hidden one, or one with no
+ *   address field once the guard has run;
  * - for a new own design, that its entry is still there, holding the entry's
  *   row for share until the write ends
  *   (`ctx.services.collections.holdEntryInTransaction`). A delete of the
@@ -34,12 +39,20 @@ import {
   designShapeRefusal,
   isEntryDesign,
 } from "./entry-designs";
+import {
+  GUARDED_COLLECTIONS_CONTEXT,
+  namedCollection,
+  TEMPLATE_COLLECTION_FIELDS,
+  templateCollectionRefusal,
+} from "./template-guard";
 
 /** What an in-transaction handler is told about a template's write. */
 interface TemplateWrite<Tx> {
   readonly operation: "create" | "update" | "delete";
   readonly data?: Record<string, unknown>;
   readonly originalData?: Record<string, unknown> | null;
+  /** A frozen copy of the write's shared hook context. */
+  readonly context?: Readonly<Record<string, unknown>>;
   readonly transaction: Tx;
 }
 
@@ -74,8 +87,46 @@ function changedShape(
 }
 
 /**
+ * Refuse a row that newly names a collection the guard did not let through:
+ * one a hook running after the guard put there. `original` is the document
+ * an update replaced, null for a create; a collection an update leaves as it
+ * was is not asked about. A write the guard did not see (one that ran no
+ * hooks) carries no record, and no hook can have changed it.
+ */
+function refuseUnguardedCollection(
+  context: Readonly<Record<string, unknown>> | undefined,
+  data: Readonly<Record<string, unknown>>,
+  original: Readonly<Record<string, unknown>> | null
+): void {
+  const guarded = context?.[GUARDED_COLLECTIONS_CONTEXT];
+  if (typeof guarded !== "object" || guarded === null) return;
+  const letThrough = guarded as Readonly<Record<string, unknown>>;
+  for (const field of TEMPLATE_COLLECTION_FIELDS) {
+    const named = namedCollection(data[field]);
+    if (original !== null && named === namedCollection(original[field])) {
+      continue;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(letThrough, field) &&
+      letThrough[field] === named
+    ) {
+      continue;
+    }
+    // Refused rather than judged here: see `GUARDED_COLLECTIONS_CONTEXT`.
+    const message =
+      named === null
+        ? "A hook emptied the collection this template names after the collection was checked."
+        : `A hook changed the collection this template names to "${named}" after the collection was checked. Set it on the template itself.`;
+    throw field === TEMPLATE_COLLECTION_FIELD
+      ? templateCollectionRefusal(message)
+      : designShapeRefusal({ path: field, message });
+  }
+}
+
+/**
  * The in-transaction handler for the templates collection: the shape of
- * every create and update judged again, and a new own design's entry held
+ * every create and update judged again, the collections it newly names
+ * held to those the guard let through, and a new own design's entry held
  * and refused once it is gone. `holdEntry` answers whether the entry exists,
  * holding its row until the transaction ends.
  */
@@ -92,10 +143,12 @@ export function judgeTemplateInTransaction<Tx>(
       if (original === null) return;
       const shape = designShapeProblem(original, changedShape(original, data));
       if (shape !== null) throw designShapeRefusal(shape);
+      refuseUnguardedCollection(write.context, data, original);
       return;
     }
     const shape = designShapeProblem(null, data);
     if (shape !== null) throw designShapeRefusal(shape);
+    refuseUnguardedCollection(write.context, data, null);
     if (!isEntryDesign(data)) return;
     const collection = data[TEMPLATE_ENTRY_COLLECTION_FIELD];
     const id = data[TEMPLATE_ENTRY_ID_FIELD];

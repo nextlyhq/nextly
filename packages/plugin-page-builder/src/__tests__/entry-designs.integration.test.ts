@@ -3,8 +3,9 @@
  * template actions route as a draft copy of the collection's published
  * template, the unique key that keeps one per entry when two gives run at
  * once, removing it, its deletion with its entry, a Direct API create whose
- * entry is deleted while it is written, and a deleted template's link
- * emptied on a published design's live row.
+ * entry is deleted while it is written, a template a later hook points at a
+ * collection the guard refuses, and a deleted template's link emptied on a
+ * published design's live row.
  *
  * @module __tests__/entry-designs.integration.test
  */
@@ -23,6 +24,7 @@ import {
 import { defineCollection, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { PAGES_SLUG } from "../collections/pages";
 import { TEMPLATES_SLUG } from "../collections/templates";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
@@ -61,7 +63,14 @@ function templateDocument(id: string) {
  * after the page builder's guard has found it there and before the write's
  * transaction opens: the window a delete racing the write falls into.
  */
-const racing: { remove?: (entryId: string) => Promise<void> } = {};
+const racing: {
+  remove?: (entryId: string) => Promise<void>;
+  /**
+   * When set, the data a template write stores after the guard has let it
+   * through: a later hook rewriting what the guard judged.
+   */
+  rewrite?: (data: Record<string, unknown>) => Record<string, unknown>;
+} = {};
 
 /** A plugin that deletes a new own design's entry while it is written. */
 const racer = definePlugin({
@@ -72,6 +81,9 @@ const racer = definePlugin({
   init(ctx) {
     ctx.hooks.on("beforeChange", TEMPLATES_SLUG, async context => {
       const data = (context as { data?: Record<string, unknown> }).data;
+      if (racing.rewrite !== undefined && data !== undefined) {
+        return racing.rewrite(data);
+      }
       const entryId = data?.entryId;
       if (racing.remove !== undefined && typeof entryId === "string") {
         await racing.remove(entryId);
@@ -88,6 +100,7 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(async () => {
       racing.remove = undefined;
+      racing.rewrite = undefined;
       await current?.destroy();
       current = undefined;
     });
@@ -404,6 +417,43 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.status).toBe(404);
       expect(JSON.stringify(refused.body)).not.toContain("Hello world");
       expect(await designs(t)).toHaveLength(1);
+    });
+
+    it("refuses a template a later hook points at a collection the guard refuses", async () => {
+      const t = await boot();
+      let rewritten = 0;
+      // The guard judges "posts", which may have a template; a hook after it
+      // points the template at the page builder's own pages, which may not.
+      racing.rewrite = data => {
+        rewritten += 1;
+        return { ...data, collection: PAGES_SLUG };
+      };
+
+      const refused = await t.nextly
+        .create({
+          collection: TEMPLATES_SLUG,
+          data: { title: "Direct", collection: "posts" },
+          overrideAccess: true,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+      expect(rewritten).toBe(1);
+      expect(NextlyError.isCode(refused, "VALIDATION_ERROR")).toBe(true);
+      expect(JSON.stringify((refused as NextlyError).publicData)).toContain(
+        "after the collection was checked"
+      );
+      const stored = await t.nextly.find({
+        collection: TEMPLATES_SLUG,
+        where: { collection: { equals: PAGES_SLUG } },
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+        limit: 1,
+      });
+      expect(stored.items).toEqual([]);
     });
 
     it("refuses a Direct API own design whose entry is deleted while it is written", async () => {

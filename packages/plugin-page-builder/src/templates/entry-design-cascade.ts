@@ -19,8 +19,12 @@ interface DeletedWrite {
   readonly operation: "create" | "update" | "delete";
   readonly id: string;
   readonly transaction: PluginCollectionTransaction;
-  /** The document as it stood before the write: for a delete, what it removes. */
-  readonly originalData?: unknown;
+  /**
+   * The document as the write leaves it. For a delete, core hands the
+   * document as it was just before it was removed here, not in
+   * `originalData`, which only an update carries.
+   */
+  readonly data?: unknown;
 }
 
 /** What the cascade needs. */
@@ -91,7 +95,7 @@ async function unlinkDeletedTemplate(
   write: DeletedWrite,
   setup: EntryDesignCascadeSetup
 ): Promise<void> {
-  const removed = write.originalData;
+  const removed = write.data;
   if (
     typeof removed === "object" &&
     removed !== null &&

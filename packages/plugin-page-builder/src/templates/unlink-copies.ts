@@ -32,6 +32,7 @@ const PAGE = 100;
 interface ListOptions {
   where: Record<string, unknown>;
   pagination: { limit: number };
+  sort?: { field: string; direction: "asc" | "desc" };
   depth: number;
 }
 
@@ -79,30 +80,34 @@ async function waitingDrafts<Tx>(
 /**
  * Empty, in `tx`, the link of every own design copied from template `id`.
  *
- * The first page again after each is emptied, so a copy made or removed
- * meanwhile cannot shift one past a page number. A copy read twice (one whose
- * live row keeps the link, as above) is not written again, and a page of
- * nothing but those ends the walk rather than looping on it.
+ * The copies are walked in id order, each read after the last id the walk
+ * has reached, so every copy is read once. Paging by number, or reading the
+ * first page again, would not get past a page of copies whose live row keeps
+ * the link (those with a draft waiting, as above): they match again, and the
+ * copies after them would never be reached.
  */
 export async function unlinkCopies<Tx>(
   services: UnlinkServices<Tx>,
   tx: Tx,
   id: string
 ): Promise<void> {
-  const emptied = new Set<string>();
+  let after: string | undefined;
   for (;;) {
     const found = await services.listForUpdate(tx, {
-      where: { [TEMPLATE_FORKED_FROM_FIELD]: { equals: id } },
+      where: {
+        [TEMPLATE_FORKED_FROM_FIELD]: { equals: id },
+        ...(after === undefined ? {} : { id: { greater_than: after } }),
+      },
       pagination: { limit: PAGE },
+      sort: { field: "id", direction: "asc" },
       depth: 0,
     });
     const copies = found.data.flatMap(row => {
       const copy = idOf(row);
-      return copy === undefined || emptied.has(copy)
+      return copy === undefined
         ? []
         : [{ id: copy, published: isPublished(row) }];
     });
-    if (copies.length === 0) return;
     const waiting = await waitingDrafts(
       services,
       tx,
@@ -118,9 +123,12 @@ export async function unlinkCopies<Tx>(
           ...(live ? { status: "published" } : {}),
         })
       );
-      emptied.add(copy.id);
     }
-    if (found.data.length < PAGE) return;
+    const last = copies.at(-1)?.id;
+    // A short page is the last; so is one with no id to go on from, which a
+    // stored copy always has.
+    if (found.data.length < PAGE || last === undefined) return;
+    after = last;
   }
 }
 

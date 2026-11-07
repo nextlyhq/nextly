@@ -38,10 +38,14 @@ The page builder uses it for an entry's own design, on every path that creates o
 Direct API included: a design written while its entry is deleted is refused, or deleted with
 the entry, rather than left naming an entry that is gone. Every write to a template has what
 it serves judged again in its own transaction, so a later hook cannot store a row naming both
-a collection and an entry, and an empty value for a field naming an entry is refused (a
+a collection and an entry, nor point a template or an own design at a collection other than
+the one the template guard checked. An empty value for a field naming an entry is refused (a
 form's cleared input is stored as none). A title made from an entry's title is cut to the
 length the title field counts, never splitting an emoji. Deleting a template now empties its
-link on a published design's live row too, without publishing a draft that waits on it.
+link on every design copied from it, a published design's live row included, without
+publishing a draft that waits on it; deleting an own design no longer looks for copies of it.
 
-On MySQL a collection's named lock is named for the database as well as the collection, so
-two Nextly databases on one server no longer wait on each other's collection deletes.
+On MySQL a collection's named lock is now also taken under a name for the database as well
+as the collection. It is still taken under its old name too, so instances on the old and new
+releases keep taking turns during a rolling deployment; once a later release drops the old
+name, two Nextly databases on one server stop waiting on each other's collection deletes.

@@ -1,7 +1,8 @@
 /**
  * A template's write judged again in its own transaction, against a stand-in
- * hold: the shape of the row about to commit, and a new own design's entry,
- * held on the write's transaction and refused once it is gone.
+ * hold: the shape of the row about to commit, the collections it newly names
+ * held to those the guard let through, and a new own design's entry, held on
+ * the write's transaction and refused once it is gone.
  *
  * That the hold takes turns with a delete of the entry on every dialect is
  * core's, proved by `nextly`'s
@@ -13,6 +14,11 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import { judgeTemplateInTransaction } from "./entry-design-write";
+import {
+  GUARDED_COLLECTIONS_CONTEXT,
+  registerTemplateGuard,
+  type TemplateGuardSetup,
+} from "./template-guard";
 
 const TX = { token: "the write's transaction" };
 
@@ -195,12 +201,174 @@ describe("an update, in its transaction", () => {
   it("asks nothing of a delete", async () => {
     const { handler, held } = judging(false);
 
+    // A delete carries the document it removed in `data`.
     await handler({
       operation: "delete",
-      originalData: design({ collection: "posts" }),
+      data: design({ collection: "posts" }),
       transaction: TX,
     });
 
     expect(held).toEqual([]);
+  });
+});
+
+/** The hook context the guard leaves, naming `collections` as let through. */
+const guarded = (collections: {
+  collection: string | null;
+  entryCollection: string | null;
+}) => Object.freeze({ [GUARDED_COLLECTIONS_CONTEXT]: { ...collections } });
+
+/** The path a refusal names. */
+function pathOf(error: NextlyError): string | undefined {
+  return (error.publicData as { errors?: { path: string }[] })?.errors?.[0]
+    ?.path;
+}
+
+describe("a collection a hook names after the guard", () => {
+  it("refuses a collection's template a later hook pointed at another collection", async () => {
+    const { handler } = judging(true);
+
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "create",
+        // The guard let "posts" through; a later hook made it the page
+        // builder's own pages, which the guard refuses.
+        data: template({ collection: "pages" }),
+        context: guarded({ collection: "posts", entryCollection: null }),
+        transaction: TX,
+      })
+    );
+
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(pathOf(refused)).toBe("collection");
+    expect(JSON.stringify(refused.publicData)).toContain(
+      "after the collection was checked"
+    );
+  });
+
+  it("refuses an own design a later hook moved to another collection's entry, before holding it", async () => {
+    const { handler, held } = judging(true);
+
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "create",
+        data: design({ entry: "pages/p1", entryCollection: "pages" }),
+        context: guarded({ collection: null, entryCollection: "posts" }),
+        transaction: TX,
+      })
+    );
+
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(pathOf(refused)).toBe("entryCollection");
+    expect(JSON.stringify(refused.publicData)).toContain(
+      "after the collection was checked"
+    );
+    expect(held).toEqual([]);
+  });
+
+  it("lets through the collection the guard let through", async () => {
+    const { handler, held } = judging(true);
+
+    await handler({
+      operation: "create",
+      data: template(),
+      context: guarded({ collection: "posts", entryCollection: null }),
+      transaction: TX,
+    });
+    await handler({
+      operation: "create",
+      data: design(),
+      context: guarded({ collection: null, entryCollection: "posts" }),
+      transaction: TX,
+    });
+
+    expect(held).toEqual([[TX, "posts", "p1"]]);
+  });
+
+  it("refuses an update a later hook pointed elsewhere, the write naming no collection itself", async () => {
+    const { handler } = judging(true);
+
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "update",
+        originalData: template(),
+        data: template({ collection: "secrets" }),
+        // The guard saw the stored "posts", which the write left alone.
+        context: guarded({ collection: "posts", entryCollection: null }),
+        transaction: TX,
+      })
+    );
+
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(pathOf(refused)).toBe("collection");
+    expect(JSON.stringify(refused.publicData)).toContain(
+      "after the collection was checked"
+    );
+  });
+
+  it("lets an update point a template at the collection the guard judged", async () => {
+    const { handler } = judging(true);
+
+    await handler({
+      operation: "update",
+      originalData: template({ collection: "gone" }),
+      data: template({ collection: "posts" }),
+      context: guarded({ collection: "posts", entryCollection: null }),
+      transaction: TX,
+    });
+  });
+
+  it("refuses the row when a hook after the guard rewrote it, with the context the guard left", async () => {
+    // The guard as registered, judging "posts" and leaving its record in the
+    // write's shared context; then a later hook rewrites the collection, and
+    // the phase is handed a frozen copy of that context, as core hands it.
+    const guardSetup: TemplateGuardSetup = {
+      templatesCollection: "templates",
+      ownCollections: () => new Set(["pages", "templates"]),
+      readCollection: async slug =>
+        slug === "posts"
+          ? { slug, fields: [{ name: "slug", type: "text" }] }
+          : null,
+      holderOf: async () => null,
+      holdEntry: async () => true,
+      entryExists: async () => true,
+      declaredAddresses: new Map(),
+      addressHolderOf: async () => null,
+    };
+    let guard: ((context: unknown) => unknown) | undefined;
+    registerTemplateGuard(
+      {
+        hooks: {
+          on: (_type, _collection, handler) => {
+            guard = handler;
+          },
+        },
+      },
+      guardSetup
+    );
+    if (!guard) throw new Error("the guard was not registered");
+    const shared: Record<string, unknown> = {};
+    const data: Record<string, unknown> = {
+      title: "Post page",
+      collection: "posts",
+    };
+    await guard({ operation: "create", data, context: shared });
+    data.collection = "pages";
+
+    const { handler } = judging(true);
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "create",
+        data: template({ collection: data.collection }),
+        context: Object.freeze(structuredClone(shared)),
+        transaction: TX,
+      })
+    );
+
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(pathOf(refused)).toBe("collection");
+    expect(JSON.stringify(refused.publicData)).toContain(
+      "after the collection was checked"
+    );
   });
 });
