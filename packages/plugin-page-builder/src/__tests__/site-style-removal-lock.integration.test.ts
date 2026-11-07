@@ -25,6 +25,19 @@
  * transaction is open runs inside it, so there the second write is refused
  * before it reaches its own transaction: the outcome is the same.
  *
+ * A shared style naming a variable races its removal the same way, inside the
+ * one Single: a shared-style save adding a `$token` is judged before its
+ * transaction, against the variables as they then stand. Both are writes of
+ * the same Single row, and every write of a Single locks its row before it
+ * stores anything and before its in-transaction phase, so the second writer
+ * waits at that row lock rather than at the graph lock; the gate still holds
+ * the first inside its transaction until the second has passed validation,
+ * so either order is produced.
+ *
+ * On a pool of one connection, the usual serverless PostgreSQL setting, a
+ * write's own transaction holds the one connection, so whatever the
+ * judgement under the lock reads must not need another.
+ *
  * @module __tests__/site-style-removal-lock.integration.test
  */
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
@@ -62,6 +75,19 @@ const sharedStyle = (id: string, orderIndex: number) => ({
 });
 const card = sharedStyle("c-card", 0);
 const spareStyle = sharedStyle("c-spare", 1);
+
+/** `card` changed to colour with the variable `token`, labelled `label`. */
+const cardUsing = (token: string, label: string) => ({
+  ...card,
+  label,
+  styles: { base: { base: { color: { $token: token } } } },
+});
+
+/**
+ * The pool size the run was started with, put back after each case: a case
+ * booting on a pool of its own size must not leave it for the next one.
+ */
+const CALLERS_POOL_MAX = process.env.DB_POOL_MAX;
 
 /**
  * A page whose one heading reads `text`, colours with `token` and applies
@@ -189,13 +215,25 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(async () => {
       gate.release();
+      // Put back first, so a teardown that fails still leaves it as found.
+      if (CALLERS_POOL_MAX === undefined) delete process.env.DB_POOL_MAX;
+      else process.env.DB_POOL_MAX = CALLERS_POOL_MAX;
       await current?.destroy();
       current = undefined;
     });
 
-    /** A site storing `accent`, `spare`, `card` and `spare`'s style, and a page using none. */
-    async function boot(): Promise<{ t: TestNextly; pageId: string }> {
+    /**
+     * A site storing `accent`, `spare`, `card` and `spare`'s style, and a page
+     * using none. `poolMax` sizes the instance's connection pool: the adapter
+     * reads `DB_POOL_MAX` when the boot creates it.
+     */
+    async function boot(
+      options: { poolMax?: number } = {}
+    ): Promise<{ t: TestNextly; pageId: string }> {
       gate = newGate();
+      if (options.poolMax !== undefined) {
+        process.env.DB_POOL_MAX = String(options.poolMax);
+      }
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder(), gatePlugin(() => gate)],
@@ -287,6 +325,45 @@ describe.each(getConfiguredTestDialects())(
         data: { ...data, _overwrite: true },
         overrideAccess: true,
       });
+    }
+
+    /** A person stored on the site, by id: whom an author's save is made as. */
+    async function author(t: TestNextly): Promise<string> {
+      const created = await t.nextly.users.create({
+        email: "author@example.com",
+        password: "Password123!",
+        data: { name: "author", isActive: true },
+      });
+      return created.item.id;
+    }
+
+    /**
+     * A write of the site style as `userId`, as the Shared Styles panel's save
+     * makes it: the Single's guards before the transaction judge it, so a
+     * shared style adding a variable the site does not define is refused
+     * there whenever that is already visible.
+     */
+    function writeSiteStyleAs(
+      t: TestNextly,
+      userId: string,
+      data: Record<string, unknown>
+    ) {
+      return t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { ...data, _overwrite: true },
+        overrideAccess: true,
+        user: { id: userId },
+      });
+    }
+
+    /** The stored shared styles, as text, read as the system. */
+    async function storedClasses(t: TestNextly): Promise<string> {
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.classes;
+      return typeof raw === "string" ? raw : JSON.stringify(raw ?? null);
     }
 
     /**
@@ -479,6 +556,116 @@ describe.each(getConfiguredTestDialects())(
           errors: [expect.objectContaining({ code: "unknown-class" })],
         },
       });
+    });
+
+    // The removal holds the Single's row lock and the graph lock; the shared
+    // style's save passes its validation while `t-spare` is still stored,
+    // then waits at the row lock. Once the removal commits, the save is
+    // judged again inside its transaction and refused, with the code the
+    // validation refuses a shared style's undefined variable with. On SQLite
+    // the save's validation reads inside the removal's open transaction,
+    // sees `t-spare` gone and is refused there: the outcome is the same.
+    it("refuses a shared style's first use of a variable a removal holding the lock takes out", async () => {
+      const { t } = await boot();
+      const userId = await author(t);
+
+      const [one, two] = await interleaved(
+        { collection: SITE_STYLE_WRITE },
+        () => writeSiteStyle(t, { tokens: { tokens: [accent] } }),
+        "card-uses-spare",
+        () =>
+          writeSiteStyleAs(t, userId, {
+            classes: [cardUsing("t-spare", "card-uses-spare"), spareStyle],
+          })
+      );
+
+      expect(one.status).toBe("fulfilled");
+      expect(two.status).toBe("rejected");
+      expect(
+        codesOf(two.status === "rejected" ? two.reason : undefined)
+      ).toEqual(["unknown-token"]);
+      expect(await storedIds(t, "tokens")).toEqual(["t-accent"]);
+      expect(await storedIds(t, "classes")).toEqual(["c-card", "c-spare"]);
+      expect(await storedClasses(t)).not.toContain("t-spare");
+    });
+
+    // The shared style's save holds the Single's row lock, its `$token` to
+    // `t-spare` stored; the removal, made as nobody, passes its validation
+    // against the shared styles as committed, without it, and waits at the
+    // row lock. Once the save commits, the removal is judged under the graph
+    // lock, finds the shared style naming `t-spare`, and is refused whole.
+    it("refuses removing a variable a shared style saved first starts using, and keeps it", async () => {
+      const { t } = await boot();
+      const userId = await author(t);
+
+      const [one, two] = await interleaved(
+        { collection: SITE_STYLE_WRITE },
+        () =>
+          writeSiteStyleAs(t, userId, {
+            classes: [cardUsing("t-spare", "card-uses-spare"), spareStyle],
+          }),
+        "drops-spare-for-card",
+        () =>
+          writeSiteStyle(t, {
+            tokens: { tokens: [{ ...accent, label: "drops-spare-for-card" }] },
+          })
+      );
+
+      expect(one.status).toBe("fulfilled");
+      expect(two.status).toBe("rejected");
+      expect(
+        codesOf(two.status === "rejected" ? two.reason : undefined)
+      ).toEqual(refusedRemoval);
+      expect(await storedIds(t, "tokens")).toEqual(["t-accent", "t-spare"]);
+      expect(await storedClasses(t)).toContain("t-spare");
+    });
+
+    // SQLite has one connection already, so a pool of one changes nothing
+    // there: these run on the pooled dialects only.
+    describe.skipIf(dialect === "sqlite")("on a pool of one connection", () => {
+      // The page write's transaction holds the one connection while it is
+      // judged under the lock. A read of the site's definitions that asks the
+      // pool for another waits out its bound and the save is refused, so the
+      // save is timed: well under that bound tells success from a refusal.
+      it("saves a page's first use of a variable and a shared style the site defines, without waiting for a connection", async () => {
+        const { t, pageId } = await boot({ poolMax: 1 });
+
+        const started = performance.now();
+        const saved = await savePage(
+          t,
+          pageId,
+          pageWith({ token: "t-spare", classes: ["c-spare"] })
+        ).then(
+          () => "saved",
+          (error: unknown) => codesOf(error)
+        );
+        const took = performance.now() - started;
+
+        expect(saved).toBe("saved");
+        expect(took).toBeLessThan(4_000);
+        const content = await storedContent(t, pageId);
+        expect(content).toContain("t-spare");
+        expect(content).toContain("c-spare");
+      });
+
+      // Likewise for the removal's read of the stored documents, whose bound
+      // is longer: the case's own timeout is past it, so a removal refused
+      // when the bound runs out fails on its code rather than on the clock.
+      it("removes a variable and a shared style nothing uses, without waiting for a connection", async () => {
+        const { t } = await boot({ poolMax: 1 });
+
+        const removed = await writeSiteStyle(t, {
+          tokens: { tokens: [accent] },
+          classes: [card],
+        }).then(
+          () => "removed",
+          (error: unknown) => codesOf(error)
+        );
+
+        expect(removed).toBe("removed");
+        expect(await storedIds(t, "tokens")).toEqual(["t-accent"]);
+        expect(await storedIds(t, "classes")).toEqual(["c-card"]);
+      }, 60_000);
     });
   }
 );
