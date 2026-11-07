@@ -264,6 +264,74 @@ describe("an entry listed but not readable", () => {
   });
 });
 
+describe("an entry waiting on a working draft", () => {
+  it("is listed by its saved title, and once chosen the chip names its draft's", async () => {
+    const changed: PreviewEntryItem = {
+      id: "p3",
+      title: "Field notes: a week with the editor",
+      status: "changed",
+      updatedAt: "2026-11-05T08:00:00Z",
+    };
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, changed]));
+    entriesReadable(["p2"]);
+    readPreviewEntry.mockImplementation(async ({ id }: { id: string }) => ({
+      id,
+      title: id === "p3" ? "Field notes, the draft's title" : `Entry ${id}`,
+      status: "changed",
+      editorValues: { id },
+      publicValues: { id },
+      fields: [],
+    }));
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() => expect(result.current.list.items).toHaveLength(2));
+    // The list keeps the saved title, marked as Changed.
+    expect(result.current.list.items[1]).toMatchObject({
+      title: "Field notes: a week with the editor",
+      status: "changed",
+    });
+    act(() => result.current.choose(changed));
+    await waitFor(() =>
+      expect(result.current.chip).toMatchObject({
+        id: "p3",
+        title: "Field notes, the draft's title",
+        loading: false,
+      })
+    );
+  });
+});
+
+describe("an entry's own design", () => {
+  it("previews the one entry it serves, whatever is newer, and chooses nothing else", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    const { result } = renderHook(() =>
+      useTemplatePreview({ ...ARGS, entry: "p1" })
+    );
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({
+        kind: "entry",
+        id: "p1",
+      })
+    );
+    expect(result.current.fixed).toBe(true);
+    act(() => result.current.choose(NEWEST));
+    expect(result.current.step(1)).toBeUndefined();
+    expect(result.current.chip?.id).toBe("p1");
+    // It remembers nothing: there is nothing to come back to.
+    expect(rememberedEntry(templatePreviewStore("u1"), "t1")).toBeUndefined();
+  });
+
+  it("previews the newest on a collection's template (the control)", async () => {
+    listPreviewEntries.mockResolvedValue(listed([NEWEST, OLDER]));
+    entriesReadable(["p1", "p2"]);
+    const { result } = renderHook(() => useTemplatePreview(ARGS));
+    await waitFor(() =>
+      expect(result.current.previewed).toMatchObject({ id: "p2" })
+    );
+    expect(result.current.fixed).toBe(false);
+  });
+});
+
 describe("a window that regains focus", () => {
   it("asks for the list again, so an entry made in another tab can be previewed", async () => {
     listPreviewEntries.mockResolvedValueOnce(listed([NEWEST, OLDER]));
@@ -320,6 +388,7 @@ describe("what the strip says, following the canvas's own read", () => {
   function answered() {
     return {
       collection: "posts",
+      fixed: false,
       labels: { singular: "Post", plural: "Posts" },
       language: undefined,
       list: { state: "ready" as const, items: [NEWEST], mayCreate: true },

@@ -10423,6 +10423,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   background: var(--nx-muted);
 }
 
+/* An own design's one entry: named, not chosen, so not drawn as pressable. */
+.nx-preview-strip__chip[data-fixed] {
+  cursor: default;
+}
+
+.nx-preview-strip__chip[data-fixed]:hover {
+  background: var(--nx-background);
+}
+
 .nx-preview-strip__chip:focus-visible,
 .nx-preview-strip__chip[data-state="open"] {
   outline: 2px solid var(--nx-ring);

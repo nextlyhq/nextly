@@ -80,6 +80,7 @@ import {
 } from "react-hook-form";
 
 import {
+  TEMPLATE_ENTRY_ID_FIELD,
   TEMPLATE_TARGET_FIELDS,
   type PreviewCollectionLabels,
   type PreviewEntryItem,
@@ -133,6 +134,22 @@ function useTemplateCollection<TFieldValues extends FieldValues>(
 }
 
 /**
+ * The one entry an entry's own design serves, by its stored id, as the form
+ * holds it; `undefined` for a collection's template, which names none.
+ */
+function useOwnDesignEntry<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>
+): string | undefined {
+  const value: unknown = useWatch({
+    control,
+    name: TEMPLATE_ENTRY_ID_FIELD as Path<TFieldValues>,
+  });
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : undefined;
+}
+
+/**
  * Around a template's editor: reads which entry the template is previewed
  * with, and hands it to the canvas (as the entry it is drawn as), to the
  * builder (as the previewed entry) and to the strip.
@@ -145,6 +162,8 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   readonly children: ReactNode;
 }): JSX.Element {
   const collection = useTemplateCollection(control);
+  // An entry's own design serves one entry, which it always previews.
+  const entry = useOwnDesignEntry(control);
   const identity = useDocumentIdentity();
   const userId = useCurrentUserId();
   // The language the editor edits, as the editor's own reads take it.
@@ -155,6 +174,7 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
       identity?.kind === "collection" ? identity.documentId : undefined,
     userId,
     locale,
+    entry,
   });
   // The canvas's own read of the entry, heard here and asked again with a
   // retry, so the strip and the seam name an entry only once both the entry
@@ -222,6 +242,12 @@ function hasNothing(previewed: PreviewedEntry): boolean {
   return previewed.kind === "none" && previewed.reason === "empty";
 }
 
+/** The keys that step through the entries, while a list can be stepped. */
+function SwitchKeys({ preview }: { readonly preview: TemplatePreview }): null {
+  useSwitchKeys(preview);
+  return null;
+}
+
 /**
  * The keys that step through the entries, registered while the strip is
  * drawn: never while typing in a field or in the page's text, and listed in
@@ -268,13 +294,18 @@ export function TemplatePreviewStrip({
 }: {
   readonly preview: TemplatePreview;
 }): JSX.Element {
-  useSwitchKeys(preview);
   return (
     <div data-template-preview="">
+      {/* An own design's one entry is not chosen, so no keys step through. */}
+      {preview.fixed ? null : <SwitchKeys preview={preview} />}
       <div className="nx-preview-strip">
         {/* Never dropped: it keeps the template's status and the entry's apart. */}
         <span>Previewing</span>
-        <EntryPicker preview={preview} />
+        {preview.fixed ? (
+          <FixedEntry preview={preview} />
+        ) : (
+          <EntryPicker preview={preview} />
+        )}
       </div>
       <PreviewNotice preview={preview} />
     </div>
@@ -360,6 +391,49 @@ function chipWords(preview: TemplatePreview): {
 }
 
 /**
+ * An own design's one entry, named as the chip names an entry but not a
+ * control: there is nothing to choose, so no chevron and no menu.
+ */
+function FixedEntry({
+  preview,
+}: {
+  readonly preview: TemplatePreview;
+}): JSX.Element {
+  const words = chipWords(preview);
+  return (
+    // Plain words rather than a labelled control: read as they stand, with
+    // the full title on hover where the strip cuts it.
+    <span className="nx-preview-strip__chip" data-fixed="" title={words.shown}>
+      <span className="nx-preview-strip__title">{words.shown}</span>
+      <ChipMark preview={preview} />
+    </span>
+  );
+}
+
+/** What follows the chip's title: its status, or that it is loading or unreadable. */
+function ChipMark({
+  preview,
+}: {
+  readonly preview: TemplatePreview;
+}): JSX.Element | null {
+  const { chip } = preview;
+  if (chip === undefined) return null;
+  if (chip.unavailable) {
+    return (
+      <span className="nx-preview-strip__unavailable">
+        <AlertTriangle aria-hidden="true" size={12} />
+        Couldn’t be read
+      </span>
+    );
+  }
+  // Not drawn yet: no status is claimed for it.
+  if (chip.loading) {
+    return <span className="nx-preview-strip__none">Loading…</span>;
+  }
+  return <StatusPill state={chip.status} size="sm" />;
+}
+
+/**
  * The chip and the picker it opens. The chip's title is cut only past the
  * strip's width, with the full title in a tooltip and in its accessible name.
  */
@@ -402,17 +476,7 @@ function EntryPicker({
                   <span ref={tip.title} className="nx-preview-strip__title">
                     {chip.title}
                   </span>
-                  {chip.unavailable ? (
-                    <span className="nx-preview-strip__unavailable">
-                      <AlertTriangle aria-hidden="true" size={12} />
-                      Couldn’t be read
-                    </span>
-                  ) : chip.loading ? (
-                    // Not drawn yet: no status is claimed for it.
-                    <span className="nx-preview-strip__none">Loading…</span>
-                  ) : (
-                    <StatusPill state={chip.status} size="sm" />
-                  )}
+                  <ChipMark preview={preview} />
                 </>
               )}
               <ChevronDown

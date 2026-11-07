@@ -30,6 +30,9 @@ export const TEMPLATE_COLLECTION_FIELD = "collection";
  */
 export const TEMPLATE_ENTRY_COLLECTION_FIELD = "entryCollection";
 
+/** The field an entry's own design names the one entry it serves in, by id. */
+export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
+
 /**
  * The fields a template names the collection it draws in, in order: a
  * collection's template by `collection`, an entry's own design by

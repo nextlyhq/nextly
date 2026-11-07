@@ -17,6 +17,7 @@ import { blocks } from "../fields/blocksHelper";
 import {
   TEMPLATE_COLLECTION_FIELD,
   TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
 } from "../templates/template-preview-contract";
 
 /** The slug templates are stored under, before any rename a host applies. */
@@ -46,7 +47,7 @@ export const TEMPLATE_CONTENT_FIELD = "content";
  */
 export const TEMPLATE_ENTRY_FIELD = "entry";
 export { TEMPLATE_ENTRY_COLLECTION_FIELD };
-export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
+export { TEMPLATE_ENTRY_ID_FIELD };
 export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
 
 /**

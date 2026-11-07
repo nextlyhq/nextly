@@ -69,6 +69,11 @@ export interface PreviewChip {
 export interface TemplatePreview {
   /** The template's collection, or `undefined` where it names none yet. */
   readonly collection: string | undefined;
+  /**
+   * Whether the entry is fixed: an own design previews the one entry it
+   * serves, so there is nothing to choose and no keys step through a list.
+   */
+  readonly fixed: boolean;
   /** How the collection is named, for "No posts to preview" and "New post". */
   readonly labels: PreviewCollectionLabels;
   readonly language: string | undefined;
@@ -97,6 +102,11 @@ export interface TemplatePreviewArgs {
   readonly templateId: string | undefined;
   readonly userId: string | null;
   readonly locale: string | undefined;
+  /**
+   * The one entry an entry's own design serves, by id: previewed always,
+   * with nothing to choose. Absent for a collection's template.
+   */
+  readonly entry?: string | undefined;
 }
 
 /**
@@ -235,14 +245,16 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     undefined
   );
   const list = usePreviewList(args, round);
-  const memory = usePreviewMemory(args);
+  // An own design remembers nothing: it previews its one entry.
+  const fixed = args.entry;
+  const memory = usePreviewMemory(memoryArgsOf(args));
   const mostRecent = list.items[0]?.id;
-  const selected = chosenRow?.id ?? memory.remembered ?? mostRecent;
+  const selected = fixed ?? chosenRow?.id ?? memory.remembered ?? mostRecent;
   const read = useEntryRead(args, selected, round);
   const dropChosen = useCallback(() => setChosen(undefined), []);
   useSettledRead(read, {
     selected,
-    mostRecent,
+    mostRecent: fixed ?? mostRecent,
     chosen: chosenRow?.id,
     memory,
     dropChosen,
@@ -251,25 +263,20 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     () => previewedFrom(collection, list, selected, read),
     [collection, list, selected, read]
   );
-  const chip = chipFrom(
-    chosenRow === undefined ? list.items : [chosenRow, ...list.items],
-    selected,
-    read
-  );
-  const choose = useCallback((entry: PreviewEntryItem) => setChosen(entry), []);
-  const step = useCallback(
-    (by: 1 | -1) => {
-      const next = steppedEntry(list.items, selected, by);
-      if (next !== undefined) setChosen(next);
-      return next;
-    },
-    [list.items, selected]
-  );
+  const labels = list.labels ?? labelsFromSlug(collection ?? "entries");
+  const chip =
+    chipFrom(
+      chosenRow === undefined ? list.items : [chosenRow, ...list.items],
+      selected,
+      read
+    ) ?? fixedChip(fixed, labels, read);
+  const { choose, step } = useChoosing(fixed, list.items, selected, setChosen);
   return {
     collection,
+    fixed: fixed !== undefined,
     // A template always names its collection; "entries" only stands in
     // until its form has the value.
-    labels: list.labels ?? labelsFromSlug(collection ?? "entries"),
+    labels,
     language: locale,
     list,
     chip,
@@ -319,6 +326,39 @@ export function followingCanvas(
     };
   }
   return { ...preview, refresh };
+}
+
+/** What the memory is kept for: nothing for an own design, which previews its one entry. */
+function memoryArgsOf(args: TemplatePreviewArgs): TemplatePreviewArgs {
+  return args.entry === undefined ? args : { ...args, templateId: undefined };
+}
+
+/**
+ * Choosing an entry and stepping through the list, both of which an own
+ * design's one entry (`fixed`) refuses: it has nothing else to preview.
+ */
+function useChoosing(
+  fixed: string | undefined,
+  items: readonly PreviewEntryItem[],
+  selected: string | undefined,
+  setChosen: (entry: PreviewEntryItem) => void
+): Pick<TemplatePreview, "choose" | "step"> {
+  const choose = useCallback(
+    (entry: PreviewEntryItem) => {
+      if (fixed === undefined) setChosen(entry);
+    },
+    [fixed, setChosen]
+  );
+  const step = useCallback(
+    (by: 1 | -1) => {
+      if (fixed !== undefined) return undefined;
+      const next = steppedEntry(items, selected, by);
+      if (next !== undefined) setChosen(next);
+      return next;
+    },
+    [fixed, items, selected, setChosen]
+  );
+  return { choose, step };
 }
 
 /** A count bumped whenever the window regains focus, and a way to bump it. */
@@ -438,6 +478,27 @@ function previewedFrom(
     return { kind: "none", reason: "unavailable" };
   }
   return { kind: "none", reason: "loading" };
+}
+
+/**
+ * The chip for an own design's one entry before its read answers, which no
+ * list row stands in for: named for the collection's entry ("the post"),
+ * read, or marked unavailable where its read failed.
+ */
+function fixedChip(
+  entry: string | undefined,
+  labels: PreviewCollectionLabels,
+  read: EntryRead | undefined
+): PreviewChip | undefined {
+  if (entry === undefined) return undefined;
+  const failed = read !== undefined && "failed" in read && read.id === entry;
+  return {
+    id: entry,
+    title: `the ${labels.singular.toLowerCase()}`,
+    status: "published",
+    unavailable: failed,
+    loading: !failed,
+  };
 }
 
 /**
