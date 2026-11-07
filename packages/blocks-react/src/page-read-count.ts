@@ -193,9 +193,9 @@ function countedMedia(
         ? drawn(id)
         : Promise.resolve(null)),
     ahead: (ids, claim) => {
-      // A route that reads each image by its own id reads none ahead, as
-      // the route's own resolver answers.
-      if (!batches) return Promise.resolve(true);
+      // A route that reads each image by its own id reads none ahead, and
+      // stops the reads ahead, as the route's own resolver answers.
+      if (!batches) return Promise.resolve(false);
       const wanted = [...new Set(ids)].filter(id => !known.has(id));
       for (let at = 0; at < wanted.length; at += BATCH_SIZE) {
         const batch = wanted.slice(at, at + BATCH_SIZE);

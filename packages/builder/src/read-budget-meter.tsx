@@ -264,9 +264,13 @@ function ReadPanel({
               blocks that need more data show as if it were missing.
             </p>
           ) : null}
+          {/* The site's own limit and how its front end reads media live in
+              its code, which the admin cannot read: the count takes the
+              defaults, and says so. */}
           <p className="nx-read-panel__foot">
-            Each list, image, link and related entry is a read. A developer can
-            change the limit in the site&apos;s code.
+            Each list, image, link and related entry is a read. Images are
+            counted as the media library reads them. A developer can change the
+            limit in the site&apos;s code.
           </p>
         </>
       )}

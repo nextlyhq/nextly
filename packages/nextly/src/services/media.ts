@@ -70,6 +70,7 @@ import {
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
+import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { withoutStoredSizes } from "../lib/media-variant";
 import { inPluginTransaction } from "../shared/lib/plugin-transaction-scope";
@@ -509,7 +510,8 @@ export class MediaService extends BaseService {
       this.logger.error("[MediaService] Get media by ids error", { error });
       return {
         success: false,
-        statusCode: 500,
+        // The canonical table's status for the code, never one of its own.
+        statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
         code: "INTERNAL_ERROR",
         message: "Failed to retrieve media",
         data: null,

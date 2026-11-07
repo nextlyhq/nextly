@@ -1904,7 +1904,10 @@ function mediaResolver(
     },
     ahead: async (ids, claim) => {
       const readMany = mediaReadMany(config, reader);
-      if (readMany === undefined) return true;
+      // A route that reads each image by its own id reads none ahead, and
+      // stops the reads ahead here, so each image's own read, made as it is
+      // drawn, comes before a later step's.
+      if (readMany === undefined) return false;
       const wanted = usableIds(ids).filter(id => !known.has(id));
       for (let at = 0; at < wanted.length; at += AHEAD_BATCH_SIZE) {
         const chunk = wanted.slice(at, at + AHEAD_BATCH_SIZE);

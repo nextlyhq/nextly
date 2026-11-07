@@ -1580,3 +1580,79 @@ describe("a list's image batch that cannot be used", () => {
     expect(html).toContain("/media/2.jpg");
   });
 });
+
+describe("a list's reads ahead, in the order the list first draws its blocks", () => {
+  it("reads the link the first entry draws before the relation only a later entry draws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const only = (title: string) => ({
+      conditions: [[{ field: "title", op: "equals", value: title }]],
+    });
+    // The author, through a relation, comes first in the template, but only
+    // the second entry draws it; the link comes later, and only the first
+    // entry draws it. Ranked by place within each entry, the relation would
+    // be read ahead first and leave the link short of its reads.
+    const nextly = site(
+      2,
+      pageOf([
+        postsList("list", 2, [
+          {
+            ...itemHeading("author", "author.name", "No author"),
+            visibility: only("Post number 2"),
+          },
+          itemHeading("title", "title", "None"),
+          {
+            id: "more",
+            type: "core/button",
+            version: 1,
+            props: { label: "Read", entryCollection: "posts" },
+            bindings: { entryId: { $bind: "id", source: "item" } },
+            visibility: only("Post number 1"),
+          },
+        ]),
+      ])
+    );
+    // The entries, then exactly the link's own reads.
+    const { html } = await journal(nextly, { maxQueries: 1 + 4 });
+    expect(html).toContain('href="/post-1"');
+  });
+});
+
+describe("a list's images, on a route that reads each by its own id", () => {
+  it("stops the reads ahead at the images, so each keeps its own read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // Each entry's own picture, then its author through a relation.
+    const nextly = site(
+      2,
+      pageOf([
+        postsList("list", 2, [
+          {
+            id: "cover",
+            type: "core/image",
+            version: 1,
+            props: { alt: "" },
+            bindings: { mediaId: { $bind: "featuredImage", source: "item" } },
+          },
+          itemHeading("author", "author.name", "No author"),
+        ]),
+      ])
+    );
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      mediaCollection: "images",
+      // The site's own resolver, which takes one id.
+      resolveMedia: (id: string) => Promise.resolve({ url: `/own/${id}.jpg` }),
+      maxQueries: 1 + 2,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const html = await renderToHtml(element);
+    // The entries, then each image's own read: the relation is not read
+    // ahead of them.
+    expect(html).toContain("/own/image-1.jpg");
+    expect(html).toContain("/own/image-2.jpg");
+  });
+});

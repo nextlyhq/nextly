@@ -320,22 +320,21 @@ function asksOf(node: BlockNode): Ask[] {
 }
 
 /**
- * Every block the entries draw, once, in page order: the order the reads
- * ahead are asked in, so under a tight allowance the earlier block's reads
- * come first, as they would one entry at a time.
+ * Every block the entries draw, once, in the order the list first draws
+ * it: entry by entry, each entry's blocks in page order, so under a tight
+ * allowance the reads ahead are asked in the order they would be made one
+ * entry at a time. Kept as first met rather than ranked by place within an
+ * entry: entries whose conditions show different blocks draw a later block
+ * of the template before an earlier one.
  */
 function inPageOrder(demands: readonly ItemReadDemand[]): BlockNode[] {
   const seen = new Map<string, BlockNode>();
-  const rank = new Map<string, number>();
   for (const demand of demands) {
-    demand.drawn.forEach((node, at) => {
+    for (const node of demand.drawn) {
       if (!seen.has(node.id)) seen.set(node.id, node);
-      rank.set(node.id, Math.min(rank.get(node.id) ?? at, at));
-    });
+    }
   }
-  return [...seen.values()].sort(
-    (one, other) => (rank.get(one.id) ?? 0) - (rank.get(other.id) ?? 0)
-  );
+  return [...seen.values()];
 }
 
 /**

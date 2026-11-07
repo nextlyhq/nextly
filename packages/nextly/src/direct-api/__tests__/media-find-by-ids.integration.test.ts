@@ -28,7 +28,9 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { MediaService } from "../../domains/media/services/media-service";
+import { MediaService as MediaRowsService } from "../../services/media";
 import { pdfDocument } from "../../services/upload-validation/__tests__/format-fixtures";
+import { BaseService } from "../../shared/base-service";
 import { Nextly } from "../nextly";
 
 import { account, role, seedPermissions } from "./checked-access-fixtures";
@@ -49,6 +51,40 @@ async function outcome<T>(
     };
     return { code, statusCode };
   }
+}
+
+/**
+ * The queries the media rows service makes, counted where they reach
+ * Drizzle: each `select` on the handle it reads media through. Installed on
+ * that service alone, and removed by `restore`.
+ */
+function countMediaQueries(): { count(): number; restore(): void } {
+  const handle = Object.getOwnPropertyDescriptor(BaseService.prototype, "db");
+  const read = handle?.get;
+  if (read === undefined) throw new Error("The services' query handle moved.");
+  let selects = 0;
+  Object.defineProperty(MediaRowsService.prototype, "db", {
+    configurable: true,
+    get(this: object): unknown {
+      const db = read.call(this) as object;
+      return new Proxy(db, {
+        get(target, key): unknown {
+          const value: unknown = Reflect.get(target, key);
+          if (key !== "select" || typeof value !== "function") return value;
+          return (...args: unknown[]): unknown => {
+            selects += 1;
+            return Reflect.apply(value, target, args);
+          };
+        },
+      });
+    },
+  });
+  return {
+    count: () => selects,
+    restore: () => {
+      Reflect.deleteProperty(MediaRowsService.prototype, "db");
+    },
+  };
 }
 
 /** A file as a test compares it: what a page draws it by. */
@@ -149,6 +185,22 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(() => {
       vi.restoreAllMocks();
+    });
+
+    it("reads several files in one query", async () => {
+      const queries = countMediaQueries();
+      try {
+        await trusted.media.findByIDs({ ids: [ids[0] ?? ""] });
+        // CONTROL: the instrument sees the lookup's own query.
+        const one = queries.count();
+        expect(one).toBeGreaterThan(0);
+        const found = await trusted.media.findByIDs({ ids });
+        expect(found.map(file => file.id)).toEqual(ids);
+        // Three files cost what one does: one query, not one per id.
+        expect(queries.count() - one).toBe(one);
+      } finally {
+        queries.restore();
+      }
     });
 
     it("refuses more ids than one read takes, reading nothing", async () => {
