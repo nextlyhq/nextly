@@ -24,12 +24,31 @@ const heading = (id: string, path: string) => ({
   bindings: { text: { $bind: path } },
 });
 
-const judged = (nodes: readonly unknown[], stored?: readonly unknown[]) =>
-  bindingSchemaIssues(nodes, {
-    schema,
-    entry: { collection: "posts" },
-    ...(stored === undefined ? {} : { stored }),
-  });
+const judged = (
+  nodes: readonly unknown[],
+  stored?: readonly unknown[],
+  settings?: unknown,
+  source: BindingSchemaSource = schema
+) =>
+  bindingSchemaIssues(
+    { nodes, ...(settings === undefined ? {} : { settings }) },
+    {
+      schema: source,
+      entry: { collection: "posts" },
+      ...(stored === undefined ? {} : { stored }),
+    }
+  );
+
+/** A Single's binding of `path`, on a heading. */
+const fromSingle = (id: string, path: string, single: string) => ({
+  ...heading(id, path),
+  bindings: { text: { $bind: path, source: "single", sourceKey: single } },
+});
+
+/** A document's metadata whose title binds `path`. */
+const titled = (path: string) => ({
+  seo: { title: ["Read ", { $bind: path, fallback: "this" }] },
+});
 
 describe("bindings judged against the schema at save", () => {
   it("refuses a binding to a field the source does not have", () => {
@@ -86,5 +105,50 @@ describe("bindings judged against the schema at save", () => {
       [{ nodes: [heading("h", "headline")] }]
     );
     expect(issues[0]?.severity).toBe("error");
+  });
+
+  it("refuses a held block's binding moved to another source missing the same field", () => {
+    // Same block, prop and path, but now read from a Single: a new binding.
+    const issues = judged(
+      [fromSingle("h", "headline", "footer")],
+      [{ nodes: [heading("h", "headline")] }],
+      undefined,
+      { fieldsOf: ref => ("single" in ref ? [] : POSTS) }
+    );
+    expect(issues.map(issue => issue.severity)).toEqual(["error"]);
+  });
+
+  it("judges the document's own metadata bindings, a held one a warning", () => {
+    const fresh = judged([], undefined, titled("headline"));
+    expect(fresh).toEqual([
+      expect.objectContaining({
+        path: "/settings/seo/title/1",
+        nodeId: "",
+        code: "binding-field-missing",
+        severity: "error",
+      }),
+    ]);
+    // The binding to `title`, which the source has, is the control.
+    expect(judged([], undefined, titled("title"))).toEqual([]);
+    const held = judged([], [{ nodes: [], settings: titled("headline") }], {
+      seo: { title: [{ $bind: "headline" }, " today"] },
+    });
+    expect(held.map(issue => [issue.path, issue.severity])).toEqual([
+      ["/settings/seo/title/0", "warning"],
+    ]);
+  });
+
+  it("finds a timestamp missing where the shapes list timestamps, and judges it where they don't", () => {
+    const listing: BindingSchemaSource = { ...schema, listsTimestamps: true };
+    expect(
+      judged([heading("h", "createdAt")], undefined, undefined, listing).map(
+        issue => issue.code
+      )
+    ).toEqual(["binding-field-missing"]);
+    expect(judged([heading("h", "createdAt")])).toEqual([]);
+    // The id every entry has is never missing.
+    expect(judged([heading("h", "id")], undefined, undefined, listing)).toEqual(
+      []
+    );
   });
 });

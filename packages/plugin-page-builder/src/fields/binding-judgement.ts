@@ -3,11 +3,14 @@
  * read, as the save judges them.
  *
  * The engine's `bindingSchemaIssues` is the one rule, the same `checkBinding`
- * the renderer falls back by. This reads what it needs: the declared fields of
- * the sources the write binds (the page's entry, each Single, and the
- * collection a path's relation leads into), and only those. Declared, not
- * public: binding a field visitors may not read is allowed, and the published
- * page shows the binding's fallback.
+ * the renderer falls back by, on blocks and in the document's own metadata.
+ * This reads what it needs: the declared fields of the sources the write
+ * binds (the page's entry, each Single, and the collection a path's relation
+ * leads into, through any groups on the way), and only those. Which sources
+ * those are is asked of the rule's own walk, so every path it can follow is
+ * read for, and nothing past the document's node cap. Declared, not public:
+ * binding a field visitors may not read is allowed, and the published page
+ * shows the binding's fallback.
  *
  * A problem the stored page already held stays a warning, so a page whose
  * binding a schema change broke (a field renamed, a prop's type changed) is
@@ -16,10 +19,10 @@
  * @module binding-judgement
  */
 import {
-  bindingDemand,
   bindingSchemaIssues,
   isErrorIssue,
   registryBlockSource,
+  type BindingDocument,
   type BindingFieldShape,
   type BindingSchemaRef,
   type BindingSchemaSource,
@@ -50,14 +53,30 @@ export interface BindingJudging {
   readonly onUnjudged?: (kept: number) => void;
 }
 
+/** A collection's or a Single's ref: the sources whose fields are read. */
+type ReadRef = { readonly collection: string } | { readonly single: string };
+
 /** A source's key in the read shapes. */
-function keyOf(
-  ref: { readonly collection: string } | { readonly single: string }
-): string {
+function keyOf(ref: ReadRef): string {
   return "collection" in ref
     ? `collection:${ref.collection}`
     : `single:${ref.single}`;
 }
+
+/**
+ * The most sources one save reads the fields of. Past it, a source is left
+ * unknown, and its bindings are judged by their shape alone, as an unreadable
+ * source's are: a write naming more is refused nothing it would not be
+ * refused for anyway, and costs no more reads.
+ */
+const MAX_SOURCES = 32;
+
+/**
+ * How many times the walk is asked which sources it reached unread: the
+ * entry and the Singles first, then the collections their relations lead
+ * into, since a path follows one relation. The last ask records nothing.
+ */
+const MAX_READ_ROUNDS = 3;
 
 /**
  * The page's entry, as its renderer reads it: a collection's entry or a
@@ -80,65 +99,86 @@ function entryOf(
     : { single: write.slug };
 }
 
+/** What a judgement reads with, kept across its passes. */
+interface SchemaReads {
+  readonly shapesOf: DeclaredShapesReader;
+  /** Every source read so far, `undefined` for one that could not be. */
+  readonly known: Map<string, readonly BindingFieldShape[] | undefined>;
+}
+
 /**
- * The declared shapes of every source the forests bind, read once each: the
- * entry and each Single their bindings name, and the collection each of
- * their paths' relations leads into. A source that cannot be read is left
- * unknown, so nothing is judged against it.
+ * The schema as read so far. A collection or a Single not read yet answers
+ * unknown, and is noted in `wanted` when one is given; the site settings and
+ * a named query's rows are never read here: their fields are a fixed set, or
+ * declared by the query.
  */
-async function schemaFor(
-  forests: readonly (readonly unknown[])[],
-  entry: BindingSchemaRef | undefined,
-  shapesOf: DeclaredShapesReader
-): Promise<BindingSchemaSource> {
-  const known = new Map<string, readonly BindingFieldShape[] | undefined>();
-  const read = async (
-    ref: { readonly collection: string } | { readonly single: string }
-  ) => {
-    const key = keyOf(ref);
-    if (known.has(key)) return known.get(key);
-    let shapes: readonly BindingFieldShape[] | undefined;
-    try {
-      shapes = await shapesOf(ref);
-    } catch {
-      shapes = undefined;
-    }
-    known.set(key, shapes);
-    return shapes;
-  };
-  const demand = bindingDemand(
-    forests.map(
-      nodes => ({ formatVersion: 1, kind: "page", nodes }) as BlockDocument
-    )
-  );
-  const sources: (readonly [
-    { readonly collection: string } | { readonly single: string },
-    ReadonlyMap<string, readonly string[]>,
-  ])[] = [
-    ...(demand.entry === undefined ||
-    entry === undefined ||
-    !("collection" in entry || "single" in entry)
-      ? []
-      : [[entry, demand.entry.follows] as const]),
-    ...[...demand.singles].map(
-      ([slug, wanted]) => [{ single: slug }, wanted.follows] as const
-    ),
-  ];
-  for (const [ref, follows] of sources) {
-    const fields = await read(ref);
-    for (const name of follows.keys()) {
-      const target = fields?.find(field => field.name === name)?.relationTo;
-      if (typeof target === "string") await read({ collection: target });
-    }
-  }
-  // The site settings and a named query's rows are not read here: their
-  // fields are a fixed set, or declared by the query.
+function schemaSoFar(
+  reads: SchemaReads,
+  wanted: Map<string, ReadRef> | undefined
+): BindingSchemaSource {
   return {
-    fieldsOf: ref =>
-      "collection" in ref || "single" in ref
-        ? known.get(keyOf(ref))
-        : undefined,
+    listsTimestamps: true,
+    fieldsOf: ref => {
+      if (!("collection" in ref || "single" in ref)) return undefined;
+      const key = keyOf(ref);
+      if (reads.known.has(key)) return reads.known.get(key);
+      if (
+        wanted !== undefined &&
+        reads.known.size + wanted.size < MAX_SOURCES
+      ) {
+        wanted.set(key, ref);
+      }
+      return undefined;
+    },
   };
+}
+
+/** Read each wanted source's declared fields, all at once. */
+async function readSources(
+  reads: SchemaReads,
+  wanted: ReadonlyMap<string, ReadRef>
+): Promise<void> {
+  await Promise.all(
+    [...wanted].map(async ([key, ref]) => {
+      let shapes: readonly BindingFieldShape[] | undefined;
+      try {
+        shapes = await reads.shapesOf(ref);
+      } catch {
+        // Unknown, so nothing is judged against it.
+        shapes = undefined;
+      }
+      reads.known.set(key, shapes);
+    })
+  );
+}
+
+/**
+ * A document's binding errors, against the declared fields of what it binds:
+ * the walk is asked which sources it reached unread, they are read, and it is
+ * asked again until it reaches none new.
+ */
+async function bindingErrors(
+  document: BindingDocument,
+  judging: {
+    readonly reads: SchemaReads;
+    readonly entry: BindingSchemaRef | undefined;
+    readonly stored: readonly BlockDocument[];
+    readonly maxNodes: number | undefined;
+  }
+): Promise<ReturnType<typeof bindingSchemaIssues>> {
+  for (let round = 0; ; round += 1) {
+    const wanted =
+      round < MAX_READ_ROUNDS ? new Map<string, ReadRef>() : undefined;
+    const issues = bindingSchemaIssues(document, {
+      schema: schemaSoFar(judging.reads, wanted),
+      ...(judging.entry === undefined ? {} : { entry: judging.entry }),
+      definitions: registryBlockSource(),
+      ...(judging.stored.length === 0 ? {} : { stored: judging.stored }),
+      ...(judging.maxNodes === undefined ? {} : { maxNodes: judging.maxNodes }),
+    }).filter(isErrorIssue);
+    if (wanted === undefined || wanted.size === 0) return issues;
+    await readSources(judging.reads, wanted);
+  }
 }
 
 /**
@@ -161,24 +201,19 @@ export async function newBindingIssues(
   ) {
     return [];
   }
-  const entry = entryOf(args.write, value);
-  const judge = async (stored: readonly BlockDocument[]) => {
-    const forests = [
-      nodes,
-      ...stored.flatMap(form => {
-        const forest = nodesOf(form);
-        return forest === undefined ? [] : [forest];
-      }),
-    ];
-    return bindingSchemaIssues(nodes, {
-      schema: await schemaFor(forests, entry, shapesOf),
-      ...(entry === undefined ? {} : { entry }),
-      definitions: registryBlockSource(),
-      ...(stored.length === 0 ? {} : { stored }),
-      ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
-    }).filter(isErrorIssue);
+  const document: BindingDocument = {
+    nodes,
+    settings: (value as { settings?: unknown }).settings,
   };
-  const found = await judge([]);
+  // One read of each source, for the write and its stored forms alike, so
+  // both verdicts are against the same schema.
+  const reads: SchemaReads = { shapesOf, known: new Map() };
+  const judging = {
+    reads,
+    entry: entryOf(args.write, value),
+    maxNodes: site.maxNodes,
+  };
+  const found = await bindingErrors(document, { ...judging, stored: [] });
   if (found.length === 0 || site.storedForms === undefined) {
     return asFieldIssues(found, args, label);
   }
@@ -191,7 +226,9 @@ export async function newBindingIssues(
   }
   // Nothing stored (a create) holds no problem, so every one is the write's.
   return asFieldIssues(
-    snapshot.forms.length > 0 ? await judge(snapshot.forms) : found,
+    snapshot.forms.length > 0
+      ? await bindingErrors(document, { ...judging, stored: snapshot.forms })
+      : found,
     args,
     label
   );

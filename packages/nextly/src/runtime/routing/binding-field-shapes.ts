@@ -323,6 +323,12 @@ function sourceOf(
 /** Every field readable: the reader of an editor's view, not a visitor's. */
 const EVERY_FIELD: FieldReadable = () => Promise.resolve(true);
 
+/** The timestamps an entry carries where its source keeps them. */
+const TIMESTAMPS: readonly BindingFieldShape[] = [
+  { name: "createdAt", type: "date" },
+  { name: "updatedAt", type: "date" },
+];
+
 /**
  * The fields of a collection or a Single as they are declared, whoever may
  * read them: what a document may bind, as a save judges it. `undefined` when
@@ -331,16 +337,27 @@ const EVERY_FIELD: FieldReadable = () => Promise.resolve(true);
  * {@link bindingFieldShapes} is the visitor's narrower view of the same
  * fields, built by the same walk.
  *
+ * `createdAt` and `updatedAt` are listed, as dates, where the source's
+ * entries carry them, and are absent where they do not, so a binding to one
+ * is judged as any field is.
+ *
  * @experimental
  */
 export async function declaredFieldShapes(
   ref: BindingSourceRef
 ): Promise<readonly BindingFieldShape[] | undefined> {
   const source = sourceOf(ref);
-  const { declaredFields } = await import("./visitor-fields");
-  const fields = await declaredFields(source);
-  if (fields === undefined) return undefined;
-  return Object.freeze(await fieldShapesOf(fields, EVERY_FIELD));
+  const { declaredSource } = await import("./visitor-fields");
+  const declared = await declaredSource(source);
+  if (declared === undefined) return undefined;
+  const shapes = await fieldShapesOf(declared.fields, EVERY_FIELD);
+  const named = new Set(shapes.map(shape => shape.name));
+  return Object.freeze([
+    ...shapes,
+    ...(declared.timestamps
+      ? TIMESTAMPS.filter(shape => !named.has(shape.name))
+      : []),
+  ]);
 }
 
 /**

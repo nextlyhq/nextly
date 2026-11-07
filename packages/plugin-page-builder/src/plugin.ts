@@ -1937,6 +1937,16 @@ export const pageBuilder = (
             }
           ),
         onLayersLockUnjudged: warnLayersLockUnjudged,
+        onBindingsUnjudged: found =>
+          ctx.logger.warn(
+            `[page-builder] a save kept ${String(found.bindings)} binding problem(s) the schema refuses, because the stored value they may already be part of could not be read; repair them in the editor`,
+            {
+              field: found.field,
+              kind: found.kind,
+              slug: found.slug,
+              id: found.id,
+            }
+          ),
         // The components being deleted, read from the plugin's own table on
         // each write that places a component. A table that cannot be read
         // refuses only writes adding a component, and says so here.

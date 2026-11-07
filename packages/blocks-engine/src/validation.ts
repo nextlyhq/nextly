@@ -58,7 +58,6 @@ import {
 import { blockLabelFrom, placementRefusalMessage } from "./placement-wording";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
-import { checkSeoBinding, type SeoBindingPlace } from "./seo-binding-check";
 import { slotLockBreaks, slotLockOf, typeOfChild } from "./slot-lock";
 import type { ActiveSlotLock } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
@@ -661,7 +660,7 @@ export function validateDocument(
   // the survey stopped reading, and a value of any width would otherwise be
   // walked whole.
   if (!overLimits && isPlainRecord(settings) && settings.seo !== undefined) {
-    validateDocumentSeo(settings.seo, "/settings/seo", issues, ctx);
+    validateDocumentSeo(settings.seo, "/settings/seo", issues);
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
@@ -691,22 +690,26 @@ export function validateDocument(
       // operator always, the field against the entry's or the list item's
       // schema when given, a problem a stored form held kept a warning.
       ...conditionIssues(envelope.nodes, judgement).map(withoutNodeId),
-      // Each block's bindings against the schema of what they read, when the
-      // caller can answer for it: the same rule the renderer falls back by,
-      // a problem a stored form held kept a warning.
+      // Each binding, on a block or in the document's own metadata, against
+      // the schema of what it reads, when the caller can answer for it: the
+      // same rule the renderer falls back by, a problem a stored form held
+      // kept a warning.
       ...(ctx.bindingSchema === undefined
         ? []
-        : bindingSchemaIssues(envelope.nodes, {
-            schema: ctx.bindingSchema,
-            ...(ctx.bindingEntry === undefined
-              ? {}
-              : { entry: ctx.bindingEntry }),
-            ...(ctx.definitions === undefined
-              ? {}
-              : { definitions: ctx.definitions }),
-            ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
-            maxNodes: survey.limits.maxNodes,
-          }).map(withoutNodeId))
+        : bindingSchemaIssues(
+            { nodes: envelope.nodes, settings },
+            {
+              schema: ctx.bindingSchema,
+              ...(ctx.bindingEntry === undefined
+                ? {}
+                : { entry: ctx.bindingEntry }),
+              ...(ctx.definitions === undefined
+                ? {}
+                : { definitions: ctx.definitions }),
+              ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+              maxNodes: survey.limits.maxNodes,
+            }
+          ).map(withoutNodeId))
     );
   }
 
@@ -3345,8 +3348,7 @@ function validBindingShape(
 function validateDocumentSeo(
   seo: unknown,
   path: string,
-  issues: ValidationIssue[],
-  ctx: ValidationContext
+  issues: ValidationIssue[]
 ): void {
   if (!isPlainRecord(seo)) {
     issues.push({
@@ -3360,9 +3362,9 @@ function validateDocumentSeo(
   for (const [field, value] of Object.entries(seo)) {
     const at = pointer(path, field);
     if (field === "title" || field === "description") {
-      validateSeoText(value, at, issues, ctx);
+      validateSeoText(value, at, issues);
     } else if (field === "image") {
-      validateSeoBinding(value, at, "image", issues, ctx);
+      validateSeoBinding(value, at, issues);
     } else {
       issues.push({
         path: at,
@@ -3378,8 +3380,7 @@ function validateDocumentSeo(
 function validateSeoText(
   value: unknown,
   path: string,
-  issues: ValidationIssue[],
-  ctx: ValidationContext
+  issues: ValidationIssue[]
 ): void {
   if (!Array.isArray(value)) {
     issues.push({
@@ -3413,44 +3414,22 @@ function validateSeoText(
       }
       return;
     }
-    validateSeoBinding(segment, at, "text", issues, ctx);
+    validateSeoBinding(segment, at, issues);
   });
 }
 
 /**
- * One metadata binding: a binding's shape, read for the page, and, when the
- * context carries the sources' schema, the check the routed page applies
- * before using it (`seo-binding-check`), so a save accepts only what the page
- * can show.
+ * One metadata binding's shape, read for the page. The check the routed page
+ * applies before using it (`seo-binding-check`) runs over the whole document
+ * once the walk is done (`bindingSchemaIssues`), when the context carries the
+ * sources' schema, so a problem a stored form already held stays a warning.
  */
 function validateSeoBinding(
   value: unknown,
   path: string,
-  place: SeoBindingPlace,
-  issues: ValidationIssue[],
-  ctx: ValidationContext
+  issues: ValidationIssue[]
 ): void {
   if (!validBindingShape(value, path, issues)) return;
-  if (ctx.bindingSchema !== undefined) {
-    const check = checkSeoBinding({
-      binding: value,
-      place,
-      id: path,
-      schema: ctx.bindingSchema,
-      ...(ctx.bindingEntry === undefined
-        ? {}
-        : { refs: { entry: ctx.bindingEntry } }),
-    });
-    for (const issue of check.issues) {
-      if (issue.code === "binding-malformed") continue;
-      issues.push({
-        path,
-        code: issue.code,
-        severity: "error",
-        message: issue.message,
-      });
-    }
-  }
   if (value.source === "item") {
     issues.push({
       path: pointer(path, "source"),

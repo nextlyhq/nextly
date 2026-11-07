@@ -313,6 +313,12 @@ export function blocksFieldType(
                 shapesOf: bindingShapes,
                 storedForms,
                 ...(maxNodes === undefined ? {} : { maxNodes }),
+                onUnjudged: bindings =>
+                  composition?.()?.onBindingsUnjudged?.({
+                    field: args.path,
+                    ...documentOf(args.write),
+                    bindings,
+                  }),
               });
         if (listFields === undefined) return bound;
         const namedQueries = composition?.()?.namedQueries;

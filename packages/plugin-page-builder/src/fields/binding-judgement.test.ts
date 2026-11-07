@@ -21,6 +21,11 @@ const DECLARED: Readonly<Record<string, readonly BindingFieldShape[]>> = {
     { name: "title", type: "text" },
     { name: "internalNote", type: "text" },
     { name: "author", type: "relationship", relationTo: "users" },
+    {
+      name: "meta",
+      type: "group",
+      fields: [{ name: "editor", type: "relationship", relationTo: "users" }],
+    },
   ],
   "collection:users": [{ name: "name", type: "text" }],
   "single:footer": [{ name: "tagline", type: "text" }],
@@ -99,10 +104,89 @@ describe("a write's bindings judged against the declared schema", () => {
       "Content",
       { shapesOf: read }
     );
+    // The entry and the Single first, then where the relation leads.
     expect(read.mock.calls.map(([ref]) => ref)).toEqual([
       { collection: "posts" },
-      { collection: "users" },
       { single: "footer" },
+      { collection: "users" },
+    ]);
+  });
+
+  it("reads where a relation inside a group leads, and judges the field there", async () => {
+    const issues = await newBindingIssues(
+      page(
+        heading("missing", { $bind: "meta.editor.nickname" }),
+        heading("found", { $bind: "meta.editor.name" })
+      ),
+      args(),
+      "Content",
+      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+    );
+    expect(issues.map(issue => issue.message)).toEqual([
+      expect.stringContaining("/nodes/0/bindings/text"),
+    ]);
+  });
+
+  it("refuses a metadata binding to a field the source does not declare", async () => {
+    const issues = await newBindingIssues(
+      {
+        ...page(),
+        settings: { seo: { title: [{ $bind: "headline" }] } },
+      },
+      args(),
+      "Content",
+      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+    );
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: "binding-field-missing",
+        message: expect.stringContaining("/settings/seo/title/0"),
+      }),
+    ]);
+  });
+
+  it("judges the stored forms against the same read of the schema", async () => {
+    // A read that fails after the first: had the stored forms' judgement read
+    // again, the related collection would be unknown and the break pass.
+    let reads = 0;
+    const once: DeclaredShapesReader = async ref => {
+      reads += 1;
+      if (reads > 2) throw new Error("registry unavailable");
+      return shapesOf(ref);
+    };
+    const issues = await newBindingIssues(
+      page(heading("h", { $bind: "author.nickname" })),
+      args(),
+      "Content",
+      {
+        shapesOf: once,
+        storedForms: async () => ({
+          readable: true,
+          forms: [page(heading("h", { $bind: "title" })) as never],
+        }),
+      }
+    );
+    expect(issues.map(issue => issue.code)).toEqual(["binding-field-missing"]);
+    expect(reads).toBe(2);
+  });
+
+  it("reads no source for a block past the document's node cap", async () => {
+    const read = vi.fn(shapesOf);
+    await newBindingIssues(
+      page(
+        heading("a", { $bind: "title" }),
+        heading("b", {
+          $bind: "tagline",
+          source: "single",
+          sourceKey: "footer",
+        })
+      ),
+      args(),
+      "Content",
+      { shapesOf: read, maxNodes: 1 }
+    );
+    expect(read.mock.calls.map(([ref]) => ref)).toEqual([
+      { collection: "posts" },
     ]);
   });
 

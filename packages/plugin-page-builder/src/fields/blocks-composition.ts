@@ -259,6 +259,11 @@ export interface CompositionSetup {
    */
   readonly bindingShapes?: DeclaredShapesReader;
   /**
+   * Told of binding problems a save kept because the stored value they may
+   * already be part of could not be read; absent, they are kept silently.
+   */
+  readonly onBindingsUnjudged?: (found: BindingsUnjudged) => void;
+  /**
    * This site's named queries, for a list whose source is one; absent, such
    * a list is judged by its shape alone.
    */
@@ -291,6 +296,14 @@ export interface PlacementUnjudged extends WrittenTo {
   readonly field: string;
   /** How many breaks were kept. */
   readonly breaks: number;
+}
+
+/** Binding problems a write kept unjudged, for the server log. */
+export interface BindingsUnjudged extends WrittenTo {
+  /** The blocks field written. */
+  readonly field: string;
+  /** How many problems were kept. */
+  readonly bindings: number;
 }
 
 /** A write whose Layers locks were not judged, for the server log. */

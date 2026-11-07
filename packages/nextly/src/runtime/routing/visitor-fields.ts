@@ -28,6 +28,7 @@ import {
 
 import type { ComponentLevel, FieldReadable } from "./binding-field-shapes";
 import {
+  expandedDeclaration,
   expandedFields,
   hiddenFieldPaths,
   type SourceEntity,
@@ -149,15 +150,20 @@ function fieldReader(
 
 /**
  * The source's declared fields, expanded as a binding reads them (a group's
- * own fields, a component field's component), whoever may read them; or
- * `undefined` when there is no such source. What an editor may bind, as
- * opposed to what a visitor may read ({@link visitorFields}).
+ * own fields, a component field's component), whoever may read them, and
+ * whether its entries carry timestamps; or `undefined` when there is no such
+ * source. What an editor may bind, as opposed to what a visitor may read
+ * ({@link visitorFields}).
  */
-export async function declaredFields(
-  source: SourceEntity
-): Promise<VisitorFields["fields"] | undefined> {
+export async function declaredSource(source: SourceEntity): Promise<
+  | {
+      readonly fields: VisitorFields["fields"];
+      readonly timestamps: boolean;
+    }
+  | undefined
+> {
   await getCachedNextly();
-  return expandedFields(source);
+  return expandedDeclaration(source);
 }
 
 /**
