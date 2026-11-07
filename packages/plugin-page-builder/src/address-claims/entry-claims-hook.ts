@@ -29,8 +29,9 @@
  * - A collection that may no longer have a template (its `slug` field
  *   removed, or made localized) is served nowhere, whatever address its
  *   template still stores: the start-up pass gives its entries' addresses
- *   up, and neither an own design's write nor its template's unpublish
- *   claims one back (see `servable`).
+ *   up, and neither an entry's save under an unpublished template, an own
+ *   design's write nor its template's unpublish claims one back (see
+ *   `servable`).
  *
  * A collection's address declared in code wins over one its template
  * stores, so a collection promoted into code moves to the declared address,
@@ -254,9 +255,10 @@ export function registerEntryAddressClaims(
  * Whether `collection`'s entries may be served at all: one given an address
  * in code always may (start-up refuses a declared collection that cannot
  * have a template), and any other only while it may still have a template.
- * The one answer the start-up pass, an own design's write and a template's
- * unpublish ask, so a write never claims back what start-up gave up. Given a
- * write's transaction, the registry is read on it.
+ * The one answer the start-up pass, an own design's write, a template's
+ * unpublish and an entry's save served by its own design ask, so a write
+ * never claims back what start-up gave up. Given a write's transaction, the
+ * registry is read on it.
  */
 async function servable(
   deps: EntryClaimsDeps,
@@ -466,7 +468,10 @@ function collectionServing(
  * design, read on `tx`, the save's own transaction; null where it is served
  * nowhere, and undefined where its collection holds nothing to reconcile
  * (see `collectionServing`). Whether the entry itself is published is judged
- * of `data` by `entryAddresses`, at the address this answers.
+ * of `data` by `entryAddresses`, at the address this answers. An own design
+ * serves the entry only while the collection may still have a template (see
+ * `servable`), asked only once a published design is found, so a save with
+ * none reads no registry.
  */
 async function servingAddress(
   deps: EntryClaimsDeps,
@@ -479,8 +484,9 @@ async function servingAddress(
   if (serving === undefined) return undefined;
   return await servedAt({
     ...serving,
-    ownDesignPublished: () =>
-      deps.ownDesignPublished(holder.collection, holder.id, tx),
+    ownDesignPublished: async () =>
+      (await deps.ownDesignPublished(holder.collection, holder.id, tx)) &&
+      (await servable(deps, holder.collection, tx)),
   });
 }
 

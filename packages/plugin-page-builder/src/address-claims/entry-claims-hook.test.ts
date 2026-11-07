@@ -741,6 +741,21 @@ describe("an entry drawn with its own design in a collection that may no longer 
     expect(h.held()).toEqual([]);
   });
 
+  it("is not claimed by its own save under an unpublished template, and is once the collection may have a template again (the control)", async () => {
+    const h = designHarness({ declared: false, templatePublished: false });
+    await h.giveDesign("hello", true);
+    h.setEligible(false);
+
+    await h.save("hello");
+    expect(h.held()).toEqual([]);
+
+    // CONTROL: the same save, with the collection eligible again, holds
+    // the address its own design serves it at.
+    h.setEligible(true);
+    await h.save("hello");
+    expect(h.held()).toEqual(["address /events/hello events:hello"]);
+  });
+
   it("keeps nothing when the collection's template is unpublished, own design or not", async () => {
     const h = designHarness({ declared: false });
     await h.save("hello");
