@@ -20,8 +20,29 @@
  * what is stored now and makes only its own change there ({@link
  * stale-retry}), so a concurrent change to another class is kept.
  *
+ * ## What serializes a removal with a first use
+ *
+ * The composition graph lock (`composition-graph-lock`). The checks here are
+ * the early refusal, naming a document the caller may open; a page saved
+ * between them and the write is not seen by them. So every write of the site
+ * style that drops a shared style, this route's, a whole-list write and an
+ * undo alike, takes the lock inside its own transaction and reads the stored
+ * documents again under it (`site-style-removal-lock`), and a page write
+ * adding a reference judges it again under the same lock against the classes
+ * read then (`composition-rejudge`). Whichever takes the lock first commits
+ * before the other is judged, so a page cannot commit a first use of a style
+ * the removal took out, and a removal cannot take out a style a page just
+ * started applying.
+ *
+ * ## What isn't closed
+ *
+ * A class applied in a blocks value inside a named group, a repeater's rows
+ * or a field-group instance: the validation judges top-level blocks fields
+ * only, and so does the judgement under the lock.
+ *
  * @module shared-styles-routes
  */
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import {
   getCachedNextly,
   NextlyError,
@@ -66,7 +87,7 @@ import {
 } from "./library-contract";
 import {
   RESCAN_PAGE_SIZE,
-  stillUsedMessage,
+  refuseStoredUses,
   storedUsesOf,
   type StoredDocuments,
   type StoredUse,
@@ -630,32 +651,6 @@ export interface StillUsedCheck {
 }
 
 /**
- * Refuse when a stored document still references any of the styles, though
- * the index counted none: an index zero is not proof, since interleaved saves
- * of one document can drop a usage row. The refusal names only a document the
- * caller may open, and counts the rest.
- */
-async function refuseStoredUses(
-  ids: readonly string[],
-  check: StillUsedCheck
-): Promise<void> {
-  const uses = await check.uses(ids);
-  if (uses.length === 0) return;
-  const message = stillUsedMessage(
-    uses.length,
-    await check.firstReadable(uses),
-    ids.length
-  );
-  throw NextlyError.validation({
-    errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
-    logContext: {
-      classIds: ids,
-      uses: uses.map(use => `${use.kind}:${use.slug}:${use.id}`),
-    },
-  });
-}
-
-/**
  * Remove unused shared styles: the one write that may remove one.
  *
  * Every check runs on what the server reads just before the write, never on
@@ -702,8 +697,11 @@ export async function removeSharedStyles(
         throw removalRefusalOf(reasons, { classIds: ids });
       }
       // Only once the index found nothing: its refusals name every reason
-      // cheaply, and this read walks every document the builder opens.
-      await refuseStoredUses(ids, stillUsed);
+      // cheaply, and this read walks every document the builder opens. An
+      // index zero is not proof, since interleaved saves of one document can
+      // drop a usage row; the refusal names only a document the caller may
+      // open, and counts the rest.
+      await refuseStoredUses(ids, stillUsed, "classIds");
       await store.write(
         classes.filter(
           entry => typeof entry.id !== "string" || !gone.has(entry.id)
@@ -847,7 +845,9 @@ export interface RescanDirectApi
 }
 
 /** The top-level fields a row is read with: the id, and each path's first key. */
-function rescanSelect(paths: readonly string[]): Record<string, boolean> {
+export function rescanSelect(
+  paths: readonly string[]
+): Record<string, boolean> {
   return Object.fromEntries([
     ["id", true],
     ...paths.map(path => [path.split(".")[0] ?? path, true]),
@@ -860,7 +860,9 @@ function rescanSelect(paths: readonly string[]): Record<string, boolean> {
  * one document and its draft. The draft is read whether or not a collection
  * keeps drafts, since the draft read answers nothing where none is surfaced.
  */
-function storedFormsOn(locales: readonly string[]): StoredDocumentForm[] {
+export function storedFormsOn(
+  locales: readonly string[]
+): StoredDocumentForm[] {
   return (locales.length > 0 ? locales : [""]).flatMap(locale => [
     { locale, variant: "published" as const },
     { locale, variant: "draft" as const },
@@ -869,6 +871,16 @@ function storedFormsOn(locales: readonly string[]): StoredDocumentForm[] {
 
 /** The form a list read answers: the default language, without the draft. */
 const LISTED_FORM: StoredDocumentForm = { locale: "", variant: "published" };
+
+/**
+ * Whether `form` is the one a list read already answered, which a row's
+ * other forms leave out rather than read again.
+ */
+export function isListedForm(form: StoredDocumentForm): boolean {
+  return (
+    form.locale === LISTED_FORM.locale && form.variant === LISTED_FORM.variant
+  );
+}
 
 /**
  * The stored documents the builder opens, read as the system: the removal's
@@ -908,15 +920,30 @@ export function storedDocumentsOf(
     rowForms: (type, id) =>
       formsOf(
         { scope: "collection", entity: type.slug, entityKey: id },
-        forms().filter(
-          form =>
-            form.locale !== LISTED_FORM.locale ||
-            form.variant !== LISTED_FORM.variant
-        )
+        forms().filter(form => !isListedForm(form))
       ),
     singleForms: type =>
       formsOf({ scope: "single", entity: type.slug, entityKey: "" }, forms()),
   };
+}
+
+/**
+ * Every stored document still referencing any of the shared styles, walked
+ * as the class index records, so the two agree. The one walk both the remove
+ * route and the site style's own write (`site-style-removal-lock`) ask.
+ *
+ * `limits` are the site's document limits (`pageBuilder({ limits })`), the
+ * bounds the index, the validator and the renderer read a document under:
+ * walked under the defaults instead, a site that raised them would miss a
+ * use held past the default node count or depth, and remove a style a page
+ * still renders. Required, so no caller falls back to the defaults unseen.
+ */
+export function storedSharedStyleUses(
+  documents: StoredDocuments,
+  limits: DocumentLimits
+): (ids: readonly string[]) => Promise<StoredUse[]> {
+  return ids =>
+    storedUsesOf(ids, documents, stored => classUsageOf(stored, limits).ids);
 }
 
 /**
@@ -1054,6 +1081,8 @@ export interface SharedStyleRouteSetup {
   readonly configClassIds: ReadonlySet<string>;
   /** The usage index for this request. */
   readonly usage: (ctx: PluginRouteContext) => SharedStyleUsageSource;
+  /** The site's document limits, the bounds the stored documents are walked under. */
+  readonly limits: DocumentLimits;
 }
 
 /** The read and update permissions on the RESOLVED site-style Single. */
@@ -1131,13 +1160,10 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
           setup.usage(ctx),
           setup.configClassIds,
           {
-            // Walked as the class index records, so the two agree.
-            uses: ids =>
-              storedUsesOf(
-                ids,
-                storedDocumentsOf(ctx, nextly),
-                stored => classUsageOf(stored).ids
-              ),
+            uses: storedSharedStyleUses(
+              storedDocumentsOf(ctx, nextly),
+              setup.limits
+            ),
             firstReadable: uses =>
               firstReadableTitle(
                 uses,
