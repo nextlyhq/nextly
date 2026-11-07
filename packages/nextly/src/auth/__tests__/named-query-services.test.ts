@@ -235,6 +235,36 @@ describe("plugin services inside a named query's frame", () => {
     expect(frame.run(() => opened.count)).toBe(2);
   });
 
+  it("pass writes through to the real service and its data, outside a frame", () => {
+    const real = {
+      setting: "before",
+      gone: true,
+      open: () => opened,
+    };
+    const opened = { list: [1, 2] as number[], label: "a" };
+    registerPluginService(PLUGIN, "mutable", () => real);
+    const service = services().mutable as unknown as typeof real;
+    service.setting = "after";
+    delete (service as { gone?: boolean }).gone;
+    Object.defineProperty(service, "added", {
+      value: 3,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    // Each change is on the real object, and reads back through the proxy.
+    expect(real).toMatchObject({ setting: "after", added: 3 });
+    expect("gone" in real).toBe(false);
+    expect(service.setting).toBe("after");
+    expect(Object.keys(service)).toEqual(["setting", "open", "added"]);
+    // Data a method returns is changed in place too: its array included.
+    const data = service.open();
+    data.label = "b";
+    data.list.push(3);
+    expect(opened).toEqual({ list: [1, 2, 3], label: "b" });
+    expect(data.list).toEqual([1, 2, 3]);
+  });
+
   it("answer through the frame's own door", () => {
     const frame = openNamedQueryFrame("notes.all");
     expect(frame.run(() => frame.read(() => services().store?.read()))).toEqual(

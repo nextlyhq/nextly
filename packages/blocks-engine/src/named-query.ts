@@ -34,6 +34,10 @@ export const NAMED_QUERY_TEXT_MAX = 200;
  * a cache entry keeps, with room for the page's own.
  */
 const NAMED_QUERY_MAX_READS = 64;
+/** The most choices one choice input may offer. */
+const NAMED_QUERY_MAX_OPTIONS = 200;
+/** The deepest a row schema's groups may nest. */
+const NAMED_QUERY_MAX_ROW_DEPTH = 8;
 /** How long a run may take when its query names no time of its own. */
 export const NAMED_QUERY_DEFAULT_TIMEOUT_MS = 5000;
 /** The longest a query may ask to run. */
@@ -840,6 +844,10 @@ function choiceShapeProblem(
   ) {
     return `${at} declares no options of { value, label }`;
   }
+  // Each option is listed to every editor and checked on every save.
+  if (options.length > NAMED_QUERY_MAX_OPTIONS) {
+    return `${at} declares ${String(options.length)} options; at most ${String(NAMED_QUERY_MAX_OPTIONS)} are allowed`;
+  }
   // A list stores the chosen value as an input's literal, which holds at
   // most NAMED_QUERY_TEXT_MAX characters: a longer value no list could save.
   if (
@@ -934,7 +942,8 @@ function rowKeyProblem(
 function rowFieldProblem(
   field: unknown,
   at: string,
-  seen: Set<string>
+  seen: Set<string>,
+  depth: number
 ): string | undefined {
   if (!isPlainRecord(field) || typeof field.type !== "string") {
     return `${at} hold a field that is not { name, type }`;
@@ -950,7 +959,7 @@ function rowFieldProblem(
   if (field.fields === undefined) return undefined;
   const group = `${at}' field "${field.name}"`;
   return Array.isArray(field.fields)
-    ? rowFieldsProblem(field.fields, group)
+    ? rowFieldsProblem(field.fields, group, depth + 1)
     : `${group} holds fields that are not a list`;
 }
 
@@ -962,11 +971,16 @@ function rowFieldProblem(
  */
 function rowFieldsProblem(
   fields: readonly unknown[],
-  at: string
+  at: string,
+  depth = 0
 ): string | undefined {
+  // Bounded, so a schema that holds itself is refused, never walked forever.
+  if (depth > NAMED_QUERY_MAX_ROW_DEPTH) {
+    return `${at} nest fields more than ${String(NAMED_QUERY_MAX_ROW_DEPTH)} groups deep`;
+  }
   const seen = new Set<string>();
   for (const field of fields) {
-    const problem = rowFieldProblem(field, at, seen);
+    const problem = rowFieldProblem(field, at, seen, depth);
     if (problem !== undefined) return problem;
   }
   return undefined;

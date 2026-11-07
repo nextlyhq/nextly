@@ -251,6 +251,36 @@ describe("a named query's declaration", () => {
       "at most 64 characters",
     ],
     [
+      "more choices than an editor lists",
+      {
+        params: {
+          c: param.choice({
+            label: "C",
+            options: Array.from({ length: 201 }, (_, i) => ({
+              value: `v${String(i)}`,
+              label: `V${String(i)}`,
+            })),
+          }),
+        },
+      },
+      "201 options",
+    ],
+    [
+      "row groups that hold themselves",
+      {
+        rows: (() => {
+          const group: { name: string; type: string; fields: unknown[] } = {
+            name: "loop",
+            type: "group",
+            fields: [],
+          };
+          group.fields.push(group);
+          return { key: "id", fields: [{ name: "id", type: "text" }, group] };
+        })(),
+      },
+      "more than 8 groups deep",
+    ],
+    [
       "a choice value no list could store",
       {
         params: {

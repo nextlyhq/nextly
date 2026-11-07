@@ -159,6 +159,20 @@ function proxyOver(
     },
     has: (_standIn, prop) => Reflect.has(value, prop),
     ownKeys: () => Reflect.ownKeys(value),
+    // Writes reach the real object, as reads come from it, so a service or
+    // its data is changed through the proxy as it always was: an assignment,
+    // a delete, a definition, and an array's own `push` or `splice`.
+    set: (_standIn, prop, next) => Reflect.set(value, prop, next),
+    deleteProperty: (_standIn, prop) => Reflect.deleteProperty(value, prop),
+    defineProperty: (stood, prop, descriptor) => {
+      const defined = Reflect.defineProperty(value, prop, descriptor);
+      // A property defined fixed in place must stand on the stand-in too,
+      // or the proxy may not report the definition as made.
+      if (defined && descriptor.configurable === false) {
+        Reflect.defineProperty(stood, prop, descriptor);
+      }
+      return defined;
+    },
   });
 }
 
