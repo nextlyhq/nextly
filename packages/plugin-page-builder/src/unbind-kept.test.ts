@@ -15,8 +15,10 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  givenPlan,
   outOfReachOf,
   listOf,
+  pairedBindingRefusal,
   unboundAsWritten,
   unbindPlan,
   type VisitorView,
@@ -218,6 +220,44 @@ describe("a bound library image visitors are drawn none of", () => {
       kept: { set: {}, empty: ["mediaId", "src"] },
       answer: { kept: "visitor" },
     });
+  });
+});
+
+describe("a value given for an image", () => {
+  const image: BlockNode = {
+    id: "img",
+    type: "core/image",
+    version: 1,
+    props: {},
+    bindings: { mediaId: { $bind: "cover" } },
+  };
+
+  it("keeps a given address in the address prop, a library id in the media prop", () => {
+    const address = "https://cdn.example.com/spring.jpg";
+    expect(givenPlan("mediaId", address, IMAGE)).toMatchObject({
+      kept: { set: { src: address }, empty: ["mediaId"] },
+      answer: { kept: "value", value: address, into: "src" },
+    });
+    expect(givenPlan("mediaId", "m7", IMAGE)).toMatchObject({
+      kept: { set: { mediaId: "m7" }, empty: ["src"] },
+      answer: { kept: "value", value: "m7" },
+    });
+  });
+
+  it("refuses where the address prop it writes is bound too", () => {
+    const both: BlockNode = {
+      ...image,
+      bindings: {
+        mediaId: { $bind: "cover" },
+        src: { $bind: "coverUrl" },
+      },
+    };
+    const plan = givenPlan("mediaId", "https://cdn.example.com/a.jpg", IMAGE);
+    expect(pairedBindingRefusal(both, "mediaId", plan)).toEqual({
+      refusal: expect.stringContaining("“src” is bound as well"),
+    });
+    // Alone, the media prop's binding is the one removed.
+    expect(pairedBindingRefusal(image, "mediaId", plan)).toBe(plan);
   });
 });
 

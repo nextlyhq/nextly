@@ -22,6 +22,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   findNode,
   getBlock,
+  imageValueOf,
   isPlainRecord,
   LIST_ENTRY_SLOT,
   readListQuery,
@@ -254,7 +255,7 @@ function isMediaProp(declared: DeclaredProps, prop: string): boolean {
 function addressPlan(
   prop: string,
   value: unknown,
-  kept: "visitor" | "fallback",
+  kept: "visitor" | "fallback" | "value",
   declared: DeclaredProps,
   reason: string
 ): UnbindPlan {
@@ -689,23 +690,20 @@ export async function planUnbind(
   if (binding === undefined) {
     return { refusal: `"${prop}" of block "${nodeId}" is not bound.` };
   }
+  const declared = getBlock(node.type)?.props;
   if (typeof keep === "object" && "value" in keep) {
-    return {
-      kept: { set: { [prop]: keep.value } },
-      answer: {
-        kept: "value",
-        value: keep.value,
-        reason: "The value given is kept.",
-      },
-    };
+    return pairedBindingRefusal(
+      node,
+      prop,
+      givenPlan(prop, keep.value, declared)
+    );
   }
   const view = await visitorViewOf(source, document, nodeId, prop, keep);
   if ("needs" in view) return { refusal: view.needs };
-  const plan = unbindPlan(
+  const plan = pairedBindingRefusal(
+    node,
     prop,
-    binding.$bind ?? prop,
-    view,
-    getBlock(node.type)?.props
+    unbindPlan(prop, binding.$bind ?? prop, view, declared)
   );
   return "refusal" in plan
     ? plan
@@ -715,6 +713,54 @@ export async function planUnbind(
           ...plan.answer,
           reason: `${plan.answer.reason} ${DEFAULT_RENDERER_NOTE}`,
         },
+      };
+}
+
+/**
+ * A given value's plan. An image address given for a media prop goes where
+ * the block keeps its image's address, as any address does: the media prop
+ * holds a library id only. A library id empties the typed address, which
+ * the bound image never drew.
+ */
+export function givenPlan(
+  prop: string,
+  value: unknown,
+  declared: DeclaredProps
+): UnbindPlan {
+  const reason = "The value given is kept.";
+  if (isMediaProp(declared, prop) && imageValueOf(value)?.holds === "address") {
+    return addressPlan(prop, value, "value", declared, reason);
+  }
+  return {
+    kept: {
+      set: { [prop]: value },
+      ...(isMediaProp(declared, prop)
+        ? typedAddressEmptied(prop, declared)
+        : {}),
+    },
+    answer: { kept: "value", value, reason },
+  };
+}
+
+/**
+ * The plan, refused where it writes or empties another prop that is bound
+ * too, such as an image's address prop: that prop's binding would fill it
+ * again on the next render, and visitors would not see what was kept.
+ */
+export function pairedBindingRefusal(
+  node: BlockNode,
+  prop: string,
+  plan: UnbindPlan
+): UnbindPlan {
+  if ("refusal" in plan) return plan;
+  const touched = [...Object.keys(plan.kept.set), ...(plan.kept.empty ?? [])];
+  const bound = touched.find(
+    name => name !== prop && node.bindings?.[name] !== undefined
+  );
+  return bound === undefined
+    ? plan
+    : {
+        refusal: `“${bound}” is bound as well, and its binding would fill it again: unbind it first.`,
       };
 }
 

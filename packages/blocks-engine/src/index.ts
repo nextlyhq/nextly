@@ -1275,6 +1275,7 @@ export {
   bindablePropKind,
   checkBinding,
   fieldFitsProp,
+  imageValueOf,
   isBindPath,
   isEmptyBoundValue,
   isValidPropValue,
