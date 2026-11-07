@@ -65,6 +65,7 @@ import {
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   CONDITIONED_ATTRIBUTE,
+  CONDITIONED_OWN_ATTRIBUTE,
   LOCKED_ATTRIBUTE,
   lockMarksOf,
   SELECTED_ATTRIBUTE,
@@ -1894,7 +1895,10 @@ describe("the drag in flight is drawn on the canvas", () => {
         {
           formatVersion: 1,
           kind: "component",
-          nodes: [{ id: "leaf", type: "acme/leaf", version: 1, props: {} }],
+          nodes: [
+            { id: "first", type: "acme/leaf", version: 1, props: {} },
+            { id: "second", type: "acme/leaf", version: 1, props: {} },
+          ],
         } as unknown as BlockDocument,
       ],
     ]);
@@ -1920,10 +1924,74 @@ describe("the drag in flight is drawn on the canvas", () => {
     );
     await act(async () => undefined);
 
-    // Drawn, and badged, where it used to be drawn without one.
-    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
-    expect(marked).toHaveLength(1);
-    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("conditional");
+    // Drawn, and badged, where it used to be drawn without one: both of
+    // promo's roots, named as one placement's, so they share one badge.
+    const marked = Array.from(
+      container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    );
+    expect(marked).toHaveLength(2);
+    expect(
+      marked.map(element => element.getAttribute(CONDITIONED_ATTRIBUTE))
+    ).toEqual(["conditional", "conditional"]);
+    const placements = marked.map(element =>
+      element.getAttribute(CONDITIONED_OWN_ATTRIBUTE)
+    );
+    expect(placements[0]).not.toBe("");
+    expect(placements[0]).not.toBeNull();
+    expect(placements[1]).toBe(placements[0]);
+  });
+
+  it("marks nothing for a placement gate stored in a definition, which the renderer removes", async () => {
+    // Only the resolver writes `within`; one a definition stores, as
+    // hand-edited data may, restricts nobody on the page.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "leaf",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { within: [{ conditions: vip }] },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "promo" },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    // CONTROL: drawn, under the placement's address.
+    expect(
+      container.querySelector(`[${INSTANCE_ATTRIBUTE}="card"]`)
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    ).toHaveLength(0);
   });
 
   it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {

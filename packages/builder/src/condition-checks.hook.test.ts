@@ -8,6 +8,8 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
+  resolveComponentInstances,
+  revealConditioned,
   type BlockDocument,
   type BlockNode,
   type DefinitionsById,
@@ -53,14 +55,27 @@ const definitions: DefinitionsById = new Map([
   ],
 ]);
 
+/**
+ * The id the composed tree gives the page's first drawn block, composed as
+ * the canvas composes it.
+ */
+function composedRootId(
+  document: BlockDocument,
+  defined: DefinitionsById
+): string | undefined {
+  return resolveComponentInstances(revealConditioned(document), defined, {
+    conditioned: "carry",
+  }).document.nodes[0]?.id;
+}
+
 describe("the conditions the canvas can't check", () => {
   it("include a placed component's own block, judged in the composed tree", () => {
     const { result } = renderHook(() =>
       useConditionsUnchecked(page, undefined, undefined, definitions)
     );
-    expect(result.current.size).toBe(1);
-    // By the id the composed tree gives it, never the placement's own.
-    expect(result.current.has("card")).toBe(false);
+    // By the id the composed tree gives it, the one the canvas draws it
+    // with, never the placement's own.
+    expect([...result.current]).toEqual([composedRootId(page, definitions)]);
   });
 
   it("judge a component's block deeper than the default depth under the depth the site raised", () => {
@@ -149,8 +164,56 @@ describe("the conditions the canvas can't check", () => {
     const { result } = renderHook(() =>
       useConditionsUnchecked(framed, undefined, undefined, nested)
     );
-    expect(result.current.size).toBe(1);
-    expect(result.current.has("card")).toBe(false);
+    expect([...result.current]).toEqual([composedRootId(framed, nested)]);
+  });
+
+  it("include nothing for a placement gate a definition stores, which the renderer removes", () => {
+    const stored: DefinitionsById = new Map([
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "inner",
+              type: "core/text",
+              version: 1,
+              props: {},
+              visibility: { within: "not a list" },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { result } = renderHook(() =>
+      useConditionsUnchecked(page, undefined, undefined, stored)
+    );
+    expect([...result.current]).toEqual([]);
+    // CONTROL: the same block with conditions of its own that nothing can
+    // read is marked, so the pass does judge this block.
+    const own: DefinitionsById = new Map([
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "inner",
+              type: "core/text",
+              version: 1,
+              props: {},
+              visibility: { conditions: "not a list" },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { result: control } = renderHook(() =>
+      useConditionsUnchecked(page, undefined, undefined, own)
+    );
+    expect(control.current.size).toBe(1);
   });
 
   it("include none of them without the definitions, as before", () => {

@@ -31,7 +31,9 @@
 
 import {
   findNode,
+  isPlainRecord,
   PAGE_ROOT_CLASS,
+  placementGatesOf,
   previewStateClass,
   resolveSiteTokens,
   resolveTokenPrefix,
@@ -84,7 +86,11 @@ import {
   CanvasRegionFrame,
   type CanvasRegion,
 } from "./canvas-regions";
-import { gatedAsDrawn, gatedAsStored } from "./condition-gate";
+import {
+  asStoredDefinitions,
+  gatedAsDrawn,
+  gatedAsStored,
+} from "./condition-gate";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import {
@@ -170,11 +176,24 @@ export const CONDITIONED_ATTRIBUTE = "data-nx-conditioned";
  * Marks an element whose condition mark is its own block's, a block of a
  * placed component's definition, rather than its placement's: the marks
  * badge each such block apart, where a placement's roots share one badge.
+ * Its value names the placement nested in a component whose gate the block
+ * carries, when that gate is all it carries, so that placement's roots share
+ * one badge too; empty for a block's own conditions.
  */
 export const CONDITIONED_OWN_ATTRIBUTE = "data-nx-conditioned-own";
 
 /** How a conditioned block is marked on the canvas. */
 type ConditionMark = "conditional" | "unchecked";
+
+/**
+ * Every conditioned block's mark, and for a composed block gated only by a
+ * placement nested in a component, which placement: the badge its roots
+ * share.
+ */
+interface ConditionMarks {
+  readonly marks: ReadonlyMap<string, ConditionMark>;
+  readonly nested: ReadonlyMap<string, string>;
+}
 
 /**
  * Every conditioned block's mark, from one walk, asked of the engine's own
@@ -186,8 +205,9 @@ function conditionMarksOf(
   document: BlockDocument,
   unchecked: ReadonlySet<string> | undefined,
   composed: { definitions?: DefinitionsById; limits?: DocumentLimits }
-): Map<string, ConditionMark> {
+): ConditionMarks {
   const marks = new Map<string, ConditionMark>();
+  const nested = new Map<string, string>();
   const markIf = (node: BlockNode, gated: boolean): void => {
     if (marks.has(node.id) || !gated) return;
     marks.set(
@@ -195,13 +215,12 @@ function conditionMarksOf(
       unchecked?.has(node.id) === true ? "unchecked" : "conditional"
     );
   };
-  const mark = (node: BlockNode): void => markIf(node, gatedAsStored(node));
   const bound = {
     maxNodes: composed.limits?.maxNodes ?? DEFAULT_LIMITS.maxNodes,
   };
   // The page's own blocks, a placement among them, by their ids, which are
   // the addresses the canvas draws them with.
-  walkNodes(document.nodes, mark, bound);
+  walkNodes(document.nodes, node => markIf(node, gatedAsStored(node)), bound);
   // And the blocks a placed component's definition holds, by the ids the
   // composed tree gives them, which the canvas draws them with: composed as
   // the renderer composes, each conditioned placement expanded too. The
@@ -211,18 +230,47 @@ function conditionMarksOf(
   // expanded into it, which only the composed tree still holds.
   if (composed.definitions !== undefined && composed.definitions.size > 0) {
     // Under the limits the canvas renders with, so a page the site allows
-    // past the default is composed here as it is drawn.
+    // past the default is composed here as it is drawn, from the definitions
+    // as the renderer reads them.
     const tree = resolveComponentInstances(
       revealConditioned(document),
-      composed.definitions,
+      asStoredDefinitions(composed.definitions, composed.limits),
       {
         conditioned: "carry",
         ...(composed.limits === undefined ? {} : { limits: composed.limits }),
       }
     ).document;
-    walkNodes(tree.nodes, node => markIf(node, gatedAsDrawn(node)), bound);
+    const placements = new Map<string, string>();
+    walkNodes(
+      tree.nodes,
+      node => {
+        markIf(node, gatedAsDrawn(node));
+        const placement = nestedPlacementOf(node);
+        if (placement === undefined) return;
+        // The innermost placement's gate is the first a root carries, the
+        // same for each of its roots, so they share one badge.
+        let group = placements.get(placement);
+        if (group === undefined) {
+          group = `p${String(placements.size + 1)}`;
+          placements.set(placement, group);
+        }
+        nested.set(node.id, group);
+      },
+      bound
+    );
   }
-  return marks;
+  return { marks, nested };
+}
+
+/**
+ * The gate of the innermost placement nested in a component that a composed
+ * block is a root of, as text, when that gate, and not conditions of its own,
+ * is what gates it.
+ */
+function nestedPlacementOf(node: BlockNode): string | undefined {
+  if (gatedAsStored(node) || !isPlainRecord(node.visibility)) return undefined;
+  const gates = placementGatesOf(node.visibility);
+  return gates.length === 0 ? undefined : JSON.stringify(gates[0]);
 }
 
 /**
@@ -264,8 +312,8 @@ function revealedDefinitions(
 function conditionMarkFor(
   element: Element,
   container: HTMLElement,
-  marks: ReadonlyMap<string, ConditionMark>
-): { mark: ConditionMark; own: boolean } | undefined {
+  { marks, nested }: ConditionMarks
+): { mark: ConditionMark; own: boolean; nested?: string } | undefined {
   const address = nodeAddressOf(element);
   if (address === null) return undefined;
   if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
@@ -280,9 +328,11 @@ function conditionMarkFor(
   // A block with conditions of its own that is also the root of a
   // conditioned placement is drawn only when both hold, so its one badge says
   // "Can't be checked" when either can't be.
+  const placement = id === null ? undefined : nested.get(id);
   return {
     mark: placed === "unchecked" ? "unchecked" : own,
     own: true,
+    ...(placement === undefined ? {} : { nested: placement }),
   };
 }
 
@@ -685,7 +735,7 @@ function useCanvasMarkers(
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
   lockedIds: ReadonlyMap<string, LockMark>,
-  conditionMarks: ReadonlyMap<string, ConditionMark>
+  conditionMarks: ConditionMarks
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -834,7 +884,11 @@ function useCanvasMarkers(
         // per entry is marked once per copy and its parts are not marked again.
         const condition = conditionMarkFor(element, container, conditionMarks);
         setMark(element, CONDITIONED_ATTRIBUTE, condition?.mark);
-        setFlag(element, CONDITIONED_OWN_ATTRIBUTE, condition?.own === true);
+        setMark(
+          element,
+          CONDITIONED_OWN_ATTRIBUTE,
+          condition?.own === true ? (condition.nested ?? "") : undefined
+        );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
         }

@@ -506,6 +506,68 @@ describe("selection marks", () => {
     ]);
   });
 
+  it("badges the roots of one placement nested in a component together", async () => {
+    // Each root has its own composed id; the value names the placement
+    // whose gate they carry, so they share one outline and one badge.
+    const root = (id: string) =>
+      createElement("div", {
+        key: id,
+        [NODE_ID_ATTRIBUTE]: id,
+        [INSTANCE_ATTRIBUTE]: "place",
+        [CONDITIONED_ATTRIBUTE]: "conditional",
+        [CONDITIONED_OWN_ATTRIBUTE]: "p1",
+      });
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {root("root-1")}
+        {root("root-2")}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+      ).toHaveLength(1)
+    );
+  });
+
+  it("keeps the tab with a block wholly off the screen's left", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.hasAttribute("data-scroller")) {
+          return new DOMRect(0, 0, 500, 500);
+        }
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "gone") {
+          return new DOMRect(-900, 200, 500, 50);
+        }
+        return new DOMRect(-900, 0, 2000, 2000);
+      }
+    );
+    const { container } = render(
+      <div data-scroller="" style={{ overflowY: "auto" }}>
+        <div className={CANVAS_ROOT_CLASS}>
+          {createElement("div", {
+            [NODE_ID_ATTRIBUTE]: "gone",
+            [CONDITIONED_ATTRIBUTE]: "conditional",
+          })}
+          <CanvasMarks />
+        </div>
+      </div>
+    );
+    await act(async () => undefined);
+    const badge = () =>
+      container.querySelector<HTMLElement>(
+        '.nx-canvas-mark[data-mark="conditioned"]'
+      );
+    await waitFor(() => expect(badge()).not.toBeNull());
+    // No inset pulling the tab back onto the screen, away from its block.
+    const inset = Number.parseFloat(
+      badge()?.style.getPropertyValue("--nx-tag-inset-side") || "0"
+    );
+    expect(inset).toBe(0);
+  });
+
   it("keeps the tab on screen when the screen cuts a block's left side", async () => {
     // Only the block's rightmost 100px show, less than the tab's width.
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(

@@ -797,7 +797,13 @@ function badgeKey(
   if (element.hasAttribute(CONDITIONED_OWN_ATTRIBUTE)) {
     // By copy as well: a list drawing the component once per entry draws
     // the block once per entry, each with the same composed id.
-    const id = element.getAttribute(NODE_ID_ATTRIBUTE) ?? String(index);
+    // The roots of one placement nested in a component share its badge, as
+    // a page placement's roots share theirs.
+    const nested = element.getAttribute(CONDITIONED_OWN_ATTRIBUTE) ?? "";
+    const id =
+      nested === ""
+        ? (element.getAttribute(NODE_ID_ATTRIBUTE) ?? String(index))
+        : `placed\u0000${nested}`;
     return `own\u0000${String(copyOf(copies, element))}\u0000${id}`;
   }
   const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
@@ -849,6 +855,9 @@ function tabInset(
   condition: "conditional" | "unchecked"
 ): number {
   const right = rect.x + rect.width;
+  // A block wholly off the screen to either side keeps its tab with it,
+  // rather than leaving one stranded at the screen's edge.
+  if (right <= onScreen.x || rect.x >= onScreen.x + onScreen.width) return 0;
   const cutRight = Math.max(0, right - (onScreen.x + onScreen.width));
   const width =
     tagWidthOf(condition === "unchecked" ? "Can’t be checked" : "Conditional") +
