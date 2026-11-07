@@ -205,6 +205,63 @@ describe("the regions of a page's Layout on the canvas", () => {
     expect(marked[0]?.closest(`.${CANVAS_REGION_CLASS}`)).toBeNull();
   });
 
+  it("draws and marks a conditioned block inside a placed component's definition", async () => {
+    // The page places a component; the component's own block has conditions,
+    // and only appears once the definition is composed into the page.
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "promo" },
+              },
+            ],
+          } as BlockDocument
+        }
+        siteStyles={sheet as never}
+        render={
+          {
+            styleContext: sheet,
+            definitions: new Map([
+              [
+                "promo",
+                {
+                  formatVersion: 1,
+                  kind: "component",
+                  nodes: [
+                    {
+                      id: "inner",
+                      type: "acme/text",
+                      version: 1,
+                      props: { text: "Members only" },
+                      visibility: {
+                        conditions: [[{ field: "tier", op: "exists" }]],
+                      },
+                    },
+                  ],
+                } as unknown as BlockDocument,
+              ],
+            ]),
+          } as never
+        }
+      />
+    );
+    await act(async () => undefined);
+    // Drawn, where the published page's gating used to leave it out.
+    expect(document.body.textContent).toContain("Members only");
+    const marked = Array.from(
+      document.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`)
+    );
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.textContent).toContain("Members only");
+  });
+
   it("emits the site sheet once, from the first part drawn", () => {
     renderCanvas([regionOf("header", "Top"), regionOf("footer", "Bottom")]);
     const sheets = document.querySelectorAll("style[data-nx-site-sheet]");

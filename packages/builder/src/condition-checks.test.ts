@@ -41,7 +41,7 @@ describe("the blocks whose conditions the page can't check", () => {
   });
 
   it("marks only the unreadable ones while the collections load, so nothing flashes red", () => {
-    expect([...uncheckedConditionIds(nodes, undefined, "posts")]).toEqual([
+    expect([...uncheckedConditionIds(nodes, "loading", "posts")]).toEqual([
       "unreadable",
     ]);
   });
@@ -75,10 +75,42 @@ describe("how far the check reads a document", () => {
       ),
       unreadable,
     ];
-    expect(uncheckedConditionIds(past, undefined, "posts").size).toBe(0);
+    expect(uncheckedConditionIds(past, "loading", "posts").size).toBe(0);
     // CONTROL: within the limit, the same block is found.
     expect([
-      ...uncheckedConditionIds([unreadable], undefined, "posts"),
+      ...uncheckedConditionIds([unreadable], "loading", "posts"),
     ]).toEqual(["late"]);
+  });
+});
+
+describe("when the collections can't be listed", () => {
+  it("still marks what needs no fields: an entry condition on a Single's page", () => {
+    const entryCondition = gated("single", [
+      [{ field: "title", op: "exists" }],
+    ]);
+    // A Single's page has no entry, so the condition can never be checked.
+    expect([
+      ...uncheckedConditionIds([entryCondition], "unavailable", null),
+    ]).toEqual(["single"]);
+    // CONTROL: while they load, it isn't marked yet.
+    expect(uncheckedConditionIds([entryCondition], "loading", null).size).toBe(
+      0
+    );
+  });
+
+  it("reads only as far as the limit the host gives", () => {
+    const unreadable = gated("late", [{ field: "title", op: "exists" }]);
+    const plain = {
+      id: "p",
+      type: "core/text",
+      version: 1,
+      props: {},
+    } as BlockNode;
+    expect(
+      uncheckedConditionIds([plain, unreadable], "loading", "posts", 1).size
+    ).toBe(0);
+    expect(
+      uncheckedConditionIds([plain, unreadable], "loading", "posts", 2).size
+    ).toBe(1);
   });
 });

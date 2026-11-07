@@ -63,14 +63,18 @@ export function storedGroups(
 
 /**
  * The blocks in a forest whose conditions the page can't check. A problem
- * that needs the collections' fields is judged only once they are listed,
- * so a block isn't marked while they load; one stored in a shape no row can
- * show needs no fields and is always marked.
+ * that needs the collections' fields is judged once they are listed, so a
+ * block isn't marked while they load. If they can't be listed, what needs no
+ * fields is still judged (an operator conditions don't have, an entry a
+ * Single's page doesn't have). One stored in a shape no row can show needs no
+ * fields and is always marked. Read as far as `maxNodes`, the limit a save
+ * surveys a document to.
  */
 export function uncheckedConditionIds(
   nodes: readonly BlockNode[],
-  collections: readonly LoopCollection[] | undefined,
-  entryCollection: string | null | undefined
+  collections: readonly LoopCollection[] | "loading" | "unavailable",
+  entryCollection: string | null | undefined,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
 ): ReadonlySet<string> {
   const found = new Set<string>();
   // The engine's guarded walk, which tolerates a malformed entry and a tree
@@ -83,13 +87,15 @@ export function uncheckedConditionIds(
         found.add(node.id);
       }
     },
-    { maxNodes: DEFAULT_LIMITS.maxNodes }
+    { maxNodes }
   );
-  if (collections === undefined) return found;
+  if (collections === "loading") return found;
   for (const issue of conditionIssues(nodes, {
-    fields: fieldSourceOf(collections),
+    ...(collections === "unavailable"
+      ? {}
+      : { fields: fieldSourceOf(collections) }),
     // As far as a save surveys a document, and no further.
-    maxNodes: DEFAULT_LIMITS.maxNodes,
+    maxNodes,
     ...(entryCollection === undefined ? {} : { entryCollection }),
   })) {
     if (issue.severity === "error") found.add(issue.nodeId);
@@ -102,13 +108,26 @@ export function useConditionsUnchecked(
   document: BlockDocument,
   services:
     | Pick<ContentServices, "listLoopCollections" | "entryCollection">
-    | undefined
+    | undefined,
+  /** The document limit the host renders and saves under. */
+  maxNodes?: number
 ): ReadonlySet<string> {
   const listed = useLoopCollections(services?.listLoopCollections);
-  const collections = listed?.kind === "ready" ? listed.collections : undefined;
+  const collections =
+    listed === undefined || listed.kind === "failed"
+      ? "unavailable"
+      : listed.kind === "loading"
+        ? "loading"
+        : listed.collections;
   const entryCollection = services?.entryCollection;
   return React.useMemo(
-    () => uncheckedConditionIds(document.nodes, collections, entryCollection),
-    [document, collections, entryCollection]
+    () =>
+      uncheckedConditionIds(
+        document.nodes,
+        collections,
+        entryCollection,
+        maxNodes
+      ),
+    [document, collections, entryCollection, maxNodes]
   );
 }

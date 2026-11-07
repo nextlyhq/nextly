@@ -41,7 +41,11 @@ import {
   tokenCustomProperty,
   tokenIdentity,
   walkNodes,
+  DEFAULT_LIMITS,
+  resolveComponentInstances,
   type BlockDocument,
+  type BlockNode,
+  type DefinitionsById,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -172,17 +176,53 @@ type ConditionMark = "conditional" | "unchecked";
  */
 function conditionMarksOf(
   document: BlockDocument,
-  unchecked: ReadonlySet<string> | undefined
+  unchecked: ReadonlySet<string> | undefined,
+  composed: { definitions?: DefinitionsById; maxNodes?: number }
 ): Map<string, ConditionMark> {
   const marks = new Map<string, ConditionMark>();
-  walkNodes(document.nodes, node => {
-    if (!gatedAsStored(node)) return;
+  const mark = (node: BlockNode): void => {
+    if (marks.has(node.id) || !gatedAsStored(node)) return;
     marks.set(
       node.id,
       unchecked?.has(node.id) === true ? "unchecked" : "conditional"
     );
-  });
+  };
+  const bound = { maxNodes: composed.maxNodes ?? DEFAULT_LIMITS.maxNodes };
+  // The page's own blocks, a placement among them, by their ids, which are
+  // the addresses the canvas draws them with.
+  walkNodes(document.nodes, mark, bound);
+  // And the blocks a placed component's definition holds, by the ids the
+  // composed tree gives them, which the canvas draws them with: composed as
+  // the renderer composes, each conditioned placement expanded too.
+  if (composed.definitions !== undefined && composed.definitions.size > 0) {
+    const tree = resolveComponentInstances(document, composed.definitions, {
+      conditioned: "carry",
+    }).document;
+    walkNodes(tree.nodes, mark, bound);
+  }
   return marks;
+}
+
+/**
+ * The mark a drawn element carries: a definition's own conditioned block by
+ * its composed id, else the block or placement it is the outermost element
+ * of, by its address. Never inside a Layout region, a document of its own
+ * whose ids may repeat the page's.
+ */
+function conditionMarkFor(
+  element: Element,
+  container: HTMLElement,
+  marks: ReadonlyMap<string, ConditionMark>
+): ConditionMark | undefined {
+  const address = nodeAddressOf(element);
+  if (address === null) return undefined;
+  if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
+  const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+  const own = id !== null && id !== address ? marks.get(id) : undefined;
+  if (own !== undefined) return own;
+  return isOutermostForAddress(element, address, container)
+    ? marks.get(address)
+    : undefined;
 }
 
 /**
@@ -730,16 +770,10 @@ function useCanvasMarkers(
         );
         // On the block's own outermost element, so a block a list draws once
         // per entry is marked once per copy and its parts are not marked again.
-        // The page's blocks only: a Layout region drawn around it is a
-        // document of its own, whose ids may repeat the page's.
         setMark(
           element,
           CONDITIONED_ATTRIBUTE,
-          address === null ||
-            element.closest(`.${CANVAS_REGION_CLASS}`) !== null ||
-            !isOutermostForAddress(element, address, container)
-            ? undefined
-            : conditionMarks.get(address)
+          conditionMarkFor(element, container, conditionMarks)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -1964,11 +1998,28 @@ function useDrawnPage({
   // Every conditioned block drawn, whoever the page would show it to, so the
   // author can see and select it; the marks say it isn't shown to everyone.
   const drawable = useMemo(() => revealConditioned(document), [document]);
+  // A placed component's definition too: its conditioned blocks are drawn,
+  // as the page's are.
+  const drawnRender = useMemo(
+    () =>
+      rendered?.definitions === undefined
+        ? rendered
+        : {
+            ...rendered,
+            definitions: new Map(
+              [...rendered.definitions].map(([id, definition]) => [
+                id,
+                revealConditioned(definition),
+              ])
+            ),
+          },
+    [rendered]
+  );
   const page = useMemo(
     () => (
       <BlockEnvironmentProvider value={environment}>
         <PageRenderer
-          {...rendered}
+          {...drawnRender}
           document={drawable}
           siteStyles={sheet}
           {...drawn?.page}
@@ -1982,7 +2033,7 @@ function useDrawnPage({
         />
       </BlockEnvironmentProvider>
     ),
-    [rendered, drawable, sheet, environment, drawn]
+    [drawnRender, drawable, sheet, environment, drawn]
   );
   return { drawn, page };
 }
@@ -2045,8 +2096,16 @@ export function Canvas({
    */
   const lockedIds = useMemo(() => lockMarksOf(document), [document]);
   const conditionMarks = useMemo(
-    () => conditionMarksOf(document, conditionsUnchecked),
-    [document, conditionsUnchecked]
+    () =>
+      conditionMarksOf(document, conditionsUnchecked, {
+        ...(render?.definitions === undefined
+          ? {}
+          : { definitions: render.definitions }),
+        ...(render?.limits?.maxNodes === undefined
+          ? {}
+          : { maxNodes: render.limits.maxNodes }),
+      }),
+    [document, conditionsUnchecked, render?.definitions, render?.limits]
   );
 
   useCanvasMarkers(

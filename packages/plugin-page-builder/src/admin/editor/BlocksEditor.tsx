@@ -1160,7 +1160,9 @@ function EditorBody<TFieldValues extends FieldValues>({
   );
   const conditionsUnchecked = useConditionsUnchecked(
     componentView.preview.document,
-    conditionServices
+    conditionServices,
+    // The limit the canvas draws and the save surveys under.
+    canvas.canvasRender.limits?.maxNodes
   );
   const view: EditorView = {
     ...mount,
