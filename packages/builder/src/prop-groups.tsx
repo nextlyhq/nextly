@@ -31,6 +31,16 @@ import { LinkGroupField } from "./link-control";
 import { linkGroupOf } from "./link-group";
 import { LIST_QUERY_PROPS, ListQueryField } from "./list-query-controls";
 
+/** What a group may say about one prop's binding beyond its name. */
+export interface BindableOptions {
+  /**
+   * The group's other props a bind empties in the same edit: those the block
+   * would follow before the bound prop, such as a button's entry reference
+   * before its address.
+   */
+  readonly clearsOnBind?: readonly string[];
+}
+
 /**
  * Wrap one prop's field with its binding controls: the field and a bind
  * button while unbound, the bound chip, Fallback and menu in its place once
@@ -38,7 +48,8 @@ import { LIST_QUERY_PROPS, ListQueryField } from "./list-query-controls";
  */
 export type BindableWrapper = (
   propName: string,
-  field: React.ReactNode
+  field: React.ReactNode,
+  options?: BindableOptions
 ) => React.ReactNode;
 
 /** What a group is drawn with. */

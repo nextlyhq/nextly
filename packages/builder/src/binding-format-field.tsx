@@ -310,13 +310,24 @@ export function BindingFormatField({
   const [codeRefusal, setCodeRefusal] = React.useState<string | undefined>();
   const value = menuValue(choosingCurrency, storedKey, stored);
   const storedCode = storedCurrencyCode(stored);
+  // A code is judged by the engine whatever it is, an empty one included:
+  // refused, nothing is written and the reason is said. A currency only
+  // picked, never stored, is let go when its code is left empty, so the menu
+  // shows again what the binding holds rather than a currency it doesn't.
   const commitCode = (typed: string): void => {
     const next = typed.trim().toUpperCase();
-    if (next === "" || next === storedCode) return;
+    if (next !== "" && next === storedCode) {
+      setCodeRefusal(undefined);
+      return;
+    }
     const format: BindingFormat = { type: "currency", currency: next };
     const check = checkFormat(format, kind, field);
-    setCodeRefusal(check.ok ? undefined : check.message);
-    if (!check.ok) return;
+    if (!check.ok) {
+      setCodeRefusal(check.message);
+      if (next === "" && storedKey !== CURRENCY) setChoosingCurrency(false);
+      return;
+    }
+    setCodeRefusal(undefined);
     setChoosingCurrency(false);
     onFormat(format);
   };
@@ -335,7 +346,7 @@ export function BindingFormatField({
   // Without a format the value shows nothing, so the row says so rather than
   // leaving the canvas's fallback unexplained.
   const noted = message === undefined && stored === undefined;
-  const explainedBy = refusal !== undefined ? errorId : noted ? noteId : "";
+  const explainedBy = message !== undefined ? errorId : noted ? noteId : "";
   return (
     <div className="nx-binding__fallback nx-binding__format">
       <label className="nx-binding__fallback-label" htmlFor={id}>

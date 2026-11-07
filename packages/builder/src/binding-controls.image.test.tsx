@@ -130,7 +130,8 @@ function Live({
 
 function mount(
   bindings: BlockNode["bindings"],
-  planUnbind?: ContentServices["planUnbind"]
+  planUnbind?: ContentServices["planUnbind"],
+  sources: readonly BindingFieldSource[] = SOURCES
 ): void {
   register();
   render(
@@ -151,7 +152,7 @@ function mount(
         } as BlockDocument
       }
       services={{
-        listBindingFields: async () => SOURCES,
+        listBindingFields: async () => sources,
         ...(planUnbind === undefined ? {} : { planUnbind }),
       }}
     />
@@ -186,6 +187,44 @@ async function sourceGroup(): Promise<HTMLElement> {
 }
 
 describe("a bound image", () => {
+  it("names a Single's field with the Single, by the host's label where it lists one", async () => {
+    const LOGO = {
+      $bind: "logo",
+      source: "single",
+      sourceKey: "related-links",
+    } as const;
+    // Listed: the host's names for the Single and its field.
+    mount({ mediaId: LOGO }, undefined, [
+      ...SOURCES,
+      {
+        binding: { source: "single", sourceKey: "related-links" },
+        label: "Brand links",
+        fields: [
+          {
+            name: "logo",
+            label: "Brand logo",
+            type: "upload",
+            relationTo: "media",
+            public: true,
+          },
+        ],
+      },
+    ]);
+    const listed = await screen.findByRole("button", {
+      name: "Image: bound to Brand logo of Brand links",
+    });
+    expect(listed.textContent).toContain("Brand links");
+    cleanup();
+    clearBlocks();
+    // Not listed (a Single with nothing saved yet): still named, by its key.
+    mount({ mediaId: LOGO });
+    const unlisted = await screen.findByRole("button", {
+      name: "Image: bound to Logo of Related links",
+    });
+    expect(unlisted.getAttribute("title")).toBe("Logo of Related links");
+    expect(unlisted.textContent).toContain("Related links");
+  });
+
   it("stands its chip on the Source row, with an address as its Fallback", async () => {
     mount({ mediaId: { $bind: "cover", fallback: ADDRESS } });
     expect(
@@ -234,6 +273,29 @@ describe("a bound image", () => {
         }) as HTMLInputElement
       ).value
     ).toBe(ADDRESS);
+  });
+
+  it("says it was the fallback's address where visitors saw the fallback", async () => {
+    // The same unbind, where the address kept was the binding's fallback:
+    // said so, rather than as an address the field gave.
+    const plan: UnbindPlanAnswer = {
+      kept: { set: { src: ADDRESS }, empty: ["mediaId"] },
+      answer: {
+        kept: "fallback",
+        value: ADDRESS,
+        into: "src",
+        reason:
+          "The bound image can't be found, so visitors see the fallback; it's kept in the image's address.",
+      },
+    };
+    mount({ mediaId: { $bind: "cover", fallback: ADDRESS } }, async () => plan);
+    await unbindImage();
+    expect(
+      (await within(await sourceGroup()).findByRole("status")).textContent
+    ).toBe(
+      "Unbound. Visitors saw the fallback's image address, so it's kept in Image address."
+    );
+    expect(storedProps()).toEqual({ src: ADDRESS });
   });
 
   it("says nothing of an address for an unbind that kept a library image", async () => {

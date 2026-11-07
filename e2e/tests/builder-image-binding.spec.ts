@@ -8,9 +8,9 @@
  * 2. An image bound with an address as its fallback is unbound: visitors saw
  *    that address, so it is kept in Image address, the image is left empty,
  *    the note says so, and the page holds it once saved and opened again.
- * 3. A heading bound to the page's own `createdAt` shows its own text until
- *    a Format is chosen (a date reaches text only through one), then the
- *    date, as the format writes it.
+ * 3. A heading bound to the page's own `createdAt`, seeded with a short date
+ *    format as the save requires (a date reaches text only through one), is
+ *    given a long one from the Format menu, and the canvas reformats it.
  *
  * @module tests/builder-image-binding.spec
  */
@@ -167,7 +167,9 @@ test.describe("binding an image and a date's format from the inspector", () => {
     ).toHaveCount(0);
   });
 
-  test("shows a bound date once a Format is chosen", async ({ page }) => {
+  test("reformats a bound date when another Format is chosen", async ({
+    page,
+  }) => {
     await gotoAdmin(page, "/");
     const mark = Date.now().toString(36);
     const id = await seed(page.request, mark, {
@@ -175,7 +177,12 @@ test.describe("binding an image and a date's format from the inspector", () => {
       type: "core/heading",
       version: 1,
       props: { text: "Its own heading", level: "h2" },
-      bindings: { text: { $bind: "createdAt" } },
+      bindings: {
+        text: {
+          $bind: "createdAt",
+          format: { type: "date", options: { dateStyle: "short" } },
+        },
+      },
     });
     await openAt(page, id, HEADING);
     const heading = async (): Promise<string> =>
@@ -183,10 +190,12 @@ test.describe("binding an image and a date's format from the inspector", () => {
         .locator(`[data-nx-node="${HEADING}"]`)
         .textContent()) ?? "";
 
-    // Unformatted, a date can't be text: the heading's own words show.
+    // The short date first, in the page's language (English): "11/8/26".
     const format = page.getByRole("combobox", { name: "Format" });
-    await expect(format).toBeVisible({ timeout: 30_000 });
-    await expect.poll(heading).toBe("Its own heading");
+    await expect(format).toHaveText("Short date", { timeout: 30_000 });
+    await expect
+      .poll(heading, { timeout: 30_000 })
+      .toMatch(/^\d{1,2}\/\d{1,2}\/\d{2}$/);
 
     await format.click();
     await page.getByRole("option", { name: "Long date" }).click();

@@ -1109,7 +1109,11 @@ export function LinkGroupField({
               }}
             />
           </div>
-        </HeldByLock>
+        </HeldByLock>,
+        // A button follows a complete entry reference before its address, so
+        // binding the address empties the reference in the same edit, or the
+        // button would keep going to the entry.
+        { clearsOnBind: destination.filter(name => name !== group.link) }
       )}
       {!linked || group.target === undefined ? null : (
         <HeldByLock reasonId={held(group.target)}>

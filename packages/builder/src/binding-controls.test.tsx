@@ -257,6 +257,107 @@ describe("a bound prop", () => {
   });
 });
 
+describe("a link's address bound inside its group", () => {
+  /** A button whose link may point at an entry, as `core/button` declares it. */
+  function mountButton(props: Record<string, unknown>): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/cta",
+          version: 1,
+          description: "A call to action.",
+          example: { props: {} },
+          editor: { label: "Call to action" },
+          props: {
+            label: { label: "Label", role: "content", type: "text" },
+            href: { label: "Link", role: "content", type: "url" },
+            entryCollection: { label: "Entry collection", type: "text" },
+            entryId: { label: "Entry", type: "text" },
+          },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-link-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "b", type: "acme/cta", version: 1, props }],
+    } as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "b",
+      selection: { ids: ["b"], primary: "b" },
+      applyAll: vi.fn(() => document),
+      select: vi.fn(),
+      apply: vi.fn(() => document),
+      undo: vi.fn(),
+      redo: vi.fn(),
+      canUndo: false,
+      canRedo: false,
+      undoDepth: 0,
+      composed: () => undefined,
+    } as unknown as EditorState;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{
+          listBindingFields: async () => [
+            {
+              binding: { source: "entry" },
+              label: "Post",
+              fields: [{ name: "website", type: "url", public: true }],
+            },
+          ],
+        }}
+      />
+    );
+    return editor;
+  }
+
+  /** Bind the link to the post's website through the picker. */
+  async function bindLink(editor: EditorState): Promise<BuilderOp> {
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Link to a field" })
+    );
+    fireEvent.click(await screen.findByRole("option", { name: /^Website/ }));
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    return vi.mocked(editor.apply).mock.calls[0]?.[0] as BuilderOp;
+  }
+
+  it("empties an entry the button pointed at, in the same edit as the binding", async () => {
+    // A button follows a complete entry reference before its address, so a
+    // bound address left beside one would never be followed.
+    const editor = mountButton({
+      label: "Read more",
+      entryCollection: "posts",
+      entryId: "p1",
+    });
+    const op = await bindLink(editor);
+    expect(op).toEqual({
+      kind: "update",
+      id: "b",
+      patch: {
+        bindings: { href: { $bind: "website" } },
+        props: { label: "Read more" },
+      },
+    });
+  });
+
+  it("writes the binding alone for a link that points at no entry", async () => {
+    // The control: the same bind, with no reference to empty, leaves the
+    // props as they are and out of the edit.
+    const editor = mountButton({ label: "Read more" });
+    const op = await bindLink(editor);
+    expect(op).toEqual({
+      kind: "update",
+      id: "b",
+      patch: { bindings: { href: { $bind: "website" } } },
+    });
+  });
+});
+
 describe("a bound prop's Open source", () => {
   /** The chip's menu, opened from the keyboard as a reader opens it. */
   async function openMenu(): Promise<void> {

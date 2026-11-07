@@ -1502,11 +1502,12 @@ function ContentFields({
   // row gets, for the props the group offers: one chip, one menu and one
   // note for every bindable prop, wherever it is drawn.
   const bindableIn = (offered: ReadonlySet<string>): BindableWrapper =>
-    function wrapBindable(name, field) {
+    function wrapBindable(name, field, options) {
       const prop = inspection.props.find(each => each.name === name);
       if (prop === undefined || !prop.offered || !offered.has(name)) {
         return field;
       }
+      const clears = options?.clearsOnBind ?? [];
       return (
         <BindableField
           nodeId={inspection.nodeId}
@@ -1515,8 +1516,11 @@ function ContentFields({
           binding={bindings?.[name]}
           document={document}
           services={services}
-          disabled={!writable(name)}
+          // A bind that empties other props may be made only where they may
+          // all be written, as the group's own pick is.
+          disabled={![name, ...clears].every(writable)}
           onApply={onApply}
+          clearsOnBind={clears}
         >
           {field}
         </BindableField>

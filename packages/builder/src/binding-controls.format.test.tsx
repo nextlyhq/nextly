@@ -8,6 +8,8 @@
  */
 import {
   clearBlocks,
+  COLLECTION_LIST_TYPE,
+  LIST_ENTRY_SLOT,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
@@ -20,6 +22,7 @@ import type {
   BindingFieldChoice,
   BindingFieldSource,
 } from "./binding-services";
+import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -55,8 +58,14 @@ const SOURCES: readonly BindingFieldSource[] = [
   { binding: { source: "entry" }, label: "Post", fields: FIELDS },
 ];
 
-/** A block with one text prop, bound as given, over a mocked editor. */
-function mount(bindings: BlockNode["bindings"]): EditorState {
+/**
+ * A block with one text prop, bound as given, over a mocked editor; inside a
+ * list of `inList`'s collection when given, for an item binding.
+ */
+function mount(
+  bindings: BlockNode["bindings"],
+  inList?: { collection: string; services: Partial<ContentServices> }
+): EditorState {
   registerBlocks(
     [
       {
@@ -72,18 +81,25 @@ function mount(bindings: BlockNode["bindings"]): EditorState {
     ] as never,
     { source: "binding-format-test" }
   );
+  const badge = {
+    id: "a",
+    type: "acme/badge",
+    version: 1,
+    props: {},
+    bindings,
+  } as BlockNode;
+  // The list as the engine finds an item's list: the block in its entry slot.
+  const list = {
+    id: "list",
+    type: COLLECTION_LIST_TYPE,
+    version: 1,
+    props: { collection: inList?.collection },
+    slots: { [LIST_ENTRY_SLOT]: [badge] },
+  } as BlockNode;
   const document = {
     formatVersion: 1,
     kind: "page",
-    nodes: [
-      {
-        id: "a",
-        type: "acme/badge",
-        version: 1,
-        props: {},
-        bindings,
-      } as BlockNode,
-    ],
+    nodes: [inList === undefined ? badge : list],
   } as BlockDocument;
   const editor = {
     document,
@@ -102,7 +118,10 @@ function mount(bindings: BlockNode["bindings"]): EditorState {
   render(
     <InspectorPanel
       editor={editor}
-      contentServices={{ listBindingFields: async () => SOURCES }}
+      contentServices={{
+        listBindingFields: async () => SOURCES,
+        ...inList?.services,
+      }}
     />
   );
   return editor;
@@ -203,5 +222,115 @@ describe("a bound prop's Format", () => {
       (screen.getByRole("textbox", { name: "Code" }) as HTMLInputElement).value
     ).toBe("EUR");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("refuses an empty currency code, writing nothing and saying why", async () => {
+    const editor = mount({
+      label: { $bind: "price", format: { type: "currency", currency: "EUR" } },
+    });
+    await formatMenu();
+    const code = screen.getByRole("textbox", { name: "Code" });
+    fireEvent.change(code, { target: { value: "" } });
+    fireEvent.blur(code);
+    expect(screen.getByRole("alert").textContent).toBe(
+      "A currency format needs a three-letter ISO 4217 code, such as EUR."
+    );
+    expect(code.getAttribute("aria-invalid")).toBe("true");
+    // The stored code stays the binding's: nothing is written.
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("lets a currency only picked go when its code is left empty", async () => {
+    // Picked, never stored: left empty, the menu shows again what the
+    // binding holds (no format) rather than a currency it doesn't.
+    const editor = mount({ label: { $bind: "price" } });
+    fireEvent.click(await formatMenu());
+    fireEvent.click(screen.getByRole("option", { name: "Currency" }));
+    const code = await screen.findByRole("textbox", { name: "Code" });
+    fireEvent.blur(code);
+    expect(screen.getByRole("alert").textContent).toBe(
+      "A currency format needs a three-letter ISO 4217 code, such as EUR."
+    );
+    expect((await formatMenu()).textContent).toBe("Choose a format");
+    expect(screen.queryByRole("textbox", { name: "Code" })).toBeNull();
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("writes a currency once a known code is given", async () => {
+    // The control for the two above: the same pick, a code typed.
+    const editor = mount({ label: { $bind: "price" } });
+    fireEvent.click(await formatMenu());
+    fireEvent.click(screen.getByRole("option", { name: "Currency" }));
+    const code = await screen.findByRole("textbox", { name: "Code" });
+    fireEvent.change(code, { target: { value: "usd" } });
+    fireEvent.blur(code);
+    const op = vi.mocked(editor.apply).mock.calls[0]?.[0] as BuilderOp;
+    expect(op).toMatchObject({
+      patch: {
+        bindings: {
+          label: {
+            $bind: "price",
+            format: { type: "currency", currency: "USD" },
+          },
+        },
+      },
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("is offered for a list item bound to a number, by the list's collection", async () => {
+    // A list's item is no source the picker lists: its fields are the list
+    // collection's, as the host lists that collection for a list.
+    mount(
+      { label: { $bind: "price", source: "item" } },
+      {
+        collection: "bound-entries",
+        services: {
+          listLoopCollections: async () => [
+            {
+              slug: "bound-entries",
+              label: "Blog posts",
+              singular: "Blog post",
+              fields: [],
+              readable: [
+                { name: "title", type: "text" },
+                { name: "price", label: "Price", type: "number" },
+              ],
+            },
+          ],
+        },
+      }
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Text: bound to Price of each blog post in the list",
+      })
+    ).toBeTruthy();
+    fireEvent.click(await formatMenu());
+    expect(listed()).toContain("Currency");
+  });
+
+  it("is not offered for a list item bound to text", async () => {
+    // The control for the item above: the same list, a text field.
+    mount(
+      { label: { $bind: "title", source: "item" } },
+      {
+        collection: "bound-entries",
+        services: {
+          listLoopCollections: async () => [
+            {
+              slug: "bound-entries",
+              label: "Blog posts",
+              fields: [],
+              readable: [{ name: "title", type: "text" }],
+            },
+          ],
+        },
+      }
+    );
+    await screen.findByRole("button", {
+      name: /^Text: bound to Title of each/,
+    });
+    expect(screen.queryByRole("combobox", { name: "Format" })).toBeNull();
   });
 });

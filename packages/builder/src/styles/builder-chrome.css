@@ -3464,9 +3464,11 @@
 
 /*
  * A list's chosen value stays on one line, cut with an ellipsis, rather than
- * wrapping its row to twice the height of every other ("Semibold 600").
+ * wrapping its row to twice the height of every other ("Semibold 600"). A
+ * bound prop's Format reads the same ("Set elsewhere").
  */
-.nx-style-inspector__select [data-slot="select-value"] {
+.nx-style-inspector__select [data-slot="select-value"],
+.nx-binding__format [data-slot="select-value"] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -11445,6 +11447,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 .nx-binding__fallback-label {
   color: var(--nx-muted-foreground);
   font-size: 0.75rem;
+}
+
+/* The Format menu shrinks with its column, its value cut rather than wrapped. */
+.nx-binding__format [data-slot="select-trigger"] {
+  min-width: 0;
 }
 
 /* Why a value was refused, or what an unset Format means: under its control. */

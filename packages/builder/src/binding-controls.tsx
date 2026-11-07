@@ -19,6 +19,7 @@ import {
   findNode,
   getBlock,
   type Binding,
+  type BindingFieldShape,
   type BindingFormat,
   type BlockDocument,
   type BuilderOp,
@@ -56,6 +57,7 @@ import type { UnbindAnswer } from "./composition-actions";
 import type { ContentServices } from "./content-controls";
 import { ImageBindingFallback } from "./image-binding-fallback";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
+import { useItemSource, type ItemSource } from "./item-binding-source";
 
 /** One field the picker offers, with where it is read from. */
 interface FieldOption extends ListedChoice {
@@ -301,6 +303,11 @@ export interface BindingControlProps {
   readonly disabled: boolean;
   /** Apply one op as an edit. */
   readonly onApply: (op: BuilderOp) => void;
+  /**
+   * Props emptied in the same edit as a bind: what would win over the bound
+   * prop, such as a button's entry reference over its address.
+   */
+  readonly clearsOnBind?: readonly string[] | undefined;
   /** The prop's own control, drawn while it is not bound. */
   readonly children: React.ReactNode;
 }
@@ -339,6 +346,7 @@ function BindButton({
   services,
   disabled,
   onApply,
+  clearsOnBind,
   onBound,
 }: BindingControlProps & { onBound: () => void }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
@@ -384,7 +392,8 @@ function BindButton({
               document,
               nodeId,
               prop.name,
-              bindingFor(picked, undefined)
+              bindingFor(picked, undefined),
+              clearsOnBind
             );
             if (op !== null) onApply(op);
             onBound();
@@ -439,10 +448,12 @@ function noteFor(
     switch (answer.kept) {
       case "visitor":
         return `Visitors saw an image address, not a library image, so it's kept in ${into}.`;
+      // The fallback is said where it is what visitors saw: the binding's
+      // own address, not one the field gave.
       case "fallback":
-        return `Visitors saw the fallback, an image address, so it's kept in ${into}.`;
+        return `Visitors saw the fallback's image address, so it's kept in ${into}.`;
       default:
-        return `The address given is kept in ${into}.`;
+        return `The image address given is kept in ${into}.`;
     }
   }
   switch (answer.kept) {
@@ -457,11 +468,17 @@ function noteFor(
   }
 }
 
+/** A field as the chip names it and a format judges it, wherever it was read. */
+type NamedField = Omit<BindingFieldShape, "fields"> & {
+  readonly label?: string;
+  readonly fields?: readonly NamedField[];
+};
+
 /**
  * The name a field is listed by: the host's label where it gives one ("Site
  * URL"), else its stored name as a person reads it.
  */
-function choiceLabel(field: BindingFieldChoice): string {
+function choiceLabel(field: NamedField): string {
   return field.label ?? fieldLabel(field.name);
 }
 
@@ -472,7 +489,7 @@ function choiceLabel(field: BindingFieldChoice): string {
  */
 function pathName(
   path: string,
-  fields: readonly BindingFieldChoice[] | undefined
+  fields: readonly NamedField[] | undefined
 ): string {
   const names: string[] = [];
   let level = fields;
@@ -500,32 +517,61 @@ function boundSource(
   );
 }
 
-/** The field a binding reads, named, and its source, once the sources are read. */
-function boundNames(
-  binding: Binding,
-  sources: readonly BindingFieldSource[] | "loading" | "failed"
-): { readonly field: string; readonly source: string | undefined } {
-  const found = boundSource(binding, sources);
-  return {
-    field: pathName(binding.$bind, found?.fields),
-    source: found === undefined ? undefined : sourceName(found),
-  };
+/**
+ * A source named from the binding alone, for one the host did not list: a
+ * Single with nothing saved yet, or an entry it could not read. Named from
+ * its key, so the chip still says where the field comes from.
+ */
+function unlistedSourceName(binding: Binding): string {
+  if (binding.source === "single") return fieldLabel(binding.sourceKey);
+  return binding.source === "site" ? "Site" : "This entry";
+}
+
+/** Where a binding reads, named, and that source's fields where they are read. */
+interface BoundFrom {
+  /** `undefined` only while the sources are being read. */
+  readonly name: string | undefined;
+  readonly fields: readonly NamedField[] | undefined;
 }
 
 /**
- * The field a binding reads, as the picker listed it: one step into a
- * relation or a group at most, as a path may go. `undefined` until the
- * sources are read, and for a field they don't list.
+ * Where a binding reads: a list's item from its list's collection, any other
+ * source from the host's sources, and one the host did not list from the
+ * binding itself once the sources are read.
  */
-function boundField(
+function boundFrom(
   binding: Binding,
-  sources: readonly BindingFieldSource[] | "loading" | "failed"
-): BindingFieldChoice | undefined {
+  sources: readonly BindingFieldSource[] | "loading" | "failed",
+  item: ItemSource | undefined
+): BoundFrom {
+  if (item !== undefined) return { name: item.name, fields: item.fields };
+  const found = boundSource(binding, sources);
+  if (found !== undefined) {
+    return { name: sourceName(found), fields: found.fields };
+  }
+  return {
+    name: sources === "loading" ? undefined : unlistedSourceName(binding),
+    fields: undefined,
+  };
+}
+
+/** The field a binding reads, named, and its source. */
+function boundNames(
+  binding: Binding,
+  from: BoundFrom
+): { readonly field: string; readonly source: string | undefined } {
+  return { field: pathName(binding.$bind, from.fields), source: from.name };
+}
+
+/**
+ * The field a binding reads, as its source lists it: one step into a
+ * relation or a group at most, as a path may go. `undefined` until the
+ * source's fields are read, and for a field they don't list.
+ */
+function boundField(binding: Binding, from: BoundFrom): NamedField | undefined {
   const [first, inner, ...rest] = binding.$bind.split(".");
   if (rest.length > 0) return undefined;
-  const top = boundSource(binding, sources)?.fields.find(
-    field => field.name === first
-  );
+  const top = from.fields?.find(field => field.name === first);
   if (inner === undefined) return top;
   return top?.fields?.find(field => field.name === inner);
 }
@@ -577,8 +623,8 @@ function BoundValueRows({
 }: {
   prop: EditableProp;
   binding: Binding;
-  /** The field the binding reads, once the sources are read. */
-  field: BindingFieldChoice | undefined;
+  /** The field the binding reads, once its source's fields are read. */
+  field: NamedField | undefined;
   services: ContentServices | undefined;
   disabled: boolean;
   /** The id of the prop's name, which each row is about. */
@@ -668,6 +714,7 @@ function BoundField({
   services,
   disabled,
   onApply,
+  clearsOnBind,
   onUnbound,
 }: Omit<BindingControlProps, "binding" | "children"> & {
   binding: Binding;
@@ -677,8 +724,10 @@ function BoundField({
   const [changing, setChanging] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const sources = useBindingSources(services, true);
+  const item = useItemSource(binding, document, nodeId, services);
+  const from = boundFrom(binding, sources, item);
   const name = propLabel(prop.name, prop.schema);
-  const names = boundNames(binding, sources);
+  const names = boundNames(binding, from);
   // Where "Open source" leads: the host's answer, absent where it has none.
   const sourceHref = services?.sourceHref?.(binding);
   // The whole of it, on the tooltip and in the accessible name: the chip
@@ -686,7 +735,7 @@ function BoundField({
   const whole =
     names.source === undefined
       ? names.field
-      : `${names.field} of ${names.source.replace(/^This /, "this ")}`;
+      : `${names.field} of ${names.source.replace(/^(This|Each) /, word => word.toLowerCase())}`;
   const unbind = async (): Promise<void> => {
     const plan = await services?.planUnbind?.({
       document,
@@ -776,7 +825,8 @@ function BoundField({
                   document,
                   nodeId,
                   prop.name,
-                  bindingFor(picked, binding)
+                  bindingFor(picked, binding),
+                  clearsOnBind
                 );
                 if (op !== null) onApply(op);
                 setChanging(false);
@@ -787,7 +837,7 @@ function BoundField({
         <BoundValueRows
           prop={prop}
           binding={binding}
-          field={boundField(binding, sources)}
+          field={boundField(binding, from)}
           services={services}
           disabled={disabled}
           labelId={labelId}
