@@ -10,6 +10,8 @@
 import {
   conditionIssues,
   DEFAULT_LIMITS,
+  placementGatesOf,
+  revealConditioned,
   resolveComponentInstances,
   isPlainRecord,
   walkNodes,
@@ -18,6 +20,7 @@ import {
   type Condition,
   type DefinitionsById,
   type DocumentLimits,
+  type NodeVisibility,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
@@ -111,6 +114,56 @@ export function uncheckedConditionIds(
 }
 
 /**
+ * A composed tree once for each depth of placement gates it carries. In the
+ * k-th, a block carrying more than k gates holds the k-th as its own
+ * visibility and every other block holds none, so each gate a placement
+ * nested in a component put on a block is judged as conditions are, where
+ * the block is drawn, inside the lists around it, and by the id the canvas
+ * draws it with.
+ */
+function placementGatePasses(nodes: readonly BlockNode[]): BlockNode[][] {
+  const passes: BlockNode[][] = [];
+  for (let depth = 0; ; depth += 1) {
+    const found = { any: false };
+    const pass = withGateAt(nodes, depth, found);
+    if (!found.any) return passes;
+    passes.push(pass);
+  }
+}
+
+/** A forest with each block's `depth`-th placement gate as its visibility. */
+function withGateAt(
+  nodes: readonly BlockNode[],
+  depth: number,
+  found: { any: boolean }
+): BlockNode[] {
+  return nodes.map(node => {
+    const gate = isPlainRecord(node.visibility)
+      ? placementGatesOf(node.visibility)[depth]
+      : undefined;
+    const next: BlockNode = { ...node };
+    if (gate === undefined) {
+      delete next.visibility;
+    } else {
+      found.any = true;
+      // As the placement stored it, an unreadable one included, which the
+      // judgement marks as it marks one stored on a block.
+      next.visibility = gate as NodeVisibility;
+    }
+    if (isPlainRecord(node.slots)) {
+      const slots: Record<string, BlockNode[]> = {};
+      for (const [name, children] of Object.entries(node.slots)) {
+        if (Array.isArray(children)) {
+          slots[name] = withGateAt(children, depth, found);
+        }
+      }
+      next.slots = slots;
+    }
+    return next;
+  });
+}
+
+/**
  * {@link uncheckedConditionIds} for a document, as an editor's services list
  * the collections: its own blocks, and with `definitions` the blocks its
  * placed components hold too, judged in the tree composed as the canvas
@@ -143,20 +196,26 @@ export function useConditionsUnchecked(
       maxNodes
     );
     if (definitions === undefined || definitions.size === 0) return own;
-    const composed = resolveComponentInstances(document, definitions, {
-      conditioned: "carry",
-      // Every limit the canvas composes under, so a site that raises the
-      // depth has its deeper blocks judged as they are drawn.
-      ...(limits === undefined ? {} : { limits }),
-    }).document;
+    // The page's own conditions lifted, as the canvas composes it, so a
+    // composed block holds only what its definition gave it.
+    const composed = resolveComponentInstances(
+      revealConditioned(document),
+      definitions,
+      {
+        conditioned: "carry",
+        // Every limit the canvas composes under, so a site that raises the
+        // depth has its deeper blocks judged as they are drawn.
+        ...(limits === undefined ? {} : { limits }),
+      }
+    ).document;
+    const judged = (nodes: readonly BlockNode[]) => [
+      ...uncheckedConditionIds(nodes, collections, entryCollection, maxNodes),
+    ];
     return new Set([
       ...own,
-      ...uncheckedConditionIds(
-        composed.nodes,
-        collections,
-        entryCollection,
-        maxNodes
-      ),
+      ...judged(composed.nodes),
+      // And each gate a placement nested in a component put on its roots.
+      ...placementGatePasses(composed.nodes).flatMap(judged),
     ]);
   }, [document, collections, entryCollection, maxNodes, limits, definitions]);
 }

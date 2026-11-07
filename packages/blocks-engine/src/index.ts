@@ -626,6 +626,7 @@ export { authoredText, isAuthoredText } from "./authored-text";
 export {
   declaresNoMarkup,
   isConditionGated,
+  placementGatesOf,
   storedVisibilityOf,
 } from "./visibility";
 // Per-device visibility as an author works with it: each device's resolved

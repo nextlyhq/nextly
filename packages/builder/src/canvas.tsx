@@ -42,8 +42,6 @@ import {
   tokenIdentity,
   walkNodes,
   DEFAULT_LIMITS,
-  componentReachIn,
-  componentReferencesFrom,
   resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
@@ -86,7 +84,7 @@ import {
   CanvasRegionFrame,
   type CanvasRegion,
 } from "./canvas-regions";
-import { gatedAsStored } from "./condition-gate";
+import { gatedAsDrawn, gatedAsStored } from "./condition-gate";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import {
@@ -190,13 +188,14 @@ function conditionMarksOf(
   composed: { definitions?: DefinitionsById; limits?: DocumentLimits }
 ): Map<string, ConditionMark> {
   const marks = new Map<string, ConditionMark>();
-  const mark = (node: BlockNode): void => {
-    if (marks.has(node.id) || !gatedAsStored(node)) return;
+  const markIf = (node: BlockNode, gated: boolean): void => {
+    if (marks.has(node.id) || !gated) return;
     marks.set(
       node.id,
       unchecked?.has(node.id) === true ? "unchecked" : "conditional"
     );
   };
+  const mark = (node: BlockNode): void => markIf(node, gatedAsStored(node));
   const bound = {
     maxNodes: composed.limits?.maxNodes ?? DEFAULT_LIMITS.maxNodes,
   };
@@ -205,61 +204,48 @@ function conditionMarksOf(
   walkNodes(document.nodes, mark, bound);
   // And the blocks a placed component's definition holds, by the ids the
   // composed tree gives them, which the canvas draws them with: composed as
-  // the renderer composes, each conditioned placement expanded too.
+  // the renderer composes, each conditioned placement expanded too. The
+  // page's own conditions are lifted first, as the canvas draws the page, so
+  // what a composed block carries is its definition's: its own conditions,
+  // and the gates of the placements nested inside a component that were
+  // expanded into it, which only the composed tree still holds.
   if (composed.definitions !== undefined && composed.definitions.size > 0) {
     // Under the limits the canvas renders with, so a page the site allows
     // past the default is composed here as it is drawn.
-    const tree = resolveComponentInstances(document, composed.definitions, {
-      conditioned: "carry",
-      ...(composed.limits === undefined ? {} : { limits: composed.limits }),
-    }).document;
-    walkNodes(tree.nodes, mark, bound);
+    const tree = resolveComponentInstances(
+      revealConditioned(document),
+      composed.definitions,
+      {
+        conditioned: "carry",
+        ...(composed.limits === undefined ? {} : { limits: composed.limits }),
+      }
+    ).document;
+    walkNodes(tree.nodes, node => markIf(node, gatedAsDrawn(node)), bound);
   }
   return marks;
 }
 
 /**
- * The components one document reaches: those its nodes store, those its
- * variants install, and those a placement's variant or instance overrides
- * repoint a placed definition's nested placement to, which the renderer
- * expands in place of the stored id. Asked of the engine's own survey, so the
- * canvas lifts the definitions the renderer actually draws.
- */
-function componentsReachedFrom(
-  document: unknown,
-  definitions: DefinitionsById,
-  maxNodes: number
-): string[] {
-  const reach = componentReachIn(document, maxNodes);
-  const ids = [...reach.ids];
-  for (const placement of reach.placements) {
-    const placed = definitions.get(placement.target);
-    if (placed === undefined) continue;
-    ids.push(...componentReferencesFrom(placed, placement.node, maxNodes).ids);
-  }
-  return ids;
-}
-
-/**
  * The definitions a page reaches, the components it places and those they
  * place, with each one's conditions lifted so the canvas draws its
- * conditioned blocks; every other definition as it is. Only the reached ones
- * are walked, so a large component library costs nothing on a page that
- * places none of it.
+ * conditioned blocks; every other definition as it is. The reached ones are
+ * those the resolver reads composing the page as the canvas does, so a
+ * component a variant or an override selects, at any depth and through any
+ * setting a placement rewrites, is lifted exactly when it is drawn. Only
+ * those are walked, so a large component library costs nothing on a page
+ * that places none of it.
  */
 function revealedDefinitions(
   document: BlockDocument,
   definitions: DefinitionsById,
-  maxNodes: number = DEFAULT_LIMITS.maxNodes
+  limits: DocumentLimits | undefined
 ): DefinitionsById {
-  const reached = new Set<string>();
-  const queue = componentsReachedFrom(document, definitions, maxNodes);
-  for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
-    const definition = definitions.get(id);
-    if (reached.has(id) || definition === undefined) continue;
-    reached.add(id);
-    queue.push(...componentsReachedFrom(definition, definitions, maxNodes));
-  }
+  const reached = new Set(
+    resolveComponentInstances(document, definitions, {
+      conditioned: "carry",
+      ...(limits === undefined ? {} : { limits }),
+    }).referenced
+  );
   if (reached.size === 0) return definitions;
   const next = new Map(definitions);
   for (const id of reached) {
@@ -285,11 +271,19 @@ function conditionMarkFor(
   if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
   const id = element.getAttribute(NODE_ID_ATTRIBUTE);
   const own = id !== null && id !== address ? marks.get(id) : undefined;
-  if (own !== undefined) return { mark: own, own: true };
   const placed = isOutermostForAddress(element, address, container)
     ? marks.get(address)
     : undefined;
-  return placed === undefined ? undefined : { mark: placed, own: false };
+  if (own === undefined) {
+    return placed === undefined ? undefined : { mark: placed, own: false };
+  }
+  // A block with conditions of its own that is also the root of a
+  // conditioned placement is drawn only when both hold, so its one badge says
+  // "Can't be checked" when either can't be.
+  return {
+    mark: placed === "unchecked" ? "unchecked" : own,
+    own: true,
+  };
 }
 
 /**
@@ -2075,7 +2069,7 @@ function useDrawnPage({
             definitions: revealedDefinitions(
               document,
               rendered.definitions,
-              rendered.limits?.maxNodes
+              rendered.limits
             ),
           },
     [rendered, document]

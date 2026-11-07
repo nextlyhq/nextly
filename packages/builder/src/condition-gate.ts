@@ -20,3 +20,12 @@ import {
 export function gatedAsStored(node: BlockNode): boolean {
   return isConditionGated({ visibility: storedVisibilityOf(node.visibility) });
 }
+
+/**
+ * Whether a block of a composed tree is drawn only for some visitors: its own
+ * conditions, or the gates of the placements it was expanded from, which only
+ * the tree a renderer composes holds and the page judges with the rest.
+ */
+export function gatedAsDrawn(node: BlockNode): boolean {
+  return isConditionGated(node);
+}

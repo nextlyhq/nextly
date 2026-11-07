@@ -106,6 +106,53 @@ describe("the conditions the canvas can't check", () => {
     expect(control.current.size).toBe(0);
   });
 
+  it("include the blocks a placement nested in a component gates in a shape nothing can read", () => {
+    // "frame" places "promo" with conditions stored as a flat list; only the
+    // composed tree carries them, on promo's block.
+    const nested: DefinitionsById = new Map([
+      [
+        "frame",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "nested",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "promo" },
+              visibility: { conditions: [{ field: "title", op: "exists" }] },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [{ id: "leaf", type: "core/text", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const framed = {
+      ...page,
+      nodes: [
+        {
+          id: "card",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "frame" },
+        },
+      ],
+    } as BlockDocument;
+    const { result } = renderHook(() =>
+      useConditionsUnchecked(framed, undefined, undefined, nested)
+    );
+    expect(result.current.size).toBe(1);
+    expect(result.current.has("card")).toBe(false);
+  });
+
   it("include none of them without the definitions, as before", () => {
     const { result } = renderHook(() =>
       useConditionsUnchecked(page, undefined)

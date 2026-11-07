@@ -1725,6 +1725,207 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("conditional");
   });
 
+  it("draws a conditioned block of a component a nested placement's rewritten variant selects", async () => {
+    // "outer" exposes its nested placement's variant; the page picks "alt",
+    // and "mid"'s "alt" variant repoints its own nested placement to "gated".
+    // No stored id names "gated": only the settings the resolver rewrites do.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const component = (nodes: unknown[], envelope: object = {}) =>
+      ({
+        formatVersion: 1,
+        kind: "component",
+        nodes,
+        ...envelope,
+      }) as unknown as BlockDocument;
+    const placing = (id: string, componentId: string) => ({
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    });
+    const definitions: DefinitionsById = new Map([
+      [
+        "outer",
+        component([placing("inner", "mid")], {
+          exposed: [
+            {
+              id: "look",
+              label: "Look",
+              nodeId: "inner",
+              propPath: "variant",
+              type: "select",
+            },
+          ],
+        }),
+      ],
+      [
+        "mid",
+        component([placing("slot", "plain")], {
+          exposed: [
+            {
+              id: "pick",
+              label: "Which",
+              nodeId: "slot",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+          variants: { alt: { label: "Alt", overrides: { pick: "gated" } } },
+        }),
+      ],
+      [
+        "plain",
+        component([{ id: "stored", type: "acme/leaf", version: 1, props: {} }]),
+      ],
+      [
+        "gated",
+        component([
+          {
+            id: "inner-leaf",
+            type: "acme/leaf",
+            version: 1,
+            props: {},
+            visibility: { conditions: vip },
+          },
+        ]),
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "outer", overrides: { look: "alt" } },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("conditional");
+  });
+
+  it("marks the root of a placement that can't be checked so, though the root has valid conditions of its own", async () => {
+    // Visitors see the root only when both hold; the placement's can't be
+    // checked, so neither can the block.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "root",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { conditions: vip },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "promo" },
+                visibility: { conditions: vip },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+        conditionsUnchecked={new Set(["card"])}
+      />
+    );
+    await act(async () => undefined);
+
+    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("unchecked");
+  });
+
+  it("marks the blocks a conditioned placement nested in a component expands to", async () => {
+    // "frame" places "promo" with conditions of its own; once composed, only
+    // the drawn tree carries that gate, on promo's block.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "frame",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "nested",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "promo" },
+              visibility: { conditions: vip },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+      [
+        "promo",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [{ id: "leaf", type: "acme/leaf", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "frame" },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    // Drawn, and badged, where it used to be drawn without one.
+    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("conditional");
+  });
+
   it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {
     /*
      * A placement's parts carry a re-minted node id plus the placement's
