@@ -33,7 +33,6 @@ import {
   type PluginCollectionTransaction,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
-import type { WhereFilter } from "nextly";
 import { z } from "nextly/zod";
 
 import {
@@ -147,10 +146,18 @@ export async function runTemplateAction(
   }
 }
 
+/**
+ * The where filter the Direct API's `find` takes, read off the plugin SDK's
+ * own handle to it, so the plugin names no core query type.
+ */
+type FindWhere = NonNullable<
+  Parameters<Awaited<ReturnType<typeof getCachedNextly>>["find"]>[0]["where"]
+>;
+
 /** One stored template found as the system, in any state, or `null`. */
 async function templateWhere(
   templates: string,
-  where: WhereFilter,
+  where: FindWhere,
   status: "all" | "published"
 ): Promise<Record<string, unknown> | null> {
   const found = await (
