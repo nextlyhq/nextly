@@ -226,7 +226,7 @@ async function documentRows(
  * first time only (`shared` holds those judged).
  */
 async function hostRows(
-  { host, maybeShared }: HostCandidate,
+  { host, access, maybeShared }: HostCandidate,
   shared: Set<string>,
   deps: Pick<BindingReportDeps, "shapesOf" | "limits">,
   reading: DocumentReading
@@ -234,7 +234,17 @@ async function hostRows(
   readonly rows: BindingReportRow[];
   readonly incomplete: boolean;
 }> {
-  const read = await reading.read(host);
+  // A host searched row by row (a blocks field inside a repeater) is not one
+  // document the report can point an author at; it is left out.
+  if (access === "scan") return { rows: [], incomplete: false };
+  let read;
+  try {
+    read = await reading.read(host);
+  } catch {
+    // A value the stored-field reader cannot reach is no document to judge,
+    // and asking again would fail the same way.
+    return { rows: [], incomplete: false };
+  }
   const value = valueOf(read.draft) ?? valueOf(read.published);
   if (value === undefined) return { rows: [], incomplete: false };
   const field = host.path.join(".");
