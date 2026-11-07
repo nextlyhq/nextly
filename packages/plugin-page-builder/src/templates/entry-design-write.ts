@@ -99,29 +99,58 @@ function refuseUnguardedCollection(
   data: Readonly<Record<string, unknown>>,
   original: Readonly<Record<string, unknown>> | null
 ): void {
-  const guarded = context?.[GUARDED_COLLECTIONS_CONTEXT];
-  if (typeof guarded !== "object" || guarded === null) return;
-  const letThrough = guarded as Readonly<Record<string, unknown>>;
+  const letThrough = guardedCollectionsOf(context);
+  if (letThrough === undefined) return;
   for (const field of TEMPLATE_COLLECTION_FIELDS) {
     const named = namedCollection(data[field]);
-    if (original !== null && named === namedCollection(original[field])) {
-      continue;
+    if (!collectionStillGuarded(letThrough, field, named, original)) {
+      // Refused rather than judged here: see `GUARDED_COLLECTIONS_CONTEXT`.
+      throw unguardedCollectionRefusal(field, named);
     }
-    if (
-      Object.prototype.hasOwnProperty.call(letThrough, field) &&
-      letThrough[field] === named
-    ) {
-      continue;
-    }
-    // Refused rather than judged here: see `GUARDED_COLLECTIONS_CONTEXT`.
-    const message =
-      named === null
-        ? "A hook emptied the collection this template names after the collection was checked."
-        : `A hook changed the collection this template names to "${named}" after the collection was checked. Set it on the template itself.`;
-    throw field === TEMPLATE_COLLECTION_FIELD
-      ? templateCollectionRefusal(message)
-      : designShapeRefusal({ path: field, message });
   }
+}
+
+/** What the guard recorded letting through, or undefined where it saw no write. */
+function guardedCollectionsOf(
+  context: Readonly<Record<string, unknown>> | undefined
+): Readonly<Record<string, unknown>> | undefined {
+  const guarded = context?.[GUARDED_COLLECTIONS_CONTEXT];
+  return typeof guarded === "object" && guarded !== null
+    ? (guarded as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+/**
+ * Whether `field` may commit naming `named`: an update that leaves it as it
+ * was, or the collection the guard let through for it.
+ */
+function collectionStillGuarded(
+  letThrough: Readonly<Record<string, unknown>>,
+  field: string,
+  named: string | null,
+  original: Readonly<Record<string, unknown>> | null
+): boolean {
+  if (original !== null && named === namedCollection(original[field])) {
+    return true;
+  }
+  return (
+    Object.prototype.hasOwnProperty.call(letThrough, field) &&
+    letThrough[field] === named
+  );
+}
+
+/** The refusal of `field` newly naming `named` after the guard had judged it. */
+function unguardedCollectionRefusal(
+  field: string,
+  named: string | null
+): ReturnType<typeof templateCollectionRefusal> {
+  const message =
+    named === null
+      ? "A hook emptied the collection this template names after the collection was checked."
+      : `A hook changed the collection this template names to "${named}" after the collection was checked. Set it on the template itself.`;
+  return field === TEMPLATE_COLLECTION_FIELD
+    ? templateCollectionRefusal(message)
+    : designShapeRefusal({ path: field, message });
 }
 
 /** Refuse a write whose shape has `problem`, when it has one. */
