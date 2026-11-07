@@ -190,6 +190,29 @@ describe("the loader, in order and kept out of the admin", () => {
     expect(errors.some(message => message.includes("navigation"))).toBe(true);
   });
 
+  it("keeps the paths it skips when code removes the data blocks", async () => {
+    const errors: string[] = [];
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", error => errors.push(error.message));
+    const window = await pageWith(
+      "https://acme.example/pricing",
+      [
+        {
+          tag: "script",
+          attrs: {},
+          text: "document.querySelectorAll('script[type=\"application/json\"]').forEach(function (block) { block.remove(); })",
+        },
+      ],
+      virtualConsole
+    );
+    expect(
+      window.document.querySelectorAll('script[type="application/json"]')
+    ).toHaveLength(0);
+    // The guard read /admin before the code ran, so moving in still reloads.
+    window.history.pushState({}, "", "/admin/collections/pages");
+    expect(errors.some(message => message.includes("navigation"))).toBe(true);
+  });
+
   it("loads a public page afresh when the admin moves out to it within the app", async () => {
     const errors: string[] = [];
     const virtualConsole = new VirtualConsole();

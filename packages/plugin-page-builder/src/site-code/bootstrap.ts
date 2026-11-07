@@ -103,18 +103,18 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
     });
     return paths;
   }
-  function skipped() {
-    return skipList().some(function (path) {
+  function skippedIn(paths) {
+    return paths.some(function (path) {
       return location.pathname === path || location.pathname.indexOf(path + "/") === 0;
     });
   }
-  function guardNavigation() {
+  function guardNavigation(paths) {
     var root = document.documentElement;
     if (root.hasAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard")) return;
     root.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard", "");
-    var wasSkipped = skipped();
+    var wasSkipped = skippedIn(paths);
     function leaveIfSkipped() {
-      if (skipped() !== wasSkipped) location.reload();
+      if (skippedIn(paths) !== wasSkipped) location.reload();
     }
     ["pushState", "replaceState"].forEach(function (name) {
       var original = history[name];
@@ -138,8 +138,11 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
   }
   function start() {
     if (framedBySite() || document.querySelector("[${CANVAS_MOUNT_ATTRIBUTE}]")) return;
-    guardNavigation();
-    if (skipped()) return;
+    // Read once the page has parsed, before any code starts, so code that
+    // later edits or removes the data blocks never changes where it may run.
+    var paths = skipList();
+    guardNavigation(paths);
+    if (skippedIn(paths)) return;
     var root = document.documentElement;
     root.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-" + data.slot, "started");
     var into = data.slot === "head" ? document.head : document.body;
