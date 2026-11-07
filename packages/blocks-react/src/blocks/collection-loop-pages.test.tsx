@@ -372,11 +372,13 @@ describe("a named query's list split into pages, rendered", () => {
     });
     expect(titles(authored)).toEqual([]);
     expect(authored.querySelector("nav")).toBeNull();
-    expect(
-      authored.querySelector("[data-nx-list-diagnostic]")?.textContent
-    ).toContain(
+    const note =
+      authored.querySelector("[data-nx-list-diagnostic]")?.textContent ?? "";
+    expect(note).toContain(
       "Counted posts doesn't count its entries, so this list can't be split into pages."
     );
+    // A refused setting, not a failed read: the note doesn't say otherwise.
+    expect(note).not.toContain("couldn't load");
     expect(failures.map(failure => failure.code)).toEqual(["uncounted"]);
     // A visitor sees the empty state alone.
     const visited = await drawn(page(list("news", NAMED_NEWS)), {

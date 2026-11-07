@@ -2450,6 +2450,38 @@ async function readSite(
   budget: QueryBudget,
   window: number | false | undefined
 ): Promise<BlocksSiteSettings | undefined> {
+  // One read per page request: the bindings, the lists' zone and a named
+  // query's day all ask the same question, and a request holds one budget,
+  // so the first ask claims the read and the rest share its answer.
+  const key = cacheScope ?? "";
+  let asked = siteReadsByRequest.get(budget);
+  if (asked === undefined) {
+    asked = new Map();
+    siteReadsByRequest.set(budget, asked);
+  }
+  const known = asked.get(key);
+  if (known !== undefined) return await known;
+  const reading = readSiteOnce(from, cacheScope, budget, window);
+  asked.set(key, reading);
+  return await reading;
+}
+
+/**
+ * The site-settings reads a page request has made, by its query budget (one
+ * per request) and cache scope: dropped with the request's budget.
+ */
+const siteReadsByRequest = new WeakMap<
+  QueryBudget,
+  Map<string, Promise<BlocksSiteSettings | undefined>>
+>();
+
+/** One read of the site settings, claimed from `budget`. */
+async function readSiteOnce(
+  from: PublicSiteSettingsSource | undefined,
+  cacheScope: string | undefined,
+  budget: QueryBudget,
+  window: number | false | undefined
+): Promise<BlocksSiteSettings | undefined> {
   if (from instanceof ProcessSiteSettings) warnOfStandIn(from);
   if (!budget.take()) return undefined;
   try {

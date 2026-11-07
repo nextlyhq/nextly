@@ -646,7 +646,10 @@ function failed(
     failed: true,
     diagnostic: {
       kind: "query-failed",
-      message: NAMED_QUERY_TEXT.runFailed(detail),
+      // A query that doesn't count is a setting refused, not a read that
+      // failed: its own words say what to change, and nothing failed to load.
+      message:
+        code === "uncounted" ? detail : NAMED_QUERY_TEXT.runFailed(detail),
       // Offered to copy only where the words name it, as a thrown error's do.
       ...(detail.includes(ref) ? { ref } : {}),
     },
