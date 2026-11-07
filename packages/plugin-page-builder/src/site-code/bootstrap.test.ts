@@ -130,6 +130,47 @@ describe("the loader, in order and kept out of the admin", () => {
     expect(window.ran).toEqual(["library", "object"]);
   });
 
+  it("finishes the head's code before the body's starts", async () => {
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {
+            src: "data:text/javascript,window.ran=(window.ran||[]).concat('head library')",
+          },
+        },
+      ],
+    });
+    const body = JSON.stringify({
+      slot: "body",
+      skip: ["/admin"],
+      entries: [
+        {
+          tag: "script",
+          attrs: {},
+          text: "window.ran = (window.ran || []).concat('body')",
+        },
+      ],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script><script>${SITE_CODE_BOOTSTRAP}</script></head><body><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="body">${body}</script><script>${SITE_CODE_BOOTSTRAP}</script></body></html>`,
+      {
+        url: "https://acme.example/",
+        runScripts: "dangerously",
+        resources: "usable",
+      }
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    // Each loader on its own would start the body's script while the head's
+    // library is still loading.
+    expect((dom.window as unknown as { ran?: string[] }).ran).toEqual([
+      "head library",
+      "body",
+    ]);
+  });
+
   it("loads the admin afresh when the page moves into it within the app", async () => {
     const errors: string[] = [];
     const virtualConsole = new VirtualConsole();
