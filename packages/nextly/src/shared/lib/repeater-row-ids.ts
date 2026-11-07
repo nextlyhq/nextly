@@ -49,6 +49,7 @@ import {
 } from "./password-fields";
 import { declaresOwnId } from "../../collections/fields/repeater-row-identity";
 
+import { rowId } from "./denied-change";
 import { sameApartFromIds } from "./same-apart-from-ids";
 
 /** What one walk carries through every level. */
@@ -203,12 +204,12 @@ function assignRows(
   // another row of the list names, wherever in the list that row is.
   const carried = new Set<string>();
   for (const row of rows) {
-    const id = rowIdOf(row);
+    const id = rowId(row);
     if (id !== undefined) carried.add(id);
   }
   const storedById = new Map<string, Record<string, unknown>>();
   for (const storedRow of previous) {
-    const id = rowIdOf(storedRow);
+    const id = rowId(storedRow);
     if (id !== undefined && isPlainRecord(storedRow) && !storedById.has(id)) {
       storedById.set(id, storedRow);
     }
@@ -245,7 +246,7 @@ function rowIdentity(
     newId: () => string;
   }
 ): { id: string; partner: Record<string, unknown> | undefined } {
-  const given = rowIdOf(row);
+  const given = rowId(row);
   if (given !== undefined) {
     // A repeat names a row the list already has, so this one is a copy.
     if (list.used.has(given)) return { id: list.newId(), partner: undefined };
@@ -253,7 +254,7 @@ function rowIdentity(
   }
   // Compared before anything below rewrites the row's nested ids.
   const atIndex = previous[index];
-  const storedId = rowIdOf(atIndex);
+  const storedId = rowId(atIndex);
   if (
     storedId !== undefined &&
     isPlainRecord(atIndex) &&
@@ -318,22 +319,15 @@ function storedInstanceFor(
   index: number,
   storedList: readonly unknown[]
 ): Record<string, unknown> | undefined {
-  const id = rowIdOf(instance);
+  const id = rowId(instance);
   if (id !== undefined) {
-    const match = storedList.find(stored => rowIdOf(stored) === id);
+    const match = storedList.find(stored => rowId(stored) === id);
     return isPlainRecord(match) ? match : undefined;
   }
   const atIndex = storedList[index];
   return isPlainRecord(atIndex) &&
-    rowIdOf(atIndex) === undefined &&
+    rowId(atIndex) === undefined &&
     sameApartFromIds(instance, atIndex)
     ? atIndex
-    : undefined;
-}
-
-/** A row's own id: a non-empty string, or none. */
-function rowIdOf(row: unknown): string | undefined {
-  return isPlainRecord(row) && typeof row.id === "string" && row.id !== ""
-    ? row.id
     : undefined;
 }

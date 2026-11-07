@@ -23,7 +23,7 @@ import { systemColumnNames } from "../../lib/system-columns";
 import { addressableFields } from "../addressable-fields";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
-import { rowPairing } from "./denied-change";
+import { rowId, rowPairing } from "./denied-change";
 import { sameApartFromIds } from "./same-apart-from-ids";
 
 /**
@@ -832,7 +832,7 @@ export function sameInstance(
 
 /** Whether a row carries an id of its own. */
 function hasRowId(row: unknown): boolean {
-  return isPlainRecord(row) && typeof row.id === "string";
+  return rowId(row) !== undefined;
 }
 
 /** A stored value, parsed where the dialect holds it as JSON text. */

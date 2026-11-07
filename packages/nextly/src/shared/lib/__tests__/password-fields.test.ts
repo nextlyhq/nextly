@@ -435,6 +435,14 @@ describe("carryStoredPasswords", () => {
       );
     });
 
+    it("reads an empty id as no id, so the row's password is never dropped", () => {
+      // An empty id names no row: unchanged, the row keeps its password by
+      // place; changed, it is refused like any row sent without its id.
+      const { rows } = carried([{ id: "", label: "a" }, { id: "b" }]);
+      expect(rows.map(row => row.pw)).toEqual([HASH_A, HASH_B]);
+      expect(() => carried([{ id: "", label: "edited" }])).toThrow();
+    });
+
     it("keeps everything else working without ids", () => {
       // A row sending its own password keeps no stored one: nothing to guess.
       expect(carried([{ label: "x", pw: "new-secret" }]).rows[0]?.pw).toBe(
