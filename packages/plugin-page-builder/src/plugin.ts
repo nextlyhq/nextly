@@ -288,6 +288,10 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import {
+  designUnderWhere,
+  registerEntryDesignCascade,
+} from "./templates/entry-design-cascade";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
@@ -1878,8 +1882,47 @@ export const pageBuilder = (
           }
         },
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
+        // Read as the system and in any state: whether the entry exists is
+        // the question, and who may see it is the action's to ask.
+        entryExists: async (collection, id) => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as {
+            findByID(args: Record<string, unknown>): Promise<unknown>;
+          };
+          try {
+            const row = await nextly.findByID({
+              collection,
+              id,
+              overrideAccess: true,
+              status: "all",
+              depth: 0,
+            });
+            return typeof row === "object" && row !== null;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return false;
+            throw error;
+          }
+        },
       };
       registerTemplateGuard(ctx, templateGuard);
+      // An entry's own design is deleted with its entry, in the delete's
+      // transaction.
+      registerEntryDesignCascade(ctx.hooks, {
+        templates,
+        ownCollections: () => new Set(Object.values(ctx.self.collections)),
+        designUnder: async key => {
+          const found = await ctx.services.ownCollections.listEntries(
+            templates,
+            { where: designUnderWhere(key), pagination: { limit: 1 }, depth: 0 }
+          );
+          const id = (found.data[0] as { id?: unknown } | undefined)?.id;
+          return typeof id === "string" || typeof id === "number"
+            ? String(id)
+            : null;
+        },
+        deleteInTransaction: (tx, slug, id) =>
+          ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
+      });
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
