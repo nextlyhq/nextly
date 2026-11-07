@@ -28,6 +28,7 @@ import { BUILDER_VIEW_PATH } from "../builder-view";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
   entryDesignPath,
+  entryDesignsForEntriesPath,
   entryDesignsPath,
   entryDesignsPathForTemplate,
   type EntryDesignItem,
@@ -69,6 +70,23 @@ export function useEntryDesign(
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: entryDesignPath(collection, entryId),
     enabled: collection !== "" && entryId !== "",
+    staleTime: 0,
+  });
+}
+
+/**
+ * The own designs of some of `collection`'s entries, answered by their keys
+ * in one request: the rows a list has on screen, whose designs may lie past
+ * the capped list. Held while no entry is named.
+ */
+export function useEntriesDesigns(
+  collection: string,
+  entries: readonly string[]
+): PluginRouteRead<EntryDesignsResponse> {
+  return usePluginRoute<EntryDesignsResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: entryDesignsForEntriesPath(collection, entries),
+    enabled: collection !== "" && entries.length > 0,
     staleTime: 0,
   });
 }
@@ -225,6 +243,11 @@ export const OWN_DESIGN_WORDS = {
   keep: "Keep it",
   removeConfirm: "Remove own design",
   removing: "Removing…",
+  /** Said while the removal's dry run is out. */
+  removeJudging: "Checking whether it can be removed…",
+  removeJudgeFailed: "Whether it can be removed couldn't be checked.",
+  removeRefused: "This can't be removed.",
+  removeFailed: "The own design couldn't be removed.",
   removedToast: (template: string | null): string =>
     template === null
       ? "Own design removed"
