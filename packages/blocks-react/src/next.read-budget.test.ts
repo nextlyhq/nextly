@@ -1656,3 +1656,55 @@ describe("a list's images, on a route that reads each by its own id", () => {
     expect(html).toContain("/own/image-2.jpg");
   });
 });
+
+describe("a list's reads ahead, stopped where a step reads nothing ahead", () => {
+  const linkThenAuthor = () =>
+    pageOf([
+      postsList("list", 1, [
+        {
+          id: "more",
+          type: "core/button",
+          version: 1,
+          props: { label: "Read", entryCollection: "posts" },
+          bindings: { entryId: { $bind: "id", source: "item" } },
+        },
+        // After the link on the page, through a relation.
+        itemHeading("author", "author.name", "No author"),
+      ]),
+    ]);
+
+  it("on a route with its own entry paths, the link keeps its read before the relation", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, linkThenAuthor());
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      mediaCollection: "images",
+      // The site's own resolver, which takes one reference and reads none
+      // ahead.
+      resolveEntryPath: (_collection: string, id: string) =>
+        Promise.resolve(`/own/${id}`),
+      // The entries, then the link's one read.
+      maxQueries: 1 + 1,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const html = await renderToHtml(element);
+    expect(html).toContain('href="/own/post-1"');
+    expect(html).toContain(">No author<");
+  });
+
+  it("in the editor's count, a link batch it cannot afford stops the reads ahead", async () => {
+    // The entries, then exactly the link's own three reads: too few for its
+    // batch, which keeps each link's reads after it.
+    const counted = await editorCount(site(5, linkThenAuthor()), {
+      cap: 1 + 3,
+      media: {},
+    });
+    expect(counted.byKind).toEqual({ entries: 1, link: 3 });
+    expect(counted.unread).toEqual([]);
+  });
+});

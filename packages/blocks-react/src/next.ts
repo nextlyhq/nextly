@@ -87,6 +87,7 @@ import { createElement, Fragment, Suspense } from "react";
 import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
 import {
   AHEAD_BATCH_SIZE,
+  judgedStep,
   fillItemBindings,
   itemFollowsIn,
   type ItemPlacement,
@@ -2162,7 +2163,9 @@ function entryPathResolver(
         if (!budget.take({ ...claim, kind: "link" })) return null;
         return custom(collection, id);
       },
-      ahead: () => Promise.resolve(true),
+      // Nothing is read ahead, so the reads ahead stop here: each of these
+      // links reads as it is drawn, before a later block's read.
+      ahead: () => Promise.resolve(false),
     };
   }
   const slugField = config.slugField ?? "slug";
@@ -3324,8 +3327,10 @@ function listBatchReads(args: {
   const { data, shapes, budget } = args;
   return {
     related: relatedThrough(data, shapes, budget),
-    entryPaths: args.entryPaths.ahead,
-    media: args.media.ahead,
+    // Each step's own answer to whether it primed what it was asked, kept
+    // for the scheduler; the published methods answer nothing.
+    entryPaths: judgedStep(args.entryPaths.ahead),
+    media: judgedStep(args.media.ahead),
   };
 }
 

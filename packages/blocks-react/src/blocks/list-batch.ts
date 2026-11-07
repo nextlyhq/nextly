@@ -497,11 +497,56 @@ async function readRun(
   if (run.kind === "link") {
     const refs = linkRefs(entries, drawnWith);
     if (refs.length === 0) return true;
-    return (await how.reads.entryPaths(refs, how.claim)) !== false;
+    return await stepGoesOn(how.reads.entryPaths(refs, how.claim));
   }
   const ids = mediaIdsOf(entries, drawnWith);
   if (ids.length === 0) return true;
-  return (await how.reads.media?.(ids, how.claim)) !== false;
+  return await stepGoesOn(how.reads.media?.(ids, how.claim));
+}
+
+/**
+ * Each read-ahead call's own answer to whether it primed all it was asked,
+ * by the promise the call returned. Kept apart from the published methods,
+ * which answer nothing, so a host's own `ListBatchReads` keeps its type:
+ * the route's steps and the editor's count's give theirs (`judgedStep`).
+ * By call, not by step, so two lists reading ahead at once never read each
+ * other's answer.
+ */
+const ANSWERS = new WeakMap<Promise<void>, Promise<boolean>>();
+
+/**
+ * A read-ahead step, published as `ListBatchReads` takes it, with its own
+ * answer kept for the scheduler: `false` where it primed less than it was
+ * asked (it could not afford a batch, a read was refused, or it reads none
+ * ahead), so the list reads nothing more ahead and each later block reads
+ * as it is drawn, in page order.
+ */
+export function judgedStep<A extends readonly unknown[]>(
+  step: (...args: A) => Promise<boolean>
+): (...args: A) => Promise<void> {
+  return (...args) => {
+    const answer = step(...args);
+    const published = answer.then(() => undefined);
+    // The scheduler awaits the answer; a host awaiting the published
+    // promise still sees a failure, and nothing is left unhandled.
+    published.catch(() => undefined);
+    ANSWERS.set(published, answer);
+    return published;
+  };
+}
+
+/**
+ * Whether the reads ahead go on past a step's call: the step's own answer,
+ * where it gave one (`judgedStep`); a host's step without one is taken as
+ * having primed what it was asked, as before; and no step at all goes no
+ * further, since each of those blocks then reads as it is drawn.
+ */
+async function stepGoesOn(called: Promise<void> | undefined): Promise<boolean> {
+  if (called === undefined) return false;
+  const answer = ANSWERS.get(called);
+  if (answer !== undefined) return await answer;
+  await called;
+  return true;
 }
 
 /** Every media id the entries' images draw, from their filled props, once. */

@@ -44,7 +44,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { createElement, Fragment, type ReactElement } from "react";
 
-import { relatedThrough } from "./blocks/list-batch";
+import { judgedStep, relatedThrough } from "./blocks/list-batch";
 import { definitionsFor, type ComponentSource } from "./component-source";
 import {
   componentBatches,
@@ -178,7 +178,8 @@ function countedMedia(
   batches: boolean
 ): {
   resolve: PageContext["resolveMedia"];
-  ahead: NonNullable<ListBatchReads["media"]>;
+  /** `false` where it stopped short, as the route's own step answers. */
+  ahead: (ids: readonly string[], claim: ReadClaim) => Promise<boolean>;
 } {
   const known = new Map<string, Promise<ResolvedMedia | null>>();
   const drawn = (id: string) => {
@@ -219,7 +220,11 @@ function countedMedia(
  */
 function countedLinks(budget: QueryBudget): {
   resolve: PageContext["resolveEntryPath"];
-  ahead: ListBatchReads["entryPaths"];
+  /** `false` where it stopped short, as the route's own step answers. */
+  ahead: (
+    refs: readonly { readonly collection: string; readonly id: string }[],
+    claim: ReadClaim
+  ) => Promise<boolean>;
 } {
   const known = new Set<string>();
   const key = (collection: string, id: string) => `${collection}\u0000${id}`;
@@ -244,19 +249,19 @@ function countedLinks(budget: QueryBudget): {
           const batch = ids.slice(at, at + BATCH_SIZE);
           // Asked only where the allowance also covers each link's own
           // reads after it, as the published page asks a batch.
+          // Stopped short either way, so the reads ahead stop, as the
+          // route's own step does; with nothing left to settle, they go on.
           if (
             (budget.remaining?.() ?? Infinity) <
-            LINK_READS * (batch.length + 1)
+              LINK_READS * (batch.length + 1) ||
+            !claimEach(budget, LINK_READS, { ...claim, kind: "link" })
           ) {
-            return Promise.resolve();
-          }
-          if (!claimEach(budget, LINK_READS, { ...claim, kind: "link" })) {
-            return Promise.resolve();
+            return Promise.resolve(false);
           }
           for (const id of batch) known.add(id);
         }
       }
-      return Promise.resolve();
+      return Promise.resolve(true);
     },
   };
 }
@@ -452,8 +457,9 @@ export async function countPageReads(
       staged.bindings?.fieldShapes,
       budget
     ),
-    entryPaths: links.ahead,
-    media: media.ahead,
+    // Each step's own answer kept for the scheduler, as the route's are.
+    entryPaths: judgedStep(links.ahead),
+    media: judgedStep(media.ahead),
   };
   const shared = {
     ...drawing,

@@ -557,21 +557,20 @@ export interface ListBatchReads {
   ): Promise<
     ReadonlyMap<string, Readonly<Record<string, unknown>>> | undefined
   >;
-  /**
-   * Settle these links' paths ahead, for `resolveEntryPath` to answer from.
-   * `false` when it stopped for want of reads, so the list reads nothing
-   * more ahead and each later block reads as it is drawn, in page order.
-   */
+  /** Settle these links' paths ahead, for `resolveEntryPath` to answer from. */
   entryPaths(
     refs: readonly { readonly collection: string; readonly id: string }[],
     claim: ReadClaim
-  ): Promise<boolean | void>;
+  ): Promise<void>;
   /**
-   * Read these media records ahead, for `resolveMedia` to answer from;
-   * `false` when it stopped for want of reads. Optional: a host without it
-   * reads each image as it is drawn.
+   * Read these media records ahead, for `resolveMedia` to answer from.
+   * Optional: a host without it reads each image as it is drawn, and the
+   * list reads nothing more ahead once it reaches its images, so each
+   * image's own read comes before a later block's.
+   *
+   * @experimental
    */
-  media?(ids: readonly string[], claim: ReadClaim): Promise<boolean | void>;
+  media?(ids: readonly string[], claim: ReadClaim): Promise<void>;
 }
 
 /**
