@@ -29,6 +29,27 @@ export interface TemplateRoutingAccess {
   readonly mayManageRouting: boolean;
 }
 
+/**
+ * Where the template form asks whether the collection a saved template draws
+ * still exists: `GET /templates/collection-exists?collection=<slug>`.
+ */
+export const TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH =
+  "/templates/collection-exists";
+
+/** What the collection question answers. */
+export interface TemplateCollectionExistence {
+  /**
+   * Whether a collection exists under the slug asked about, whoever may read
+   * it: the answer the template guard judges a change of collection by.
+   */
+  readonly exists: boolean;
+}
+
+/** The collection question's path for one slug. */
+export function templateCollectionExistsPath(collection: string): string {
+  return `${TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH}?collection=${encodeURIComponent(collection)}`;
+}
+
 /** One template action request. */
 export interface TemplateActionRequest {
   readonly action: TemplateAction;

@@ -8,14 +8,19 @@
  * out of a save by someone without the permission, are proved against a real
  * instance by `__tests__/template-addresses-runtime.integration.test.ts`.
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { TemplateActionResult } from "./template-actions-contract";
+import {
+  templateCollectionExistsPath,
+  type TemplateActionResult,
+} from "./template-actions-contract";
 import {
   cutToTitleLength,
+  readTemplateCollectionExists,
   readTemplateRoutingAccess,
   runTemplateAction,
+  templateCollectionExistsRoute,
   type TemplateActionsContext,
   type TemplateActionsSetup,
 } from "./template-actions-route";
@@ -270,6 +275,93 @@ describe("the routing question", () => {
     expect(await readTemplateRoutingAccess({ caller: null })).toEqual({
       mayManageRouting: false,
     });
+  });
+});
+
+describe("the collection question", () => {
+  /** A guard whose registry holds `posts` alone, under a renamed templates slug. */
+  function existenceGuard() {
+    const readCollection = vi.fn((slug: string) =>
+      Promise.resolve(slug === "posts" ? { slug: "posts" } : null)
+    );
+    const guard: TemplateGuardSetup = {
+      templatesCollection: "site_templates",
+      ownCollections: () => new Set(["site_templates"]),
+      readCollection,
+      holderOf: () => Promise.resolve(null),
+      entryExists: () => Promise.resolve(true),
+      holdEntry: () => Promise.resolve(true),
+      declaredAddresses: new Map(),
+      addressHolderOf: () => Promise.resolve(null),
+    };
+    return { guard, readCollection };
+  }
+
+  /** A caller granted `update` on `granted` and nothing else. */
+  function callerFor(granted: string | null) {
+    const can = vi.fn((action: string, resource: string) =>
+      Promise.resolve(action === "update" && resource === granted)
+    );
+    return { can };
+  }
+
+  it("answers whether a collection exists, read by the guard's own lookup", async () => {
+    const { guard, readCollection } = existenceGuard();
+    const caller = callerFor("site_templates");
+    expect(
+      await readTemplateCollectionExists("posts", { caller, guard })
+    ).toEqual({ exists: true });
+    // Gone: what the guard lets a template be pointed away from.
+    expect(
+      await readTemplateCollectionExists("articles", { caller, guard })
+    ).toEqual({ exists: false });
+    expect(readCollection.mock.calls.map(([slug]) => slug)).toEqual([
+      "posts",
+      "articles",
+    ]);
+    // The right asked is updating the RESOLVED templates collection, as a
+    // type-level question, since the read names no template.
+    expect(caller.can).toHaveBeenCalledWith("update", "site_templates", {
+      anyEntry: true,
+    });
+  });
+
+  it("refuses a caller who may not update templates, before anything is read", async () => {
+    const { guard, readCollection } = existenceGuard();
+    for (const caller of [callerFor("templates"), callerFor(null), null]) {
+      await expect(
+        readTemplateCollectionExists("posts", { caller, guard })
+      ).rejects.toSatisfy(error => NextlyError.isForbidden(error));
+    }
+    expect(readCollection).not.toHaveBeenCalled();
+  });
+
+  it("is served as a GET never stored, and refuses a query naming no collection", async () => {
+    const { guard, readCollection } = existenceGuard();
+    const route = templateCollectionExistsRoute({ guard: () => guard });
+    expect(route.method).toBe("GET");
+    expect(route).not.toHaveProperty("public");
+    expect(route.noStore).toBe(true);
+    const ctx = {
+      caller: callerFor("site_templates"),
+    } as unknown as PluginRouteContext;
+    const get = (path: string) =>
+      route.handler(new Request(`http://nextly.test/x${path}`), ctx);
+    // The positive control: the refusals below would be met by a handler
+    // that refuses everything.
+    const answer = await get(templateCollectionExistsPath("posts"));
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ exists: true });
+    for (const path of [
+      route.path,
+      `${route.path}?collection=`,
+      `${route.path}?collection=${"a".repeat(513)}`,
+    ]) {
+      await expect(get(path)).rejects.toSatisfy(error =>
+        NextlyError.isValidation(error)
+      );
+    }
+    expect(readCollection).toHaveBeenCalledOnce();
   });
 });
 

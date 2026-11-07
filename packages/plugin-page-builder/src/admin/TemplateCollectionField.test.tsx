@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 /**
  * The template form's collection control: a saved template's collection by
- * its name and read-only; a choice of collections by name while one is made;
- * the choice again where a saved template's collection is no longer listed;
- * and typing the slug where the collections cannot be listed.
+ * its name and read-only; a choice of collections by name while one is made,
+ * offered only once the pages slug is known; a saved template's collection
+ * the list leaves out kept fixed unless it is answered gone, when the choice
+ * is offered again; and typing the slug where the collections cannot be
+ * listed.
  */
 import {
   act,
@@ -38,11 +40,16 @@ import {
   loopCollectionsPath,
   type LoopCollectionItem,
 } from "../loop-collections-contract";
+import {
+  TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH,
+  templateCollectionExistsPath,
+} from "../templates/template-actions-contract";
 
 import {
   collectionFieldView,
   LIST_FAILED_NOTE,
   offeredCollections,
+  removedNote,
   TemplateCollectionField,
   TYPE_SLUG_NOTE,
   unlistedNote,
@@ -75,11 +82,28 @@ const LISTED: LoopCollectionItem[] = [
   item("events", "Events"),
 ];
 
-/** What the list route answers: the items, a failure, or nothing yet. */
-let listed: { data?: unknown; error: Error | null } = {
+/** One read's answer: data, a failure, or nothing yet. */
+type Answer = { data?: unknown; error: Error | null };
+
+const LISTED_ANSWER: Answer = {
   data: { items: LISTED, meta: {} },
   error: null,
 };
+const PAGES_ANSWER: Answer = {
+  data: {
+    pagesCollection: "pages",
+    layoutsCollection: "layouts",
+    templatesCollection: "templates",
+  },
+  error: null,
+};
+
+/** What the list route answers. */
+let listed: Answer = LISTED_ANSWER;
+/** What the pages slug route answers. */
+let pages: Answer = PAGES_ANSWER;
+/** What the collection question answers, for any slug. */
+let existence: Answer = { data: { exists: true }, error: null };
 let values: () => FieldValues = () => ({});
 
 beforeAll(() => {
@@ -90,18 +114,23 @@ beforeAll(() => {
   proto.scrollIntoView = () => {};
 });
 
+/** The answer a read gets by its path; a disabled read gets nothing, as the hook does. */
+function answerFor(path: string, enabled: boolean): Answer {
+  if (!enabled) return { data: undefined, error: null };
+  if (path === PAGE_COLLECTION_ROUTE_PATH) return pages;
+  if (path.startsWith(TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH)) return existence;
+  return listed;
+}
+
 beforeEach(() => {
-  read.mockImplementation((({ path }: { path: string }) => ({
-    ...(path === PAGE_COLLECTION_ROUTE_PATH
-      ? {
-          data: {
-            pagesCollection: "pages",
-            layoutsCollection: "layouts",
-            templatesCollection: "templates",
-          },
-          error: null,
-        }
-      : listed),
+  read.mockImplementation((({
+    path,
+    enabled = true,
+  }: {
+    path: string;
+    enabled?: boolean;
+  }) => ({
+    ...answerFor(path, enabled),
     pending: false,
     fetching: false,
     refetch: () => {},
@@ -110,9 +139,24 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  listed = { data: { items: LISTED, meta: {} }, error: null };
+  listed = LISTED_ANSWER;
+  pages = PAGES_ANSWER;
+  existence = { data: { exists: true }, error: null };
   identity.mockReset();
+  read.mockReset();
 });
+
+/** The collection question's reads the control made while enabled, by path. */
+function existenceAsked(): string[] {
+  return read.mock.calls
+    .map(([options]) => options)
+    .filter(
+      options =>
+        options.path.startsWith(TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH) &&
+        options.enabled !== false
+    )
+    .map(options => options.path);
+}
 
 function Form({ defaults }: { defaults: FieldValues }) {
   const form = useForm({ defaultValues: defaults });
@@ -147,32 +191,75 @@ const answered: CollectionChoices = {
   ],
 };
 
+/** A saved template's flags, its value as saved unless `value` says otherwise. */
+function savedAt(stored: string, value: string = stored) {
+  return { saved: true, value, stored };
+}
+
+const NEW = { saved: false, value: "", stored: "" };
+
 describe("collectionFieldView", () => {
-  it("shows a saved template's collection by its name, read-only", () => {
-    expect(
-      collectionFieldView({ saved: true, value: "posts" }, answered)
-    ).toEqual({ kind: "fixed", label: "Posts", slug: "posts", note: null });
+  it("shows a saved template's collection by its name, read-only, whatever existence says", () => {
+    const named = {
+      kind: "fixed",
+      label: "Posts",
+      slug: "posts",
+      note: null,
+    };
+    expect(collectionFieldView(savedAt("posts"), answered, "pending")).toEqual(
+      named
+    );
+    // Listed is listed: an existence answer is never asked for it, and a
+    // stray one changes nothing.
+    expect(collectionFieldView(savedAt("posts"), answered, "gone")).toEqual(
+      named
+    );
   });
 
-  it("keeps a saved template's collection fixed where the list does not name it, saying why", () => {
-    // The list leaves out collections the author may not read, so a saved
-    // collection missing from it may still exist: no change is offered.
-    expect(
-      collectionFieldView({ saved: true, value: "articles" }, answered)
-    ).toEqual({
+  it("keeps an unlisted collection fixed by its slug unless it is answered gone", () => {
+    // The list leaves out collections the author may not read, so one missing
+    // from it that still exists stays as saved: the guard refuses a change.
+    const unlisted = {
       kind: "fixed",
       label: null,
       slug: "articles",
       note: unlistedNote("articles"),
-    });
+    };
+    expect(
+      collectionFieldView(savedAt("articles"), answered, "exists")
+    ).toEqual(unlisted);
+    // Unanswered is not gone: nothing is offered that may not save.
+    expect(
+      collectionFieldView(savedAt("articles"), answered, "failed")
+    ).toEqual(unlisted);
+    expect(
+      collectionFieldView(savedAt("articles"), answered, "pending")
+    ).toEqual({ kind: "fixed", label: null, slug: "articles", note: null });
+  });
+
+  it("offers the choice again, saying why, where the saved collection is gone", () => {
+    const reopened = {
+      kind: "choose",
+      options: answered.offered,
+      loading: false,
+      note: removedNote("articles"),
+    };
+    expect(collectionFieldView(savedAt("articles"), answered, "gone")).toEqual(
+      reopened
+    );
+    // Once another is chosen the choice stays open until the template is
+    // saved: what is offered follows the saved value, not the edited one.
+    expect(
+      collectionFieldView(savedAt("articles", "posts"), answered, "gone")
+    ).toEqual(reopened);
   });
 
   it("keeps a saved template's slug read-only while the names load or fail", () => {
     expect(
-      collectionFieldView({ saved: true, value: "posts" }, { state: "pending" })
+      collectionFieldView(savedAt("posts"), { state: "pending" }, "gone")
     ).toEqual({ kind: "fixed", label: null, slug: "posts", note: null });
     expect(
-      collectionFieldView({ saved: true, value: "posts" }, { state: "failed" })
+      collectionFieldView(savedAt("posts"), { state: "failed" }, "gone")
     ).toEqual({
       kind: "fixed",
       label: null,
@@ -182,25 +269,30 @@ describe("collectionFieldView", () => {
   });
 
   it("offers a choice by name while a template is made, and typing when none can be listed", () => {
-    expect(collectionFieldView({ saved: false, value: "" }, answered)).toEqual({
+    expect(collectionFieldView(NEW, answered, "pending")).toEqual({
       kind: "choose",
       options: answered.offered,
       loading: false,
       note: null,
     });
-    expect(
-      collectionFieldView({ saved: false, value: "" }, { state: "pending" })
-    ).toEqual({ kind: "choose", options: [], loading: true, note: null });
-    expect(
-      collectionFieldView({ saved: false, value: "" }, { state: "failed" })
-    ).toEqual({ kind: "type", note: TYPE_SLUG_NOTE });
+    expect(collectionFieldView(NEW, { state: "pending" }, "pending")).toEqual({
+      kind: "choose",
+      options: [],
+      loading: true,
+      note: null,
+    });
+    expect(collectionFieldView(NEW, { state: "failed" }, "pending")).toEqual({
+      kind: "type",
+      note: TYPE_SLUG_NOTE,
+    });
   });
 
   it("changes nothing on a version being read, whether saved or not", () => {
     expect(
       collectionFieldView(
-        { readOnly: true, saved: true, value: "articles" },
-        answered
+        { readOnly: true, ...savedAt("articles") },
+        answered,
+        "gone"
       )
     ).toEqual({ kind: "fixed", label: null, slug: "articles", note: null });
   });
@@ -289,5 +381,76 @@ describe("the collection control", () => {
     fireEvent.change(input, { target: { value: "posts" } });
     expect(values().collection).toBe("posts");
     expect(screen.getByText(TYPE_SLUG_NOTE)).toBeTruthy();
+  });
+
+  it("offers nothing until the pages slug is known, even with the list in hand", async () => {
+    // The list answered first, as it can on a cold load: Pages would be
+    // offered, and a template for it cannot be saved.
+    pages = { data: undefined, error: null };
+    renderField("");
+    const trigger = screen.getByRole("combobox", { name: "Collection" });
+    expect(trigger.textContent).toBe("Loading collections…");
+    expect(trigger.hasAttribute("disabled")).toBe(true);
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+    expect(screen.queryAllByRole("option")).toEqual([]);
+  });
+
+  it("falls back to typing the slug when the pages slug cannot be read", () => {
+    pages = { data: undefined, error: new Error("refused") };
+    renderField("");
+    expect(screen.getByRole("textbox", { name: "Collection" })).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.getByText(TYPE_SLUG_NOTE)).toBeTruthy();
+  });
+
+  it("asks whether a saved collection exists only where the list leaves it out", () => {
+    renderField("posts", "t1");
+    expect(existenceAsked()).toEqual([]);
+    cleanup();
+    read.mockClear();
+    renderField("articles", "t1");
+    expect(existenceAsked()).toContain(
+      templateCollectionExistsPath("articles")
+    );
+  });
+
+  it("keeps an unlisted collection that still exists fixed, saying why", () => {
+    existence = { data: { exists: true }, error: null };
+    renderField("articles", "t1");
+    const shown = screen.getByRole("textbox", { name: "Collection" });
+    expect(shown.getAttribute("aria-readonly")).toBe("true");
+    expect(shown.textContent).toBe("articles");
+    expect(screen.getByText(unlistedNote("articles"))).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("keeps an unlisted collection fixed while its existence is asked", () => {
+    existence = { data: undefined, error: null };
+    renderField("articles", "t1");
+    const shown = screen.getByRole("textbox", { name: "Collection" });
+    expect(shown.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("lets a template whose collection is gone be pointed at another, keeping the choice open", async () => {
+    existence = { data: { exists: false }, error: null };
+    renderField("articles", "t1");
+    expect(screen.getByText(removedNote("articles"))).toBeTruthy();
+    const trigger = screen.getByRole("combobox", { name: "Collection" });
+    // The removed slug is no option, so the placeholder shows.
+    expect(trigger.textContent).toBe("Choose a collection");
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("option", { name: "Posts posts" }));
+    });
+    expect(values().collection).toBe("posts");
+    // Still a choice, now showing the one chosen, until the template saves.
+    expect(
+      screen.getByRole("combobox", { name: "Collection" }).textContent
+    ).toBe("Posts posts");
   });
 });

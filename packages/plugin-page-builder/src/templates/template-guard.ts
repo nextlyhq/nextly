@@ -255,6 +255,19 @@ export type CollectionRecordRead = (
   slug: string
 ) => Promise<Record<string, unknown> | null>;
 
+/**
+ * Whether a collection exists under `slug`, as the registry answers it to the
+ * system. A template may be pointed at another collection only once this
+ * says no for the one it draws, so the admin asks the same question, through
+ * the template collection route, before it offers the change.
+ */
+export async function collectionExists(
+  read: CollectionRecordRead,
+  slug: string
+): Promise<boolean> {
+  return (await read(slug)) !== null;
+}
+
 /** The field whose value is an entry's part of its address. */
 const ENTRY_ADDRESS_FIELD = TEMPLATE_ENTRY_ADDRESS_FIELD;
 
@@ -630,7 +643,7 @@ export async function guardWrite(
     // collection is, so a rename never strands its design.
     if (
       typeof before === "string" &&
-      (await setup.readCollection(before)) !== null
+      (await collectionExists(setup.readCollection, before))
     ) {
       throw templateCollectionRefusal(
         "A template's collection cannot be changed while that collection exists. Create a template for the other collection instead."

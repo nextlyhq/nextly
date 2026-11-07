@@ -9,8 +9,10 @@
  * collection, so it is shown read-only there, as the name with the slug
  * beside it. A template being made chooses one from the collections the
  * author may read that have an address to serve an entry at. A saved
- * template whose collection is no longer listed, renamed or removed, may be
- * pointed at another, so the choice is offered there too, with why.
+ * template whose collection is no longer listed is asked about by slug, since
+ * the list leaves out what the author may not read: one that still exists
+ * stays fixed, and one that was renamed or removed may be pointed at
+ * another, so the choice is offered there too, with why.
  *
  * It decides nothing: the template guard judges every collection a write
  * names, whichever control wrote it, and refuses the rest in its own words.
@@ -33,6 +35,7 @@ import {
 } from "@nextlyhq/ui";
 import { useId, type JSX } from "react";
 import {
+  get,
   useController,
   type Control,
   type FieldValues,
@@ -50,6 +53,10 @@ import {
   type LoopCollectionItem,
   type LoopCollectionsResponse,
 } from "../loop-collections-contract";
+import {
+  templateCollectionExistsPath,
+  type TemplateCollectionExistence,
+} from "../templates/template-actions-contract";
 import { TEMPLATE_ENTRY_ADDRESS_FIELD } from "../templates/template-preview-contract";
 
 import { loopCollectionsOf } from "./loop-collections-client";
@@ -87,6 +94,12 @@ export type CollectionChoices =
       readonly offered: readonly CollectionChoice[];
     };
 
+/**
+ * Whether the collection a saved template draws exists, asked by slug where
+ * the list does not name it: still being asked, unanswered, or answered.
+ */
+export type CollectionExistence = "pending" | "failed" | "exists" | "gone";
+
 /** What the control draws. */
 export type CollectionFieldView =
   /** The collection, read-only: its name where known, and its slug. */
@@ -111,6 +124,11 @@ export function unlistedNote(slug: string): string {
   return `"${slug}" isn't among the collections you can see, so it is shown by its slug.`;
 }
 
+/** Said where a saved template's collection no longer exists under its slug. */
+export function removedNote(slug: string): string {
+  return `The collection "${slug}" was removed or renamed. Choose the collection this template draws now.`;
+}
+
 /** Said where the collections could not be listed. */
 export const LIST_FAILED_NOTE =
   "Couldn't list the collections. Reload the page to try again.";
@@ -121,25 +139,33 @@ export const TYPE_SLUG_NOTE =
 
 /**
  * The control's state from the form's flags, whether the template is saved,
- * the value it holds and the list of collections. Its own function so the
- * rule is pinned apart from the render.
+ * the value it holds, the value it was saved with, the list of collections and
+ * whether the saved one exists. Its own function so the rule is pinned apart
+ * from the render.
+ *
+ * What is offered is decided by the SAVED value, not the one being edited, so
+ * a template pointed at another collection keeps its choice open until it is
+ * saved, rather than the control turning read-only under the author's cursor.
  */
 export function collectionFieldView(
   flags: {
     readonly readOnly?: boolean;
     readonly saved: boolean;
     readonly value: string;
+    /** The collection the template was saved with. */
+    readonly stored: string;
   },
-  choices: CollectionChoices
+  choices: CollectionChoices,
+  existence: CollectionExistence
 ): CollectionFieldView {
-  const { value } = flags;
+  const { value, stored } = flags;
   const name =
     choices.state === "answered" ? (choices.named.get(value) ?? null) : null;
   // A version being read changes nothing, whatever the template is.
   if (flags.readOnly === true) {
     return { kind: "fixed", label: name, slug: value, note: null };
   }
-  if (flags.saved && value !== "") {
+  if (flags.saved && stored !== "") {
     switch (choices.state) {
       // The slug alone for the moment the names take, rather than a choice
       // that turns into text under the author's cursor.
@@ -152,19 +178,11 @@ export function collectionFieldView(
           slug: value,
           note: LIST_FAILED_NOTE,
         };
-      // Kept as saved even where the list does not name it: the list leaves
-      // out collections this author may not read, so its absence does not
-      // say the collection is gone, and the guard refuses a change of a
-      // collection that still exists.
       case "answered":
-        return name === null
-          ? {
-              kind: "fixed",
-              label: null,
-              slug: value,
-              note: unlistedNote(value),
-            }
-          : { kind: "fixed", label: name, slug: value, note: null };
+        if (choices.named.has(stored)) {
+          return { kind: "fixed", label: name, slug: value, note: null };
+        }
+        return unlistedView(value, stored, choices.offered, existence);
     }
   }
   switch (choices.state) {
@@ -178,6 +196,43 @@ export function collectionFieldView(
         options: choices.offered,
         loading: false,
         note: null,
+      };
+  }
+}
+
+/**
+ * A saved template whose collection the list does not name. The list leaves
+ * out collections this author may not read, so only the existence answer says
+ * whether it is gone: the guard refuses a change of a collection that still
+ * exists and allows one where it does not. Kept fixed by its slug until that
+ * answer says gone, so a failed or slow answer offers nothing that cannot
+ * save.
+ */
+function unlistedView(
+  value: string,
+  stored: string,
+  offered: readonly CollectionChoice[],
+  existence: CollectionExistence
+): CollectionFieldView {
+  switch (existence) {
+    case "gone":
+      return {
+        kind: "choose",
+        options: offered,
+        loading: false,
+        note: removedNote(stored),
+      };
+    // No note for the moment the answer takes, rather than one that changes
+    // under the author's eyes.
+    case "pending":
+      return { kind: "fixed", label: null, slug: value, note: null };
+    case "exists":
+    case "failed":
+      return {
+        kind: "fixed",
+        label: null,
+        slug: value,
+        note: unlistedNote(value),
       };
   }
 }
@@ -230,22 +285,52 @@ function useCollectionChoices(): CollectionChoices {
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: PAGE_COLLECTION_ROUTE_PATH,
   });
-  if (listed.error !== null) return { state: "failed" };
-  if (listed.data === undefined || listed.data === null) {
+  if (listed.error !== null || resolved.error !== null) {
+    return { state: "failed" };
+  }
+  // Answered only once both reads have: before the pages slug arrives, Pages
+  // would be offered, and a template for it cannot be saved.
+  if (listed.data === undefined || resolved.data === undefined) {
     return { state: "pending" };
   }
-  const collections = loopCollectionsOf(listed.data);
-  if (collections === undefined) return { state: "failed" };
-  // The pages slug only narrows what is offered: without it Pages is offered
-  // and the guard refuses it in its own words.
+  const collections =
+    listed.data === null ? undefined : loopCollectionsOf(listed.data);
+  const pagesCollection = fieldOf(resolved.data, "pagesCollection");
+  if (collections === undefined || typeof pagesCollection !== "string") {
+    return { state: "failed" };
+  }
   return {
     state: "answered",
     named: new Map(collections.map(item => [item.slug, item.label])),
-    offered: offeredCollections(
-      collections,
-      resolved.data?.pagesCollection ?? undefined
-    ),
+    offered: offeredCollections(collections, pagesCollection),
   };
+}
+
+/**
+ * Whether the collection `slug` exists, asked only where `ask` says the list
+ * leaves it out. Asked again on every mount, as the list is.
+ */
+function useCollectionExistence(
+  slug: string,
+  ask: boolean
+): CollectionExistence {
+  const read = usePluginRoute<TemplateCollectionExistence>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: templateCollectionExistsPath(slug),
+    enabled: ask,
+    staleTime: 0,
+  });
+  if (read.error !== null) return "failed";
+  if (read.data === undefined) return "pending";
+  const exists = fieldOf(read.data, "exists");
+  return typeof exists === "boolean" ? (exists ? "exists" : "gone") : "failed";
+}
+
+/** One property of a route's answer, which may be any JSON a server sent. */
+function fieldOf(answer: unknown, key: string): unknown {
+  return typeof answer === "object" && answer !== null
+    ? (answer as Record<string, unknown>)[key]
+    : undefined;
 }
 
 /** The field's label, as its declaration gives it. */
@@ -266,13 +351,29 @@ export function TemplateCollectionField<
   readOnly = false,
   disabled = false,
 }: TemplateCollectionFieldProps<TFieldValues>): JSX.Element {
-  const { field, fieldState } = useController({ name, control });
+  const { field, fieldState, formState } = useController({ name, control });
   const identity = useDocumentIdentity();
   const choices = useCollectionChoices();
   const value = typeof field.value === "string" ? field.value : "";
+  // The form starts again from the stored row on load and after each save,
+  // so its defaults hold the collection the template is saved with. A form
+  // that keeps no default for the field is read by its value, as before.
+  const savedValue: unknown = get(formState.defaultValues, name);
+  const stored = typeof savedValue === "string" ? savedValue : value;
   const saved =
     typeof identity?.documentId === "string" && identity.documentId !== "";
-  const view = collectionFieldView({ readOnly, saved, value }, choices);
+  const askExistence =
+    !readOnly &&
+    saved &&
+    stored !== "" &&
+    choices.state === "answered" &&
+    !choices.named.has(stored);
+  const existence = useCollectionExistence(stored, askExistence);
+  const view = collectionFieldView(
+    { readOnly, saved, value, stored },
+    choices,
+    existence
+  );
   const noteId = useId();
   const label = declaredLabel(declaration);
   const { note } = view;
@@ -288,7 +389,11 @@ export function TemplateCollectionField<
           // the value carries its own name.
           aria-label={label}
           aria-describedby={describedBy}
-          aria-busy={choices.state === "pending" || undefined}
+          aria-busy={
+            choices.state === "pending" ||
+            (askExistence && existence === "pending") ||
+            undefined
+          }
           className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-input bg-muted/40 px-3 text-sm"
         >
           {view.slug === "" ? (
@@ -313,7 +418,13 @@ export function TemplateCollectionField<
         </div>
       ) : view.kind === "choose" ? (
         <Select
-          value={value === "" ? undefined : value}
+          // A value none of the options holds, as a removed collection's slug,
+          // shows the placeholder rather than an empty trigger.
+          value={
+            view.options.some(option => option.slug === value)
+              ? value
+              : undefined
+          }
           onValueChange={next => field.onChange(next)}
           disabled={disabled || view.loading}
         >

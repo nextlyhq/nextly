@@ -38,6 +38,7 @@ import {
   getCachedNextly,
   NextlyError,
   readableTitleText,
+  respondDoc,
   respondMutation,
   type PluginCollectionTransaction,
   type PluginRouteContext,
@@ -68,13 +69,16 @@ import { titleFieldIn } from "../entries-route";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
 import { readingAsUser } from "../library-route";
+import { parseRouteQuery } from "../route-query";
 
 import {
   TEMPLATE_ACTIONS_ROUTE_PATH,
+  TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH,
   TEMPLATE_ROUTING_ROUTE_PATH,
   type TemplateAction,
   type TemplateActionRequest,
   type TemplateActionResult,
+  type TemplateCollectionExistence,
   type TemplateRoutingAccess,
   type TemplateSummary,
 } from "./template-actions-contract";
@@ -82,6 +86,7 @@ import {
   addressCollectionProblem,
   addressHolderProblem,
   ASKED_BEFORE_CONTEXT,
+  collectionExists,
   secondTemplateRefusal,
   templateCollectionProblem,
   type MayReadTemplate,
@@ -1255,5 +1260,93 @@ export function templateRoutingRoute(): {
     path: TEMPLATE_ROUTING_ROUTE_PATH,
     handler: async (_req, ctx) =>
       Response.json(await readTemplateRoutingAccess(ctx)),
+  };
+}
+
+/**
+ * The collection question's query: one slug, bounded as a query's ids are
+ * elsewhere in the plugin. Stated as a type so the parser's result is one.
+ */
+const COLLECTION_EXISTS_QUERY: z.ZodType<
+  { collection: string },
+  Record<string, string>
+> = z.object({ collection: z.string().trim().min(1).max(512) });
+
+/** What the collection question reads with: the caller and the guard. */
+export interface TemplateCollectionExistsReads {
+  readonly caller: {
+    can(
+      action: string,
+      resource: string,
+      options?: { readonly anyEntry?: boolean }
+    ): Promise<boolean>;
+  } | null;
+  readonly guard: Pick<
+    TemplateGuardSetup,
+    "templatesCollection" | "readCollection"
+  >;
+}
+
+/**
+ * Whether a collection exists under `collection`, for a caller who may edit
+ * templates. The collection list leaves out what the caller may not read, so
+ * a saved template's collection missing from it may be unreadable or gone,
+ * and the guard lets a template be pointed elsewhere only when it is gone.
+ * This answers that, read as the system by the guard's own lookup, and says
+ * nothing else about the collection. Refused, as forbidden, to a caller who
+ * may not update templates: no one else has a template form to ask for.
+ */
+export async function readTemplateCollectionExists(
+  collection: string,
+  reads: TemplateCollectionExistsReads
+): Promise<TemplateCollectionExistence> {
+  const { caller, guard } = reads;
+  // The precondition first: nothing is read for a caller who may not edit a
+  // template. Any template, since the question names none.
+  const mayEdit =
+    caller !== null &&
+    (await caller.can("update", guard.templatesCollection, {
+      anyEntry: true,
+    }));
+  if (!mayEdit) {
+    throw NextlyError.forbidden({
+      logContext: { route: TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH },
+    });
+  }
+  return { exists: await collectionExists(guard.readCollection, collection) };
+}
+
+/**
+ * The collection question's route: what the template form asks before it
+ * offers a saved template's collection for change. Authenticated, with its
+ * right asked in the read above; the guard still judges the write.
+ */
+export function templateCollectionExistsRoute(setup: {
+  readonly guard: () => TemplateGuardSetup;
+}): {
+  method: "GET";
+  path: string;
+  noStore: true;
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "GET",
+    path: TEMPLATE_COLLECTION_EXISTS_ROUTE_PATH,
+    // A collection is added, renamed or removed at any time.
+    noStore: true,
+    handler: async (req, ctx) => {
+      const { collection } = parseRouteQuery(
+        req.url,
+        ["collection"],
+        COLLECTION_EXISTS_QUERY,
+        "template collection route"
+      );
+      return respondDoc(
+        await readTemplateCollectionExists(collection, {
+          caller: ctx.caller,
+          guard: setup.guard(),
+        })
+      );
+    },
   };
 }
