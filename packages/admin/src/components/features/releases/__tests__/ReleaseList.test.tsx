@@ -595,6 +595,9 @@ describe("the open tab and its count", () => {
 });
 
 describe("paging when a tab shrinks", () => {
+  // 25 rows through jsdom and userEvent: over the default 10s whenever the
+  // suite runs under the pre-push hook's worker cap, which it failed four
+  // pushes in a row on while passing every solo run.
   it("moves back to the last page when the only row on a later page goes", async () => {
     const user = userEvent.setup();
     // The pager reads the server's total, not the rows it is handed, so one
@@ -621,7 +624,7 @@ describe("paging when a tab shrinks", () => {
       )
     );
     expect(screen.getByText(/Showing 1.25 of 25/)).toBeTruthy();
-  });
+  }, 30_000);
 });
 
 describe("the single-document filter", () => {

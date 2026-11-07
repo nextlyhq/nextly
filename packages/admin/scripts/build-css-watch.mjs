@@ -37,6 +37,20 @@ const rootDir = path.resolve(__dirname, "..");
 let isBuilding = false;
 let pending = false;
 
+/**
+ * Say, in the watcher, what the release build would fail on.
+ *
+ * The production build refuses to ship these; saying so here means the change
+ * that caused it is still on screen when the warning appears.
+ */
+function warnReported(what, selectors) {
+  if (!selectors?.length) return;
+  console.warn(
+    `[admin:css] ⚠ ${selectors.length} ${what} and will fail the release build:`
+  );
+  for (const sel of selectors.slice(0, 10)) console.warn(`  ${sel}`);
+}
+
 async function build(reason) {
   if (isBuilding) {
     pending = true;
@@ -44,16 +58,13 @@ async function build(reason) {
   }
   isBuilding = true;
   try {
-    const { ms, sizeKB, unscoped } = await buildCssFast();
+    const { ms, sizeKB, unscoped, unconfinedVariants } = await buildCssFast();
     console.log(`[admin:css] ${reason} → ${sizeKB} KB in ${ms}ms`);
-    if (unscoped?.length) {
-      // The production build refuses to ship these; say so now, while the
-      // change that caused it is still on screen.
-      console.warn(
-        `[admin:css] ⚠ ${unscoped.length} rule(s) escaped .nextly-admin and will fail the release build:`
-      );
-      for (const sel of unscoped.slice(0, 10)) console.warn(`  ${sel}`);
-    }
+    warnReported("rule(s) escaped .nextly-admin", unscoped);
+    warnReported(
+      "selector(s) reach a dark/group/peer variant outside .nextly-admin",
+      unconfinedVariants
+    );
   } catch (err) {
     console.error(`[admin:css] build failed (${reason}):`, err);
   } finally {

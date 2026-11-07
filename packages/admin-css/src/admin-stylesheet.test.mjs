@@ -75,6 +75,27 @@ describe("isolateAdminStylesheet", () => {
     );
   });
 
+  it("confines the variant ancestor references to the admin's root", () => {
+    // What `dark:` and `group-hover:` compile to: references to an ancestor
+    // class the rule does not own, which the host's own `<html class="dark">`
+    // or `.group` satisfies inside the wrapper.
+    const variants = [
+      ".dark\\:text-warm:where(.dark, .dark *) {",
+      "  color: red;",
+      "}",
+      ".group-hover\\:scale:is(:where(.group):hover *) {",
+      "  scale: 1.05;",
+      "}",
+    ].join("\n");
+
+    const out = isolateAdminStylesheet(variants);
+
+    expect(out).toContain(":where(.nextly-admin.dark,.nextly-admin.dark *)");
+    expect(out).toContain(":is(:where(.nextly-admin .group):hover *)");
+    expect(out).not.toContain(":where(.dark");
+    expect(out).not.toContain(":where(.group)");
+  });
+
   it("prefixes the names a document resolves globally", () => {
     const out = isolateAdminStylesheet(SHEET);
 
@@ -133,6 +154,19 @@ describe("isolateAdminStylesheet", () => {
 
     expect(() => isolateAdminStylesheet(escaped)).toThrow(
       /escaped the \.nextly-admin scope: .*\.a/
+    );
+  });
+
+  it("refuses a variant ancestor written bare inside :is(...), naming it", () => {
+    // The confinement check reads `:is(...)` bodies as well as `:where(...)`
+    // ones: a marker list in a bare `:is(...)` is the same ancestor reference
+    // — one a host's `html.dark` satisfies from outside the wrapper — and
+    // `confineVariantClasses` rewrites no such shape, so the sequence's own
+    // gate refuses it rather than shipping the leak.
+    const leaked = ".nextly-admin .dark\\:x:is(.dark *) { color: red; }";
+
+    expect(() => isolateAdminStylesheet(leaked)).toThrow(
+      /reference a dark\/group\/peer variant outside the \.nextly-admin scope: .*:is\(\.dark \*\)/
     );
   });
 });
