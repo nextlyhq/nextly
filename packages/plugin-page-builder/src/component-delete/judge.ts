@@ -12,10 +12,12 @@
  *   where it is;
  * - a Layout using the component;
  * - a document the person may not write as the conversion will: its update
- *   gate for that row, its publish gate where the conversion puts the row live
- *   again, and the update rule of each field the conversion sets, asked of
- *   core's own gates (`mayWriteEntry`). A document whose gates cannot be asked
- *   counts as one they may not write.
+ *   gate for that row, the update rule of each field the conversion sets, and
+ *   the lifecycle gate only where the status the write names moves the row
+ *   into or out of published, asked of core's own gates (`mayWriteEntry`), so
+ *   the check asks what the write asks, no more. The conversion names the
+ *   state it read the live row in, so it never moves one. A document whose
+ *   gates cannot be asked counts as one they may not write.
  *
  * @module component-delete/judge
  */
@@ -143,21 +145,22 @@ interface PlannedWrite {
   readonly key: string;
   readonly locale: string | undefined;
   readonly fields: Set<string>;
-  publish: boolean;
+  /** The status the write names, where it names one. */
+  status: string | undefined;
 }
 
 /**
  * The documents the person may not write as the conversion will, each asked
- * once per language it is written in: the top-level fields it sets, and
- * whether it publishes. A check that cannot be asked counts as refused.
+ * once per language it is written in: the top-level fields it sets, and the
+ * status it names. A check that cannot be asked counts as refused.
  */
 async function writesRefused(
   deps: JudgeDeps,
   report: RewriteReport,
   drafted: readonly HostAddress[]
 ): Promise<string[]> {
-  const publishing = new Set(
-    (report.publishing ?? []).map(host => writeKeyOf(host))
+  const statuses = new Map(
+    (report.statuses ?? []).map(named => [writeKeyOf(named.host), named.status])
   );
   const writes = new Map<string, PlannedWrite>();
   for (const host of [...report.rewritten, ...drafted]) {
@@ -166,11 +169,11 @@ async function writesRefused(
       key: documentKeyOf(host),
       locale: host.locale,
       fields: new Set<string>(),
-      publish: false,
+      status: undefined,
     };
     const field = host.path[0];
     if (field !== undefined) planned.fields.add(field);
-    if (publishing.has(at)) planned.publish = true;
+    planned.status ??= statuses.get(at);
     writes.set(at, planned);
   }
   const refused = new Set<string>();
@@ -195,7 +198,7 @@ async function mayMake(
   try {
     return await deps.mayWrite({
       ...target,
-      publish: planned.publish,
+      ...(planned.status === undefined ? {} : { status: planned.status }),
       fields: [...planned.fields],
       ...(planned.locale === undefined ? {} : { locale: planned.locale }),
     });

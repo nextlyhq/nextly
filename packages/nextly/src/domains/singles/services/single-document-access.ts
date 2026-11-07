@@ -40,6 +40,7 @@ import {
 } from "../../../database/with-db-errors";
 import { getService } from "../../../di";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
+import { resolvePublishTransition } from "../../../lib/status-transition";
 import type { UserContext } from "../types";
 
 import { checkSingleAccess } from "./single-query-service";
@@ -183,18 +184,32 @@ export async function singleDocumentEditable(
  * there is no document to judge.
  */
 /**
- * Whether the caller may publish the Single's document, asked WITHOUT writing:
- * nothing is created and no hook runs. The gate a Single's publish asks
- * (`checkSingleAccess` for `publish`), applied to the stored row; a Single
- * with no row is not publishable here, as it is not editable.
+ * Whether the caller may make a write naming `nextStatus` of the Single's
+ * document, asked WITHOUT writing: nothing is created and no hook runs. The
+ * lifecycle gate a Single's update asks (`checkSingleAccess` for `publish` or
+ * `unpublish`), and only where it asks it: for a write that moves the stored
+ * row into or out of published, as {@link resolvePublishTransition}
+ * classifies it. A write that keeps the status asks nothing more. A Single
+ * with no row is refused here, as it is not editable.
  *
  * @experimental
  */
-export async function singleDocumentPublishable(
+export async function singleDocumentStatusMoveAllowed(
   slug: string,
+  nextStatus: string,
   subject: SingleAccessSubject
 ): Promise<boolean> {
-  return storedSingleDocumentAllows(slug, "publish", subject);
+  const registry = getService("singleRegistryService");
+  const record = await registry.getSingleBySlug(slug);
+  if (!record?.tableName) return false;
+  const document = await storedRow(slug, record.tableName);
+  if (!document) return false;
+  const stored = document.status;
+  const move = resolvePublishTransition(
+    typeof stored === "string" ? stored : null,
+    nextStatus
+  );
+  return move === null || storedSingleDocumentAllows(slug, move, subject);
 }
 
 export async function singleStoredDocumentReadable(
@@ -213,7 +228,7 @@ export async function singleStoredDocumentReadable(
  */
 async function storedSingleDocumentAllows(
   slug: string,
-  operation: "read" | "update" | "publish",
+  operation: "read" | "update" | "publish" | "unpublish",
   { user, actor, routeAuthorized, locale }: SingleAccessSubject
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
