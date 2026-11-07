@@ -286,3 +286,73 @@ describe("the manifest's actions", () => {
     );
   });
 });
+
+/**
+ * The operations Dynamic Data is built from, written out by hand rather than
+ * read off the builder's kind lists: the manifest is built from those lists,
+ * so a check derived from them agrees with the manifest whatever either
+ * holds, and a kind dropped from both passes it. Removing or renaming one of
+ * these kinds is a change a client sees, and it fails here.
+ */
+const DYNAMIC_DATA_OPS = {
+  pageAction: [
+    "set-list-query",
+    "set-conditions",
+    "bind-prop",
+    "unbind-prop",
+    "place-entry-content",
+    "set-entry-content-field",
+  ],
+  templateAction: [
+    "create-template",
+    "publish-template",
+    "give-entry-design",
+    "remove-entry-design",
+    "delete-template",
+    "set-template-address",
+  ],
+} as const;
+
+/** The `kind` each branch of an advertised request's `action` accepts. */
+function advertisedKinds(
+  request: Readonly<Record<string, unknown>>
+): unknown[] {
+  const action = (
+    request as { properties?: { action?: { oneOf?: unknown[] } } }
+  ).properties?.action;
+  return (action?.oneOf ?? []).map(
+    branch =>
+      (branch as { properties?: { kind?: { const?: unknown } } }).properties
+        ?.kind?.const
+  );
+}
+
+describe("the manifest lists every Dynamic Data operation", () => {
+  it.each(
+    Object.entries(DYNAMIC_DATA_OPS).flatMap(([name, kinds]) =>
+      kinds.map(kind => [name, kind] as const)
+    )
+  )(
+    "%s %s: listed in its kinds and accepted by its request schema",
+    (name, kind) => {
+      const action = manifestActions().find(listed => listed.name === name);
+      expect(action, `no ${name} in the manifest`).toBeDefined();
+      expect(action?.kinds).toContain(kind);
+      // A branch whose `kind` is this kind's constant: a client validating
+      // against the advertised schema would refuse the op without one.
+      expect(advertisedKinds(action?.request ?? {})).toContain(kind);
+    }
+  );
+
+  it("reads each advertised branch's kind, so a missing one is seen", () => {
+    // The control for the helper above: it finds every branch's kind, so an
+    // empty answer cannot pass for a schema that lists the op.
+    const page = manifestActions().find(listed => listed.name === "pageAction");
+    const kinds = advertisedKinds(page?.request ?? {});
+    expect(kinds).toHaveLength(page?.kinds.length ?? -1);
+    expect(kinds).toEqual(page?.kinds);
+    expect(advertisedKinds({ properties: { action: { oneOf: [] } } })).toEqual(
+      []
+    );
+  });
+});

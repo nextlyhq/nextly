@@ -63,6 +63,33 @@ const AUTHOR = [
   "read-layouts",
 ];
 
+/**
+ * May reach every action route the manifest lists past its declared right:
+ * the definition route asks `update-components` before it reads the body,
+ * so a caller without it would never have the action's kind judged.
+ */
+const EVERY_ROUTE = [
+  ...AUTHOR,
+  "update-components",
+  "read-templates",
+  "create-templates",
+  "update-templates",
+  "publish-templates",
+  "delete-templates",
+];
+
+/** The path of each problem a schema refusal names; none for any other answer. */
+function refusedPaths(answer: {
+  status: number;
+  body: Record<string, unknown>;
+}): string[] {
+  if (answer.status !== 400) return [];
+  const error = answer.body.error as
+    | { data?: { errors?: { path?: unknown }[] } }
+    | undefined;
+  return (error?.data?.errors ?? []).map(problem => String(problem.path));
+}
+
 /** The title marker of a page whose saves a failing side effect follows. */
 const FAILING_MARK = "mailed";
 
@@ -361,6 +388,58 @@ describe.each(getConfiguredTestDialects())(
         variant: light.id,
         overrides: { [field.id]: "Mine" },
       });
+    });
+
+    it("takes every kind it lists: a dry run of each is never refused as an unknown kind", async () => {
+      const t = await boot();
+      const { page, card } = await site(t);
+      const { cookie } = await holding(t, EVERY_ROUTE);
+      const manifest = await manifestOf(cookie);
+
+      // Each kind alone, with none of the fields it needs: what is judged is
+      // whether the route knows the kind, which its schema answers before
+      // anything else about the action, as a refusal at `action.kind`.
+      const dryRun = (
+        action: CompositionManifest["actions"][number],
+        kind: string
+      ) =>
+        call(
+          "POST",
+          cookie,
+          action.path.replace(":id", card).split("/").filter(Boolean),
+          {
+            body: {
+              ...(action.name === "pageAction"
+                ? { page: { collection: manifest.collections.pages, id: page } }
+                : {}),
+              action: { kind },
+              dryRun: true,
+            },
+          }
+        );
+
+      // The control, on every route: a kind it does not have is refused at
+      // `action.kind`, so a route that did not know a listed kind would be
+      // seen below rather than pass as some other refusal.
+      expect(manifest.actions).toHaveLength(3);
+      for (const action of manifest.actions) {
+        const unknown = await dryRun(action, "no-such-kind");
+        expect(unknown.status, JSON.stringify(unknown.body)).toBe(400);
+        expect(refusedPaths(unknown)).toContain("action.kind");
+      }
+
+      for (const action of manifest.actions) {
+        expect(action.kinds.length, action.name).toBeGreaterThan(0);
+        for (const kind of action.kinds) {
+          const answer = await dryRun(action, kind);
+          const said = `${action.name} ${kind}: ${String(answer.status)} ${JSON.stringify(answer.body)}`;
+          // Reached as a caller the route admits, so its body was read.
+          expect([401, 403], said).not.toContain(answer.status);
+          // Refused for a missing id or field, or judged by a dry run: any
+          // answer but the route not knowing the kind.
+          expect(refusedPaths(answer), said).not.toContain("action.kind");
+        }
+      }
     });
 
     it("answers a part the caller may not read as unreadable, and the rest as read", async () => {
