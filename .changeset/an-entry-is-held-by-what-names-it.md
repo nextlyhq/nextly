@@ -33,7 +33,9 @@ A plugin can hold an entry its write names: `ctx.services.collections.holdEntryI
 (experimental) holds the entry's row for share in the write's transaction and answers whether
 it exists, so the write either commits before a delete of the entry goes on, which then sees
 it, or waits and is told the entry is gone. It holds the entry's collection first, so a delete
-of the whole collection takes turns with the write the same way.
+of the whole collection takes turns with the write the same way. `PENDING_CHANGE_KEY`, the
+filter key keeping entries with changes waiting to be published, is now exported
+(experimental) from `@nextlyhq/plugin-sdk`.
 
 The page builder uses it for an entry's own design, on every path that creates one, the
 Direct API included: a design written while its entry is deleted is refused, or deleted with

@@ -20,7 +20,7 @@
  *
  * @module templates/unlink-copies
  */
-import { PENDING_CHANGE_KEY } from "nextly/reserved-filter-keys";
+import { PENDING_CHANGE_KEY } from "@nextlyhq/plugin-sdk";
 
 import { TEMPLATE_FORKED_FROM_FIELD } from "../collections/templates";
 import { asOverwrite } from "../document-version";
