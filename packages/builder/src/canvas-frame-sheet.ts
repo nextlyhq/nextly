@@ -243,6 +243,19 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
   padding: 0.6em 0.9em;
 }
 
+/* A block its conditions hide while they are applied, drawn as one line in
+   its place: its words kept readable however small the canvas paints the
+   page, never under 11px on screen, and at its own 13px from full size up.
+   In pixels, not rems, so a site whose root font size is not 16px moves
+   neither. Its spacing is in its own text's units, so it keeps its shape at
+   every zoom. Written under the root, so it outweighs the marker's own
+   defaults in the page's sheet. */
+${ROOT} .nx-condition-hidden {
+  font-size: max(13px, calc(11px / var(--nx-canvas-zoom, 1)));
+  gap: 0.6em;
+  padding: 0.45em 0.75em;
+}
+
 [data-nx-list-diagnostic="sort-fallback"] {
   border-color: color-mix(in srgb, var(--nx-builder-warning, Mark) 55%, transparent);
   background: color-mix(
