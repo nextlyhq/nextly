@@ -1,9 +1,12 @@
 /**
  * The definitions as the renderer reads them, for the canvas's marks and the
- * conditions it can't check: stored placement gates removed, and stored data
- * the resolver repairs handed on rather than thrown on.
+ * conditions it can't check: the renderer's own repair, so the editor
+ * composes the tree the canvas draws, and malformed stored data is repaired
+ * or refused rather than thrown on.
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
   resolveComponentInstances,
   type BlockDocument,
   type DefinitionsById,
@@ -13,99 +16,79 @@ import { describe, expect, it } from "vitest";
 import { asStoredDefinitions } from "./condition-gate";
 
 /** Stored data in a shape the types don't allow, as a database may hold. */
-function stored(json: string): BlockDocument {
-  const parsed: BlockDocument = JSON.parse(json);
+function stored(value: unknown): BlockDocument {
+  const parsed: BlockDocument = JSON.parse(JSON.stringify(value));
   return parsed;
 }
 
-const page = stored(
-  JSON.stringify({
-    version: 1,
-    nodes: [
-      {
-        id: "placed",
-        type: "core/component-instance",
-        version: 1,
-        props: { componentId: "card" },
-      },
-    ],
-  })
-);
+const page = stored({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: [
+    {
+      id: "placed",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "card" },
+    },
+  ],
+});
+
+const title = {
+  id: "title",
+  type: "core/text",
+  version: 1,
+  props: {},
+  visibility: { within: [[{ field: "title", op: "exists" }]] },
+};
 
 describe("the definitions as the renderer reads them", () => {
-  it("hands on a definition whose nodes are not a list, for the resolver to judge", () => {
-    const definition = stored('{"version":1,"nodes":"not a list"}');
-    const definitions: DefinitionsById = new Map([["card", definition]]);
+  it("leaves a definition whose nodes are not a list for the resolver to report unreadable", () => {
+    const definitions: DefinitionsById = new Map([
+      [
+        "card",
+        stored({
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: "not a list",
+        }),
+      ],
+    ]);
     const lookup = asStoredDefinitions(definitions);
-    // Kept as stored, rather than a throw from reading it as a list.
-    expect(lookup.get("card")?.nodes).toBe("not a list");
-    expect(() =>
-      resolveComponentInstances(page, lookup, { conditioned: "carry" })
-    ).not.toThrow();
-  });
-
-  it("keeps a null entry as stored and still removes the gate beside it", () => {
-    const definitions: DefinitionsById = new Map([
-      [
-        "card",
-        stored(
-          JSON.stringify({
-            version: 1,
-            nodes: [
-              null,
-              {
-                id: "title",
-                type: "core/text",
-                version: 1,
-                props: {},
-                visibility: { within: [[{ field: "title", op: "exists" }]] },
-              },
-            ],
-          })
-        ),
-      ],
-    ]);
-    const nodes: readonly unknown[] =
-      asStoredDefinitions(definitions).get("card")?.nodes ?? [];
-    expect(nodes[0]).toBeNull();
-    // The block beside it still loses its stored placement gate, so the
-    // guard skips only what isn't a block.
-    expect(nodes[1]).toMatchObject({ id: "title" });
-    expect(JSON.stringify(nodes[1])).not.toContain("within");
-  });
-
-  it("reads no deeper than the deepest tree the resolver composes", () => {
-    // Three levels, each with a stored placement gate. Under a depth of 1
-    // the resolver composes two of them, so the third is left as stored:
-    // a hand-edited tree of any depth costs only the limit to read here.
-    const gate = { within: [[{ field: "title", op: "exists" }]] };
-    const level = (id: string, children?: unknown[]) => ({
-      id,
-      type: "core/section",
-      version: 1,
-      props: {},
-      visibility: gate,
-      ...(children === undefined ? {} : { slots: { children } }),
+    // Supplied, so not missing; unreadable, so no document to compose.
+    expect(lookup.has("card")).toBe(true);
+    expect(lookup.get("card")).toBeUndefined();
+    const composed = resolveComponentInstances(page, lookup, {
+      conditioned: "carry",
     });
+    expect(composed.unresolved.map(entry => entry.instanceId)).toEqual([
+      "placed",
+    ]);
+  });
+
+  it("drops an entry that is not a block, as the renderer drops it, and removes a stored gate", () => {
     const definitions: DefinitionsById = new Map([
       [
         "card",
-        stored(
-          JSON.stringify({
-            version: 1,
-            nodes: [level("top", [level("middle", [level("deepest")])])],
-          })
-        ),
+        stored({
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component",
+          nodes: [null, title],
+        }),
       ],
     ]);
-    const read = JSON.stringify(
-      asStoredDefinitions(definitions, { maxDepth: 1 }).get("card")?.nodes
-    );
-    // Only the deepest block keeps its gate: one "within" left, not none (a
-    // walk to the end, whatever the depth) and not three (no walk at all).
-    expect(read.split('"within"')).toHaveLength(2);
-    expect(read).toMatch(
-      /"id":"deepest","type":"core\/section","version":1,"props":\{\},"visibility":\{"within"/
-    );
+    const lookup = asStoredDefinitions(definitions);
+    const nodes: readonly unknown[] = lookup.get("card")?.nodes ?? [];
+    // Dropped rather than kept, so it counts against no node budget the
+    // composition spends.
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({ id: "title" });
+    // A placement gate is the resolver's to write, never stored data's.
+    expect(JSON.stringify(nodes[0])).not.toContain("within");
+    const composed = resolveComponentInstances(page, lookup, {
+      conditioned: "carry",
+    });
+    expect(composed.unresolved).toEqual([]);
+    expect(composed.document.nodes).toHaveLength(1);
   });
 });
