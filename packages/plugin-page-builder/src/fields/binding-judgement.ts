@@ -22,6 +22,7 @@ import {
   bindingSchemaIssues,
   isErrorIssue,
   registryBlockSource,
+  SITE_SETTING_FIELD_SHAPES,
   walkNodes,
   type BlockNode,
   type ResolvedBlockNode,
@@ -138,7 +139,9 @@ interface SchemaReads {
 /**
  * The schema as read so far. A collection or a Single not read yet answers
  * unknown, and is noted in `wanted` when one is given; the site settings are
- * never read here, being a fixed set, and a named query's rows are its
+ * the engine's fixed table, the one the renderer reads, so a binding to a
+ * setting a page is never handed is refused here as the page would fall it
+ * back; and a named query's rows are its
  * declaration's own fields (a query whose rows are a collection's entries is
  * judged as that collection, by the walk).
  */
@@ -149,6 +152,7 @@ function schemaSoFar(
   return {
     listsTimestamps: true,
     fieldsOf: ref => {
+      if ("site" in ref) return SITE_SETTING_FIELD_SHAPES;
       if ("query" in ref) {
         const rows = reads.namedQueries?.declarationOf(ref.query)?.rows;
         return rows !== undefined && "fields" in rows ? rows.fields : undefined;
