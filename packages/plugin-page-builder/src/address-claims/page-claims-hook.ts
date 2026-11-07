@@ -214,7 +214,9 @@ function addressesIn(
  * hold narrower grants than its owner and the write does not carry them:
  * naming only what the public may read leaks nothing to any caller.
  */
-function describeFor(deps: PageClaimsDeps): DescribeHolder {
+export function describeFor(
+  deps: Pick<PageClaimsDeps, "collection" | "nextly">
+): DescribeHolder {
   return async holder => {
     const config = await deps.collection(holder.collection).catch(() => null);
     const label = singularLabel(config);
@@ -238,7 +240,7 @@ function describeFor(deps: PageClaimsDeps): DescribeHolder {
 /** The holder as a visitor reads it: published, and only if public. */
 async function readAsPublic(
   holder: Holder,
-  deps: PageClaimsDeps
+  deps: Pick<PageClaimsDeps, "nextly">
 ): Promise<unknown> {
   const nextly = await deps.nextly();
   return nextly.findByID({
