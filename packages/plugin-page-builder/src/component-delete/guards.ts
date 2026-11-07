@@ -134,30 +134,25 @@ export interface ComponentGuardArgs {
  *
  * A save made on its own runs its `beforeChange` hooks before its
  * transaction opens, so there the record is read afresh, on the pool, with
- * no connection of the write's held. A save inside a caller's transaction
- * holds one, and a read on the pool could wait behind it for ever on a pool
- * of one, so there nothing is read: the last answer read stands, first read
- * once the site is ready (`prime`). With none yet, or a read that fails, the
- * store counts as having a lifecycle, so the check runs.
+ * no connection of the write's held, and only that fresh answer can let a
+ * save through. A save inside a caller's transaction holds one, and a read
+ * on the pool could wait behind it for ever on a pool of one, so there
+ * nothing is read and the store counts as having a lifecycle: the check
+ * runs. A read that fails counts the same way. The cost is that, inside a
+ * caller's transaction, a host store without a lifecycle has an edit of its
+ * own `status` field refused as an unpublish where a component it holds is
+ * used.
  */
-export function storeLifecycle(read: () => Promise<boolean>): {
-  readonly prime: () => Promise<void>;
-  readonly has: (inATransaction: boolean) => Promise<boolean>;
-} {
-  let last: boolean | undefined;
-  const fresh = async (): Promise<boolean> => {
+export function storeLifecycle(
+  read: () => Promise<boolean>
+): (inATransaction: boolean) => Promise<boolean> {
+  return async inATransaction => {
+    if (inATransaction) return true;
     try {
-      last = await read();
-      return last;
+      return await read();
     } catch {
       return true;
     }
-  };
-  return {
-    prime: async () => {
-      await fresh();
-    },
-    has: async inATransaction => (inATransaction ? (last ?? true) : fresh()),
   };
 }
 

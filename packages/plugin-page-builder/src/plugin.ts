@@ -1461,13 +1461,6 @@ export const pageBuilder = (
    */
   let seedGraphLock: (() => Promise<void>) | null = null;
 
-  /**
-   * Whether the component store has a lifecycle, read once the site is
-   * ready and again by each save made on its own. Published by `init` for
-   * the reason `defaultLayoutSetup` is.
-   */
-  let componentStoreLifecycle: ReturnType<typeof storeLifecycle> | null = null;
-
   /** The installed spacing-model store, or a refusal naming why it is missing. */
   const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
     if (spacingSetup === null) {
@@ -2288,7 +2281,6 @@ export const pageBuilder = (
               } | null
             )?.status === true
         );
-        componentStoreLifecycle = lifecycle;
         registerComponentGuards({
           ctx,
           components: store,
@@ -2297,7 +2289,7 @@ export const pageBuilder = (
           confirmUnused: storedUseCheck(() =>
             componentDeleteRewriteService(requireRewriteInstall)
           ),
-          lifecycle: lifecycle.has,
+          lifecycle,
         });
       }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
@@ -2349,7 +2341,6 @@ export const pageBuilder = (
       const backfill = pageClaimsBackfill;
       if (backfill !== null) void backfill().catch(() => undefined);
       void seedGraphLock?.();
-      void componentStoreLifecycle?.prime();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
       const seeded =
