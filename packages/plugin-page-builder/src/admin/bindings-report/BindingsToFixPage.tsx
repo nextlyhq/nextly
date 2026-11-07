@@ -21,7 +21,7 @@
  * @module admin/bindings-report/BindingsToFixPage
  */
 import { Button, navigateTo } from "@nextlyhq/plugin-sdk/admin";
-import { Tabs, TabsList, TabsTrigger } from "@nextlyhq/ui";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import { AlertTriangle, ArrowRight, ChevronRight } from "lucide-react";
 import { useState, type JSX } from "react";
 
@@ -272,7 +272,7 @@ function ReportBody({
   const places = PLACES.filter(entry => (meta.byPlace[entry.value] ?? 0) > 0);
   return (
     <>
-      <Tabs value={place} onValueChange={onPlace} className="mb-4">
+      <Tabs value={place} onValueChange={onPlace}>
         <TabsList aria-label="Show bindings in">
           <TabsTrigger value="all">
             All
@@ -289,11 +289,31 @@ function ReportBody({
             </TabsTrigger>
           ))}
         </TabsList>
+        {/* A panel for every tab, so each tab names a panel that is there;
+            only the open one holds the table, read for its place. */}
+        {["all", ...places.map(entry => entry.value)].map(value => (
+          <TabsContent
+            key={value}
+            value={value}
+            forceMount
+            hidden={value !== place}
+            className="mt-4"
+          >
+            {value === place ? (
+              <>
+                <BindingsTable items={report.data?.items ?? []} />
+                {meta.totalPages > 1 ? (
+                  <Pager
+                    page={page}
+                    totalPages={meta.totalPages}
+                    onPage={onPage}
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </TabsContent>
+        ))}
       </Tabs>
-      <BindingsTable items={report.data?.items ?? []} />
-      {meta.totalPages > 1 ? (
-        <Pager page={page} totalPages={meta.totalPages} onPage={onPage} />
-      ) : null}
     </>
   );
 }
