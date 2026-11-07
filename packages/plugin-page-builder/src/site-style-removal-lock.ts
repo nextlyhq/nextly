@@ -65,7 +65,11 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { holdCompositionGraph } from "./composition-graph-lock";
+import {
+  GRAPH_SNAPSHOT_RACED,
+  holdCompositionGraph,
+  isGraphSnapshotRefusal,
+} from "./composition-graph-lock";
 import { refuseStoredUses, type StoredUse } from "./shared-style-rescan";
 import {
   SITE_STYLE_SLUG,
@@ -160,7 +164,23 @@ export async function refuseRemovalsInUse(
 
   // The lock first, then the read: what the read sees is everything a page
   // write holding the lock before this one committed.
-  await holdCompositionGraph(write.db, dialect);
+  try {
+    await holdCompositionGraph(write.db, dialect);
+  } catch (error) {
+    // A page write took the lock and committed after this write's
+    // transaction first read (a Single's write keeps MySQL's REPEATABLE
+    // READ): said in the removal's own words rather than the lock's, which
+    // speak of components. The cause stays, so the remove routes read the
+    // Single again and try once more, as for a replaced version, and the
+    // retry finds the page and refuses as in use.
+    if (!isGraphSnapshotRefusal(error)) throw error;
+    throw NextlyError.conflict({
+      reason: "state",
+      message: DESIGN_CHANGED,
+      ...(error instanceof Error ? { cause: error } : {}),
+      logContext: { cause: GRAPH_SNAPSHOT_RACED },
+    });
+  }
   const found = await readWithinOrRefuse(
     async () => ({
       variables:

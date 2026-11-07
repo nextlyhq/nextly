@@ -9,8 +9,13 @@
  * (`__tests__/site-style-removal-lock.integration.test.ts`) drives with two
  * writers; here it is recorded, so the order of the lock and the read shows.
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  GRAPH_SNAPSHOT_RACED,
+  isGraphSnapshotRefusal,
+} from "./composition-graph-lock";
 import type { StoredUse } from "./shared-style-rescan";
 import {
   DESIGN_CHANGED,
@@ -23,14 +28,23 @@ import {
 /** What happened, in order: the lock taken, the stored documents read. */
 const order = vi.hoisted(() => [] as string[]);
 
-vi.mock("./composition-graph-lock", () => ({
+/** What the lock throws next, when a test makes it refuse. */
+const lockRefuses = vi.hoisted(() => ({ next: undefined as unknown }));
+
+// The lock is recorded; what tells its refusals apart is the module's own.
+vi.mock("./composition-graph-lock", async importOriginal => ({
+  ...(await importOriginal<typeof import("./composition-graph-lock")>()),
   holdCompositionGraph: vi.fn(async () => {
     order.push("lock");
+    const refusal = lockRefuses.next;
+    lockRefuses.next = undefined;
+    if (refusal !== undefined) throw refusal;
   }),
 }));
 
 afterEach(() => {
   order.length = 0;
+  lockRefuses.next = undefined;
   vi.useRealTimers();
 });
 
@@ -231,6 +245,48 @@ describe("a site style write dropping a variable or a shared style", () => {
     });
     await vi.advanceTimersByTimeAsync(REMOVAL_RESCAN_MS);
     await settled;
+  });
+
+  it("says a lock refused for an old snapshot in its own words, keeping the cause the routes retry on", async () => {
+    const raced = NextlyError.conflict({
+      reason: "state",
+      message: "the lock's own words",
+      logContext: { cause: GRAPH_SNAPSHOT_RACED },
+    });
+    lockRefuses.next = raced;
+    const { setup, variableUses } = setupUsing();
+    const judged = refuseRemovalsInUse(
+      update(
+        { tokens: { tokens: [variable("t-accent")] } },
+        { tokens: { tokens: [] } }
+      ),
+      setup,
+      "mysql"
+    );
+    await expect(judged).rejects.toMatchObject({
+      code: "CONFLICT",
+      publicMessage: DESIGN_CHANGED,
+      cause: raced,
+      logContext: { cause: GRAPH_SNAPSHOT_RACED },
+    });
+    await expect(
+      judged.catch(error => isGraphSnapshotRefusal(error))
+    ).resolves.toBe(true);
+    // Refused at the lock: nothing was read.
+    expect(variableUses).not.toHaveBeenCalled();
+  });
+
+  it("passes any other refusal of the lock on as it is", async () => {
+    const other = new Error("the connection was lost");
+    lockRefuses.next = other;
+    const { setup } = setupUsing();
+    await expect(
+      refuseRemovalsInUse(
+        update({ classes: [style("c-card")] }, { classes: [] }),
+        setup,
+        "postgresql"
+      )
+    ).rejects.toBe(other);
   });
 
   it("is registered for the Single as the host renamed it", () => {

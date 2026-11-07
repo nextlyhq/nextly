@@ -57,6 +57,34 @@ import { siteOptions } from "./schema/tables";
 /** The lock row's name in the table. */
 const COMPOSITION_GRAPH_LOCK = "composition-graph-lock";
 
+/**
+ * The cause a refusal names when the transaction's reads are older than the
+ * last writer that held the lock: the write is sound to make again, from a
+ * fresh read, as a write refused for a replaced version is.
+ */
+export const GRAPH_SNAPSHOT_RACED =
+  "composition-graph-snapshot-older-than-lock";
+
+/**
+ * Whether a write was refused because its transaction read from a snapshot
+ * older than the lock ({@link holdCompositionGraph}), wherever it sits in the
+ * chain of causes. A refusal re-worded for its caller keeps the same cause, so
+ * it is still told apart from every other conflict.
+ */
+export function isGraphSnapshotRefusal(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 10 && current instanceof Error; depth += 1) {
+    if (
+      current instanceof NextlyError &&
+      current.logContext?.cause === GRAPH_SNAPSHOT_RACED
+    ) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 /** The dialect, as `ctx.dialect` names it. */
 type Dialect = Parameters<typeof isUniqueViolation>[0];
 
@@ -95,7 +123,7 @@ export async function holdCompositionGraph(
         reason: "state",
         message:
           "This save raced another change to the page builder's components. Save it again.",
-        logContext: { cause: "composition-graph-snapshot-older-than-lock" },
+        logContext: { cause: GRAPH_SNAPSHOT_RACED },
       });
     }
     seen = row.value;

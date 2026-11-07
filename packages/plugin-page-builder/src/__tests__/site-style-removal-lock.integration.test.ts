@@ -329,7 +329,9 @@ describe.each(getConfiguredTestDialects())(
      * by the read under the lock. On MySQL a Single's write keeps the
      * dialect's REPEATABLE READ, so its reads answer from a snapshot taken
      * before the page committed, and the lock's compare-and-set refuses it as
-     * a conflict to save again before it reads anything.
+     * a conflict to save again before it reads anything. Written directly, as
+     * here, that refusal is the answer; the remove routes read the Single
+     * again and retry it, and the retry is refused as in use.
      */
     const refusedRemoval = dialect === "mysql" ? ["CONFLICT"] : ["IN_USE"];
 
