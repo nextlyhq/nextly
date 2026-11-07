@@ -19,6 +19,7 @@ import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resourc
 import type { Logger } from "../../../services/shared";
 import { assertAddressAllowed } from "../../../shared/address-rule";
 import { BaseService } from "../../../shared/base-service";
+import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
@@ -1178,9 +1179,11 @@ export class CollectionMetadataService extends BaseService {
     if (!(await this.holdCollectionIn(tx, slug))) return false;
     let collection: unknown;
     try {
-      collection = await this.collectionService.getCollection(
-        slug,
-        tx.getDrizzle()
+      // Routed onto `tx`: the registry read otherwise takes a pooled
+      // connection, which on a pool of one waits for the very connection
+      // this transaction holds.
+      collection = await runReadsInTransaction(tx, () =>
+        this.collectionService.getCollection(slug)
       );
     } catch (error) {
       if (NextlyError.isNotFound(error)) return false;

@@ -11,17 +11,25 @@
  * does that): a hold that reads the record and the row first answers that
  * the entry exists.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import {
+  adapterForReads,
+  readsOnTransaction,
+} from "../../../../shared/lib/read-transaction-scope";
 import { CollectionMetadataService } from "../collection-metadata-service";
 
 /** The calls each stand-in received, in the order they came. */
 type Call =
   | { kind: "holdCollections"; slugs: readonly string[]; strength: string }
-  | { kind: "getCollection"; slug: string }
+  | { kind: "getCollection"; slug: string; onTransaction?: boolean }
   | { kind: "select"; table: string; forShare: boolean };
+
+/** A pooled adapter, as far as the read scope asks one. */
+const POOL = { transactionOpenInFlow: () => true };
 
 /** The hold's service over stand-ins answering as `world` says. */
 function holding(world: {
@@ -31,6 +39,8 @@ function holding(world: {
   record?: Record<string, unknown>;
   /** The ids the entry table holds. */
   entries: readonly string[];
+  /** Record whether the record read runs on the held transaction. */
+  probeRouting?: boolean;
 }): {
   hold: (slug: string, id: string) => Promise<boolean>;
   calls: Call[];
@@ -52,7 +62,20 @@ function holding(world: {
         }
       ),
       getCollection: vi.fn(async (slug: string) => {
-        calls.push({ kind: "getCollection", slug });
+        calls.push(
+          world.probeRouting === true
+            ? {
+                kind: "getCollection",
+                slug,
+                // What a service reading through this adapter would read on:
+                // a view of the held transaction inside its read scope, the
+                // pool outside it.
+                onTransaction: readsOnTransaction(
+                  adapterForReads(POOL as unknown as DrizzleAdapter)
+                ),
+              }
+            : { kind: "getCollection", slug }
+        );
         if (!world.record) {
           throw NextlyError.notFound({ logContext: { collection: slug } });
         }
@@ -97,6 +120,24 @@ describe("CollectionMetadataService.holdEntryIn", () => {
       { kind: "getCollection", slug: "posts" },
       { kind: "select", table: "dc_posts", forShare: true },
     ]);
+  });
+
+  it("reads the collection's record on the held transaction, never the pool", async () => {
+    // On a pool of one connection, a record read through the pool waits for
+    // the connection this transaction holds.
+    const { hold, calls } = holding({
+      registered: ["posts"],
+      record: { tableName: "dc_posts" },
+      entries: ["1"],
+      probeRouting: true,
+    });
+
+    expect(await hold("posts", "1")).toBe(true);
+    expect(calls[1]).toEqual({
+      kind: "getCollection",
+      slug: "posts",
+      onTransaction: true,
+    });
   });
 
   it("answers false for a collection that is gone, reading neither its record nor the entry's row", async () => {
