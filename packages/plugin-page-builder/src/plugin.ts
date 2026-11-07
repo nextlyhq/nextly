@@ -26,6 +26,7 @@ import {
   resolvedCollectionView,
   type PluginCollectionView,
   type PluginDefinition,
+  type PluginCollectionTransaction,
   type PluginRouteContext,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
@@ -44,7 +45,11 @@ import {
   publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
-import type { Tx } from "./address-claims/claim-store";
+import {
+  lockHolder,
+  releaseHolderLock,
+  type Tx,
+} from "./address-claims/claim-store";
 import {
   CONTENT_ADDRESS_SERVICE,
   contentAddressService,
@@ -116,7 +121,12 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
+import {
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_FORKED_FROM_FIELD,
+  templatesCollection,
+  TEMPLATES_SLUG,
+} from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -160,6 +170,7 @@ import {
   pageBuilderSettingsSingle,
 } from "./default-layout/settings-single";
 import { definitionActionsRoute } from "./definition-actions-route";
+import { asOverwrite } from "./document-version";
 import { entriesRoute } from "./entries-route";
 import type {
   CompositionSetup,
@@ -304,6 +315,10 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import {
+  designUnderWhere,
+  registerEntryDesignCascade,
+} from "./templates/entry-design-cascade";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   checkedTemplateAddresses,
@@ -2019,6 +2034,13 @@ export const pageBuilder = (
       // place and names the template already holding it. RESOLVED slugs, for
       // the reason the guard above takes them.
       const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      // The address store's collection, as the address claims and the lock an
+      // entry's own design is given and deleted under both reach it.
+      const addressClaims = {
+        services: ctx.services,
+        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
+        dialect: ctx.dialect,
+      };
       templateGuard = {
         templatesCollection: templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
@@ -2034,8 +2056,125 @@ export const pageBuilder = (
           }
         },
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
+        lockEntry: (tx, collection, id) =>
+          lockHolder(addressClaims, tx, { collection, id }),
+        // Read as the system and in any state: whether the entry exists is
+        // the question, and who may see it is the action's to ask.
+        entryExists: async (collection, id) => {
+          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+          const nextly = (await getCachedNextly()) as unknown as {
+            findByID(args: Record<string, unknown>): Promise<unknown>;
+          };
+          try {
+            const row = await nextly.findByID({
+              collection,
+              id,
+              overrideAccess: true,
+              status: "all",
+              depth: 0,
+              select: { id: true },
+            });
+            return typeof row === "object" && row !== null;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return false;
+            throw error;
+          }
+        },
       };
       registerTemplateGuard(ctx, templateGuard);
+      // An entry's own design is deleted with its entry, in the delete's
+      // transaction.
+      // The id of the own design held under `key`, read on the transaction
+      // `tx` stands for, with the lock asked for.
+      const designIdUnder = async (
+        tx: PluginCollectionTransaction,
+        key: string,
+        lock: "share" | "update"
+      ): Promise<string | null> => {
+        const found =
+          await ctx.services.ownCollections.listEntriesInTransaction(
+            tx,
+            templates,
+            {
+              where: designUnderWhere(key),
+              pagination: { limit: 1 },
+              depth: 0,
+            },
+            { lock }
+          );
+        const id = (found.data[0] as { id?: unknown } | undefined)?.id;
+        return typeof id === "string" || typeof id === "number"
+          ? String(id)
+          : null;
+      };
+      registerEntryDesignCascade(ctx.hooks, {
+        templates,
+        ownCollections: () => new Set(Object.values(ctx.self.collections)),
+        hasDesigns: async (tx, collection) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templates,
+              {
+                where: {
+                  [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                },
+                pagination: { limit: 1 },
+                depth: 0,
+              }
+            );
+          return found.data.length > 0;
+        },
+        designAt: (tx, key) => designIdUnder(tx, key, "share"),
+        lockEntry: (tx, entry) => lockHolder(addressClaims, tx, entry),
+        releaseEntryLock: (tx, entry) =>
+          releaseHolderLock(addressClaims, tx, entry),
+        // On the delete's own transaction, for update: the design is deleted
+        // next, and no second pooled connection is taken while the delete
+        // holds one.
+        designUnder: (tx, key) => designIdUnder(tx, key, "update"),
+        unlinkCopiesOf: async (tx, id) => {
+          // The first page again after each is emptied, so a copy made or
+          // removed meanwhile cannot shift one past a page number. A copy
+          // read twice (its link not emptied) ends the walk rather than
+          // looping on it.
+          const emptied = new Set<string>();
+          for (;;) {
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
+                tx,
+                templates,
+                {
+                  where: { [TEMPLATE_FORKED_FROM_FIELD]: { equals: id } },
+                  pagination: { limit: 100 },
+                  depth: 0,
+                },
+                { lock: "update" }
+              );
+            const copies = (found.data as { id?: unknown }[])
+              .map(row => row.id)
+              .filter(
+                (copy): copy is string | number =>
+                  typeof copy === "string" || typeof copy === "number"
+              )
+              .map(String)
+              .filter(copy => !emptied.has(copy));
+            if (copies.length === 0) return;
+            for (const copy of copies) {
+              await ctx.services.collections.updateEntryInTransaction(
+                tx,
+                templates,
+                copy,
+                asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null })
+              );
+              emptied.add(copy);
+            }
+            if (found.data.length < 100) return;
+          }
+        },
+        deleteInTransaction: (tx, slug, id) =>
+          ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
+      });
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
@@ -2281,11 +2420,7 @@ export const pageBuilder = (
       // A page's address, and its paginated list's later pages, held in the
       // address store in the save's own transaction, so two documents never
       // hold one address whichever path saved them.
-      const claimsStore = {
-        services: ctx.services,
-        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
-        dialect: ctx.dialect,
-      };
+      const claimsStore = addressClaims;
       const pagesSlug = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
       const siteLocales = (): readonly string[] =>
         claimLocales(
