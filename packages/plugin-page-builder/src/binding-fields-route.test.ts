@@ -191,9 +191,17 @@ describe("the picker's fields", () => {
     expect(named(site, "applicationName")).toEqual({
       name: "applicationName",
       type: "text",
+      label: "Application name",
       public: true,
       preview: "Northwind Academy",
     });
+    // Named as the settings screen names them.
+    expect(site.map(field => field.label)).toEqual([
+      "Application name",
+      "Site URL",
+      "Logo URL",
+      "Time zone",
+    ]);
   });
 
   it("marks a relation's fields as visitors reach them, through the relation", async () => {
