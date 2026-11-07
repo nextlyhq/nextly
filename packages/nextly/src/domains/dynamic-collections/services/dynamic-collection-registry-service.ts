@@ -676,6 +676,29 @@ export class DynamicCollectionRegistryService extends BaseService {
    * (`forgetUnregisteredCollection`, given what this returns): forgotten
    * earlier, a rollback would leave the row and lose what was known about it.
    */
+  /**
+   * Lock the registry rows of `slugs` inside `tx` until it ends, and answer
+   * the slugs whose row is there. `"update"` is a collection delete's: taken
+   * before it removes anything, so a write holding a row for `"share"` (one
+   * that must not outlive the collection, such as a plugin's row naming it)
+   * and the delete take turns. The write then either commits before the
+   * delete reads what it removes, or waits and finds the row gone. SQLite
+   * has one writer at a time, so there the rows are only read.
+   */
+  async holdCollectionsIn(
+    tx: TransactionContext,
+    slugs: readonly string[],
+    strength: "share" | "update"
+  ): Promise<string[]> {
+    if (slugs.length === 0) return [];
+    const rows = await tx.select<{ slug: string }>("dynamic_collections", {
+      columns: ["slug"],
+      where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
+      ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
+    });
+    return rows.map(row => row.slug);
+  }
+
   async unregisterCollectionIn(
     tx: TransactionContext,
     slug: string

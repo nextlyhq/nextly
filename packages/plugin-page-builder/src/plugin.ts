@@ -290,7 +290,10 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
-import { templateCollectionDelete } from "./templates/collection-delete";
+import {
+  holdTemplateCollection,
+  templateCollectionDelete,
+} from "./templates/collection-delete";
 import { templateActionsRoute } from "./templates/template-actions-route";
 import {
   registerTemplateGuard,
@@ -1973,6 +1976,19 @@ export const pageBuilder = (
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
       };
       registerTemplateGuard(ctx, templateGuard);
+      // A template written while its collection is deleted holds the
+      // collection in its own transaction, so the two take turns: see
+      // `holdTemplateCollection`.
+      ctx.hooks.onInTransaction(
+        templates,
+        holdTemplateCollection<PluginCollectionTransaction>(
+          (transaction, collection) =>
+            ctx.services.collections.holdCollectionInTransaction(
+              transaction,
+              collection
+            )
+        )
+      );
       // A collection's template and its entries' own designs go with the
       // collection: listed in its delete dialog, and removed in the delete's
       // transaction, so none is left drawing a collection that is gone.

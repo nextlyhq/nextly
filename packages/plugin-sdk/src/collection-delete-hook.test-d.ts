@@ -34,6 +34,14 @@ expectTypeOf<
   ReturnType<NonNullable<Handlers["inTransaction"]>>
 >().toEqualTypeOf<Promise<void>>();
 
+// A write that names a collection holds it in its own transaction, by the
+// same token, and is told whether the collection is still there.
+expectTypeOf<
+  PluginContext["services"]["collections"]["holdCollectionInTransaction"]
+>().toEqualTypeOf<
+  (tx: PluginCollectionTransaction, collectionName: string) => Promise<boolean>
+>();
+
 function register(ctx: PluginContext): void {
   ctx.hooks.onCollectionDelete({
     impact: async slug => [{ label: `${slug} design`, kind: "design" }],

@@ -1125,6 +1125,24 @@ export class CollectionMetadataService extends BaseService {
     );
   }
 
+  /**
+   * Hold collection `slug`'s registry row for share inside `tx` until it
+   * ends, and answer whether the collection exists. A delete of the
+   * collection holds the row for update before it removes anything, so the
+   * two take turns: see `holdCollectionsIn`.
+   */
+  async holdCollectionIn(
+    tx: TransactionContext,
+    slug: string
+  ): Promise<boolean> {
+    const held = await this.collectionService.holdCollectionsIn(
+      tx,
+      [slug],
+      "share"
+    );
+    return held.includes(slug);
+  }
+
   private async deleteCollectionExcluded(
     params: Parameters<CollectionMetadataService["deleteCollection"]>[0]
   ): Promise<MetadataServiceResult> {
@@ -1302,11 +1320,13 @@ export class CollectionMetadataService extends BaseService {
       { splitStatements },
       { runCollectionDeleteHandlers },
       { getActiveHookRegistry },
+      { collectionDeleteFailure },
     ] = await Promise.all([
       import("./teardown-adapter-in-transaction"),
       import("../../schema/pipeline/sql-statement-utils"),
       import("./collection-delete-plugins"),
       import("../../../hooks/hook-registry"),
+      import("./collection-delete-failure"),
     ]);
     const drop = this.dropMigrationFor(ordered);
     await this.fileManager.saveDropMigration(
@@ -1315,17 +1335,25 @@ export class CollectionMetadataService extends BaseService {
     );
     // What each registry row's removal found, read after the commit.
     const unregistered = new Map<string, UnregisteredCollectionRow>();
+    const slugs = ordered.map(({ slug }) => slug);
+    // Set before the first statement that can be DDL (the translations
+    // teardown can drop a table): until then a failure on MySQL has
+    // committed nothing, and is answered as on the other dialects.
+    let ddlStarted = false;
     try {
       await this.adapter.transaction(async tx => {
-        // The plugins' handlers first: what they remove is plain rows, so
+        // The registry rows first, held for update to the end: a write that
+        // must not outlive a collection holds its row for share
+        // (`holdCollectionsIn`), so it either commits before the plugins'
+        // handlers below read what to remove, or waits and finds the
+        // collection gone.
+        await this.collectionService.holdCollectionsIn(tx, slugs, "update");
+        // The plugins' handlers next: what they remove is plain rows, so
         // here, before any DDL, a handler that throws rolls the whole delete
         // back on every dialect, MySQL included, whose table drops below
         // commit what ran before them.
-        await runCollectionDeleteHandlers(
-          getActiveHookRegistry(),
-          ordered.map(({ slug }) => slug),
-          tx
-        );
+        await runCollectionDeleteHandlers(getActiveHookRegistry(), slugs, tx);
+        ddlStarted = true;
         const teardownAdapter = teardownAdapterIn(this.adapter, tx);
         for (const { slug, collection } of ordered) {
           await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
@@ -1349,7 +1377,10 @@ export class CollectionMetadataService extends BaseService {
       // cached rows are not trusted either way.
       clearRegistryRowCache();
       await this.withdrawDropMigration(drop.migrationFileName);
-      throw this.deleteFailed(error, ordered);
+      throw collectionDeleteFailure(error, slugs, {
+        dialect: this.dialect,
+        ddlStarted,
+      });
     }
     for (const { slug, collection } of ordered) {
       await this.forgetDeleted(
@@ -1402,34 +1433,6 @@ export class CollectionMetadataService extends BaseService {
         `A failed collection delete could not remove its drop migration ${migrationFileName}. Remove it before the next \`nextly migrate\`, which would otherwise drop tables of collections that are still registered: ${error instanceof Error ? error.message : String(error)}`
       );
     }
-  }
-
-  /**
-   * What a failed delete says. On PostgreSQL and SQLite the transaction undid
-   * everything, so a refusal raised inside it keeps its own words and anything
-   * else says nothing was removed. On MySQL a table drop commits as it runs, so
-   * the delete says what may already be gone and how to finish it.
-   */
-  private deleteFailed(
-    error: unknown,
-    ordered: ReadonlyArray<{ slug: string }>
-  ): NextlyError {
-    const partial = this.dialect === "mysql";
-    if (!partial && NextlyError.is(error)) return error;
-    const one = ordered.length === 1;
-    const subject = one ? "this collection" : "these collections";
-    return new NextlyError({
-      code: "NEXTLY_MIGRATION_APPLY_FAILED",
-      publicMessage: partial
-        ? `Deleting ${subject} failed part-way. MySQL keeps each table drop as it runs, so some of what ${one ? "it" : "they"} stored, such as field-group values and translations, may already be removed. ${one ? "Delete it again to finish." : "Delete those still listed again to finish."}`
-        : `Deleting ${subject} failed, so nothing was removed.`,
-      logMessage: `Collection delete failed: ${error instanceof Error ? error.message : String(error)}`,
-      logContext: {
-        collections: ordered.map(({ slug }) => slug),
-        partial,
-      },
-      cause: error instanceof Error ? error : undefined,
-    });
   }
 
   /**

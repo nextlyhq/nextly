@@ -48,6 +48,15 @@ const DESIGNER = "@test/designer";
 
 /** Whether the second plugin refuses the delete. */
 const refusing = { on: false };
+/**
+ * When set, the second plugin's handler says it was reached and waits for
+ * `gate`, holding the delete open inside its transaction.
+ */
+const pausing: {
+  at?: { reached: () => void; gate: Promise<void> };
+} = {};
+/** The designer's context, for a write of its own beside the delete. */
+let designerContext: PluginContext | undefined;
 /** The slugs the designer's `inTransaction` was called for. */
 const handled: string[] = [];
 
@@ -55,6 +64,8 @@ let current: TestNextly | undefined;
 
 afterEach(async () => {
   refusing.on = false;
+  pausing.at = undefined;
+  designerContext = undefined;
   handled.length = 0;
   await current?.destroy();
   current = undefined;
@@ -133,6 +144,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         init(ctx) {
           ctx.hooks.onCollectionDelete({
             inTransaction: async () => {
+              if (pausing.at) {
+                pausing.at.reached();
+                await pausing.at.gate;
+              }
               if (refusing.on) {
                 throw NextlyError.conflict({
                   message: "The refuser holds this collection.",
@@ -146,6 +161,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   });
   current = t;
   if (!designer) throw new Error("the designer's init did not run");
+  designerContext = designer;
   for (const [title, target] of [
     ["Home design", HOST],
     ["About design", HOST],
@@ -247,5 +263,34 @@ describeEachDialect("a plugin's collection-delete hook", dialect => {
     clearRegistryRowCache();
     await builderDelete(HOST);
     expect(await designTitles(t)).toEqual(["Pages design"]);
+  });
+
+  it("holds a collection a write names until its delete ends, then answers it gone", async () => {
+    await boot(dialect);
+    const plugin = designerContext;
+    if (!plugin) throw new Error("not booted");
+    const collections = plugin.services.collections;
+    const hold = () =>
+      collections.withTransaction(tx =>
+        collections.holdCollectionInTransaction(tx, HOST)
+      );
+    // The control: before any delete, the collection is there.
+    expect(await hold()).toBe(true);
+
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    let reached!: () => void;
+    const inDelete = new Promise<void>(resolve => (reached = resolve));
+    pausing.at = { reached, gate };
+    const deleting = builderDelete(HOST);
+    await inDelete;
+    // Asked while the delete holds the registry row and has not yet removed
+    // it: a hold that took no lock would answer that the collection exists.
+    const held = hold();
+    await new Promise(resolve => setTimeout(resolve, 200));
+    release();
+    await deleting;
+
+    expect(await held).toBe(false);
   });
 });

@@ -56,7 +56,10 @@ import type {
   MigrationStatus,
 } from "@admin/types/entities";
 
-import { CollectionDeleteImpact } from "./CollectionDeleteImpact";
+import {
+  CollectionDeleteImpact,
+  useCollectionDeleteImpact,
+} from "./CollectionDeleteImpact";
 import { CollectionTableSkeleton } from "./CollectionTableSkeleton";
 
 /** Source badge label + icon. */
@@ -182,6 +185,19 @@ export default function CollectionTable(): JSX.Element {
       return true;
     });
   }, [data?.items, sourceFilter, migrationFilter]);
+
+  // What each delete dialog takes with it, asked while it is open: the one
+  // collection, or the set the bulk confirm deletes together.
+  const deleteImpact = useCollectionDeleteImpact(
+    collectionToDelete ? [collectionToDelete.name] : [],
+    deleteDialogOpen
+  );
+  const bulkDeleteImpact = useCollectionDeleteImpact(
+    filteredData
+      .filter(c => selectedIds.includes(c.id) && !c.locked)
+      .map(c => c.name),
+    bulkDeleteDialogOpen
+  );
 
   // Code-first (locked) collections open the same builder route; the builder
   // renders read-only when the loaded collection is locked.
@@ -630,11 +646,9 @@ export default function CollectionTable(): JSX.Element {
         }
         onConfirm={handleConfirmDelete}
         isLoading={isDeleting}
+        confirmDisabled={deleteImpact.resolving}
       >
-        <CollectionDeleteImpact
-          slugs={collectionToDelete ? [collectionToDelete.name] : []}
-          enabled={deleteDialogOpen}
-        />
+        <CollectionDeleteImpact impact={deleteImpact} />
       </BulkDeleteDialog>
 
       <BulkDeleteDialog
@@ -647,14 +661,9 @@ export default function CollectionTable(): JSX.Element {
           .map(c => ({ id: c.id, name: c.label, secondary: c.name }))}
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
+        confirmDisabled={bulkDeleteImpact.resolving}
       >
-        {/* The same set the confirm deletes together. */}
-        <CollectionDeleteImpact
-          slugs={filteredData
-            .filter(c => selectedIds.includes(c.id) && !c.locked)
-            .map(c => c.name)}
-          enabled={bulkDeleteDialogOpen}
-        />
+        <CollectionDeleteImpact impact={bulkDeleteImpact} />
       </BulkDeleteDialog>
     </>
   );

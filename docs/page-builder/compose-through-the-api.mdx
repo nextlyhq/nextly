@@ -232,7 +232,8 @@ The answer holds the `template` as the write stored it.
 Deleting a collection deletes its template with it, in the same transaction. The Schema
 Builder's delete dialog lists the template first, under the page builder's name, so
 you see what goes before you confirm. The page builder's own collections are not
-affected.
+affected. A template created while its collection is being deleted waits for the delete
+and is then refused, as for a collection that does not exist.
 
 ## Other routes with a dry run
 

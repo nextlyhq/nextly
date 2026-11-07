@@ -219,6 +219,14 @@ init(ctx) {
   drop with everything before it; deleting the collection again finishes it.
 - Both are asked about every collection deleted, your own among them: decide in the
   handler which you hold anything for.
+- A write of yours that names a collection and must not outlive it (a row your
+  `inTransaction` would remove) can still commit after that handler read what to remove.
+  Close the gap by holding the collection inside the write's transaction with
+  `ctx.services.collections.holdCollectionInTransaction(tx, slug)` (`@experimental`), and
+  refuse the write when it answers `false`: the delete holds the collection's registry row
+  for update before your handler runs, so the write either commits first and is removed
+  with the collection, or waits and is told the collection is gone. On MySQL a delete
+  that drops tables releases its hold at its first drop.
 
 **Never hardcode your own slugs** in `init`. Use `ctx.self` so your plugin keeps working when an integrator renames an entity:
 

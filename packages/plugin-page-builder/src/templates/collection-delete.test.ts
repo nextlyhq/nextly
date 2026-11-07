@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { TEMPLATE_COLLECTION_FIELD } from "../collections/templates";
 
 import {
+  holdTemplateCollection,
   templateCollectionDelete,
   type TemplateDeleteServices,
 } from "./collection-delete";
@@ -101,5 +102,73 @@ describe("the page builder's collection-delete handlers", () => {
 
     expect(asked).toEqual([]);
     expect(deleted).toEqual([]);
+  });
+});
+
+describe("a template's write holding its collection", () => {
+  /** A hold over the collections that exist, recording what it held. */
+  function holding(existing: readonly string[]) {
+    const held: string[] = [];
+    const handler = holdTemplateCollection<typeof TX>(
+      async (tx, collection) => {
+        expect(tx).toBe(TX);
+        held.push(collection);
+        return existing.includes(collection);
+      }
+    );
+    return { handler, held };
+  }
+
+  it("holds the collection a new template names, on the write's transaction", async () => {
+    const { handler, held } = holding(["articles"]);
+
+    await handler({
+      operation: "create",
+      data: { [TEMPLATE_COLLECTION_FIELD]: "articles" },
+      transaction: TX,
+    });
+
+    expect(held).toEqual(["articles"]);
+  });
+
+  it("refuses a template whose collection is gone by the time it holds it", async () => {
+    const { handler } = holding([]);
+
+    await expect(
+      handler({
+        operation: "create",
+        data: { [TEMPLATE_COLLECTION_FIELD]: "articles" },
+        transaction: TX,
+      })
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "template-collection-refused" },
+    });
+  });
+
+  it("holds nothing for an update that keeps its collection, or a delete", async () => {
+    const { handler, held } = holding(["articles", "posts"]);
+
+    await handler({
+      operation: "update",
+      data: { [TEMPLATE_COLLECTION_FIELD]: "articles", title: "New" },
+      originalData: { [TEMPLATE_COLLECTION_FIELD]: "articles" },
+      transaction: TX,
+    });
+    await handler({
+      operation: "delete",
+      data: { [TEMPLATE_COLLECTION_FIELD]: "articles" },
+      transaction: TX,
+    });
+    expect(held).toEqual([]);
+
+    // The control: an update pointing it at another collection holds that one.
+    await handler({
+      operation: "update",
+      data: { [TEMPLATE_COLLECTION_FIELD]: "posts" },
+      originalData: { [TEMPLATE_COLLECTION_FIELD]: "gone" },
+      transaction: TX,
+    });
+    expect(held).toEqual(["posts"]);
   });
 });

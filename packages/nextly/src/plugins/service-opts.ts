@@ -598,6 +598,22 @@ export type PluginCollectionService = Pick<
   withTransaction<T>(
     work: (tx: PluginCollectionTransaction) => Promise<T>
   ): Promise<T>;
+  /**
+   * @experimental Hold a collection for the rest of the transaction `tx`
+   * stands for, and answer whether it exists: its registry row, locked for
+   * share. A delete of the collection locks the row for update before it
+   * removes anything, so a write that must not outlive the collection it
+   * names either commits before the delete's collection-delete handlers
+   * (`ctx.hooks.onCollectionDelete`) read what to remove with it, or waits
+   * for the delete and is told the collection is gone. Asks nothing of the
+   * caller's access, and reads nothing but whether the row is there. On
+   * MySQL a delete that drops tables commits at its first drop, which ends
+   * its hold early. A settled token is refused.
+   */
+  holdCollectionInTransaction(
+    tx: PluginCollectionTransaction,
+    collectionName: string
+  ): Promise<boolean>;
 };
 
 /**
@@ -737,6 +753,19 @@ export function wrapCollectionsForPlugin(
     createEntryInTransaction: inTransaction("createEntryInTransaction"),
     updateEntryInTransaction: inTransaction("updateEntryInTransaction"),
     deleteEntryInTransaction: inTransaction("deleteEntryInTransaction"),
+    // Checked and tracked as the writes are, with no `ServiceOpts`: it reads
+    // only whether the collection's registry row is there.
+    holdCollectionInTransaction: async (
+      token: unknown,
+      collectionName: string
+    ): Promise<boolean> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        collections.holdCollectionInTransaction(tx, collectionName),
+        "read"
+      );
+    },
   }) as unknown as PluginCollectionService;
 }
 

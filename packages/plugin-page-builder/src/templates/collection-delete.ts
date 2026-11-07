@@ -18,12 +18,23 @@
  * The plugin's own collections are skipped: none of them is drawn with a
  * template, and deleting one is not this module's to answer for.
  *
+ * A template written while its collection is being deleted is the other
+ * half ({@link holdTemplateCollection}): the write holds the collection's
+ * registry row for share in its own transaction, which the delete holds for
+ * update before it reads what to remove. So the write either commits before
+ * that read, and is removed with the collection, or waits and is refused
+ * once the collection is gone. Without the hold, a template created after the
+ * delete's read and committed after it would be left drawing nothing, and
+ * would take the place of a collection later created under the same slug.
+ *
  * @module templates/collection-delete
  */
 import {
   TEMPLATE_COLLECTION_FIELD,
   templatesCollection,
 } from "../collections/templates";
+
+import { templateCollectionRefusal } from "./template-guard";
 
 /** The field naming the collection whose entry an own design draws. */
 export const ENTRY_COLLECTION_FIELD = "entryCollection";
@@ -67,6 +78,43 @@ export interface TemplateDeleteServices<Tx> {
   deleteTemplateInTransaction(tx: Tx, id: string): Promise<unknown>;
   /** The entries of `collection` with these ids, as the system. */
   listEntries(collection: string, ids: readonly string[]): Promise<Page>;
+}
+
+/** What an in-transaction handler is told about a template's write. */
+interface TemplateWrite<Tx> {
+  readonly operation: "create" | "update" | "delete";
+  readonly data?: Record<string, unknown>;
+  readonly originalData?: Record<string, unknown>;
+  readonly transaction: Tx;
+}
+
+/**
+ * The in-transaction handler that holds, for the rest of a template's write,
+ * each collection the template newly names: on a create, and on an update
+ * that points it at another. One that no longer exists refuses the write, as
+ * the guard refuses a collection that is not there.
+ */
+export function holdTemplateCollection<Tx>(
+  hold: (tx: Tx, collection: string) => Promise<boolean>
+): (write: TemplateWrite<Tx>) => Promise<void> {
+  return async write => {
+    if (write.operation === "delete") return;
+    for (const field of [TEMPLATE_COLLECTION_FIELD, ENTRY_COLLECTION_FIELD]) {
+      const collection = write.data?.[field];
+      if (typeof collection !== "string" || collection === "") continue;
+      if (
+        write.operation === "update" &&
+        write.originalData?.[field] === collection
+      ) {
+        continue;
+      }
+      if (!(await hold(write.transaction, collection))) {
+        throw templateCollectionRefusal(
+          `There is no collection "${collection}" to give a template.`
+        );
+      }
+    }
+  };
 }
 
 /** The templates rows that name `collection`: its template and own designs. */

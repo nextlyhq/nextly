@@ -3,10 +3,11 @@
  * in the delete dialog before the confirm, under the name of each plugin that
  * holds something for them (`ctx.hooks.onCollectionDelete`).
  *
- * Asked when the dialog opens, for exactly the collections it is about to
- * delete. Nothing to list shows nothing. A failure to ask is said, not
- * hidden, and does not stop the delete: the server runs the plugins' removal
- * with the delete whether or not the list was seen.
+ * Asked each time the dialog opens, for exactly the collections it is about
+ * to delete, and the confirm held until the answer arrives. Nothing to list
+ * shows nothing. A failure to ask is said, not hidden, and does not stop the
+ * delete: the server runs the plugins' removal with the delete whether or
+ * not the list was seen.
  */
 import { Alert, AlertDescription, Spinner } from "@nextlyhq/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -65,24 +66,52 @@ export function CollectionDeleteImpactList({
   );
 }
 
-/** Ask what deleting `slugs` takes with it, while `enabled`, and list it. */
-export function CollectionDeleteImpact({
-  slugs,
-  enabled,
-}: {
-  slugs: readonly string[];
-  enabled: boolean;
-}): JSX.Element | null {
+/** What the delete dialog knows of the impact, as {@link useCollectionDeleteImpact} answers it. */
+export interface CollectionDeleteImpactState {
+  /**
+   * Whether the answer for this opening is still on its way: the first ask,
+   * or a fresh ask on reopening while an earlier answer is cached. The
+   * dialog shows no list and holds its confirm until it settles, so what it
+   * lists is never what an earlier opening was told.
+   */
+  resolving: boolean;
+  /** Whether asking failed. */
+  failed: boolean;
+  /** The groups to list; none while resolving or after a failure. */
+  groups: readonly CollectionDeleteImpactGroup[];
+}
+
+/** Ask what deleting `slugs` takes with it, while `enabled`. */
+export function useCollectionDeleteImpact(
+  slugs: readonly string[],
+  enabled: boolean
+): CollectionDeleteImpactState {
+  const asking = enabled && slugs.length > 0;
   const impact = useQuery({
     queryKey: ["collections", "delete-impact", [...slugs]],
     queryFn: () => fetchCollectionDeleteImpact(slugs),
-    enabled: enabled && slugs.length > 0,
+    enabled: asking,
     // Asked afresh each time the dialog opens: what a plugin holds changes.
     staleTime: 0,
     retry: false,
   });
-  if (!enabled || slugs.length === 0) return null;
-  if (impact.isPending) {
+  // A refetch with an earlier answer cached is not settled: TanStack Query
+  // serves the cached answer meanwhile, which may describe another moment.
+  const resolving = asking && (impact.isPending || impact.isFetching);
+  return {
+    resolving,
+    failed: asking && !resolving && impact.isError,
+    groups: asking && !resolving && impact.isSuccess ? impact.data : [],
+  };
+}
+
+/** The impact as the dialog shows it: asking, failed, or the list. */
+export function CollectionDeleteImpact({
+  impact,
+}: {
+  impact: CollectionDeleteImpactState;
+}): JSX.Element | null {
+  if (impact.resolving) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
         <Spinner size="sm" />
@@ -90,7 +119,7 @@ export function CollectionDeleteImpact({
       </p>
     );
   }
-  if (impact.isError) {
+  if (impact.failed) {
     return (
       <Alert variant="destructive">
         <AlertDescription>
@@ -100,5 +129,5 @@ export function CollectionDeleteImpact({
       </Alert>
     );
   }
-  return <CollectionDeleteImpactList groups={impact.data} />;
+  return <CollectionDeleteImpactList groups={impact.groups} />;
 }
