@@ -17,6 +17,7 @@ import {
   type BlockNode,
   type Condition,
   type DefinitionsById,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
@@ -120,8 +121,8 @@ export function useConditionsUnchecked(
   services:
     | Pick<ContentServices, "listLoopCollections" | "entryCollection">
     | undefined,
-  /** The document limit the host renders and saves under. */
-  maxNodes?: number,
+  /** The document limits the host renders and saves under. */
+  limits?: DocumentLimits,
   /** The definitions of the components the document places. */
   definitions?: DefinitionsById
 ): ReadonlySet<string> {
@@ -133,6 +134,7 @@ export function useConditionsUnchecked(
         ? "loading"
         : listed.collections;
   const entryCollection = services?.entryCollection;
+  const maxNodes = limits?.maxNodes;
   return React.useMemo(() => {
     const own = uncheckedConditionIds(
       document.nodes,
@@ -143,10 +145,9 @@ export function useConditionsUnchecked(
     if (definitions === undefined || definitions.size === 0) return own;
     const composed = resolveComponentInstances(document, definitions, {
       conditioned: "carry",
-      limits: {
-        ...DEFAULT_LIMITS,
-        maxNodes: maxNodes ?? DEFAULT_LIMITS.maxNodes,
-      },
+      // Every limit the canvas composes under, so a site that raises the
+      // depth has its deeper blocks judged as they are drawn.
+      ...(limits === undefined ? {} : { limits }),
     }).document;
     return new Set([
       ...own,
@@ -157,5 +158,5 @@ export function useConditionsUnchecked(
         maxNodes
       ),
     ]);
-  }, [document, collections, entryCollection, maxNodes, definitions]);
+  }, [document, collections, entryCollection, maxNodes, limits, definitions]);
 }

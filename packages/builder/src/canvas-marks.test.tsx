@@ -462,6 +462,50 @@ describe("selection marks", () => {
     );
   });
 
+  it("badges each copy of a component's own conditioned block apart, though they share its composed id", async () => {
+    // A list drawing the component once per entry: each copy of the block
+    // carries the same composed id, in a wrapper of its own.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const copy = this.parentElement?.getAttribute("data-copy");
+        if (copy === "first") return new DOMRect(100, 100, 200, 50);
+        if (copy === "second") return new DOMRect(100, 600, 200, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const copyOfBlock = (copy: string) =>
+      createElement(
+        "div",
+        { key: copy, "data-copy": copy },
+        createElement("div", {
+          [NODE_ID_ATTRIBUTE]: "block-1",
+          [INSTANCE_ATTRIBUTE]: "place",
+          [CONDITIONED_ATTRIBUTE]: "conditional",
+          [CONDITIONED_OWN_ATTRIBUTE]: "",
+        })
+      );
+    const { container } = render(
+      <div className={CANVAS_ROOT_CLASS}>
+        {copyOfBlock("first")}
+        {copyOfBlock("second")}
+        <CanvasMarks />
+      </div>
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="conditioned"]'
+        )
+      );
+    // One outline per copy, not one spanning both and what lies between.
+    await waitFor(() => expect(badges()).toHaveLength(2));
+    expect(badges().map(badge => badge.style.top)).not.toEqual([
+      badges()[0]?.style.top,
+      badges()[0]?.style.top,
+    ]);
+  });
+
   it("keeps the tab on screen when the screen cuts a block's left side", async () => {
     // Only the block's rightmost 100px show, less than the tab's width.
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(

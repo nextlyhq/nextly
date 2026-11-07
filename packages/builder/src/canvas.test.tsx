@@ -38,11 +38,13 @@ import { createElement } from "react";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   PAGE_ROOT_CLASS,
   previewStateClass,
   registerBlocks,
   STYLE_STATES,
   type BlockDocument,
+  type DefinitionsById,
   type SiteSheetInput,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -1638,6 +1640,89 @@ describe("the drag in flight is drawn on the canvas", () => {
       container.querySelector(`[${NODE_ID_ATTRIBUTE}="plain"]`)
     ).not.toBeNull();
     expect(markOf("plain")).toBeNull();
+  });
+
+  it("draws a conditioned block of a component an override places, marked", async () => {
+    // The page places "frame", whose nested placement stores "plain" but is
+    // exposed; the page's override repoints it to "gated", the component the
+    // renderer then draws, whose own block has conditions.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const definitions: DefinitionsById = new Map([
+      [
+        "frame",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "nested",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "plain" },
+            },
+          ],
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "nested",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+      [
+        "plain",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [{ id: "stored", type: "acme/leaf", version: 1, props: {} }],
+        } as unknown as BlockDocument,
+      ],
+      [
+        "gated",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "inner",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { conditions: vip },
+            },
+          ],
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "card",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "frame", overrides: { swap: "gated" } },
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ definitions }}
+      />
+    );
+    await act(async () => undefined);
+
+    // Drawn, though the page would leave it out, and marked as conditioned.
+    const marked = container.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.getAttribute(CONDITIONED_ATTRIBUTE)).toBe("conditional");
   });
 
   it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {

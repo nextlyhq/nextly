@@ -785,7 +785,7 @@ interface ConditionBadge {
 
 /**
  * Which badge an element's outline joins: a block of a placed component's
- * definition its own, by its composed id; the roots of one copy of a
+ * definition its own, by its composed id within one drawn copy; the roots of one copy of a
  * conditioned placement one together, as one frame is drawn round a selected
  * one; any other block its own.
  */
@@ -795,7 +795,10 @@ function badgeKey(
   index: number
 ): string {
   if (element.hasAttribute(CONDITIONED_OWN_ATTRIBUTE)) {
-    return `own\u0000${element.getAttribute(NODE_ID_ATTRIBUTE) ?? String(index)}`;
+    // By copy as well: a list drawing the component once per entry draws
+    // the block once per entry, each with the same composed id.
+    const id = element.getAttribute(NODE_ID_ATTRIBUTE) ?? String(index);
+    return `own\u0000${String(copyOf(copies, element))}\u0000${id}`;
   }
   const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
   return placement === ""

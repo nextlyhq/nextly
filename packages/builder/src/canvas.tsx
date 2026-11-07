@@ -42,7 +42,8 @@ import {
   tokenIdentity,
   walkNodes,
   DEFAULT_LIMITS,
-  componentIdsIn,
+  componentReachIn,
+  componentReferencesFrom,
   resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
@@ -218,6 +219,28 @@ function conditionMarksOf(
 }
 
 /**
+ * The components one document reaches: those its nodes store, those its
+ * variants install, and those a placement's variant or instance overrides
+ * repoint a placed definition's nested placement to, which the renderer
+ * expands in place of the stored id. Asked of the engine's own survey, so the
+ * canvas lifts the definitions the renderer actually draws.
+ */
+function componentsReachedFrom(
+  document: unknown,
+  definitions: DefinitionsById,
+  maxNodes: number
+): string[] {
+  const reach = componentReachIn(document, maxNodes);
+  const ids = [...reach.ids];
+  for (const placement of reach.placements) {
+    const placed = definitions.get(placement.target);
+    if (placed === undefined) continue;
+    ids.push(...componentReferencesFrom(placed, placement.node, maxNodes).ids);
+  }
+  return ids;
+}
+
+/**
  * The definitions a page reaches, the components it places and those they
  * place, with each one's conditions lifted so the canvas draws its
  * conditioned blocks; every other definition as it is. Only the reached ones
@@ -230,12 +253,12 @@ function revealedDefinitions(
   maxNodes: number = DEFAULT_LIMITS.maxNodes
 ): DefinitionsById {
   const reached = new Set<string>();
-  const queue = componentIdsIn(document.nodes, maxNodes);
+  const queue = componentsReachedFrom(document, definitions, maxNodes);
   for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
     const definition = definitions.get(id);
     if (reached.has(id) || definition === undefined) continue;
     reached.add(id);
-    queue.push(...componentIdsIn(definition.nodes, maxNodes));
+    queue.push(...componentsReachedFrom(definition, definitions, maxNodes));
   }
   if (reached.size === 0) return definitions;
   const next = new Map(definitions);
