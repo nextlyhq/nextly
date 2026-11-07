@@ -55,6 +55,11 @@ function useDocumentKey(): string | undefined {
       });
 }
 
+/** Words as one sentence: a full stop, unless a quotation already ends in one. */
+function sentence(words: string): string {
+  return /[.!?]["”]?$/.test(words) ? words : `${words}.`;
+}
+
 /** The chip, and the list it opens; nothing when the document has none. */
 export function BindingsToFixChip({
   editor,
@@ -119,8 +124,9 @@ export function BindingsToFixChip({
                   {whereBound(row)}
                 </div>
                 <div className="text-[13px] leading-snug text-muted-foreground">
-                  {whatChanged(row, item.collectionLabel)}. Visitors see{" "}
-                  {visitorsSee(row)}.
+                  {sentence(
+                    `${whatChanged(row, item.collectionLabel)}. Visitors see ${visitorsSee(row)}`
+                  )}
                 </div>
               </div>
               {row.nodeId === "" ? null : (
