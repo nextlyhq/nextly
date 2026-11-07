@@ -85,7 +85,7 @@ export function templatesCollection(): CollectionConfig {
           component: TEMPLATE_ADDRESS_FIELD_COMPONENT,
           placeholder: "/blog",
           description:
-            "Where this collection's entries are served: the entry hello is served at <address>/hello, once the template is published. Changing it moves every entry to the new address and frees the old ones. Only someone allowed to manage template routing can set or change it.",
+            "Where this collection's entries are served: with /blog, the entry hello is served at /blog/hello once the template is published. Changing it moves every entry to the new address and frees the old ones.",
         },
       }),
       blocks({

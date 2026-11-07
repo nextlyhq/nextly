@@ -167,7 +167,13 @@ export function TemplateAddressField<
         }
         spellCheck={false}
         autoComplete="off"
-        className="font-mono"
+        // A value nobody here may change reads as settled, not as an
+        // input waiting for text.
+        className={
+          view.editable
+            ? "font-mono"
+            : "bg-muted/40 font-mono text-muted-foreground"
+        }
       />
       {/* Always drawn, so the answer arriving moves nothing below it. */}
       <p

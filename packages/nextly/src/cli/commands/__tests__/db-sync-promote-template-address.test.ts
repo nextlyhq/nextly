@@ -5,6 +5,8 @@
  * defined in code. One with no stored address prints none, and a read that
  * fails costs the promote nothing.
  */
+import { inspect } from "node:util";
+
 import type { SQL } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
@@ -19,7 +21,16 @@ import {
 const templatesRecord = {
   slug: "templates",
   tableName: "dc_templates",
+  source: "plugin:@nextlyhq/plugin-page-builder",
   fields: [{ name: "collection" }, { name: "address" }],
+} as unknown as DynamicCollectionRecord;
+
+/** Another collection, holding neither field. */
+const postsRecord = {
+  slug: "posts",
+  tableName: "dc_posts",
+  source: "ui",
+  fields: [{ name: "title" }, { name: "slug" }],
 } as unknown as DynamicCollectionRecord;
 
 describe("the promoted collection's template address", () => {
@@ -36,8 +47,7 @@ describe("the promoted collection's template address", () => {
     const asked: SQL[] = [];
     const address = await storedTemplateAddress(
       {
-        getCollectionBySlug: async slug =>
-          slug === "templates" ? templatesRecord : null,
+        getAllCollections: async () => [postsRecord, templatesRecord],
         queryStatement: async statement => {
           asked.push(statement);
           return [{ address: "/blog" }];
@@ -49,6 +59,29 @@ describe("the promoted collection's template address", () => {
     expect(asked).toHaveLength(1);
   });
 
+  it("finds the page builder's templates under the slug a site renamed them to", async () => {
+    let table = "";
+    const address = await storedTemplateAddress(
+      {
+        getAllCollections: async () => [
+          postsRecord,
+          {
+            ...templatesRecord,
+            slug: "site-templates",
+            tableName: "dc_site_templates",
+          } as unknown as DynamicCollectionRecord,
+        ],
+        queryStatement: async statement => {
+          table = inspect(statement, { depth: 6 });
+          return [{ address: "/blog" }];
+        },
+      },
+      "posts"
+    );
+    expect(address).toBe("/blog");
+    expect(table).toContain("dc_site_templates");
+  });
+
   it.each([
     ["no stored address", [{ address: null }]],
     ["an emptied one", [{ address: "" }]],
@@ -57,7 +90,7 @@ describe("the promoted collection's template address", () => {
     expect(
       await storedTemplateAddress(
         {
-          getCollectionBySlug: async () => templatesRecord,
+          getAllCollections: async () => [templatesRecord],
           queryStatement: async () => rows,
         },
         "posts"
@@ -74,11 +107,12 @@ describe("the promoted collection's template address", () => {
     expect(
       await storedTemplateAddress(
         {
-          getCollectionBySlug: async () =>
-            ({
+          getAllCollections: async () => [
+            {
               ...templatesRecord,
               fields: [{ name: "collection" }],
-            }) as unknown as DynamicCollectionRecord,
+            } as unknown as DynamicCollectionRecord,
+          ],
           queryStatement,
         },
         "posts"
@@ -86,7 +120,7 @@ describe("the promoted collection's template address", () => {
     ).toBeNull();
     expect(
       await storedTemplateAddress(
-        { getCollectionBySlug: async () => null, queryStatement },
+        { getAllCollections: async () => [postsRecord], queryStatement },
         "posts"
       )
     ).toBeNull();
@@ -97,7 +131,7 @@ describe("the promoted collection's template address", () => {
     expect(
       await storedTemplateAddress(
         {
-          getCollectionBySlug: async () => templatesRecord,
+          getAllCollections: async () => [templatesRecord],
           queryStatement: async () => {
             throw new Error("connection lost");
           },

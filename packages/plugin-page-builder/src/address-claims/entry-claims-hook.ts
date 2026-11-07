@@ -60,6 +60,9 @@ import {
 /** How many entries one read of a walk takes. */
 const BATCH = 100;
 
+/** How many claims one read of the store's holders takes. */
+const SWEEP_PAGE = 500;
+
 /** A committed row as the walks read it. */
 type Row = Readonly<Record<string, unknown>>;
 
@@ -94,6 +97,12 @@ export interface EntryClaimsDeps {
    * served under a template address.
    */
   readonly neverServed: (collection: string) => boolean;
+  /**
+   * Whether `collection` may have a template at all (a `slug` text field,
+   * shown in the admin, not localized): a collection that may not never
+   * holds an address, so its saves take no lock.
+   */
+  readonly mayHaveTemplate: (collection: string) => Promise<boolean>;
   /**
    * Why a stored address cannot be `address` for `collection`, judged
    * without reading, or null: the guard's own words, asked again of the
@@ -178,15 +187,11 @@ export function registerEntryAddressClaims(
 
 /**
  * An entry's claims in a collection not given an address in code. A
- * collection with no template holds no address and takes no lock, so a
- * save in any of the site's other collections costs one read; one with a
- * template takes its lock and is judged as a declared collection's entry is,
- * at the address its template stores.
- *
- * A template created and published with an address while an entry of its
- * collection is being saved can miss that entry, which read no template
- * before the template's walk read the entries; the entry is claimed at its
- * next save or the next start.
+ * collection that may not have a template holds no address and takes no
+ * lock. One that may takes its lock before it reads whether it has a
+ * template, so a template created, published or given an address while the
+ * entry is saved is either seen by this save or sees the entry in its own
+ * walk, and the entry is judged at the address its template stores.
  */
 async function holdRuntimeEntryClaims(
   write: HostWrite,
@@ -202,7 +207,7 @@ async function holdRuntimeEntryClaims(
   ) {
     return;
   }
-  if ((await deps.templateOf(collection)) === null) return;
+  if (!(await deps.mayHaveTemplate(collection))) return;
   await holdEntryClaims(collection, write, deps);
 }
 
@@ -258,6 +263,9 @@ async function holdEntryClaims(
   // sees this entry once committed.
   await lockCollection(deps.claims, write.transaction, collection);
   const template = await deps.templateOf(collection);
+  // A collection given no address in code, with no template, holds nothing:
+  // a template's removal gave every entry's address up.
+  if (template === null && !deps.addresses.has(collection)) return;
   const address = deps.addresses.get(collection) ?? template?.address ?? null;
   const wanted =
     template?.published === true && address !== null
@@ -381,18 +389,71 @@ async function settleTemplateClaims(
       });
     }
   }
-  const declared = deps.addresses.get(collection) ?? null;
+  // A template may be pointed at another collection once its own is gone
+  // (renamed or deleted): the old collection's entries then give their
+  // addresses up, and the new one's are judged as on a first publish.
+  const collectionBefore =
+    typeof before?.collection === "string" ? before.collection : collection;
+  const retargeted = collectionBefore !== collection;
   const servedBefore =
-    before?.status === "published" ? (declared ?? storedBefore) : null;
+    before?.status === "published"
+      ? (deps.addresses.get(collectionBefore) ?? storedBefore)
+      : null;
   const servedAfter =
     write.operation !== "delete" && data.status === "published"
-      ? (declared ?? storedAfter)
+      ? (deps.addresses.get(collection) ?? storedAfter)
       : null;
-  if (sameAddress(servedBefore, servedAfter)) return;
+  if (!retargeted && sameAddress(servedBefore, servedAfter)) return;
   if (write.transactionKey !== undefined) {
     sharePending(write.transaction, write.transactionKey);
   }
+  if (retargeted) {
+    await releaseCollection(deps, write.transaction, collectionBefore);
+    if (servedAfter === null) return;
+  }
   await settleEntries(deps, write.transaction, collection, servedAfter);
+}
+
+/**
+ * Give up every address and wait held by an entry of `collection`, in `tx`,
+ * under its lock, reading the holders from the store rather than the
+ * collection, which may no longer exist.
+ */
+async function releaseCollection(
+  deps: EntryClaimsDeps,
+  tx: Tx,
+  collection: string
+): Promise<void> {
+  await lockCollection(deps.claims, tx, collection);
+  for (const holder of await holdersIn(deps, collection)) {
+    await releaseClaims(deps.claims, tx, holder);
+  }
+}
+
+/** Every holder of `collection` holding or waiting for an address, as committed. */
+async function holdersIn(
+  deps: Pick<EntryClaimsDeps, "claims">,
+  collection: string
+): Promise<Holder[]> {
+  const holders = new Map<string, Holder>();
+  for (let page = 1; ; page += 1) {
+    const { rows, total } = await committedClaims(
+      deps.claims,
+      {
+        kind: { in: ["address", "waiting"] },
+        holderCollection: { equals: collection },
+      },
+      { limit: SWEEP_PAGE, page }
+    );
+    for (const row of rows) {
+      // Matched again exactly, as every read of the store is.
+      if (row.holder?.collection === collection) {
+        holders.set(row.holder.id, row.holder);
+      }
+    }
+    if (rows.length === 0 || page * SWEEP_PAGE >= total)
+      return [...holders.values()];
+  }
 }
 
 /**
@@ -500,9 +561,6 @@ export async function settleEntryClaimsAtStart(
   }
 }
 
-/** How many claims one read of the undeclared sweep takes. */
-const SWEEP_PAGE = 500;
-
 /**
  * Give up every address and wait held by an entry of a collection given a
  * template address neither in code nor on its template (removed since the
@@ -528,7 +586,7 @@ export async function releaseUndeclared(
     ...deps.addresses.keys(),
     ...stored.keys(),
   ]);
-  const stale = new Map<string, Holder>();
+  const stale = new Set<string>();
   try {
     for (let page = 1; ; page += 1) {
       const { rows, total } = await committedClaims(
@@ -539,7 +597,7 @@ export async function releaseUndeclared(
       for (const row of rows) {
         const holder = row.holder;
         if (holder === null || known.has(holder.collection)) continue;
-        stale.set(`${holder.collection}\u0000${holder.id}`, holder);
+        stale.add(holder.collection);
       }
       if (rows.length === 0 || page * SWEEP_PAGE >= total) break;
     }
@@ -549,13 +607,21 @@ export async function releaseUndeclared(
     });
     return;
   }
-  for (const holder of stale.values()) {
+  for (const collection of stale) {
     try {
-      await deps.withTransaction(tx => releaseClaims(deps.claims, tx, holder));
+      await deps.withTransaction(async tx => {
+        // Under the collection's lock, and asked again: an address may have
+        // been set on its template since the read above.
+        await lockCollection(deps.claims, tx, collection);
+        const address = (await deps.templateOf(collection))?.address ?? null;
+        if (address !== null) return;
+        for (const holder of await holdersIn(deps, collection)) {
+          await releaseClaims(deps.claims, tx, holder);
+        }
+      });
     } catch (error) {
-      deps.warn("Could not release an undeclared collection's address.", {
-        collection: holder.collection,
-        id: holder.id,
+      deps.warn("Could not release an undeclared collection's addresses.", {
+        collection,
         error: String(error),
       });
     }

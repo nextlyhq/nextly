@@ -199,7 +199,7 @@ export async function runPromote(
       templateAddress: collection =>
         storedTemplateAddress(
           {
-            getCollectionBySlug: found => registry.getCollectionBySlug(found),
+            getAllCollections: () => registry.getAllCollections(),
             queryStatement: statement => adapter.queryStatement(statement),
           },
           collection

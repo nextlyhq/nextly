@@ -2387,6 +2387,19 @@ export const pageBuilder = (
         // bookkeeping, never entries served under a template address.
         neverServed: collection =>
           Object.values(ctx.self.collections).includes(collection),
+        // The template guard's own judgement of which collections may have
+        // one; a localized collection is refused an address.
+        mayHaveTemplate: async collection => {
+          const problem = await templateCollectionProblem(
+            collection,
+            collectionRecord,
+            new Set(Object.values(ctx.self.collections))
+          );
+          return (
+            problem === null &&
+            (await collectionRecord(collection))?.localized !== true
+          );
+        },
         storedAddressProblem: (address, collection) =>
           storedAddressProblem(address, collection, {
             declared: declaredPaths,
