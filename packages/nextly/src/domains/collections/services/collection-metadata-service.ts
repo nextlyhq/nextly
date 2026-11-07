@@ -1,4 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -35,6 +36,7 @@ import {
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
+import { collectionTableName } from "./collection-utils";
 import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
 
 /** The parts of a collection's registry row its delete reads. */
@@ -1143,6 +1145,45 @@ export class CollectionMetadataService extends BaseService {
       "share"
     );
     return existing.includes(slug);
+  }
+
+  /**
+   * Hold entry `entryId` of collection `slug` for share inside `tx` until it
+   * ends, and answer whether it is there. A delete of the entry locks its row
+   * for update before it removes it, and runs its in-transaction handlers
+   * after, so the two take turns: a write holding the row commits before the
+   * delete goes on, and the delete's handlers see what it wrote, or the write
+   * waits for the delete and is told the entry is gone. On SQLite, with one
+   * writer at a time, the row is only read. A collection that is not
+   * registered holds no entry.
+   *
+   * Both reads run on `tx`'s connection, so a pool of one connection is not
+   * asked for a second one while the transaction holds it.
+   */
+  async holdEntryIn(
+    tx: TransactionContext,
+    slug: string,
+    entryId: string
+  ): Promise<boolean> {
+    let collection: unknown;
+    try {
+      collection = await this.collectionService.getCollection(
+        slug,
+        tx.getDrizzle()
+      );
+    } catch (error) {
+      if (NextlyError.isNotFound(error)) return false;
+      throw error;
+    }
+    const rows = await tx.select<{ id: unknown }>(
+      collectionTableName(collection, slug),
+      {
+        columns: ["id"],
+        where: { and: [{ column: "id", op: "=", value: entryId }] },
+        forShare: true,
+      }
+    );
+    return rows.length > 0;
   }
 
   private async deleteCollectionExcluded(

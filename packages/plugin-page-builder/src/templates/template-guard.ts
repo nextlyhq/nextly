@@ -35,6 +35,7 @@ import {
   designShapeProblem,
   designShapeRefusal,
   isEntryDesign,
+  withoutEmptyEntryFields,
 } from "./entry-designs";
 import {
   addressRefusal,
@@ -268,8 +269,8 @@ export function templateCollectionRefusal(message: string): NextlyError {
 /**
  * The hook context key a template action's own write carries when the action
  * asked the guard's questions before opening its transaction, and asks the
- * ones that can change meanwhile again once it has committed: giving an
- * entry its own design checks the entry before, and again after.
+ * ones that can change meanwhile again inside it: giving an entry its own
+ * design checks the entry before, and holds it in the write's transaction.
  */
 export const ASKED_BEFORE_CONTEXT = "pageBuilder.templateAskedBefore";
 
@@ -284,14 +285,15 @@ export interface TemplateGuardSetup {
   /** Whether `collection` holds an entry `id`, in any state, read as the system. */
   readonly entryExists: (collection: string, id: string) => Promise<boolean>;
   /**
-   * Hold the entry's own lock row until `tx` ends: taken by giving an entry
-   * its own design and by deleting the entry, so the two take turns.
+   * Hold the entry's row for share until `tx` ends, and answer whether it
+   * exists: a delete of the entry locks the row for update before removing
+   * it, so giving the entry its own design and deleting it take turns.
    */
-  readonly lockEntry: (
+  readonly holdEntry: (
     tx: PluginCollectionTransaction,
     collection: string,
     id: string
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /** Each address declared in code, by collection slug. */
   readonly declaredAddresses: ReadonlyMap<string, string>;
   /** The template storing an address, read as the system. */
@@ -330,7 +332,9 @@ export interface TemplateGuardHooks {
  *
  * `beforeChange`, which runs after every `beforeCreate` and `beforeUpdate`
  * hook and after validation, still before the write. A hook running later
- * can still change the data; the unique index is what holds regardless.
+ * can still change the data: the unique indexes hold regardless, and the
+ * template's in-transaction phase judges the row it commits again
+ * (`entry-design-write`), what it serves and a new own design's entry.
  */
 export function registerTemplateGuard(
   ctx: TemplateGuardHooks,
@@ -338,10 +342,14 @@ export function registerTemplateGuard(
 ): void {
   ctx.hooks.on("beforeChange", setup.templatesCollection, async context => {
     const hook = recordOf(context) ?? {};
-    const data = await guardAddress(setup, hook);
+    const addressed = await guardAddress(setup, hook);
+    // A cleared input names no entry, as a cleared address is none: stored
+    // as none rather than as an empty value the unique index would hold.
+    const data =
+      withoutEmptyEntryFields(addressed ?? recordOf(hook.data)) ?? addressed;
     await guardWrite(setup, data === undefined ? hook : { ...hook, data });
-    // The data as the address guard left it, an emptied address made none;
-    // undefined keeps the write's own.
+    // The data as the guards left it, an emptied address or entry field made
+    // none; undefined keeps the write's own.
     return data;
   });
 }

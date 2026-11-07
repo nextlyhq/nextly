@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   guardWrite,
+  registerTemplateGuard,
   templateCollectionProblem,
   type TemplateGuardSetup,
 } from "./template-guard";
@@ -32,7 +33,7 @@ function setup(
     ownCollections: () => new Set(["pages", "templates", "components"]),
     readCollection: async slug => (slug === "posts" ? POSTS : null),
     holderOf: async () => null,
-    lockEntry: async () => undefined,
+    holdEntry: async () => true,
     entryExists: async (collection, id) =>
       collection === "posts" && id === "p1",
     declaredAddresses: new Map(),
@@ -347,6 +348,55 @@ describe("an entry's own design", () => {
       })
     );
     expect(turned.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("is refused when a field naming its entry is given an empty value", async () => {
+    for (const field of ["entry", "entryCollection", "entryId"]) {
+      const refused = await refusalOf(() =>
+        guardWrite(setup(), {
+          operation: "create",
+          data: { title: "Post page", collection: "posts", [field]: "" },
+        })
+      );
+      expect(refused.code).toBe("VALIDATION_ERROR");
+      expect(
+        (refused.publicData as { errors: { path: string }[] }).errors[0]?.path
+      ).toBe(field);
+    }
+  });
+
+  it("stores a cleared entry input as none, so a collection's template still saves", async () => {
+    let guard: ((context: unknown) => unknown) | undefined;
+    registerTemplateGuard(
+      {
+        hooks: {
+          on: (_type, _collection, handler) => {
+            guard = handler;
+          },
+        },
+      },
+      setup()
+    );
+    if (!guard) throw new Error("the guard was not registered");
+
+    const written = await guard({
+      operation: "create",
+      data: {
+        title: "Post page",
+        collection: "posts",
+        entry: "",
+        entryCollection: "",
+        entryId: "",
+      },
+    });
+
+    expect(written).toEqual({
+      title: "Post page",
+      collection: "posts",
+      entry: null,
+      entryCollection: null,
+      entryId: null,
+    });
   });
 
   it("saves its design without its entry being judged again", async () => {

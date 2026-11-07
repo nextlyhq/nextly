@@ -1,8 +1,10 @@
 /**
  * An entry's own design against a real instance: giving one through the
  * template actions route as a draft copy of the collection's published
- * template, the unique key and the entry's lock that keep one per entry when
- * two gives run at once, removing it, and its deletion with its entry.
+ * template, the unique key that keeps one per entry when two gives run at
+ * once, removing it, its deletion with its entry, a Direct API create whose
+ * entry is deleted while it is written, and a deleted template's link
+ * emptied on a published design's live row.
  *
  * @module __tests__/entry-designs.integration.test
  */
@@ -11,7 +13,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { definePlugin, NextlyError } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -22,6 +24,7 @@ import { defineCollection, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TEMPLATES_SLUG } from "../collections/templates";
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import type { TemplateActionResult } from "../templates/template-actions-contract";
 
@@ -53,12 +56,38 @@ function templateDocument(id: string) {
   };
 }
 
+/**
+ * When set, the entry a new template names is deleted in `beforeChange`,
+ * after the page builder's guard has found it there and before the write's
+ * transaction opens: the window a delete racing the write falls into.
+ */
+const racing: { remove?: (entryId: string) => Promise<void> } = {};
+
+/** A plugin that deletes a new own design's entry while it is written. */
+const racer = definePlugin({
+  name: "@test/entry-design-racer",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+  init(ctx) {
+    ctx.hooks.on("beforeChange", TEMPLATES_SLUG, async context => {
+      const data = (context as { data?: Record<string, unknown> }).data;
+      const entryId = data?.entryId;
+      if (racing.remove !== undefined && typeof entryId === "string") {
+        await racing.remove(entryId);
+      }
+      return undefined;
+    });
+  },
+});
+
 describe.each(getConfiguredTestDialects())(
   "an entry's own design (%s)",
   (dialect: TestDialect) => {
     let current: TestNextly | undefined;
 
     afterEach(async () => {
+      racing.remove = undefined;
       await current?.destroy();
       current = undefined;
     });
@@ -66,7 +95,7 @@ describe.each(getConfiguredTestDialects())(
     async function boot(): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), racer],
         collections: [
           defineCollection({
             slug: "posts",
@@ -213,8 +242,8 @@ describe.each(getConfiguredTestDialects())(
         entry: hello,
       };
 
-      // Both found no design before writing; the entry's lock makes them
-      // take turns, and the second meets the first at the unique key.
+      // Both found no design before writing, and both hold the entry for
+      // share; the second meets the first at the unique key.
       const answers = await Promise.all([
         act(cookie, action),
         act(cookie, action),
@@ -375,6 +404,134 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.status).toBe(404);
       expect(JSON.stringify(refused.body)).not.toContain("Hello world");
       expect(await designs(t)).toHaveLength(1);
+    });
+
+    it("refuses a Direct API own design whose entry is deleted while it is written", async () => {
+      const t = await boot();
+      const hello = await entry(t, "Hello world");
+      // The control: with nothing racing, the same create is kept.
+      const kept = await entry(t, "Kept");
+      await t.nextly.create({
+        collection: TEMPLATES_SLUG,
+        data: {
+          title: "Kept",
+          entry: `posts/${kept}`,
+          entryCollection: "posts",
+          entryId: kept,
+        },
+        overrideAccess: true,
+      });
+      racing.remove = async entryId => {
+        racing.remove = undefined;
+        await t.nextly.delete({
+          collection: "posts",
+          id: entryId,
+          overrideAccess: true,
+        });
+      };
+
+      const refused = await t.nextly
+        .create({
+          collection: TEMPLATES_SLUG,
+          data: {
+            title: "Direct",
+            entry: `posts/${hello}`,
+            entryCollection: "posts",
+            entryId: hello,
+          },
+          overrideAccess: true,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+      // The guard found the entry before the delete; the write's own
+      // transaction found it gone, and kept nothing naming it.
+      expect(NextlyError.isCode(refused, "VALIDATION_ERROR")).toBe(true);
+      expect((await designs(t)).map(row => row.entryId)).toEqual([kept]);
+    });
+
+    it("empties a deleted template's link on a published design's live row, and leaves a waiting draft unpublished", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      const template = await publishedTemplate(t, cookie);
+      const hello = await entry(t, "Hello world");
+      const other = await entry(t, "Other");
+      for (const id of [hello, other]) {
+        await act(cookie, {
+          kind: "give-entry-design",
+          collection: "posts",
+          entry: id,
+        });
+      }
+      const byEntry = new Map(
+        (await designs(t)).map(row => [row.entryId, String(row.id)])
+      );
+      const live = byEntry.get(hello) ?? "";
+      const waiting = byEntry.get(other) ?? "";
+      for (const id of [live, waiting]) {
+        await t.nextly.update({
+          collection: TEMPLATES_SLUG,
+          id,
+          data: { content: templateDocument("published-heading") },
+          overrideAccess: true,
+        });
+        await t.nextly.update({
+          collection: TEMPLATES_SLUG,
+          id,
+          data: { status: "published" },
+          overrideAccess: true,
+        });
+      }
+      // A working draft waits on the second design, not yet published.
+      await t.nextly.update({
+        collection: TEMPLATES_SLUG,
+        id: waiting,
+        data: { content: templateDocument("unfinished-heading") },
+        draft: true,
+        overrideAccess: true,
+      });
+
+      await t.nextly.delete({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        overrideAccess: true,
+      });
+
+      const published = await t.nextly.find({
+        collection: TEMPLATES_SLUG,
+        where: { entryCollection: { equals: "posts" } },
+        overrideAccess: true,
+        status: "published",
+        depth: 0,
+        limit: 10,
+      });
+      const rows = new Map(
+        (published.items as Record<string, unknown>[]).map(row => [
+          String(row.id),
+          row,
+        ])
+      );
+      // The live row itself, not a draft beside it: a write naming no status
+      // would have left it naming the deleted template.
+      expect(rows.get(live)?.forkedFrom ?? null).toBeNull();
+      // The waiting draft was not published by the delete.
+      const nodesOf = (row: Record<string, unknown> | undefined) =>
+        (row?.content as { nodes?: { id: string }[] } | undefined)?.nodes?.map(
+          node => node.id
+        );
+      expect(nodesOf(rows.get(waiting))).toEqual(["published-heading"]);
+      const draft = (await t.nextly.findByID({
+        collection: TEMPLATES_SLUG,
+        id: waiting,
+        draft: true,
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+      })) as Record<string, unknown>;
+      expect(nodesOf(draft)).toEqual(["unfinished-heading"]);
+      expect(draft.forkedFrom ?? null).toBeNull();
     });
 
     it("deletes an entry's own design with the entry", async () => {

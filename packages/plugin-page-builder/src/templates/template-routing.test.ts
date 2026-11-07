@@ -39,7 +39,7 @@ function setup(
     }),
     holderOf: async () => null,
     declaredAddresses: new Map([["posts", "/blog"]]),
-    lockEntry: async () => undefined,
+    holdEntry: async () => true,
     entryExists: async () => false,
     addressHolderOf: async () => null,
     ...overrides,

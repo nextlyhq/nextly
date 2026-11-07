@@ -617,6 +617,23 @@ export type PluginCollectionService = Pick<
     tx: PluginCollectionTransaction,
     collectionName: string
   ): Promise<boolean>;
+  /**
+   * @experimental Hold an entry for the rest of the transaction `tx` stands
+   * for, and answer whether it exists: its row, locked for share. A delete of
+   * the entry locks the row for update before it removes it, and runs its
+   * in-transaction handlers (`ctx.hooks.onInTransaction`) after, so a write
+   * that must not outlive the entry it names either commits before the
+   * delete goes on, and those handlers see it, or waits for the delete and is
+   * told the entry is gone. Asks nothing of the caller's access, and reads
+   * nothing but whether the row is there. On SQLite, with one writer at a
+   * time, the row is only read. A collection that does not exist holds no
+   * entry. A settled token is refused.
+   */
+  holdEntryInTransaction(
+    tx: PluginCollectionTransaction,
+    collectionName: string,
+    entryId: string
+  ): Promise<boolean>;
 };
 
 /**
@@ -766,6 +783,19 @@ export function wrapCollectionsForPlugin(
       scope.assertOpen();
       return scope.track(
         collections.holdCollectionInTransaction(tx, collectionName),
+        "read"
+      );
+    },
+    // The same, for one entry's row.
+    holdEntryInTransaction: async (
+      token: unknown,
+      collectionName: string,
+      entryId: string
+    ): Promise<boolean> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        collections.holdEntryInTransaction(tx, collectionName, entryId),
         "read"
       );
     },
