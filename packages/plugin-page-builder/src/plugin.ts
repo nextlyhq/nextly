@@ -2540,8 +2540,10 @@ export const pageBuilder = (
         // editor offers as a list's custom sources.
         namedQueriesRoute(namedQueryDeclarations),
         // A collection list's entries on the canvas, read as the author asking
-        // reads them, drafts included, for a collection they may read.
-        listEntriesRoute(),
+        // reads them, drafts included, for a collection they may read. A
+        // list whose source is a named query runs it here, on the server,
+        // where its run function lives.
+        listEntriesRoute(name => namedQueries.definitionOf(name)),
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),

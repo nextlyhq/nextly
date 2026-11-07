@@ -16,6 +16,7 @@
 import {
   bindingDemand,
   bindingKindOf,
+  calendarDayIn,
   COLLECTION_LIST_TYPE,
   conditionDemand,
   conditionFieldKind,
@@ -758,19 +759,6 @@ function publicReaderFor(
   };
 }
 
-/** A day in a time zone, `YYYY-MM-DD`. */
-function dayIn(zone: string, at: Date): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: zone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(at);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find(candidate => candidate.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
 /**
  * The most tags a named query's cached result carries: Next keeps 128 per
  * cache entry, and nextly's reads keep to it (`readTags`).
@@ -838,11 +826,14 @@ const TODAY_LIFETIME = 60;
  */
 async function todayFor(zone: string | undefined): Promise<string> {
   const safe = safeTimeZone(zone).zone;
-  return await cachedFind(() => Promise.resolve(dayIn(safe, new Date())), {
-    tags: nextlySiteSettingsTags(),
-    keyParts: ["nextly-named-query-today", safe],
-    revalidate: TODAY_LIFETIME,
-  });
+  return await cachedFind(
+    () => Promise.resolve(calendarDayIn(safe, new Date())),
+    {
+      tags: nextlySiteSettingsTags(),
+      keyParts: ["nextly-named-query-today", safe],
+      revalidate: TODAY_LIFETIME,
+    }
+  );
 }
 
 /**

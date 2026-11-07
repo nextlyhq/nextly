@@ -374,7 +374,8 @@ function useCanvasRender({
     editor.listsShowingEmpty,
     locale,
     initialDocument,
-    pagedList
+    pagedList,
+    editor.listsStillShowing
   );
   const pageInputs = useMemo(
     () =>

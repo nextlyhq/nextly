@@ -54,6 +54,7 @@ import {
   NAMED_QUERY_MAX_PARAMS,
   NAMED_QUERY_TEXT,
   NAMED_QUERY_TEXT_MAX,
+  type NamedQueryDeclaration,
   type NamedQueryParamValue,
   type NamedQuerySource,
 } from "./named-query";
@@ -1508,6 +1509,55 @@ function unreadable(
   return fields !== undefined && fields.readable.length === 0;
 }
 
+/** The fields every entry keeps, which say nothing about what is hidden. */
+const ENTRY_KEPT: ReadonlySet<string> = new Set([
+  "id",
+  "createdAt",
+  "updatedAt",
+]);
+
+/**
+ * One collection a named query reads that visitors can read nothing of: its
+ * name as authors read it, and the fields it declares, which a published
+ * page's rows go without.
+ *
+ * @experimental
+ */
+export interface NamedQueryHiddenRead {
+  readonly collection: string;
+  readonly label: string;
+  /** Its declared fields, the id and timestamps left out; none when unknown. */
+  readonly fields: readonly string[];
+}
+
+/**
+ * The collections a named query declares it reads, other than the one its
+ * rows are entries of, that visitors can read nothing of, as far as `fields`
+ * knows: the one answer the save's warning, the editor's inspector and its
+ * canvas share. A collection `fields` does not know is left out.
+ *
+ * @experimental
+ */
+export function namedQueryHiddenReads(
+  declaration: NamedQueryDeclaration,
+  fields: ListFieldSource
+): NamedQueryHiddenRead[] {
+  const rows = declaration.rows;
+  const rowsCollection = "collection" in rows ? rows.collection : undefined;
+  const hidden: NamedQueryHiddenRead[] = [];
+  for (const read of declaration.reads.collections ?? []) {
+    if (read === rowsCollection) continue;
+    const known = fields.fieldsOf(read);
+    if (known === undefined || known.readable.length > 0) continue;
+    hidden.push({
+      collection: read,
+      label: known.label ?? read,
+      fields: [...known.declared].filter(name => !ENTRY_KEPT.has(name)),
+    });
+  }
+  return hidden;
+}
+
 /**
  * The judgement of a list's custom source against its query's declaration:
  * a name nothing registers, each input missing, not fitting or no longer
@@ -1567,13 +1617,16 @@ function namedFindings(
       ),
     });
   }
-  for (const read of declaration.reads.collections ?? []) {
-    if (read === rowsCollection || !unreadable(judgement, read)) continue;
+  const hidden =
+    judgement.fields === undefined
+      ? []
+      : namedQueryHiddenReads(declaration, judgement.fields);
+  for (const read of hidden) {
     found.push({
       path: at("namedQuery"),
       nodeId,
       code: "list-named-query-reads-hidden",
-      message: NAMED_QUERY_TEXT.readsHidden(collectionWords(judgement, read)),
+      message: NAMED_QUERY_TEXT.readsHidden(read.label, read.fields),
     });
   }
   return found;

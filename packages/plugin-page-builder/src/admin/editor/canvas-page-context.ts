@@ -29,6 +29,7 @@ import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import {
   createQueryBudget,
   createStandaloneContext,
+  type NamedQueryHost,
   type PageContext,
   type QueryBudget,
   type ResolvedIcon,
@@ -39,9 +40,10 @@ import {
   useDocumentIdentity,
   useMediaResolver,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { canvasListReadsIn } from "../list-entries-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 
 /**
  * An icon as the canvas draws it, from the set a published page draws with.
@@ -88,6 +90,9 @@ function canvasQueryBudget(): CanvasQueryBudget {
   let current = createQueryBudget();
   return {
     take: () => current.take(),
+    remaining: () => current.remaining?.() ?? 0,
+    // Each draw's own, so a named query's run is kept for one draw only.
+    generation: () => current,
     renew: () => {
       current = createQueryBudget();
     },
@@ -126,7 +131,9 @@ export function useCanvasPageContext(
   /** The document being edited, whose kind decides whether it is an entry. */
   document?: unknown,
   /** The list the page splits into pages, which draws its first page's links. */
-  pagedList?: string
+  pagedList?: string,
+  /** The lists whose new source waits for an input, with each one's tag. */
+  listsStillShowing?: ReadonlyMap<string, string>
 ): PageContext {
   const readMedia = useMediaResolver();
   const budget = useMemo(canvasQueryBudget, []);
@@ -145,7 +152,12 @@ export function useCanvasPageContext(
     identity?.kind === "collection" ? identity.documentId : undefined;
   // The person's and language's one set of list reads, which the inspector's
   // count shares: the rows are read as the person signed in.
-  const lists = canvasListReadsIn(locale, useCurrentUserId());
+  const userId = useCurrentUserId();
+  const lists = canvasListReadsIn(locale, userId);
+  // The site's named queries, whose runs the server makes as that person:
+  // until they are read, a list whose source is one draws its template, as
+  // with no host.
+  const namedQueries = useCanvasNamedHost(locale, userId);
   const base = useMemo(
     () =>
       createStandaloneContext({
@@ -160,26 +172,102 @@ export function useCanvasPageContext(
         ...(entryCollection === undefined || entryId === undefined
           ? {}
           : { entry: { id: entryId }, entryCollection }),
+        ...(namedQueries === undefined ? {} : { namedQueries }),
       }),
-    [readMedia, entryCollection, entryId, lists, budget]
+    [readMedia, entryCollection, entryId, lists, budget, namedQueries]
   );
   return useMemo(() => {
-    const showing =
+    const empty =
       listsShowingEmpty === undefined || listsShowingEmpty.size === 0
-        ? base
-        : { ...base, listsShowingEmpty };
-    // The links lead nowhere on the canvas: a click there selects the list,
-    // and the pages after the first are the published route's to draw.
-    return pagedList === undefined
-      ? showing
-      : {
-          ...showing,
-          listPage: { nodeId: pagedList, page: 1, href: canvasPageHref },
-        };
-  }, [base, listsShowingEmpty, pagedList]);
+        ? undefined
+        : listsShowingEmpty;
+    const still =
+      listsStillShowing === undefined || listsStillShowing.size === 0
+        ? undefined
+        : listsStillShowing;
+    // The editor's one object again whenever nothing is chosen, waiting or
+    // paged.
+    if (empty === undefined && still === undefined && pagedList === undefined) {
+      return base;
+    }
+    return {
+      ...base,
+      ...(empty === undefined ? {} : { listsShowingEmpty: empty }),
+      ...(still === undefined ? {} : { listsStillShowing: still }),
+      // The links lead nowhere on the canvas: a click there selects the
+      // list, and the pages after the first are the published route's to
+      // draw.
+      ...(pagedList === undefined
+        ? {}
+        : {
+            listPage: { nodeId: pagedList, page: 1, href: canvasPageHref },
+          }),
+    };
+  }, [base, listsShowingEmpty, listsStillShowing, pagedList]);
 }
 
 /** Where a page link points on the canvas: an anchor naming the page. */
 function canvasPageHref(page: number): string {
   return `#page-${String(page)}`;
+}
+
+/** How long the canvas waits before asking again for queries it could not read. */
+const RETRY_FIRST_MS = 2000;
+/** The longest it waits between asks, however many have failed. */
+const RETRY_MOST_MS = 60_000;
+
+/** The wait before ask number `attempt` (from 1), doubling to its cap. */
+export function namedHostRetryDelay(attempt: number): number {
+  return Math.min(
+    RETRY_FIRST_MS * 2 ** Math.max(0, attempt - 1),
+    RETRY_MOST_MS
+  );
+}
+
+/**
+ * The canvas's host for named queries in `locale`, once the site's queries
+ * are read; `undefined` until then, so a list whose source is one draws its
+ * template rather than a failure. A read that fails is asked again, after a
+ * wait that grows to a cap, so one failed request never leaves the canvas
+ * without its queries for the rest of the session.
+ */
+function useCanvasNamedHost(
+  locale: string | undefined,
+  userId: string | null
+): NamedQueryHost | undefined {
+  const [found, setFound] = useState<{
+    readonly locale: string | undefined;
+    readonly userId: string | null;
+    readonly host: NamedQueryHost;
+  }>();
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    canvasNamedQueriesIn(locale, userId)
+      .host()
+      .then(
+        host => {
+          if (live) setFound({ locale, userId, host });
+        },
+        () => {
+          // The shared read keeps no failure, so the next ask reads again.
+          if (!live) return;
+          retry = setTimeout(
+            () => setAttempt(count => count + 1),
+            namedHostRetryDelay(attempt + 1)
+          );
+        }
+      );
+    return () => {
+      live = false;
+      if (retry !== undefined) clearTimeout(retry);
+    };
+  }, [locale, userId, attempt]);
+  // The host for THIS person and language only, so one never draws another's.
+  return found !== undefined &&
+    found.locale === locale &&
+    found.userId === userId
+    ? found.host
+    : undefined;
 }

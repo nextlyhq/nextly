@@ -508,6 +508,9 @@ describe.each(getConfiguredTestDialects())(
           expect.objectContaining({ key: "within", min: 1, max: 9 }),
         ],
         readsHidden: [],
+        declaration: expect.objectContaining({
+          name: "events.upcoming",
+        }) as unknown,
       });
       expect(JSON.stringify(listed.body)).not.toContain("run");
       const manifest = await call("GET", cookie, ["manifest"]);

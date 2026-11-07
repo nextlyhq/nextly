@@ -30,6 +30,7 @@ import {
   CHILD_GAP_CLASS,
   COLLECTION_LIST_TYPE,
   defineBlock,
+  NAMED_QUERY_TEXT,
   type ListFilter,
   type ListNamedQuery,
   type ListRelation,
@@ -37,7 +38,7 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
-import { LIST_ACTION_ATTRIBUTE } from "../editor-markers";
+import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
@@ -132,14 +133,19 @@ function diagnosticNote(
   ctx: PageContext
 ): ReactElement | null {
   if (ctx.diagnostics !== true || outcome.diagnostic === undefined) return null;
+  const { kind, message, ref } = outcome.diagnostic;
   // One action, on the editor's canvas only: a sort that fell back is fixed
   // by choosing another field, which the canvas takes the author to. A failed
-  // read has no one fix, so its note stays words alone.
-  const offersChoice =
-    ctx.listNoteActions === true && outcome.diagnostic.kind === "sort-fallback";
+  // read has no one fix, so its note stays words alone, except that the log
+  // reference a failed run names can be copied, to quote to a developer.
+  const offersChoice = ctx.listNoteActions === true && kind === "sort-fallback";
+  const offersCopy = ctx.listNoteActions === true && ref !== undefined;
   return (
-    <div role="status" data-nx-list-diagnostic={outcome.diagnostic.kind}>
-      <span>{outcome.diagnostic.message} Only you see this message.</span>
+    <div role="status" data-nx-list-diagnostic={kind}>
+      <span>
+        <NoteWords message={message} reference={ref} /> Only you see this
+        message.
+      </span>
       {offersChoice ? (
         <button
           type="button"
@@ -148,8 +154,55 @@ function diagnosticNote(
           Choose a field
         </button>
       ) : null}
+      {offersCopy ? (
+        <button
+          type="button"
+          aria-label={`${NAMED_QUERY_TEXT.copyRef} ${ref}`}
+          {...{
+            [LIST_ACTION_ATTRIBUTE]: "copy-ref",
+            [LIST_REF_ATTRIBUTE]: ref,
+          }}
+        >
+          {/* Both words drawn, one shown: the canvas marks the button copied
+              for a moment, and its sheet shows the second word then. */}
+          <span data-nx-list-copy="ready">{NAMED_QUERY_TEXT.copyRef}</span>
+          <span data-nx-list-copy="done">{NAMED_QUERY_TEXT.copiedRef}</span>
+        </button>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * A note's words, the log reference among them set apart as code, so it
+ * reads as the exact text to quote and selects as one word.
+ */
+function NoteWords({
+  message,
+  reference,
+}: {
+  message: string;
+  reference: string | undefined;
+}): ReactElement {
+  const at = reference === undefined ? -1 : message.indexOf(reference);
+  if (reference === undefined || at < 0) return <>{message}</>;
+  return (
+    <>
+      {message.slice(0, at)}
+      <code data-nx-list-ref="">{reference}</code>
+      {message.slice(at + reference.length)}
+    </>
+  );
+}
+
+/**
+ * The mark on a list's root saying its author chose a new source that waits
+ * for an input, with the tag's words, while an author is looking.
+ */
+function stillMarks(ctx: PageContext, nodeId: string): Record<string, string> {
+  const words =
+    ctx.diagnostics === true ? ctx.listsStillShowing?.get(nodeId) : undefined;
+  return words === undefined ? {} : { "data-nx-list-still": words };
 }
 
 /**
@@ -245,7 +298,11 @@ export async function renderCollectionLoop({
     ctx.listsShowingEmpty?.has(node.id) === true
   ) {
     return (
-      <div className={className} {...emptyMarks(ctx, "chosen")}>
+      <div
+        className={className}
+        {...emptyMarks(ctx, "chosen")}
+        {...stillMarks(ctx, node.id)}
+      >
         {renderSlot("empty")}
       </div>
     );
@@ -256,10 +313,20 @@ export async function renderCollectionLoop({
   if (named === "template") {
     // No host runs named queries here, as no data source answers a
     // collection: the template, once, so an author still sees it.
-    return <div className={className}>{renderSlot("children")}</div>;
+    return (
+      <div className={className} {...stillMarks(ctx, node.id)}>
+        {renderSlot("children")}
+      </div>
+    );
   }
   if (named !== undefined) {
-    return drawList(named, { className, renderSlot, spacingMode, ctx });
+    return drawList(named, {
+      className,
+      renderSlot,
+      spacingMode,
+      ctx,
+      nodeId: node.id,
+    });
   }
   // A cleared text field persists as an empty string, which is a collection
   // nobody named rather than a collection called "". Querying for it fails, the
@@ -283,7 +350,9 @@ export async function renderCollectionLoop({
       ...withoutItem
     } = ctx;
     return (
-      <div className={className}>{renderSlot("children", withoutItem)}</div>
+      <div className={className} {...stillMarks(ctx, node.id)}>
+        {renderSlot("children", withoutItem)}
+      </div>
     );
   }
   // The page this render draws, when the route pages this list: the one
@@ -355,7 +424,7 @@ export async function renderCollectionLoop({
         itemQuery: undefined,
       }),
     },
-    { className, renderSlot, spacingMode, ctx },
+    { className, renderSlot, spacingMode, ctx, nodeId: node.id },
     pages
   );
 }
@@ -369,16 +438,19 @@ function drawList(
   args: Pick<
     BlockRenderArgs<CollectionLoopProps>,
     "className" | "renderSlot" | "spacingMode" | "ctx"
-  >,
+  > & { readonly nodeId: string },
   pages: ReactElement | null = null
 ): ReactElement {
   const { outcome, itemContext } = read;
   const { className, renderSlot, spacingMode, ctx } = args;
   const note = diagnosticNote(outcome, ctx);
-  const marks = emptyMarks(
-    ctx,
-    outcome.items.length > 0 ? undefined : outcome.failed ? "failed" : "none"
-  );
+  const marks = {
+    ...emptyMarks(
+      ctx,
+      outcome.items.length > 0 ? undefined : outcome.failed ? "failed" : "none"
+    ),
+    ...stillMarks(ctx, args.nodeId),
+  };
   // Nothing matched, or the read failed: the designable empty state, as a
   // visitor sees it. Otherwise each entry, drawn with the template.
   const content =
@@ -549,6 +621,14 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       },
       limit: { label: "Number of items", type: "number", min: 1, max: 100 },
       offset: { label: "Skip the first", type: "number", min: 0 },
+      // A custom source: a named query a developer registered, and a value
+      // for each of its inputs, `{ name, params }`. Drawn by the same group
+      // as the rest of the query, in its Source menu and Inputs.
+      namedQuery: {
+        label: "Custom source",
+        type: "object",
+        display: "listNamedQuery",
+      },
       paginate: { label: "Split into pages", type: "checkbox" },
     },
     defaultProps: { limit: 10 },
