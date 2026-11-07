@@ -5,39 +5,19 @@
  *
  * @module bindings-report/layout-regions
  */
-import {
-  COMPONENT_INSTANCE_TYPE,
-  DOCUMENT_FORMAT_VERSION,
-} from "@nextlyhq/blocks-engine";
-
 import { effectiveLayoutFor } from "../default-layout/effective-layout";
-import { relationId, type DefaultLayoutSlugs } from "../default-layout/store";
+import type { DefaultLayoutSlugs } from "../default-layout/store";
 import type { HostAddress } from "../host-rewrite/contract";
+import {
+  areaComponentIds,
+  layoutAreasDocument,
+} from "../layout-areas-document";
 
 /** What reading a page's Layout needs. */
 export interface LayoutRegionsDeps {
   /** The pages collection, as renamed: only its entries are drawn in a Layout. */
   readonly pages: string;
   readonly slugs: DefaultLayoutSlugs;
-}
-
-/** A document placing each of a Layout's region components, by its areas. */
-function regionsDocument(areas: readonly unknown[]): unknown {
-  const nodes = areas.flatMap((entry, index) => {
-    const area = entry as { area?: unknown; component?: unknown };
-    const componentId = relationId(area.component);
-    if (componentId === null) return [];
-    const name = typeof area.area === "string" ? area.area : String(index);
-    return [
-      {
-        id: `layout-${name}`,
-        type: COMPONENT_INSTANCE_TYPE,
-        version: 1,
-        props: { componentId },
-      },
-    ];
-  });
-  return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes };
 }
 
 /**
@@ -62,6 +42,9 @@ export async function layoutRegionsOf(
     id: at.id,
     depth: 0,
     status: "all",
+    // The working draft where there is one: the blocks judged are the
+    // draft's, so the Layout must be the one that draft chooses.
+    draft: true,
     overrideAccess: true,
   });
   const chosen = await effectiveLayoutFor(page ?? {}, {
@@ -75,8 +58,12 @@ export async function layoutRegionsOf(
     depth: 0,
     overrideAccess: true,
   });
-  const areas = (layout as { areas?: unknown } | null)?.areas;
-  return Array.isArray(areas)
-    ? { id: chosen.id, value: regionsDocument(areas) }
-    : undefined;
+  // The areas as placements, by the one builder every Layout reader uses, so
+  // the report composes a Layout as the render and the publish check do.
+  const components = areaComponentIds(
+    (layout as { areas?: unknown } | null)?.areas
+  );
+  return components.length === 0
+    ? undefined
+    : { id: chosen.id, value: layoutAreasDocument(components) };
 }

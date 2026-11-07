@@ -23,9 +23,11 @@ import {
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
+import { z } from "nextly/zod";
 
 import { labelOf } from "../collection-labels";
 import { PAGES_SLUG } from "../collections/pages";
+import { optionalText, parseRouteQuery } from "../route-query";
 
 import {
   BINDINGS_TO_FIX_PAGE_SIZE,
@@ -170,21 +172,38 @@ async function singleLabelsOf(
   return labels;
 }
 
-/** The query, read as given; anything else is ignored. */
-function filtersOf(req: Request): {
-  readonly document?: string;
-  readonly place?: string;
-  readonly page: number;
-} {
-  const params = new URL(req.url).searchParams;
-  const document = params.get("document");
-  const place = params.get("place");
-  const page = Number.parseInt(params.get("page") ?? "1", 10);
-  return {
-    ...(document === null || document === "" ? {} : { document }),
-    ...(place === null || place === "" ? {} : { place }),
-    page: Number.isFinite(page) && page > 0 ? page : 1,
-  };
+/** The places a document can be in, as `?place=` names them. */
+const PLACES = [
+  "pages",
+  "components",
+  "patterns",
+  "layouts",
+  "entries",
+  "singles",
+] as const;
+
+/**
+ * The query, parsed at the boundary: a malformed one is refused as the
+ * caller's mistake rather than read as something else.
+ *
+ * - `document`: one document's key, as the report stores it;
+ * - `place`: one of the places;
+ * - `page`: which hundred documents, from 1.
+ */
+const reportQuery = z.object({
+  document: optionalText(512),
+  place: z.enum(PLACES).optional(),
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+});
+
+/** The query's filters. */
+function filtersOf(req: Request): z.output<typeof reportQuery> {
+  return parseRouteQuery(
+    req.url,
+    ["document", "place", "page"],
+    reportQuery,
+    "bindings to fix"
+  );
 }
 
 /**
