@@ -25,8 +25,8 @@ import {
 import * as React from "react";
 
 import { useLoopCollections } from "./collection-loop-controls";
-import type { ContentServices, LoopCollection } from "./content-controls";
 import { asStoredDefinitions, gatedAsStored } from "./condition-gate";
+import type { ContentServices, LoopCollection } from "./content-controls";
 import { fieldSourceOf } from "./list-query-controls";
 
 /** Whether a stored value is a condition a row can show: a field and an operator. */

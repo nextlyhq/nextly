@@ -42,6 +42,7 @@ import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
+import { withReadAhead } from "./list-batch";
 import { ListPages } from "./list-pages";
 import {
   listPagesOf,
@@ -52,6 +53,7 @@ import {
   type ListOutcome,
 } from "./list-read";
 import { readNamedList } from "./named-read";
+import { readClaimOf } from "./props";
 
 export interface CollectionLoopProps {
   /** The collection queried, or the collection a related source's entries are in. */
@@ -235,6 +237,7 @@ function withoutItem(ctx: PageContext): PageContext {
     item: _outerItem,
     itemSource: _outerSource,
     itemQuery: _outerQuery,
+    itemFollowed: _outerRows,
     ...rest
   } = ctx;
   return rest;
@@ -251,6 +254,11 @@ interface ListRead {
   readonly rowKey?: string;
   /** How many entries match before the window, where the read says. */
   readonly matching?: number;
+  /**
+   * The collection the entries are entries of, when they are one's: what
+   * their item bindings' relations are read ahead in.
+   */
+  readonly entriesOf?: string;
 }
 
 /**
@@ -319,6 +327,9 @@ async function readNamedSource(
   return {
     outcome,
     itemContext: itemOf(outcome.rowsCollection, base.named.name),
+    ...(outcome.rowsCollection === undefined
+      ? {}
+      : { entriesOf: outcome.rowsCollection }),
     ...(outcome.rowKey === undefined ? {} : { rowKey: outcome.rowKey }),
     ...(outcome.total === undefined ? {} : { matching: outcome.total }),
   };
@@ -397,8 +408,10 @@ export async function renderCollectionLoop({
     );
   }
   if (named !== undefined) {
+    // Rows that are a collection's entries read ahead as a list of that
+    // collection's entries does, drawn with the query's own item context.
     return drawList(
-      named,
+      await withReadAhead(named, node, ctx, named.entriesOf),
       { className, renderSlot, spacingMode, ctx, nodeId: node.id },
       pageLinks(paging, named, props, partClass)
     );
@@ -428,8 +441,20 @@ export async function renderCollectionLoop({
   // renderer is not counting, which is the editor drawing a single block.
   // The list a route pages had its first read claimed for it before any
   // block was drawn, so it does not claim again.
-  if (paging?.claimed !== true && ctx.queries?.take() === false) {
-    return <div className={className} />;
+  // Past the allowance the list draws what visitors see when nothing
+  // matches, its designed empty state, as a list whose data is missing does,
+  // with no item: not the item of a list around this one.
+  const claim = { ...readClaimOf(node), kind: "entries" } as const;
+  if (paging?.claimed !== true && ctx.queries?.take(claim) === false) {
+    return (
+      <div
+        className={className}
+        {...emptyMarks(ctx, "none")}
+        {...stillMarks(ctx, node.id)}
+      >
+        {renderSlot("empty", withoutItem(ctx))}
+      </div>
+    );
   }
   // The count of matching entries, as the read reports it, for the links.
   let matching: number | undefined;
@@ -448,9 +473,26 @@ export async function renderCollectionLoop({
         matching = wholeCount(result.total);
         return Array.isArray(result.items) ? [...result.items] : [];
       },
-      claim: () => ctx.queries?.take() !== false,
+      claim: () => ctx.queries?.take(claim) !== false,
     },
     paging?.page
+  );
+  // What the entries' template reads, read ahead for all of them at once, so
+  // the list's cost does not grow with its length.
+  // An ordinary entry: the item is no named query's row, whatever the list
+  // around this one shows. Read ahead and drawn with the same context, so the
+  // read-ahead asks only for what each entry draws.
+  const contextOf = (item: Record<string, unknown>): PageContext => ({
+    ...ctx,
+    item,
+    itemSource: collection,
+    itemQuery: undefined,
+  });
+  const read = await withReadAhead(
+    { outcome, itemContext: contextOf },
+    node,
+    ctx,
+    collection
   );
   // The links between pages, under the entries, when the route pages this
   // list and its read said how many entries it matches.
@@ -461,17 +503,7 @@ export async function renderCollectionLoop({
     partClass
   );
   return drawList(
-    {
-      outcome,
-      // An ordinary entry: the item is no named query's row, whatever the
-      // list around this one shows.
-      itemContext: item => ({
-        ...ctx,
-        item,
-        itemSource: collection,
-        itemQuery: undefined,
-      }),
-    },
+    read,
     { className, renderSlot, spacingMode, ctx, nodeId: node.id },
     pages
   );

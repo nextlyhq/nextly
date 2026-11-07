@@ -16,9 +16,18 @@ import { requireNextly } from "nextly/runtime";
 import { labelOf, pluralLabelOf } from "../collection-labels";
 import { titleFieldIn } from "../entries-route";
 import { entryOf, findAsCaller } from "../entry-reads";
-import { readingAsUser } from "../library-route";
+import { readingAsUser, type IdentifiedCaller } from "../library-route";
 
+import type { BindingReportRow } from "./rows";
 import type { StoredDocumentReport } from "./store";
+
+/**
+ * Who the report is read as, and the services a collection's naming is read
+ * through: a route's request, or a dashboard card's reader.
+ */
+export type ReadableContext = IdentifiedCaller & {
+  readonly services: Pick<PluginRouteContext["services"], "collections">;
+};
 
 /** What the caller may read of one reported document. */
 export interface ReadableDocument {
@@ -34,7 +43,7 @@ export interface ReadableDocument {
 const IDS_PER_READ = 200;
 
 /** A row's top-level blocks field: the first segment of its dotted path. */
-export function topFieldOf(blocksField: string | undefined): string {
+function topFieldOf(blocksField: string | undefined): string {
   return (blocksField ?? "").split(".")[0] ?? "";
 }
 
@@ -55,7 +64,7 @@ function present(
 
 /** A collection's title field and its name, from its registry record. */
 async function collectionNaming(
-  ctx: Pick<PluginRouteContext, "services">,
+  ctx: Pick<ReadableContext, "services">,
   slug: string
 ): Promise<
   { readonly titleField?: string; readonly label: string } | undefined
@@ -78,7 +87,7 @@ async function collectionNaming(
 
 /** One read as the caller of up to `IDS_PER_READ` documents; `null` when refused. */
 async function readAsCaller(
-  ctx: Pick<PluginRouteContext, "caller">,
+  ctx: IdentifiedCaller,
   slug: string,
   ids: readonly string[],
   select: Record<string, boolean>
@@ -100,7 +109,7 @@ async function readAsCaller(
 
 /** One collection's reported documents, as the caller may read them. */
 async function readCollection(
-  ctx: Pick<PluginRouteContext, "caller" | "services">,
+  ctx: ReadableContext,
   slug: string,
   entries: readonly StoredDocumentReport[],
   found: Map<string, ReadableDocument>
@@ -138,26 +147,57 @@ async function readCollection(
   }
 }
 
+/**
+ * A Single as the caller reads it: its row, `"refused"` when core's gate
+ * refuses them, or `"none"` when it has no row yet. Core judges the read
+ * before it looks for the row, so `"none"` is a Single they may read.
+ */
+async function singleAsCaller(
+  ctx: IdentifiedCaller,
+  slug: string
+): Promise<{ readonly row: unknown } | "refused" | "none"> {
+  try {
+    return {
+      row: await requireNextly().findSingle({
+        slug,
+        createIfMissing: false,
+        depth: 0,
+        ...(await readingAsUser(ctx)),
+      }),
+    };
+  } catch (error) {
+    if (NextlyError.isForbidden(error)) return "refused";
+    if (NextlyError.isNotFound(error)) return "none";
+    throw error;
+  }
+}
+
+/**
+ * Which of these Singles the caller may read, each read as them through
+ * core's gate: the report names a Single a binding reads by its label only
+ * for a reader who may read it, and by the slug the binding holds otherwise.
+ * A Single with no row yet is one they may read, and has a label all the same.
+ */
+export async function readableSingles(
+  ctx: IdentifiedCaller,
+  slugs: ReadonlySet<string>
+): Promise<ReadonlySet<string>> {
+  const readable = new Set<string>();
+  for (const slug of slugs) {
+    if ((await singleAsCaller(ctx, slug)) !== "refused") readable.add(slug);
+  }
+  return readable;
+}
+
 /** One reported Single, as the caller may read it. */
 async function readSingle(
-  ctx: Pick<PluginRouteContext, "caller">,
+  ctx: IdentifiedCaller,
   entry: StoredDocumentReport,
   found: Map<string, ReadableDocument>
 ): Promise<void> {
-  let row: unknown;
-  try {
-    row = await requireNextly().findSingle({
-      slug: entry.slug,
-      createIfMissing: false,
-      depth: 0,
-      ...(await readingAsUser(ctx)),
-    });
-  } catch (error) {
-    if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
-      return;
-    }
-    throw error;
-  }
+  const read = await singleAsCaller(ctx, entry.slug);
+  if (typeof read !== "object") return;
+  const { row } = read;
   if (typeof row !== "object" || row === null) return;
   found.set(entry.documentKey, {
     title: entry.slug,
@@ -168,7 +208,7 @@ async function readSingle(
 
 /** Each reported document the caller may read, by its key. */
 export async function readableAsCaller(
-  ctx: Pick<PluginRouteContext, "caller" | "services">,
+  ctx: ReadableContext,
   entries: readonly StoredDocumentReport[]
 ): Promise<ReadonlyMap<string, ReadableDocument>> {
   const found = new Map<string, ReadableDocument>();
@@ -186,4 +226,28 @@ export async function readableAsCaller(
     await readCollection(ctx, slug, list, found);
   }
   return found;
+}
+
+/** A document's rows in the blocks fields the caller may read. */
+export function readableRows(
+  entry: StoredDocumentReport,
+  readable: ReadableDocument | undefined
+): readonly BindingReportRow[] {
+  if (readable === undefined) return [];
+  return entry.rows.filter(row =>
+    readable.fields.has(topFieldOf(row.blocksField))
+  );
+}
+
+/** How many broken bindings of the report the caller may see. */
+export async function visibleBindings(
+  ctx: ReadableContext,
+  stored: readonly StoredDocumentReport[]
+): Promise<number> {
+  const readable = await readableAsCaller(ctx, stored);
+  return stored.reduce(
+    (sum, entry) =>
+      sum + readableRows(entry, readable.get(entry.documentKey)).length,
+    0
+  );
 }

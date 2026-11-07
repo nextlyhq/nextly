@@ -1359,6 +1359,7 @@ export {
   LIST_MAX_VALUES,
   isListFieldKind,
   listFieldKind,
+  listItemRef,
   listKindSortable,
   listPageCount,
   listQueryIssues,

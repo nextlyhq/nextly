@@ -1,13 +1,19 @@
 /**
- * The addresses a collection's entry holds while its collection's template is
- * published: `<the collection's address>/<the entry's slug>`, in every
- * language the site serves, while the entry is published.
+ * The addresses a collection's entry holds while it is drawn on the site (its
+ * collection's template is published, or its own design is):
+ * `<the collection's address>/<the entry's slug>`, in every language the site
+ * serves, while the entry is published.
  *
- * Pure, so the save hook, the template's publish and the start-up pass ask one
- * answer.
+ * Pure, so the save hook, a template's or an own design's write and the
+ * start-up pass ask one answer.
  *
  * @module address-claims/entry-claims
  */
+import {
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
+} from "../templates/template-preview-contract";
+
 import {
   claimKey,
   servedAddress,
@@ -155,4 +161,71 @@ export function templateChanges(
     ...(was === null ? [] : [{ collection: was, served: false }]),
     ...(now === null ? [] : [{ collection: now, served: true }]),
   ];
+}
+
+/** What decides whether, and where, one entry is served. */
+export interface EntryServing {
+  /**
+   * The collection's address, as segments: declared in code, else stored on
+   * its template; null where it has none left.
+   */
+  readonly address: readonly string[] | null;
+  /** Whether the collection's template is published. */
+  readonly templatePublished: boolean;
+  /**
+   * Whether the entry's own design is published, asked only when the
+   * answer depends on it, so a save under a published template reads no
+   * design.
+   */
+  readonly ownDesignPublished: () => boolean | Promise<boolean>;
+}
+
+/**
+ * Where an entry is served, as segments, or null for nowhere: at its
+ * collection's address while either the collection's template or the
+ * entry's own design is published, since either draws it, and nowhere once
+ * neither is or the collection has no address. The one answer every path
+ * that holds or gives up an entry's address asks: the entry's save, a
+ * template's publish, unpublish, delete or address change, an own design's
+ * publish, unpublish or removal, and the start-up pass.
+ *
+ * An entry whose collection's address lived only on a template since
+ * deleted (a collection created at runtime) has no address left, and is
+ * served nowhere whatever its own design: the design has no address of its
+ * own to be served at.
+ */
+export async function servedAt(
+  serving: EntryServing
+): Promise<readonly string[] | null> {
+  if (serving.address === null) return null;
+  if (serving.templatePublished) return serving.address;
+  return (await serving.ownDesignPublished()) ? serving.address : null;
+}
+
+/** The entry an own design serves, and whether the design is published. */
+export interface DesignedEntry {
+  readonly collection: string;
+  readonly id: string;
+  readonly published: boolean;
+}
+
+/**
+ * The entry the templates row `row` serves as its own design, or null for a
+ * collection's template (or no row): an own design names its entry's
+ * collection and id, and no collection.
+ */
+export function designedEntry(
+  row: Readonly<Record<string, unknown>> | null
+): DesignedEntry | null {
+  const collection = row?.[TEMPLATE_ENTRY_COLLECTION_FIELD];
+  const id = row?.[TEMPLATE_ENTRY_ID_FIELD];
+  if (
+    typeof collection !== "string" ||
+    collection === "" ||
+    typeof id !== "string" ||
+    id === ""
+  ) {
+    return null;
+  }
+  return { collection, id, published: row?.status === "published" };
 }

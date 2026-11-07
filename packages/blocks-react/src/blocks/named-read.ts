@@ -807,7 +807,7 @@ export async function readNamedList(
   options: { readonly counted?: boolean } = {}
 ): Promise<NamedListOutcome> {
   const host = ctx.namedQueries;
-  const claim = () => ctx.queries?.take() !== false;
+  const claim = () => ctx.queries?.take({ kind: "entries", nodeId }) !== false;
   const at = { host, name: named.name, nodeId };
   const definition = namedQueryLookup(host)(named.name);
   if (definition === undefined) {

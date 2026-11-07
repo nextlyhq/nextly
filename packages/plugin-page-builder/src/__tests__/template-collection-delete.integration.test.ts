@@ -9,6 +9,10 @@
  * is created as in development, where the Builder builds its table, so its
  * entries can be written and given designs of their own.
  *
+ * The own designs it removes are deleted before its template, so none is
+ * first updated by the template's delete emptying its link; a design of
+ * another collection copied from that template still has its link emptied.
+ *
  * @module __tests__/template-collection-delete.integration.test
  */
 
@@ -17,6 +21,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -66,12 +71,39 @@ async function api(
   };
 }
 
+/** The templates updated while `on`, by id, as their hooks see them. */
+const watching: { on: boolean; updated: string[] } = {
+  on: false,
+  updated: [],
+};
+
+/** A plugin recording every update of a template, as any hook would see it. */
+const watcher = definePlugin({
+  name: "@test/template-update-watcher",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    ctx.hooks.on("beforeChange", TEMPLATES_SLUG, async context => {
+      const { operation, originalData } = context as {
+        operation?: string;
+        originalData?: { id?: unknown };
+      };
+      if (watching.on && operation === "update") {
+        watching.updated.push(String(originalData?.id));
+      }
+      return undefined;
+    });
+  },
+});
+
 describe.each(getConfiguredTestDialects())(
   "deleting a collection with a template (%s)",
   (dialect: TestDialect) => {
     let current: TestNextly | undefined;
 
     afterEach(async () => {
+      watching.on = false;
+      watching.updated = [];
       await current?.destroy();
       current = undefined;
     });
@@ -80,7 +112,7 @@ describe.each(getConfiguredTestDialects())(
     async function boot(): Promise<{ t: TestNextly; cookie: string }> {
       const t = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), watcher],
         collections: [
           // A collection may have a template when its entries have an
           // address: a `slug` text field.
@@ -207,6 +239,74 @@ describe.each(getConfiguredTestDialects())(
       const deleted = await api(cookie, "DELETE", ["collections", HOST]);
       expect(deleted.status).toBe(200);
       expect(await templateTitles(t)).toEqual([]);
+    });
+
+    it("updates none of the own designs it deletes, and empties the link of a copy it keeps", async () => {
+      const { t, cookie } = await boot();
+      const act = (action: Record<string, unknown>) =>
+        post(cookie, ["templates", "actions"], { action });
+      const made = await act({
+        kind: "create-template",
+        collection: HOST,
+        publish: true,
+      });
+      expect(made.status).toBe(200);
+      const template = (made.body.item as { template?: { id?: string } })
+        .template?.id;
+      expect(typeof template).toBe("string");
+      const article = await t.nextly.create({
+        collection: HOST,
+        data: { title: "Hello world", slug: "hello-world" },
+        overrideAccess: true,
+      });
+      expect(
+        (
+          await act({
+            kind: "give-entry-design",
+            collection: HOST,
+            entry: String(article.item.id),
+          })
+        ).status
+      ).toBe(200);
+      // The control: an entry of the kept collection given a copy of the same
+      // template, which the delete keeps and so must update.
+      const kept = await t.nextly.create({
+        collection: KEPT,
+        data: { title: "Kept", slug: "kept" },
+        overrideAccess: true,
+      });
+      const keptId = String(kept.item.id);
+      const copy = await t.nextly.create({
+        collection: TEMPLATES_SLUG,
+        data: {
+          title: "Kept copy",
+          entry: `${KEPT}/${keptId}`,
+          entryCollection: KEPT,
+          entryId: keptId,
+          forkedFrom: template,
+        },
+        overrideAccess: true,
+      });
+      const copyId = String(copy.item.id);
+      watching.on = true;
+
+      const deleted = await api(cookie, "DELETE", ["collections", HOST]);
+      expect(deleted.status).toBe(200);
+
+      // Only the copy the delete keeps was updated: the design it deleted
+      // was gone before its template was.
+      expect(watching.updated).toEqual([copyId]);
+      expect(await templateTitles(t)).toEqual(["Kept copy"]);
+      const stored = await t.nextly.findByID({
+        collection: TEMPLATES_SLUG,
+        id: copyId,
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+      });
+      expect(
+        (stored as Record<string, unknown> | null)?.forkedFrom ?? null
+      ).toBeNull();
     });
   }
 );

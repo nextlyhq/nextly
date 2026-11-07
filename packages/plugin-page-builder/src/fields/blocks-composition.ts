@@ -1039,6 +1039,10 @@ async function judgeComposedLists(args: {
       maxNodes: site.maxNodes,
       onUnjudged: (bindings: number) =>
         args.setup.onBindingsUnjudged?.({ ...args.unjudged, bindings }),
+      // A placed list's item bindings, against its query's rows.
+      ...(args.setup.namedQueries === undefined
+        ? {}
+        : { namedQueries: args.setup.namedQueries }),
     }
   );
   for (const issue of bound) args.report.add(issue.code, issue.message);

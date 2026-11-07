@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { JUDGEMENT_CONTEXT } from "../judged-writes";
 
 import {
+  addressCollectionProblem,
   addressHolderProblem,
   guardAddress,
   guardWrite,
@@ -39,7 +40,7 @@ function setup(
     }),
     holderOf: async () => null,
     declaredAddresses: new Map([["posts", "/blog"]]),
-    lockEntry: async () => undefined,
+    holdEntry: async () => true,
     entryExists: async () => false,
     addressHolderOf: async () => null,
     ...overrides,
@@ -264,6 +265,20 @@ describe("an address for a collection that may not have a template", () => {
       })
     );
     expect(words).toBe('There is no collection "events" to give a template.');
+  });
+});
+
+describe("a collection's eligibility for an address", () => {
+  it("is judged from one read of its record", async () => {
+    const readCollection = vi.fn(async (slug: string) => ({
+      slug,
+      fields: [{ name: "slug", type: "text" }],
+      localized: true,
+    }));
+    expect(
+      await addressCollectionProblem(setup({ readCollection }), "events")
+    ).toMatch(/is localized/);
+    expect(readCollection).toHaveBeenCalledOnce();
   });
 });
 

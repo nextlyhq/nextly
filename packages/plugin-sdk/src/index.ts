@@ -241,6 +241,19 @@ export { isLocaleSelector } from "nextly";
 export { previewUrlFromTemplate, readableTitleText } from "nextly/config";
 
 /**
+ * Which entries have changes waiting to be published.
+ * @experimental `PENDING_CHANGE_KEY` — the reserved filter key that keeps,
+ *   in a `where` handed to `ctx.services.collections`, only the entries whose
+ *   working draft differs from their published row. A plugin that must not
+ *   publish someone's unfinished edits as a side effect of its own write asks
+ *   the core with this key rather than spelling it, so it names the key the
+ *   query layer reads. Held experimental with the other workflow keys until
+ *   the dashboard's Needs attention card is complete; `plugin-page-builder`
+ *   exercises it when a template delete unlinks its copies.
+ */
+export { PENDING_CHANGE_KEY } from "nextly/reserved-filter-keys";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.

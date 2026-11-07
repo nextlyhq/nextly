@@ -311,6 +311,7 @@ export function blocksFieldType(
       const lists = async (): Promise<readonly PluginFieldIssue[]> => {
         if (emptied || args.write === undefined) return [];
         const maxNodes = composition?.()?.limits.maxNodes;
+        const namedQueries = composition?.()?.namedQueries;
         const bound =
           bindingShapes === undefined
             ? []
@@ -318,6 +319,8 @@ export function blocksFieldType(
                 shapesOf: bindingShapes,
                 storedForms,
                 ...(maxNodes === undefined ? {} : { maxNodes }),
+                // A list's item bindings, against its query's rows.
+                ...(namedQueries === undefined ? {} : { namedQueries }),
                 onUnjudged: bindings =>
                   composition?.()?.onBindingsUnjudged?.({
                     field: args.path,
@@ -326,7 +329,6 @@ export function blocksFieldType(
                   }),
               });
         if (listFields === undefined) return bound;
-        const namedQueries = composition?.()?.namedQueries;
         // Where templates are stored, so a template's lists are judged
         // against the collection it draws.
         const templates = composition?.()?.templates;

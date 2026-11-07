@@ -7,9 +7,11 @@ import { describe, expect, it } from "vitest";
 
 import { claimKey, servedAddress, type ServedAddress } from "./claim-key";
 import {
+  designedEntry,
   entryAddresses,
   NO_ADDRESS,
   pageCandidates,
+  servedAt,
   templateChanges,
 } from "./entry-claims";
 
@@ -150,5 +152,84 @@ describe("what a template's write changes about the entries it serves", () => {
     );
     expect(templateChanges("create", draft("posts"), null)).toEqual([]);
     expect(templateChanges("delete", draft("posts"), null)).toEqual([]);
+  });
+});
+
+describe("where an entry is served", () => {
+  /** An own design's state that fails the test if it is asked. */
+  const unasked = () => {
+    throw new Error("the own design was asked for");
+  };
+
+  it("is its collection's address while the template is published, without asking for its own design", async () => {
+    expect(
+      await servedAt({
+        address: ["blog"],
+        templatePublished: true,
+        ownDesignPublished: unasked,
+      })
+    ).toEqual(["blog"]);
+  });
+
+  it("is its collection's address while only its own design is published", async () => {
+    expect(
+      await servedAt({
+        address: ["blog"],
+        templatePublished: false,
+        ownDesignPublished: async () => true,
+      })
+    ).toEqual(["blog"]);
+  });
+
+  it("is nowhere while neither the template nor its own design is published", async () => {
+    expect(
+      await servedAt({
+        address: ["blog"],
+        templatePublished: false,
+        ownDesignPublished: () => false,
+      })
+    ).toBeNull();
+  });
+
+  it("is nowhere when the collection has no address left, whatever is published", async () => {
+    for (const templatePublished of [true, false]) {
+      expect(
+        await servedAt({
+          address: null,
+          templatePublished,
+          ownDesignPublished: () => true,
+        })
+      ).toBeNull();
+    }
+  });
+});
+
+describe("the entry an own design serves", () => {
+  it("is named by the design's entry collection and id, with whether it is published", () => {
+    expect(
+      designedEntry({
+        collection: null,
+        entry: "posts/e1",
+        entryCollection: "posts",
+        entryId: "e1",
+        status: "published",
+      })
+    ).toEqual({ collection: "posts", id: "e1", published: true });
+    expect(
+      designedEntry({
+        entryCollection: "posts",
+        entryId: "e1",
+        status: "draft",
+      })
+    ).toEqual({ collection: "posts", id: "e1", published: false });
+  });
+
+  it("is none for a collection's template, a row naming its entry in part, or no row", () => {
+    expect(
+      designedEntry({ collection: "posts", status: "published" })
+    ).toBeNull();
+    expect(designedEntry({ entryCollection: "posts", entryId: "" })).toBeNull();
+    expect(designedEntry({ entryId: "e1" })).toBeNull();
+    expect(designedEntry(null)).toBeNull();
   });
 });

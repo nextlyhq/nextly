@@ -31,6 +31,8 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 
 import {
+  BINDINGS_TO_FIX_CARD_COMPONENT,
+  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   COMPONENT_LIST_TOOLS_COMPONENT,
@@ -57,6 +59,8 @@ import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
  */
 import "../styles/editor.css";
 
+import { BindingsToFixCard } from "./bindings-report/BindingsToFixCard";
+import { BindingsToFixPage } from "./bindings-report/BindingsToFixPage";
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
 import {
@@ -112,6 +116,9 @@ const COMPONENTS = {
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
+  // The "Bindings to fix" page and its dashboard card.
+  [BINDINGS_TO_FIX_PAGE_COMPONENT]: BindingsToFixPage,
+  [BINDINGS_TO_FIX_CARD_COMPONENT]: BindingsToFixCard,
   // Above the Components list: Import from file, and the row action's
   // Delete component dialog; for a host's component store, the same tools
   // drawn through the header slot.
@@ -147,6 +154,8 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 });
 
 export {
+  BindingsToFixCard,
+  BindingsToFixPage,
   BlocksField,
   BlocksSummary,
   ComponentListTools,

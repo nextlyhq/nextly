@@ -36,7 +36,6 @@ import {
   OnboardingChecklist,
   SelectionBreadcrumb,
   SpacingOverlay,
-  VariantPreviewTag,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
   type ComponentFieldsHost,
@@ -69,6 +68,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
@@ -87,8 +87,10 @@ import {
 import { valueAtPath } from "../snapshot-merge";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
+import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { previewedCanvas } from "./canvas-preview-mode";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -100,6 +102,7 @@ import {
   useMediaSummaryReader,
   type ReadMediaSummary,
 } from "./media-summary-reader";
+import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { recentIconsStore } from "./recent-icons-store";
@@ -288,8 +291,11 @@ const COMPONENT_READ_NOTES: Readonly<
  */
 function editorTopBar(
   view: EditorView,
-  /** The page's title as the form has it now, and the field being edited. */
-  page: { title: string | undefined; field: string }
+  /**
+   * The page's title as the form has it now, the field being edited, and the
+   * canvas, which a binding's Select brings its block into view in.
+   */
+  page: { title: string | undefined; field: string; canvas: HTMLElement | null }
 ): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
@@ -325,10 +331,28 @@ function editorTopBar(
           onAllPages={() => view.requestPanel("pages")}
         />
         <DocumentStatusPill isDirty={documentDirty} />
+        {/* The page's bindings that no longer fit, beside its status: shown
+            only when it has one. */}
+        <BindingsToFixChip
+          editor={editor}
+          field={page.field}
+          canvas={page.canvas}
+          requestPanel={view.requestPanel}
+        />
         {/* On a collection's template, how many of its entries have their
             own design, opening the list; nothing on any other document. */}
         <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
+        {/* What the page costs to read, against its allowance: a page's
+            alone, since a component is read as part of each page placing it. */}
+        {view.initialDocument.kind === "page" ? (
+          <PageReadMeter
+            editor={editor}
+            drawnWith={view.canvasRender}
+            regions={view.canvasRegions}
+            componentTitle={view.componentLibrary.titleOf}
+          />
+        ) : null}
       </>
     ),
     topBarCenter: (
@@ -676,6 +700,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     canvasDir,
     visitorUnreadable,
   } = view;
+  // The theme the frame draws the page in and the tags saying so, from one
+  // answer, so the tag never names a mode the canvas is not drawn in.
+  const previewed = previewedCanvas(view.previewMode, view.preview.previewing);
   return (
     <>
       {/*
@@ -750,9 +777,13 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
+            // The site mode the author picked, on the frame's document and
+            // the frame element only; nothing picked draws the page's own.
+            theme={previewed.theme}
             overlay={
               <>
-                <VariantPreviewTag name={view.preview.previewing} />
+                {/* One row: the variant previewed and the mode picked. */}
+                {previewed.tags}
                 {/* A selected block the page hides on this device is drawn
                     anyway, and its ring says so. */}
                 <CanvasMarks
@@ -1026,8 +1057,11 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   onClose: () => void;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
-  /** The section to open at, as the address names it; none opens at the top. */
-  openAt?: string | undefined;
+  /**
+   * The section or block to open at, as the address names it; none opens at
+   * the top.
+   */
+  openAt?: OpenAt | undefined;
 }
 
 export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
@@ -1243,7 +1277,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     conditionsUnchecked,
   };
   useOpenAtSection({
-    sectionId: openAt,
+    sectionId: openAt?.sectionId,
+    blockId: openAt?.blockId,
     editor,
     canvas: canvas.canvasElement,
     requestPanel: panels.requestPanel,
@@ -1292,7 +1327,11 @@ function EditorBody<TFieldValues extends FieldValues>({
           // the editor's OWN dirty signal: the form's is false for as long as the
           // editor is open, because the document is committed on the way out.
           // The title is the top bar's switcher, so the shell draws none.
-          {...editorTopBar(view, { title: page.title, field: name })}
+          {...editorTopBar(view, {
+            title: page.title,
+            field: name,
+            canvas: canvas.canvasElement,
+          })}
           // Pinned above a template's canvas: the entry it is drawn with.
           canvasStrip={templateStrip(templatePreview)}
           openSettingsRequest={view.pages.settingsRequest}
