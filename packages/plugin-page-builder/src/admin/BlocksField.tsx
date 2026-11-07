@@ -234,7 +234,6 @@ function useBuilderWayIn<TFieldValues extends FieldValues>(
   const address = fieldBuilderAddress(
     identity,
     fieldAddress,
-    name,
     useDocumentLocale()
   );
   const returnedTo = useBuilderReturn(

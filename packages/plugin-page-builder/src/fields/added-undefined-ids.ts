@@ -16,7 +16,7 @@ import type { PluginFieldValidateArgs } from "@nextlyhq/plugin-sdk";
 
 import { newUndefinedIds } from "../undefined-references";
 
-import { readStoredForms } from "./lock-baselines";
+import { readStoredForms, storedReadReaches } from "./lock-baselines";
 
 /** No stored id: what the first, cheaper comparison is made against. */
 const NOTHING_HELD: ReadonlySet<string> = new Set();
@@ -40,6 +40,30 @@ export function storedFormsFor(
     [false, true],
     (args.field as { localized?: unknown }).localized === true
   );
+}
+
+/** Stored forms that hold nothing, which every undefined reference is new to. */
+export const NO_STORED_FORMS: StoredForms = { forms: [], readable: true };
+
+/**
+ * The stored forms a reference check compares a write with: `stored`, or the
+ * field's own by default. A field in a repeater's row has none core's stored
+ * read can name, and passing its write unjudged would let a save reintroduce
+ * a shared style or variable removed while the row's editor was open: the
+ * renderer drops the reference, and the row loses its styling unseen. So a
+ * row is judged against nothing held, refusing every reference the site no
+ * longer defines. That refuses no reference the row already held but by a
+ * race: removing a shared style or a variable is refused while any row uses
+ * it, since the removal's rescan reads every row.
+ */
+export function referenceBaseline(
+  args: PluginFieldValidateArgs,
+  stored?: () => Promise<StoredForms>
+): () => Promise<StoredForms> {
+  if (!storedReadReaches(args.path)) {
+    return () => Promise.resolve(NO_STORED_FORMS);
+  }
+  return stored ?? (() => storedFormsFor(args));
 }
 
 /**

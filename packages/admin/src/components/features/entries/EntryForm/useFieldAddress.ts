@@ -36,7 +36,16 @@ import { useOptionalEntryFormContext } from "./EntryFormContext";
  * @experimental
  */
 export type FieldAddress =
-  | { address: string }
+  | {
+      address: string;
+      /**
+       * Set for a field inside a repeater's row, whose address names the row
+       * by its saved id. Said outright rather than inferred from the address
+       * differing from the form path: a row whose saved id is the same as its
+       * position spells both the same.
+       */
+      throughRow?: true;
+    }
   | { unavailable: RowPathRefusal };
 
 /** Whether a form path steps through a repeater's row, which it numbers. */
@@ -78,6 +87,6 @@ export function useFieldAddress<TFieldValues extends FieldValues>(
   );
   if (found === undefined) return { unavailable: "unaddressable" };
   return found.kind === "address"
-    ? { address: found.address }
+    ? { address: found.address, throughRow: true }
     : { unavailable: found.reason };
 }

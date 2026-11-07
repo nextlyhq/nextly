@@ -114,22 +114,20 @@ const ROW_IN_ANOTHER_LANGUAGE =
 
 /**
  * The builder's address for a field, from the address its form gives it
- * (`useFieldAddress`) at `formPath`: the same as {@link builderAddress}, or,
- * for a field in a repeater's row that has no address yet, or that the form
- * shows in another language, why. A document that cannot open the builder at
- * all is said first, since saving it is the first step either way.
+ * (`useFieldAddress`): the same as {@link builderAddress}, or, for a field in
+ * a repeater's row that has no address yet, or that the form shows in another
+ * language, why. A document that cannot open the builder at all is said
+ * first, since saving it is the first step either way.
  */
 export function fieldBuilderAddress(
   identity: DocumentIdentity | null,
   field: FieldAddress,
-  formPath: string,
   locale?: Pick<DocumentLocale, "documentLocalized" | "isDefaultLocale"> | null
 ): BuilderAddress {
   const document = builderAddress(identity, "", locale);
   if ("address" in field) {
-    // A row's field is the only one whose address is not its form path.
-    const inRow = field.address !== formPath;
-    if (!inRow || !showsAnotherLanguage(locale)) {
+    // Whether the field is in a row is said by the form, never inferred.
+    if (field.throughRow !== true || !showsAnotherLanguage(locale)) {
       return builderAddress(identity, field.address, locale);
     }
     if ("unavailable" in document) return document;

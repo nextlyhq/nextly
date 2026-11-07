@@ -72,6 +72,7 @@ describe("useFieldAddress", () => {
     const { result } = addressOf("sections.1.body");
     expect(result.current.address).toEqual<FieldAddress>({
       address: "sections.row-b.body",
+      throughRow: true,
     });
   });
 
@@ -86,6 +87,7 @@ describe("useFieldAddress", () => {
     });
     expect(result.current.address).toEqual<FieldAddress>({
       address: "sections.row-a.body",
+      throughRow: true,
     });
   });
 
