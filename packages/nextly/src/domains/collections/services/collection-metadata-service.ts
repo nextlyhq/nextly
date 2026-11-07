@@ -19,6 +19,7 @@ import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resourc
 import type { Logger } from "../../../services/shared";
 import { assertAddressAllowed } from "../../../shared/address-rule";
 import { BaseService } from "../../../shared/base-service";
+import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
@@ -37,6 +38,7 @@ import {
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
+import { collectionTableName } from "./collection-utils";
 import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
 
 /** The parts of a collection's registry row its delete reads. */
@@ -1145,6 +1147,57 @@ export class CollectionMetadataService extends BaseService {
       "share"
     );
     return existing.includes(slug);
+  }
+
+  /**
+   * Hold entry `entryId` of collection `slug` for share inside `tx` until it
+   * ends, and answer whether it is there. A delete of the entry locks its row
+   * for update before it removes it, and runs its in-transaction handlers
+   * after, so the two take turns: a write holding the row commits before the
+   * delete goes on, and the delete's handlers see what it wrote, or the write
+   * waits for the delete and is told the entry is gone. On SQLite, with one
+   * writer at a time, the row is only read. A collection that is not
+   * registered holds no entry.
+   *
+   * The collection is held first, as `holdCollectionIn` holds it. A
+   * collection delete locks the registry row, not its entries' rows, before
+   * it runs its in-transaction handlers (`onCollectionDelete`), so holding
+   * the entry's row alone would let those handlers run before the write has
+   * stored what names the entry, and miss it. Held first, the registry row
+   * makes the write and a collection delete take turns too, and the record
+   * the entry's table is named by is read only once the collection can no
+   * longer go.
+   *
+   * Every read runs on `tx`'s connection, so a pool of one connection is not
+   * asked for a second one while the transaction holds it.
+   */
+  async holdEntryIn(
+    tx: TransactionContext,
+    slug: string,
+    entryId: string
+  ): Promise<boolean> {
+    if (!(await this.holdCollectionIn(tx, slug))) return false;
+    let collection: unknown;
+    try {
+      // Routed onto `tx`: the registry read otherwise takes a pooled
+      // connection, which on a pool of one waits for the very connection
+      // this transaction holds.
+      collection = await runReadsInTransaction(tx, () =>
+        this.collectionService.getCollection(slug)
+      );
+    } catch (error) {
+      if (NextlyError.isNotFound(error)) return false;
+      throw error;
+    }
+    const rows = await tx.select<{ id: unknown }>(
+      collectionTableName(collection, slug),
+      {
+        columns: ["id"],
+        where: { and: [{ column: "id", op: "=", value: entryId }] },
+        forShare: true,
+      }
+    );
+    return rows.length > 0;
   }
 
   private async deleteCollectionExcluded(
