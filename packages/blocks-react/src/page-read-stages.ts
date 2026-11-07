@@ -459,19 +459,36 @@ function customRowsNeedZone(
   return anyListWhere(
     documents,
     (query, list) => {
-      const name = query.namedQuery?.name;
-      const rows =
-        name === undefined ? undefined : namedQueries.definitionOf(name)?.rows;
-      if (name === undefined || rows === undefined || !("fields" in rows)) {
-        return false;
-      }
-      return ordersADay(
-        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
-          new Set(),
-        queryRowFields(namedQueries, name, () => undefined)
-      );
+      const name = ownSchemaQuery(query.namedQuery?.name, namedQueries);
+      return name !== undefined && rowsOrderADay(list, name, namedQueries);
     },
     run
+  );
+}
+
+/**
+ * The named query a list reads, where its rows are of their own schema
+ * (they declare fields), not a collection's entries.
+ */
+function ownSchemaQuery(
+  name: string | undefined,
+  namedQueries: NamedQueryLookup
+): string | undefined {
+  if (name === undefined) return undefined;
+  const rows = namedQueries.definitionOf(name)?.rows;
+  return rows !== undefined && "fields" in rows ? name : undefined;
+}
+
+/** Whether a list's item conditions order a date its query's rows hold. */
+function rowsOrderADay(
+  list: BlockNode,
+  name: string,
+  namedQueries: NamedQueryLookup
+): boolean {
+  return ordersADay(
+    conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
+      new Set(),
+    queryRowFields(namedQueries, name, () => undefined)
   );
 }
 

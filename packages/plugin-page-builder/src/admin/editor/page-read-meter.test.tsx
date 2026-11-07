@@ -87,7 +87,11 @@ describe("the page reads the editor counts", () => {
     // The inner component is drawn unavailable, so its list asks nothing.
     expect(counted.byKind).toEqual({ component: 1 });
     expect(counted.refused).toBe(1);
-    expect(counted.unread).toEqual([]);
+    // The refused read is named by the block an author placed: the outer
+    // placement, which hosts the inner one.
+    expect(counted.unread).toEqual([
+      { nodeId: "outer-placed", what: "component" },
+    ]);
   });
 
   it("counts the page alone where it is drawn inside no Layout", async () => {

@@ -126,7 +126,10 @@ export function ReadBudgetMeter({
           aria-busy={standing === "counting" ? true : undefined}
         >
           <MeterMark standing={standing} />
-          <span className="nx-read-meter__count" aria-hidden="true">
+          <span
+            className="nx-read-meter__count nx-read-meter__words"
+            aria-hidden="true"
+          >
             <MeterWords report={report} standing={standing} />
           </span>
           <span className="nx-read-meter__track" aria-hidden="true">
@@ -192,8 +195,11 @@ function MeterWords({
     <>
       <span className="nx-read-meter__full">
         {readCount(report.used)}
-        <span className="nx-read-meter__of"> / {readCount(report.cap)}</span>
-        <span className="nx-read-meter__unit"> reads</span>
+        <span className="nx-read-meter__of nx-read-meter__words">
+          {" "}
+          / {readCount(report.cap)}
+        </span>
+        <span className="nx-read-meter__unit nx-read-meter__words"> reads</span>
       </span>
       <span className="nx-read-meter__short">{readCount(report.used)}</span>
     </>

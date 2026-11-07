@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-`nextly.media.findByIDs({ ids })` reads several media files in one query, judged exactly as `findByID` judges one (@experimental). A collection list now reads the images its entries draw in one batch through it, or through a named media collection, so a list whose entries each bind their own image no longer costs one read per image. A list's reads ahead are scheduled in page order, and the read-limit warning counts each cache scope apart.
+`nextly.media.findByIDs({ ids })` reads several media files in one query, judged exactly as `findByID` judges one (@experimental). A collection list now reads the images its entries draw in one batch through it, or through a named media collection, so a list whose entries each bind their own image no longer costs one read per image. A list's reads ahead are scheduled in page order, and the read-limit warning counts each cache scope apart. A component read refused for want of reads names the placements asking for it among the blocks not read, and the editor's read meter counts a list's images in batches, as the page reads them.

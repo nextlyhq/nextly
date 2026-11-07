@@ -1202,6 +1202,14 @@ function everyStage(): {
       ...postsList("posts", 3, [
         itemHeading("title", "title", "None"),
         itemHeading("author", "author.name", "No author"),
+        // Each entry's own picture, read ahead with the others in a batch.
+        {
+          id: "cover",
+          type: "core/image",
+          version: 1,
+          props: { alt: "" },
+          bindings: { mediaId: { $bind: "featuredImage", source: "item" } },
+        },
         {
           id: "more",
           type: "core/button",
@@ -1291,6 +1299,7 @@ describe("the editor's count of a page's reads", () => {
       { name: "slug", type: "text" },
       { name: "publishedAt", type: "date" },
       { name: "author", type: "relationship", relationTo: "authors" },
+      { name: "featuredImage", type: "upload", relationTo: "images" },
     ]);
     const published = async (cap: number) => {
       const { nextly } = everyStage();
@@ -1384,6 +1393,7 @@ describe("the editor's count of a page's reads", () => {
           await renderToHtml(element);
         },
         cap,
+        mediaCollection: "images",
       });
     };
     const full = await published(500);
@@ -1393,6 +1403,8 @@ describe("the editor's count of a page's reads", () => {
     expect(full.html).toContain("/media/2.jpg");
     expect(full.html).toContain("Writer ");
     expect(full.html).toContain('href="/post-1"');
+    // The entries' own pictures, read ahead in one batch.
+    expect(full.html).toContain("/media/3.jpg");
     const most = full.report?.used ?? 0;
     expect(most).toBeGreaterThan(8);
     // Each allowance from none to past the page's need, both ways, compared
@@ -1405,5 +1417,32 @@ describe("the editor's count of a page's reads", () => {
       editor.push({ cap, ...comparable(await counted(cap)) });
     }
     expect(editor).toEqual(route);
+  });
+});
+
+describe("a component read refused for want of reads", () => {
+  it("names the placements asking for it, as the blocks drawn without it", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { nextly } = everyStage();
+    // Room for the outer component's read alone: the inner one's, asked by
+    // the block it is placed in, is refused.
+    const route = createPublicBlocksPage({
+      collections: ["pages", "posts"],
+      field: "content",
+      blocks,
+      maxQueries: 1,
+      nextly: nextly as never,
+    });
+    const element = await throughBoundary<{ children?: unknown }>(
+      route.ContentPage({ params: { slug: ["journal"] } })
+    );
+    const report = reportIn(element);
+    expect(report?.byKind).toEqual({ component: 1 });
+    // The page's own placement, which the inner component is drawn inside:
+    // the block an author placed and can select.
+    expect(report?.unread).toContainEqual({
+      nodeId: "outer-placed",
+      what: "component",
+    });
   });
 });

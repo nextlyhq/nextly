@@ -16,8 +16,9 @@
  *   allowance is refused where the route refuses it;
  * - lists read their entries through the editor's data provider, and their
  *   relations through it too, as the route reads them ahead;
- * - each distinct image is one read, and each link to an entry three (its
- *   row and two ownership checks), or three per batch for a list's links:
+ * - each distinct image is one read, or one per batch of a list's images,
+ *   and each link to an entry three (its row and two ownership checks), or
+ *   three per batch for a list's links:
  *   counted as the route counts them, without the read, since the editor
  *   draws neither.
  *
@@ -134,6 +135,12 @@ export interface PageReadCountArgs {
   readonly draw: (element: ReactElement) => Promise<void>;
   /** The allowance counted against: the default a published page has. */
   readonly cap?: number;
+  /**
+   * The collection the route reads media from, where it names one: a bound
+   * image is filled only from an upload field pointing there. The media
+   * library's, when absent.
+   */
+  readonly mediaCollection?: string;
 }
 
 /** What one link to an entry costs a published page: its row, two checks. */
@@ -154,19 +161,45 @@ function claimEach(
   return true;
 }
 
-/** Each image once, as the published page reads it. */
+/**
+ * Each image once, as the published page reads it; a list's images ahead in
+ * batches of {@link BATCH_SIZE}, one read each, asked only where the
+ * allowance also covers each image's own read after it, as the published
+ * page asks a batch, and then not again per image.
+ */
 function countedMedia(
   base: PageContext,
   budget: QueryBudget
-): PageContext["resolveMedia"] {
+): {
+  resolve: PageContext["resolveMedia"];
+  ahead: NonNullable<ListBatchReads["media"]>;
+} {
   const known = new Map<string, Promise<ResolvedMedia | null>>();
-  return (id, claim) => {
-    const kept = known.get(id);
-    if (kept !== undefined) return kept;
-    if (!budget.take({ ...claim, kind: "image" })) return Promise.resolve(null);
+  const drawn = (id: string) => {
     const reading = base.resolveMedia(id).catch(() => null);
     known.set(id, reading);
     return reading;
+  };
+  return {
+    resolve: (id, claim) =>
+      known.get(id) ??
+      (budget.take({ ...claim, kind: "image" })
+        ? drawn(id)
+        : Promise.resolve(null)),
+    ahead: (ids, claim) => {
+      const wanted = [...new Set(ids)].filter(id => !known.has(id));
+      for (let at = 0; at < wanted.length; at += BATCH_SIZE) {
+        const batch = wanted.slice(at, at + BATCH_SIZE);
+        if (
+          (budget.remaining?.() ?? Infinity) < batch.length + 1 ||
+          !budget.take({ ...claim, kind: "image" })
+        ) {
+          return Promise.resolve(false);
+        }
+        for (const id of batch) void drawn(id);
+      }
+      return Promise.resolve(true);
+    },
   };
 }
 
@@ -262,10 +295,11 @@ function heldComponents(
   known: DefinitionsById | undefined,
   budget: QueryBudget
 ): ComponentSource {
-  return ids => {
+  return (ids, placements) => {
     const wanted = [...new Set(ids)].filter(id => id.trim() !== "");
     const found = new Map<string, BlockDocument>();
-    for (const batch of componentBatches(wanted, budget)) {
+    // Named by the placements asking, so a refused batch names them unread.
+    for (const batch of componentBatches(wanted, budget, placements)) {
       for (const id of batch) {
         const definition = known?.get(id);
         if (definition !== undefined) found.set(id, definition);
@@ -367,6 +401,7 @@ export async function countPageReads(
     limits: drawing.limits,
     styleContext: drawing.styleContext,
     namedQueries: drawnContext?.namedQueries,
+    mediaCollection: args.mediaCollection,
   };
   const staged = await readPageStages({
     terms,
@@ -388,10 +423,11 @@ export async function countPageReads(
     ...base
   } = drawnContext ?? createStandaloneContext();
   const links = countedLinks(budget);
+  const media = countedMedia(base, budget);
   const counting: PageContext = {
     ...base,
     queries: budget,
-    resolveMedia: countedMedia(base, budget),
+    resolveMedia: media.resolve,
     resolveEntryPath: links.resolve,
   };
   // The route's own relation read, through the editor's data provider, so
@@ -404,6 +440,7 @@ export async function countPageReads(
       budget
     ),
     entryPaths: links.ahead,
+    media: media.ahead,
   };
   const shared = {
     ...drawing,

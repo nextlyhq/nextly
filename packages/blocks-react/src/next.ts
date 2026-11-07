@@ -116,9 +116,11 @@ import {
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
   isBindingIssue,
+  placementsOf,
 } from "./context";
 import type {
   BindingIssuesHandler,
+  ComponentPlacements,
   BlockHostPolicy,
   BlocksDataProvider,
   PageIssue,
@@ -1460,15 +1462,20 @@ function componentSource(
     // bounds the reader we wrote while leaving unbounded the one a site
     // supplies. A nested chain asks it once per level, so an uncharged source
     // is `MAX_COMPOSED_DEPTH` unbounded reads on a route that stated a limit.
-    return async ids =>
-      budget.take(COMPONENT_CLAIM) ? await custom(ids) : EMPTY_DEFINITIONS;
+    return async (ids, placements) =>
+      budget.take({
+        ...COMPONENT_CLAIM,
+        nodeIds: placementsOf(ids, placements),
+      })
+        ? await custom(ids)
+        : EMPTY_DEFINITIONS;
   }
   const collection = config.componentCollection ?? COMPONENT_TAG_COLLECTION;
   const field = config.componentField ?? COMPONENT_DOCUMENT_FIELD;
   const status = embeddedStatus(config);
   const overlayDrafts = overlaysDrafts(config);
 
-  return async (ids: readonly string[]) => {
+  return async (ids: readonly string[], placements) => {
     // Dropped before anything is built from them, not repaired. `entryIdTag`
     // refuses a blank segment by THROWING — correctly, because a bare
     // `nextly:components:id:` tag would over-invalidate — and a stored
@@ -1487,12 +1494,13 @@ function componentSource(
         field,
         locale,
         budget,
+        placements,
       });
     }
     // One claim per query, by the batches every count of component reads
     // takes (`componentBatches`); charging nothing would leave the read on
     // this path that grows with the page unbounded.
-    for (const chunk of componentBatches(wanted, budget)) {
+    for (const chunk of componentBatches(wanted, budget, placements)) {
       const page = await readRowsChunk(chunk, {
         reader,
         collection,
@@ -1676,13 +1684,23 @@ async function readDraftDefinitions(
     field: string;
     locale: string | undefined;
     budget: QueryBudget;
+    /** Who asks for each id, named unread when its read is refused. */
+    placements: ComponentPlacements | undefined;
   }
 ): Promise<DefinitionsById> {
-  const { field, ...rest } = args;
+  const { field, placements, ...rest } = args;
   // Through the SAME reader the batched path uses, so a row is judged readable
   // by one rule. A second unwrapping here is how the two paths would come to
   // disagree about which stored value counts as a definition.
-  return definitionsById(await readDraftRows(wanted, rest), field);
+  return definitionsById(
+    await readDraftRows(wanted, {
+      ...rest,
+      // Each id's own read, refused, names the placements asking for it and
+      // every later id's, since a refusal ends the reads.
+      claimAt: at => ({ nodeIds: placementsOf(wanted.slice(at), placements) }),
+    }),
+    field
+  );
 }
 
 /**
@@ -1701,17 +1719,19 @@ async function readDraftRows(
     budget: QueryBudget;
     /** Relationship depth, for a read that needs only the ids it stores. */
     depth?: number;
+    /** The claim the read of the id at `at` is made with; unnamed if none. */
+    claimAt?: (at: number) => ReadClaim;
   }
 ): Promise<Record<string, unknown>[]> {
   const { reader, collection, locale, budget, depth } = args;
   const rows: Record<string, unknown>[] = [];
-  for (const id of wanted) {
+  for (const [at, id] of wanted.entries()) {
     // One claim per QUERY, exactly as the batched path charges. Here that is
     // one per row, which is the honest price of this read rather than a
     // penalty: a page whose reads outrun the allowance stops fetching and the
     // remainder resolve as missing, with a marker, instead of the route
     // issuing unbounded reads.
-    if (!budget.take()) break;
+    if (!budget.take(args.claimAt?.(at))) break;
     const row = await reader.findByID({
       collection,
       id,
