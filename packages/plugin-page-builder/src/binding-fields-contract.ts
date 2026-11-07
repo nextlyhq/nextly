@@ -36,7 +36,7 @@ export interface BindingFieldsRequest {
 }
 
 /** One field a binding can read, as the picker lists it. */
-export interface PickerField extends BindingFieldShape {
+export interface PickerField extends Omit<BindingFieldShape, "fields"> {
   /** Whether a visitor may read it; a binding to one shows its fallback. */
   readonly public: boolean;
   /**
@@ -47,7 +47,10 @@ export interface PickerField extends BindingFieldShape {
   readonly preview?: string;
   /** Set when the value differs from what the published entry holds. */
   readonly draft?: true;
-  /** A relation's own fields, one step in, as the entry it names holds them. */
+  /**
+   * The fields inside it: a group's own, or a relation's, one step in, as the
+   * entry it names holds them.
+   */
   readonly fields?: readonly PickerField[];
 }
 

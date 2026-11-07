@@ -88,10 +88,10 @@ export interface BindingFieldsReads {
   declared(
     ref: { readonly collection: string } | { readonly single: string }
   ): Promise<readonly BindingFieldShape[] | undefined>;
-  /** The names of the fields the public may read, as the published page decides. */
-  publicNames(
+  /** The fields the public may read, as the published page decides them. */
+  publicShapes(
     ref: { readonly collection: string } | { readonly single: string }
-  ): Promise<ReadonlySet<string>>;
+  ): Promise<readonly BindingFieldShape[]>;
   /** The source as the caller reads it, these fields only; `null` when refused. */
   asEditor(
     ref: FieldsRef,
@@ -137,12 +137,26 @@ function followable(shape: BindingFieldShape): string | undefined {
   return typeof shape.relationTo === "string" ? shape.relationTo : undefined;
 }
 
-/** What one read of a source gives the listing. */
+/** What one read of a source, or of a group in it, gives the listing. */
 interface SourceRead {
   readonly shapes: readonly BindingFieldShape[];
   readonly row: Readonly<Record<string, unknown>>;
   readonly published: Readonly<Record<string, unknown>> | null;
-  readonly publicNames: ReadonlySet<string>;
+  /** The same level's fields as the public may read them. */
+  readonly publicShapes: readonly BindingFieldShape[];
+}
+
+/**
+ * The fields the caller's read returned at this level: a field their rules
+ * hide is deleted from it, so it is never listed, not even as empty.
+ */
+function returned(
+  shapes: readonly BindingFieldShape[],
+  row: Readonly<Record<string, unknown>>
+): readonly BindingFieldShape[] {
+  return shapes
+    .slice(0, MOST_FIELDS)
+    .filter(shape => Object.hasOwn(row, shape.name));
 }
 
 /**
@@ -161,33 +175,49 @@ async function readSource(
   const names = declared.slice(0, MOST_FIELDS).map(shape => shape.name);
   const row = await reads.asEditor(ref, names);
   if (row === null) return undefined;
-  const [published, publicNames] = await Promise.all([
+  const [published, publicShapes] = await Promise.all([
     reads.published(ref, names),
-    reads.publicNames(kind),
+    reads.publicShapes(kind),
   ]);
+  return { shapes: returned(declared, row), row, published, publicShapes };
+}
+
+/** A group's own level, read from its value in the source's read. */
+function groupRead(
+  shape: BindingFieldShape,
+  read: SourceRead,
+  publicShape: BindingFieldShape | undefined
+): SourceRead | undefined {
+  const row = read.row[shape.name];
+  if (shape.fields === undefined || !isPlainRecord(row)) return undefined;
+  const published = read.published?.[shape.name];
   return {
-    // Only what the caller's read returned: a field their rules hide is
-    // deleted from it, so it is never listed, not even as empty.
-    shapes: declared
-      .slice(0, MOST_FIELDS)
-      .filter(shape => Object.hasOwn(row, shape.name)),
+    shapes: returned(shape.fields, row),
     row,
-    published,
-    publicNames,
+    published: isPlainRecord(published) ? published : null,
+    publicShapes: publicShape?.fields ?? [],
   };
 }
 
-/** One field as the picker lists it, from the source's read. */
+/** One field as the picker lists it, from its level's read; a group's inside it. */
 function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
+  const { fields: _declaredInside, ...own } = shape;
   const value = read.row[shape.name];
-  const isPublic = read.publicNames.has(shape.name);
+  const publicShape = read.publicShapes.find(
+    candidate => candidate.name === shape.name
+  );
+  const isPublic = publicShape !== undefined;
   const draft = !sameJsonValue(value, read.published?.[shape.name]);
   const preview = isPublic && !draft ? previewOf(value) : undefined;
+  const group = groupRead(shape, read, publicShape);
   return {
-    ...shape,
+    ...own,
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
     ...(preview === undefined ? {} : { preview }),
+    ...(group === undefined
+      ? {}
+      : { fields: group.shapes.map(inner => pickerField(inner, group)) }),
   };
 }
 
@@ -221,10 +251,11 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
   return {
     binding: { source: "site" },
     label: "Site",
-    fields: SITE_SETTING_FIELD_SHAPES.map(shape => {
+    fields: SITE_SETTING_FIELD_SHAPES.map((shape): PickerField => {
       const preview = previewOf(values[shape.name]);
       return {
-        ...shape,
+        name: shape.name,
+        type: shape.type,
         public: true,
         ...(preview === undefined ? {} : { preview }),
       };
@@ -291,10 +322,9 @@ function directBindingFieldsReads(
       const { declaredFieldShapes } = await import("nextly/runtime");
       return declaredFieldShapes(ref);
     },
-    publicNames: async ref => {
+    publicShapes: async ref => {
       const { bindingFieldShapes } = await import("nextly/runtime");
-      const shapes = await bindingFieldShapes(ref, at);
-      return new Set((shapes ?? []).map(shape => shape.name));
+      return (await bindingFieldShapes(ref, at)) ?? [];
     },
     asEditor: async (ref, select) => {
       const reader = await editor;
