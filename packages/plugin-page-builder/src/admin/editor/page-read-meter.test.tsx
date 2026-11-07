@@ -4,6 +4,7 @@
  */
 import {
   DOCUMENT_FORMAT_VERSION,
+  regionDocument,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -43,11 +44,50 @@ const drawnWith = {
 describe("the page reads the editor counts", () => {
   it("counts a Layout's header with the page, as the published page draws them", async () => {
     const counted = await countPageReads(drawnWith, page([list("body")]), [
-      { area: "header", document: page([list("header-list")]) },
+      {
+        area: "header",
+        document: regionDocument([{ area: "header", componentId: "head" }]),
+        definitions: new Map([
+          ["head", { ...page([list("header-list")]), kind: "component" }],
+        ]),
+      },
     ]);
-    // The page's list, the header's list, and the Layout's row.
-    expect(counted.byKind).toEqual({ entries: 2, component: 1 });
-    expect(counted.used).toBe(3);
+    // The page's list, the Layout's row, the header's component and its
+    // list.
+    expect(counted.byKind).toEqual({ entries: 2, component: 2 });
+    expect(counted.used).toBe(4);
+  });
+
+  it("draws only the components the allowance read, as the published page does", async () => {
+    const instance = (id: string, componentId: string) => ({
+      id,
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId },
+    });
+    const counted = await countPageReads(
+      {
+        ...drawnWith,
+        definitions: new Map([
+          [
+            "outer",
+            {
+              ...page([instance("inner-placed", "inner")]),
+              kind: "component",
+            },
+          ],
+          ["inner", { ...page([list("inner-list")]), kind: "component" }],
+        ]),
+      },
+      page([instance("outer-placed", "outer")]),
+      [],
+      // The outer component's read alone: the inner one's is refused.
+      1
+    );
+    // The inner component is drawn unavailable, so its list asks nothing.
+    expect(counted.byKind).toEqual({ component: 1 });
+    expect(counted.refused).toBe(1);
+    expect(counted.unread).toEqual([]);
   });
 
   it("counts the page alone where it is drawn inside no Layout", async () => {

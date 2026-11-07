@@ -11021,3 +11021,26 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-builder-text-muted);
   font-size: 0.75rem;
 }
+
+/* A Layout region's block: named with its Layout, and the way to edit that
+   Layout at the row's end, since the page's editor cannot select it. */
+.nx-read-panel__block[data-source="layout"] {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  cursor: default;
+}
+
+.nx-read-panel__block-edit {
+  grid-row: 1 / span 2;
+  grid-column: 3;
+  color: var(--nx-builder-text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.nx-read-panel__block-edit:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+  border-radius: 0.25rem;
+}

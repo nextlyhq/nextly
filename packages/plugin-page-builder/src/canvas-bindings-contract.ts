@@ -13,7 +13,7 @@
  *
  * @module canvas-bindings-contract
  */
-import type { BindingDemand } from "@nextlyhq/blocks-engine";
+import type { BindingDemand, ConditionDemand } from "@nextlyhq/blocks-engine";
 import type { WireBindings } from "@nextlyhq/blocks-react";
 
 /** What one source is read for, as the engine states it. */
@@ -51,6 +51,48 @@ export interface CanvasBindingsRequest {
   readonly lists: readonly string[];
   /** The language being edited. */
   readonly locale?: string;
+  /**
+   * What the page's visibility conditions read, read in the same read of
+   * the entry as its bindings', as the published page reads them: the
+   * editor's read meter asks it, so the conditions are judged as they are
+   * there.
+   */
+  readonly conditions?: CanvasConditionDemand;
+  /**
+   * The reads the page has left when its bindings are read, so they are read
+   * under the allowance the published page reads them under; the default
+   * allowance when absent.
+   */
+  readonly allowance?: number;
+}
+
+/** What a page's conditions read, as JSON carries it. */
+export interface CanvasConditionDemand {
+  readonly any: boolean;
+  readonly entryFields: readonly string[];
+  readonly ordersValues: boolean;
+}
+
+/** What the conditions read, as the meter sends it. */
+export function conditionsToWire(
+  conditions: ConditionDemand
+): CanvasConditionDemand {
+  return {
+    any: conditions.any,
+    entryFields: [...conditions.entryFields].sort(),
+    ordersValues: conditions.ordersValues,
+  };
+}
+
+/** What the conditions read, as the route reads it back. */
+export function conditionsFromWire(
+  wire: CanvasConditionDemand
+): ConditionDemand {
+  return {
+    any: wire.any,
+    entryFields: new Set(wire.entryFields),
+    ordersValues: wire.ordersValues,
+  };
 }
 
 /** What the route answers: the sources, read as the caller. */

@@ -22,6 +22,7 @@ import {
   isPlainRecord,
   type BindingDemand,
   type BlockDocument,
+  type ConditionDemand,
 } from "@nextlyhq/blocks-engine";
 import {
   bindingsFromWire,
@@ -41,6 +42,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   CANVAS_BINDINGS_ROUTE_PATH,
+  conditionsToWire,
   demandToWire,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
@@ -150,10 +152,22 @@ export function canvasBindingsRequest(
    * collection's entries asks for that collection's field shapes too, as
    * the published page does.
    */
-  namedQueries?: NamedQueryLookup
+  namedQueries?: NamedQueryLookup,
+  /**
+   * For the editor's read meter, which reads as the published page does:
+   * what the page's conditions read, and the reads the page has left.
+   */
+  reads: {
+    readonly conditions?: ConditionDemand;
+    readonly allowance?: number;
+  } = {}
 ): CanvasBindingsRequest | undefined {
   if (identity === null || drawn.length === 0) return undefined;
   const found = bindingDemand(drawn);
+  // Conditions that restrict anybody read for the page as its bindings do,
+  // as the published page's read takes them in.
+  const conditions =
+    reads.conditions?.any === true ? reads.conditions : undefined;
   const demand: BindingDemand = component
     ? {
         any: found.any,
@@ -169,8 +183,9 @@ export function canvasBindingsRequest(
     Object.keys(wire.singles).length > 0 ||
     wire.site ||
     wire.formatsDates ||
-    lists.length > 0;
-  if (!found.any || !asks) return undefined;
+    lists.length > 0 ||
+    conditions !== undefined;
+  if (!(found.any || conditions !== undefined) || !asks) return undefined;
   return {
     source: {
       kind: identity.kind,
@@ -180,6 +195,13 @@ export function canvasBindingsRequest(
     demand: wire,
     lists,
     ...(locale === undefined ? {} : { locale }),
+    ...(conditions === undefined
+      ? {}
+      : { conditions: conditionsToWire(conditions) }),
+    // A whole number of reads the route can be asked for; none past it.
+    ...(reads.allowance === undefined || !Number.isFinite(reads.allowance)
+      ? {}
+      : { allowance: Math.max(0, Math.floor(reads.allowance)) }),
   };
 }
 

@@ -37,6 +37,7 @@ import { z } from "nextly/zod";
 
 import {
   CANVAS_BINDINGS_ROUTE_PATH,
+  conditionsFromWire,
   demandFromWire,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
@@ -56,6 +57,9 @@ const SLUG = z
 
 /** At most this many fields, follows or Singles in one ask: a page's worth. */
 const MOST = 200;
+
+/** The most reads an ask may be allowed: far past any page's allowance. */
+const MOST_READS = 100_000;
 
 /** What one source is read for, as the canvas sends it. */
 /*
@@ -127,6 +131,16 @@ const CanvasBindingsBody = z
       .strict(),
     lists: z.array(SLUG).max(MOST),
     locale: z.string().min(1).max(35).optional(),
+    conditions: z
+      .object({
+        any: z.boolean(),
+        entryFields: z.array(NAME).max(MOST),
+        ordersValues: z.boolean(),
+      })
+      .strict()
+      .optional(),
+    // At most a published page's allowance: an ask is one page's reads.
+    allowance: z.number().int().min(0).max(MOST_READS).optional(),
   })
   .strict()
   .refine(body => shapeLookupsOf(body) <= MOST, {
@@ -179,7 +193,9 @@ function directCanvasBindingsReads(
       // A published page's own allowance, for one ask, counting what it
       // spends, so the editor's read meter adds what these reads cost as
       // they were made, as a named query's run reports its reads.
-      const budget = blocks.createQueryBudget();
+      // Under the reads the page has left at that point, when the meter
+      // says, so a read past them is refused here as it is there.
+      const budget = blocks.createQueryBudget(request.allowance);
       const bindings = await next.readBindingSources({
         documents: [],
         demand: demandFromWire(request.demand),
@@ -196,6 +212,11 @@ function directCanvasBindingsReads(
         ...(locale === undefined ? {} : { locale }),
         reader,
         budget,
+        // The entry fields the page's conditions check, read with the
+        // bindings', as the published page reads them.
+        ...(request.conditions === undefined
+          ? {}
+          : { conditions: conditionsFromWire(request.conditions) }),
       });
       const reads = budget.report();
       return bindings === undefined

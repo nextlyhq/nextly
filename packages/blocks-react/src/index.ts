@@ -57,7 +57,6 @@ export {
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
   defineBlock,
-  componentBatches,
   READ_KINDS,
   emptyDataProvider,
 } from "./context";
@@ -472,9 +471,17 @@ export {
 // page builder's Layout choices read a region's components, nested ones
 // included, at the posture the published route reads them.
 export { definitionsFor } from "./component-source";
-// The relation read a route's lists make ahead, shared with the editor's
-// count of what a page reads. `@experimental` with the read budget.
-export { relatedThrough } from "./blocks/list-batch";
+// What a page reads when published, counted where it is edited: the
+// published route's own read stages, run with the editor's reads.
+// `@experimental` with the read budget.
+export {
+  countPageReads,
+  type CountedBindings,
+  type CountedDrawing,
+  type CountedRegion,
+  type PageReadCountArgs,
+} from "./page-read-count";
+export type { BindingsAsk, EntrySource, PageWhere } from "./page-read-stages";
 
 // How a page and the regions of its Layout share one site sheet and keep
 // their own styles apart: one answer for the published route and the editor's

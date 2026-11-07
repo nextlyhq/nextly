@@ -350,6 +350,7 @@ function editorTopBar(
             editor={editor}
             drawnWith={view.canvasRender}
             regions={view.canvasRegions}
+            componentTitle={view.componentLibrary.titleOf}
           />
         ) : null}
       </>
@@ -1091,7 +1092,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
               */}
               {isTemplate ? (
                 <TemplatePreviewScope control={props.control}>
-              <EditorBody {...props} />
+                  <EditorBody {...props} />
                 </TemplatePreviewScope>
               ) : (
                 <EditorBody {...props} />

@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import type { CanvasRegion } from "./canvas-regions";
 import type { EditorState } from "./editor-state";
 import { blockNameOf, type ComponentTitleOf } from "./layers";
 import {
@@ -57,6 +58,12 @@ export interface ReadBudgetMeterProps {
   editor: Pick<EditorState, "document" | "select">;
   /** A component's title by id, so a placement is named as Layers names it. */
   componentTitle?: ComponentTitleOf;
+  /**
+   * The Layout regions the page is drawn inside, as the canvas draws them, so
+   * an unread block of a header or footer is named with the Layout it comes
+   * from, and offers the way to edit that Layout.
+   */
+  regions?: readonly CanvasRegion[];
 }
 
 /** The mark each standing wears beside its count. */
@@ -83,6 +90,9 @@ const KIND_MARK: Record<
   component: ComponentMark,
 };
 
+/** No Layout: a page drawn inside none. */
+const NO_REGIONS: readonly CanvasRegion[] = [];
+
 /** The panel's one-line verdict, beside its title. */
 const STANDING_WORDS: Record<ReadBudgetStanding, string> = {
   counting: "Counting",
@@ -95,6 +105,7 @@ export function ReadBudgetMeter({
   report,
   editor,
   componentTitle,
+  regions,
 }: ReadBudgetMeterProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const standing = readBudgetStanding(report);
@@ -139,6 +150,7 @@ export function ReadBudgetMeter({
           standing={standing}
           editor={editor}
           componentTitle={componentTitle}
+          regions={regions ?? NO_REGIONS}
           onPicked={() => setOpen(false)}
         />
       </PopoverContent>
@@ -203,12 +215,14 @@ function ReadPanel({
   standing,
   editor,
   componentTitle,
+  regions,
   onPicked,
 }: {
   report: PageReadReport | undefined;
   standing: ReadBudgetStanding;
   editor: ReadBudgetMeterProps["editor"];
   componentTitle: ComponentTitleOf | undefined;
+  regions: readonly CanvasRegion[];
   onPicked: () => void;
 }): React.JSX.Element {
   return (
@@ -235,6 +249,7 @@ function ReadPanel({
               report={report}
               editor={editor}
               componentTitle={componentTitle}
+              regions={regions}
               onPicked={onPicked}
             />
           ) : standing === "near" ? (
@@ -334,11 +349,13 @@ function UnreadBlocks({
   report,
   editor,
   componentTitle,
+  regions,
   onPicked,
 }: {
   report: PageReadReport;
   editor: ReadBudgetMeterProps["editor"];
   componentTitle: ComponentTitleOf | undefined;
+  regions: readonly CanvasRegion[];
   onPicked: () => void;
 }): React.JSX.Element {
   const headingId = React.useId();
@@ -354,34 +371,102 @@ function UnreadBlocks({
         these blocks as if their data were missing:
       </p>
       <ul className="nx-read-panel__list">
-        {rows.map(({ nodeId, what }) => {
-          const Mark = KIND_MARK[what[0] ?? "page"];
-          // A block the document no longer holds (an undo since the draw)
-          // is named by what it missed alone, and cannot be selected.
-          const name = blockNameOf(editor.document, nodeId, componentTitle);
-          return (
-            <li key={nodeId}>
-              <button
-                type="button"
-                className="nx-read-panel__block"
-                disabled={name === undefined}
-                onClick={() => {
-                  editor.select(nodeId);
-                  onPicked();
-                }}
-              >
-                <Mark className="nx-read-panel__kind-mark" aria-hidden={true} />
-                <span className="nx-read-panel__block-name">
-                  {name ?? "A removed block"}
-                </span>
-                <span className="nx-read-panel__block-what">
-                  {what.map(kind => READ_KIND_WORDS[kind].unread).join(" · ")}
-                </span>
-              </button>
-            </li>
-          );
-        })}
+        {rows.map(({ nodeId, what }) => (
+          <li key={nodeId}>
+            <UnreadRow
+              nodeId={nodeId}
+              what={what}
+              editor={editor}
+              componentTitle={componentTitle}
+              regions={regions}
+              onPicked={onPicked}
+            />
+          </li>
+        ))}
       </ul>
     </section>
+  );
+}
+
+/** The Layout region whose document holds a block, when one does. */
+function regionHolding(
+  regions: readonly CanvasRegion[],
+  nodeId: string,
+  componentTitle: ComponentTitleOf | undefined
+): { region: CanvasRegion; name: string } | undefined {
+  for (const region of regions) {
+    const name = blockNameOf(region.document, nodeId, componentTitle);
+    if (name !== undefined) return { region, name };
+  }
+  return undefined;
+}
+
+/**
+ * One unread block: a page's selects it; a Layout region's is named with
+ * the Layout it comes from and offers that Layout's editor, since the page's
+ * editor cannot select it; one neither holds (an undo since the draw) is
+ * named by what it missed alone.
+ */
+function UnreadRow({
+  nodeId,
+  what,
+  editor,
+  componentTitle,
+  regions,
+  onPicked,
+}: {
+  nodeId: string;
+  what: readonly ReadKind[];
+  editor: ReadBudgetMeterProps["editor"];
+  componentTitle: ComponentTitleOf | undefined;
+  regions: readonly CanvasRegion[];
+  onPicked: () => void;
+}): React.JSX.Element {
+  const Mark = KIND_MARK[what[0] ?? "page"];
+  const missed = what.map(kind => READ_KIND_WORDS[kind].unread).join(" · ");
+  const name = blockNameOf(editor.document, nodeId, componentTitle);
+  const held =
+    name === undefined
+      ? regionHolding(regions, nodeId, componentTitle)
+      : undefined;
+  if (held !== undefined) {
+    const { region } = held;
+    return (
+      <div className="nx-read-panel__block" data-source="layout">
+        <Mark className="nx-read-panel__kind-mark" aria-hidden={true} />
+        <span className="nx-read-panel__block-name">{held.name}</span>
+        <span className="nx-read-panel__block-what">
+          {region.label} · {missed}
+        </span>
+        {region.edit === undefined ? null : (
+          <a
+            className="nx-read-panel__block-edit"
+            href={region.edit.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={region.edit.name}
+          >
+            {region.edit.text}
+          </a>
+        )}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="nx-read-panel__block"
+      disabled={name === undefined}
+      onClick={() => {
+        editor.select(nodeId);
+        onPicked();
+      }}
+    >
+      <Mark className="nx-read-panel__kind-mark" aria-hidden={true} />
+      <span className="nx-read-panel__block-name">
+        {name ?? "A removed block"}
+      </span>
+      <span className="nx-read-panel__block-what">{missed}</span>
+    </button>
   );
 }
