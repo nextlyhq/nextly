@@ -9,6 +9,9 @@ import type { BindingReportRow } from "./rows";
 /** Where the route is mounted under the plugin. */
 export const BINDINGS_TO_FIX_ROUTE_PATH = "/bindings-to-fix";
 
+/** How many documents one page of the answer lists. */
+export const BINDINGS_TO_FIX_PAGE_SIZE = 100;
+
 /** One broken binding in the answer, with the names an author knows. */
 export interface BindingsToFixRow extends BindingReportRow {
   /** The block's name as the editor shows it; empty for the document's metadata. */

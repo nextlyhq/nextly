@@ -51,6 +51,8 @@ export interface BindingReportRow {
   readonly codes: readonly string[];
   /** The field the path reaches, where the schema has one. */
   readonly reaches?: { readonly name: string; readonly type: string };
+  /** The component the block came from, when a placement put it on the page. */
+  readonly component?: string;
   /** The blocks field the binding is in, as a dotted path. */
   readonly blocksField?: string;
   /** The language of the value it is in, for a field stored per language. */

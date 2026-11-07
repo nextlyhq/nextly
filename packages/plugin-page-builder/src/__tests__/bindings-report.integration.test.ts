@@ -1,7 +1,8 @@
 /**
  * The "Bindings to fix" report, kept on real writes: a page saved holding a
- * binding that no longer fits gets a row, saving it fixed removes the row, and
- * deleting the page removes it too.
+ * binding that no longer fits is reported, saving it fixed reports nothing,
+ * and deleting the page reports nothing either. A document judged whole keeps
+ * a row with no issues, which is how the report says "nothing to fix".
  *
  * What only a server shows: the report is kept by hooks after each committed
  * write, in the plugin's own table, which no unit test reaches.
@@ -85,7 +86,7 @@ describe.each(getConfiguredTestDialects())(
         : [];
     }
 
-    it("records a broken binding a save kept, drops it once fixed, and on delete", async () => {
+    it("reports a broken binding a save kept, nothing once fixed, and nothing once deleted", async () => {
       const created = await t.nextly.create({
         collection: ARTICLES,
         data: { title: "Launch", content: pageOf({ $bind: "title" }) },
@@ -93,7 +94,7 @@ describe.each(getConfiguredTestDialects())(
       });
       const id = String(created.item.id);
       // Fits: nothing to report.
-      expect(await rowOf(id)).toBeUndefined();
+      expect(codesOf(await rowOf(id))).toEqual([]);
 
       // Planted past every check, as a save before a rename left it, then
       // saved again with an edit beside it: the save keeps the binding, and
@@ -126,7 +127,7 @@ describe.each(getConfiguredTestDialects())(
         data: asOverwrite({ content: pageOf({ $bind: "title" }) }),
         overrideAccess: true,
       });
-      expect(await rowOf(id)).toBeUndefined();
+      expect(codesOf(await rowOf(id))).toEqual([]);
 
       // Broken again, then deleted: the row goes with it.
       await t.adapter.update(
@@ -140,13 +141,13 @@ describe.each(getConfiguredTestDialects())(
         data: asOverwrite({ title: "Again", content: broken }),
         overrideAccess: true,
       });
-      expect(await rowOf(id)).toBeDefined();
+      expect(codesOf(await rowOf(id))).toEqual(["binding-field-missing"]);
       await t.nextly.delete({
         collection: ARTICLES,
         id,
         overrideAccess: true,
       });
-      expect(await rowOf(id)).toBeUndefined();
+      expect(codesOf(await rowOf(id))).toEqual([]);
     });
   }
 );

@@ -285,6 +285,23 @@ async function hintedDocuments(
   return found;
 }
 
+/**
+ * One document's hosts, as the walk would list them: each blocks field in
+ * each language it stores. Empty for a document holding no blocks field, and
+ * for a Single the site does not list as holding one.
+ */
+export async function documentHosts(
+  site: DocumentSite,
+  at: Pick<HostAddress, "kind" | "slug" | "id">
+): Promise<HostCandidate[]> {
+  if (at.kind === "collection") {
+    return hostsOf(at, await site.resolveCollection(at.slug), site.locales());
+  }
+  const singles = await site.singles();
+  const single = singles?.find(entry => entry.slug === at.slug);
+  return single === undefined ? [] : hostsOf(at, single, site.locales());
+}
+
 /** Where a document sits in the walk. */
 function cursorOfDocument(document: HostDocument): Cursor {
   const host = document.hosts[0]?.host;

@@ -273,9 +273,11 @@ GET /admin/api/plugins/@nextlyhq/plugin-page-builder/bindings-to-fix
 ```
 
 It answers people who can update pages, listing only the documents the caller
-may read, each by its title. `?document=<key>` narrows it to one document and
-`?place=` to one place (`pages`, `components`, `patterns`, `layouts`,
-`entries` or `singles`). Its `meta` adds the number of broken bindings in each
+may read, each by its title, and only the bindings in blocks fields their field
+rules let them read. A binding inside a component a page places is listed on
+that page, judged against its entry. `?document=<key>` narrows it to one
+document, `?place=` to one place (`pages`, `components`, `patterns`, `layouts`,
+`entries` or `singles`), and `?page=` pages it, a hundred documents a page. Its `meta` adds the number of broken bindings in each
 place (`byPlace`), their total (`bindings`), when every document was last
 checked (`checkedAt`), and whether a check is under way (`checking`).
 

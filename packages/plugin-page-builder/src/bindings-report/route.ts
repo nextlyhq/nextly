@@ -3,19 +3,20 @@
  * they read, for the people who edit pages.
  *
  * Read from the stored report (`bindings-report/store`), never computed per
- * request, so its count is cheap wherever the admin shows it. Each document is
- * listed only when the caller may read it, named as they know it, by one read
- * as the caller per collection (the dry run's own naming). A request also
- * starts the check of every document when the schema changed since the last
- * complete one, and is answered at once with what is stored and that a check
- * is under way.
+ * request, so its count is cheap wherever the admin shows it. A document is
+ * listed only when the caller may read it, and only the rows of the blocks
+ * fields they may read (`bindings-report/readable`), named as they know it.
+ * A request also starts the check of every document when the schema changed
+ * since the last complete one, and is answered at once with what is stored
+ * and that a check is under way.
  *
  * `?document=<key>` narrows the answer to one document, for the editor;
  * `?place=<place>` to one place (pages, components, patterns, layouts,
- * entries, singles).
+ * entries, singles); `?page=<n>` pages it, a hundred documents a page.
  *
  * @module bindings-report/route
  */
+import { getBlock } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type PluginRouteContext,
@@ -23,33 +24,27 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 
-import { getBlock } from "@nextlyhq/blocks-engine";
-
-import { labelOf, pluralLabelOf } from "../collection-labels";
 import { PAGES_SLUG } from "../collections/pages";
-import type { HostAddress } from "../host-rewrite/contract";
 
 import {
+  BINDINGS_TO_FIX_PAGE_SIZE,
   BINDINGS_TO_FIX_ROUTE_PATH,
   type BindingsToFixItem,
   type BindingsToFixMeta,
   type BindingsToFixRow,
 } from "./contract";
+import { topFieldOf, type ReadableDocument } from "./readable";
 import type { BindingReportRow } from "./rows";
-import { MAX_REPORTED_DOCUMENTS, type BindingReportStore } from "./store";
-
-
-
-
+import type { BindingReportStore, StoredDocumentReport } from "./store";
 
 /** What the route needs of the installed plugin. */
 export interface BindingsToFixDeps {
   readonly store: () => BindingReportStore | null;
-  /** What the caller knows each document by, for the ones they may read. */
-  readonly names: (
+  /** What the caller may read of each reported document. */
+  readonly readable: (
     ctx: PluginRouteContext,
-    hosts: readonly HostAddress[]
-  ) => Promise<ReadonlyMap<string, string>>;
+    entries: readonly StoredDocumentReport[]
+  ) => Promise<ReadonlyMap<string, ReadableDocument>>;
   /**
    * Start the check of every document if the schema changed, through the
    * caller's request; never waits for it.
@@ -87,35 +82,46 @@ function withLabels(row: BindingReportRow): BindingsToFixRow {
   };
 }
 
-/** Each collection's name as the admin shows it, read once per answer. */
-function collectionLabels(
-  ctx: PluginRouteContext
-): (slug: string) => Promise<string> {
-  const known = new Map<string, Promise<string>>();
-  return slug => {
-    let held = known.get(slug);
-    if (held === undefined) {
-      held = ctx.services.collections
-        .getCollection(slug, undefined as never)
-        .then(record => {
-          const fields = record as unknown as Record<string, unknown>;
-          return pluralLabelOf(fields).pluralLabel ?? labelOf(fields, slug);
-        })
-        .catch(() => slug);
-      known.set(slug, held);
-    }
-    return held;
-  };
-}
-
 /** The query, read as given; anything else is ignored. */
-function filtersOf(req: Request): { document?: string; place?: string } {
+function filtersOf(req: Request): {
+  readonly document?: string;
+  readonly place?: string;
+  readonly page: number;
+} {
   const params = new URL(req.url).searchParams;
   const document = params.get("document");
   const place = params.get("place");
+  const page = Number.parseInt(params.get("page") ?? "1", 10);
   return {
     ...(document === null || document === "" ? {} : { document }),
     ...(place === null || place === "" ? {} : { place }),
+    page: Number.isFinite(page) && page > 0 ? page : 1,
+  };
+}
+
+/**
+ * A stored document as the caller may see it: only the rows of the blocks
+ * fields they may read; nothing when that leaves none.
+ */
+function itemFor(
+  entry: StoredDocumentReport,
+  readable: ReadableDocument | undefined
+): BindingsToFixItem | undefined {
+  if (readable === undefined) return undefined;
+  const rows = entry.rows.filter(row =>
+    readable.fields.has(topFieldOf(row.blocksField))
+  );
+  if (rows.length === 0) return undefined;
+  return {
+    documentKey: entry.documentKey,
+    kind: entry.kind,
+    slug: entry.slug,
+    ...(entry.documentId === undefined ? {} : { documentId: entry.documentId }),
+    place: entry.place,
+    title: readable.title,
+    collectionLabel: readable.collectionLabel,
+    rows: rows.map(withLabels),
+    checkedAt: entry.checkedAt.toISOString(),
   };
 }
 
@@ -133,76 +139,49 @@ async function readBindingsToFix(
   }
   deps.refresh(ctx);
   const filters = filtersOf(req);
-  const [stored, check] = await Promise.all([store.list(), store.fullCheck()]);
-  const wanted = stored.filter(
-    entry =>
-      filters.document === undefined || entry.documentKey === filters.document
-  );
-  const names = await deps.names(
-    ctx,
-    wanted.map(entry => ({
-      kind: entry.kind,
-      slug: entry.slug,
-      ...(entry.documentId === undefined ? {} : { id: entry.documentId }),
-      path: [],
-    }))
-  );
-  const labelOfCollection = collectionLabels(ctx);
-  // Only documents the caller may read; the place filter after the counts,
-  // so each tab's count stays whatever tab is open.
-  const labelled = await Promise.all(
-    wanted.map(async entry => ({
-      entry,
-      title: names.get(entry.documentKey),
-      collectionLabel:
-        entry.kind === "single" ? entry.slug : await labelOfCollection(entry.slug),
-    }))
-  );
-  const readable: BindingsToFixItem[] = labelled.flatMap(
-    ({ entry, title, collectionLabel }) => {
-    return title === undefined
-      ? []
-      : [
-          {
-            collectionLabel,
-            documentKey: entry.documentKey,
-            kind: entry.kind,
-            slug: entry.slug,
-            ...(entry.documentId === undefined
-              ? {}
-              : { documentId: entry.documentId }),
-            place: entry.place,
-            title,
-            rows: entry.rows.map(withLabels),
-            checkedAt: entry.checkedAt.toISOString(),
-          },
-        ];
-    }
-  );
+  const [stored, check] = await Promise.all([
+    filters.document === undefined
+      ? store.list()
+      : store
+          .get(filters.document)
+          .then(entry => (entry === undefined ? [] : [entry])),
+    store.fullCheck(),
+  ]);
+  const readable = await deps.readable(ctx, stored);
+  const visible = stored.flatMap(entry => {
+    const item = itemFor(entry, readable.get(entry.documentKey));
+    return item === undefined ? [] : [item];
+  });
+  // The counts are of every place, so each tab's count stays whatever tab is
+  // open; the place filter and the page come after.
   const byPlace: Record<string, number> = {};
-  for (const item of readable) {
+  for (const item of visible) {
     byPlace[item.place] = (byPlace[item.place] ?? 0) + item.rows.length;
   }
-  const items = readable.filter(
+  const inPlace = visible.filter(
     item => filters.place === undefined || item.place === filters.place
   );
+  const totalPages = Math.max(
+    1,
+    Math.ceil(inPlace.length / BINDINGS_TO_FIX_PAGE_SIZE)
+  );
+  const start = (filters.page - 1) * BINDINGS_TO_FIX_PAGE_SIZE;
   const meta: Parameters<typeof respondList>[1] & BindingsToFixMeta = {
-    total: items.length,
-    page: 1,
-    limit: MAX_REPORTED_DOCUMENTS,
-    totalPages: 1,
-    // The store keeps at most the cap; more would be read on a next page.
-    hasNext: stored.length >= MAX_REPORTED_DOCUMENTS,
-    hasPrev: false,
+    total: inPlace.length,
+    page: filters.page,
+    limit: BINDINGS_TO_FIX_PAGE_SIZE,
+    totalPages,
+    hasNext: filters.page < totalPages,
+    hasPrev: filters.page > 1,
     byPlace,
-    bindings: readable.reduce((sum, item) => sum + item.rows.length, 0),
-    checkedAt:
-      check.checked !== null && check.at !== null
-        ? check.at.toISOString()
-        : null,
+    bindings: visible.reduce((sum, item) => sum + item.rows.length, 0),
+    checkedAt: check.completedAt?.toISOString() ?? null,
     checking: check.checking !== null,
   };
-  return respondList(items, meta);
+  return respondList(
+    inPlace.slice(start, start + BINDINGS_TO_FIX_PAGE_SIZE),
+    meta
+  );
 }
 
 /**

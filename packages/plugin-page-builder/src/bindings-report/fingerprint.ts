@@ -1,7 +1,8 @@
 /**
  * The fingerprint of what bindings are judged against: every collection's and
- * every Single's fields, as the registry's schema hash for each says, and
- * every registered block's props.
+ * every Single's fields, as the registry's schema hash for each says, whether
+ * a collection's entries carry timestamps, and every registered block's
+ * props.
  *
  * Nothing tells a plugin that one of these changed, so the check of every
  * document compares this with the one the last complete check was made
@@ -19,6 +20,7 @@ interface RegistryRow {
   readonly slug?: unknown;
   readonly schemaHash?: unknown;
   readonly updatedAt?: unknown;
+  readonly timestamps?: unknown;
 }
 
 /** A block definition, as far as the fingerprint reads it. */
@@ -48,7 +50,9 @@ function recordPart(kind: string, row: unknown): string {
       : record.updatedAt instanceof Date
         ? record.updatedAt.toISOString()
         : JSON.stringify(record.updatedAt ?? null);
-  return `${kind}:${slug}:${version}`;
+  // Whether its entries carry timestamps, which the fields' hash leaves out
+  // and the shapes a binding is judged against list.
+  return `${kind}:${slug}:${version}:${record.timestamps === false ? "no-timestamps" : "timestamps"}`;
 }
 
 /** The fingerprint of the schema bindings are judged against now. */
