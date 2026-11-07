@@ -30,7 +30,6 @@ import {
 } from "@nextlyhq/blocks-react";
 import {
   useCurrentUserId,
-  useDocumentIdentity,
   writePluginRoute,
   type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -43,6 +42,8 @@ import {
   type CanvasBindingsResponse,
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+
+import { useCanvasEntryIdentity } from "./editor/canvas-entry";
 
 /** No source read: what the canvas draws with until an answer arrives. */
 const NONE: PageBindings = Object.freeze({});
@@ -181,7 +182,9 @@ export function useCanvasBindings(
   /** The site's named queries, once the canvas has read them. */
   namedQueries?: NamedQueryLookup
 ): PageBindings {
-  const identity = useDocumentIdentity();
+  // The entry the canvas is drawn as: the document's own, or a template's
+  // previewed entry of the collection it draws.
+  const identity = useCanvasEntryIdentity();
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>

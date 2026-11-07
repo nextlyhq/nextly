@@ -86,6 +86,7 @@ import {
 } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
+import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import {
   editorPanelRenderer,
@@ -125,6 +126,12 @@ import {
   offerableTokens,
   siteStyleStatus,
 } from "./site-style-studios";
+import { documentFrom } from "./stored-document";
+import {
+  TemplatePreviewScope,
+  TemplatePreviewStrip,
+  useTemplatePreviewState,
+} from "./template-preview-strip";
 import { useComponentView, type ComponentView } from "./use-component-view";
 import { useEditorMount, type EditorMount } from "./use-editor-mount";
 import {
@@ -1028,6 +1035,11 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
    * of the style writers run in the editor component itself.
    */
   const style = useSiteStyleHistory();
+  // Read once, from the document the editor opens with, as the editor reads
+  // it: its kind does not change while the editor is open.
+  const [isTemplate] = useState(
+    () => documentFrom(props.initialValue, props.kinds).kind === "template"
+  );
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
       {/* Held style edits, drawn before they are stored. */}
@@ -1041,7 +1053,19 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
             window the page is drawn in.
           */}
             <CanvasFrameProvider>
-              <EditorBody {...props} />
+              {/*
+                A template is drawn with an entry of the collection it names,
+                chosen in the strip above its canvas: read around the editor,
+                so the canvas, the inspector and the strip all read the one
+                answer. Any other document is drawn as itself.
+              */}
+              {isTemplate ? (
+                <TemplatePreviewScope control={props.control}>
+                  <EditorBody {...props} />
+                </TemplatePreviewScope>
+              ) : (
+                <EditorBody {...props} />
+              )}
             </CanvasFrameProvider>
           </ConnectStyleHistoryContext.Provider>
         </StyleRevisionContext.Provider>
@@ -1170,11 +1194,15 @@ function EditorBody<TFieldValues extends FieldValues>({
   // A stored image's name and picture in the inspector, read as the canvas
   // reads it.
   const readMedia = useMediaSummaryReader();
-  const identity = useDocumentIdentity();
+  // The entry the canvas is drawn as: the document's own, or the entry a
+  // template is previewed with, whose collection the inspector judges by.
+  const identity = useCanvasEntryIdentity();
   const entryCollection = listEntryCollectionOf(
     identity,
     mount.initialDocument
   );
+  // The Previewing strip, for a template only.
+  const templatePreview = useTemplatePreviewState();
   // The conditioned blocks the page can't check, badged in red on the canvas,
   // judged with the collections the inspector lists, in this language.
   const conditionServices = useMemo(
@@ -1261,6 +1289,12 @@ function EditorBody<TFieldValues extends FieldValues>({
           // editor is open, because the document is committed on the way out.
           // The title is the top bar's switcher, so the shell draws none.
           {...editorTopBar(view, { title: page.title, field: name })}
+          // Pinned above a template's canvas: the entry it is drawn with.
+          {...(templatePreview === undefined
+            ? {}
+            : {
+                canvasStrip: <TemplatePreviewStrip preview={templatePreview} />,
+              })}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page)}
           // The shell owns the region; this fills it. Rendered unconditionally
