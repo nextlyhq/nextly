@@ -210,6 +210,31 @@ describe("a bound prop's Format", () => {
     );
   });
 
+  it("names a format set elsewhere in full on the menu's tooltip", async () => {
+    // Accepted by the engine, named by no preset: the value is cut where the
+    // panel is narrow, so its whole words are on the trigger's title.
+    mount({
+      label: {
+        $bind: "publishedAt",
+        format: { type: "date", options: { dateStyle: "medium" } },
+      },
+    });
+    const menu = await formatMenu();
+    expect(menu.textContent).toBe("Set elsewhere");
+    expect(menu.getAttribute("title")).toBe("Set elsewhere");
+  });
+
+  it("titles a preset's menu with its own words", async () => {
+    // The control: the title follows the value shown, not one fixed text.
+    mount({
+      label: {
+        $bind: "publishedAt",
+        format: { type: "date", options: { dateStyle: "long" } },
+      },
+    });
+    expect((await formatMenu()).getAttribute("title")).toBe("Long date");
+  });
+
   it("shows a stored format the engine accepts as it is", async () => {
     // The control for the refusal above: a known code, the same row.
     mount({

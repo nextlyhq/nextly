@@ -45,6 +45,9 @@ const CURRENCY = "currency";
 /** The menu's key for a stored format no preset names. */
 const STORED = "stored";
 
+/** What the menu shows for it. */
+const SET_ELSEWHERE = "Set elsewhere";
+
 /**
  * A code `checkFormat` knows on every runtime, used only to ask whether a
  * currency format fits the field at all; the author types the real one.
@@ -211,6 +214,15 @@ export interface BindingFormatFieldProps {
   readonly onFormat: (format: BindingFormat) => void;
 }
 
+/** The words the menu shows for `value`, or `undefined` for none. */
+function shownLabel(
+  value: string,
+  presets: readonly FormatPreset[]
+): string | undefined {
+  if (value === STORED) return SET_ELSEWHERE;
+  return presets.find(preset => preset.key === value)?.label;
+}
+
 /** The currency code a stored currency format names, or `""`. */
 function storedCurrencyCode(stored: unknown): string {
   return isRecord(stored) &&
@@ -355,6 +367,8 @@ export function BindingFormatField({
       <Select value={value} disabled={disabled} onValueChange={choose}>
         <SelectTrigger
           id={id}
+          // The shown value in full, as other cut-off menu values have it.
+          title={shownLabel(value, presets)}
           aria-invalid={refusal === undefined ? undefined : true}
           aria-describedby={`${describedBy} ${explainedBy}`.trim()}
         >
@@ -370,7 +384,7 @@ export function BindingFormatField({
             // Shown, never offered: a format written elsewhere with options
             // no preset names, kept until the author picks another.
             <SelectItem value={STORED} disabled>
-              Set elsewhere
+              {SET_ELSEWHERE}
             </SelectItem>
           ) : null}
         </SelectContent>

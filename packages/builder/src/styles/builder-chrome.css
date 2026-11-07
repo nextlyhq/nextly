@@ -11415,21 +11415,23 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   white-space: nowrap;
 }
 
+/* The field stays whole while it fits, and is cut only when it alone can't. */
 .nx-binding-chip__field {
-  flex: 0 1 auto;
-  min-inline-size: 0;
+  flex: none;
+  max-inline-size: 100%;
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
 }
 
+/* The source takes what room is left, cut with an ellipsis before the field. */
 .nx-binding-chip__source {
-  flex: 0 100 auto;
+  flex: 0 1 auto;
   min-inline-size: 0;
   overflow: hidden;
   color: var(--nx-muted-foreground);
   font-size: 0.75rem;
-  text-overflow: clip;
+  text-overflow: ellipsis;
 }
 
 /*
