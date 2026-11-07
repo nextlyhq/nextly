@@ -22,11 +22,12 @@ import {
   definePlugin,
   NextlyError,
   type HookContext,
+  readableTitleText,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginCollectionTransaction,
   type PluginCollectionView,
   type PluginDefinition,
-  type PluginCollectionTransaction,
   type PluginRouteContext,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
@@ -184,7 +185,7 @@ import {
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
 import { asOverwrite } from "./document-version";
-import { entriesRoute } from "./entries-route";
+import { entriesRoute, titleFieldIn } from "./entries-route";
 import type {
   CompositionSetup,
   LayersLockUnjudged,
@@ -331,6 +332,10 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import {
+  holdTemplateCollection,
+  templateCollectionDelete,
+} from "./templates/collection-delete";
 import {
   designUnderWhere,
   registerEntryDesignCascade,
@@ -2457,6 +2462,75 @@ export const pageBuilder = (
         deleteInTransaction: (tx, slug, id) =>
           ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
       });
+      // A template written while its collection is deleted holds the
+      // collection in its own transaction, so the two take turns: see
+      // `holdTemplateCollection`.
+      ctx.hooks.onInTransaction(
+        templates,
+        holdTemplateCollection<PluginCollectionTransaction>(
+          (transaction, collection) =>
+            ctx.services.collections.holdCollectionInTransaction(
+              transaction,
+              collection
+            )
+        )
+      );
+      // A collection's template and its entries' own designs go with the
+      // collection: listed in its delete dialog, and removed in the delete's
+      // transaction, so none is left drawing a collection that is gone.
+      ctx.hooks.onCollectionDelete(
+        templateCollectionDelete<PluginCollectionTransaction>({
+          own: () => new Set(Object.values(ctx.self.collections)),
+          services: {
+            listTemplates: options =>
+              ctx.services.ownCollections.listEntries(templates, options),
+            listTemplatesInTransaction: (transaction, options) =>
+              ctx.services.ownCollections.listEntriesInTransaction(
+                transaction,
+                templates,
+                options,
+                { lock: "update" }
+              ),
+            deleteTemplateInTransaction: (transaction, id) =>
+              ctx.services.collections.deleteEntryInTransaction(
+                transaction,
+                templates,
+                id,
+                {}
+              ),
+            // Named by the field the collection names its entries by, and
+            // its value read as core reads a title, so the dialog shows the
+            // names people recognise.
+            entryTitles: async (collection, ids) => {
+              const config = await ctx.services.collections
+                .getCollection(collection, undefined as never)
+                .catch(() => null);
+              const field =
+                (typeof config === "object" && config !== null
+                  ? titleFieldIn(config)?.name
+                  : undefined) ?? "title";
+              const found = await ctx.services.collections.listEntries(
+                collection,
+                {
+                  where: { id: { in: [...ids] } },
+                  pagination: { limit: ids.length },
+                  select: { id: true, [field]: true },
+                  depth: 0,
+                },
+                { as: "system" }
+              );
+              const titles = new Map<string, string>();
+              for (const entry of found.data as Record<string, unknown>[]) {
+                const title = readableTitleText(entry[field]);
+                if (entry.id !== undefined && title !== undefined) {
+                  titles.set(String(entry.id), title);
+                }
+              }
+              return titles;
+            },
+          },
+        })
+      );
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.

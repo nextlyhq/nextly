@@ -764,3 +764,26 @@ export type InTransactionRunner = (
   tx: TransactionContext,
   write: InTransactionWrite
 ) => Promise<void>;
+
+/**
+ * @experimental One thing deleting a collection takes with it besides its own
+ * entries, as a plugin names it for the delete dialog: what it is called
+ * (`label`) and what sort of thing it is (`kind`, such as `"template"`).
+ */
+export interface CollectionDeleteImpactItem {
+  readonly label: string;
+  readonly kind: string;
+}
+
+/**
+ * How the registry holds one plugin's collection-delete handlers: what
+ * deleting a collection takes with it, and the work that removes it inside
+ * the delete's transaction. A plugin's handlers are wrapped into one with a
+ * transaction token of their own (`ctx.hooks.onCollectionDelete`).
+ *
+ * @internal
+ */
+export interface CollectionDeleteRunner {
+  impact?: (slug: string) => Promise<readonly CollectionDeleteImpactItem[]>;
+  inTransaction?: (slug: string, tx: TransactionContext) => Promise<void>;
+}
