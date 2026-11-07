@@ -839,7 +839,9 @@ function choiceShapeProblem(
       option =>
         isPlainRecord(option) &&
         typeof option.value === "string" &&
-        typeof option.label === "string"
+        typeof option.label === "string" &&
+        // A label an author can see, or the control offers a blank choice.
+        option.label.trim() !== ""
     )
   ) {
     return `${at} declares no options of { value, label }`;
@@ -909,6 +911,11 @@ function paramShapeProblem(
   }
   if (each.label.length > NAMED_QUERY_LABEL_MAX) {
     return `${at}'s label is longer than ${String(NAMED_QUERY_LABEL_MAX)} characters`;
+  }
+  // `required` decides whether a list may leave the input out, so only a
+  // yes or no can mean it.
+  if (each.required !== undefined && typeof each.required !== "boolean") {
+    return `${at}'s required is not true or false`;
   }
   const type = each.type;
   if (typeof type !== "string" || !Object.hasOwn(SHAPE_RULES, type)) {

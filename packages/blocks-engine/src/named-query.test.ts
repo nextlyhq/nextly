@@ -293,6 +293,26 @@ describe("a named query's declaration", () => {
       "longer than 200 characters",
     ],
     [
+      "a required flag that is not true or false",
+      { params: { c: { type: "text", label: "C", required: "yes" } } },
+      "required is not true or false",
+    ],
+    [
+      "a choice option with no visible label",
+      {
+        params: {
+          c: param.choice({
+            label: "C",
+            options: [
+              { value: "a", label: "A" },
+              { value: "b", label: "  " },
+            ],
+          }),
+        },
+      },
+      "no options of { value, label }",
+    ],
+    [
       "a choice with no options",
       { params: { c: { type: "choice", label: "C", options: [] } } },
       "no options",

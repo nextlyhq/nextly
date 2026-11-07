@@ -11,13 +11,17 @@
  * server's access, and its rows would reach a published page.
  *
  * So the renderer runs `run` inside a frame ({@link openNamedQueryFrame}),
- * and the Direct API refuses EVERY call made inside it. The reader's own
- * reads go through the frame's `read` door, which leaves the frame for the
- * length of that read: the door belongs to the frame that opened it, so code
- * inside `run` cannot open one of its own and walk through it.
+ * and the entry points into the server refuse while it is open: every
+ * Direct API method, the instance's own service getters, and the resolution
+ * of a plugin's service. The reader's own reads go through the frame's
+ * `read` door, which leaves the frame for the length of that read: the door
+ * belongs to the frame that opened it, so code inside `run` cannot open one
+ * of its own and walk through it.
  *
- * Fails closed: a call made inside the frame by any other route than the
- * door is refused, whatever access it names.
+ * A guardrail against mistakes in the app's own code, not a sandbox: what
+ * the server hands out is never wrapped, so an object taken before the run
+ * and called during it is not refused. That is code written to get round the
+ * guard, which a named query, as the app's own code, could always write.
  *
  * `AsyncLocalStorage`, for the reason every caller scope here uses it: pages
  * render concurrently. The cost is one store lookup per Direct API call.
@@ -95,200 +99,4 @@ export function refusedInsideNamedQuery(
 ): NextlyError | undefined {
   const frame = namedQueryFrame.getStore();
   return frame === undefined ? undefined : refusal(frame.name, operation);
-}
-
-/** Whether a value is plain data: a plain record or an array. */
-function isPlainData(value: object): boolean {
-  if (Array.isArray(value)) return true;
-  const prototype = Object.getPrototypeOf(value) as unknown;
-  return prototype === Object.prototype || prototype === null;
-}
-
-/**
- * What a guarded service method returned, guarded in its turn: a function
- * or an object other than plain data (a client, a repository, a closure) is
- * a handle that can read data, so it refuses inside a named query's frame as
- * the service does, whether it is used at once or kept and used later. A
- * promise is guarded once it settles. Plain data is read as it is, and a
- * handle held inside it, at any depth, comes back guarded when it is read.
- */
-function guardedResult(value: unknown, path: string): unknown {
-  if (typeof value === "function") return refusingInsideNamedQuery(value, path);
-  if (typeof value !== "object" || value === null) return value;
-  if (value instanceof Promise) {
-    return value.then(settled => guardedResult(settled, path));
-  }
-  return isPlainData(value)
-    ? plainDataGuarded(value, path)
-    : refusingInsideNamedQuery(value, path);
-}
-
-/**
- * A proxy over `value` whose traps read `value` itself, built on a stand-in
- * of the same kind and prototype. A proxy's answers are held to its target's
- * frozen properties (a frozen method must read as itself, so it could not
- * come back guarded), and the stand-in holds none: a frozen service, or
- * frozen data, is guarded like any other. Every trap a reader reaches reads
- * through to `value`; a descriptor is reported configurable, as the stand-in
- * holds no property it could contradict.
- */
-function proxyOver(
-  value: object,
-  path: string,
-  get: (real: object, prop: PropertyKey) => unknown,
-  describe: (
-    real: object,
-    prop: PropertyKey
-  ) => PropertyDescriptor | undefined = (real, prop) =>
-    Reflect.getOwnPropertyDescriptor(real, prop)
-): object {
-  const standIn: object = Array.isArray(value)
-    ? []
-    : (Object.create(Object.getPrototypeOf(value) as object | null) as object);
-  return new Proxy(standIn, {
-    get: (stood, prop) => {
-      // A property defined fixed in place stands on the stand-in, and a
-      // proxy must read it as exactly what is stored there: handed out as
-      // it is, and refused while a frame is open when it is a handle.
-      const fixed = Reflect.getOwnPropertyDescriptor(stood, prop);
-      if (fixed !== undefined && fixed.configurable === false) {
-        if (!("value" in fixed)) return undefined;
-        if (fixed.writable === false) {
-          const held: unknown = fixed.value;
-          const handle =
-            typeof held === "function" ||
-            (typeof held === "object" && held !== null);
-          const refused = handle
-            ? refusedInsideNamedQuery(`${path}.${String(prop)}`)
-            : undefined;
-          if (refused !== undefined) throw refused;
-          return held;
-        }
-      }
-      return get(value, prop);
-    },
-    getOwnPropertyDescriptor: (stood, prop) => {
-      const descriptor = describe(value, prop);
-      if (descriptor === undefined) return undefined;
-      // An array stand-in's own `length` is fixed in place: reported as the
-      // stand-in holds it, with the real array's length.
-      const own = Reflect.getOwnPropertyDescriptor(stood, prop);
-      if (own !== undefined && own.configurable === false) {
-        return { ...own, value: Reflect.get(value, prop) as unknown };
-      }
-      return { ...descriptor, configurable: true };
-    },
-    has: (_standIn, prop) => Reflect.has(value, prop),
-    ownKeys: () => Reflect.ownKeys(value),
-    // Writes reach the real object, as reads come from it, so a service or
-    // its data is changed through the proxy as it always was: an assignment,
-    // a delete, a definition, and an array's own `push` or `splice`.
-    set: (_standIn, prop, next) => Reflect.set(value, prop, next),
-    deleteProperty: (_standIn, prop) => Reflect.deleteProperty(value, prop),
-    defineProperty: (stood, prop, descriptor) => {
-      const defined = Reflect.defineProperty(value, prop, descriptor);
-      // A property defined fixed in place must stand on the stand-in too,
-      // or the proxy may not report the definition as made.
-      if (defined && descriptor.configurable === false) {
-        Reflect.defineProperty(stood, prop, descriptor);
-      }
-      return defined;
-    },
-  });
-}
-
-/** Each plain record or array already traversed, so one read twice is one proxy. */
-const traversedPlain = new WeakMap<object, object>();
-
-/**
- * Plain data, read as it is, each of its own properties that is a handle
- * coming back guarded (`guardedResult`), lazily, when it is read: a record
- * holding `{ repository: new Repository() }` hands out the repository
- * guarded. Inherited members, such as an array's `map`, are read as they
- * are, so plain data stays usable inside the frame.
- */
-function plainDataGuarded(value: object, path: string): object {
-  const known = traversedPlain.get(value);
-  if (known !== undefined) return known;
-  const proxy = proxyOver(value, path, (target, prop) => {
-    // An inherited member, such as an array's `map`, read as it is, with
-    // this proxy as its receiver so what it reads comes back guarded.
-    if (!Object.hasOwn(target, prop)) {
-      return Reflect.get(target, prop, proxy) as unknown;
-    }
-    const at = `${path}.${String(prop)}`;
-    const member = Reflect.get(target, prop, target) as unknown;
-    // A method of the data runs on the data it was read from, so `this`
-    // inside it is that record, as it always was.
-    if (typeof member === "function") {
-      const method = member as (...args: unknown[]) => unknown;
-      return (...args: unknown[]) => {
-        const refused = refusedInsideNamedQuery(at);
-        if (refused !== undefined) throw refused;
-        return guardedResult(Reflect.apply(method, target, args), `${at}()`);
-      };
-    }
-    return guardedResult(member, at);
-  });
-  traversedPlain.set(value, proxy);
-  return proxy;
-}
-
-/** Each object already guarded, so one reached twice is one proxy. */
-const guardedObjects = new WeakMap<object, object>();
-
-/**
- * `value` with every function reached through it refusing to run inside a
- * named query's frame: for a namespace the Direct API hands out whose
- * methods do not pass through its own guarded entry points, such as the
- * services plugins contribute. A method taken from it outside the frame and
- * called inside one is refused all the same, since the check is made when it
- * is called. Values other than functions and objects pass as they are.
- */
-export function refusingInsideNamedQuery<T>(value: T, path: string): T {
-  if (typeof value === "function") {
-    const method = value as (...args: unknown[]) => unknown;
-    // Called with the receiver it was called on, so a function that reads
-    // `this` reads what it always did.
-    return function guarded(this: unknown, ...args: unknown[]) {
-      const refused = refusedInsideNamedQuery(path);
-      if (refused !== undefined) throw refused;
-      return guardedResult(Reflect.apply(method, this, args), `${path}()`);
-    } as T;
-  }
-  if (typeof value !== "object" || value === null) return value;
-  const known = guardedObjects.get(value);
-  if (known !== undefined) return known as T;
-  const proxy = proxyOver(
-    value,
-    path,
-    (target, prop) => {
-      // Refused before the property is read, since reading one runs its
-      // getter, which can read data as a method can.
-      const at = `${path}.${String(prop)}`;
-      const refusedHere = refusedInsideNamedQuery(at);
-      if (refusedHere !== undefined) throw refusedHere;
-      // Read with the target as the receiver, so a getter reading a private
-      // field reads it from the object that holds it.
-      const member = Reflect.get(target, prop, target) as unknown;
-      if (typeof member === "function") {
-        const method = member as (...args: unknown[]) => unknown;
-        return (...args: unknown[]) => {
-          const refused = refusedInsideNamedQuery(at);
-          if (refused !== undefined) throw refused;
-          return guardedResult(Reflect.apply(method, target, args), `${at}()`);
-        };
-      }
-      return refusingInsideNamedQuery(member, at);
-    },
-    // A property's descriptor hands out its getter itself, to be called
-    // with any receiver: refused inside the frame for the same reason.
-    (target, prop) => {
-      const refused = refusedInsideNamedQuery(`${path}.${String(prop)}`);
-      if (refused !== undefined) throw refused;
-      return Reflect.getOwnPropertyDescriptor(target, prop);
-    }
-  );
-  guardedObjects.set(value, proxy);
-  return proxy as T;
 }
