@@ -28,8 +28,9 @@ const refetch = vi.fn();
 /** Each write's body, in order: dry runs and saves alike. */
 const writes: Record<string, unknown>[] = [];
 let checkAnswer: SiteCodeChecked;
-/** Whether the read is being refreshed. */
+/** Whether the read is being refreshed, and how its last refresh failed. */
 let refreshing = false;
+let readError: Error | null = null;
 /** Holds every write until released, to look at the section mid-check. */
 let held: Promise<void> | null = null;
 let saveAnswer: SiteCodeSaved;
@@ -38,7 +39,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: () => ({
     data: codeRead,
     pending: false,
-    error: null,
+    error: readError,
     fetching: refreshing,
     refetch,
   }),
@@ -96,6 +97,7 @@ beforeEach(() => {
   refetch.mockClear();
   livePolicy = null;
   refreshing = false;
+  readError = null;
   held = null;
   checkAnswer = unchecked;
   saveAnswer = { ...unchecked, version: "rev-2" };
@@ -578,5 +580,50 @@ describe("the site's code in Settings", () => {
         name: "Copy what to add to the policy the site sends, the 2nd in its header",
       })
     ).toBeTruthy();
+  });
+
+  it("keeps the code closed and offers Retry when a refresh fails", () => {
+    readError = new Error("offline");
+    show();
+    const add = screen.getByRole("button", { name: "Add code" });
+    expect((add as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(add);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("calls a block a block when one policy enforces what another only reports", async () => {
+    const seen = (source: "declared" | "live", level: "error" | "warning") => ({
+      source,
+      check: {
+        checked: true as const,
+        findings: [
+          {
+            slot: "head" as const,
+            index: 0,
+            directive: "script-src",
+            message: "this inline script is blocked",
+            level,
+          },
+        ],
+      },
+      additions: [],
+      policies: 1,
+    });
+    checkAnswer = {
+      head: judged(1),
+      body: judged(0),
+      csp: [seen("declared", "warning"), seen("live", "error")],
+      cspKey: "sha256-k",
+    };
+    show();
+    editHead("<script>a()</script>");
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    expect(
+      await screen.findByText("This inline script is blocked")
+    ).toBeTruthy();
+    expect(screen.queryByText(/\(reported only\)/)).toBeNull();
+    expect(screen.getByText("script-src · declared, live")).toBeTruthy();
   });
 });

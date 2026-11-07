@@ -210,7 +210,8 @@ function useSiteCodeFlow(props: SiteCodeSectionProps) {
     problem,
     edit: (): void => {
       // Never from a read being refreshed: it may predate a save.
-      if (stored === undefined || read.fetching) return;
+      // Nor from one whose refresh failed: what it holds may be stale.
+      if (stored === undefined || read.fetching || read.error !== null) return;
       setText({ head: stored.head, body: stored.body });
       setVersion(stored.version);
       setProblem(null);
@@ -275,7 +276,7 @@ function StepView({
         <Summary
           stored={stored}
           saved={step.saved}
-          refreshing={flow.read.fetching}
+          refresh={flow.read}
           onEdit={flow.edit}
         />
       );
@@ -341,19 +342,42 @@ function elements(count: number): string {
 function Summary({
   stored,
   saved,
-  refreshing,
+  refresh,
   onEdit,
 }: {
   stored: SiteCodeRead;
   saved: SiteCodeChecked | undefined;
-  /** The read is being refreshed; the code opens once it answers. */
-  refreshing: boolean;
+  /**
+   * The read, refreshed: the code opens only once it has answered, so never
+   * from what may predate a save; a failed refresh offers Retry.
+   */
+  refresh: Pick<
+    ReturnType<typeof usePluginRoute<SiteCodeRead>>,
+    "fetching" | "error" | "refetch"
+  >;
   onEdit: () => void;
 }): JSX.Element {
   const empty =
     stored.described.head.length === 0 && stored.described.body.length === 0;
   return (
     <div className="space-y-3">
+      {refresh.error === null ? null : (
+        <div className="flex items-center gap-3 text-sm">
+          <span>
+            {
+              "The site's code could not be read again, so it can't be edited yet."
+            }
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={refresh.refetch}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
       {saved === undefined ? null : (
         <StatusRow
           icon={<Check className="size-4 text-success" aria-hidden="true" />}
@@ -382,7 +406,7 @@ function Summary({
           type="button"
           variant="outline"
           onClick={onEdit}
-          disabled={refreshing}
+          disabled={refresh.fetching || refresh.error !== null}
         >
           {empty ? "Add code" : "Edit code"}
         </Button>
@@ -587,7 +611,7 @@ function ordinal(index: number): string {
 
 /** One block, with every policy that makes it. */
 interface Seen {
-  readonly finding: CspFinding;
+  finding: CspFinding;
   readonly sources: string[];
 }
 
@@ -599,8 +623,13 @@ function findingsOf(checked: SiteCodeChecked): Seen[] {
     for (const finding of check.findings) {
       const key = `${finding.slot} ${finding.index} ${finding.directive} ${finding.message}`;
       const known = seen.get(key);
-      if (known === undefined) seen.set(key, { finding, sources: [source] });
-      else if (!known.sources.includes(source)) known.sources.push(source);
+      if (known === undefined) {
+        seen.set(key, { finding, sources: [source] });
+        continue;
+      }
+      if (!known.sources.includes(source)) known.sources.push(source);
+      // A block one policy enforces is a block, whatever another reports.
+      if (finding.level === "error") known.finding = finding;
     }
   }
   return [...seen.values()];
