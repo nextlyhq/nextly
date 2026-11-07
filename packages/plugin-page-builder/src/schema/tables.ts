@@ -33,7 +33,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -540,6 +540,99 @@ export const tokenUsageRows: TableDefinition<"token_usage", TokenUsageColumns> =
     }
   );
 
+/** The columns of {@link bindingIssues}. */
+type BindingIssuesColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly documentKey: ColumnBuilder<string, false, false>;
+  readonly kind: ColumnBuilder<string, false, false>;
+  readonly slug: ColumnBuilder<string, false, false>;
+  readonly documentId: ColumnBuilder<string, true, false>;
+  readonly place: ColumnBuilder<string, false, false>;
+  readonly issues: ColumnBuilder<unknown, false, false>;
+  readonly count: ColumnBuilder<number, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * One row per document whose bindings no longer fit what they read: a field
+ * renamed or removed, a Single's field, a type that changed, a prop the block
+ * no longer has. Kept so the report and its count are read, not computed, on
+ * every admin page that shows them; a document with no such binding has no
+ * row.
+ *
+ * - `documentKey` names the document as the usage indexes do (`kind:slug`,
+ *   and `:id` for a collection's entry), unique, so a document's recompute
+ *   replaces its row.
+ * - `place` is where the document lives (pages, components, patterns,
+ *   layouts, another collection's entries, or a Single), for the report's
+ *   filters.
+ * - `issues` is the list of the document's broken bindings, each with what
+ *   the report shows; `count` is its length, so a total is a sum of a column.
+ * - `updatedAt` is when the document was last judged.
+ */
+export const bindingIssues: TableDefinition<
+  "binding_issues",
+  BindingIssuesColumns
+> = defineTable<"binding_issues", BindingIssuesColumns>(
+  "binding_issues",
+  {
+    id: col.id(),
+    documentKey: col.varchar(512),
+    kind: col.varchar(16),
+    slug: col.varchar(255),
+    documentId: col.varchar(255, { nullable: true }),
+    place: col.varchar(16),
+    issues: col.json(),
+    count: col.integer(),
+    ...col.timestamps(),
+  },
+  { indexes: [{ columns: ["documentKey"], unique: true }] }
+);
+
+/** The columns of {@link bindingReportRuns}. */
+type BindingReportRunsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly name: ColumnBuilder<string, false, false>;
+  readonly checked: ColumnBuilder<string, true, false>;
+  readonly checking: ColumnBuilder<string, true, false>;
+  readonly cursor: ColumnBuilder<unknown, true, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * Where the check of every document for {@link bindingIssues} stands: one row,
+ * named `full`.
+ *
+ * - `checked` is the schema fingerprint the last complete check was made
+ *   against; a different fingerprint now means the schema changed since, and
+ *   every document is judged again.
+ * - `checking` is the fingerprint a check under way is making, and `cursor`
+ *   the document it resumes after, so a check longer than one jobs pass
+ *   carries on where the last pass stopped.
+ * - `updatedAt` is when the check last moved.
+ */
+export const bindingReportRuns: TableDefinition<
+  "binding_report_runs",
+  BindingReportRunsColumns
+> = defineTable<"binding_report_runs", BindingReportRunsColumns>(
+  "binding_report_runs",
+  {
+    id: col.id(),
+    name: col.varchar(32),
+    checked: col.varchar(64, { nullable: true }),
+    checking: col.varchar(64, { nullable: true }),
+    cursor: col.json({ nullable: true }),
+    ...col.timestamps(),
+  },
+  { indexes: [{ columns: ["name"], unique: true }] }
+);
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
@@ -553,6 +646,8 @@ export const PAGE_BUILDER_TABLES: readonly [
   typeof classUsageRows,
   typeof componentUsageRows,
   typeof tokenUsageRows,
+  typeof bindingIssues,
+  typeof bindingReportRuns,
 ] = [
   usageRuns,
   usageProgress,
@@ -565,4 +660,6 @@ export const PAGE_BUILDER_TABLES: readonly [
   classUsageRows,
   componentUsageRows,
   tokenUsageRows,
+  bindingIssues,
+  bindingReportRuns,
 ];

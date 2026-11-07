@@ -62,7 +62,7 @@ export interface BindingJudging {
 }
 
 /** A collection's or a Single's ref: the sources whose fields are read. */
-type ReadRef = { readonly collection: string } | { readonly single: string };
+export type ReadRef = { readonly collection: string } | { readonly single: string };
 
 /** A source's key in the read shapes. */
 function keyOf(ref: ReadRef): string {
@@ -96,8 +96,8 @@ const MAX_READ_ROUNDS = 3;
  * Single. A component's own document has none: a placed component reads the
  * entry of each page placing it.
  */
-function entryOf(
-  write: PluginFieldWrite,
+export function entryOf(
+  write: Pick<PluginFieldWrite, "kind" | "slug">,
   document: unknown
 ): BindingSchemaRef | undefined {
   if (
@@ -244,6 +244,45 @@ async function judgedErrors(
     await bindingErrors(document, { ...judging, stored: snapshot.forms })
   ).filter(keep);
   return { found: held, overflowed: reads.overflowed };
+}
+
+/** A document's binding problems now, and the declared fields they were read against. */
+export interface CurrentBindingProblems {
+  /** Every problem, held or not, as the engine names it. */
+  readonly found: readonly BindingError[];
+  /** Whether it binds more sources than one judgement reads; then `found` is empty. */
+  readonly overflowed: boolean;
+  /** The declared fields of each source read, or `undefined` for one unknown. */
+  readonly fieldsOf: (ref: ReadRef) => readonly BindingFieldShape[] | undefined;
+}
+
+/**
+ * Every binding problem a document has now, against the declared schema, as
+ * the report of documents to fix lists them: a problem the stored page already
+ * held counts too, since the report is of what is broken, not of what a write
+ * broke. The same judgement, and the same reads, as a save's.
+ */
+export async function currentBindingProblems(
+  document: BindingDocument,
+  entry: BindingSchemaRef | undefined,
+  site: { readonly shapesOf: DeclaredShapesReader; readonly maxNodes?: number }
+): Promise<CurrentBindingProblems> {
+  const reads: SchemaReads = {
+    shapesOf: site.shapesOf,
+    known: new Map(),
+    overflowed: false,
+  };
+  const found = await bindingErrors(document, {
+    reads,
+    entry,
+    maxNodes: site.maxNodes,
+    stored: [],
+  });
+  return {
+    found: reads.overflowed ? [] : found,
+    overflowed: reads.overflowed,
+    fieldsOf: ref => reads.known.get(keyOf(ref)),
+  };
 }
 
 /**
