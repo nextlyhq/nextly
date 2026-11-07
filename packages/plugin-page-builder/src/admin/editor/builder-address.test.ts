@@ -270,6 +270,33 @@ describe("bindingSourcePath", () => {
     );
   });
 
+  it("opens an entry's and a Single's screen in the language being edited", () => {
+    expect(bindingSourcePath({ $bind: "title" }, post, "ar")).toBe(
+      "/admin/collections/posts/p1?locale=ar"
+    );
+    expect(
+      bindingSourcePath(
+        { $bind: "phone", source: "single", sourceKey: "contact" },
+        post,
+        "pt-BR"
+      )
+    ).toBe("/admin/singles/contact?locale=pt-BR");
+    // The site settings have one language, so none is named.
+    expect(
+      bindingSourcePath({ $bind: "siteUrl", source: "site" }, post, "ar")
+    ).toBe("/admin/settings");
+  });
+
+  it("names no language for the default one", () => {
+    // The control: the same entry, no language given, no query.
+    expect(bindingSourcePath({ $bind: "title" }, post)).toBe(
+      "/admin/collections/posts/p1"
+    );
+    expect(bindingSourcePath({ $bind: "title" }, post, undefined)).not.toMatch(
+      /\?/
+    );
+  });
+
   it("is nothing where no one screen edits the source", () => {
     // A list's item is a different entry for every row; an unsaved entry,
     // or none read, has no edit screen yet.

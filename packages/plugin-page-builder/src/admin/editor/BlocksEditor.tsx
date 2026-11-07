@@ -591,8 +591,9 @@ function servicesFor(
       // decision as the page actions API's.
       ...withPlanUnbind(unbindPlanner(binding.page, locale)),
       // Where a bound field's source is edited, for the chip's "Open
-      // source": the entry the bindings read, a Single, or the settings.
-      sourceHref: bound => bindingSourcePath(bound, binding.entry),
+      // source": the entry the bindings read, a Single, or the settings, in
+      // the language the picker previewed it in.
+      sourceHref: bound => bindingSourcePath(bound, binding.entry, locale),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),
     };

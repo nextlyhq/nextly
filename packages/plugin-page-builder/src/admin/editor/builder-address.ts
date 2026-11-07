@@ -175,6 +175,13 @@ export function entryEditPath(collection: string, id: string): string {
   return `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`;
 }
 
+/** An edit screen's path, opened in `locale` where one is given. */
+function inLanguage(path: string, locale: string | undefined): string {
+  return locale === undefined || locale === ""
+    ? path
+    : `${path}?${new URLSearchParams({ locale }).toString()}`;
+}
+
 /**
  * The admin's edit screen for the Single `slug`, as its own route table
  * spells it (`/admin/singles/<slug>`).
@@ -196,22 +203,31 @@ const SITE_SETTINGS_PATH = "/admin/settings";
  * the site settings. `undefined` where there is no one screen: a list's item,
  * and an entry not saved yet.
  *
+ * An entry's and a Single's screens open in the language being edited, the
+ * one the picker previewed the field in, named as the admin's own entry
+ * links name it (`?locale=`); none for the default, which is what a screen
+ * opens without one. The site settings have one language.
+ *
  * @param entry - the entry the editor's bindings read, as the picker lists it
+ * @param locale - the language being edited, `undefined` for the default
  */
 export function bindingSourcePath(
   binding: Binding,
-  entry: DocumentIdentity | null
+  entry: DocumentIdentity | null,
+  locale?: string
 ): string | undefined {
   switch (binding.source ?? "entry") {
     case "entry":
       if (entry === null) return undefined;
-      if (entry.kind === "single") return singleEditPath(entry.slug);
+      if (entry.kind === "single") {
+        return inLanguage(singleEditPath(entry.slug), locale);
+      }
       return entry.documentId === undefined
         ? undefined
-        : entryEditPath(entry.slug, entry.documentId);
+        : inLanguage(entryEditPath(entry.slug, entry.documentId), locale);
     case "single":
       return "sourceKey" in binding && typeof binding.sourceKey === "string"
-        ? singleEditPath(binding.sourceKey)
+        ? inLanguage(singleEditPath(binding.sourceKey), locale)
         : undefined;
     case "site":
       return SITE_SETTINGS_PATH;
