@@ -56,7 +56,6 @@ import {
   respondList,
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
-import type { WhereFilter } from "nextly";
 import { z } from "nextly/zod";
 
 import { labelOf, pluralLabelOf } from "../collection-labels";
@@ -86,6 +85,14 @@ import {
   type TemplateGuardSetup,
 } from "./template-guard";
 
+
+/**
+ * The filter the Direct API's `find` takes, as the plugin SDK's own handle
+ * types it: derived from the SDK's surface rather than imported from core.
+ */
+type FindWhere = NonNullable<
+  Parameters<Awaited<ReturnType<typeof getCachedNextly>>["find"]>[0]["where"]
+>;
 /**
  * The most pages of own design rows one read goes through looking for those
  * the caller may read: {@link ENTRY_DESIGNS_MAX} rows each. Own designs are the
@@ -206,7 +213,7 @@ export interface EntryDesignsReads {
   templates(args: {
     // The Direct API's own filter type, so the read hands `find` exactly what
     // it takes: a filter typed here is checked where it is built.
-    where: WhereFilter;
+    where: FindWhere;
     limit: number;
     select: Record<string, true>;
     sort?: string[];
