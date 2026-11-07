@@ -43,7 +43,7 @@ import { pageBuilderContent } from "../page-content";
 import { pageBuilder } from "../plugin";
 import type { TemplateActionResult } from "../templates/template-actions-contract";
 
-import { holding, post } from "./transfer-harness";
+import { holding, person, post } from "./transfer-harness";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
@@ -124,6 +124,10 @@ describe.each(getConfiguredTestDialects())(
         ],
         seedPublic: true,
       });
+      // The instance's first user is its super admin, whom the routing rule
+      // admits, so it is made here and never acts: every author below holds
+      // only what it is granted.
+      await person(current, "owner");
       return current;
     }
 
@@ -231,7 +235,8 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id: events,
-        data: { address: "/elsewhere", status: "published" },
+        // Made whatever is stored, as the REST updates above are.
+        data: { address: "/elsewhere", status: "published", _overwrite: true },
         user: { id: author.id },
         overrideAccess: false,
       });

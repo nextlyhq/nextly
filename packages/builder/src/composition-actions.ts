@@ -195,6 +195,26 @@ export type UnbindKeep =
   | { readonly value: unknown };
 
 /**
+ * What an unbind kept in a prop's place and why, as the one unbind decision
+ * answers the page actions API and the inspector alike.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface UnbindAnswer {
+  /**
+   * What was kept: what a visitor sees now, the binding's fallback, the
+   * prop's own value, or a value the caller gave.
+   */
+  readonly kept: "visitor" | "fallback" | "own" | "value";
+  /** The value kept; absent when the prop keeps its own. */
+  readonly value?: unknown;
+  /** The prop an image's address was kept in, where the bound prop could not hold it. */
+  readonly into?: string;
+  /** Why, in words an author reads. */
+  readonly reason: string;
+}
+
+/**
  * The parts of a collection list's query a `set-list-query` action changes:
  * each one set when given, removed when `null`, kept when absent. Shaped as
  * the block stores them (`ListQuery` in the engine reads them back).
