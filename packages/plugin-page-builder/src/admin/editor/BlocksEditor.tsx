@@ -148,6 +148,7 @@ import { documentFrom } from "./stored-document";
 import {
   TemplatePreviewScope,
   TemplatePreviewStrip,
+  useDrawnTemplate,
   useTemplatePreviewState,
 } from "./template-preview-strip";
 import { useComponentView, type ComponentView } from "./use-component-view";
@@ -1192,6 +1193,30 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
 }
 
 /**
+ * The canvas's render inputs with the sources its bindings read, asked of
+ * `document` as the canvas draws it: a template's with the previewed entry's
+ * own blocks composed in, so a binding inside them reads its source here as
+ * the published page, which composes first, reads it. Composed from the
+ * entry's own read, not the seam's, which waits on this read's answer. Only
+ * `document`'s own blocks are marked: the entry's are edited on the entry.
+ */
+function useDrawnCanvasRender(
+  render: Parameters<typeof useBoundCanvasRender>[0],
+  document: BlockDocument,
+  regions: Parameters<typeof useBoundCanvasRender>[1]["regions"],
+  locale: string | undefined,
+  component: boolean
+): ReturnType<typeof useBoundCanvasRender> {
+  const drawn = useDrawnTemplate(document, render.limits);
+  return useBoundCanvasRender(
+    render,
+    { document: drawn, stored: document, regions },
+    locale,
+    component
+  );
+}
+
+/**
  * What the editor's search adds from: the Add panel's own sources, and the
  * container whose "+" opened Add, so a search row adds where the panel would.
  */
@@ -1348,9 +1373,10 @@ function EditorBody<TFieldValues extends FieldValues>({
   // The canvas's render inputs with the sources its bindings read, asked of
   // the tree the canvas draws (in a component's view, the open variant's)
   // and of the Layout regions drawn around it, together.
-  const { canvasRender, visitorUnreadable } = useBoundCanvasRender(
+  const { canvasRender, visitorUnreadable } = useDrawnCanvasRender(
     canvas.canvasRender,
-    { document: componentView.preview.document, regions: panels.canvasRegions },
+    componentView.preview.document,
+    panels.canvasRegions,
     mount.locale,
     mount.initialDocument.kind === "component"
   );

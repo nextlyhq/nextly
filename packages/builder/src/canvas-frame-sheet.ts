@@ -23,6 +23,11 @@
  * @module canvas-frame-sheet
  */
 
+import {
+  ENTRY_CONTENT_DRAWN_ATTRIBUTE,
+  ENTRY_CONTENT_NOTE_ATTRIBUTE,
+} from "@nextlyhq/blocks-react";
+
 import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -384,6 +389,66 @@ ${ROOT} [data-nx-list-empty-because="none"]::before {
 
 ${ROOT} [data-nx-list-empty-because="failed"]::before {
   content: "Showing When empty";
+}
+
+/* An Entry content block drawing the entry's own blocks: they are the
+   entry's, edited on the entry, so the pointer passes through them to the
+   block, which a click selects. Nothing inside is pressed, hovered or
+   followed, and no caret lands in it. */
+${ROOT} [${ENTRY_CONTENT_DRAWN_ATTRIBUTE}] * {
+  pointer-events: none;
+  cursor: inherit;
+}
+
+/* An Entry content block's note to its author, where it has none of the
+   entry's content to draw: the canvas's muted note, drawn as an empty
+   container is, in the page's own ink so it reads on any section, its words
+   faint and the entry's title in full ink; red for a field the collection
+   no longer has. At the admin's size whatever the zoom. A visitor's page
+   never carries one. */
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  margin: 0;
+  padding: 0.6em 0.9em;
+  border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: var(--radius-sm, 0.25rem);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: calc(0.75rem / var(--nx-canvas-zoom, 1));
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: start;
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] span > span {
+  color: color-mix(in srgb, currentColor 65%, transparent);
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] b {
+  font-weight: 500;
+}
+
+/* The red note, drawn on the page as the muted one is: its tint over the
+   page itself and its words mixed with the page's own ink, so it reads on a
+   light page and a dark section alike, whatever the admin's theme. The red
+   is the admin's danger hue, the one value taken from the editor. */
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}="failed"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--nx-builder-danger, currentColor) 55%, transparent);
+  background: color-mix(in srgb, var(--nx-builder-danger, currentColor) 8%, transparent);
+  color: color-mix(in oklab, var(--nx-builder-danger, currentColor) 70%, currentColor);
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}="failed"] span > span {
+  color: inherit;
+}
+
+[${ENTRY_CONTENT_NOTE_ATTRIBUTE}] > svg {
+  flex: none;
+  inline-size: 1.15em;
+  block-size: 1.15em;
 }
 
 /* A list whose new source waits for an input wears what it still draws

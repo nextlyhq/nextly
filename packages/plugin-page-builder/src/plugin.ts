@@ -363,6 +363,7 @@ import {
   holdTemplateCollection,
   templateCollectionDelete,
 } from "./templates/collection-delete";
+import { readEntryBlocksFields } from "./templates/entry-content-fields";
 import {
   designUnderWhere,
   registerEntryDesignCascade,
@@ -2738,6 +2739,13 @@ export const pageBuilder = (
         // template's lists and conditions are judged against the collection
         // it draws, read from the template itself.
         templates: templateTargets(ctx.services.ownCollections, templates),
+        // A collection's top-level blocks fields, for the field a template's
+        // Entry content block draws: read per write, so a field removed a
+        // moment ago is refused at the next save that newly chooses it.
+        // A failed read is thrown, so the save refuses rather than storing
+        // a field nobody checked.
+        entryBlocksFields: collection =>
+          readEntryBlocksFields(ctx.services.collections, collection),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),

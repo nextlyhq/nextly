@@ -163,6 +163,7 @@ describe("inspectSelection", () => {
       "richText",
       "array",
       "relation",
+      "entryField",
     ]);
   });
 

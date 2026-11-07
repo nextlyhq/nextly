@@ -120,6 +120,8 @@ drafts saves an edit straight onto the published entry, so there the caller need
 | `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only.         |
 | `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`, `namedQuery`. See below. |
 | `set-conditions`       | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                                      |
+| `place-entry-content`  | `field?`, `at?`                             | On a template, places Entry content, which draws the entry's own blocks field `field`. See below.                                       |
+| `set-entry-content-field` | `nodeId`, `field`                        | On a template, chooses the blocks field the Entry content block `nodeId` draws.                                                         |
 | `bind-prop`            | `nodeId`, `prop`, `binding`                 | Binds a block's prop to a field. See below.                                                                                             |
 | `unbind-prop`          | `nodeId`, `prop`, `keep?`                   | Unbinds a block's prop, keeping in its place what a visitor sees now. See below.                                                        |
 
@@ -167,6 +169,16 @@ item for a block inside a Collection list. `null`, or no groups, shows the block
 everyone. The devices the block shows on are kept. The write is judged as the editor's save
 is: an operator the field's kind does not take, a field the entry lacks or visitors can't
 see, and a value that does not fit are refused in the words the editor shows.
+
+`place-entry-content` places an Entry content block on a template (the `page` names the
+template in the `templates` collection), where the entry's own blocks content is drawn.
+`field` is the name of a blocks field stored on the collection's entries; without it, the
+collection's one blocks field is chosen where it has exactly one, and where it has several
+the write is refused until one is named. The write is judged as the editor's save is: a
+second Entry content block, one on a page, a component, a pattern or an entry's own blocks
+field, and a field that isn't one of the collection's blocks fields are refused, for
+example `Entry content shows "summary", which isn't a blocks field of Posts. Choose Body or Sidebar.`
+`set-entry-content-field` changes the field later, with the same refusals.
 
 `bind-prop` binds the prop `prop` of the block whose id is `nodeId` to a field. `binding` is
 stored as the block stores it: `{ "$bind": "title" }`, with `source` (`entry`, the

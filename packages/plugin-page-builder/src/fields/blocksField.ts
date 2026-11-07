@@ -53,6 +53,7 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { newEntryContentIssues } from "./entry-content-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
@@ -341,10 +342,22 @@ export function blocksFieldType(
         };
         // And the fields its blocks' visibility conditions check, judged the
         // same way, since a condition the page could not check hides its block.
+        const entryBlocksFields = composition?.()?.entryBlocksFields;
         return [
           ...(await newListQueryIssues(value, args, label, site)),
           ...(await newConditionIssues(value, args, label, site)),
           ...bound,
+          // And the field a template's Entry content block draws, against
+          // the collection the template draws, and where the document is
+          // stored, since only a template may hold one.
+          ...(await newEntryContentIssues(value, args, label, {
+            storedForms,
+            ...(templates === undefined ? {} : { templates }),
+            ...(entryBlocksFields === undefined
+              ? {}
+              : { blocksFieldsOf: entryBlocksFields }),
+            ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
+          })),
         ];
       };
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {

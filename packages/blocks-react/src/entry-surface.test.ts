@@ -442,6 +442,10 @@ describe("the root entry", () => {
       // The read budget's default: see `createQueryBudget`.
       "DEFAULT_MAX_QUERIES",
       "EDITOR_NAMESPACE",
+      // The Entry content block's marks on the editor's canvas, public so the
+      // canvas's sheet draws by the names the renderer writes.
+      "ENTRY_CONTENT_DRAWN_ATTRIBUTE",
+      "ENTRY_CONTENT_NOTE_ATTRIBUTE",
       "INSTANCE_ATTRIBUTE",
       // The action a collection list's note offers on the editor's canvas,
       // public so the canvas acts on the name the renderer writes.
@@ -656,6 +660,9 @@ describe("the blocks entry", () => {
       "coreBlocks",
       "divider",
       "embed",
+      // Added deliberately: the Entry content block, where a template draws
+      // the entry's own blocks content.
+      "entryContent",
       "form",
       "gallery",
       "heading",

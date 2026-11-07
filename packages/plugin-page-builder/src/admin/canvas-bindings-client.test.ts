@@ -4,7 +4,11 @@
  * The canvas's binding sources: asked only for what the page's bindings read,
  * and kept per signed-in person, so no person is ever handed another's.
  */
-import { defineNamedQuery, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  composeEntryContent,
+  defineNamedQuery,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -236,6 +240,26 @@ describe("the canvas's binding sources", () => {
     expect(first.entry).toEqual({ id: "p1", title: "A's draft" });
   });
 
+  it("asks afresh for a read the editor asks again, whatever was kept", async () => {
+    const request = canvasBindingsRequest(
+      [page({ text: { $bind: "title" } })],
+      identity,
+      "de"
+    );
+    if (request === undefined) throw new Error("no ask");
+    const ask = vi.fn(async () => answer("Old title"));
+    await canvasBindingsFor(request, "author-f", ask);
+    // The control: the same ask again is answered from what was kept.
+    await canvasBindingsFor(request, "author-f", ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    // Asked again, as a retry or the window back in focus asks it: read
+    // afresh, and the new answer is the one handed back.
+    ask.mockImplementationOnce(async () => answer("New title"));
+    const fresh = await canvasBindingsFor(request, "author-f", ask, true);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(fresh.entry).toEqual({ id: "p1", title: "New title" });
+  });
+
   it("drops the earlier answer when a changed ask fails", async () => {
     editing.identity = identity;
     const bound = [page({ text: { $bind: "title" } })];
@@ -376,6 +400,80 @@ describe("the canvas's entry, for a template", () => {
   });
 });
 
+describe("a retry the editor asks for", () => {
+  it("is pending while its read is on its way, not answered by the read before it", async () => {
+    editing.identity = {
+      kind: "collection",
+      slug: "templates",
+      documentId: "t2",
+    };
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValueOnce(answer("Old title"));
+    const heard: { entryId: string | undefined; state: string }[] = [];
+    const onRead = (read: { entryId: string | undefined; state: string }) =>
+      heard.push(read);
+    let retry = 0;
+    const drawn = [page({ text: { $bind: "title" } })];
+    const { rerender } = renderHook(() => useCanvasBindings(drawn, "es"), {
+      wrapper: ({ children }) =>
+        CanvasEntryProvider({
+          identity: { kind: "collection", slug: "posts", documentId: "p8" },
+          retry,
+          onRead,
+          children,
+        }),
+    });
+    // The control: the first read is answered.
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p8", state: "answered" })
+    );
+
+    // The window back in focus: a retry, whose read has not answered yet.
+    let release: (value: unknown) => void = () => {};
+    writePluginRoute.mockImplementationOnce(
+      () => new Promise(resolve => (release = resolve))
+    );
+    retry = 1;
+    rerender();
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p8", state: "pending" })
+    );
+    release(answer("New title"));
+    await waitFor(() =>
+      expect(heard.at(-1)).toEqual({ entryId: "p8", state: "answered" })
+    );
+    editing.identity = null;
+  });
+});
+
+describe("a binding inside a template's Entry content", () => {
+  it("is asked for once the previewed entry's blocks are composed in, as the published page asks", () => {
+    // The template holds no binding of its own; the entry's Body holds a
+    // heading bound to its excerpt.
+    const template = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "ec",
+          type: "core/entry-content",
+          version: 1,
+          props: { field: "body" },
+        },
+      ],
+    } as BlockDocument;
+    const body = page({ text: { $bind: "excerpt" } });
+    // The control: the template as stored asks for nothing.
+    expect(canvasBindingsRequest([template], identity, "en")).toBeUndefined();
+    const composed = composeEntryContent(template, {
+      valueOf: field => (field === "body" ? body : undefined),
+    });
+    expect(
+      canvasBindingsRequest([composed], identity, "en")?.demand.entry
+    ).toEqual({ fields: ["excerpt"], follows: {} });
+  });
+});
+
 describe("the canvas's read, as the template's strip hears it", () => {
   it("says the read failed, and asks again when the editor retries", async () => {
     editing.identity = {
@@ -411,6 +509,14 @@ describe("the canvas's read, as the template's strip hears it", () => {
       expect(heard.at(-1)).toEqual({ entryId: "p7", state: "answered" })
     );
     expect(writePluginRoute).toHaveBeenCalledTimes(2);
+
+    // Answered and kept, a retry still reads afresh: the window back in
+    // focus asks one, and the canvas must not answer it from what it kept.
+    writePluginRoute.mockResolvedValueOnce(answer("A post, retitled"));
+    retries = 2;
+    rerender();
+    await waitFor(() => expect(writePluginRoute).toHaveBeenCalledTimes(3));
+    retries = 0;
     editing.identity = null;
   });
 });

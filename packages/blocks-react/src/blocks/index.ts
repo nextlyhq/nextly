@@ -34,6 +34,7 @@ import { column } from "./column";
 import { columns } from "./columns";
 import { divider } from "./divider";
 import { embed } from "./embed";
+import { entryContent } from "./entry-content";
 import { form } from "./form";
 import { gallery } from "./gallery";
 import { heading } from "./heading";
@@ -67,6 +68,9 @@ export { column } from "./column";
 export { columns } from "./columns";
 export { divider, type DividerProps } from "./divider";
 export { embed, type EmbedProps } from "./embed";
+// The Entry content block: where a collection's template draws the entry's
+// own blocks content.
+export { entryContent, type EntryContentProps } from "./entry-content";
 export { icon, type IconProps } from "./icon";
 export {
   form,
@@ -180,6 +184,7 @@ type CoreBlockList = [
   typeof embed,
   typeof icon,
   typeof collectionLoop,
+  typeof entryContent,
 ];
 
 export const coreBlocks: CoreBlockList[number][] = [
@@ -215,4 +220,7 @@ export const coreBlocks: CoreBlockList[number][] = [
   embed,
   icon,
   collectionLoop,
+  // Holds no child of its own to meet first: the entry's blocks are composed
+  // into it for drawing, never stored.
+  entryContent,
 ] satisfies CoreBlockList;

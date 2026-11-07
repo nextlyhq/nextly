@@ -51,6 +51,7 @@ import {
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
+import { duplicationRefusal } from "./entry-content-rules";
 import type { Rect } from "./geometry";
 import { placedComponentId } from "./instance-inspector";
 import {
@@ -842,7 +843,7 @@ export function toolbarActions(
     // same reading the keyboard duplicate takes. A slot's lock is another
     // matter: a copy changes what a slot whose blocks are fixed holds.
     heldByLock(
-      { id: "duplicate", label: "Duplicate", enabled: duplication !== null },
+      duplicateAction(document, selectedId, duplication !== null),
       lockRefusalFor,
       duplication?.ops
     ),
@@ -1124,4 +1125,20 @@ export function depthMoveActions(
           direction: move.direction,
         }
   );
+}
+
+/**
+ * The Duplicate item for one selected block: refused, with the words the
+ * Add panel's tile uses, where the block is or holds a template's one Entry
+ * content block, since a copy would be a second.
+ */
+function duplicateAction(
+  document: BlockDocument,
+  selectedId: string,
+  duplicable: boolean
+): ToolbarAction {
+  const reason = duplicationRefusal(document, selectedId);
+  return reason === undefined
+    ? { id: "duplicate", label: "Duplicate", enabled: duplicable }
+    : { id: "duplicate", label: "Duplicate", enabled: false, reason };
 }

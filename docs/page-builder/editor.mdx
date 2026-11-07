@@ -460,6 +460,35 @@ turned off: there's no entry to check against there. The published page checks t
 where the component or the Layout is placed. The switch is yours for this session and is
 never saved.
 
+### Showing the entry's own content
+
+An entry can hold blocks of its own, such as a post's Body. To draw them inside the
+template, add **Entry content**, under **Entry** in the Add panel. It is offered only
+while a template is open, and a template holds one: with one placed, its tile says
+"A template holds one Entry content block.", and Duplicate is turned off for it.
+
+- **Field** chooses which of the collection's blocks fields it shows, from the fields
+  stored on the entry itself. When the collection has one, it is chosen for you; when it
+  has several, the first is chosen and you can pick another.
+- **On the canvas** it shows the entry you preview, drafts included, read-only: a click
+  anywhere inside selects Entry content itself, and the content is edited on the entry.
+  **Open post** (named after the collection) opens that entry in a new tab. A faint
+  dashed outline with a tab, such as "Entry content · Body", marks the block whether or
+  not it is selected.
+- **When there is nothing to show** the canvas says why: "The post’s Body shows here."
+  with no entry to preview, "_Title_ has no Body content yet." for an empty field, and,
+  in red, "The Body field no longer exists in Posts, so this shows nothing. Choose
+  another field." when the field was removed from the collection. A template saved
+  before its field was removed keeps saving, and Field shows the old choice as
+  "Body (removed)" until you choose another.
+- **On the published page** it shows the field as visitors may read it. When they may
+  not read it, or it is empty or gone, nothing is drawn: no markup, and none of the
+  field's content in the page.
+
+Entry content is refused when it is saved anywhere but a template, an entry's own blocks
+field included, and so is a second one, or a field the collection doesn't have as a
+blocks field.
+
 ## Help
 
 Help lists the keyboard shortcuts the editor has right now, read from the same list the
