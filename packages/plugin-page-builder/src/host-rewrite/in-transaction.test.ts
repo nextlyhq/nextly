@@ -156,6 +156,36 @@ describe("judging a write inside its transaction", () => {
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
+  it("refuses an update of the component itself while its hosts are judged", async () => {
+    const tx = transaction([
+      { id: "r", componentId: "card", purpose: "delete", phase: "preflight" },
+    ]);
+
+    await expect(
+      judgeInTransaction(
+        { ...write(tx.db, { title: "x" }, "components"), id: "card" },
+        SETTINGS
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("refuses creating a component under the id of one a run deleted", async () => {
+    const tx = transaction([
+      { id: "r", componentId: "card", purpose: "delete", phase: "deleted" },
+    ]);
+
+    await expect(
+      judgeInTransaction(
+        {
+          ...write(tx.db, { title: "x" }, "components"),
+          id: "card",
+          operation: "create" as const,
+        },
+        SETTINGS
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
   it("leaves alone runs of other components and retired-field runs", async () => {
     const tx = transaction([
       { id: "a", componentId: "other", purpose: "delete", phase: "deleted" },

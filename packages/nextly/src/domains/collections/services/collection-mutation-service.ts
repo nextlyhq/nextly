@@ -11249,6 +11249,42 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The status a write in `locale` is classified against, as the update's own
+   * gate classifies it: where the collection keeps its status per language,
+   * the write names that language's companion `_status`, and the gate judges
+   * the move from the one committed there; a language with no companion row
+   * (the default one, stored on the main row) and every collection without
+   * per-language status are judged from the main row's.
+   */
+  private async storedStatusInLocale(
+    collectionName: string,
+    entryId: string,
+    row: Record<string, unknown>,
+    locale: string | undefined
+  ): Promise<string | null> {
+    const main = typeof row.status === "string" ? row.status : null;
+    if (locale === undefined || !this.localization) return main;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    // As the update gates its read: `_status` exists only on a companion
+    // migrated for per-language status, and asking it otherwise fails.
+    if (
+      !companion?.hasStatus ||
+      (await this.companionLacksStatus(collectionName))
+    ) {
+      return main;
+    }
+    const inLocale = await readCompanionLocaleStatus(
+      this.db as Parameters<typeof readCompanionLocaleStatus>[0],
+      companion.table,
+      entryId,
+      locale,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
+    return inLocale ?? main;
+  }
+
+  /**
    * Whether this user may make a write naming `nextStatus` of the entry,
    * decided without writing: the lifecycle gate an update asks, and only where
    * that update asks it. Core asks a publish or unpublish gate only for a write
@@ -11279,9 +11315,13 @@ export class CollectionMutationService extends BaseService {
     );
     // As `resolveTransitionAuthorization` reads it: no lifecycle, no gate.
     if ((collection as { status?: boolean }).status !== true) return true;
-    const stored = existingEntry.status;
     const move = resolvePublishTransition(
-      typeof stored === "string" ? stored : null,
+      await this.storedStatusInLocale(
+        params.collectionName,
+        params.entryId,
+        existingEntry,
+        params.locale
+      ),
       params.nextStatus
     );
     if (move === null) return true;

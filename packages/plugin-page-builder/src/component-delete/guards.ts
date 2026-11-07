@@ -291,9 +291,14 @@ function refusal(message: string, reason: string): NextlyError {
   });
 }
 
-/** A row's non-empty string `id`, or null. */
+/**
+ * A row's id as the run table keys it, or null: a string as it is, a number
+ * as its string, as the other host-address helpers read one, so a store with
+ * numeric ids is guarded like any other.
+ */
 function idIn(row: unknown): string | null {
   if (typeof row !== "object" || row === null) return null;
   const id = (row as { id?: unknown }).id;
-  return typeof id === "string" && id !== "" ? id : null;
+  if (typeof id === "string" && id !== "") return id;
+  return typeof id === "number" && Number.isFinite(id) ? String(id) : null;
 }
