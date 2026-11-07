@@ -296,8 +296,13 @@ export function DesignCell({
   // Where the collection's answer is capped, its absence of a row says
   // nothing, so the row is named for the lookup of the rows on screen.
   const capped = read.data?.meta.hasNext === true && lookupNames(id);
-  const rows = useSyncExternalStore(watchRowsOnScreen, () =>
-    rowsOnScreenOf(collection)
+  // A server render has no rows on screen yet: the list is drawn there
+  // before any cell has named its row, and React asks for this snapshot
+  // during it.
+  const rows = useSyncExternalStore(
+    watchRowsOnScreen,
+    () => rowsOnScreenOf(collection),
+    () => NO_ROWS
   );
   const lookup = useEntriesDesigns(
     collection,

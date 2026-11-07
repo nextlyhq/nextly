@@ -16,6 +16,7 @@
  * each row on its own would ask the server once per row.
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntryDesignsResponse } from "../templates/entry-designs-contract";
@@ -314,6 +315,16 @@ describe("the Design column", () => {
     };
     render(<DesignCell collection="posts" row={{ id: 7 }} />);
     expect(screen.getByText("Template")).toBeTruthy();
+  });
+
+  it("draws on the server, before any row on screen is known", () => {
+    // React asks a store its server snapshot here, and refuses to render a
+    // store that has none, so a list loaded directly would fail to draw.
+    cellRead = { data: answer(BLOG_POST, [ownDesign("p1")]), error: null };
+    const html = renderToString(
+      <DesignCell collection="posts" row={{ id: "p1" }} />
+    );
+    expect(html).toContain("Own design");
   });
 
   it("asks no lookup of the rows when the collection's answer is whole", () => {
