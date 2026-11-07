@@ -551,7 +551,6 @@ type BindingIssuesColumns = {
   readonly documentId: ColumnBuilder<string, true, false>;
   readonly place: ColumnBuilder<string, false, false>;
   readonly issues: ColumnBuilder<unknown, false, false>;
-  readonly count: ColumnBuilder<number, false, false>;
   readonly createdAt: ColumnBuilder<Date, false, true>;
   readonly updatedAt: ColumnBuilder<Date, false, true>;
 };
@@ -560,8 +559,7 @@ type BindingIssuesColumns = {
  * One row per document whose bindings no longer fit what they read: a field
  * renamed or removed, a Single's field, a type that changed, a prop the block
  * no longer has. Kept so the report and its count are read, not computed, on
- * every admin page that shows them; a document with no such binding has no
- * row.
+ * every admin page that shows them.
  *
  * - `documentKey` names the document as the usage indexes do (`kind:slug`,
  *   and `:id` for a collection's entry), unique, so a document's recompute
@@ -570,7 +568,8 @@ type BindingIssuesColumns = {
  *   layouts, another collection's entries, or a Single), for the report's
  *   filters.
  * - `issues` is the list of the document's broken bindings, each with what
- *   the report shows; `count` is its length, so a total is a sum of a column.
+ *   the report shows; empty for a document judged and found whole, a row kept
+ *   so a slower check of every document cannot write over a newer save.
  * - `updatedAt` is when the document was last judged.
  */
 export const bindingIssues: TableDefinition<
@@ -586,7 +585,6 @@ export const bindingIssues: TableDefinition<
     documentId: col.varchar(255, { nullable: true }),
     place: col.varchar(16),
     issues: col.json(),
-    count: col.integer(),
     ...col.timestamps(),
   },
   { indexes: [{ columns: ["documentKey"], unique: true }] }

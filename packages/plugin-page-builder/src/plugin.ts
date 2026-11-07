@@ -41,6 +41,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
+import { readableAsCaller } from "./bindings-report/readable";
 import { bindingsToFixRoute } from "./bindings-report/route";
 import {
   registerBindingReportOnWrite,
@@ -152,6 +153,7 @@ import {
   type RewriteInstall,
 } from "./host-rewrite/service";
 import {
+  documentHosts,
   siteHostReader,
   siteWalkSource,
   singleToWalk,
@@ -1495,6 +1497,37 @@ export const pageBuilder = (
       const { declaredFieldShapes } = await import("nextly/runtime");
       return declaredFieldShapes(ref);
     },
+    // Documents read as the walk reads them, and the components they place as
+    // visitors are served them.
+    reading: () => {
+      const install = rewriteInstall;
+      if (install === null) return null;
+      const site = install.site;
+      const read = siteHostReader(site);
+      return {
+        hostsOf: at => documentHosts(site, at),
+        read,
+        components: async (id, draft) => {
+          try {
+            const found = await read({
+              kind: "collection",
+              slug: install.store.collection,
+              id,
+              path: [install.store.field],
+            });
+            const value =
+              draft && found.draft !== null && found.draft.kind === "value"
+                ? found.draft
+                : found.published;
+            return value.kind === "value"
+              ? { kind: "document", document: value.value }
+              : { kind: "absent" };
+          } catch {
+            return { kind: "unreadable" };
+          }
+        },
+      };
+    },
     limits: () => opts.limits ?? DEFAULT_LIMITS,
     placeOf: at => {
       if (at.kind === "single") return "singles";
@@ -1517,7 +1550,6 @@ export const pageBuilder = (
       {
         documents: cursor => walk.documents(cursor),
         cursorOf: document => walk.cursorOf(document),
-        read: siteHostReader(site),
         fingerprint: () =>
           schemaFingerprint({
             collections: () => collectionRegistryRows(ctx),
@@ -2661,8 +2693,7 @@ export const pageBuilder = (
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({
           store: bindingReportDeps.store,
-          names: (routeCtx, hosts) =>
-            nameDocumentsOnSite(removalSite(), routeCtx, hosts),
+          readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
           // A read starts a check when the schema may have changed, at most
           // once a minute, and never waits for it.
           refresh: routeCtx => {

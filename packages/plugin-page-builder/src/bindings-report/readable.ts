@@ -1,0 +1,189 @@
+/**
+ * Which reported documents, and which of their blocks fields, the person
+ * asking may read: read as them, through core's own gate, so the report never
+ * shows a row of a field their field rules hide, nor of a document they may
+ * not open.
+ *
+ * One read per collection (a few, for many documents), selecting each
+ * document's title and the blocks fields its rows are in: a field the read
+ * leaves out is one the caller may not read. Each Single is read on its own.
+ *
+ * @module bindings-report/readable
+ */
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import { requireNextly } from "nextly/runtime";
+
+import { labelOf, pluralLabelOf } from "../collection-labels";
+import { titleFieldIn } from "../entries-route";
+import { entryOf, findAsCaller } from "../entry-reads";
+import { readingAsUser } from "../library-route";
+
+import type { StoredDocumentReport } from "./store";
+
+/** What the caller may read of one reported document. */
+export interface ReadableDocument {
+  /** The document as they know it: an entry's title, a Single's slug. */
+  readonly title: string;
+  /** The top-level blocks fields of it they may read. */
+  readonly fields: ReadonlySet<string>;
+  /** Its collection's name as the admin shows it; a Single's slug. */
+  readonly collectionLabel: string;
+}
+
+/** How many ids one read asks for. */
+const IDS_PER_READ = 200;
+
+/** A row's top-level blocks field: the first segment of its dotted path. */
+export function topFieldOf(blocksField: string | undefined): string {
+  return (blocksField ?? "").split(".")[0] ?? "";
+}
+
+/** The blocks fields a document's rows are in. */
+function fieldsNamed(entry: StoredDocumentReport): string[] {
+  return [
+    ...new Set(entry.rows.map(row => topFieldOf(row.blocksField))),
+  ].filter(field => field !== "");
+}
+
+/** The fields of `fields` a read as the caller returned. */
+function present(
+  row: Record<string, unknown>,
+  fields: readonly string[]
+): ReadonlySet<string> {
+  return new Set(fields.filter(field => Object.hasOwn(row, field)));
+}
+
+/** A collection's title field and its name, from its registry record. */
+async function collectionNaming(
+  ctx: Pick<PluginRouteContext, "services">,
+  slug: string
+): Promise<
+  { readonly titleField?: string; readonly label: string } | undefined
+> {
+  let record: Record<string, unknown>;
+  try {
+    record = (await ctx.services.collections.getCollection(
+      slug,
+      undefined as never
+    )) as unknown as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  const titleField = titleFieldIn(record)?.name;
+  return {
+    ...(titleField === undefined ? {} : { titleField }),
+    label: pluralLabelOf(record).pluralLabel ?? labelOf(record, slug),
+  };
+}
+
+/** One read as the caller of up to `IDS_PER_READ` documents; `null` when refused. */
+async function readAsCaller(
+  ctx: Pick<PluginRouteContext, "caller">,
+  slug: string,
+  ids: readonly string[],
+  select: Record<string, boolean>
+): Promise<readonly unknown[] | null> {
+  try {
+    const page = await findAsCaller(ctx, {
+      collection: slug,
+      where: { id: { in: [...ids] } },
+      select,
+      limit: ids.length,
+    });
+    return page.items;
+  } catch (error) {
+    // A caller refused the whole collection may read none of it.
+    if (NextlyError.isForbidden(error)) return null;
+    throw error;
+  }
+}
+
+/** One collection's reported documents, as the caller may read them. */
+async function readCollection(
+  ctx: Pick<PluginRouteContext, "caller" | "services">,
+  slug: string,
+  entries: readonly StoredDocumentReport[],
+  found: Map<string, ReadableDocument>
+): Promise<void> {
+  const naming = await collectionNaming(ctx, slug);
+  if (naming === undefined) return;
+  const { titleField, label } = naming;
+  const select = {
+    id: true,
+    ...(titleField === undefined ? {} : { [titleField]: true }),
+    ...Object.fromEntries(
+      [...new Set(entries.flatMap(fieldsNamed))].map(field => [field, true])
+    ),
+  };
+  const byId = new Map(entries.map(entry => [entry.documentId ?? "", entry]));
+  const ids = [...byId.keys()];
+  for (let start = 0; start < ids.length; start += IDS_PER_READ) {
+    const rows = await readAsCaller(
+      ctx,
+      slug,
+      ids.slice(start, start + IDS_PER_READ),
+      select
+    );
+    if (rows === null) return;
+    for (const row of rows) {
+      const entry = entryOf(row, titleField);
+      const stored = entry === undefined ? undefined : byId.get(entry.id);
+      if (entry === undefined || stored === undefined) continue;
+      found.set(stored.documentKey, {
+        title: entry.title,
+        fields: present(row as Record<string, unknown>, fieldsNamed(stored)),
+        collectionLabel: label,
+      });
+    }
+  }
+}
+
+/** One reported Single, as the caller may read it. */
+async function readSingle(
+  ctx: Pick<PluginRouteContext, "caller">,
+  entry: StoredDocumentReport,
+  found: Map<string, ReadableDocument>
+): Promise<void> {
+  let row: unknown;
+  try {
+    row = await requireNextly().findSingle({
+      slug: entry.slug,
+      createIfMissing: false,
+      depth: 0,
+      ...(await readingAsUser(ctx)),
+    });
+  } catch (error) {
+    if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
+      return;
+    }
+    throw error;
+  }
+  if (typeof row !== "object" || row === null) return;
+  found.set(entry.documentKey, {
+    title: entry.slug,
+    fields: present(row as Record<string, unknown>, fieldsNamed(entry)),
+    collectionLabel: entry.slug,
+  });
+}
+
+/** Each reported document the caller may read, by its key. */
+export async function readableAsCaller(
+  ctx: Pick<PluginRouteContext, "caller" | "services">,
+  entries: readonly StoredDocumentReport[]
+): Promise<ReadonlyMap<string, ReadableDocument>> {
+  const found = new Map<string, ReadableDocument>();
+  const bySlug = new Map<string, StoredDocumentReport[]>();
+  for (const entry of entries) {
+    if (entry.kind === "single") {
+      await readSingle(ctx, entry, found);
+      continue;
+    }
+    const list = bySlug.get(entry.slug) ?? [];
+    list.push(entry);
+    bySlug.set(entry.slug, list);
+  }
+  for (const [slug, list] of bySlug) {
+    await readCollection(ctx, slug, list, found);
+  }
+  return found;
+}

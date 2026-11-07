@@ -1,16 +1,20 @@
 /**
- * Where the "Bindings to fix" report is kept: one row per document holding a
- * binding that no longer fits, in this plugin's own table, and where the check
- * of every document stands (`binding_report_runs`).
+ * Where the "Bindings to fix" report is kept: one row per document judged,
+ * in this plugin's own table, and where the check of every document stands
+ * (`binding_report_runs`).
  *
  * Kept rather than computed on each read, because the report's count is shown
  * on admin screens many people open, and judging every page there would read
  * every page each time. A document is judged again when it is saved, and every
  * document when the schema it is judged against changes.
  *
+ * A document judged whole keeps its row, with no issues: the time it was
+ * judged is what stops a slower check of every document, which read the
+ * document before a save fixed it, from putting back what the save removed.
+ *
  * @module bindings-report/store
  */
-import { desc, eq, lt } from "@nextlyhq/plugin-sdk/db";
+import { and, asc, desc, eq, lt } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -23,25 +27,29 @@ import type { BindingReportRow } from "./rows";
 /** The one row of `binding_report_runs`: the check of every document. */
 const FULL_CHECK = "full";
 
+/** How many rows one read of the table takes, while the report is listed whole. */
+const LIST_PAGE = 500;
+
+/**
+ * How much earlier than a check's read a row must have been judged for the
+ * check to replace it: a timestamp column may keep whole seconds, so a save
+ * judged in the same second as the read could otherwise read as older.
+ */
+const CLOCK_GRAIN_MS = 1000;
+
 /** Where the check of every document stands. */
 export interface FullCheck {
   /** The schema fingerprint the last complete check was made against. */
   readonly checked: string | null;
+  /** When that check completed. */
+  readonly completedAt: Date | null;
   /** The fingerprint a check under way is making, if one is. */
   readonly checking: string | null;
   /** The walk's cursor a check under way resumes after. */
   readonly cursor: string | null;
   /** When the check under way started. */
   readonly startedAt: Date | null;
-  /** When the check last moved. */
-  readonly at: Date | null;
 }
-
-/**
- * The most documents one read of the report returns. A site with more broken
- * documents than this is told there are at least this many.
- */
-export const MAX_REPORTED_DOCUMENTS = 500;
 
 /** Which document a row is about, and where it lives. */
 export interface ReportedDocument {
@@ -61,19 +69,24 @@ export interface StoredDocumentReport extends ReportedDocument {
 
 /** The report's store. */
 export interface BindingReportStore {
-  /** Record a document's rows, replacing its last; none removes its row. */
+  /**
+   * Record a document's rows, replacing its last. With `readAt`, as a check
+   * of every document records: only when the row was judged before that read,
+   * so a save judged since is kept.
+   */
   record(
     document: ReportedDocument,
-    rows: readonly BindingReportRow[]
+    rows: readonly BindingReportRow[],
+    readAt?: Date
   ): Promise<void>;
-  /** Every reported document, newest check first, up to the cap. */
+  /** Every document with a broken binding, newest judged first. */
   list(): Promise<StoredDocumentReport[]>;
+  /** One document's row, when it has a broken binding. */
+  get(documentKey: string): Promise<StoredDocumentReport | undefined>;
   /** Where the check of every document stands. */
   fullCheck(): Promise<FullCheck>;
   /** Record where it stands now. */
-  setFullCheck(
-    state: Pick<FullCheck, "checked" | "checking" | "cursor" | "startedAt">
-  ): Promise<void>;
+  setFullCheck(state: FullCheck): Promise<void>;
   /** Drop the rows judged before `at`: documents a complete check no longer found. */
   dropCheckedBefore(at: Date): Promise<void>;
 }
@@ -90,6 +103,37 @@ function jsonOf(value: unknown): unknown {
   }
 }
 
+/** A date an ISO string in a JSON column names, or `null`. */
+function dateIn(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** A stored row as the report reads it; `undefined` for one judged whole. */
+function reportOf(row: {
+  documentKey: string;
+  kind: string;
+  slug: string;
+  documentId: string | null;
+  place: string;
+  issues: unknown;
+  updatedAt: Date;
+}): StoredDocumentReport | undefined {
+  const parsed = jsonOf(row.issues);
+  const rows = Array.isArray(parsed) ? (parsed as BindingReportRow[]) : [];
+  if (rows.length === 0) return undefined;
+  return {
+    documentKey: row.documentKey,
+    kind: row.kind === "single" ? "single" : "collection",
+    slug: row.slug,
+    ...(row.documentId === null ? {} : { documentId: row.documentId }),
+    place: row.place,
+    rows,
+    checkedAt: row.updatedAt,
+  };
+}
+
 /** The report's store over this plugin's own tables. */
 export function bindingReportStore(
   db: Pick<PluginDatabase, "select" | "insert" | "update" | "delete" | "table">,
@@ -98,70 +142,79 @@ export function bindingReportStore(
   const issues = () => db.table(bindingIssues);
   const runs = () => db.table(bindingReportRuns);
 
-  /** Insert, or update the row a concurrent insert won with. */
-  const upsert = async (
-    insert: () => Promise<unknown>,
-    update: () => Promise<number>
-  ): Promise<void> => {
-    if ((await update()) > 0) return;
+  /** Insert; `false` when a row already holds the key. */
+  const insert = async (
+    values: Parameters<typeof db.insert<typeof bindingIssues>>[1]
+  ): Promise<boolean> => {
     try {
-      await insert();
+      await db.insert(bindingIssues, values);
+      return true;
     } catch (error) {
       if (!isUniqueViolation(dialect, error)) throw error;
-      await update();
+      return false;
     }
   };
 
   return {
-    record: async (document, rows) => {
+    record: async (document, rows, readAt) => {
       const keyed = eq(issues().documentKey, document.documentKey);
-      if (rows.length === 0) {
-        await db.delete(bindingIssues).where(keyed);
-        return;
-      }
       const values = {
         kind: document.kind,
         slug: document.slug,
         documentId: document.documentId ?? null,
         place: document.place,
         issues: rows,
-        count: rows.length,
         updatedAt: new Date(),
       };
-      await upsert(
-        () =>
-          db.insert(bindingIssues, {
-            documentKey: document.documentKey,
-            ...values,
-          }),
-        () => db.update(bindingIssues, values).where(keyed)
-      );
+      if (readAt === undefined) {
+        if ((await db.update(bindingIssues, values).where(keyed)) > 0) return;
+        if (await insert({ documentKey: document.documentKey, ...values })) {
+          return;
+        }
+        await db.update(bindingIssues, values).where(keyed);
+        return;
+      }
+      // Fenced: only a row judged before the read this check made.
+      const before = new Date(readAt.getTime() - CLOCK_GRAIN_MS);
+      const replaced = await db
+        .update(bindingIssues, values)
+        .where(and(keyed, lt(issues().updatedAt, before)) ?? keyed);
+      if (replaced > 0) return;
+      // No row older than the read: none at all, or one a save judged since,
+      // which the insert then meets and leaves.
+      const held = await db.select(bindingIssues).where(keyed).first();
+      if (held === null) {
+        await insert({ documentKey: document.documentKey, ...values });
+      }
     },
 
     list: async () => {
-      const found = await db
+      const found: StoredDocumentReport[] = [];
+      for (let offset = 0; ; offset += LIST_PAGE) {
+        const page = await db
+          .select(bindingIssues)
+          .orderBy(desc(issues().updatedAt), asc(issues().documentKey))
+          .limit(LIST_PAGE)
+          .offset(offset)
+          .all();
+        for (const row of page) {
+          const report = reportOf(row);
+          if (report !== undefined) found.push(report);
+        }
+        if (page.length < LIST_PAGE) return found;
+      }
+    },
+
+    get: async documentKey => {
+      const row = await db
         .select(bindingIssues)
-        .orderBy(desc(issues().updatedAt))
-        .limit(MAX_REPORTED_DOCUMENTS)
-        .all();
-      return found.map(row => {
-        const parsed = jsonOf(row.issues);
-        return {
-          documentKey: row.documentKey,
-          kind: row.kind === "single" ? "single" : "collection",
-          slug: row.slug,
-          ...(row.documentId === null ? {} : { documentId: row.documentId }),
-          place: row.place,
-          rows: Array.isArray(parsed) ? (parsed as BindingReportRow[]) : [],
-          checkedAt: row.updatedAt,
-        };
-      });
+        .where(eq(issues().documentKey, documentKey))
+        .first();
+      return row === null ? undefined : reportOf(row);
     },
 
     dropCheckedBefore: async at => {
-      // A second earlier: a timestamp column may keep whole seconds, so a row
-      // judged in the check's first second can read as before its start.
-      const before = new Date(at.getTime() - 1000);
+      const before = new Date(at.getTime() - CLOCK_GRAIN_MS);
       await db.delete(bindingIssues).where(lt(issues().updatedAt, before));
     },
 
@@ -170,31 +223,21 @@ export function bindingReportStore(
         .select(bindingReportRuns)
         .where(eq(runs().name, FULL_CHECK))
         .first();
-      if (row === null) {
-        return {
-          checked: null,
-          checking: null,
-          cursor: null,
-          startedAt: null,
-          at: null,
-        };
-      }
-      const held = jsonOf(row.cursor);
-      const { after, startedAt } =
+      const held = row === null ? null : jsonOf(row.cursor);
+      const state =
         typeof held === "object" && held !== null
-          ? (held as { after?: unknown; startedAt?: unknown })
+          ? (held as {
+              after?: unknown;
+              startedAt?: unknown;
+              completedAt?: unknown;
+            })
           : {};
-      const started =
-        typeof startedAt === "string" ? new Date(startedAt) : undefined;
       return {
-        checked: row.checked,
-        checking: row.checking,
-        cursor: typeof after === "string" ? after : null,
-        startedAt:
-          started === undefined || Number.isNaN(started.getTime())
-            ? null
-            : started,
-        at: row.updatedAt,
+        checked: row?.checked ?? null,
+        completedAt: dateIn(state.completedAt),
+        checking: row?.checking ?? null,
+        cursor: typeof state.after === "string" ? state.after : null,
+        startedAt: dateIn(state.startedAt),
       };
     },
 
@@ -203,21 +246,28 @@ export function bindingReportStore(
       const values = {
         checked: state.checked,
         checking: state.checking,
-        // Wrapped in an object: a bare string in a JSON column reads back
-        // decoded on one dialect and as JSON text on another.
-        cursor:
-          state.startedAt === null
-            ? null
-            : {
-                ...(state.cursor === null ? {} : { after: state.cursor }),
-                startedAt: state.startedAt.toISOString(),
-              },
+        // One JSON object on every dialect: a bare string in a JSON column
+        // reads back decoded on one and as JSON text on another.
+        cursor: {
+          ...(state.cursor === null ? {} : { after: state.cursor }),
+          ...(state.startedAt === null
+            ? {}
+            : { startedAt: state.startedAt.toISOString() }),
+          ...(state.completedAt === null
+            ? {}
+            : { completedAt: state.completedAt.toISOString() }),
+        },
         updatedAt: new Date(),
       };
-      await upsert(
-        () => db.insert(bindingReportRuns, { name: FULL_CHECK, ...values }),
-        () => db.update(bindingReportRuns, values).where(keyed)
-      );
+      if ((await db.update(bindingReportRuns, values).where(keyed)) > 0) {
+        return;
+      }
+      try {
+        await db.insert(bindingReportRuns, { name: FULL_CHECK, ...values });
+      } catch (error) {
+        if (!isUniqueViolation(dialect, error)) throw error;
+        await db.update(bindingReportRuns, values).where(keyed);
+      }
     },
   };
 }
