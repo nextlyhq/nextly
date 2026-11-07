@@ -16,7 +16,7 @@ import type { PluginFieldValidateArgs } from "@nextlyhq/plugin-sdk";
 
 import { newUndefinedIds } from "../undefined-references";
 
-import { readStoredForms } from "./lock-baselines";
+import { readStoredForms, storedReadReaches } from "./lock-baselines";
 
 /** No stored id: what the first, cheaper comparison is made against. */
 const NOTHING_HELD: ReadonlySet<string> = new Set();
@@ -40,16 +40,6 @@ export interface StoredForms {
 }
 
 /**
- * Whether the stored read can name the field at `path`: a top-level field, or
- * one inside named groups (`hero.body`), which is where the editor opens a
- * blocks field. A field in a repeater's rows (`rows[2].body`) has no stored
- * path of its own.
- */
-export function storedReadReaches(path: string): boolean {
-  return path !== "" && !/[[\]]/.test(path) && !path.split(".").includes("");
-}
-
-/**
  * Both stored forms of the field being written: an id either one holds is the
  * page's already.
  */
@@ -61,6 +51,30 @@ export function storedFormsFor(args: JudgedField): Promise<StoredForms> {
     // No declaration is a field not kept per language.
     args.field?.localized === true
   );
+}
+
+/** Stored forms that hold nothing, which every undefined reference is new to. */
+export const NO_STORED_FORMS: StoredForms = { forms: [], readable: true };
+
+/**
+ * The stored forms a reference check compares a write with: `stored`, or the
+ * field's own by default. A field in a repeater's row has none core's stored
+ * read can name, and passing its write unjudged would let a save reintroduce
+ * a shared style or variable removed while the row's editor was open: the
+ * renderer drops the reference, and the row loses its styling unseen. So a
+ * row is judged against nothing held, refusing every reference the site no
+ * longer defines. That refuses no reference the row already held but by a
+ * race: removing a shared style or a variable is refused while any row uses
+ * it, since the removal's rescan reads every row.
+ */
+export function referenceBaseline(
+  args: JudgedField,
+  stored?: () => Promise<StoredForms>
+): () => Promise<StoredForms> {
+  if (!storedReadReaches(args.path)) {
+    return () => Promise.resolve(NO_STORED_FORMS);
+  }
+  return stored ?? (() => storedFormsFor(args));
 }
 
 /**

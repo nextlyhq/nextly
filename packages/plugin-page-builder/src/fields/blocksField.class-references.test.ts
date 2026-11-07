@@ -65,11 +65,12 @@ function setup() {
 
 async function validate(
   value: unknown,
-  how: { mode: "create" | "update"; write?: PluginFieldWrite }
+  how: { mode: "create" | "update"; write?: PluginFieldWrite; path?: string }
 ) {
+  const path = how.path ?? "content";
   return setup().field.validate?.(value, {
-    path: "content",
-    field: { name: "content", type: "blocks" },
+    path,
+    field: { name: path.split(".").at(-1), type: "blocks" },
     data: {},
     mode: how.mode,
     ...(how.write === undefined ? {} : { write: how.write }),
@@ -128,6 +129,37 @@ describe("a page write's references to the site's shared styles", () => {
       await validate(page(["c-card"]), {
         mode: "update",
         write: write({ published: page([]) }),
+      })
+    ).toBe(true);
+  });
+
+  it("refuses an undefined class in a repeater's row, judged against nothing held", async () => {
+    // A row has no stored path core can read: a save that reintroduced a
+    // shared style removed while the row's editor was open would otherwise
+    // pass, and the row would lose its styling unseen.
+    const asked: unknown[] = [];
+    const rowWrite = {
+      ...write({ published: page(["c-gone"]) }),
+      readStored: async (target: unknown) => {
+        asked.push(target);
+        return { kind: "absent" as const };
+      },
+    } as PluginFieldWrite;
+    const result = await validate(page(["c-card"], ["c-gone"]), {
+      mode: "update",
+      path: "sections[1].body",
+      write: rowWrite,
+    });
+    expect(codes(result)).toEqual(["unknown-class"]);
+    expect(asked).toEqual([]);
+  });
+
+  it("passes a row whose classes the site defines", async () => {
+    expect(
+      await validate(page(["c-card"]), {
+        mode: "update",
+        path: "sections[1].body",
+        write: write({}),
       })
     ).toBe(true);
   });
@@ -212,13 +244,17 @@ describe("a blocks field inside named groups", () => {
     ).toEqual(["unknown-class"]);
   });
 
-  it("does not judge a field in a repeater's rows, which has no stored path", async () => {
+  it("judges a field in a repeater's rows against nothing held, which has no stored path", async () => {
+    // The editor opens a row's field; a save reintroducing a shared style
+    // removed while it was open is refused, as in a group.
     expect(
-      await validateAt(
-        page(["c-gone"]),
-        "rows[0].body",
-        writeAt("rows[0].body", page([]))
+      codes(
+        await validateAt(
+          page(["c-gone"]),
+          "rows[0].body",
+          writeAt("rows[0].body", page(["c-gone"]))
+        )
       )
-    ).toBe(true);
+    ).toEqual(["unknown-class"]);
   });
 });

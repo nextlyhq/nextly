@@ -29,7 +29,12 @@
  *   its own field type (`readStored`, form `draft`), on the transaction,
  *   which answers the pending draft where one is shown, else the live row, by
  *   the rule the preview reads by. A field it cannot read (a blocks field in
- *   a group kept per language) is refused, and the removal with it.
+ *   a group kept per language) is refused, and the removal with it. A blocks
+ *   field inside a repeater's rows has no path that read can name, so its
+ *   draft is not read here: the remove routes' rescan before the lock reads
+ *   every draft whole (`storedDocumentsOf`), rows included, and the rows'
+ *   other forms are read here whole, so only a row draft saved between the
+ *   two passes goes unseen.
  *
  * What a plain read sees is the removal's isolation, a Single's write's:
  *
@@ -195,7 +200,9 @@ export function storedDocumentsOnTransaction(
       for (const form of forms().filter(entry => !isListedForm(entry))) {
         if (form.variant === "draft") {
           const draft = await fieldsAt(
-            type.paths,
+            // A working draft is read a field at a time, and core reads none
+            // inside a repeater's rows (see the module).
+            type.fixedPaths,
             draftOf(form, { collection: type.slug, id })
           );
           if (draft !== undefined) found.push(draft);
@@ -216,7 +223,9 @@ export function storedDocumentsOnTransaction(
       for (const form of forms()) {
         if (form.variant === "draft") {
           const draft = await fieldsAt(
-            type.paths,
+            // A working draft is read a field at a time, and core reads none
+            // inside a repeater's rows (see the module).
+            type.fixedPaths,
             draftOf(form, { single: type.slug })
           );
           if (draft !== undefined) found.push(draft);

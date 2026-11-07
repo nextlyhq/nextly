@@ -237,12 +237,33 @@ describe("a blocks field inside named groups", () => {
     ).toEqual(["unknown-token"]);
   });
 
-  it("does not judge a field in a repeater's rows, which has no stored path", async () => {
+  it("refuses an undefined variable in a repeater's row, judged against nothing held", async () => {
+    // A row has no stored path core can read: a save that reintroduced a
+    // variable removed while the row's editor was open would otherwise pass.
+    const read: string[] = [];
     expect(
-      await validate(page(["color.gone"]), {
+      codes(
+        await validate(page(["color.gone"]), {
+          mode: "update",
+          path: "rows[0].body",
+          write: write(
+            { published: page(["color.gone"]) },
+            "rows[0].body",
+            read
+          ),
+        })
+      )
+    ).toEqual(["unknown-token"]);
+    // Never asked of core, whose stored read names no row.
+    expect(read).toEqual([]);
+  });
+
+  it("passes a row whose variables the site defines", async () => {
+    expect(
+      await validate(page(["color.brand"]), {
         mode: "update",
         path: "rows[0].body",
-        write: write({ published: page([]) }, "rows[0].body"),
+        write: write({}, "rows[0].body"),
       })
     ).toBe(true);
   });

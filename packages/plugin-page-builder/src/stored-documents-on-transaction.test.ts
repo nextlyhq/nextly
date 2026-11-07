@@ -23,16 +23,19 @@ const PAGES: BuilderDocumentType = {
   slug: "pages",
   label: "Pages",
   paths: ["content"],
+  fixedPaths: ["content"],
 };
 const POSTS: BuilderDocumentType = {
   slug: "posts",
   label: "Posts",
   paths: ["hero.body"],
+  fixedPaths: ["hero.body"],
 };
 const HOME: BuilderDocumentType = {
   slug: "home",
   label: "Home",
   paths: ["content"],
+  fixedPaths: ["content"],
 };
 
 /**
@@ -198,6 +201,40 @@ describe("the stored documents, read on the write's transaction", () => {
     expect(forms).toHaveLength(3);
   });
 
+  it("never asks the stored read for a field in a repeater's rows, and still reads the rows' other forms whole", async () => {
+    // Core's stored read refuses a path through a row; asking it would fail
+    // every removal on a site with a blocks field in a repeater.
+    const LANDING: BuilderDocumentType = {
+      slug: "landing",
+      label: "Landing",
+      paths: ["content", "sections.body"],
+      fixedPaths: ["content"],
+    };
+    const reads = readsAnswering();
+    reads.findHostEntryByIdInTransaction.mockResolvedValue({
+      id: "l1",
+      sections: [{ id: "r1", body: { nodes: ["in a row"] } }],
+    });
+    const readStored = vi.fn(async (target: PluginStoredValueTarget) => {
+      if (target.field !== "content") throw new Error("refused: in a row");
+      return { kind: "absent" as const };
+    });
+    const documents = storedDocumentsOnTransaction(
+      sourceOf(reads, { readStored, locales: () => ["en"] })
+    );
+
+    const forms = await documents.rowForms(LANDING, "l1");
+
+    expect(readStored.mock.calls.map(([target]) => target.field)).toEqual([
+      "content",
+    ]);
+    // The language's stored form, read whole, still carries the row.
+    expect(forms).toContainEqual({
+      id: "l1",
+      sections: [{ id: "r1", body: { nodes: ["in a row"] } }],
+    });
+  });
+
   it("reads a Single in each form, its document by the Single read and its draft by the stored read", async () => {
     const reads = readsAnswering();
     const readStored = vi.fn(async () => ({
@@ -275,5 +312,48 @@ describe("the stored documents, read on the write's transaction", () => {
     );
 
     expect(uses).toEqual([{ kind: "collection", slug: "pages", id: "p1" }]);
+  });
+
+  it("lets a shared style's removal on a site with a repeater blocks field pass when it's unused, and refuses it when a row uses it", async () => {
+    // The walk the removal is decided by, on a collection whose only blocks
+    // field sits in a repeater's rows: the stored read is never asked for
+    // the row's field, so an unused style's removal is not refused by a read
+    // core cannot make, and a row using the style is still found.
+    const LANDING: BuilderDocumentType = {
+      slug: "landing",
+      label: "Landing",
+      paths: ["sections.body"],
+      fixedPaths: [],
+    };
+    const readStored = vi.fn(async () => {
+      throw new Error("refused: in a row");
+    });
+    const uses = (classes: string[]) => {
+      const reads = readsAnswering();
+      reads.listHostEntriesInTransaction.mockResolvedValueOnce(
+        listed([{ id: "l1", sections: [{ id: "r1", body: { classes } }] }])
+      );
+      return storedUsesOf(
+        ["s-card"],
+        storedDocumentsOnTransaction(
+          sourceOf(reads, {
+            readStored,
+            ownCollections: new Set<string>(),
+            collections: async () => [LANDING],
+          })
+        ),
+        // The row's blocks value as the walk hands it over, parsed.
+        stored =>
+          JSON.stringify(stored ?? null).includes("s-card") ? ["s-card"] : []
+      );
+    };
+
+    // Unused: nothing holds the style, and the removal goes ahead.
+    await expect(uses(["s-other"])).resolves.toEqual([]);
+    // Used inside a row: the removal is refused, naming the entry.
+    await expect(uses(["s-card"])).resolves.toEqual([
+      { kind: "collection", slug: "landing", id: "l1" },
+    ]);
+    expect(readStored).not.toHaveBeenCalled();
   });
 });
