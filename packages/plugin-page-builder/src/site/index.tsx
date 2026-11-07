@@ -46,8 +46,16 @@ export interface SiteCodeProps {
    * dynamic, which a nonce-based policy already does.
    */
   readonly nonce?: string;
-  /** The paths site code never runs under. Defaults to `["/admin"]`. */
+  /**
+   * The paths site code never runs under, as the app names them (without its
+   * base path). Defaults to `["/admin"]`.
+   */
   readonly skip?: readonly string[];
+  /**
+   * The app's base path, which every path a visitor's browser shows begins
+   * with. Read from the app's Next.js config when not given.
+   */
+  readonly basePath?: string;
   /** The site code Single's slug, where the site renamed it. */
   readonly slug?: string;
   /** How the stored code is read; Nextly's cached Direct API by default. */
@@ -56,6 +64,20 @@ export interface SiteCodeProps {
 
 /** The paths site code never runs under unless told otherwise. */
 const DEFAULT_SKIP: readonly string[] = ["/admin"];
+
+/**
+ * The skipped paths as the browser shows them: under the app's base path
+ * (`basePath: "/site"` serves the admin at `/site/admin`), which Next.js
+ * builds into every bundle as `process.env.__NEXT_ROUTER_BASEPATH`.
+ */
+function skippedPaths(props: SiteCodeProps): string[] {
+  const base = (
+    props.basePath ??
+    process.env.__NEXT_ROUTER_BASEPATH ??
+    ""
+  ).replace(/\/+$/, "");
+  return (props.skip ?? DEFAULT_SKIP).map(path => `${base}${path}`);
+}
 
 /** The stored site code, read through Nextly's cache, tagged by its Single. */
 async function readStoredSiteCode(slug: string): Promise<unknown> {
@@ -213,7 +235,7 @@ export async function SiteCode(
             dangerouslySetInnerHTML={{
               __html: scriptData({
                 slot: props.slot,
-                skip: props.skip ?? DEFAULT_SKIP,
+                skip: skippedPaths(props),
                 entries: gated,
               }),
             }}

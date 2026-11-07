@@ -244,10 +244,18 @@ async function policyChecks(
   return checks;
 }
 
-/** Every finding the checks made, which an acknowledgement covers. */
+/**
+ * The findings an acknowledgement covers: the blocks an enforced policy
+ * makes. A Report-Only policy blocks nothing, so its warnings are shown in
+ * the check and never asked to be acknowledged.
+ */
 function findingsOf(checks: readonly SiteCodePolicyChecked[]): unknown[] {
   return checks.flatMap(({ source, check }) =>
-    check.checked ? check.findings.map(finding => ({ source, finding })) : []
+    check.checked
+      ? check.findings
+          .filter(finding => finding.level === "error")
+          .map(finding => ({ source, finding }))
+      : []
   );
 }
 

@@ -54,11 +54,12 @@ function contextFor(authMethod: "session" | "api-key") {
 function routeOf(
   method: "GET" | "POST",
   nextly: SiteCodeDirectApi,
-  csp?: string
+  csp?: string,
+  reportOnly = false
 ): PluginRoute {
   const route = siteCodeRoutes({
     nextly: async () => nextly,
-    options: csp === undefined ? undefined : { csp },
+    options: csp === undefined ? undefined : { csp, reportOnly },
     permission: "manage-page-builder-site",
   }).find(candidate => candidate.method === method);
   if (route === undefined) throw new Error(`no ${method} route`);
@@ -148,6 +149,25 @@ describe("saving site code", () => {
       post({ ...code, acknowledgeCsp: checked.item.cspKey }),
       ctx
     );
+    expect(updates).toHaveLength(1);
+  });
+
+  it("shows a Report-Only policy's findings but asks no acknowledgement for them", async () => {
+    const { nextly, updates } = store();
+    const { ctx } = contextFor("session");
+    const route = routeOf("POST", nextly, "script-src 'self'", true);
+    const code = { head: "<script>a()</script>", body: "" };
+    const checked = (await (
+      await call(route, post({ ...code, dryRun: true }), ctx)
+    ).json()) as {
+      item: {
+        cspKey: string | null;
+        csp: { check: { findings: unknown[] } }[];
+      };
+    };
+    expect(checked.item.csp[0]?.check.findings.length).toBeGreaterThan(0);
+    expect(checked.item.cspKey).toBeNull();
+    await call(route, post(code), ctx);
     expect(updates).toHaveLength(1);
   });
 

@@ -116,6 +116,23 @@ describe("<SiteCode>", () => {
     );
   });
 
+  it("skips the admin under the app's base path", async () => {
+    const markup = await html({
+      slot: "head",
+      basePath: "/site",
+      read: stored([{ tag: "style", attrs: {}, text: "a{}" }]),
+    });
+    expect(markup).toContain('"skip":["/site/admin"]');
+  });
+
+  it("skips the admin at the root where the app has no base path", async () => {
+    const markup = await html({
+      slot: "head",
+      read: stored([{ tag: "style", attrs: {}, text: "a{}" }]),
+    });
+    expect(markup).toContain('"skip":["/admin"]');
+  });
+
   it("gives the loader the site's nonce", async () => {
     const markup = await html({
       slot: "head",
