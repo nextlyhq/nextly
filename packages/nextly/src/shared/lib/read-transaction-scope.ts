@@ -48,8 +48,8 @@ import type { AnyRelations, SQL } from "drizzle-orm";
  */
 interface ReadScope {
   readonly tx: TransactionContext;
-  /** The lock a row read takes on PostgreSQL and MySQL. */
-  readonly strength: ReadLockStrength;
+  /** The lock a row read takes on PostgreSQL and MySQL, or none. */
+  readonly lock: ReadLock;
   live: boolean;
 }
 
@@ -63,15 +63,36 @@ interface ReadScope {
  */
 export type ReadLockStrength = "share" | "update";
 
+/**
+ * What a scope's row reads take on PostgreSQL and MySQL: a lock of
+ * {@link ReadLockStrength}, or `none`, a plain read on the transaction's
+ * connection that takes no row lock and waits for none.
+ *
+ * `none` is for a caller already holding a lock of its own (a lock row its
+ * writes all take first, say) that reads rows another writer may be
+ * updating. A locking read waits for that writer, and when the writer is
+ * itself waiting for the caller's lock, the two wait on each other until the
+ * database refuses one. The plain read does not wait. Under READ COMMITTED
+ * (PostgreSQL's default) it sees the latest committed rows; under
+ * REPEATABLE READ (MySQL's default) it answers from the transaction's
+ * snapshot, which may predate a commit the caller's lock was meant to order
+ * it after, and the caller must allow for that itself. Nothing it read is
+ * held: another transaction may change those rows before this one ends.
+ */
+export type ReadLock = ReadLockStrength | "none";
+
 const readTransaction = new AsyncLocalStorage<ReadScope>();
 
-/** Run `work` with every read its services make routed to `tx`. */
+/**
+ * Run `work` with every read its services make routed to `tx`, its row reads
+ * taking `lock` (see {@link ReadLock}).
+ */
 export async function runReadsInTransaction<T>(
   tx: TransactionContext,
   work: () => Promise<T>,
-  strength: ReadLockStrength = "share"
+  lock: ReadLock = "share"
 ): Promise<T> {
-  const scope: ReadScope = { tx, strength, live: true };
+  const scope: ReadScope = { tx, lock, live: true };
   try {
     return await readTransaction.run(scope, work);
   } finally {
@@ -245,9 +266,21 @@ function readingOn(
 }
 
 /**
- * Whether a read of content rows made here takes a shared row lock: inside
- * {@link runReadsInTransaction}, on a dialect with row locks. The one place
- * that decides it, for the reads built here and the adapter's `forShare`.
+ * The row lock a read of content rows made here takes: inside
+ * {@link runReadsInTransaction}, on a dialect with row locks, unless the
+ * scope asked for none. Undefined where no lock is taken. The one place that
+ * decides it, for the reads built here and the adapter's `forShare`.
+ */
+function rowLockOf(adapter: ReadingAdapter): ReadLockStrength | undefined {
+  if (readTransactionOf(adapter) === undefined) return undefined;
+  if (adapter.getCapabilities().dialect === "sqlite") return undefined;
+  const lock = readTransaction.getStore()?.lock ?? "share";
+  return lock === "none" ? undefined : lock;
+}
+
+/**
+ * Whether a read of content rows made here takes a row lock
+ * ({@link rowLockOf}).
  *
  * A locking read sees the latest committed row rather than the
  * transaction's snapshot, which under MySQL's REPEATABLE READ is what a
@@ -260,10 +293,7 @@ function readingOn(
  * on PostgreSQL, so it is read as before and holds nothing.
  */
 export function readLocksRows(adapter: ReadingAdapter): boolean {
-  return (
-    readTransactionOf(adapter) !== undefined &&
-    adapter.getCapabilities().dialect !== "sqlite"
-  );
+  return rowLockOf(adapter) !== undefined;
 }
 
 /** The select builder's locking clause, as PostgreSQL's and MySQL's take it. */
@@ -273,8 +303,8 @@ interface LockableSelect {
 
 /**
  * `query` with the scope's lock (shared, or for update) on the rows it reads
- * from `table` when
- * {@link readLocksRows} says so, otherwise `query` unchanged. Applied last,
+ * from `table` when {@link rowLockOf} names one, otherwise `query` unchanged:
+ * outside the scope, on SQLite, or for a scope that asked for none. Applied last,
  * after the limit and offset, as the locking clause ends the statement.
  *
  * On PostgreSQL the lock names `table`: a read joined to a translations table
@@ -287,8 +317,8 @@ export function lockedForRead<Q>(
   adapter: ReadingAdapter,
   table: unknown
 ): Q {
-  if (!readLocksRows(adapter)) return query;
-  const strength = readTransaction.getStore()?.strength ?? "share";
+  const strength = rowLockOf(adapter);
+  if (strength === undefined) return query;
   const lockable = query as unknown as LockableSelect;
   return (
     adapter.getCapabilities().dialect === "postgresql"

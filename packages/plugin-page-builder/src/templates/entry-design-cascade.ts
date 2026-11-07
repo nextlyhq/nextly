@@ -89,7 +89,9 @@ async function deleteEntryDesign(
 /**
  * Empty the link of every own design copied from the template `write`
  * deletes. Only a collection's template is copied: an own design deleted
- * (with its entry, or removed) has no copies to look for.
+ * (with its entry, or removed) has no copies to look for. A collection's
+ * delete removes its entries' own designs before its template
+ * (`collection-delete`), so the copies found here are those it keeps.
  */
 async function unlinkDeletedTemplate(
   write: DeletedWrite,

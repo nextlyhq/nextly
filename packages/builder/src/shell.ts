@@ -603,6 +603,19 @@ export type {
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*
+ * The page reads meter: the reads a page makes against its allowance, from
+ * 80% of it a warning, and over it the blocks that went unread.
+ */
+export { ReadBudgetMeter } from "./read-budget-meter";
+export type { ReadBudgetMeterProps } from "./read-budget-meter";
+export { readBudgetStanding, READ_WARNING_SHARE } from "./read-budget";
+export type {
+  PageReadReport,
+  ReadBudgetStanding,
+  ReadKind,
+  UnreadBlock,
+} from "./read-budget";
+/*
  * The editor's words, spelled once, for every surface a host draws beside the
  * shell's own: a panel it mounts names its places with these.
  */

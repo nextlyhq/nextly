@@ -21,6 +21,18 @@ import { readStoredForms } from "./lock-baselines";
 /** No stored id: what the first, cheaper comparison is made against. */
 const NOTHING_HELD: ReadonlySet<string> = new Set();
 
+/**
+ * What a reference check reads of a field's write: where the field sits, the
+ * entry write behind it, and the field's declaration where there is one. The
+ * blocks field's validation hands its whole arguments. The judgement made
+ * again inside the write's transaction (`composition-rejudge`) has no
+ * declaration to hand, and hands the stored forms it read itself instead, so
+ * nothing here reads the declaration on its behalf.
+ */
+export type JudgedField = Pick<PluginFieldValidateArgs, "path" | "write"> & {
+  readonly field?: PluginFieldValidateArgs["field"];
+};
+
 /** The page's stored forms as one read answered: both, or unreadable. */
 export interface StoredForms {
   readonly forms: readonly BlockDocument[];
@@ -41,14 +53,13 @@ export function storedReadReaches(path: string): boolean {
  * Both stored forms of the field being written: an id either one holds is the
  * page's already.
  */
-export function storedFormsFor(
-  args: PluginFieldValidateArgs
-): Promise<StoredForms> {
+export function storedFormsFor(args: JudgedField): Promise<StoredForms> {
   return readStoredForms(
     args.write,
     args.path,
     [false, true],
-    (args.field as { localized?: unknown }).localized === true
+    // No declaration is a field not kept per language.
+    args.field?.localized === true
   );
 }
 
@@ -61,7 +72,7 @@ export function storedFormsFor(
  * defines reads nothing more.
  */
 export async function addedUndefinedIds(
-  args: PluginFieldValidateArgs,
+  args: JudgedField,
   used: readonly string[],
   /** The ids the site defines, read when asked. */
   defined: () => Promise<ReadonlySet<string>>,

@@ -410,6 +410,20 @@ export type ReadKind =
   | "component";
 
 /**
+ * Every kind a budget counts, in the order the editor lists them.
+ *
+ * @experimental
+ */
+export const READ_KINDS: readonly ReadKind[] = [
+  "entries",
+  "related",
+  "image",
+  "link",
+  "page",
+  "component",
+];
+
+/**
  * One read's claim: what it is for, and the block that asked, where a block
  * did. A claim with no kind counts as the page's own data.
  *
@@ -418,6 +432,35 @@ export type ReadKind =
 export interface ReadClaim {
   readonly kind?: ReadKind;
   readonly nodeId?: string;
+}
+
+/**
+ * How many component definitions one read of them asks for.
+ *
+ * @experimental
+ */
+export const COMPONENT_BATCH_SIZE = 128;
+
+/**
+ * The batches one read of component definitions makes, each claimed as one
+ * read before it is made, stopping at the first refused: one claim per
+ * query, since a page embedding twenty components spends one read, and
+ * charging per definition would refuse a page for an allowance it never
+ * spent. The route's own component reads take their batches here, and so
+ * does the editor's count of them, so the two cannot count differently.
+ *
+ * @experimental
+ */
+export function componentBatches(
+  ids: readonly string[],
+  budget: QueryBudget
+): string[][] {
+  const batches: string[][] = [];
+  for (let at = 0; at < ids.length; at += COMPONENT_BATCH_SIZE) {
+    if (!budget.take({ kind: "component" })) break;
+    batches.push(ids.slice(at, at + COMPONENT_BATCH_SIZE));
+  }
+  return batches;
 }
 
 /** A block drawn without its data, because the page had spent its reads. */

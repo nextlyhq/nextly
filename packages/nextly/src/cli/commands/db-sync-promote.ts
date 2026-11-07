@@ -24,15 +24,19 @@ import type { Logger } from "../utils/logger";
 import { answered } from "../utils/prompt-cancelled";
 
 import {
+  droppedHooksNote,
+  promotedCollection,
+} from "./db-sync-promote-collection";
+import {
+  storedTemplateAddress,
+  templateAddressNote,
+} from "./db-sync-promote-template-address";
+import {
   collectionChangedAfterConsent,
   openCollectionRegistry,
   sameCollectionRecord,
   withCollectionRegistryWrite,
 } from "./db-sync-registry";
-import {
-  storedTemplateAddress,
-  templateAddressNote,
-} from "./db-sync-promote-template-address";
 
 /**
  * Whether `db:sync --yes` was given, answering the confirmation of
@@ -80,12 +84,14 @@ export async function promoteCollection(
   const confirmed = await registry.getCollectionBySlug(slug);
   if (!confirmed) throw promoteCollectionNotFound(slug);
 
-  const fields = (confirmed.fields ?? []) as unknown[];
-  const code = serializeCollection({ slug, fields: fields as never[] });
+  const code = serializeCollection(promotedCollection(confirmed));
   // A collection whose template stores an address keeps its entries there only if the address is
   // declared in code too, so the declaration is shown and appended beside its code.
   const address = (await args.templateAddress?.(slug)) ?? null;
-  const note = address === null ? [] : templateAddressNote(slug, address);
+  const note = [
+    ...(address === null ? [] : templateAddressNote(slug, address)),
+    ...droppedHooksNote(confirmed.hooks),
+  ];
   const preview = [code, ...note.map(line => `// ${line}`)].join("\n");
 
   if (!(await args.confirm(preview))) {
