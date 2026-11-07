@@ -129,7 +129,7 @@ export type TemplateActionsContext = CompositionRouteContext & {
   services: {
     collections: Pick<
       PluginRouteContext["services"]["collections"],
-      "getCollection"
+      "getCollection" | "deleteEntry" | "deleteEntryInTransaction"
     >;
   };
 };
@@ -171,10 +171,18 @@ export async function runTemplateAction(
   }
 }
 
+/**
+ * The where filter the Direct API's `find` takes, read off the plugin SDK's
+ * own handle to it, so the plugin names no core query type.
+ */
+type FindWhere = NonNullable<
+  Parameters<Awaited<ReturnType<typeof getCachedNextly>>["find"]>[0]["where"]
+>;
+
 /** One stored template found as the system, in any state, or `null`. */
 async function templateWhere(
   templates: string,
-  where: Record<string, unknown>,
+  where: FindWhere,
   status: "all" | "published"
 ): Promise<Record<string, unknown> | null> {
   const found = await (
@@ -339,7 +347,9 @@ async function createDesign(
 ): Promise<unknown> {
   const templates = guard.templatesCollection;
   const collections = ctx.services.collections;
-  let created: { item: unknown };
+  // An in-transaction write answers the stored entry itself, not the
+  // mutation envelope a write outside a transaction answers.
+  let created: unknown;
   try {
     created = await collections.withTransaction(async tx => {
       await guard.lockEntry(tx, action.collection, action.entry);
@@ -359,7 +369,7 @@ async function createDesign(
     throw alreadyHasDesign(winner);
   }
   if (!(await guard.entryExists(action.collection, action.entry))) {
-    const id = idOf(created.item);
+    const id = idOf(created);
     if (id !== undefined) {
       await collections.deleteEntry(templates, id, { as: "system" });
     }
@@ -367,8 +377,8 @@ async function createDesign(
       logContext: { reason: "entry-design-entry-deleted" },
     });
   }
-  await unlinkIfSourceGone(ctx, data, created.item, guard);
-  return created.item;
+  await unlinkIfSourceGone(ctx, data, created, guard);
+  return created;
 }
 
 /**
