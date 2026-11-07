@@ -186,3 +186,53 @@ describe("conditions applied through a refresh of the same entry", () => {
     expect(result.current.applied?.hidden).toHaveLength(1);
   });
 });
+
+describe("a refresh whose entry read answers before the canvas's", () => {
+  // The same article, its Body revised in another tab: one plain block.
+  const REVISED: PreviewedEntry = {
+    ...ARTICLE,
+    editorValues: {
+      body: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "rev",
+            type: "core/text",
+            version: 1,
+            props: { text: "Revised paragraph" },
+          },
+        ],
+      },
+    },
+  };
+
+  /** What the Entry content block draws, by its blocks' words. */
+  function wordsIn(page: BlockDocument): unknown[] {
+    return (page.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT] ?? []).map(
+      node => node.props.text
+    );
+  }
+
+  it("keeps the Body and conditions as named until the strip names the refreshed entry", () => {
+    const { result, rerender } = drawnOver(NAMED);
+    // The entry's own read has answered with the revision; the canvas's
+    // read of it is still on its way, so the strip names no entry yet.
+    rerender({ preview: previewOf(LOADING, REVISED, chipOf(REVISED)) });
+    expect(wordsIn(result.current.page.composed)).toEqual([
+      "Members' worksheet",
+    ]);
+    expect(result.current.applied?.hidden).toHaveLength(1);
+    // Both reads back: the strip names the revision, and it is drawn.
+    rerender({
+      preview: previewOf(REVISED, REVISED, {
+        ...chipOf(REVISED),
+        loading: false,
+      }),
+    });
+    expect(wordsIn(result.current.page.composed)).toEqual([
+      "Revised paragraph",
+    ]);
+    expect(result.current.applied?.hidden).toEqual([]);
+  });
+});
