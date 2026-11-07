@@ -37,6 +37,7 @@ import {
   LIST_MAX_SORT_KEYS,
   listKindSortable,
   listPageCount,
+  NAMED_QUERY_TEXT,
   listQueryIssues,
   locateNode,
   outerListOf,
@@ -51,6 +52,7 @@ import {
   type ListQuery,
   type ListRelation,
   type ListSortKey,
+  type NamedQueryParamValue,
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
@@ -70,7 +72,14 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
-import { GripVertical, Link2, MoreHorizontal, Plus, X } from "lucide-react";
+import {
+  GripVertical,
+  Link2,
+  MoreHorizontal,
+  Plus,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList, type ListedChoice } from "./choice-list";
@@ -106,6 +115,24 @@ import {
   type DraftFilter,
   type FilterSentence,
 } from "./list-query-model";
+import { FieldCaution, FieldError, GroupTitle } from "./list-query-parts";
+import {
+  CUSTOM_SOURCE_MARK,
+  CustomSourceRow,
+  FiltersSetBy,
+  InputsGroup,
+  KeptInputsGroup,
+} from "./named-query-controls";
+import {
+  customSourceLookup,
+  judgedDraft,
+  namedSourceChanges,
+  needsInput,
+  sourceSearchText,
+  withInput,
+  type CustomSource,
+  type StoredParams,
+} from "./named-query-model";
 import { RelationControl } from "./relation-control";
 import {
   SentenceRow,
@@ -121,6 +148,7 @@ export const LIST_QUERY_PROPS = [
   "sort",
   "limit",
   "offset",
+  "namedQuery",
   "paginate",
 ] as const;
 
@@ -144,36 +172,11 @@ export interface ListQueryFieldProps {
   readonly sortFieldAsked?: number | undefined;
   /** Draw its empty state, or its entries; absent where nothing can. */
   readonly onShowEmpty?: ((empty: boolean) => void) | undefined;
-}
-
-/** The note under a field that says what is wrong with it. */
-function FieldError({
-  id,
-  children,
-}: {
-  id: string;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <p id={id} className="nx-inspector__error nx-list-query__error">
-      {children}
-    </p>
-  );
-}
-
-/** A group's title, as the Advanced summary is titled. */
-function GroupTitle({
-  id,
-  children,
-}: {
-  id: string;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <h3 id={id} className="nx-list-query__title">
-      {children}
-    </h3>
-  );
+  /**
+   * Tag the list on the canvas while a new source waits for an input, with
+   * what it still shows ("Still showing Events"); `undefined` clears it.
+   */
+  readonly onStillShowing?: ((words: string | undefined) => void) | undefined;
 }
 
 /**
@@ -366,13 +369,17 @@ function relatedSources(
 interface SourceChoice extends ListedChoice {
   readonly pick:
     | { readonly kind: "collection"; readonly slug: string | undefined }
-    | { readonly kind: "related"; readonly source: RelatedSource };
+    | { readonly kind: "related"; readonly source: RelatedSource }
+    | { readonly kind: "custom"; readonly source: CustomSource };
 }
+
+/** A pick that names a collection or a related source, not a custom one. */
+type CollectionPick = Exclude<SourceChoice["pick"], { kind: "custom" }>;
 
 /** The props a new source writes: a new collection clears what named the old. */
 function sourceChanges(
   query: ListQuery,
-  pick: SourceChoice["pick"]
+  pick: CollectionPick
 ): Record<string, unknown> {
   const collection =
     pick.kind === "collection" ? pick.slug : pick.source.collection;
@@ -385,6 +392,9 @@ function sourceChanges(
   return {
     collection,
     relation,
+    // A collection or a related source is the list's whole source: a custom
+    // one goes in the same edit.
+    namedQuery: undefined,
     ...(collection === query.collection
       ? {}
       : { filters: undefined, sort: undefined }),
@@ -396,10 +406,27 @@ function sourceShown(
   listed: LoopCollections,
   query: ListQuery,
   related: RelatedSource | undefined,
-  current: LoopCollection | undefined
+  current: LoopCollection | undefined,
+  named: ShownNamed | undefined
 ): { words: string; state: "value" | "prompt" | "unknown" } {
   if (listed.kind === "loading") {
     return { words: "Loading collections…", state: "prompt" };
+  }
+  if (named !== undefined) {
+    if (named.source !== undefined) {
+      return { words: named.source.declaration.label, state: "value" };
+    }
+    return named.loading
+      ? { words: "Loading sources…", state: "prompt" }
+      : { words: `${named.name} · not available`, state: "unknown" };
+  }
+  // No collection could be listed: a stored one is shown by its name, as
+  // it is not known to be gone, and an unset one asks for a custom source.
+  if (listed === NO_COLLECTIONS) {
+    const stored = query.relation?.field ?? query.collection;
+    return stored === undefined
+      ? { words: "Choose a custom source", state: "prompt" }
+      : { words: stored, state: "value" };
   }
   if (query.relation !== undefined) {
     return related === undefined
@@ -420,7 +447,8 @@ function sourceShown(
 /** The Source menu's rows: related sources first, then the collections. */
 function sourceChoices(
   related: Related,
-  collections: readonly LoopCollection[]
+  collections: readonly LoopCollection[] | undefined,
+  customs: readonly CustomSource[]
 ): SourceChoice[] {
   const relatedRow = (source: RelatedSource): SourceChoice => ({
     key: `${source.of}:${source.field}`,
@@ -431,13 +459,30 @@ function sourceChoices(
   return [
     ...related.entry.map(relatedRow),
     ...related.item.map(relatedRow),
-    {
-      key: "collection:",
-      label: "No collection",
-      group: "collections",
-      pick: { kind: "collection", slug: undefined },
-    },
-    ...alphabetical(collections).map(
+    // A site's own queries, above its collections: few, made for this site,
+    // and kept in view above a collection list that may scroll.
+    ...customs.map(
+      (source): SourceChoice => ({
+        key: `custom:${source.declaration.name}`,
+        label: source.declaration.label,
+        group: "custom",
+        // Searched by its line too, which the row draws under its name.
+        search: sourceSearchText(source.declaration),
+        pick: { kind: "custom", source },
+      })
+    ),
+    // No collection row, nor any collection, where none could be listed.
+    ...(collections === undefined
+      ? []
+      : [
+          {
+            key: "collection:",
+            label: "No collection",
+            group: "collections",
+            pick: { kind: "collection", slug: undefined },
+          } satisfies SourceChoice,
+        ]),
+    ...alphabetical(collections ?? []).map(
       (each): SourceChoice => ({
         key: `collection:${each.slug}`,
         label: each.label,
@@ -449,7 +494,11 @@ function sourceChoices(
 }
 
 /** The Source menu's headings, for the groups that hold a row. */
-function sourceGroups(related: Related): { group: string; heading: string }[] {
+function sourceGroups(
+  related: Related,
+  customs: readonly CustomSource[],
+  collectionsOffered: boolean
+): { group: string; heading: string }[] {
   return [
     ...(related.entry.length === 0
       ? []
@@ -457,8 +506,22 @@ function sourceGroups(related: Related): { group: string; heading: string }[] {
     ...(related.item.length === 0
       ? []
       : [{ group: "item", heading: related.itemHeading }]),
-    { group: "collections", heading: "Collections" },
+    ...(customs.length === 0
+      ? []
+      : [{ group: "custom", heading: "Custom sources" }]),
+    ...(collectionsOffered
+      ? [{ group: "collections", heading: "Collections" }]
+      : []),
   ];
+}
+
+/** A Source menu row as drawn: a custom source on two lines, any other on one. */
+function sourceRow(choice: SourceChoice): React.ReactNode {
+  return choice.pick.kind === "custom" ? (
+    <CustomSourceRow declaration={choice.pick.source.declaration} />
+  ) : (
+    choice.label
+  );
 }
 
 /** The Source menu's note where no related source can be offered. */
@@ -532,10 +595,52 @@ function relatedSourceOf(
 }
 
 /** The Source menu's key for what is stored: a relation, or a collection. */
-function sourceKey(query: ListQuery): string {
+function sourceKey(query: ListQuery, named: ShownNamed | undefined): string {
+  if (named !== undefined) return `custom:${named.name}`;
   return query.relation === undefined
     ? `collection:${query.collection ?? ""}`
     : `${query.relation.of}:${query.relation.field}`;
+}
+
+/**
+ * The custom source a list shows in its inspector: the one it stores, or the
+ * one just picked and waiting for an input, with its inputs as shown and the
+ * source the site offers under that name, if it still does.
+ */
+interface ShownNamed {
+  readonly name: string;
+  readonly params: StoredParams;
+  readonly source: CustomSource | undefined;
+  /** Picked but not written yet: an input it needs is still empty. */
+  readonly drafted: boolean;
+  /** The site's sources are still being read, so `source` is not known yet. */
+  readonly loading: boolean;
+}
+
+/** What a custom source's Source hint says: the developer's line. */
+function NamedHint({
+  id,
+  named,
+}: {
+  id: string;
+  named: ShownNamed;
+}): React.JSX.Element | null {
+  const description = named.source?.declaration.description;
+  const hidden = named.source?.readsHidden ?? [];
+  if (description === undefined && hidden.length === 0) return null;
+  return (
+    <div id={id} className="nx-list-query__hints">
+      {description === undefined ? null : (
+        <p className="nx-inspector__note nx-list-query__hint">{description}</p>
+      )}
+      {hidden.map(read => (
+        <FieldCaution key={read.collection}>
+          <TriangleAlert aria-hidden="true" size={12} />
+          {NAMED_QUERY_TEXT.readsHidden(read.label, read.fields)}
+        </FieldCaution>
+      ))}
+    </div>
+  );
 }
 
 /** What describes the Source control: its error, else its hint, else none. */
@@ -549,39 +654,87 @@ function sourceDescribedBy(state: {
   return state.hinted ? state.hintId : undefined;
 }
 
-/** The Source control: a collection, or a relation where one can be read. */
+/** The collections where none could be listed: the custom sources stand alone. */
+const NO_COLLECTIONS: LoopCollections = { kind: "ready", collections: [] };
+
+/** The mark the Source control's value wears: a custom or a related source's. */
+function sourceMark(
+  query: ListQuery,
+  named: ShownNamed | undefined
+): React.JSX.Element | undefined {
+  if (named !== undefined) return CUSTOM_SOURCE_MARK;
+  return query.relation === undefined ? undefined : RELATED_MARK;
+}
+
+/** Whether a custom source has a line to say under Source: its own, or a caution. */
+function namedHinted(named: ShownNamed | undefined): boolean {
+  const source = named?.source;
+  return (
+    source !== undefined &&
+    (source.declaration.description !== undefined ||
+      source.readsHidden.length > 0)
+  );
+}
+
+/** Under the Source control: its error, or the hint for what it names. */
+function SourceFoot({
+  ids,
+  problems,
+  related,
+  named,
+  collections,
+}: {
+  ids: { readonly error: string; readonly hint: string };
+  problems: readonly string[];
+  related: RelatedSource | undefined;
+  named: ShownNamed | undefined;
+  collections: readonly LoopCollection[];
+}): React.JSX.Element | null {
+  if (problems.length > 0) {
+    return <FieldError id={ids.error}>{problems.join(" ")}</FieldError>;
+  }
+  if (related !== undefined) {
+    return (
+      <SourceHint id={ids.hint} source={related} collections={collections} />
+    );
+  }
+  return named === undefined ? null : <NamedHint id={ids.hint} named={named} />;
+}
+
+/** The Source control: a collection, a relation where one can be read, or a custom source. */
 function SourceField({
   id,
-  query,
+  reading,
   listed,
-  collections,
-  related,
+  named,
   disabled,
   problems,
   onPick,
 }: {
   id: string;
-  query: ListQuery;
+  reading: ListQueryReading;
   listed: LoopCollections;
-  collections: readonly LoopCollection[];
-  related: Related;
+  named: ShownNamed | undefined;
   disabled: boolean;
   problems: readonly string[];
   onPick: (pick: SourceChoice["pick"]) => void;
 }): React.JSX.Element {
+  const { query, collections, customs, related, collectionsOffered } = reading;
   const labelId = `${id}-label`;
-  const errorId = `${id}-error`;
-  const hintId = `${id}-hint`;
+  const ids = { error: `${id}-error`, hint: `${id}-hint` };
   const all = [...related.entry, ...related.item];
-  const currentRelated = relatedSourceOf(all, query.relation);
+  const currentRelated =
+    named === undefined ? relatedSourceOf(all, query.relation) : undefined;
   const shown = sourceShown(
     listed,
     query,
     currentRelated,
-    collections.find(each => each.slug === query.collection)
+    collections.find(each => each.slug === query.collection),
+    named
   );
   const refused = problems.length > 0;
-  const hinted = !refused && currentRelated !== undefined;
+  const hinted =
+    !refused && (currentRelated !== undefined || namedHinted(named));
   return (
     <div className="nx-inspector__field" data-content-control="listSource">
       <Label id={labelId} htmlFor={id}>
@@ -592,38 +745,50 @@ function SourceField({
         labelId={labelId}
         value={{
           ...shown,
-          icon: query.relation === undefined ? undefined : RELATED_MARK,
+          icon: sourceMark(query, named),
           invalid: refused,
-          describedBy: sourceDescribedBy({ refused, hinted, errorId, hintId }),
+          describedBy: sourceDescribedBy({
+            refused,
+            hinted,
+            errorId: ids.error,
+            hintId: ids.hint,
+          }),
         }}
         disabled={disabled || listed.kind === "loading"}
         list={{
-          choices: sourceChoices(related, collections),
-          groups: sourceGroups(related),
-          currentKey: sourceKey(query),
+          choices: sourceChoices(
+            related,
+            collectionsOffered ? collections : undefined,
+            customs
+          ),
+          groups: sourceGroups(related, customs, collectionsOffered),
+          currentKey: sourceKey(query, named),
           label: "Sources",
           searchLabel: "Search sources",
           noMatch: "No source matches.",
           searchFrom: 1,
+          renderChoice: sourceRow,
+          // Two-line rows need the room; a menu of collections alone keeps
+          // its control's width.
+          wide: customs.length > 0,
         }}
         around={{
+          // Where no collection could be listed, no related entry could be
+          // either, and the note above says why.
           above:
-            all.length > 0 ? undefined : (
+            all.length > 0 || !collectionsOffered ? undefined : (
               <NoRelated inEmptyState={related.inEmptyState === true} />
             ),
         }}
         onPick={choice => onPick(choice.pick)}
       />
-      {refused ? (
-        <FieldError id={errorId}>{problems.join(" ")}</FieldError>
-      ) : null}
-      {hinted ? (
-        <SourceHint
-          id={hintId}
-          source={currentRelated}
-          collections={collections}
-        />
-      ) : null}
+      <SourceFoot
+        ids={ids}
+        problems={problems}
+        related={currentRelated}
+        named={named}
+        collections={collections}
+      />
     </div>
   );
 }
@@ -2294,7 +2459,12 @@ function useListCount(
 }
 
 /** "4 entries match, so 3 show.", with one entry spoken of as one. */
-function countWords({ matching, shown }: ListEntriesCount): string {
+function countWords(
+  { matching, shown }: ListEntriesCount,
+  named: boolean
+): string {
+  // A custom source's rows are not always entries: counted in its own words.
+  if (named) return NAMED_QUERY_TEXT.counted(matching, shown);
   const match =
     matching === 1 ? "1 entry matches" : `${String(matching)} entries match`;
   const show = shown === 1 ? "1 shows" : `${String(shown)} show`;
@@ -2332,7 +2502,11 @@ function HowManyGroup({
         fallback={limitFallback}
         disabled={disabled}
         problem={issuesAt(issues, ["limit"])[0]}
-        hint={counted === undefined ? undefined : countWords(counted)}
+        hint={
+          counted === undefined
+            ? undefined
+            : countWords(counted, values.namedQuery !== undefined)
+        }
         onBound={limit => commit({ limit })}
       />
       <BoundField
@@ -2444,6 +2618,15 @@ interface ListQueryReading {
   readonly values: Readonly<Record<string, unknown>>;
   readonly query: ListQuery;
   readonly listed: LoopCollections | undefined;
+  /** The site's custom sources, none while they are read or where none can be. */
+  readonly customs: readonly CustomSource[];
+  /** The same, or `undefined` until they are read, so "not set up" waits. */
+  readonly customsRead: readonly CustomSource[] | undefined;
+  /**
+   * Whether the site's collections could be listed: where they could not,
+   * the Source menu offers its custom sources alone.
+   */
+  readonly collectionsOffered: boolean;
   readonly collections: readonly LoopCollection[];
   readonly fieldSource: ListFieldSource | undefined;
   readonly issues: Issues;
@@ -2468,6 +2651,7 @@ function useListQueryReading(
   );
   const { query } = readListQuery(values);
   const listed = useLoopCollections(services?.listLoopCollections);
+  const customs = useCustomSources(services?.listCustomSources);
   const collections = listed?.kind === "ready" ? listed.collections : [];
   const fieldSource = React.useMemo(
     () =>
@@ -2475,16 +2659,24 @@ function useListQueryReading(
     [listed]
   );
   const entryCollection = services?.entryCollection;
+  // A custom source is judged against the site's queries once they are
+  // read: before that, by its shape alone, so a query not yet listed is
+  // never called unknown.
+  const namedQueries = React.useMemo(
+    () => (customs === undefined ? undefined : customSourceLookup(customs)),
+    [customs]
+  );
   const issues = React.useMemo(
     () =>
       listQueryIssues(document.nodes, {
         ...(fieldSource === undefined ? {} : { fields: fieldSource }),
         ...(entryCollection === undefined ? {} : { entryCollection }),
+        ...(namedQueries === undefined ? {} : { namedQueries }),
         // So a component's or a Layout region's list is told at once that it
         // can't be split into pages, as its save would be.
         documentKind: document.kind,
       }).filter(issue => issue.nodeId === nodeId && issue.severity === "error"),
-    [document, nodeId, fieldSource, entryCollection]
+    [document, nodeId, fieldSource, entryCollection, namedQueries]
   );
   // The list whose entry is this one's item, as the save judges it: never
   // one whose empty state this list sits in.
@@ -2495,6 +2687,10 @@ function useListQueryReading(
     values,
     query,
     listed,
+    customs: customs ?? [],
+    collectionsOffered: listed?.kind === "ready",
+    // A host lending no custom sources has none: a stored one is not set up.
+    customsRead: services?.listCustomSources === undefined ? [] : customs,
     collections,
     fieldSource,
     issues,
@@ -2514,7 +2710,8 @@ function changesSource(
 ): boolean {
   return (
     changes.collection !== query.collection ||
-    JSON.stringify(changes.relation) !== JSON.stringify(query.relation)
+    JSON.stringify(changes.relation) !== JSON.stringify(query.relation) ||
+    JSON.stringify(changes.namedQuery) !== JSON.stringify(query.namedQuery)
   );
 }
 
@@ -2530,55 +2727,317 @@ function relatedShownOf(
   )?.words;
 }
 
+/** How long the inspector waits before asking again for custom sources. */
+const SOURCES_RETRY_MS = 2000;
+/** The longest it waits between asks. */
+const SOURCES_RETRY_MOST_MS = 60_000;
+
+/** The host's custom sources, read once for every list asking while it runs. */
+type ListCustomSources = NonNullable<ContentServices["listCustomSources"]>;
+
 /**
- * A collection list's query, drawn as one group in the Content tab where its
- * `collection` prop would sit.
+ * The read in flight, per host function, shared only while it runs, for the
+ * reason the collections' read is (`collection-loop-controls`): an answer
+ * is one signed-in author's.
  */
-export function ListQueryField({
-  props,
-  writable,
-  services,
-  onCommitMany,
-  document,
-  nodeId,
-  showsEmpty,
-  onShowEmpty,
-  sortFieldAsked,
-}: ListQueryFieldProps): React.JSX.Element | null {
-  const id = React.useId();
-  const reading = useListQueryReading(props, services, document, nodeId);
-  const { query, listed, issues, fields, fieldSource } = reading;
-  const node = findNode(document.nodes, nodeId);
-  if (node === undefined) return null;
-  const held = LIST_QUERY_PROPS.some(
-    name => props.some(prop => prop.name === name) && !writable(name)
-  );
-  const unsourced = held || query.collection === undefined;
-  const commit = (changes: Readonly<Record<string, unknown>>) => {
-    onCommitMany(changes);
+const customsInFlight = new WeakMap<
+  ListCustomSources,
+  Promise<readonly CustomSource[]>
+>();
+
+/** The host's custom sources, one read shared by every list asking at once. */
+function readCustomSources(
+  list: ListCustomSources
+): Promise<readonly CustomSource[]> {
+  const held = customsInFlight.get(list);
+  if (held !== undefined) return held;
+  const answer = list();
+  customsInFlight.set(list, answer);
+  const settle = () => {
+    if (customsInFlight.get(list) === answer) customsInFlight.delete(list);
   };
+  answer.then(settle, settle);
+  return answer;
+}
+
+/**
+ * The site's custom sources, or `undefined` while they are read, where the
+ * host lends no way to list them, or where the read failed: the Source menu
+ * then offers collections and related entries, as it did before there were
+ * custom sources.
+ */
+export function useCustomSources(
+  list: ListCustomSources | undefined
+): readonly CustomSource[] | undefined {
+  const [found, setFound] = React.useState<{
+    readonly list: ListCustomSources;
+    readonly sources: readonly CustomSource[];
+  }>();
+  // Each failed read is asked again, after a wait that doubles to a cap, so
+  // one failed request never leaves the menu without its custom sources.
+  const [failures, setFailures] = React.useState(0);
+  React.useEffect(() => {
+    if (list === undefined) return;
+    let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    readCustomSources(list).then(
+      sources => {
+        if (live) setFound({ list, sources });
+      },
+      () => {
+        if (!live) return;
+        retry = setTimeout(
+          () => setFailures(count => count + 1),
+          Math.min(SOURCES_RETRY_MS * 2 ** failures, SOURCES_RETRY_MOST_MS)
+        );
+      }
+    );
+    return () => {
+      live = false;
+      if (retry !== undefined) clearTimeout(retry);
+    };
+  }, [list, failures]);
+  return list !== undefined && found?.list === list ? found.sources : undefined;
+}
+
+/**
+ * A custom source picked, or its inputs changed, that cannot run yet: kept
+ * here and never written, so the list keeps what it stores and the draft is
+ * never a page that cannot be saved. For one list, by its id.
+ */
+interface NamedDraft {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly params: StoredParams;
+}
+
+/**
+ * The inputs a list may store for a query: only those it declares, so a
+ * write leaves out an input the query no longer takes, as its run does.
+ */
+function declaredOnly(
+  source: CustomSource,
+  params: StoredParams
+): StoredParams {
+  const declared = source.declaration.params ?? {};
+  return Object.fromEntries(
+    Object.entries(params).filter(([key]) => Object.hasOwn(declared, key))
+  );
+}
+
+/** The custom source shown: the draft over what is stored, if any. */
+function shownNamedOf(
+  query: ListQuery,
+  draft: NamedDraft | undefined,
+  customs: readonly CustomSource[] | undefined
+): ShownNamed | undefined {
+  const find = (name: string) =>
+    customs?.find(each => each.declaration.name === name);
+  if (draft !== undefined) {
+    return {
+      name: draft.name,
+      params: draft.params,
+      source: find(draft.name),
+      drafted: true,
+      loading: customs === undefined,
+    };
+  }
+  const stored = query.namedQuery;
+  if (stored === undefined) return undefined;
+  return {
+    name: stored.name,
+    params: stored.params,
+    source: find(stored.name),
+    drafted: false,
+    loading: customs === undefined,
+  };
+}
+
+/**
+ * What the canvas still draws while a new source waits for an input: the
+ * stored source in the words the Source control shows it in. Nothing for a
+ * list with no source, which draws its template.
+ */
+function storedSourceWords(reading: ListQueryReading): string | undefined {
+  const { query, related, collections, customs } = reading;
+  const stored = query.namedQuery;
+  if (stored !== undefined) {
+    return (
+      customs.find(each => each.declaration.name === stored.name)?.declaration
+        .label ?? stored.name
+    );
+  }
+  const relation = relatedShownOf(query, related);
+  if (relation !== undefined) return relation;
+  if (query.collection === undefined) return undefined;
   return (
-    <div className="nx-list-query" data-content-control="listQuery">
-      {listed === undefined || listed.kind === "failed" ? (
-        <p className="nx-inspector__note">
-          The site&apos;s collections could not be listed, so this list&apos;s
-          source, filters and sort can&apos;t be chosen here.
-        </p>
-      ) : (
-        <SourceField
-          id={`${id}-source`}
-          query={query}
-          listed={listed}
-          collections={reading.collections}
-          related={reading.related}
-          disabled={held}
-          problems={issuesAt(issues, ["collection", "relation"])}
-          onPick={pick => {
-            const changes = sourceChanges(query, pick);
-            if (changesSource(query, changes)) commit(changes);
-          }}
-        />
-      )}
+    collections.find(each => each.slug === query.collection)?.label ??
+    query.collection
+  );
+}
+
+/**
+ * The canvas's tag for a list whose new source waits: set while it waits,
+ * and cleared once it is written or abandoned, once the inspector shows
+ * another list, and once it is gone. Each tag is cleared through the
+ * function that set it, which names its own list.
+ */
+function useStillShowing(
+  nodeId: string,
+  tag: ((words: string | undefined) => void) | undefined,
+  words: string | undefined
+): void {
+  const latest = React.useRef(tag);
+  latest.current = tag;
+  const shown = React.useRef<
+    | {
+        readonly nodeId: string;
+        readonly words: string;
+        readonly clear: () => void;
+      }
+    | undefined
+  >(undefined);
+  React.useEffect(() => {
+    const held = shown.current;
+    if (held?.nodeId === nodeId && held.words === words) return;
+    held?.clear();
+    shown.current = undefined;
+    const set = latest.current;
+    if (words === undefined || set === undefined) return;
+    set(words);
+    shown.current = { nodeId, words, clear: () => set(undefined) };
+  }, [nodeId, words]);
+  React.useEffect(() => () => shown.current?.clear(), []);
+}
+
+/** The draft of a custom source, dropped when what the list stores changes. */
+function useNamedDraft(
+  nodeId: string,
+  query: ListQuery
+): readonly [
+  NamedDraft | undefined,
+  (draft: Omit<NamedDraft, "nodeId"> | undefined) => void,
+] {
+  const [draft, setDraft] = React.useState<NamedDraft | undefined>(undefined);
+  // An undo, a redo or a write elsewhere changes what is stored under a
+  // draft; the draft would then describe a list that no longer exists.
+  const storedText = JSON.stringify([
+    query.collection,
+    query.relation,
+    query.namedQuery,
+  ]);
+  React.useEffect(() => setDraft(undefined), [storedText, nodeId]);
+  const set = React.useCallback(
+    (next: Omit<NamedDraft, "nodeId"> | undefined) =>
+      setDraft(next === undefined ? undefined : { ...next, nodeId }),
+    [nodeId]
+  );
+  return [draft?.nodeId === nodeId ? draft : undefined, set];
+}
+
+/** The tag the canvas shows while a draft waits: what the list still draws. */
+function stillWords(
+  draft: NamedDraft | undefined,
+  reading: ListQueryReading
+): string | undefined {
+  if (draft === undefined) return undefined;
+  const words = storedSourceWords(reading);
+  return words === undefined ? undefined : NAMED_QUERY_TEXT.stillShowing(words);
+}
+
+/** A list's custom source as the inspector edits it: shown, picked and set. */
+interface NamedEditing {
+  readonly named: ShownNamed | undefined;
+  readonly pickSource: (pick: SourceChoice["pick"]) => void;
+  readonly setInput: (
+    key: string,
+    value: NamedQueryParamValue | undefined
+  ) => void;
+}
+
+/**
+ * The custom source a list shows and the edits that change its source: a
+ * source picked or an input set is written once the query can run, as one
+ * write of the props, and kept here until then, the canvas told to tag the
+ * list with what it still draws.
+ */
+function useNamedEditing(
+  nodeId: string,
+  reading: ListQueryReading,
+  commit: (changes: Readonly<Record<string, unknown>>) => void,
+  onStillShowing: ListQueryFieldProps["onStillShowing"]
+): NamedEditing {
+  const { query } = reading;
+  const [draft, setDraft] = useNamedDraft(nodeId, query);
+  const named = shownNamedOf(query, draft, reading.customsRead);
+  useStillShowing(nodeId, onStillShowing, stillWords(draft, reading));
+  const pickCustom = (source: CustomSource) => {
+    const name = source.declaration.name;
+    setDraft(undefined);
+    if (query.namedQuery?.name === name) return;
+    // A query with an input that needs a value waits for it: chosen on
+    // screen, nothing written, the canvas still drawing what is stored.
+    if (needsInput(source.declaration)) setDraft({ name, params: {} });
+    else commit(namedSourceChanges(name, {}));
+  };
+  const pickSource = (pick: SourceChoice["pick"]) => {
+    if (pick.kind === "custom") {
+      pickCustom(pick.source);
+      return;
+    }
+    setDraft(undefined);
+    const changes = sourceChanges(query, pick);
+    if (changesSource(query, changes)) commit(changes);
+  };
+  const setInput = (key: string, value: NamedQueryParamValue | undefined) => {
+    const source = named?.source;
+    if (named === undefined || source === undefined) return;
+    const params = withInput(named.params, key, value);
+    if (!judgedDraft(source.declaration, params).writable) {
+      setDraft({ name: named.name, params });
+      return;
+    }
+    setDraft(undefined);
+    const kept = declaredOnly(source, params);
+    // The source and its inputs in one write, so it is one undo step: a
+    // new source is a change even when its inputs equal the stored ones.
+    const stored = query.namedQuery;
+    if (
+      named.name !== stored?.name ||
+      JSON.stringify(kept) !== JSON.stringify(stored.params)
+    ) {
+      commit(namedSourceChanges(named.name, kept));
+    }
+  };
+  return { named, pickSource, setInput };
+}
+
+/** What the groups under Source are drawn with. */
+interface QueryPartsProps {
+  readonly id: string;
+  readonly reading: ListQueryReading;
+  readonly node: BlockNode;
+  readonly editing: NamedEditing;
+  readonly held: boolean;
+  readonly services: ContentServices | undefined;
+  readonly sortFieldAsked: number | undefined;
+  readonly commit: (changes: Readonly<Record<string, unknown>>) => void;
+}
+
+/** Filters and Sort, for a collection or a related source. */
+function CollectionParts({
+  id,
+  reading,
+  node,
+  held,
+  services,
+  sortFieldAsked,
+  commit,
+}: QueryPartsProps): React.JSX.Element {
+  const { query, issues, fields, fieldSource } = reading;
+  const unsourced = held || query.collection === undefined;
+  return (
+    <>
       <FiltersGroup
         key={query.collection ?? ""}
         id={`${id}-filters`}
@@ -2602,6 +3061,150 @@ export function ListQueryField({
         problems={codedIssues(issues, "sort", "list-sort-invalid")}
         fieldAsked={sortFieldAsked}
         onSort={keys => commit({ sort: sortValue(keys) })}
+      />
+    </>
+  );
+}
+
+/**
+ * The groups under Source: Filters and Sort for a collection or a related
+ * source; Inputs and the read-only Filters and sort line for a custom one;
+ * and for a stored custom source the site no longer registers, what it
+ * keeps, once the site's sources are known to lack it.
+ */
+function QueryParts(props: QueryPartsProps): React.JSX.Element | null {
+  const { id, reading, editing, held, services } = props;
+  const named = editing.named;
+  if (named === undefined) return <CollectionParts {...props} />;
+  const source = named.source;
+  if (source === undefined) {
+    return reading.customsRead === undefined ? null : (
+      <KeptInputsGroup id={`${id}-inputs`} params={named.params} />
+    );
+  }
+  const judged = judgedDraft(source.declaration, named.params);
+  return (
+    <>
+      <InputsGroup
+        key={named.name}
+        id={`${id}-inputs`}
+        declaration={source.declaration}
+        params={named.params}
+        problems={judged.problems}
+        unknown={judged.unknown}
+        disabled={held}
+        services={services}
+        onInput={editing.setInput}
+      />
+      <FiltersSetBy id={`${id}-filters`} declaration={source.declaration} />
+    </>
+  );
+}
+
+/**
+ * The Source control, and, where the site's collections could not be
+ * listed, the note saying so: then the custom sources are offered alone, or
+ * no source can be chosen where there are none.
+ */
+function SourcePart({
+  id,
+  reading,
+  editing,
+  held,
+}: {
+  id: string;
+  reading: ListQueryReading;
+  editing: NamedEditing;
+  held: boolean;
+}): React.JSX.Element {
+  const { listed, issues } = reading;
+  const unlisted = listed === undefined || listed.kind === "failed";
+  const offersCustom = reading.customs.length > 0;
+  // Custom sources read before the collections are usable at once: the
+  // collections join the menu when they arrive.
+  const waiting = listed?.kind === "loading" && offersCustom;
+  return (
+    <>
+      {unlisted ? (
+        <p className="nx-inspector__note">
+          {offersCustom ? (
+            <>
+              The site&apos;s collections could not be listed, so only its
+              custom sources are offered here.
+            </>
+          ) : (
+            <>
+              The site&apos;s collections could not be listed, so this
+              list&apos;s source, filters and sort can&apos;t be chosen here.
+            </>
+          )}
+        </p>
+      ) : null}
+      {unlisted && !offersCustom ? null : (
+        <SourceField
+          id={id}
+          reading={reading}
+          listed={unlisted || waiting ? NO_COLLECTIONS : listed}
+          named={editing.named}
+          disabled={held}
+          // A source just picked has nothing stored to refuse yet.
+          problems={
+            editing.named?.drafted === true
+              ? []
+              : issuesAt(issues, ["collection", "relation", "namedQuery"])
+          }
+          onPick={editing.pickSource}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * A collection list's query, drawn as one group in the Content tab where its
+ * `collection` prop would sit.
+ */
+export function ListQueryField({
+  props,
+  writable,
+  services,
+  onCommitMany,
+  document,
+  nodeId,
+  showsEmpty,
+  onShowEmpty,
+  sortFieldAsked,
+  onStillShowing,
+}: ListQueryFieldProps): React.JSX.Element | null {
+  const id = React.useId();
+  const reading = useListQueryReading(props, services, document, nodeId);
+  const commit = (changes: Readonly<Record<string, unknown>>) => {
+    onCommitMany(changes);
+  };
+  const editing = useNamedEditing(nodeId, reading, commit, onStillShowing);
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined) return null;
+  const held = LIST_QUERY_PROPS.some(
+    name => props.some(prop => prop.name === name) && !writable(name)
+  );
+  const { issues } = reading;
+  return (
+    <div className="nx-list-query" data-content-control="listQuery">
+      <SourcePart
+        id={`${id}-source`}
+        reading={reading}
+        editing={editing}
+        held={held}
+      />
+      <QueryParts
+        id={id}
+        reading={reading}
+        node={node}
+        editing={editing}
+        held={held}
+        services={services}
+        sortFieldAsked={sortFieldAsked}
+        commit={commit}
       />
       <HowManyGroup
         id={`${id}-many`}

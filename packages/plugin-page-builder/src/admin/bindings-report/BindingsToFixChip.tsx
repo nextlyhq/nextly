@@ -123,21 +123,24 @@ export function BindingsToFixChip({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[400px] p-0"
+        // Within the screen whatever its size: never wider than the viewport
+        // allows, never taller than the room Radix measures below the chip,
+        // with the list scrolling between its heading and its footer.
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-[min(400px,calc(100vw-2rem))] flex-col p-0"
         aria-label="Bindings to fix on this page"
       >
-        <div className="px-4 pb-2.5 pt-3.5">
+        <div className="flex-none px-4 pb-2.5 pt-3.5">
           <h2 className="text-sm font-semibold text-foreground">
             {rows.length === 1
               ? "1 binding no longer fits"
               : `${String(rows.length)} bindings no longer fit`}
           </h2>
           <p className="mt-1 text-[13px] leading-snug text-muted-foreground">
-            Visitors see each one’s fallback until you bind it again or unbind
-            it.
+            Until you bind each again or unbind it, visitors see what its row
+            says: its fallback, the block’s own value or nothing.
           </p>
         </div>
-        <ul>
+        <ul className="min-h-0 flex-1 overflow-y-auto">
           {rows.map((row, index) => (
             <li
               key={`${row.nodeId}:${row.prop}:${String(index)}`}
@@ -167,7 +170,7 @@ export function BindingsToFixChip({
             </li>
           ))}
         </ul>
-        <div className="flex items-center justify-between border-t border-border px-4 py-3 text-[13px] text-muted-foreground">
+        <div className="flex flex-none items-center justify-between border-t border-border px-4 py-3 text-[13px] text-muted-foreground">
           <span>{elsewhereWords(everything, item.rows.length)}</span>
           <a
             href={BINDINGS_TO_FIX_PAGE_HREF}

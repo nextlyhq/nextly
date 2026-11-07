@@ -170,6 +170,7 @@ export type NamedQueryFailureCode =
   | "timeout"
   | "bad-rows"
   | "rows-hidden"
+  | "uncounted"
   | "threw";
 
 /** A named query's failure, as the host logs it. */
@@ -229,11 +230,36 @@ export interface NamedQueryHost {
     run<T>(operation: () => Promise<T>): Promise<T>;
     read<T>(operation: () => Promise<T>): Promise<T>;
   };
+  /**
+   * What an author is told about a run that succeeded, where a visitor's
+   * page would go without part of it: a query reading a collection visitors
+   * can't read. Shown only where an author is looking; an editor's canvas
+   * gives it, a published page does not.
+   */
+  readonly caution?: (declaration: NamedQueryDeclaration) => string | undefined;
   /** Keep a run's result across renders, tagged by everything it declares. */
   readonly cache?: (request: {
     readonly declaration: NamedQueryDeclaration;
     readonly key: readonly string[];
     readonly read: () => Promise<NamedQueryRunData>;
+    /**
+     * The run as the list stores it: its inputs before they are judged, and
+     * its window. What a host that runs the query elsewhere (an editor's
+     * canvas, on its server) asks for, so the run is judged there as on a
+     * published page. Optional, so a host written before it was handed one
+     * is still a host; the renderer always hands it.
+     */
+    readonly asked?: {
+      readonly params: Readonly<Record<string, unknown>>;
+      readonly window: { readonly limit: number; readonly offset: number };
+      /**
+       * The reads the render has left, when its allowance can say: a run
+       * made elsewhere may spend no more, and none is started at 0.
+       */
+      readonly allowance?: number;
+      /** The list block the run is for, so a failure is logged under it. */
+      readonly node?: string;
+    };
   }) => Promise<NamedQueryRunData>;
   /**
    * Told about each failed run, for the server log. The failure carries the
@@ -334,6 +360,19 @@ export const emptyDataProvider: BlocksDataProvider = {
 export interface QueryBudget {
   /** Claim one read. False when the page has spent its allowance. */
   take(): boolean;
+  /**
+   * How many reads are left, claiming none: what a host that makes a run
+   * elsewhere hands that place, so it never spends more than the page has.
+   * Absent on a budget that cannot say.
+   */
+  remaining?(): number;
+  /**
+   * What this render's named query runs are kept with: a new object for
+   * each render. Absent, the budget itself, which a page makes per render;
+   * a budget kept across renders and renewed for each (an editor's canvas)
+   * answers the current render's, so no run outlives its render.
+   */
+  generation?(): object;
 }
 
 /**
@@ -608,6 +647,16 @@ export interface PageContext {
    */
   listsShowingEmpty?: ReadonlySet<string>;
   /**
+   * The collection lists, by node id, whose author chose a new source that
+   * is not written yet, since it waits for an input: the editor's tag for
+   * each, which the list wears while it keeps drawing what it stores
+   * ("Still showing Events"). Honoured only where {@link diagnostics} says
+   * an author is looking.
+   *
+   * @experimental
+   */
+  listsStillShowing?: ReadonlyMap<string, string>;
+  /**
    * The editor's canvas, which can act on a list note's action: a list whose
    * sort fell back offers "Choose a field" there, which the canvas answers by
    * taking the author to the list's sort. Honoured only where
@@ -765,6 +814,13 @@ export interface PageBindings {
    * day, whatever the zone.
    */
   readonly timeZone?: string;
+  /**
+   * The collection whose ids `resolveMedia` reads, so an image is filled only
+   * from an upload field pointing there. `media`, Nextly's media library,
+   * when absent: a host resolving media from a collection of its own names
+   * it here.
+   */
+  readonly mediaCollection?: string;
 }
 
 /**
@@ -831,6 +887,7 @@ export function createQueryBudget(
   // mistake rather than by a document.
   let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
   return {
+    remaining: () => Math.max(0, remaining),
     take: () => {
       if (remaining <= 0) return false;
       remaining -= 1;

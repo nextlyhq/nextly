@@ -152,6 +152,34 @@ export function waitingKey(
 }
 
 /**
+ * The key of `waiter`'s wait for the later pages of its list at `list` on the
+ * claim keyed `blocking`. Spelled apart from an address's wait (its
+ * namespace is followed by `space:` and two encoded parts, where an
+ * address's has one, and no encoded part holds a `:`), since a page waits
+ * for its own address and its list's later pages on separate claims.
+ */
+export function spaceWaitingKey(
+  waiter: { readonly collection: string; readonly id: string },
+  list: ServedAddress,
+  blocking: string
+): string {
+  return `${NAMESPACE.waiting}:space:${encodeURIComponent(waiter.collection)}:${encodeURIComponent(waiter.id)}|${list.locale}|${pathOf(list)}|${blocking}`;
+}
+
+/**
+ * The key of the lock row a holder's own claims are reconciled under, so the
+ * start-up pass and a save of the same page take turns. Its namespace is the
+ * lock's, but it holds no `|`, which every address's lock key does after its
+ * language, so the two never meet.
+ */
+export function holderLockKey(holder: {
+  readonly collection: string;
+  readonly id: string;
+}): string {
+  return `${NAMESPACE.lock}:holder:${encodeURIComponent(holder.collection)}:${encodeURIComponent(holder.id)}`;
+}
+
+/**
  * The list whose page-segment space holds `address`, or null when `address`
  * is not a later page of any list. `/news/page/2` is in the space of `/news`;
  * `/news` itself is not, since the list's first page is a document's own

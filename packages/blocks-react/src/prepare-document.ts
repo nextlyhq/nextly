@@ -59,7 +59,6 @@ import {
   DOCUMENT_FORMAT_VERSION,
   isPlainRecord,
   migrateDocument,
-  namedQueryRowFields,
   resolveComponentInstances,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -80,7 +79,7 @@ import type {
   UnresolvedInstance,
 } from "@nextlyhq/blocks-engine";
 
-import { namedQueryLookup } from "./blocks/named-read";
+import { queryRowFields } from "./blocks/named-read";
 import type {
   BlocksSiteSettings,
   NamedQueryHost,
@@ -163,11 +162,8 @@ export function pageBindingRun(
       // A named query's rows with their own field schema: the fields it
       // declares, as the process registry holds it.
       if ("query" in ref) {
-        const lookup = namedQueryLookup(namedQueries);
-        return namedQueryRowFields(
-          { declarationOf: name => lookup(name) },
-          ref.query,
-          slug => shapes?.fieldsOf({ collection: slug })
+        return queryRowFields(namedQueries, ref.query, slug =>
+          shapes?.fieldsOf({ collection: slug })
         );
       }
       return shapes?.fieldsOf(ref);
@@ -186,6 +182,9 @@ export function pageBindingRun(
     schema,
     ...(locale === undefined ? {} : { locale }),
     ...(bindings.timeZone === undefined ? {} : { timeZone: bindings.timeZone }),
+    ...(bindings.mediaCollection === undefined
+      ? {}
+      : { mediaCollection: bindings.mediaCollection }),
     props: resolver,
   });
 }

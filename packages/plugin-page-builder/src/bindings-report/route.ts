@@ -51,6 +51,11 @@ export interface BindingsToFixDeps {
    * caller's request; never waits for it.
    */
   readonly refresh: (ctx: PluginRouteContext) => void;
+  /** Which of these Singles the caller may read, read as them. */
+  readonly readableSingles: (
+    ctx: PluginRouteContext,
+    slugs: ReadonlySet<string>
+  ) => Promise<ReadonlySet<string>>;
   /** The collection components are stored in, a configured store included. */
   readonly componentStore: () => string;
   /** The site's default language, the one the Page Builder edits. */
@@ -231,10 +236,13 @@ async function readBindingsToFix(
           .then(entry => (entry === undefined ? [] : [entry])),
     store.fullCheck(),
   ]);
-  const [readable, singles] = await Promise.all([
+  // A Single is named by its label only for a reader who may read it; any
+  // other keeps the slug its binding holds.
+  const [readable, mayRead] = await Promise.all([
     deps.readable(ctx, stored),
-    singleLabelsOf(ctx, singlesNamed(stored)),
+    deps.readableSingles(ctx, singlesNamed(stored)),
   ]);
+  const singles = await singleLabelsOf(ctx, mayRead);
   const editing: Editing = {
     singles,
     componentStore: deps.componentStore(),

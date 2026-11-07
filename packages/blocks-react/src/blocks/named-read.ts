@@ -31,6 +31,7 @@ import {
   judgeNamedParams,
   NAMED_QUERY_TEXT,
   namedQueryDeclaration,
+  namedQueryRowFields,
   namedQueryTimeout,
   type BindingFieldShape,
   type ListNamedQuery,
@@ -366,10 +367,32 @@ async function execute(
  * the run and the binding checks of its rows share, so a list's items are
  * judged against the query that made them.
  */
-export function namedQueryLookup(
+function namedQueryLookup(
   host: Pick<NamedQueryHost, "definitionOf"> | undefined
 ): (name: string) => NamedQueryDefinition | undefined {
   return host?.definitionOf ?? (() => undefined);
+}
+
+/**
+ * The fields a row of the named query `query` carries, as a host's queries
+ * declare them: its own schema, or the public fields of the collection its
+ * rows are entries of (`collectionFields`). `undefined` when either is not
+ * known. The one reading a row's bindings and its blocks' visibility
+ * conditions share, so both judge a row by the same fields.
+ */
+export function queryRowFields(
+  host: Pick<NamedQueryHost, "definitionOf"> | undefined,
+  query: string,
+  collectionFields: (
+    collection: string
+  ) => readonly BindingFieldShape[] | undefined
+): readonly BindingFieldShape[] | undefined {
+  const lookup = namedQueryLookup(host);
+  return namedQueryRowFields(
+    { declarationOf: name => lookup(name) },
+    query,
+    collectionFields
+  );
 }
 
 /** What an error is, for a log: its code or its class, never its words. */
@@ -434,7 +457,7 @@ function referenceFor(name: string, nodeId: string): string {
  * keeps nothing.
  */
 const runsThisRender = new WeakMap<
-  QueryBudget,
+  object,
   Map<string, Promise<NamedQueryRunData>>
 >();
 
@@ -451,6 +474,72 @@ function publicMessageOf(error: unknown): string | undefined {
     typeof candidate.statusCode === "number" &&
     typeof candidate.code === "string"
     ? candidate.publicMessage
+    : undefined;
+}
+
+/** The codes a failed run can carry, as a set to judge a carried one by. */
+const FAILURE_CODES: ReadonlySet<string> = new Set<NamedQueryFailureCode>([
+  "unknown",
+  "params",
+  "undeclared-read",
+  "trusted-read",
+  "budget",
+  "timeout",
+  "bad-rows",
+  "rows-hidden",
+  "threw",
+  "uncounted",
+]);
+
+/** A log reference as a failure names it: `NQ-` and six hex digits. */
+const REFERENCE = /^NQ-[0-9A-F]{6}$/;
+
+/**
+ * A run that failed somewhere else, as the place that ran it told it: an
+ * editor's canvas runs its named queries on the server, which judged the
+ * failure, logged it under `ref` and words it as `detail`.
+ *
+ * @experimental
+ */
+export interface CarriedNamedQueryFailure {
+  readonly code: NamedQueryFailureCode;
+  readonly detail: string;
+  readonly ref: string;
+  /**
+   * How many reads the failed run made before it stopped, which the render
+   * that asked claims from its own allowance, as it claims a run's that
+   * succeeded.
+   */
+  readonly reads?: number;
+}
+
+/**
+ * The failure an error carries from the place that ran the query, on its
+ * `namedQueryFailure`; `undefined` for any other error, or one whose
+ * carried failure is not one a run can have.
+ */
+export function carriedFailureOf(
+  error: unknown
+): CarriedNamedQueryFailure | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const carried: unknown = (error as { namedQueryFailure?: unknown })
+    .namedQueryFailure;
+  if (!isPlainRecord(carried)) return undefined;
+  const { code, detail, ref, reads } = carried;
+  const counted =
+    typeof reads === "number" && Number.isSafeInteger(reads) && reads > 0;
+  return typeof code === "string" &&
+    FAILURE_CODES.has(code) &&
+    typeof detail === "string" &&
+    detail !== "" &&
+    typeof ref === "string" &&
+    REFERENCE.test(ref)
+    ? {
+        code: code as NamedQueryFailureCode,
+        detail,
+        ref,
+        ...(counted ? { reads } : {}),
+      }
     : undefined;
 }
 
@@ -507,10 +596,18 @@ function classify(
 export interface NamedListOutcome {
   readonly items: readonly Record<string, unknown>[];
   readonly failed: boolean;
+  /**
+   * What an author is told: why the run failed, or, for one that ran, what
+   * a visitor's page goes without. `ref` is the log reference the message
+   * names, when it names one, so an editor can offer it to copy.
+   */
   readonly diagnostic?: {
-    readonly kind: "query-failed";
+    readonly kind: "query-failed" | "query-caution";
     readonly message: string;
+    readonly ref?: string;
   };
+  /** A failed run, as the place that ran it would carry it elsewhere. */
+  readonly failure?: CarriedNamedQueryFailure;
   /** How many rows match before the window, when the query counts them. */
   readonly total?: number;
   /** The collection its rows are entries of; absent for a field schema. */
@@ -531,13 +628,14 @@ function failed(
     readonly error?: unknown;
   }
 ): NamedListOutcome {
+  const ref = context.ref ?? referenceFor(context.name, context.nodeId);
   // A log that fails must not fail the list: it still draws its empty state.
   try {
     context.host.report?.({
       code,
       query: context.name,
       nodeId: context.nodeId,
-      ref: context.ref ?? referenceFor(context.name, context.nodeId),
+      ref,
       ...(context.error === undefined ? {} : { error: context.error }),
     });
   } catch {
@@ -548,8 +646,14 @@ function failed(
     failed: true,
     diagnostic: {
       kind: "query-failed",
-      message: NAMED_QUERY_TEXT.runFailed(detail),
+      // A query that doesn't count is a setting refused, not a read that
+      // failed: its own words say what to change, and nothing failed to load.
+      message:
+        code === "uncounted" ? detail : NAMED_QUERY_TEXT.runFailed(detail),
+      // Offered to copy only where the words name it, as a thrown error's do.
+      ...(detail.includes(ref) ? { ref } : {}),
     },
+    failure: { code, detail, ref },
   };
 }
 
@@ -602,7 +706,9 @@ async function beforeRun(
 /**
  * A run this render already started under `key`, or `start`'s, kept with
  * the render's allowance (`owner`) for the rest of the render. Nothing is
- * kept for a render with no allowance.
+ * kept for a render with no allowance. A failed run is not kept either: an
+ * allowance an editor holds for its life would otherwise answer every later
+ * draw with the same failure.
  */
 function renderRun(
   owner: QueryBudget | undefined,
@@ -610,14 +716,75 @@ function renderRun(
   start: () => Promise<NamedQueryRunData>
 ): { readonly pending: Promise<NamedQueryRunData>; readonly joined: boolean } {
   if (owner === undefined) return { pending: start(), joined: false };
+  // The render's own generation, so a budget an editor keeps for its life
+  // keeps no run past the draw it was made in.
+  const holder = owner.generation?.() ?? owner;
   const runs =
-    runsThisRender.get(owner) ?? new Map<string, Promise<NamedQueryRunData>>();
-  runsThisRender.set(owner, runs);
+    runsThisRender.get(holder) ?? new Map<string, Promise<NamedQueryRunData>>();
+  runsThisRender.set(holder, runs);
   const started = runs.get(key);
   if (started !== undefined) return { pending: started, joined: true };
   const pending = start();
   runs.set(key, pending);
+  pending.catch(() => {
+    if (runs.get(key) === pending) runs.delete(key);
+  });
   return { pending, joined: false };
+}
+
+/** The reads a render's allowance has left, when it can say. */
+function allowanceOf(budget: QueryBudget | undefined): {
+  readonly allowance?: number;
+} {
+  const left = budget?.remaining?.();
+  return left === undefined ? {} : { allowance: left };
+}
+
+/**
+ * A run that threw, as the list draws it. A failure judged where the run
+ * was made keeps that place's words and the reference its log names it by;
+ * any other is judged here, under a reference made for it.
+ */
+function failedRun(
+  error: unknown,
+  declaration: NamedQueryDeclaration,
+  at: {
+    readonly host: NamedQueryHost;
+    readonly name: string;
+    readonly nodeId: string;
+  }
+): NamedListOutcome {
+  const carried = carriedFailureOf(error);
+  if (carried !== undefined) {
+    return failed(carried.code, carried.detail, {
+      ...at,
+      ref: carried.ref,
+      error,
+    });
+  }
+  const ref = referenceFor(at.name, at.nodeId);
+  const why = classify(error, declaration, ref);
+  return failed(why.code, why.detail, { ...at, ref, error });
+}
+
+/** A run that gave rows, with what an author is told about it, if anything. */
+function succeeded(
+  data: NamedQueryRunData,
+  declaration: NamedQueryDeclaration,
+  host: NamedQueryHost
+): NamedListOutcome {
+  const rows = declaration.rows;
+  const caution = host.caution?.(declaration);
+  return {
+    items: data.rows,
+    failed: false,
+    ...(data.total === undefined ? {} : { total: data.total }),
+    rowKey: "fields" in rows ? rows.key : "id",
+    ...("collection" in rows ? { rowsCollection: rows.collection } : {}),
+    ...(caution === undefined
+      ? {}
+      : { diagnostic: { kind: "query-caution", message: caution } }),
+  };
 }
 
 /**
@@ -625,13 +792,19 @@ function renderRun(
  * that fails comes back as `failed` with what failed, and the list draws its
  * empty state.
  *
- * `window` is the list's own limit and offset, as `list-read` reads them.
+ * `window` is the list's own limit and offset, as `list-read` reads them,
+ * moved to the page drawn where the list is split into pages. `counted`
+ * says the list counts its pages from the run's total, so a run that
+ * returns none fails (`uncounted`) rather than letting anything guess how
+ * many pages there are: a query whose declaration changed since the page
+ * was saved.
  */
 export async function readNamedList(
   named: ListNamedQuery,
   window: { readonly limit: number; readonly offset: number },
   ctx: PageContext & { readonly namedQueries: NamedQueryHost },
-  nodeId: string
+  nodeId: string,
+  options: { readonly counted?: boolean } = {}
 ): Promise<NamedListOutcome> {
   const host = ctx.namedQueries;
   const claim = () => ctx.queries?.take() !== false;
@@ -680,15 +853,30 @@ export async function readNamedList(
     );
   };
   const { pending, joined } = renderRun(ctx.queries, key.join("\u0000"), () =>
-    host.cache === undefined ? read() : host.cache({ declaration, key, read })
+    host.cache === undefined
+      ? read()
+      : host.cache({
+          declaration,
+          key,
+          read,
+          asked: {
+            params: named.params,
+            window,
+            node: nodeId,
+            ...allowanceOf(ctx.queries),
+          },
+        })
   );
   let data: NamedQueryRunData;
   try {
     data = await pending;
   } catch (error) {
-    const ref = referenceFor(named.name, nodeId);
-    const why = classify(error, declaration, ref);
-    return failed(why.code, why.detail, { ...at, ref, error });
+    // A run made elsewhere that read and then failed cost those reads too:
+    // claimed here, once, as a run that succeeded is, so failing lists share
+    // the page's allowance rather than each spending a fresh one.
+    const spent = carriedFailureOf(error)?.reads ?? 0;
+    if (!ranHere && !joined) replayClaims(spent, claim);
+    return failedRun(error, declaration, at);
   }
   // Reads are claimed once per render for each run: as made, or, for a
   // result the host's cache kept from another render, claimed again. A list
@@ -697,12 +885,19 @@ export async function readNamedList(
   if (!ranHere && !joined && !replayClaims(data.reads, claim)) {
     return failed("budget", NAMED_QUERY_TEXT.budget(declaration.label), at);
   }
-  const rows = declaration.rows;
-  return {
-    items: data.rows,
-    failed: false,
-    ...(data.total === undefined ? {} : { total: data.total }),
-    rowKey: "fields" in rows ? rows.key : "id",
-    ...("collection" in rows ? { rowsCollection: rows.collection } : {}),
-  };
+  // Checked after the run's reads are claimed, so a page costs the same
+  // whether or not its query still counts. Counting is what the query
+  // declares, as the save and the editor judge it: a total a query returns
+  // without declaring one is not counted on.
+  if (
+    options.counted === true &&
+    (declaration.total !== true || data.total === undefined)
+  ) {
+    return failed(
+      "uncounted",
+      NAMED_QUERY_TEXT.uncounted(declaration.label),
+      at
+    );
+  }
+  return succeeded(data, declaration, host);
 }

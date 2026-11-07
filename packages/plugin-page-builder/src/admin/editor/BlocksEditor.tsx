@@ -78,6 +78,7 @@ import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import { canvasListReadsIn } from "../list-entries-client";
 import { listLoopCollections } from "../loop-collections-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
@@ -473,9 +474,16 @@ function servicesFor(
       findLinkTargets: findLinkTargetsIn(locale),
       // The fields a list may name, as a save in this language judges them.
       listLoopCollections: loopCollectionsIn(locale, userId),
+      // The site's named queries, a list's custom sources, as judged in
+      // this language: one read the canvas shares.
+      listCustomSources: canvasNamedQueriesIn(locale, userId).sources,
       // The selected list's "N entries match, so M show", taken from the
-      // canvas's own read of the list in this language.
-      countListEntries: canvasListReadsIn(locale, userId).count,
+      // canvas's own read of the list in this language, or its named
+      // query's run where that is its source.
+      countListEntries: props =>
+        props.namedQuery === undefined || props.namedQuery === null
+          ? canvasListReadsIn(locale, userId).count(props)
+          : canvasNamedQueriesIn(locale, userId).count(props),
       ...(entryCollection === undefined ? {} : { entryCollection }),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),
@@ -1192,8 +1200,11 @@ function EditorBody<TFieldValues extends FieldValues>({
   const conditionsUnchecked = useConditionsUnchecked(
     componentView.preview.document,
     conditionServices,
-    // The limit the canvas draws and the save surveys under.
-    canvas.canvasRender.limits?.maxNodes
+    // The limits the canvas draws and the save surveys under.
+    canvas.canvasRender.limits,
+    // The placed components' definitions, whose own conditions are judged
+    // in the tree the canvas composes.
+    canvas.canvasRender.definitions
   );
   const view: EditorView = {
     ...mount,

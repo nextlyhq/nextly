@@ -11,8 +11,8 @@ Authors see it as a **custom source**. Nothing an author types is ever a query: 
 one by name and fill in its inputs.
 
 Named queries are experimental: the contract may change before the page builder is
-stable. The editor's controls for them are still being built; today a list takes one
-through the [API](/docs/page-builder/compose-through-the-api).
+stable. A list takes one in the editor, as below, or through the
+[API](/docs/page-builder/compose-through-the-api).
 
 ## Declare a query
 
@@ -127,7 +127,9 @@ sources register, stops the boot and names both sources.
 - **`rows`** is what a row is: a collection's entries (`{ collection }`, keyed by id), or
   a field schema of your own with a text or number `key`. The editor's binding picker and
   the binding checks read a list's items from it.
-- **`total`** says `run` returns how many rows match before the window.
+- **`total`** says `run` returns how many rows match before the window. A list split into
+  pages needs it: its pages are counted from the total, so the save refuses Split into
+  pages on a list whose query does not declare it.
 - **`timeoutMs`** bounds how long `run` may take: 5000 by default, at most 30000.
 - **`revalidate`** bounds how long a cached result lives, in seconds. Set it when the
   answer depends on the date.
@@ -159,6 +161,23 @@ collection its rows are entries of, and each row's key must be present and uniqu
 
 ## Set it on a list
 
+In the editor, select the Collection list and open **Source** in its Content tab. The
+site's queries are listed as **Custom sources**, above the collections, each with its
+`description` under its label; a query with a required input that has no default is
+tagged **Needs input**. One search covers every group, descriptions included.
+
+Choosing one shows an **Inputs** group with a control for each input: text, a number
+with its `unit`, yes or no, a choice, a day (empty means `default`, such as Today) and
+an entry. A note names the inputs the query needs, and each empty input shows what empty
+means. Until every required input has a value nothing is written: the list keeps what it
+stores, and the canvas tags it "Still showing …". **Filters and sort** becomes one line
+saying the query sets them.
+
+The canvas draws the query's rows, run on the server as you, the person editing, read
+them, drafts included. If a query reads a collection visitors can't read, the inspector
+and the canvas name the fields visitors see the rows without on the published page; the
+page still saves.
+
 Through the API, `set-list-query` takes a `namedQuery`:
 
 ```json
@@ -187,10 +206,20 @@ query the site does not register, in the words the editor shows. A page saved be
 query was removed keeps saving, with a warning, and the list shows its empty state. An
 input the query no longer takes is left out, with a warning.
 
+## Split into pages
+
+A list whose query declares `total: true` can be split into pages, as a collection list
+can: page `n` at `<address>/page/n` asks `run` for the window that starts `limit` rows
+further on for each page before it, after Skip the first, and the number of pages is the
+total less the skipped rows, divided by Number of items and rounded up. A page past the
+last is not found. A query that stops returning a total draws the list's empty state, and
+the editor says why, rather than guessing how many pages there are.
+
 ## When a query fails
 
 A query that throws, runs past its time, reads something it does not declare, spends the
 page's read allowance or returns rows without unique keys draws the list's empty state.
 Visitors see nothing else. In the editor and a preview, the list says what failed. When
-`run` throws, authors see a reference such as `NQ-7F3A2C` rather than the error; the
-server log carries the same reference with the error, the page and the list.
+`run` throws, authors see a reference such as `NQ-7F3A2C` rather than the error, with
+a button on the editor's canvas that copies it, and are asked to quote it to their
+developer; the server log carries the same reference, the page and the list.

@@ -9,6 +9,7 @@ import { getDialectTables } from "../database/index";
 import { resolveRelations } from "../database/resolve-relations";
 
 import { normalizeDbTimestamp } from "./lib/date-formatting";
+import { adapterForReads, pooledAdapterOf } from "./lib/read-transaction-scope";
 import {
   afterCommit,
   runAdapterTransaction,
@@ -152,10 +153,32 @@ export abstract class BaseService<
 > {
   private _tables: TAdapter["tables"] | null = null;
 
+  /** The adapter this service was built with, on its pool. */
+  private readonly pooledAdapter: DrizzleAdapter;
+
   constructor(
-    protected readonly adapter: DrizzleAdapter,
+    adapter: DrizzleAdapter,
     protected readonly logger: Logger
-  ) {}
+  ) {
+    // The adapter itself even when handed a view of it: a sub-service built
+    // on first use inside a read routed to a transaction must not keep that
+    // transaction's view once it has ended.
+    this.pooledAdapter = pooledAdapterOf(adapter);
+  }
+
+  /**
+   * The adapter this service reads and writes through.
+   *
+   * The one it was built with, except inside a read routed to a transaction
+   * the calling flow holds (`runReadsInTransaction`): there, a view of it
+   * whose reads run on that transaction's connection, so a read made from
+   * inside a write's transaction neither waits for a second pooled connection
+   * nor misses what the transaction wrote. {@link db} is built from it, so the
+   * two cannot disagree. See `shared/lib/read-transaction-scope`.
+   */
+  protected get adapter(): DrizzleAdapter {
+    return adapterForReads(this.pooledAdapter);
+  }
 
   /**
    * Raw Drizzle instance for relational queries (.query.TABLE.findFirst(), etc.).
@@ -172,8 +195,13 @@ export abstract class BaseService<
    * object, so an unchanged schema costs two map lookups.
    */
   protected get db(): TAdapter["db"] {
-    const relations = resolveRelations(this.adapter.getCapabilities().dialect);
-    return this.adapter.getDrizzle<TAdapter["db"]>(relations);
+    return this.drizzleOn(this.adapter);
+  }
+
+  /** `adapter`'s Drizzle handle, with the relations as they stand now. */
+  private drizzleOn(adapter: DrizzleAdapter): TAdapter["db"] {
+    const relations = resolveRelations(adapter.getCapabilities().dialect);
+    return adapter.getDrizzle<TAdapter["db"]>(relations);
   }
 
   /**
@@ -337,7 +365,11 @@ export abstract class BaseService<
     // PG/MySQL: the adapter's Drizzle handle takes async callbacks, joins the
     // transaction the calling flow is inside, and otherwise opens one on a
     // pooled client, running BEGIN, COMMIT or ROLLBACK around the callback.
-    return this.db.transaction(work);
+    // The pooled handle's, even inside a read routed to a transaction: that
+    // one's handle is Drizzle's own, whose `transaction` would send a second
+    // BEGIN down the connection and COMMIT the outer transaction with it,
+    // while the pooled handle's joins it as a savepoint.
+    return this.drizzleOn(this.pooledAdapter).transaction(work);
   }
 
   /**

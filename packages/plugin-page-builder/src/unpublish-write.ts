@@ -13,6 +13,12 @@ export interface UnpublishHookContext {
   operation?: unknown;
   data?: unknown;
   originalData?: unknown;
+  /**
+   * The status core classifies the update against, where it differs from
+   * `originalData`'s: on a store that keeps its status per language, the
+   * status stored in the language the write names.
+   */
+  storedStatus?: unknown;
 }
 
 /** A row's `status`, or undefined when the row does not carry one. */
@@ -31,6 +37,12 @@ export function statusOf(row: unknown): string | undefined {
  * leaves the status out, or sets it to `undefined` (which core strips), keeps
  * the published row live and stores a pending edit beside it. A create has no
  * stored row, so it unpublishes nothing.
+ *
+ * The status it moves from is the one core names on the hook context, where
+ * it names one: on a store that keeps its status per language, the language
+ * the write names, so a published translation saved as a draft is judged an
+ * unpublish while the main row is a draft. Where core names none, the stored
+ * row's.
  */
 export function unpublishes(context: unknown): boolean {
   const hook = context as UnpublishHookContext | null;
@@ -41,9 +53,23 @@ export function unpublishes(context: unknown): boolean {
   if (typeof data !== "object" || data === null) return false;
   const next = (data as { status?: unknown }).status;
   return (
-    statusOf(hook?.originalData) === "published" &&
+    statusBefore(hook) === "published" &&
     Object.hasOwn(data, "status") &&
     next !== undefined &&
     next !== "published"
   );
+}
+
+/**
+ * The status an update moves from, as core classifies it. A value core names
+ * that is neither a status nor `null` (no status stored) cannot be read, so it
+ * answers as published: the guard asking runs its check rather than skip it.
+ */
+function statusBefore(hook: UnpublishHookContext | null): string | undefined {
+  if (typeof hook === "object" && hook !== null && "storedStatus" in hook) {
+    const stored = hook.storedStatus;
+    if (typeof stored === "string") return stored;
+    return stored === null ? undefined : "published";
+  }
+  return statusOf(hook?.originalData);
 }

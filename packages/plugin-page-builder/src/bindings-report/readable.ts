@@ -147,26 +147,50 @@ async function readCollection(
   }
 }
 
-/** One reported Single, as the caller may read it. */
-async function readSingle(
+/** A Single as the caller may read it; `undefined` when they may not. */
+async function singleAsCaller(
   ctx: IdentifiedCaller,
-  entry: StoredDocumentReport,
-  found: Map<string, ReadableDocument>
-): Promise<void> {
-  let row: unknown;
+  slug: string
+): Promise<unknown> {
   try {
-    row = await requireNextly().findSingle({
-      slug: entry.slug,
+    return await requireNextly().findSingle({
+      slug,
       createIfMissing: false,
       depth: 0,
       ...(await readingAsUser(ctx)),
     });
   } catch (error) {
     if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
-      return;
+      return undefined;
     }
     throw error;
   }
+}
+
+/**
+ * Which of these Singles the caller may read, each read as them through
+ * core's gate: the report names a Single a binding reads by its label only
+ * for a reader who may read it, and by the slug the binding holds otherwise.
+ */
+export async function readableSingles(
+  ctx: IdentifiedCaller,
+  slugs: ReadonlySet<string>
+): Promise<ReadonlySet<string>> {
+  const readable = new Set<string>();
+  for (const slug of slugs) {
+    const row = await singleAsCaller(ctx, slug);
+    if (typeof row === "object" && row !== null) readable.add(slug);
+  }
+  return readable;
+}
+
+/** One reported Single, as the caller may read it. */
+async function readSingle(
+  ctx: IdentifiedCaller,
+  entry: StoredDocumentReport,
+  found: Map<string, ReadableDocument>
+): Promise<void> {
+  const row = await singleAsCaller(ctx, entry.slug);
   if (typeof row !== "object" || row === null) return;
   found.set(entry.documentKey, {
     title: entry.slug,

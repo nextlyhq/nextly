@@ -369,6 +369,12 @@ export function BindingsToFixPage(): JSX.Element {
     setPlace("all");
     setPage(1);
   }, [placeGone]);
+  // A check that shrank the list leaves no page past its last: back to the
+  // last page there is, so the bindings left stay reachable.
+  const lastPage = meta?.totalPages;
+  useEffect(() => {
+    if (lastPage !== undefined && page > lastPage) setPage(lastPage);
+  }, [page, lastPage]);
   return (
     <div className="min-h-[calc(100vh-4rem)] w-full max-w-full px-4 py-6 @sm/content:px-6 @sm/content:py-8 @2xl/content:px-8">
       <Breadcrumb />
@@ -378,9 +384,10 @@ export function BindingsToFixPage(): JSX.Element {
             Bindings to fix
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            A field, a Single or a block changed after these were bound, so each
-            one shows its fallback wherever it’s drawn: the published page, or a
-            draft not yet published. Open one to bind it to another field or
+            A field, a Single or a block changed after these were bound, so none
+            of them shows what it reads: visitors see its fallback, the block’s
+            own value or nothing, as each row says, on the published page or in
+            a draft not yet published. Open one to bind it to another field or
             unbind it.
           </p>
         </div>

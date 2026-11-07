@@ -38,7 +38,9 @@ const stored = (
 
 function routeOver(
   entries: StoredDocumentReport[],
-  readable: Record<string, readonly string[]>
+  readable: Record<string, readonly string[]>,
+  /** Singles the caller may not read. */
+  unreadableSingles: ReadonlySet<string> = new Set()
 ) {
   const store = {
     list: async () => entries,
@@ -68,6 +70,8 @@ function routeOver(
     refresh: () => undefined,
     componentStore: () => "components",
     defaultLocale: () => "en",
+    readableSingles: async (_ctx, slugs) =>
+      new Set([...slugs].filter(slug => !unreadableSingles.has(slug))),
   });
 }
 
@@ -169,6 +173,33 @@ describe("the bindings to fix route", () => {
       },
     });
     expect(unread.items[0]?.rows[0]).not.toHaveProperty("sourceLabel");
+  });
+
+  it("keeps the slug of a bound Single the caller may not read, whatever the registry says", async () => {
+    const bound: StoredDocumentReport = {
+      ...stored("a", "pages", ["content"]),
+      rows: [
+        {
+          ...row("content"),
+          binding: { source: "single", sourceKey: "contact", path: "slogan" },
+        },
+      ],
+    };
+    const route = routeOver([bound], { a: ["content"] }, new Set(["contact"]));
+    const asked: unknown[] = [];
+    const { items } = await answer(route, "", {
+      services: {
+        singles: {
+          list: async (query: unknown) => {
+            asked.push(query);
+            return { data: [{ slug: "contact", label: "Contact details" }] };
+          },
+        },
+      },
+    });
+    expect(items[0]?.rows[0]).not.toHaveProperty("sourceLabel");
+    // Not even asked of the registry.
+    expect(asked).toEqual([]);
   });
 
   it("sends a Layout region's binding to its component, and marks one in another language", async () => {
