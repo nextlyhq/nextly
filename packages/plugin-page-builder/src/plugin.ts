@@ -345,8 +345,13 @@ import {
   storedAddressesReader,
   templateCollectionProblem,
   templateHolderReader,
+  templateTargets,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
+import {
+  templatePreviewEntriesRoute,
+  templatePreviewEntryRoute,
+} from "./templates/template-preview-route";
 import {
   MANAGE_TEMPLATE_ROUTING_DECLARATION,
   storedAddressOf,
@@ -2585,6 +2590,10 @@ export const pageBuilder = (
         // write, so a field hidden a moment ago is refused at the next save.
         // This site's named queries, for a list whose source is one.
         namedQueries: namedQuerySource,
+        // Where templates live, under the host's name for them, so a
+        // template's lists and conditions are judged against the collection
+        // it draws, read from the template itself.
+        templates: templateTargets(ctx.services.ownCollections, templates),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -2785,7 +2794,7 @@ export const pageBuilder = (
               pagesSlug,
               id
             );
-          return found as unknown as Readonly<Record<string, unknown>>;
+          return found;
         } catch (error) {
           if (NextlyError.isNotFound(error)) return null;
           throw error;
@@ -3633,6 +3642,11 @@ export const pageBuilder = (
         }),
         // Give a collection its template and publish it, each with a dry run.
         templateActionsRoute(templateActions),
+        // A template's preview in the editor: the entries of its collection
+        // the author may preview, and the one being previewed, read as the
+        // author asking. Reads only: which entry is previewed is not stored.
+        templatePreviewEntriesRoute({ guard: requireTemplateGuard }),
+        templatePreviewEntryRoute({ guard: requireTemplateGuard }),
         // Whether this caller may set or change a template address: what the
         // template form asks before it offers the address for editing. Not a
         // security boundary: the field's rules and the action decide.

@@ -1,4 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+// The transaction a write that must not outlive a collection holds its row in.
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";

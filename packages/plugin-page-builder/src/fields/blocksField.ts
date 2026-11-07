@@ -322,11 +322,15 @@ export function blocksFieldType(
               });
         if (listFields === undefined) return bound;
         const namedQueries = composition?.()?.namedQueries;
+        // Where templates are stored, so a template's lists are judged
+        // against the collection it draws.
+        const templates = composition?.()?.templates;
         const site = {
           fieldsOf: listFields,
           storedForms,
           maxNodes,
           ...(namedQueries === undefined ? {} : { namedQueries }),
+          ...(templates === undefined ? {} : { templates }),
         };
         // And the fields its blocks' visibility conditions check, judged the
         // same way, since a condition the page could not check hides its block.

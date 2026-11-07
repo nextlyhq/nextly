@@ -145,7 +145,7 @@ export interface ListSetting {
  * condition by its operator, as a component placing the one being saved is.
  * A list's item inside the definition is still known, and still judged.
  */
-export function listSettingOf(
+function listSettingOf(
   write: PluginFieldWrite,
   document: unknown
 ): ListSetting {
@@ -154,6 +154,136 @@ export function listSettingOf(
   return {
     ...locale,
     entryCollection: write.kind === "collection" ? write.slug : null,
+  };
+}
+
+/**
+ * Where templates are stored, and what a stored one draws: a template's
+ * lists and conditions read the entry of the collection it names, not an
+ * entry of the templates collection it is stored in.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export interface TemplateTargets {
+  /** The RESOLVED templates collection: a host may rename it. */
+  readonly collection: string;
+  /**
+   * The fields a template names the collection it draws in, in order: a
+   * collection's template by `collection`, an entry's own design by
+   * `entryCollection`.
+   */
+  readonly fields: readonly string[];
+  /**
+   * The collections stored templates draw, by template id, read as the
+   * system in ONE read whatever the number of ids: a template missing from
+   * the answer is not stored or names none.
+   */
+  readonly storedTargetsOf: (
+    ids: readonly string[]
+  ) => Promise<ReadonlyMap<string, string>>;
+}
+
+/**
+ * Said of a template whose collection this judgement cannot know, so its
+ * lists and conditions cannot be judged against it. Never answered by
+ * judging them by their shape alone: the write is refused instead
+ * ({@link templateTargetUnknownIssue}).
+ */
+export const TEMPLATE_TARGET_UNKNOWN: unique symbol = Symbol(
+  "template target unknown"
+);
+
+/** The code of the refusal of a template whose collection is not known. */
+const TEMPLATE_TARGET_UNKNOWN_CODE = "TEMPLATE_COLLECTION_UNKNOWN";
+
+/**
+ * Whether `document`, stored under `slug`, is a template stored where
+ * templates are: a document of kind `template` in the templates collection.
+ */
+export function isStoredTemplate(
+  slug: string,
+  document: unknown,
+  templates: TemplateTargets | undefined
+): templates is TemplateTargets {
+  return (
+    templates !== undefined &&
+    isPlainRecord(document) &&
+    document.kind === "template" &&
+    slug === templates.collection
+  );
+}
+
+/**
+ * The setting a template's lists and conditions are judged in: the write's
+ * language, with the collection the template draws as the entry's;
+ * `undefined` for any other document, which `listSettingOf` answers for.
+ *
+ * The collection is the template's own field, as the write stores it: the
+ * value the write carries, which the template guard holds to the stored one
+ * (a template keeps the collection it draws), or, where it carries none, the
+ * value stored, read as the system. Never a value the editor sends beside
+ * the write. Inside a caller's transaction the stored value cannot be read:
+ * a validator is handed no read of a text field on the write's connection,
+ * and a read on another connection can wait on the one the transaction
+ * holds. There, and where nothing is stored, the answer is
+ * {@link TEMPLATE_TARGET_UNKNOWN}, which refuses the write.
+ */
+async function templateSettingOf(
+  write: PluginFieldWrite,
+  document: unknown,
+  data: Readonly<Record<string, unknown>>,
+  templates: TemplateTargets | undefined
+): Promise<ListSetting | typeof TEMPLATE_TARGET_UNKNOWN | undefined> {
+  if (write.kind !== "collection") return undefined;
+  if (!isStoredTemplate(write.slug, document, templates)) return undefined;
+  const locale = write.locale === undefined ? {} : { locale: write.locale };
+  const carried = templates.fields
+    .map(field => data[field])
+    .find(value => typeof value === "string" && value !== "");
+  if (typeof carried === "string") {
+    return { ...locale, entryCollection: carried };
+  }
+  if (write.id === undefined || write.inTransaction) {
+    return TEMPLATE_TARGET_UNKNOWN;
+  }
+  const stored = (await templates.storedTargetsOf([write.id])).get(write.id);
+  return stored === undefined
+    ? TEMPLATE_TARGET_UNKNOWN
+    : { ...locale, entryCollection: stored };
+}
+
+/**
+ * A write's setting: a template's ({@link templateSettingOf}) where the
+ * document is one, else {@link listSettingOf}'s.
+ */
+export async function writeSettingOf(
+  write: PluginFieldWrite,
+  document: unknown,
+  data: Readonly<Record<string, unknown>>,
+  templates: TemplateTargets | undefined
+): Promise<ListSetting | typeof TEMPLATE_TARGET_UNKNOWN> {
+  return (
+    (await templateSettingOf(write, document, data, templates)) ??
+    listSettingOf(write, document)
+  );
+}
+
+/**
+ * The refusal of a template save whose collection cannot be known, so its
+ * lists and conditions cannot be judged against it: said on the field, with
+ * what to do instead.
+ */
+function templateTargetUnknownIssue(
+  args: Pick<PluginFieldValidateArgs, "path">,
+  label: string
+): PluginFieldIssue {
+  return {
+    path: args.path,
+    code: TEMPLATE_TARGET_UNKNOWN_CODE,
+    message:
+      `${label}: this template's lists and conditions are checked against the collection it draws, ` +
+      "which this save does not name and cannot read inside a batch. Send the template's collection " +
+      "with the save, or save the template on its own.",
   };
 }
 
@@ -247,6 +377,11 @@ export interface ListJudging {
    * not be read, for a caller whose server log says so.
    */
   readonly onUnjudged?: (kept: number) => void;
+  /**
+   * Where templates are stored, so a template's lists are judged against the
+   * collection it draws; absent, a template is judged as any other entry.
+   */
+  readonly templates?: TemplateTargets;
 }
 
 /** One finding of a forest judgement, as the engine names it. */
@@ -354,9 +489,40 @@ export function asFieldIssues(
 }
 
 /**
+ * What a write's forest is judged in: its nodes and its setting, nothing for
+ * a value with no forest or no entry write behind it, or
+ * {@link TEMPLATE_TARGET_UNKNOWN} for a template whose collection cannot be
+ * known, which is refused rather than judged by shape.
+ */
+async function writeForest(
+  value: unknown,
+  args: PluginFieldValidateArgs,
+  site: ListJudging
+): Promise<
+  | { readonly nodes: readonly unknown[]; readonly setting: ListSetting }
+  | typeof TEMPLATE_TARGET_UNKNOWN
+  | undefined
+> {
+  const nodes = nodesOf(value);
+  if (nodes === undefined || args.write === undefined) return undefined;
+  // A template's lists and conditions read the entry of the collection it
+  // draws.
+  const setting = await writeSettingOf(
+    args.write,
+    value,
+    args.data,
+    site.templates
+  );
+  return setting === TEMPLATE_TARGET_UNKNOWN
+    ? TEMPLATE_TARGET_UNKNOWN
+    : { nodes, setting };
+}
+
+/**
  * The issues a write is refused with for the fields its lists name; empty
  * when it names only fields the public may read, or when nothing can tell a
- * new problem from one the page already held.
+ * new problem from one the page already held. A template whose collection
+ * cannot be known is refused here, once.
  *
  * Fields are read only for the collections the value's lists name, and the
  * stored forms only once a problem is found, so a page with no list, or with
@@ -368,15 +534,15 @@ export async function newListQueryIssues(
   label: string,
   site: ListJudging
 ): Promise<PluginFieldIssue[]> {
-  const nodes = nodesOf(value);
-  if (nodes === undefined || args.write === undefined) return [];
+  const forest = await writeForest(value, args, site);
+  if (forest === undefined) return [];
+  if (forest === TEMPLATE_TARGET_UNKNOWN) {
+    return [templateTargetUnknownIssue(args, label)];
+  }
   // Only what the schema or the host decides: the engine's own validation
   // already reported the shape of each of the page's own lists on this write.
-  const found = await listErrorsIn(
-    nodes,
-    listSettingOf(args.write, value),
-    site,
-    issue => LIST_FIELD_CODES.has(issue.code)
+  const found = await listErrorsIn(forest.nodes, forest.setting, site, issue =>
+    LIST_FIELD_CODES.has(issue.code)
   );
   return asFieldIssues(found, args, label);
 }
@@ -388,6 +554,10 @@ export async function newListQueryIssues(
  * field's kind does not take, and a condition on the entry of a page that
  * has none. Each would hide its block on the published page, so the save
  * says so instead. A problem the page already held is kept, as for lists.
+ *
+ * A template whose collection cannot be known is refused by the lists'
+ * judgement ({@link newListQueryIssues}), which the field asks beside this
+ * one, so the refusal is said once; nothing here judges it by shape instead.
  */
 export async function newConditionIssues(
   value: unknown,
@@ -395,13 +565,13 @@ export async function newConditionIssues(
   label: string,
   site: ListJudging
 ): Promise<PluginFieldIssue[]> {
-  const nodes = nodesOf(value);
-  if (nodes === undefined || args.write === undefined) return [];
+  const forest = await writeForest(value, args, site);
+  if (forest === undefined || forest === TEMPLATE_TARGET_UNKNOWN) return [];
   // The operators were judged by the engine's own validation of this write;
   // only what the schema or the host decides is left.
   const found = await errorsIn(
-    nodes,
-    listSettingOf(args.write, value),
+    forest.nodes,
+    forest.setting,
     site,
     conditionIssues,
     issue => CONDITION_FIELD_CODES.has(issue.code)
