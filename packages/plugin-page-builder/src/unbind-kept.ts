@@ -701,10 +701,29 @@ export async function planUnbind(
   }
   const view = await visitorViewOf(source, document, nodeId, prop, keep);
   if ("needs" in view) return { refusal: view.needs };
-  return unbindPlan(
+  const plan = unbindPlan(
     prop,
     binding.$bind ?? prop,
     view,
     getBlock(node.type)?.props
   );
+  return "refusal" in plan
+    ? plan
+    : {
+        ...plan,
+        answer: {
+          ...plan.answer,
+          reason: `${plan.answer.reason} ${DEFAULT_RENDERER_NOTE}`,
+        },
+      };
 }
+
+/**
+ * What a visitor's value was read as, said with every answer read so: the
+ * site's default page renderer. A page route giving `createBlocksPage` its
+ * own options (another Nextly instance, a query allowance, a media
+ * collection, a time zone, image address rules) may show another value, and
+ * none of them reach this route; there the value to keep is given.
+ */
+const DEFAULT_RENDERER_NOTE =
+  "Read as the site's default page renderer shows it; a page with its own renderer options can give the value to keep.";
