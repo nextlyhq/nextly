@@ -38,7 +38,9 @@ const stored = (
 
 function routeOver(
   entries: StoredDocumentReport[],
-  readable: Record<string, readonly string[]>
+  readable: Record<string, readonly string[]>,
+  /** Singles the caller may not read. */
+  unreadableSingles: ReadonlySet<string> = new Set()
 ) {
   const store = {
     list: async () => entries,
@@ -66,19 +68,24 @@ function routeOver(
         ])
       ),
     refresh: () => undefined,
+    componentStore: () => "components",
+    defaultLocale: () => "en",
+    readableSingles: async (_ctx, slugs) =>
+      new Set([...slugs].filter(slug => !unreadableSingles.has(slug))),
   });
 }
 
 async function answer(
   route: ReturnType<typeof bindingsToFixRoute>,
-  query = ""
+  query = "",
+  ctx: unknown = {}
 ): Promise<{
-  items: { documentKey: string; rows: unknown[] }[];
+  items: { documentKey: string; rows: Record<string, unknown>[] }[];
   meta: Record<string, unknown>;
 }> {
   const response = await route.handler(
     new Request(`http://admin.test/bindings-to-fix${query}`),
-    {} as PluginRouteContext
+    ctx as PluginRouteContext
   );
   return (await response.json()) as never;
 }
@@ -128,6 +135,90 @@ describe("the bindings to fix route", () => {
     const second = await answer(route, "?place=pages&page=2");
     expect(second.items).toHaveLength(20);
     expect(second.meta).toMatchObject({ hasNext: false, hasPrev: true });
+  });
+
+  it("names a bound Single by its label, and by its slug when the registry can't say", async () => {
+    const bound: StoredDocumentReport = {
+      ...stored("a", "pages", ["content"]),
+      rows: [
+        {
+          ...row("content"),
+          binding: { source: "single", sourceKey: "contact", path: "slogan" },
+        },
+      ],
+    };
+    const route = routeOver([bound], { a: ["content"] });
+    const asked: unknown[] = [];
+    const labelled = await answer(route, "", {
+      services: {
+        singles: {
+          list: async (query: unknown) => {
+            asked.push(query);
+            return { data: [{ slug: "contact", label: "Contact details" }] };
+          },
+        },
+      },
+    });
+    expect(asked).toEqual([{ slugAllowlist: ["contact"], limit: 1 }]);
+    expect(labelled.items[0]?.rows[0]).toMatchObject({
+      sourceLabel: "Contact details",
+    });
+    const unread = await answer(route, "", {
+      services: {
+        singles: {
+          list: async () => {
+            throw new Error("registry unavailable");
+          },
+        },
+      },
+    });
+    expect(unread.items[0]?.rows[0]).not.toHaveProperty("sourceLabel");
+  });
+
+  it("keeps the slug of a bound Single the caller may not read, whatever the registry says", async () => {
+    const bound: StoredDocumentReport = {
+      ...stored("a", "pages", ["content"]),
+      rows: [
+        {
+          ...row("content"),
+          binding: { source: "single", sourceKey: "contact", path: "slogan" },
+        },
+      ],
+    };
+    const route = routeOver([bound], { a: ["content"] }, new Set(["contact"]));
+    const asked: unknown[] = [];
+    const { items } = await answer(route, "", {
+      services: {
+        singles: {
+          list: async (query: unknown) => {
+            asked.push(query);
+            return { data: [{ slug: "contact", label: "Contact details" }] };
+          },
+        },
+      },
+    });
+    expect(items[0]?.rows[0]).not.toHaveProperty("sourceLabel");
+    // Not even asked of the registry.
+    expect(asked).toEqual([]);
+  });
+
+  it("sends a Layout region's binding to its component, and marks one in another language", async () => {
+    const entry: StoredDocumentReport = {
+      ...stored("a", "pages", ["content"]),
+      rows: [
+        { ...row("layout"), layout: "l1", component: "c9" },
+        { ...row("content"), locale: "fr" },
+        { ...row("content"), locale: "en" },
+      ],
+    };
+    const { items } = await answer(
+      routeOver([entry], { a: ["content", "layout"] })
+    );
+    const [region, french, english] = items[0]?.rows ?? [];
+    expect(region).toMatchObject({ opens: { slug: "components", id: "c9" } });
+    expect(french).toMatchObject({ inAnotherLanguage: true });
+    expect(english).not.toHaveProperty("inAnotherLanguage");
+    expect(english).not.toHaveProperty("opens");
   });
 
   it("refuses a malformed query rather than reading it as something else", async () => {

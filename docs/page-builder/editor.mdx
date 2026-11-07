@@ -22,6 +22,29 @@ The top bar runs across the editor in three parts.
 and **Unpublish**, each where the entry offers it. An action you can't use right now is
 greyed out and says why. Duplicating, discarding and deleting stay on the entry's page.
 
+### Bindings to fix
+
+When a field, a Single or a block changes so a binding on the page no longer fits, a
+chip beside the page's status says how many: **2 bindings to fix**. Choose it for the
+list: each binding's block and prop, what changed, and what visitors see meanwhile (its
+fallback, the block's own value, or nothing). **Select** selects the block, opens Layers
+on it and brings it into view; **All bindings to fix** opens the site-wide list. The chip
+shows only on a page that has one.
+
+The site-wide list is **Bindings to fix**, in the Page Builder's menu beside Patterns,
+Components and Layouts
+(`/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`), for people who can edit
+pages. It lists every document whose bindings no longer fit, by place (pages, components,
+patterns, Layouts, other entries and Singles), each with **Open in editor** at its block.
+The dashboard's **Needs your attention** card counts them and links to it, and a
+**Bindings to fix** card can be added under **Customize**.
+
+A binding in a page's Layout region opens the component that region places, where it is
+edited. One in a language other than the default has no link, since the editor edits the
+default language. A document's draft is checked as well, so a binding broken only in a
+draft is listed before that draft is published. Until the first check of every document
+finishes, the list says it hasn't checked yet rather than that every binding fits.
+
 ### Publishing a page whose parts aren't published
 
 A page, the components it places and its Layout are published separately. When you

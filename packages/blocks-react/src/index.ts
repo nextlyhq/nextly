@@ -41,7 +41,13 @@ export type {
   PageBindings,
   PageContext,
   PageIssue,
+  PageReadReport,
   QueryBudget,
+  QueryBudgetOptions,
+  ReadClaim,
+  ReadKind,
+  UnreadBlock,
+  ListBatchReads,
   ReactBlockDefinition,
   ResolvedIcon,
   ResolvedMedia,
@@ -288,6 +294,12 @@ export {
  * surface listing a page's parts beside a picture of it.
  */
 export { prepareDocumentAsDrawn } from "./prepare-document";
+/**
+ * @experimental The component definitions as the renderer reads them,
+ * repaired on demand, for an editor surface that composes a page beside the
+ * renderer and must compose the same tree.
+ */
+export { repairingLookup } from "./prepare-document";
 /**
  * @experimental The collections a page's lists draw, whose field shapes judge
  * their items' bindings: one walk for the published route and the editor.

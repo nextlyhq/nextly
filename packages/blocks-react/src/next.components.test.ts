@@ -17,7 +17,9 @@ import type { ReactElement } from "react";
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
 import { throughBoundary } from "./__tests__/through-boundary";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+import { afterOverrunLines } from "./__tests__/overrun-quiet";
 
 const cached = vi.fn();
 
@@ -682,3 +684,6 @@ describe("a Single blocks page and the components it embeds", () => {
     expect(meta.title).toBe("PENDING EDIT");
   });
 });
+
+// Pages here outrun their caps, and a route logs that after a short quiet.
+afterAll(afterOverrunLines);

@@ -234,6 +234,7 @@ first by its title, or by its id to someone who may not read it.
 | `publish-template`    | `id`                                    | **read** and **publish**    |
 | `give-entry-design`   | `collection`, `entry`, and `title`      | **create**                  |
 | `remove-entry-design` | `collection`, `entry`                   | **delete**                  |
+| `delete-template`     | `id`                                    | **read** and **delete**     |
 
 A template is created as a draft unless `publish` is set, and named after its collection
 unless `title` is given. A collection may have a template when it is content the admin
@@ -273,6 +274,63 @@ Deleting an entry deletes its own design in the same transaction.
 An own design is a `templates` document whose `collection` is empty and whose `entry`,
 `entryCollection` and `entryId` name the entry it serves; `forkedFrom` is the template
 it was copied from.
+
+`delete-template` deletes a template by `id`: a collection's template, after which the
+collection's entries without their own design are not shown as pages until it has a
+published template again, or an entry's own design. Own designs are kept when their
+collection's template is deleted. An own design is deleted only by a caller who may read
+its entry; anyone else is answered `404`, its dry run too. The dry run answers the
+`template` it would delete.
+
+### Read a collection's own designs
+
+```http
+GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs?collection=posts
+```
+
+Answers the collection's own designs in the list envelope, newest edit first, each as
+`id`, `entryId`, `title`, `status` and `updatedAt`, up to 500, and only those whose
+entries the caller may read. `meta.hasNext` says there may be more: the list was cut at
+500, or the read stopped after looking through 5,000 own designs without filling it, so
+treat the list as a floor then, never as the whole. Add `&entry=<id>` to answer that one entry's own design, or none, by its
+key: ask that, not the capped list, whether an entry has one. Ask with `?template=<id>`
+instead to read for the collection that template draws or, for an own design, for its
+entry alone.
+
+`meta` carries:
+
+| Field                 | What it says                                                                      |
+| --------------------- | --------------------------------------------------------------------------------- |
+| `template`            | The collection's template (`id`, `title`, `status`), or `null`                    |
+| `templateReadable`    | `false` when the templates were withheld from the caller, so `null` says nothing  |
+| `templateAllowed`     | Whether the collection may have a template                                        |
+| `mayCreateTemplate`   | The collection may have a template, has none, and the caller may create templates |
+| `mayGiveDesign`       | The template is published and the caller may create templates                     |
+| `entry`               | The entry asked about with `&entry=`, or `null`                                   |
+| `names`, `collection` | The collection's singular and plural names, and its slug                          |
+
+Everything is read as the caller. Someone who may not read the collection, or the
+`templates` collection, is answered an empty list and no template, with
+`templateReadable` false. An own design is listed only when the caller may read its
+entry, so a collection whose read rule filters rows lists only the own designs of the
+entries the caller can see.
+
+### In the admin
+
+- **The entry's Design section.** Every entry whose collection has, or may have, a
+  template shows a Design section first in its side panel: the template it is shown
+  with and **Give this post its own design**, or its own design with **Edit design** and
+  **Remove own design…**. While an own design is not published, the section says
+  visitors still see the template. Where the collection has no published template, it
+  says the entry isn't shown as a page, and offers the template to open or create.
+- **The entry list.** A collection with a template gets a **Design** column marking
+  each entry with its own design: **Own design**, or a dashed **Own design · not
+  published**.
+- **The template.** The template's side panel lists the entries with their own design,
+  each opening its entry, and the builder's top bar shows how many there are.
+- **Deleting.** Deleting a template from its document lists the entries with their own
+  design, which are kept, and says the others stop being shown as pages. Deleting an
+  entry deletes its own design with it, as its Design section says.
 
 ## Other routes with a dry run
 
