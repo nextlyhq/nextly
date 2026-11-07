@@ -2074,6 +2074,11 @@ export const pageBuilder = (
         }),
         siteDefinitions: async () => {
           const style = await siteStyleNow();
+          // Imported at call time: it imports `node:async_hooks`, which a
+          // browser bundle reaching this entry cannot resolve.
+          const { withProvisionalTokenIds } = await import(
+            "./transfer/provisional-variables"
+          );
           return {
             // Capped and resolved as the compiler reads the library, so a
             // page may reference exactly the classes it applies.
@@ -2085,9 +2090,12 @@ export const pageBuilder = (
               )
             ),
             // Every tier of variables, as the stylesheet resolves them, so a
-            // page may name exactly the variables it renders with.
-            tokenIds: new Set(
-              resolveSiteTokens(style.tokens).tokens.map(tokenIdentity)
+            // page may name exactly the variables it renders with. An
+            // import's judging writes also count the variables it adds, which
+            // the site style holds only once the import applies; no other
+            // write sees any.
+            tokenIds: withProvisionalTokenIds(
+              new Set(resolveSiteTokens(style.tokens).tokens.map(tokenIdentity))
             ),
           };
         },
