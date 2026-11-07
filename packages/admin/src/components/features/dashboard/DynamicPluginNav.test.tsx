@@ -21,8 +21,11 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 let mockCanManageSettings = true;
 let mockCollectionCaps: Record<string, { canRead: boolean }> = {};
+/** Which permission slugs the reader holds, for menu items that ask one. */
+let mockHolds: (slug: string) => boolean = () => true;
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
+    hasPermission: (slug: string) => mockHolds(slug),
     capabilities: {
       canViewCollections: true,
       canManageSettings: mockCanManageSettings,
@@ -103,6 +106,7 @@ function givePluginWithReadableCollection() {
 }
 
 afterEach(() => {
+  mockHolds = () => true;
   mockBranding = undefined;
   mockCollections = { items: [] };
   mockIsLoading = false;
@@ -509,5 +513,35 @@ describe("DynamicPluginNav collapsed", () => {
 
     // The case above, without the menu item, offers it here.
     expect(screen.queryByRole("menuitem", { name: "Widgets" })).toBeNull();
+  });
+
+  it("keeps a collection whose menu item the reader may not open", async () => {
+    // The item is withheld from this reader, so it hides nothing: their way
+    // to the collection stays the collection's own link.
+    givePluginWithReadableCollection();
+    mockCanManageSettings = false;
+    mockHolds = () => false;
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/p",
+          collections: ["widgets"],
+          menu: [
+            {
+              label: "Widgets admin",
+              to: "/admin/collections/widgets",
+              requiredPermission: "manage-widgets",
+            },
+          ],
+        },
+      ],
+    } as unknown as AdminBranding;
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Widgets" })
+    ).toHaveAttribute("href", "/admin/collections/widgets");
   });
 });

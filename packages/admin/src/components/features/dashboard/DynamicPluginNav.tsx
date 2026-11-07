@@ -30,7 +30,10 @@ import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
 import { isCollectionPlacedElsewhere } from "@admin/lib/plugins/collection-placement";
-import { menuDestinations } from "@admin/lib/plugins/menu";
+import {
+  menuDestinations,
+  resolveVisibleMenuItems,
+} from "@admin/lib/plugins/menu";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
@@ -114,7 +117,7 @@ export function DynamicPluginNav({
 }: DynamicPluginNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
-  const { capabilities } = useCurrentUserPermissions();
+  const { capabilities, hasPermission } = useCurrentUserPermissions();
   const branding = useBranding();
 
   // `error` is deliberately not read. The two things this panel renders have
@@ -158,10 +161,12 @@ export function DynamicPluginNav({
 
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
-  // A collection a plugin's own menu item already leads to is listed there.
+  // A collection a plugin's own menu item already leads to is listed there,
+  // counting only the items this reader may open, as the panel draws them.
   const offeredByMenu = React.useMemo(
-    () => menuDestinations(pluginMetadata),
-    [pluginMetadata]
+    () =>
+      menuDestinations(resolveVisibleMenuItems(pluginMetadata, hasPermission)),
+    [pluginMetadata, hasPermission]
   );
 
   // Build plugin entries from ALL plugin collections (so the plugin always appears

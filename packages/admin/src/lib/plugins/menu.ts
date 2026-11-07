@@ -99,19 +99,19 @@ export function menuItemsMatching(
 }
 
 /**
- * Every address a plugin's menu items lead to, children included: a plugin
- * collection one of them already offers is listed once, by the plugin's own
- * item, and not again among the plugins' collections.
+ * Every address the given menu items lead to, children included: a plugin
+ * collection one the reader can see already offers is listed once, by the
+ * plugin's own item, and not again among the plugins' collections. Given the
+ * items as `resolveVisibleMenuItems` keeps them for the reader, so an item
+ * they may not open never hides a collection they may.
  */
 export function menuDestinations(
-  plugins: readonly PluginMetadata[] | undefined
+  items: readonly PluginMenuItemMeta[]
 ): ReadonlySet<string> {
   const destinations = new Set<string>();
-  for (const plugin of plugins ?? []) {
-    for (const item of plugin.menu ?? []) {
-      destinations.add(item.to);
-      for (const child of item.children ?? []) destinations.add(child.to);
-    }
+  for (const item of items) {
+    destinations.add(item.to);
+    for (const child of item.children ?? []) destinations.add(child.to);
   }
   return destinations;
 }

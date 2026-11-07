@@ -231,20 +231,15 @@ describe("resolveVisibleMenuItems with the panels drawn", () => {
 
 describe("menuDestinations", () => {
   it("holds every item's address, children included", () => {
-    const plugins = [
-      {
-        name: "@a/p",
-        collections: [],
-        menu: [
-          {
-            label: "Reports",
-            to: "/r",
-            children: [{ label: "Weekly", to: "/r/weekly" }],
-          },
-        ],
-      },
-    ] satisfies PluginMetadata[];
-    expect([...menuDestinations(plugins)]).toEqual(["/r", "/r/weekly"]);
-    expect(menuDestinations(undefined).size).toBe(0);
+    expect([
+      ...menuDestinations([
+        {
+          label: "Reports",
+          to: "/r",
+          children: [{ label: "Weekly", to: "/r/weekly" }],
+        },
+      ]),
+    ]).toEqual(["/r", "/r/weekly"]);
+    expect(menuDestinations([]).size).toBe(0);
   });
 });
