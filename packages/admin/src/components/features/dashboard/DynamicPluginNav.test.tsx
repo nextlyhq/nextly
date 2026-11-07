@@ -485,4 +485,29 @@ describe("DynamicPluginNav collapsed", () => {
       screen.queryByRole("menuitem", { name: /installed plugins/i })
     ).toBeNull();
   });
+
+  /**
+   * A plugin whose own menu item leads to its collection lists it once, by
+   * that item (drawn under the plugin's name in the same panel), not again
+   * among the plugins' collections.
+   */
+  it("leaves out a collection a plugin's menu item already leads to", async () => {
+    givePluginWithReadableCollection();
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/p",
+          collections: ["widgets"],
+          menu: [{ label: "Widgets", to: "/admin/collections/widgets" }],
+        },
+      ],
+    } as unknown as AdminBranding;
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    // The case above, without the menu item, offers it here.
+    expect(screen.queryByRole("menuitem", { name: "Widgets" })).toBeNull();
+  });
 });

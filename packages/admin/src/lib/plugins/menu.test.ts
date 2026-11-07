@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { PluginMetadata } from "@admin/types/branding";
 
-import { menuItemsMatching, resolveVisibleMenuItems } from "./menu";
+import {
+  menuDestinations,
+  menuItemsMatching,
+  resolveVisibleMenuItems,
+} from "./menu";
 
 const allow = () => true;
 
@@ -222,5 +226,25 @@ describe("resolveVisibleMenuItems with the panels drawn", () => {
         item => item.label
       )
     ).toEqual(["Library"]);
+  });
+});
+
+describe("menuDestinations", () => {
+  it("holds every item's address, children included", () => {
+    const plugins = [
+      {
+        name: "@a/p",
+        collections: [],
+        menu: [
+          {
+            label: "Reports",
+            to: "/r",
+            children: [{ label: "Weekly", to: "/r/weekly" }],
+          },
+        ],
+      },
+    ] satisfies PluginMetadata[];
+    expect([...menuDestinations(plugins)]).toEqual(["/r", "/r/weekly"]);
+    expect(menuDestinations(undefined).size).toBe(0);
   });
 });

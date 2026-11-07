@@ -97,3 +97,21 @@ export function menuItemsMatching(
     return children.length > 0 ? [{ ...item, children }] : [];
   });
 }
+
+/**
+ * Every address a plugin's menu items lead to, children included: a plugin
+ * collection one of them already offers is listed once, by the plugin's own
+ * item, and not again among the plugins' collections.
+ */
+export function menuDestinations(
+  plugins: readonly PluginMetadata[] | undefined
+): ReadonlySet<string> {
+  const destinations = new Set<string>();
+  for (const plugin of plugins ?? []) {
+    for (const item of plugin.menu ?? []) {
+      destinations.add(item.to);
+      for (const child of item.children ?? []) destinations.add(child.to);
+    }
+  }
+  return destinations;
+}

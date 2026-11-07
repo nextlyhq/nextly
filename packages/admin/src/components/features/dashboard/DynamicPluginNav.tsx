@@ -30,6 +30,7 @@ import { useCollections } from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
 import { isCollectionPlacedElsewhere } from "@admin/lib/plugins/collection-placement";
+import { menuDestinations } from "@admin/lib/plugins/menu";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
@@ -157,6 +158,11 @@ export function DynamicPluginNav({
 
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
+  // A collection a plugin's own menu item already leads to is listed there.
+  const offeredByMenu = React.useMemo(
+    () => menuDestinations(pluginMetadata),
+    [pluginMetadata]
+  );
 
   // Build plugin entries from ALL plugin collections (so the plugin always appears
   // with its Settings link), but only include visible collections as sub-items
@@ -188,7 +194,10 @@ export function DynamicPluginNav({
       // nothing about which section owns them.
       if (
         visibleCollectionIds.has(collection.id) &&
-        !isCollectionPlacedElsewhere(collection.name, pluginMetadata)
+        !isCollectionPlacedElsewhere(collection.name, pluginMetadata) &&
+        !offeredByMenu.has(
+          buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collection.name })
+        )
       ) {
         pluginMap.get(groupName)!.collections.push(collection);
       }
@@ -209,7 +218,13 @@ export function DynamicPluginNav({
     return Array.from(pluginMap.values()).sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-  }, [allPluginCollections, visibleCollectionIds, pluginMetadata, search]);
+  }, [
+    allPluginCollections,
+    visibleCollectionIds,
+    pluginMetadata,
+    offeredByMenu,
+    search,
+  ]);
 
   // The overview link is shown only to users who can open the page it points
   // at: /admin/plugins is manage-settings guarded, and a collection reader
