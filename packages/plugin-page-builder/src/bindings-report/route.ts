@@ -25,6 +25,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
+import { labelOf } from "../collection-labels";
 import { PAGES_SLUG } from "../collections/pages";
 import { optionalText, parseRouteQuery } from "../route-query";
 
@@ -35,7 +36,7 @@ import {
   type BindingsToFixMeta,
   type BindingsToFixRow,
 } from "./contract";
-import { topFieldOf, type ReadableDocument } from "./readable";
+import { readableRows, type ReadableDocument } from "./readable";
 import type { BindingReportRow } from "./rows";
 import type { BindingReportStore, StoredDocumentReport } from "./store";
 
@@ -52,6 +53,22 @@ export interface BindingsToFixDeps {
    * caller's request; never waits for it.
    */
   readonly refresh: (ctx: PluginRouteContext) => void;
+  /** Which of these Singles the caller may read, read as them. */
+  readonly readableSingles: (
+    ctx: PluginRouteContext,
+    slugs: ReadonlySet<string>
+  ) => Promise<ReadonlySet<string>>;
+  /** The collection components are stored in, a configured store included. */
+  readonly componentStore: () => string;
+  /** The site's default language, the one the Page Builder edits. */
+  readonly defaultLocale: () => string | undefined;
+}
+
+/** What a row's way into the editor depends on, read once per answer. */
+interface Editing {
+  readonly singles: SingleLabels;
+  readonly componentStore: string;
+  readonly defaultLocale: string | undefined;
 }
 
 /** A capital first letter, for a name read off a key. */
@@ -64,7 +81,28 @@ function named(key: string): string {
  * running registry when the answer is made, so a renamed label shows at once
  * and none is stored. A block no longer registered is named by its type.
  */
-function withLabels(row: BindingReportRow): BindingsToFixRow {
+function withLabels(
+  bare: BindingReportRow,
+  editing: Editing
+): BindingsToFixRow {
+  // A Single it reads is named as the admin names it, its slug where none.
+  const sourceLabel =
+    bare.binding.source === "single" && bare.binding.sourceKey !== undefined
+      ? editing.singles.get(bare.binding.sourceKey)
+      : undefined;
+  const row: BindingReportRow & Partial<BindingsToFixRow> = {
+    ...bare,
+    ...(sourceLabel === undefined ? {} : { sourceLabel }),
+    // A Layout region's binding is in the component the region places, not
+    // in the page: it opens in that component's builder.
+    ...(bare.layout !== undefined && bare.component !== undefined
+      ? { opens: { slug: editing.componentStore, id: bare.component } }
+      : {}),
+    // The builder edits the default language only.
+    ...(bare.locale !== undefined && bare.locale !== editing.defaultLocale
+      ? { inAnotherLanguage: true as const }
+      : {}),
+  };
   if (row.blockType === "") {
     // The document's own metadata: `seo.title` is the page's Title.
     return { ...row, blockLabel: "", propLabel: named(row.prop.slice(4)) };
@@ -82,6 +120,56 @@ function withLabels(row: BindingReportRow): BindingsToFixRow {
     blockLabel: typeof blockLabel === "string" ? blockLabel : row.blockType,
     propLabel: typeof propLabel === "string" ? propLabel : named(row.prop),
   };
+}
+
+/** The admin's name for each Single, by slug. */
+type SingleLabels = ReadonlyMap<string, string>;
+
+/** Every Single the stored rows name: reported Singles and the Singles bound. */
+function singlesNamed(stored: readonly StoredDocumentReport[]): Set<string> {
+  const slugs = new Set<string>();
+  for (const entry of stored) {
+    if (entry.kind === "single") slugs.add(entry.slug);
+    for (const row of entry.rows) {
+      if (
+        row.binding.source === "single" &&
+        row.binding.sourceKey !== undefined
+      )
+        slugs.add(row.binding.sourceKey);
+    }
+  }
+  return slugs;
+}
+
+/**
+ * The labels of the Singles named, in one registry read. A name is only
+ * wording: a read that fails, or a Single the registry no longer lists, leaves
+ * that Single named by its slug rather than failing the report.
+ */
+async function singleLabelsOf(
+  ctx: PluginRouteContext,
+  slugs: ReadonlySet<string>
+): Promise<SingleLabels> {
+  const labels = new Map<string, string>();
+  if (slugs.size === 0) return labels;
+  let rows: unknown;
+  try {
+    const listed: unknown = await ctx.services.singles.list({
+      slugAllowlist: [...slugs],
+      limit: slugs.size,
+    });
+    rows = (listed as { data?: unknown }).data;
+  } catch {
+    return labels;
+  }
+  if (!Array.isArray(rows)) return labels;
+  for (const record of rows as unknown[]) {
+    if (typeof record !== "object" || record === null) continue;
+    const slug = (record as { slug?: unknown }).slug;
+    if (typeof slug !== "string" || !slugs.has(slug)) continue;
+    labels.set(slug, labelOf(record as Record<string, unknown>, slug));
+  }
+  return labels;
 }
 
 /** The places a document can be in, as `?place=` names them. */
@@ -124,22 +212,23 @@ function filtersOf(req: Request): z.output<typeof reportQuery> {
  */
 function itemFor(
   entry: StoredDocumentReport,
-  readable: ReadableDocument | undefined
+  readable: ReadableDocument | undefined,
+  editing: Editing
 ): BindingsToFixItem | undefined {
-  if (readable === undefined) return undefined;
-  const rows = entry.rows.filter(row =>
-    readable.fields.has(topFieldOf(row.blocksField))
-  );
-  if (rows.length === 0) return undefined;
+  const rows = readableRows(entry, readable);
+  if (readable === undefined || rows.length === 0) return undefined;
+  // A Single is named by its label, as the admin's sidebar names it.
+  const singleLabel =
+    entry.kind === "single" ? editing.singles.get(entry.slug) : undefined;
   return {
     documentKey: entry.documentKey,
     kind: entry.kind,
     slug: entry.slug,
     ...(entry.documentId === undefined ? {} : { documentId: entry.documentId }),
     place: entry.place,
-    title: readable.title,
-    collectionLabel: readable.collectionLabel,
-    rows: rows.map(withLabels),
+    title: singleLabel ?? readable.title,
+    collectionLabel: singleLabel ?? readable.collectionLabel,
+    rows: rows.map(row => withLabels(row, editing)),
     checkedAt: entry.checkedAt.toISOString(),
   };
 }
@@ -166,9 +255,20 @@ async function readBindingsToFix(
           .then(entry => (entry === undefined ? [] : [entry])),
     store.fullCheck(),
   ]);
-  const readable = await deps.readable(ctx, stored);
+  // A Single is named by its label only for a reader who may read it; any
+  // other keeps the slug its binding holds.
+  const [readable, mayRead] = await Promise.all([
+    deps.readable(ctx, stored),
+    deps.readableSingles(ctx, singlesNamed(stored)),
+  ]);
+  const singles = await singleLabelsOf(ctx, mayRead);
+  const editing: Editing = {
+    singles,
+    componentStore: deps.componentStore(),
+    defaultLocale: deps.defaultLocale(),
+  };
   const visible = stored.flatMap(entry => {
-    const item = itemFor(entry, readable.get(entry.documentKey));
+    const item = itemFor(entry, readable.get(entry.documentKey), editing);
     return item === undefined ? [] : [item];
   });
   // The counts are of every place, so each tab's count stays whatever tab is
