@@ -256,6 +256,8 @@ is published. Later changes to the template don't reach the copy. An entry has a
 one own design, held by a unique key even when two requests race. The action is refused
 while the collection has no published template, and when the entry already has its own
 design. The entry is read as the caller, so an entry the caller can't read answers `404`.
+Once published, it draws the entry on the site in place of the template
+([Serving a collection's entries](/docs/page-builder#serving-a-collections-entries)).
 `remove-entry-design` deletes it, and the entry is drawn with the template again.
 Deleting an entry deletes its own design in the same transaction.
 

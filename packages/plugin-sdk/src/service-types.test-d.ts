@@ -84,6 +84,17 @@ expectTypeOf<
   ReturnType<PluginCollectionService["getCollectionInTransaction"]>
 >().toEqualTypeOf<ReturnType<PluginCollectionService["getCollection"]>>();
 
+// An entry list on a transaction the plugin holds: the token first, then
+// exactly what `listEntries` takes, answered as `listEntries` answers it.
+expectTypeOf<
+  PluginCollectionService["listEntriesInTransaction"]
+>().parameters.toEqualTypeOf<
+  [typeof tx, ...Parameters<PluginCollectionService["listEntries"]>]
+>();
+expectTypeOf<
+  ReturnType<PluginCollectionService["listEntriesInTransaction"]>
+>().toEqualTypeOf<ReturnType<PluginCollectionService["listEntries"]>>();
+
 // Exported so eslint does not flag the assertions as unused.
 export const __d56TypeCheck = {
   q,
