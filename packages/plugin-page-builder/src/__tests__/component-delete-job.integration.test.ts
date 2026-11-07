@@ -27,7 +27,11 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
-import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  mayWriteEntry,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -67,6 +71,8 @@ const NOTES = "notes";
 const BRIEFS = "briefs";
 /** The same, translated, with its status kept per language. */
 const LOCAL_BRIEFS = "local-briefs";
+/** A collection whose blocks field has an update rule reading the body. */
+const RULED_BRIEFS = "ruled-briefs";
 /** A translated Single with drafts, whose blocks are translated. */
 const LOCAL_BAND = "local-band";
 /** The plugin's run table, as its adapter names it. */
@@ -393,6 +399,8 @@ describe.each(getConfiguredTestDialects())(
         localBriefs?: boolean;
         /** A translated Single with drafts, whose blocks are translated. */
         localBand?: boolean;
+        /** A collection whose blocks field has a rule reading the body. */
+        ruledBriefs?: boolean;
         /** Components may be created under an id the caller names. */
         reuseIds?: boolean;
         /**
@@ -429,6 +437,31 @@ describe.each(getConfiguredTestDialects())(
                   fields: [
                     { name: "title", type: "text", localized: true },
                     { name: "content", type: BLOCKS_TYPE, localized: true },
+                  ],
+                } as never,
+              ]
+            : []),
+          ...(site.ruledBriefs === true
+            ? [
+                {
+                  slug: RULED_BRIEFS,
+                  status: true,
+                  fields: [
+                    { name: "title", type: "text" },
+                    {
+                      name: "content",
+                      type: BLOCKS_TYPE,
+                      // Set only with a value, and never in a write that
+                      // names the row published: a rule judging the body.
+                      access: {
+                        update: ({
+                          data,
+                        }: {
+                          data?: { status?: unknown; content?: unknown };
+                        }) =>
+                          data?.status !== "published" && data?.content != null,
+                      },
+                    },
                   ],
                 } as never,
               ]
@@ -1429,6 +1462,86 @@ describe.each(getConfiguredTestDialects())(
       expect(await exists(t, cardId)).toBe(false);
     });
 
+    it("judges a field rule on the body the conversion sends: a draft's write is let through", async () => {
+      const { t, anAuthor } = await boot({}, { ruledBriefs: true });
+      const cardId = await card(t);
+      const brief = await t.nextly.create({
+        collection: RULED_BRIEFS,
+        data: {
+          title: "Brief",
+          status: "draft",
+          content: pageDoc([copyOf("r1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const editor = await anAuthor("ruled-editor", [
+        "read-components",
+        "delete-components",
+        `read-${RULED_BRIEFS}`,
+        `update-${RULED_BRIEFS}`,
+        `publish-${RULED_BRIEFS}`,
+      ]);
+
+      // The write sends the converted blocks and names no status, which the
+      // rule allows; a check judging an empty body would refuse it.
+      const done = await deleteToTheEnd(editor, cardId);
+
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      const briefId = String(brief.item.id);
+      expect(copies(await nodesOf(t, RULED_BRIEFS, briefId), cardId)).toBe(0);
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("judges a field rule on the body the conversion sends: a published row's write stops it before anything changes", async () => {
+      const { t, anAuthor } = await boot({}, { ruledBriefs: true });
+      const cardId = await card(t);
+      const page = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: `live-${String(Math.random()).slice(2, 10)}`,
+          status: "published",
+          content: pageDoc([copyOf("p1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.create({
+        collection: RULED_BRIEFS,
+        data: {
+          title: "Brief",
+          status: "published",
+          content: pageDoc([copyOf("r1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const editor = await anAuthor("ruled-editor", [
+        "read-components",
+        "delete-components",
+        "read-pages",
+        "update-pages",
+        "publish-pages",
+        `read-${RULED_BRIEFS}`,
+        `update-${RULED_BRIEFS}`,
+        `publish-${RULED_BRIEFS}`,
+      ]);
+
+      // The brief's write names it published, which the rule refuses; a check
+      // judging a body with no status would let it through, and the page
+      // would be converted before the brief's write was refused.
+      const started = await deleteToTheEnd(editor, cardId);
+
+      expect(started.item.status, JSON.stringify(started.body)).toBe("refused");
+      expect(started.item.left).toEqual([
+        expect.objectContaining({
+          document: expect.objectContaining({ slug: RULED_BRIEFS }),
+          reason: "not-permitted",
+        }),
+      ]);
+      const pageId = String(page.item.id);
+      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+      expect(await exists(t, cardId)).toBe(true);
+    });
+
     it("stops before changing anything for a person who may not update one of the documents", async () => {
       const { t, anAuthor } = await boot({}, { briefs: true });
       const cardId = await card(t);
@@ -1595,6 +1708,36 @@ describe.each(getConfiguredTestDialects())(
       })) as unknown as Record<string, unknown>;
       const nodes = (asDocument(row.content)?.nodes ?? []) as Node[];
       expect(copies(nodes, cardId)).toBe(0);
+    });
+
+    it("judges a Single's write in a language by that language's status, not the main row's", async () => {
+      const { t } = await boot({}, { localBand: true });
+      await t.nextly.updateSingle({
+        slug: LOCAL_BAND,
+        locale: "en",
+        data: { content: pageDoc([]), status: "published", _overwrite: true },
+        overrideAccess: true,
+      });
+      await t.nextly.updateSingle({
+        slug: LOCAL_BAND,
+        locale: "de",
+        data: { content: pageDoc([]), status: "draft", _overwrite: true },
+        overrideAccess: true,
+      });
+      // May change the Single, and neither publish nor unpublish it.
+      const id = await person(t, "band-writer");
+      await grant(t, id, [`read-${LOCAL_BAND}`, `update-${LOCAL_BAND}`]);
+      const asks = (locale: string) =>
+        mayWriteEntry(
+          { user: { id } },
+          { single: LOCAL_BAND, status: "draft", locale }
+        );
+
+      // German stays a draft: no unpublish, though the main row is published.
+      await expect(asks("de")).resolves.toBe(true);
+      // The control: in the default language the main row moves out of
+      // published, which is an unpublish this person may not make.
+      await expect(asks("en")).resolves.toBe(false);
     });
 
     it("tells a save's hooks the status stored in the language it names, not the main row's", async () => {

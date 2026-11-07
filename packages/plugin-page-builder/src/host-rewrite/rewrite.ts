@@ -30,6 +30,7 @@ import {
   type HostStep,
   type LeftHost,
   type LeftReason,
+  type PlannedHostWrite,
   type RewriteReport,
   type StepOutcome,
 } from "./contract";
@@ -215,7 +216,7 @@ type HostResult =
 /** The report being built over one call. */
 interface Tally {
   rewritten: HostAddress[];
-  statuses: { host: HostAddress; status: string }[];
+  writes: PlannedHostWrite[];
   unchanged: HostAddress[];
   left: LeftHost[];
   caught: HostAddress[];
@@ -248,7 +249,7 @@ export async function rewriteHosts(
   }
   const tally: Tally = {
     rewritten: [],
-    statuses: [],
+    writes: [],
     unchanged: [],
     left: [],
     caught: [],
@@ -274,7 +275,7 @@ function report(walk: Walk, finished: boolean): RewriteReport {
     unchanged: walk.tally.unchanged,
     left: walk.tally.left,
     caughtByFinalWalk: walk.tally.caught,
-    statuses: walk.tally.statuses,
+    ...(walk.args.dryRun === true ? { writes: walk.tally.writes } : {}),
     finished,
   };
 }
@@ -468,13 +469,18 @@ async function attemptHost(
   if (candidate.access !== "write") {
     return { kind: "left", reason: "unaddressable" };
   }
-  if (decision.write.publishAs !== undefined) {
-    walk.tally.statuses.push({
+  if (!writes) {
+    // Kept only in a dry run, which writes nothing: the values a real run
+    // writes are not held past their write.
+    walk.tally.writes.push({
       host: candidate.host,
-      status: decision.write.publishAs,
+      value: decision.write.value,
+      ...(decision.write.publishAs === undefined
+        ? {}
+        : { status: decision.write.publishAs }),
     });
+    return written(decision);
   }
-  if (!writes) return written(decision);
   return writtenBy(await walk.deps.write(decision.write), decision);
 }
 

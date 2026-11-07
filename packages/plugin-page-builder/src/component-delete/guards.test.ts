@@ -9,7 +9,7 @@ import { registerComponentGuards } from "./guards";
 import { COMPONENT_DELETE_CONTEXT_KEY } from "./job";
 
 /** The guards as registered, by hook phase. */
-function guards(runPhase: string, unused = true) {
+function guards(runPhase: string, unused = true, lifecycle = true) {
   const handlers = new Map<string, (context: unknown) => unknown>();
   const asked: string[] = [];
   registerComponentGuards({
@@ -34,6 +34,7 @@ function guards(runPhase: string, unused = true) {
     }),
     confirmUnused: async () =>
       unused ? { kind: "unused" as const } : { kind: "unsure" as const },
+    lifecycle: async () => lifecycle,
   });
   return { handlers, asked };
 }
@@ -99,5 +100,31 @@ describe("the unpublish guard on a store that keeps its status per language", ()
     await expect(
       handlers.get("beforeChange")?.(save(1, "draft"))
     ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});
+
+/**
+ * A store without the Draft/Published lifecycle: `status` is an ordinary
+ * field of the host's there, so changing it unpublishes nothing.
+ */
+describe("the unpublish guard on a store without a lifecycle", () => {
+  const save = {
+    operation: "update",
+    originalData: { id: 7, status: "published" },
+    data: { status: "archived" },
+  };
+
+  it("lets a used component's field named status change", async () => {
+    const { handlers } = guards("idle", false, false);
+
+    await expect(handlers.get("beforeChange")?.(save)).resolves.toBeUndefined();
+  });
+
+  it("refuses the same save where the store has a lifecycle", async () => {
+    const { handlers } = guards("idle", false, true);
+
+    await expect(handlers.get("beforeChange")?.(save)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
   });
 });

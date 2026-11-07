@@ -119,6 +119,12 @@ export interface ComponentGuardArgs {
   readonly hostsOf?: () => HostFinder | undefined;
   /** Every document read as stored, within a budget: who places it. */
   readonly confirmUnused: (componentId: string) => Promise<UseCheck>;
+  /**
+   * Whether the store has the Draft/Published lifecycle, read as it stands.
+   * Without one, `status` is an ordinary field of the host's, and no save
+   * unpublishes a component.
+   */
+  readonly lifecycle: () => Promise<boolean>;
 }
 
 /** What reading every document as stored found. */
@@ -155,8 +161,21 @@ export function registerComponentGuards(args: ComponentGuardArgs): void {
   // hook, so a status another hook sets is the status judged.
   args.ctx.hooks.on("beforeChange", args.components, async context => {
     if (!unpublishes(context)) return;
+    if (!(await hasLifecycle(args))) return;
     await refuseUnpublishWhileUsed(args, context as GuardHookContext);
   });
+}
+
+/**
+ * Whether the store has a lifecycle, asked only of a save that would
+ * unpublish. One that can't be read counts as having one, so the check runs.
+ */
+async function hasLifecycle(args: ComponentGuardArgs): Promise<boolean> {
+  try {
+    return await args.lifecycle();
+  } catch {
+    return true;
+  }
 }
 
 /** Let through only the delete's own write, at its delete step. */

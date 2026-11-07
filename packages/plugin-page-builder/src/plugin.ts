@@ -239,17 +239,17 @@ import {
   siteBreakpointUndoRoute,
 } from "./site-breakpoint-undo";
 import {
-  resolveFontOptions,
-  type PageBuilderFontOptions,
-} from "./site-fonts/options";
-import { siteFontRoutes } from "./site-fonts/routes";
-import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
   siteCodeRoutes,
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
@@ -2269,14 +2269,23 @@ export const pageBuilder = (
       // so a component a Layout uses is refused naming the Layout first.
       {
         const placing = composition.hostsOf;
+        const store = composition.store.collection;
         registerComponentGuards({
           ctx,
-          components: composition.store.collection,
+          components: store,
           runs: () => fenceStore(ctx.db, ctx.dialect),
           hostsOf: () => placing,
           confirmUnused: storedUseCheck(() =>
             componentDeleteRewriteService(requireRewriteInstall)
           ),
+          // Read at the save, as the store stands: the registry's record of
+          // the collection, which a store made in the admin changes there.
+          lifecycle: async () =>
+            (
+              (await ctx.services.collections.getCollection(store, {})) as {
+                status?: unknown;
+              } | null
+            )?.status === true,
         });
       }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
