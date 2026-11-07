@@ -102,16 +102,16 @@ read and is refused on a write, and a selector is refused on both.
 
 `ctx.services.collections` exposes:
 
-| Method                               | Purpose                                                           |
-| ------------------------------------ | ----------------------------------------------------------------- |
-| `createEntry(slug, data, opts?)`     | Create one entry. Returns `{ message, item, warnings? }`.         |
-| `listEntries(slug, query?, opts?)`   | List with filter/sort/pagination → `PaginatedResult`.             |
-| `findEntryById(slug, id, opts?)`     | Fetch one by id.                                                  |
+| Method                               | Purpose                                                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `createEntry(slug, data, opts?)`     | Create one entry. Returns `{ message, item, warnings? }`.                                        |
+| `listEntries(slug, query?, opts?)`   | List with filter/sort/pagination → `PaginatedResult`.                                            |
+| `findEntryById(slug, id, opts?)`     | Fetch one by id.                                                                                 |
 | `updateEntry(slug, id, data, opts?)` | Update one; `data` carries `_rev` or `_overwrite: true`. Returns `{ message, item, warnings? }`. |
-| `deleteEntry(slug, id, opts?)`       | Delete one. Returns `{ message, item: { id }, warnings? }`.       |
-| `count(slug, where?, opts?)`         | Count matching rows.                                              |
-| `createMany(slug, rows, opts?)`      | Bulk insert → `BatchOperationResult`.                             |
-| `updateMany(slug, entries, opts?)`   | Bulk update, one `{ id, data }` per row → `BatchOperationResult`. |
+| `deleteEntry(slug, id, opts?)`       | Delete one. Returns `{ message, item: { id }, warnings? }`.                                      |
+| `count(slug, where?, opts?)`         | Count matching rows.                                                                             |
+| `createMany(slug, rows, opts?)`      | Bulk insert → `BatchOperationResult`.                                                            |
+| `updateMany(slug, entries, opts?)`   | Bulk update, one `{ id, data }` per row → `BatchOperationResult`.                                |
 
 It also has `createCollection`, `listCollections`, `getCollection`,
 `updateCollection`, `deleteCollection`, `warmLocalizedReadiness`, and the
@@ -184,7 +184,10 @@ const res = await ctx.services.collections.updateMany(
     // Each row says which version it changes (its `_rev`), or that it
     // replaces whatever is stored.
     { id: "post-1", data: { status: "published", _rev: "7" } },
-    { id: "post-2", data: { status: "archived", pinned: false, _overwrite: true } },
+    {
+      id: "post-2",
+      data: { status: "archived", pinned: false, _overwrite: true },
+    },
   ],
   { as: "system" }
 );
@@ -400,9 +403,10 @@ is a hook):
 
 **The rules:**
 
-- It offers `listEntries`, `findEntryById`, `count` and `group`, and runs **as the system
-  only**, never as a person, even inside a person's request. Its options carry only
-  `context`, `locale` and `fallbackLocale`.
+- It offers `listEntries`, `findEntryById`, `count` and `group` (and, inside a
+  transaction, the reads below), and runs **as the system only**, never as a person,
+  even inside a person's request. Its options carry only `context`, `locale` and
+  `fallbackLocale`.
 - Any other collection is refused before anything is read. That includes another plugin's,
   the app's, and the collections of a plugin you depend on (`dependsOn`). Contrast `ctx.db`,
   which lets a dependent plugin read the owner's tables.
@@ -416,6 +420,56 @@ is a hook):
   another, and this read skips them. Use it to decide something in your plugin's
   own code; read through `ctx.services.collections` for anything a person sees.
 </Callout>
+
+### Reading your own content inside a transaction
+
+A handler that runs inside a write's transaction (`ctx.hooks.onInTransaction`), or work
+inside `collections.withTransaction`, cannot read through `listEntries` or `findEntryById`:
+they take a connection from the pool. That connection cannot see what the transaction
+wrote, and on a pool of one connection, the usual serverless setting, it never comes free:
+the transaction holds it until the read returns, so the read waits until the pool gives up.
+
+Three `@experimental` reads run on the transaction's own connection instead. Each takes the
+transaction token first: the `tx` that `withTransaction` hands its work, or the handler's
+`transaction`.
+
+- `listEntriesInTransaction(tx, slug, options?, opts?)` takes the same options as
+  `listEntries` and gives the same answer.
+- `findEntryByIdInTransaction(tx, slug, id, opts?)` gives the same answer as
+  `findEntryById`.
+- `getSingleInTransaction(tx, slug, opts?)` reads a Single your plugin declared, as stored.
+  None of the Single's read hooks run (`beforeOperation`, `beforeRead`, `afterRead`, and
+  its fields' `afterRead`). A Single with no stored document answers the default document,
+  and nothing is written.
+
+```ts
+ctx.hooks.onInTransaction(ctx.self.collections.claims, async write => {
+  const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+    write.transaction,
+    ctx.self.collections.claims,
+    {
+      where: { address: { equals: write.data?.address } },
+      pagination: { limit: 50 },
+    }
+  );
+  // ...decide from rows that include this write's own, uncommitted one
+});
+```
+
+They follow the rules above: as the system, your own collections and Singles only, and a
+settled token is refused, both before anything is read. On PostgreSQL and MySQL the rows
+they read are locked `FOR SHARE` until the transaction ends. A locked read sees the latest
+committed row, whatever the transaction's isolation level, and a write to that row from
+elsewhere waits for your transaction. A list's `pagination.total` is a count, which takes
+no lock, so rows can still be added beside your page: page with `limit`, and stop on a
+page shorter than the limit rather than on the total. SQLite has one connection and one
+writer, so there is nothing to lock.
+
+When the read goes on to write the rows it read, pass `{ lock: "update" }` as the last
+argument of `listEntriesInTransaction` or `findEntryByIdInTransaction`. The rows are then
+locked `FOR UPDATE`, so a second transaction doing the same waits for yours, rather than
+both holding a shared lock that the other's write then waits on, which the database ends by
+refusing one of them.
 
 ## When to drop to `ctx.db`
 

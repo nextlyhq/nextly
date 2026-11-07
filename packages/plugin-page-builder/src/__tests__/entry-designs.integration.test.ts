@@ -1,8 +1,8 @@
 /**
  * An entry's own design against a real instance: giving one through the
  * template actions route as a draft copy of the collection's published
- * template, the unique key that keeps one per entry when two gives race past
- * every read, removing it, and its deletion with its entry.
+ * template, the unique key and the entry's lock that keep one per entry when
+ * two gives run at once, removing it, and its deletion with its entry.
  *
  * @module __tests__/entry-designs.integration.test
  */
@@ -11,7 +11,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { definePlugin, NextlyError } from "@nextlyhq/plugin-sdk";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -37,36 +37,21 @@ const DESIGNER = [
   "read-posts",
 ];
 
-/**
- * Holds every template create at its `beforeChange` until `width` of them
- * have arrived, so racing gives all pass every read before any is written.
- */
-const race = { width: 0, arrived: 0, release: (): void => {} };
-let released = Promise.resolve();
-function startRace(width: number): void {
-  race.width = width;
-  race.arrived = 0;
-  released = new Promise(resolve => {
-    race.release = resolve;
-  });
+/** A template document holding one heading, by id. */
+function templateDocument(id: string) {
+  return {
+    formatVersion: 1,
+    kind: "template",
+    nodes: [
+      {
+        id,
+        type: "core/heading",
+        version: 1,
+        props: { text: "Notes", level: 2 },
+      },
+    ],
+  };
 }
-const racingCreates = definePlugin({
-  name: "@t/racing-designs",
-  version: "1.0.0",
-  nextly: ">=0.0.0",
-  init(ctx) {
-    ctx.hooks.on("beforeChange", TEMPLATES_SLUG, async hook => {
-      const { operation } = hook as { operation?: string };
-      if (operation !== "create" || race.width === 0) return;
-      race.arrived += 1;
-      if (race.arrived >= race.width) {
-        race.width = 0;
-        race.release();
-      }
-      await released;
-    });
-  },
-});
 
 describe.each(getConfiguredTestDialects())(
   "an entry's own design (%s)",
@@ -74,8 +59,6 @@ describe.each(getConfiguredTestDialects())(
     let current: TestNextly | undefined;
 
     afterEach(async () => {
-      race.width = 0;
-      race.release();
       await current?.destroy();
       current = undefined;
     });
@@ -83,7 +66,7 @@ describe.each(getConfiguredTestDialects())(
     async function boot(): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder(), racingCreates],
+        plugins: [pageBuilder()],
         collections: [
           defineCollection({
             slug: "posts",
@@ -145,6 +128,21 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const { cookie } = await holding(t, DESIGNER);
       const template = await publishedTemplate(t, cookie);
+      // The template as published, then a working draft of it the copy must
+      // not take: the copy is of what visitors see.
+      await t.nextly.update({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        data: { content: templateDocument("published-heading") },
+        overrideAccess: true,
+      });
+      await t.nextly.update({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        data: { content: templateDocument("draft-heading") },
+        draft: true,
+        overrideAccess: true,
+      });
       const hello = await entry(t, "Hello world");
 
       const given = await act(cookie, {
@@ -168,7 +166,9 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
       });
       expect(row?.collection ?? null).toBeNull();
-      expect(row?.content).toMatchObject({ kind: "template" });
+      expect(
+        (row?.content as { nodes?: { id: string }[] }).nodes?.map(n => n.id)
+      ).toEqual(["published-heading"]);
 
       // Still one template for the collection: the own design is not one.
       const second = await act(cookie, {
@@ -202,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await designs(t)).toHaveLength(1);
     });
 
-    it("keeps one own design per entry when two gives race past every read", async () => {
+    it("keeps one own design per entry when two gives run at once", async () => {
       const t = await boot();
       const { cookie } = await holding(t, DESIGNER);
       await publishedTemplate(t, cookie);
@@ -212,14 +212,14 @@ describe.each(getConfiguredTestDialects())(
         collection: "posts",
         entry: hello,
       };
-      startRace(2);
 
+      // Both found no design before writing; the entry's lock makes them
+      // take turns, and the second meets the first at the unique key.
       const answers = await Promise.all([
         act(cookie, action),
         act(cookie, action),
       ]);
 
-      expect(race.arrived).toBe(2);
       expect(answers.map(answer => answer.status).sort()).toEqual([200, 409]);
       expect(await designs(t)).toHaveLength(1);
     });
@@ -303,6 +303,78 @@ describe.each(getConfiguredTestDialects())(
         entry: hello,
       });
       expect(remove.status).toBe(403);
+    });
+
+    it("keeps an entry's own design when its template is deleted, naming the template no longer", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      const template = await publishedTemplate(t, cookie);
+      const hello = await entry(t, "Hello world");
+      await act(cookie, {
+        kind: "give-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      expect((await designs(t))[0]?.forkedFrom).toBe(template);
+
+      await t.nextly.delete({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        overrideAccess: true,
+      });
+
+      const [kept] = await designs(t);
+      expect(kept?.entryId).toBe(hello);
+      expect(kept?.forkedFrom ?? null).toBeNull();
+    });
+
+    it("deletes an entry's own design with the entry even after its template is gone", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      const template = await publishedTemplate(t, cookie);
+      const hello = await entry(t, "Hello world");
+      await act(cookie, {
+        kind: "give-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      await t.nextly.delete({
+        collection: TEMPLATES_SLUG,
+        id: template,
+        overrideAccess: true,
+      });
+      expect(await designs(t)).toHaveLength(1);
+
+      await t.nextly.delete({
+        collection: "posts",
+        id: hello,
+        overrideAccess: true,
+      });
+      expect(await designs(t)).toEqual([]);
+    });
+
+    it("refuses removing the own design of an entry the caller may not read, as not found", async () => {
+      const t = await boot();
+      const { cookie } = await holding(t, DESIGNER);
+      await publishedTemplate(t, cookie);
+      const hello = await entry(t, "Hello world");
+      await act(cookie, {
+        kind: "give-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      const removerId = await person(t, "remover");
+      await grant(t, removerId, ["read-templates", "delete-templates"]);
+      const remover = await sessionOf(t, removerId);
+
+      const refused = await act(remover, {
+        kind: "remove-entry-design",
+        collection: "posts",
+        entry: hello,
+      });
+      expect(refused.status).toBe(404);
+      expect(JSON.stringify(refused.body)).not.toContain("Hello world");
+      expect(await designs(t)).toHaveLength(1);
     });
 
     it("deletes an entry's own design with the entry", async () => {

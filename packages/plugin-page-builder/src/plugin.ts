@@ -24,7 +24,9 @@ import {
   type HookContext,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginCollectionView,
   type PluginDefinition,
+  type PluginCollectionTransaction,
   type PluginRouteContext,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
@@ -43,11 +45,9 @@ import {
   publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
+import { lockHolder, releaseHolderLock } from "./address-claims/claim-store";
 import { claimLocales } from "./address-claims/page-claims";
-import {
-  registerPageAddressClaims,
-  type ReadsById,
-} from "./address-claims/page-claims-hook";
+import { registerPageAddressClaims } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
@@ -71,6 +71,8 @@ import {
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
@@ -104,12 +106,18 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
+import {
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_FORKED_FROM_FIELD,
+  templatesCollection,
+  TEMPLATES_SLUG,
+} from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
   registerComponentGuards,
   storedUseCheck,
+  storeLifecycle,
 } from "./component-delete/guards";
 import { componentDeleteRoutes } from "./component-delete/route";
 import { componentDeleteJob } from "./component-delete/sweep";
@@ -147,6 +155,7 @@ import {
   pageBuilderSettingsSingle,
 } from "./default-layout/settings-single";
 import { definitionActionsRoute } from "./definition-actions-route";
+import { asOverwrite } from "./document-version";
 import { entriesRoute } from "./entries-route";
 import type {
   CompositionSetup,
@@ -242,17 +251,17 @@ import {
   siteBreakpointUndoRoute,
 } from "./site-breakpoint-undo";
 import {
-  resolveFontOptions,
-  type PageBuilderFontOptions,
-} from "./site-fonts/options";
-import { siteFontRoutes } from "./site-fonts/routes";
-import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
   siteCodeRoutes,
   type PageBuilderSiteCodeOptions,
 } from "./site-code/route";
 import { siteCodeSingle } from "./site-code/storage";
+import {
+  resolveFontOptions,
+  type PageBuilderFontOptions,
+} from "./site-fonts/options";
+import { siteFontRoutes } from "./site-fonts/routes";
 import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
@@ -422,6 +431,79 @@ function componentStoreOf(opts: PageBuilderOptions): ComponentStore {
       : { collection: readiness.collection }),
     field: readiness.field ?? COMPONENT_DOCUMENT_FIELD,
   };
+}
+
+/**
+ * Whether the plugin's own Components collection is the component store: no
+ * host store is named, or the one named is it.
+ */
+function storeIsOwn(store: ComponentStore): boolean {
+  return store.collection === undefined || store.collection === COMPONENTS_SLUG;
+}
+
+/**
+ * The admin views that route a component's delete through Delete component,
+ * on the store's collection and no other: the plugin's own when no host store
+ * is named, else the host's.
+ */
+function deleteComponentViews(
+  store: ComponentStore
+): Record<string, PluginCollectionView> {
+  const replaced = {
+    documentActions: {
+      delete: {
+        component: DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+        label: "Delete component…",
+      },
+    },
+  };
+  return store.collection === undefined || storeIsOwn(store)
+    ? { [COMPONENTS_SLUG]: replaced }
+    : { [store.collection]: replaced };
+}
+
+/**
+ * Refuse a component store that shares a slug with a collection this plugin
+ * declares, other than naming its own Components collection.
+ *
+ * The delete's surfaces are keyed by the store's slug, and a key that is one
+ * of the plugin's own slugs is read as that plugin collection, through any
+ * rename: a host store named `patterns` would get Delete component on the
+ * plugin's Patterns, and one named `components` while the plugin's own is
+ * renamed would get it on the renamed collection, while the delete itself
+ * acts on the host's. Ambiguous either way, so refused, naming both, rather
+ * than guessed. `resolved` is the plugin's collections as the site renamed
+ * them, known from `init`; without it, only the declared names are judged.
+ */
+function refuseStoreSharingAPluginSlug(
+  store: ComponentStore,
+  declared: readonly string[],
+  resolved?: Readonly<Record<string, string | undefined>>
+): void {
+  const slug = store.collection;
+  if (slug === undefined) return;
+  if (slug === COMPONENTS_SLUG) {
+    const renamed = resolved?.[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+    if (renamed === COMPONENTS_SLUG) return;
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", but the Page Builder's own Components collection is renamed to "${renamed}". Leave componentReadiness.collection unset to keep components in the plugin's collection, or give the host's store a slug the Page Builder does not declare.`
+    );
+  }
+  if (declared.includes(slug)) {
+    throw new Error(
+      `[page-builder] componentReadiness.collection names "${slug}", which is also a collection the Page Builder declares. A component store of the host's own needs a slug of its own: rename the host's collection, or leave componentReadiness.collection unset to use the plugin's Components collection.`
+    );
+  }
+}
+
+/**
+ * A host's own component store's slug, or `undefined` when the store is the
+ * plugin's own collection.
+ */
+function hostStoreOf(store: ComponentStore): string | undefined {
+  return store.collection === undefined || storeIsOwn(store)
+    ? undefined
+    : store.collection;
 }
 
 /**
@@ -796,6 +878,11 @@ function adminClientConfig(
       ? {}
       : { remotePatterns: opts.remotePatterns }),
     ...(opts.checklist === undefined ? {} : { checklist: opts.checklist }),
+    // A host's own component store, by slug, for the delete tools the header
+    // draws for its list. A slug, nothing secret.
+    ...(hostStoreOf(componentStoreOf(opts)) === undefined
+      ? {}
+      : { componentStore: hostStoreOf(componentStoreOf(opts)) }),
     // The canvas route's path, which the editor loads its frame from. A path,
     // never a secret: the route serves an empty page.
     ...(canvasPath === undefined ? {} : { canvasPath }),
@@ -1413,6 +1500,11 @@ export const pageBuilder = (
   // Set once that pass has finished, after which a page save need not claim
   // the existing pages its list's later pages would fall on.
   let pageClaimsBackfilled = false;
+  // Which initialization the flag belongs to. A reload under HMR runs
+  // `init` again on this same definition, so the flag is reset there, and a
+  // pass started by an earlier initialization, still running, never sets it
+  // for the new one (whose languages may differ).
+  let pageClaimsInit = 0;
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -1839,6 +1931,13 @@ export const pageBuilder = (
     // because the factory is memoized for the boot and clears only on its
     // first resolution.
     init: ctx => {
+      // The store judged again against the site's renames, before anything
+      // is wired to it.
+      refuseStoreSharingAPluginSlug(
+        componentStoreOf(opts),
+        [],
+        ctx.self.collections
+      );
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
@@ -1871,6 +1970,13 @@ export const pageBuilder = (
       // place and names the template already holding it. RESOLVED slugs, for
       // the reason the guard above takes them.
       const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      // The address store's collection, as the address claims and the lock an
+      // entry's own design is given and deleted under both reach it.
+      const addressClaims = {
+        services: ctx.services,
+        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
+        dialect: ctx.dialect,
+      };
       templateGuard = {
         templatesCollection: templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
@@ -1886,6 +1992,8 @@ export const pageBuilder = (
           }
         },
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
+        lockEntry: (tx, collection, id) =>
+          lockHolder(addressClaims, tx, { collection, id }),
         // Read as the system and in any state: whether the entry exists is
         // the question, and who may see it is the action's to ask.
         entryExists: async (collection, id) => {
@@ -1912,18 +2020,86 @@ export const pageBuilder = (
       registerTemplateGuard(ctx, templateGuard);
       // An entry's own design is deleted with its entry, in the delete's
       // transaction.
+      // The id of the own design held under `key`, read on the transaction
+      // `tx` stands for, with the lock asked for.
+      const designIdUnder = async (
+        tx: PluginCollectionTransaction,
+        key: string,
+        lock: "share" | "update"
+      ): Promise<string | null> => {
+        const found =
+          await ctx.services.ownCollections.listEntriesInTransaction(
+            tx,
+            templates,
+            {
+              where: designUnderWhere(key),
+              pagination: { limit: 1 },
+              depth: 0,
+            },
+            { lock }
+          );
+        const id = (found.data[0] as { id?: unknown } | undefined)?.id;
+        return typeof id === "string" || typeof id === "number"
+          ? String(id)
+          : null;
+      };
       registerEntryDesignCascade(ctx.hooks, {
         templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
-        designUnder: async key => {
-          const found = await ctx.services.ownCollections.listEntries(
-            templates,
-            { where: designUnderWhere(key), pagination: { limit: 1 }, depth: 0 }
-          );
-          const id = (found.data[0] as { id?: unknown } | undefined)?.id;
-          return typeof id === "string" || typeof id === "number"
-            ? String(id)
-            : null;
+        hasDesigns: async (tx, collection) => {
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templates,
+              {
+                where: {
+                  [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                },
+                pagination: { limit: 1 },
+                depth: 0,
+              }
+            );
+          return found.data.length > 0;
+        },
+        designAt: (tx, key) => designIdUnder(tx, key, "share"),
+        lockEntry: (tx, entry) => lockHolder(addressClaims, tx, entry),
+        releaseEntryLock: (tx, entry) =>
+          releaseHolderLock(addressClaims, tx, entry),
+        // On the delete's own transaction, for update: the design is deleted
+        // next, and no second pooled connection is taken while the delete
+        // holds one.
+        designUnder: (tx, key) => designIdUnder(tx, key, "update"),
+        unlinkCopiesOf: async (tx, id) => {
+          // Every copy first, then each emptied: paged by a short page, as an
+          // in-transaction list's total is an unlocked count.
+          const copies: string[] = [];
+          for (let page = 1; ; page += 1) {
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
+                tx,
+                templates,
+                {
+                  where: { [TEMPLATE_FORKED_FROM_FIELD]: { equals: id } },
+                  pagination: { limit: 100, page },
+                  depth: 0,
+                },
+                { lock: "update" }
+              );
+            for (const row of found.data as { id?: unknown }[]) {
+              if (typeof row.id === "string" || typeof row.id === "number") {
+                copies.push(String(row.id));
+              }
+            }
+            if (found.data.length < 100) break;
+          }
+          for (const copy of copies) {
+            await ctx.services.collections.updateEntryInTransaction(
+              tx,
+              templates,
+              copy,
+              asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null })
+            );
+          }
         },
         deleteInTransaction: (tx, slug, id) =>
           ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
@@ -2165,27 +2341,36 @@ export const pageBuilder = (
       // A page's address, and its paginated list's later pages, held in the
       // address store in the save's own transaction, so two documents never
       // hold one address whichever path saved them.
-      const claimsStore = {
-        services: ctx.services,
-        slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
-        dialect: ctx.dialect,
-      };
+      const claimsStore = addressClaims;
       const pagesSlug = ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG;
       const siteLocales = (): readonly string[] =>
         claimLocales(
           ctx.config.localization?.locales.map(locale => locale.code) ?? [],
           ctx.config.localization?.defaultLocale
         );
+      pageClaimsInit += 1;
+      pageClaimsBackfilled = false;
+      const claimsInit = pageClaimsInit;
       registerPageAddressClaims(ctx.hooks, {
         pages: pagesSlug,
         claims: claimsStore,
         locales: siteLocales,
-        nextly: async () => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          return (await getCachedNextly()) as unknown as ReadsById;
+        // On the save's own connection, so naming a refusal takes no second
+        // connection from the pool while the save holds one.
+        readPage: async (tx, id) => {
+          try {
+            const found =
+              await ctx.services.ownCollections.findEntryByIdInTransaction(
+                tx,
+                pagesSlug,
+                id
+              );
+            return found as unknown as Readonly<Record<string, unknown>>;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return null;
+            throw error;
+          }
         },
-        collection: slug =>
-          ctx.services.collections.getCollection(slug, undefined as never),
         ...(opts.pagePreviewPath === undefined
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
@@ -2209,12 +2394,15 @@ export const pageBuilder = (
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
+          current: () => claimsInit === pageClaimsInit,
         });
         // Only a pass that settled every page ends the saves' part in it: a
         // page it failed to read or claim is still unclaimed, so saves keep
         // claiming the pages in a list's way until a later boot's pass
         // finishes.
-        if (complete) pageClaimsBackfilled = true;
+        if (complete && claimsInit === pageClaimsInit) {
+          pageClaimsBackfilled = true;
+        }
       };
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
@@ -2317,14 +2505,26 @@ export const pageBuilder = (
       // so a component a Layout uses is refused naming the Layout first.
       {
         const placing = composition.hostsOf;
+        const store = composition.store.collection;
+        // The registry's record of the collection, which a store made in the
+        // admin changes there; never read inside a caller's transaction.
+        const lifecycle = storeLifecycle(
+          async () =>
+            (
+              (await ctx.services.collections.getCollection(store, {})) as {
+                status?: unknown;
+              } | null
+            )?.status === true
+        );
         registerComponentGuards({
           ctx,
-          components: composition.store.collection,
+          components: store,
           runs: () => fenceStore(ctx.db, ctx.dialect),
           hostsOf: () => placing,
           confirmUnused: storedUseCheck(() =>
             componentDeleteRewriteService(requireRewriteInstall)
           ),
+          lifecycle,
         });
       }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
@@ -2528,7 +2728,10 @@ export const pageBuilder = (
           )
         ),
         patternsCollection(),
-        componentsCollection(),
+        // The plugin's own collection is the store unless the host names one.
+        componentsCollection({
+          isStore: storeIsOwn(componentStoreOf(opts)),
+        }),
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
@@ -2836,6 +3039,15 @@ export const pageBuilder = (
           },
           options: opts.siteCode,
           permission: MANAGE_SITE_PERMISSION,
+          // Read as the server, for "Last changed by": the name only.
+          personName: async id => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            const person = await nextly.users.findByID({ id });
+            return typeof person?.name === "string" && person.name !== ""
+              ? person.name
+              : null;
+          },
         }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
@@ -2997,10 +3209,20 @@ export const pageBuilder = (
             before: "status",
           },
         ],
+        // Delete component on the component store, wherever it is: the
+        // plugin's own collection (followed through a rename, as every view
+        // key is), or the host's store named by `componentReadiness`. The
+        // document's own Delete opens the Delete component dialog in its
+        // place, keeping its row, its permission and every reason it can't
+        // run (a past version on screen, a colleague's claim). A host's store
+        // also gets the delete tools above its list, for the row action; the
+        // plugin's own collection declares them itself.
+        //
         // On a template's own document screen: the entries with their own
         // design, in its panel, and a Delete that says what deleting the
         // template, or an own design, does to the site before it happens.
         views: {
+          ...deleteComponentViews(componentStoreOf(opts)),
           [TEMPLATES_SLUG]: {
             documentActions: {
               delete: { component: TEMPLATE_DELETE_COMPONENT },
@@ -3013,6 +3235,13 @@ export const pageBuilder = (
             ],
           },
         },
+        // A host's own store's list gets Delete component on each row through
+        // tools drawn in the header, which is on every page: the slot above a
+        // list is the host's own to fill, and a second one there would be
+        // dropped. Its slug reaches them through `clientConfig`.
+        ...(hostStoreOf(componentStoreOf(opts)) === undefined
+          ? {}
+          : { header: { slot: COMPONENT_STORE_DELETE_HOST_COMPONENT } }),
         menu: [
           {
             label: "Patterns",
@@ -3049,5 +3278,12 @@ export const pageBuilder = (
   sitesQueries.set(plugin, {
     definitionOf: name => namedQueries.definitionOf(name),
   });
+  // A host's component store must not share a slug with the plugin's own
+  // collections: refused while the config is read, before anything is keyed
+  // by it. A rename is judged again in `init`, once it is known.
+  refuseStoreSharingAPluginSlug(
+    componentStoreOf(opts),
+    (plugin.contributes?.collections ?? []).map(collection => collection.slug)
+  );
   return plugin;
 };

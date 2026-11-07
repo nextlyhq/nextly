@@ -68,6 +68,11 @@ export interface NamedQueryRowField {
   readonly type: string;
   /** What a list's filter would call it, when it holds one scalar. */
   readonly kind?: ListFieldKind;
+  /**
+   * A group's own fields, each listed the same way, so a binding can name
+   * one by its path (`seo.title`).
+   */
+  readonly fields?: readonly NamedQueryRowField[];
 }
 
 /**

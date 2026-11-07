@@ -12,10 +12,11 @@
  *   where it is;
  * - a Layout using the component;
  * - a document the person may not write as the conversion will: its update
- *   gate for that row, the update rule of each field the conversion sets, and
- *   the lifecycle gate only where the status the write names moves the row
- *   into or out of published, asked of core's own gates (`mayWriteEntry`), so
- *   the check asks what the write asks, no more. The conversion names the
+ *   gate for that row, the update rule of the field each write sets, judged
+ *   on the body that write sends (the field's new value, and the status it
+ *   names), and the lifecycle gate only where the status the write names
+ *   moves the row into or out of published, asked of core's own gates
+ *   (`mayWriteEntry`), so the check asks what the write asks, no more. The conversion names the
  *   state it read the live row in, so it never moves one. A document whose
  *   gates cannot be asked counts as one they may not write.
  *
@@ -24,10 +25,10 @@
 import type { PluginWriteCheck } from "@nextlyhq/plugin-sdk";
 
 import {
-  documentAddressOf,
   documentKeyOf,
   type HostAddress,
   type LeftReason,
+  type PlannedHostWrite,
   type RewriteReport,
 } from "../host-rewrite/contract";
 import type { HostProgress } from "../host-rewrite/progress";
@@ -93,6 +94,7 @@ export async function judge(
     caller: deps.caller,
     after,
     maxDocuments: STEP_DOCUMENTS,
+    plannedWrites: true,
     deadline: new Date(deps.now().getTime() + STEP_MS),
   });
   const { report } = slice;
@@ -100,7 +102,7 @@ export async function judge(
     .filter(left => left.reason === "pending-draft")
     .map(left => left.host);
   const stopping = stoppingDocuments(report);
-  for (const key of await writesRefused(deps, report, drafted)) {
+  for (const key of await writesRefused(deps, report)) {
     if (!stopping.has(key)) stopping.set(key, "not-permitted");
   }
   const layoutKeys = [...stopping]
@@ -140,99 +142,54 @@ function stoppingDocuments(report: RewriteReport): Map<string, LeftReason> {
   return stopping;
 }
 
-/** One write the conversion will make: a document, in one language. */
-interface PlannedWrite {
-  readonly key: string;
-  readonly locale: string | undefined;
-  readonly fields: Set<string>;
-  /** The status the write names, where it names one. */
-  status: string | undefined;
-}
-
 /**
- * The documents the person may not write as the conversion will, each asked
- * once per language it is written in: the top-level fields it sets, and the
- * status it names. A check that cannot be asked counts as refused.
+ * The documents the person may not write as the conversion will, each write
+ * the dry run reported asked as it would be sent: the field it sets with the
+ * value it sets there, and the status it names. Only those writes are asked:
+ * a host left for its pending draft makes none, and keeps its own reason. A
+ * dry run that reported no writes at all while it rewrote hosts, or a check
+ * that cannot be asked, counts as refused.
  */
 async function writesRefused(
   deps: JudgeDeps,
-  report: RewriteReport,
-  drafted: readonly HostAddress[]
+  report: RewriteReport
 ): Promise<string[]> {
-  const statuses = new Map(
-    (report.statuses ?? []).map(named => [writeKeyOf(named.host), named.status])
-  );
-  const writes = new Map<string, PlannedWrite>();
-  for (const host of [...report.rewritten, ...drafted]) {
-    const at = writeKeyOf(host);
-    const planned = writes.get(at) ?? {
-      key: documentKeyOf(host),
-      locale: host.locale,
-      fields: new Set<string>(),
-      status: undefined,
-    };
-    const field = host.path[0];
-    if (field !== undefined) planned.fields.add(field);
-    planned.status ??= statuses.get(at);
-    writes.set(at, planned);
-  }
+  if (report.writes === undefined) return keysOf(report.rewritten);
   const refused = new Set<string>();
-  for (const planned of writes.values()) {
-    if (refused.has(planned.key)) continue;
-    if (!(await mayMake(deps, planned))) refused.add(planned.key);
+  for (const write of report.writes) {
+    const key = documentKeyOf(write.host);
+    if (refused.has(key)) continue;
+    if (!(await mayMake(deps.mayWrite, write))) refused.add(key);
   }
   return [...refused];
 }
 
-/** Whether the person may make one planned write; `false` where it can't be asked. */
-async function mayMake(
-  deps: JudgeDeps,
-  planned: PlannedWrite
+/**
+ * Whether the person may make one write, asked with the body the write sends
+ * (`siteHostWriter` sends the host's field, with the status where it names
+ * one), so a field rule reading `data` judges what it will judge on the
+ * write. `false` where it can't be asked.
+ */
+export async function mayMake(
+  mayWrite: (check: PluginWriteCheck) => Promise<boolean>,
+  write: PlannedHostWrite
 ): Promise<boolean> {
-  const address = documentAddressOf(planned.key);
-  if (address === undefined) return false;
+  const field = write.host.path[0];
+  if (field === undefined || write.host.path.length !== 1) return false;
   const target =
-    address.kind === "single"
-      ? { single: address.slug }
-      : { collection: address.slug, id: address.id ?? "" };
+    write.host.kind === "single"
+      ? { single: write.host.slug }
+      : { collection: write.host.slug, id: write.host.id ?? "" };
   try {
-    return await mayWriteEveryField(deps.mayWrite, {
+    return await mayWrite({
       ...target,
-      ...(planned.status === undefined ? {} : { status: planned.status }),
-      fields: [...planned.fields],
-      ...(planned.locale === undefined ? {} : { locale: planned.locale }),
+      ...(write.status === undefined ? {} : { status: write.status }),
+      data: { [field]: write.value },
+      ...(write.host.locale === undefined ? {} : { locale: write.host.locale }),
     });
   } catch {
     return false;
   }
-}
-
-/** How many fields one write check names at most: core takes up to 64. */
-export const FIELDS_PER_CHECK = 32;
-
-/**
- * Whether the person may make `check`, its fields asked {@link
- * FIELDS_PER_CHECK} at a time: a document with more top-level fields than one
- * check names is asked in several, each with the same document, language and
- * status, and is allowed only where every one is.
- */
-export async function mayWriteEveryField(
-  mayWrite: (check: PluginWriteCheck) => Promise<boolean>,
-  check: PluginWriteCheck
-): Promise<boolean> {
-  const fields = [...(check.fields ?? [])];
-  let at = 0;
-  do {
-    const part = fields.slice(at, at + FIELDS_PER_CHECK);
-    if (!(await mayWrite({ ...check, fields: part }))) return false;
-    at += FIELDS_PER_CHECK;
-  } while (at < fields.length);
-  return true;
-}
-
-/** A document in one language, as one write makes it. */
-function writeKeyOf(host: HostAddress): string {
-  return `${documentKeyOf(host)}\u001F${host.locale ?? ""}`;
 }
 
 /** The documents the hosts belong to, once each, in the order found. */

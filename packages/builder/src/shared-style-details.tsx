@@ -29,6 +29,7 @@ import {
   sharedStyleUse,
   SHARED_STYLE_NOT_WHOLE_NOTE,
   SHARED_STYLE_RENAME_PENDING,
+  SHARED_STYLE_UNCOUNTED_USES,
   type BlocksOnThisPage,
   type SharedStyleRefusal,
   type SharedStyleRemoval,
@@ -550,8 +551,13 @@ function RemoveOne({
           role="group"
           aria-label={`Remove ${name}`}
         >
+          {/* What the count knows, and what it cannot see: it asks even at
+              a count of zero, since a zero is not permission. */}
           <p>
-            Remove <strong>{name}</strong>? Nothing uses it.
+            Remove <strong>{name}</strong>? No page uses it in the editor.
+          </p>
+          <p className="nx-shared-styles__meta">
+            {SHARED_STYLE_UNCOUNTED_USES}
           </p>
           <KeepOrRemove
             busy={busy}

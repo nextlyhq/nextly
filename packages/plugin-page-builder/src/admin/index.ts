@@ -32,7 +32,13 @@ import {
 
 import {
   BUILDER_VIEW_COMPONENT,
+<<<<<<< HEAD
   ENTRY_DESIGN_SECTION_COMPONENT,
+=======
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
+  COMPONENT_LIST_TOOLS_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+>>>>>>> origin/entry-own-design
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
@@ -56,6 +62,11 @@ import "../styles/editor.css";
 
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
+import {
+  ComponentListTools,
+  ComponentStoreDeleteHost,
+  DeleteComponentReplacement,
+} from "./DeleteComponentAction";
 import { PageBuilderView } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import { EntryDesignSection } from "./EntryDesignSection";
@@ -95,19 +106,34 @@ const COMPONENTS = {
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
+<<<<<<< HEAD
   // An entry's own design: the Design section of every entry's side panel,
   // a template's own designs, and the delete that says what it means.
   [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
   [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
   [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
+=======
+  // Above the Components list: Import from file, and the row action's
+  // Delete component dialog; for a host's component store, the same tools
+  // drawn through the header slot.
+  [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
+  [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
+  // The component store's own Delete, opening Delete component instead.
+  [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
+>>>>>>> origin/entry-own-design
 };
 
 // Eager registration on module load.
 registerComponents(COMPONENTS);
 // "Export" on the Components, Patterns and Layouts lists.
 registerExportActions();
+<<<<<<< HEAD
 // The Design column on the lists of collections that have a template.
 registerEntryDesignColumn();
+=======
+// "Delete component…" on the component store's list is registered by the
+// list's own tools, under the slug the site resolved.
+>>>>>>> origin/entry-own-design
 
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
@@ -120,7 +146,13 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 export {
   BlocksField,
   BlocksSummary,
+<<<<<<< HEAD
   EntryDesignSection,
+=======
+  ComponentListTools,
+  ComponentStoreDeleteHost,
+  DeleteComponentReplacement,
+>>>>>>> origin/entry-own-design
   PageBuilderView,
   RemoveLayoutToolbarSlot,
   TemplateDeleteAction,

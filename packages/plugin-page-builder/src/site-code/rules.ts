@@ -20,6 +20,7 @@
  * @experimental
  */
 import { cssFetches } from "./css-urls";
+import { SITE_CODE_LIMITS } from "./limits";
 
 /** Where site code goes on every published page. */
 export type SiteCodeSlot = "head" | "body";
@@ -51,20 +52,9 @@ export type SiteCodeEntry =
       };
     };
 
-/**
- * How much site code a site may have. It ships on every page view, so the
- * bounds are generous for vendor snippets and small for a page's weight.
- */
-export const SITE_CODE_LIMITS = {
-  /** Characters a person may paste into one slot. */
-  slotChars: 50_000,
-  /** Elements one slot may hold. */
-  entriesPerSlot: 40,
-  /** Characters in one URL. */
-  urlLength: 2048,
-  /** Characters in one attribute value. */
-  attributeLength: 4096,
-} as const;
+// How much site code a site may have, kept on its own so the admin's
+// editor reads the same bounds without loading the rules' CSS parser.
+export { SITE_CODE_LIMITS };
 
 /**
  * The script types a browser runs as classic scripts: the HTML standard's

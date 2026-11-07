@@ -25,6 +25,7 @@ import {
 import {
   bindingsFromWire,
   listCollections,
+  type NamedQueryLookup,
   type PageBindings,
 } from "@nextlyhq/blocks-react";
 import {
@@ -77,7 +78,13 @@ export function canvasBindingsRequest(
   drawn: readonly BlockDocument[],
   identity: DocumentIdentity | null,
   locale: string | undefined,
-  component = false
+  component = false,
+  /**
+   * The site's named queries: a list whose source is one whose rows are a
+   * collection's entries asks for that collection's field shapes too, as
+   * the published page does.
+   */
+  namedQueries?: NamedQueryLookup
 ): CanvasBindingsRequest | undefined {
   if (identity === null || drawn.length === 0) return undefined;
   const found = bindingDemand(drawn);
@@ -89,7 +96,7 @@ export function canvasBindingsRequest(
         formatsDates: found.formatsDates,
       }
     : found;
-  const lists = [...listCollections(drawn)].sort();
+  const lists = [...listCollections(drawn, namedQueries)].sort();
   const wire = demandToWire(demand);
   const asks =
     wire.entry !== undefined ||
@@ -170,13 +177,16 @@ export function canvasBindingsFor(
 export function useCanvasBindings(
   drawn: readonly BlockDocument[],
   locale: string | undefined,
-  component = false
+  component = false,
+  /** The site's named queries, once the canvas has read them. */
+  namedQueries?: NamedQueryLookup
 ): PageBindings {
   const identity = useDocumentIdentity();
   const userId = useCurrentUserId();
   const request = useMemo(
-    () => canvasBindingsRequest(drawn, identity, locale, component),
-    [drawn, identity, locale, component]
+    () =>
+      canvasBindingsRequest(drawn, identity, locale, component, namedQueries),
+    [drawn, identity, locale, component, namedQueries]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);

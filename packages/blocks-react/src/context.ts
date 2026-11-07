@@ -170,6 +170,7 @@ export type NamedQueryFailureCode =
   | "timeout"
   | "bad-rows"
   | "rows-hidden"
+  | "uncounted"
   | "threw";
 
 /** A named query's failure, as the host logs it. */

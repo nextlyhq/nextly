@@ -1,69 +1,83 @@
 /**
- * A document with more top-level fields than one write check names is asked
- * in several checks, each naming the same document, language and status, and
- * is allowed only where every check is.
+ * Each write the conversion will make is asked as it would be sent: the
+ * field it sets with the value it sets there, the status it names, and its
+ * language, so a field rule reading `data` judges the write's own body.
  */
 import type { PluginWriteCheck } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
-import { FIELDS_PER_CHECK, mayWriteEveryField } from "./judge";
+import { mayMake } from "./judge";
 
-const FIELDS = Array.from({ length: 65 }, (_, n) => `field${n}`);
+const CONVERTED = { formatVersion: 1, kind: "page", nodes: [] };
 
-/** A write check that records what it was asked, refusing one field. */
-function checks(refusing?: string) {
+/** A write check that records what it was asked, answering `answer`. */
+function checks(answer: () => Promise<boolean> = async () => true) {
   const asked: PluginWriteCheck[] = [];
   const mayWrite = async (check: PluginWriteCheck) => {
     asked.push(check);
-    return !(check.fields ?? []).includes(refusing ?? "");
+    return answer();
   };
   return { asked, mayWrite };
 }
 
-describe("a write check over a document with 65 fields", () => {
-  it("asks every field, at most 32 to a check, with the same document, language and status", async () => {
+describe("a planned write, asked as it would be sent", () => {
+  it("names the field with its new value, the status and the language", async () => {
     const { asked, mayWrite } = checks();
 
-    const allowed = await mayWriteEveryField(mayWrite, {
-      collection: "pages",
-      id: "7",
+    const allowed = await mayMake(mayWrite, {
+      host: {
+        kind: "collection",
+        slug: "pages",
+        id: "7",
+        path: ["content"],
+        locale: "de",
+      },
+      value: CONVERTED,
       status: "published",
-      locale: "de",
-      fields: FIELDS,
     });
 
     expect(allowed).toBe(true);
-    expect(FIELDS_PER_CHECK).toBe(32);
-    expect(asked.map(check => check.fields?.length)).toEqual([32, 32, 1]);
-    expect(asked.flatMap(check => check.fields ?? [])).toEqual(FIELDS);
-    for (const check of asked) {
-      expect(check).toMatchObject({
+    expect(asked).toEqual([
+      {
         collection: "pages",
         id: "7",
         status: "published",
+        data: { content: CONVERTED },
         locale: "de",
-      });
-    }
+      },
+    ]);
   });
 
-  it("refuses when the last field alone is refused", async () => {
-    const { mayWrite } = checks("field64");
-
-    await expect(
-      mayWriteEveryField(mayWrite, {
-        collection: "pages",
-        id: "7",
-        fields: FIELDS,
-      })
-    ).resolves.toBe(false);
-  });
-
-  it("still asks once for a write naming no field", async () => {
+  it("names no status for a write that names none", async () => {
     const { asked, mayWrite } = checks();
 
+    await mayMake(mayWrite, {
+      host: { kind: "single", slug: "home", path: ["content"] },
+      value: CONVERTED,
+    });
+
+    expect(asked).toEqual([{ single: "home", data: { content: CONVERTED } }]);
+  });
+
+  it("answers no for a refused check, one that throws, and a host below a group", async () => {
+    const write = {
+      host: { kind: "single" as const, slug: "home", path: ["content"] },
+      value: CONVERTED,
+    };
+
     await expect(
-      mayWriteEveryField(mayWrite, { single: "home", fields: [] })
-    ).resolves.toBe(true);
-    expect(asked).toHaveLength(1);
+      mayMake(checks(async () => false).mayWrite, write)
+    ).resolves.toBe(false);
+    await expect(
+      mayMake(checks(() => Promise.reject(new Error("down"))).mayWrite, write)
+    ).resolves.toBe(false);
+    const { asked, mayWrite } = checks();
+    await expect(
+      mayMake(mayWrite, {
+        ...write,
+        host: { ...write.host, path: ["hero", "content"] },
+      })
+    ).resolves.toBe(false);
+    expect(asked).toEqual([]);
   });
 });

@@ -12,6 +12,7 @@
 import {
   CONDITION_KIND_OPS,
   conditionFieldKind,
+  type BindingFieldShape,
   type Condition,
   type ConditionFieldKind,
   type ConditionOp,
@@ -65,26 +66,52 @@ export function conditionFieldsOf(
   collection: LoopCollection
 ): readonly ConditionField[] {
   const listed = new Set(collection.fields.map(field => field.name));
-  const others = (collection.readable ?? []).flatMap(
-    (shape): ConditionField[] => {
-      if (listed.has(shape.name)) return [];
-      // Of the kind the save judges it by: a field no list offers may still
-      // be a scalar, such as an entry's id, with that kind's operators.
-      const kind = conditionFieldKind(shape);
-      return [
-        {
-          name: shape.name,
-          label: shape.label ?? shape.name,
-          kind,
-          ...(kind === "other" ? { kindWords: otherKindWords(shape) } : {}),
-          ...(kind === "entry" && typeof shape.relationTo === "string"
-            ? { relationTo: shape.relationTo }
-            : {}),
-        },
-      ];
-    }
+  const others = (collection.readable ?? []).flatMap(shape =>
+    listed.has(shape.name) ? [] : [conditionFieldOf(shape)]
   );
   return [...collection.fields, ...others];
+}
+
+/**
+ * The fields a block's conditions can check in a list's items whose source
+ * is a named query with rows of its own schema: the fields its rows declare,
+ * each of the kind the save judges it by.
+ */
+export function conditionFieldsOfShapes(
+  shapes: readonly BindingFieldShape[]
+): readonly ConditionField[] {
+  return shapes.map(shape => {
+    const field = conditionFieldOf(shape);
+    // A row's choices are declared as their stored values, which are also
+    // what an author picks between; a day-only date is entered as a day.
+    if (field.kind === "choice" && shape.options !== undefined) {
+      return {
+        ...field,
+        options: shape.options.map(value => ({ value, label: value })),
+      };
+    }
+    return field.kind === "date" && shape.dateOnly === true
+      ? { ...field, dateOnly: true }
+      : field;
+  });
+}
+
+/**
+ * One field as a condition checks it, of the kind the save judges it by: a
+ * field no list offers may still be a scalar, such as an entry's id, with
+ * that kind's operators.
+ */
+function conditionFieldOf(shape: ReadableField): ConditionField {
+  const kind = conditionFieldKind(shape);
+  return {
+    name: shape.name,
+    label: shape.label ?? shape.name,
+    kind,
+    ...(kind === "other" ? { kindWords: otherKindWords(shape) } : {}),
+    ...(kind === "entry" && typeof shape.relationTo === "string"
+      ? { relationTo: shape.relationTo }
+      : {}),
+  };
 }
 
 /** A field as a list's filter controls take it, for one a list filters by. */

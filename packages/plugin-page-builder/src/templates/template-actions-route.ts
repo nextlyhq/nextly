@@ -58,7 +58,11 @@ import {
   type ActionAnswer,
   type CompositionRouteContext,
 } from "../composition-route-kit";
-import { documentVersionOf, withVersionFrom } from "../document-version";
+import {
+  asOverwrite,
+  documentVersionOf,
+  withVersionFrom,
+} from "../document-version";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
 import { readingAsUser } from "../library-route";
@@ -71,6 +75,7 @@ import {
   type TemplateSummary,
 } from "./template-actions-contract";
 import {
+  ASKED_BEFORE_CONTEXT,
   secondTemplateRefusal,
   templateCollectionProblem,
   type MayReadTemplate,
@@ -180,79 +185,19 @@ async function giveEntryDesign(
   const by = await actingCaller(ctx, [["create", templates]], {
     anyEntry: true,
   });
-  // Only what names the entry is read: its id, and its title where the
-  // action gives the design none.
-  const titleField =
-    action.title === undefined
-      ? await titleFieldOf(ctx, action.collection)
-      : null;
-  const entry = recordOf(
-    await readOrNull(async () =>
-      (await getCachedNextly()).findByID({
-        collection: action.collection,
-        id: action.entry,
-        ...(await readingAsUser(ctx)),
-        status: "all",
-        depth: 0,
-        select:
-          titleField === null ? { id: true } : { id: true, [titleField]: true },
-      })
-    )
-  );
-  if (entry === null) {
-    throw NextlyError.notFound({
-      logContext: { reason: "entry-design-missing-entry" },
-    });
-  }
-  const key = entryDesignKey(action.collection, action.entry);
-  const title = action.title ?? entryTitle(entry, titleField, action.entry);
+  const title = await designTitle(ctx, action);
   const asked: TemplateSummary = {
     title,
     collection: action.collection,
     entry: action.entry,
     status: "draft",
   };
-
-  const problem = await templateCollectionProblem(
-    action.collection,
-    guard.readCollection,
-    guard.ownCollections()
-  );
-  // The copy is of the template as visitors see it: its published state.
-  const base =
-    problem === null
-      ? await templateWhere(
-          templates,
-          { [TEMPLATE_COLLECTION_FIELD]: { equals: action.collection } },
-          "published"
-        )
-      : null;
-  const held = await templateWhere(
-    templates,
-    { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
-    "all"
-  );
-  const refusal =
-    problem !== null
-      ? refusedAction([problem])
-      : held !== null
-        ? alreadyHasDesign(held)
-        : base === null
-          ? refusedAction([
-              `The collection "${action.collection}" has no published template to copy. Publish its template first.`,
-            ])
-          : null;
-  if (refusal !== null || base === null) {
-    const refused = refusal ?? refusedAction([]);
-    if (!dryRun) throw refused;
-    return dryRunAnswer(
-      "give-entry-design",
-      asked,
-      refusalMessages(refused),
-      by
-    );
+  const key = entryDesignKey(action.collection, action.entry);
+  const base = await designSource(action.collection, key, guard);
+  if (base instanceof NextlyError) {
+    if (!dryRun) throw base;
+    return dryRunAnswer("give-entry-design", asked, refusalMessages(base), by);
   }
-
   const data = {
     title,
     [TEMPLATE_ENTRY_FIELD]: key,
@@ -261,8 +206,8 @@ async function giveEntryDesign(
     [TEMPLATE_FORKED_FROM_FIELD]: idOf(base) ?? null,
     [TEMPLATE_CONTENT_FIELD]: base[TEMPLATE_CONTENT_FIELD],
   };
-  const collections = ctx.services.collections;
   if (dryRun) {
+    const collections = ctx.services.collections;
     const judged = await judgeInTransaction(
       run => collections.withTransaction(run),
       (tx: PluginCollectionTransaction) =>
@@ -280,12 +225,110 @@ async function giveEntryDesign(
         )
       : dryRunAnswer("give-entry-design", asked, judged.refusal.messages, by);
   }
+  const created = await createDesign(ctx, action, data, key, guard);
+  return {
+    message: "The entry was given its own design.",
+    item: {
+      dryRun: false,
+      kind: "give-entry-design",
+      template: summaryOf(created, asked),
+      refusals: [],
+      by,
+    },
+  };
+}
+
+/**
+ * The own design's name: the one the action gives, or its entry's title. The
+ * entry is read as the caller, its id and title field alone, and a caller who
+ * may not read it is answered not found.
+ */
+async function designTitle(
+  ctx: TemplateActionsContext,
+  action: Extract<TemplateAction, { kind: "give-entry-design" }>
+): Promise<string> {
+  const titleField =
+    action.title === undefined
+      ? await titleFieldOf(ctx, action.collection)
+      : null;
+  const entry = await entryAsCaller(
+    ctx,
+    action.collection,
+    action.entry,
+    titleField
+  );
+  if (entry === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "entry-design-missing-entry" },
+    });
+  }
+  return action.title ?? entryTitle(entry, titleField, action.entry);
+}
+
+/**
+ * The template an own design for the entry keyed `key` is copied from, its
+ * published state, or the refusal of giving one: a collection that may not
+ * have a template, an entry that already has its own design, or no published
+ * template to copy.
+ */
+async function designSource(
+  collection: string,
+  key: string,
+  guard: TemplateGuardSetup
+): Promise<Record<string, unknown> | NextlyError> {
+  const templates = guard.templatesCollection;
+  const problem = await templateCollectionProblem(
+    collection,
+    guard.readCollection,
+    guard.ownCollections()
+  );
+  if (problem !== null) return refusedAction([problem]);
+  const held = await templateWhere(
+    templates,
+    { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
+    "all"
+  );
+  if (held !== null) return alreadyHasDesign(held);
+  // The copy is of the template as visitors see it: its published state.
+  const base = await templateWhere(
+    templates,
+    { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
+    "published"
+  );
+  return (
+    base ??
+    refusedAction([
+      `The collection "${collection}" has no published template to copy. Publish its template first.`,
+    ])
+  );
+}
+
+/**
+ * Create the own design, under the entry's lock, which deleting the entry
+ * takes too, and check once it has committed that the entry is still there:
+ * a delete that held the lock first has committed by then, and the design
+ * made after it is removed. Two gives meet at the unique key; the one that
+ * loses is told the entry has one now.
+ */
+async function createDesign(
+  ctx: TemplateActionsContext,
+  action: Extract<TemplateAction, { kind: "give-entry-design" }>,
+  data: Record<string, unknown>,
+  key: string,
+  guard: TemplateGuardSetup
+): Promise<unknown> {
+  const templates = guard.templatesCollection;
+  const collections = ctx.services.collections;
   let created: { item: unknown };
   try {
-    created = await collections.createEntry(templates, data, asCaller(ctx));
+    created = await collections.withTransaction(async tx => {
+      await guard.lockEntry(tx, action.collection, action.entry);
+      return collections.createEntryInTransaction(tx, templates, data, {
+        ...asCaller(ctx),
+        context: { [ASKED_BEFORE_CONTEXT]: true },
+      });
+    });
   } catch (error) {
-    // Two gives that both found no own design meet at the unique index; the
-    // one that loses is told the entry has one now.
     if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
     const winner = await templateWhere(
       templates,
@@ -295,16 +338,46 @@ async function giveEntryDesign(
     if (winner === null) throw error;
     throw alreadyHasDesign(winner);
   }
-  return {
-    message: "The entry was given its own design.",
-    item: {
-      dryRun: false,
-      kind: "give-entry-design",
-      template: summaryOf(created.item, asked),
-      refusals: [],
-      by,
-    },
-  };
+  if (!(await guard.entryExists(action.collection, action.entry))) {
+    const id = idOf(created.item);
+    if (id !== undefined) {
+      await collections.deleteEntry(templates, id, { as: "system" });
+    }
+    throw NextlyError.notFound({
+      logContext: { reason: "entry-design-entry-deleted" },
+    });
+  }
+  await unlinkIfSourceGone(ctx, data, created.item, guard);
+  return created.item;
+}
+
+/**
+ * Empty the new design's link to the template it was copied from when that
+ * template was deleted while the copy was being made: the delete emptied the
+ * link of every copy it found, and this one was not yet there to find.
+ */
+async function unlinkIfSourceGone(
+  ctx: TemplateActionsContext,
+  data: Record<string, unknown>,
+  item: unknown,
+  guard: TemplateGuardSetup
+): Promise<void> {
+  const source = data[TEMPLATE_FORKED_FROM_FIELD];
+  const id = idOf(item);
+  if (typeof source !== "string" || id === undefined) return;
+  const templates = guard.templatesCollection;
+  const stillThere = await templateWhere(
+    templates,
+    { id: { equals: source } },
+    "all"
+  );
+  if (stillThere !== null) return;
+  await ctx.services.collections.updateEntry(
+    templates,
+    id,
+    asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null }),
+    { as: "system" }
+  );
 }
 
 /** The refusal of a second own design for an entry, naming the first by id. */
@@ -330,6 +403,16 @@ async function removeEntryDesign(
   const by = await actingCaller(ctx, [["delete", templates]], {
     anyEntry: true,
   });
+  // The entry read as the caller first, as giving one a design reads it: a
+  // caller who may not read the entry learns nothing of its design, and
+  // removes none.
+  if (
+    (await entryAsCaller(ctx, action.collection, action.entry, null)) === null
+  ) {
+    throw NextlyError.notFound({
+      logContext: { reason: "entry-design-missing-entry" },
+    });
+  }
   const held = await templateWhere(
     templates,
     {
@@ -450,6 +533,31 @@ async function deleteTemplate(
       by,
     },
   };
+}
+
+/**
+ * The entry `id` of `collection` as the caller may read it, with its id and
+ * `titleField` alone, or null where the caller may not.
+ */
+async function entryAsCaller(
+  ctx: TemplateActionsContext,
+  collection: string,
+  id: string,
+  titleField: string | null
+): Promise<Record<string, unknown> | null> {
+  return recordOf(
+    await readOrNull(async () =>
+      (await getCachedNextly()).findByID({
+        collection,
+        id,
+        ...(await readingAsUser(ctx)),
+        status: "all",
+        depth: 0,
+        select:
+          titleField === null ? { id: true } : { id: true, [titleField]: true },
+      })
+    )
+  );
 }
 
 /** The field `collection` names its entries by, or "title" where it says none. */

@@ -73,6 +73,12 @@ export interface ComponentDeleteRewriteArgs {
   readonly deadline?: Date;
   /** Judge every host and write nothing. */
   readonly dryRun?: boolean;
+  /**
+   * In a dry run, report each write with the body it sends
+   * (`RewriteReport.writes`). Asked only by a caller whose slices are small,
+   * since every body is held until the call ends.
+   */
+  readonly plannedWrites?: boolean;
 }
 
 /**
@@ -137,6 +143,8 @@ export interface PlanArgs
   readonly maxDocuments: number;
   /** When the slice stops, after the document in hand. */
   readonly deadline: Date;
+  /** Report each write with its body; see {@link ComponentDeleteRewriteArgs}. */
+  readonly plannedWrites?: boolean;
 }
 
 /** What one slice of a plan found. */
@@ -272,7 +280,12 @@ export function componentDeleteRewriteService(
           advance: () => Promise.resolve(false),
         },
         progress(),
-        { componentId: args.componentId, caller: args.caller, dryRun: true },
+        {
+          componentId: args.componentId,
+          caller: args.caller,
+          dryRun: true,
+          ...(args.plannedWrites === true ? { plannedWrites: true } : {}),
+        },
         PLAN_RUN_ID,
         source => slicedSource(source, args, slice)
       );
@@ -374,6 +387,7 @@ function rewriteAsCaller(
         : { maxDocuments: args.maxDocuments }),
       ...(args.deadline === undefined ? {} : { deadline: args.deadline }),
       ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+      ...(args.plannedWrites === true ? { plannedWrites: true } : {}),
     }
   );
 }

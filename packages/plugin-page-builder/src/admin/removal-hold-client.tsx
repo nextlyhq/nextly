@@ -58,6 +58,8 @@ import {
 } from "../removal-hold-contract";
 import { exposureIdsOf } from "../retired-history";
 
+import { DESTRUCTIVE_CONFIRM_CLASS } from "./destructive-confirm";
+
 /** A count of the documents placing a component, as the dialogs say it. */
 type Reach = RemovalHoldResult["reach"];
 
@@ -361,10 +363,8 @@ function RemovalRecountDialog({
           <Button
             type="button"
             variant="destructive"
-            // A deeper red under the white label in the light theme, where
-            // the solid red holds under 4.5:1; the dark theme's dark label
-            // on its solid red holds already.
-            className="bg-destructive-700 hover:bg-destructive-800 dark:bg-destructive-solid dark:hover:bg-destructive-600"
+            // The deeper red the page builder's destructive confirmations share.
+            className={DESTRUCTIVE_CONFIRM_CLASS}
             onClick={() => onAnswer(true)}
           >
             Publish and remove

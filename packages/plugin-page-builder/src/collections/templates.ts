@@ -93,7 +93,12 @@ export function templatesCollection(): CollectionConfig {
         index: true,
       }),
       text({ name: TEMPLATE_ENTRY_ID_FIELD, label: "Entry id" }),
-      text({ name: TEMPLATE_FORKED_FROM_FIELD, label: "Copied from" }),
+      // Indexed: deleting a template finds the designs copied from it by it.
+      text({
+        name: TEMPLATE_FORKED_FROM_FIELD,
+        label: "Copied from",
+        index: true,
+      }),
       blocks({
         name: TEMPLATE_CONTENT_FIELD,
         label: "Template",
