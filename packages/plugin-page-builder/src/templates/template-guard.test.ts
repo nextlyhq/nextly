@@ -35,6 +35,8 @@ function setup(
     lockEntry: async () => undefined,
     entryExists: async (collection, id) =>
       collection === "posts" && id === "p1",
+    declaredAddresses: new Map(),
+    addressHolderOf: async () => null,
     ...overrides,
   };
 }

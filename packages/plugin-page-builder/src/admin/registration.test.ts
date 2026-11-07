@@ -27,6 +27,7 @@ import {
   TEMPLATE_DELETE_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
+import { TEMPLATE_ADDRESS_FIELD_COMPONENT } from "../collections/templates";
 import { BLOCKS_FIELD_COMPONENT } from "../fields/blocksField";
 
 // Captured rather than reconstructed. The assertion is about what this module
@@ -93,6 +94,17 @@ describe("the admin entry's component registration", () => {
       ]) {
         expect(registered[path], path).toBeTypeOf("function");
       }
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
+
+  it(
+    "registers the exact specifier the template address field declares",
+    async () => {
+      await import("./index");
+      expect(registered[TEMPLATE_ADDRESS_FIELD_COMPONENT]).toBeTypeOf(
+        "function"
+      );
     },
     IMPORT_GRAPH_BUDGET_MS
   );

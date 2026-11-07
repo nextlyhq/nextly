@@ -232,6 +232,12 @@ collection exists. A refused action answers `409` for a collection that already 
 template and `422` for one that cannot have one; a dry run answers either as `refusals`.
 The answer holds the `template` as the write stored it.
 
+Deleting a collection deletes its template and its entries' own designs with it, in the
+same transaction. The Schema Builder's delete dialog lists them first, under the page builder's name, so
+you see what goes before you confirm. The page builder's own collections are not
+affected. A template created while its collection is being deleted waits for the delete
+and is then refused, as for a collection that does not exist.
+
 ### An entry's own design
 
 One entry can be drawn with a design of its own instead of its collection's template.

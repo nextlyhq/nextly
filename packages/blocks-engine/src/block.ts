@@ -680,8 +680,11 @@ export interface BlockDefinition<
    * would put a network call between a crawler and the page title. An image is
    * returned as a media id or a URL and resolved by the caller, which is what
    * keeps it that way.
+   *
+   * `read.bound` names what each bound prop holds, as the block's render is
+   * given it, so the metadata offers the picture the page draws.
    */
-  seo?(props: P): BlockSeoContribution | undefined;
+  seo?(props: P, read?: BlockSeoRead): BlockSeoContribution | undefined;
   /**
    * Slots this block may decline to render for some props.
    *
@@ -705,6 +708,16 @@ export interface BlockDefinition<
   conditionalSlots?: readonly string[];
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
+}
+
+/**
+ * What a block's `seo` is told about the props it is asked with.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface BlockSeoRead {
+  /** What each bound prop holds, by prop name, as its render is given it. */
+  readonly bound?: Readonly<Record<string, BoundValue>>;
 }
 
 /**
@@ -846,5 +859,5 @@ export interface AnyBlockDefinition
    * nothing to fall back on, and EVERY typed definition was rejected by
    * `registerBlocks` whether or not it contributed any SEO at all.
    */
-  seo?(props: object): BlockSeoContribution | undefined;
+  seo?(props: object, read?: BlockSeoRead): BlockSeoContribution | undefined;
 }

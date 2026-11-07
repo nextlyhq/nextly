@@ -70,6 +70,7 @@ import { EntryDesignSection } from "./EntryDesignSection";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
 import { TemplateDeleteAction } from "./TemplateDeleteAction";
 import { TemplateOwnDesigns } from "./TemplateOwnDesigns";
+import { TemplateAddressField } from "./TemplateAddressField";
 import { registerExportActions } from "./transfer-export-action";
 import { TransferImport } from "./transfer-import";
 
@@ -94,6 +95,14 @@ const BLOCKS_FIELD_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksField";
  */
 const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
 
+/**
+ * The template form's address control. Must match
+ * `TEMPLATE_ADDRESS_FIELD_COMPONENT`, for the reason `BLOCKS_FIELD_PATH`
+ * gives.
+ */
+const TEMPLATE_ADDRESS_FIELD_PATH =
+  "@nextlyhq/plugin-page-builder/admin#TemplateAddressField";
+
 const COMPONENTS = {
   [BLOCKS_FIELD_PATH]: BlocksField,
   [BLOCKS_SUMMARY_PATH]: BlocksSummary,
@@ -115,6 +124,8 @@ const COMPONENTS = {
   [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
   [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
   [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
+  // The template's address, editable under the routing permission.
+  [TEMPLATE_ADDRESS_FIELD_PATH]: TemplateAddressField,
 };
 
 // Eager registration on module load.
@@ -146,6 +157,7 @@ export {
   RemoveLayoutToolbarSlot,
   TemplateDeleteAction,
   TemplateOwnDesigns,
+  TemplateAddressField,
   TransferImport,
 };
 /**

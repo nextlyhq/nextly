@@ -50,6 +50,11 @@ import { exposedValueFits } from "./placement-values";
 import { isPlainRecord } from "./plain-record";
 import { isRichTextNode, isRichTextValue } from "./rich-text";
 import { ownEntry } from "./safe-record";
+import {
+  hasControlCharacter,
+  isImageAddress,
+  normalizeUrl,
+} from "./url-policy";
 
 /**
  * A binding path: a dot-joined chain of field identifiers, such as "title" or
@@ -218,6 +223,13 @@ export type BindingSchemaRef =
  */
 export interface BindingSchemaSource {
   fieldsOf(ref: BindingSchemaRef): readonly BindingFieldShape[] | undefined;
+  /**
+   * Whether the shapes list an entry's `createdAt` and `updatedAt` where the
+   * source has them. Then one unlisted is missing, as any other field is;
+   * otherwise it is judged by the value it reads, as shapes that never list
+   * them leave it to be.
+   */
+  readonly listsTimestamps?: boolean;
 }
 
 /**
@@ -364,6 +376,42 @@ function isReferenceValue(value: unknown): boolean {
 }
 
 /**
+ * What an image prop's value names: a media record's id, which the host
+ * resolves to its address, alternative text and size, or an image address.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface ImageValue {
+  readonly holds: "media" | "address";
+  readonly value: string;
+}
+
+/** Any leading `scheme:`, as the URL parser reads one. */
+const ANY_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * An image prop's value read by its shape: an image address, else a media id.
+ * A value written like an address that is not an image address (another
+ * scheme, a host-relative `//host`, a control character) is neither, so it is
+ * never handed to a host's media lookup as an id.
+ */
+export function imageValueOf(value: unknown): ImageValue | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  if (isImageAddress(trimmed)) return { holds: "address", value: trimmed };
+  const normalized = normalizeUrl(trimmed);
+  if (
+    hasControlCharacter(normalized) ||
+    ANY_SCHEME.test(normalized) ||
+    normalized.startsWith("/")
+  ) {
+    return undefined;
+  }
+  return { holds: "media", value: trimmed };
+}
+
+/**
  * Whether a value is one a prop of this kind can hold, judged as the prop's
  * own value would be.
  *
@@ -396,6 +444,12 @@ export function isValidPropValue(
       );
     case "reference":
       return isReferenceValue(value);
+    case "image":
+      // Only bindings ask this of an image, and only of a fallback, which is
+      // an image address: never `javascript:` or `data:`, and not a media id,
+      // which a page's export, import and media index do not follow into a
+      // binding, so the picture would be lost on the way.
+      return isImageAddress(value);
     default:
       // The sentinel that clears an override is not a value of any prop.
       if (isUnsetOverride(value)) return false;
@@ -529,14 +583,20 @@ function shapelessRest(remaining: number): PathWalk {
 
 /**
  * A path naming a field its source's schema does not list: one every entry
- * carries is judged by its value, any other is missing.
+ * carries is judged by its value, any other is missing. A timestamp is one
+ * only where the shapes do not list timestamps: where they do, a source
+ * without them has none.
  */
 function unlistedField(
   name: string,
   index: number,
-  segments: readonly string[]
+  segments: readonly string[],
+  schema: BindingSchemaSource
 ): PathWalk {
-  if (index === 0 && SYSTEM_FIELDS.has(name)) {
+  const carried =
+    name === "id" ||
+    (SYSTEM_FIELDS.has(name) && schema.listsTimestamps !== true);
+  if (index === 0 && carried) {
     return shapelessRest(segments.length - MAX_SEGMENTS_WITHOUT_SCHEMA + 1);
   }
   return walkFailure(
@@ -566,7 +626,9 @@ function walkPath(
     const field: BindingFieldShape | undefined = fields.find(
       candidate => candidate.name === name
     );
-    if (field === undefined) return unlistedField(name, index, segments);
+    if (field === undefined) {
+      return unlistedField(name, index, segments, schema);
+    }
     if (last) return { ok: true, field };
     const step = stepInto(field, hops, schema);
     if (!step.ok) return step;
@@ -841,7 +903,9 @@ function checkedFallback(
       input,
       stored.path,
       "binding-fallback-invalid",
-      `This binding's fallback is not a valid ${prop.kind} value, so the prop's own value is shown instead.`
+      prop.kind === "image"
+        ? "This image binding's fallback is not an image address (https://, http:// or a path on the site), so the prop's own value is shown instead. A media id can't be a fallback."
+        : `This binding's fallback is not a valid ${prop.kind} value, so the prop's own value is shown instead.`
     )
   );
   return undefined;

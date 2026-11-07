@@ -33,6 +33,7 @@ import { asOverwrite } from "../document-version";
 
 import {
   claimKey,
+  collectionLockKey,
   holderLockKey,
   pathOf,
   servedAddress,
@@ -411,6 +412,27 @@ export async function releaseHolderLock(
   if (claims.dialect === "sqlite") return;
   const [row] = await keyed(claims, tx, [holderLockKey(holder)], "update");
   if (row !== undefined) await remove(claims, tx, row);
+}
+
+/**
+ * Hold `collection`'s own lock row until this transaction ends (see
+ * {@link collectionLockKey}): taken by an entry's save before it reads where
+ * its collection is served, and by whatever changes that, so neither commits
+ * past the other unseen. Taken before any holder's or address's lock.
+ */
+export async function lockCollection(
+  claims: Claims,
+  tx: Tx,
+  collection: string
+): Promise<void> {
+  const key = collectionLockKey(collection);
+  await holdLockRow(
+    claims,
+    tx,
+    key,
+    { claimKey: storedKey(key), kind: "lock" },
+    { kind: "lock" }
+  );
 }
 
 /**
@@ -1011,19 +1033,6 @@ export async function reconcileHolder(
   return true;
 }
 
-/**
- * Hold the locks on `addresses` until `tx` ends, in key order, so saves that
- * must not judge the same thing at once take turns: whatever else locks one
- * of them waits for this transaction, then reads what it committed.
- */
-export async function holdLocks(
-  claims: Claims,
-  tx: Tx,
-  addresses: readonly ServedAddress[]
-): Promise<void> {
-  await lockInOrder(claims, tx, addresses);
-}
-
 /** Who holds an address, as the route serving it is told. */
 export interface AddressHolding {
   readonly holder: Holder;
@@ -1065,22 +1074,40 @@ export async function committedHolderAt(
 }
 
 /**
- * Up to `limit` of the addresses held in `locale`, as last committed, from
- * `page`, with how many there are in all: what a route pre-renders.
+ * Up to `limit` of the addresses held in `locale` by documents of `holders`,
+ * as last committed, from `page`, with how many there are in all: what a
+ * route pre-renders.
  */
 export async function committedAddresses(
   claims: Claims,
   locale: string,
-  { limit, page = 1 }: { limit: number; page?: number }
+  {
+    limit,
+    page = 1,
+    holders,
+  }: {
+    limit: number;
+    page?: number;
+    /** Only addresses held by documents of these collections. */
+    holders: readonly string[];
+  }
 ): Promise<{ addresses: ServedAddress[]; total: number }> {
+  if (holders.length === 0) return { addresses: [], total: 0 };
+  // Narrowed in the database, so only these holders' addresses count toward
+  // `limit` and `total`.
   const { rows, total } = await committedClaims(
     claims,
-    { kind: { equals: "address" }, locale: { equals: locale } },
+    {
+      kind: { equals: "address" },
+      locale: { equals: locale },
+      holderCollection: { in: [...holders] },
+    },
     { limit, page }
   );
   const addresses = rows.flatMap(row =>
     row.kind === "address" &&
     row.holder !== null &&
+    holders.includes(row.holder.collection) &&
     row.address !== null &&
     row.address.locale === locale
       ? [row.address]
