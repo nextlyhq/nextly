@@ -22,6 +22,7 @@ const registered = {
   "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p2.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
   "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p3.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p4.BlocksField,
+  "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement": _p4.DeleteComponentReplacement,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p4.PageBuilderView,
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p4.RemoveLayoutToolbarSlot,
 } satisfies DeclaredComponentMap<typeof siteConfig>;

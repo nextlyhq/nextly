@@ -57,6 +57,8 @@ import {
   type MigrationDialect,
 } from "../../field-groups/migration/session";
 
+import { connectionOf } from "../../../shared/lib/read-transaction-scope";
+
 import type { CompanionIntrospectAdapter } from "./companion-io";
 
 export type CompanionReadiness = "ready" | "pre-migration" | "broken";
@@ -112,7 +114,10 @@ const VERDICT_TTL_MS = 30_000;
  */
 export type ReadinessScope = object;
 
-function readyTables(scope: ReadinessScope): Map<string, number> {
+function readyTables(given: ReadinessScope): Map<string, number> {
+  // Keyed by the connection, not a view of it reading on a transaction, so
+  // a verdict the pool observed serves such a read without probing again.
+  const scope = connectionOf(given);
   const bag = globalThis as ReadinessCacheBag;
   bag.__nextly_companionReadiness ??= new WeakMap<
     object,
@@ -354,8 +359,10 @@ export function expireCompanionReadiness(scope: ReadinessScope): void {
 }
 
 function columnVerdicts(
-  scope: ReadinessScope
+  given: ReadinessScope
 ): Map<string, Map<string, number>> {
+  // Keyed by the connection, as `readyTables` is.
+  const scope = connectionOf(given);
   const bag = globalThis as ReadinessCacheBag;
   bag.__nextly_companionColumns ??= new WeakMap<
     object,

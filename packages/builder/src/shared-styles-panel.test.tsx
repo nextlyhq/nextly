@@ -21,11 +21,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  SharedStyleReach,
-  SharedStylesCount,
-  SharedStylesUsage,
-  SharedStyleUsesPage,
+import {
+  SHARED_STYLE_UNCOUNTED_USES,
+  type SharedStyleReach,
+  type SharedStylesCount,
+  type SharedStylesUsage,
+  type SharedStyleUsesPage,
 } from "./shared-style-library";
 import {
   SharedStylesPanel,
@@ -1660,6 +1661,12 @@ describe("removing one style", () => {
     await panel({ access });
     const details = await open(/^Old note/, "Old note");
     fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    // At a count of zero it still asks, saying what the count cannot see.
+    const confirm = within(details).getByRole("group", {
+      name: "Remove Old note",
+    });
+    expect(confirm.textContent).toContain("No page uses it in the editor.");
+    expect(confirm.textContent).toContain(SHARED_STYLE_UNCOUNTED_USES);
     await act(async () => {
       fireEvent.click(
         within(details).getByRole("button", { name: "Remove Old note" })
@@ -1689,7 +1696,7 @@ describe("removing one style", () => {
     });
     expect(within(details).getByRole("alert").textContent).toBe(refusal);
     // No confirmation left saying nothing uses it, and nothing to press.
-    expect(within(details).queryByText(/Nothing uses it/)).toBeNull();
+    expect(within(details).queryByText(/No page uses it/)).toBeNull();
     expect(
       within(details).queryByRole("button", { name: /^Remove/ })
     ).toBeNull();
@@ -1798,8 +1805,10 @@ describe("Remove unused…", () => {
       name: "Remove 2 unused shared styles",
     });
     expect(confirm.textContent).toContain(
-      "Remove 2 unused shared styles? No page uses them."
+      "Remove 2 unused shared styles? No page uses them in the editor."
     );
+    // At a count of zero it still says what the count cannot see.
+    expect(confirm.textContent).toContain(SHARED_STYLE_UNCOUNTED_USES);
     expect(confirm.textContent).toContain("hero");
     expect(confirm.textContent).toContain("Old note");
     expect(confirm.textContent).not.toContain("Card");

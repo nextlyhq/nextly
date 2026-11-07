@@ -8,7 +8,7 @@
  *
  * @module address-claims/page-claims
  */
-import { paginatedList } from "@nextlyhq/blocks-engine";
+import { mayPaginateList } from "@nextlyhq/blocks-engine";
 import { previewUrlFromTemplate } from "@nextlyhq/plugin-sdk";
 import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 
@@ -62,8 +62,12 @@ export function pageClaims(
     return address === null ? [] : [address];
   });
   const document = asDocument(data.content);
+  // A list split into pages as stored, or by a value bound to the entry,
+  // holds its later pages: the save cannot run the binding pass that
+  // settles a bound split, so it holds them in case, which may refuse a
+  // page there but never leaves two documents at one address.
   const paginates =
-    document !== null && paginatedList(document.nodes) !== undefined;
+    document !== null && mayPaginateList(document.nodes) !== undefined;
   return { addresses, spaces: paginates ? addresses : [] };
 }
 

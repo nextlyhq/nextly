@@ -662,8 +662,16 @@ describe.each(getConfiguredTestDialects())(
     it("removes a style when another save lands first, keeping that save's change", async () => {
       const { t } = await boot();
       const { store, writes } = interleaved(t, 1);
+      // Each walk notes hero's stored label as it runs, so the second walk
+      // is seen to come after the other save rather than merely to happen.
+      const heroLabels: unknown[] = [];
       const stillUsed = {
-        uses: vi.fn(async () => []),
+        uses: vi.fn(async (_ids: readonly string[]) => {
+          heroLabels.push(
+            (await stored(t)).find(entry => entry.id === "c-hero")?.label
+          );
+          return [];
+        }),
         firstReadable: async () => undefined,
       };
       const answer = await removeSharedStyles(
@@ -679,8 +687,10 @@ describe.each(getConfiguredTestDialects())(
         lockedCard,
         { ...hero, label: "Hero 1" },
       ]);
-      // The stored documents do not depend on the Single: walked once.
-      expect(stillUsed.uses).toHaveBeenCalledTimes(1);
+      // The stored documents are walked once per attempt: a page saved
+      // between the two may use the style without the index counting it.
+      expect(stillUsed.uses.mock.calls).toEqual([[["c-spare"]], [["c-spare"]]]);
+      expect(heroLabels).toEqual([undefined, "Hero 1"]);
     });
 
     it("refuses a lock as stale after three writes when the Single keeps changing, storing nothing of it", async () => {

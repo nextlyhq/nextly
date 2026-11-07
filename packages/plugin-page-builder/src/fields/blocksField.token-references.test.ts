@@ -8,6 +8,11 @@ import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  withProvisionalTokenIds,
+  withProvisionalVariables,
+} from "../transfer/provisional-variables";
+
 import type { CompositionSetup } from "./blocks-composition";
 import { blocksFieldType } from "./blocksField";
 
@@ -240,5 +245,85 @@ describe("a blocks field inside named groups", () => {
         write: write({ published: page([]) }, "rows[0].body"),
       })
     ).toBe(true);
+  });
+});
+
+describe("an import's judging write, counting the variables it adds", () => {
+  /**
+   * A page whose one node names `sides` on the two block sides of a single
+   * structured padding value: the shape where dropping the whole property
+   * would hide every reference it holds.
+   */
+  const padded = (start: string, end: string) => ({
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "n0",
+        type: "core/text",
+        version: 1,
+        props: {},
+        styles: {
+          base: {
+            base: {
+              padding: {
+                blockStart: { $token: start },
+                blockEnd: { $token: end },
+              },
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  /** The field, judged against the site's variables as `plugin.ts` reads them. */
+  function judgedAsThePluginReads() {
+    const composition: CompositionSetup = {
+      store: { collection: "components", field: "definition" },
+      limits: DEFAULT_LIMITS,
+      composesDocuments: false,
+      siteDefinitions: async () => ({
+        classIds: new Set<string>(),
+        breakpointIds: new Set(["base"]),
+        tokenIds: withProvisionalTokenIds(SITE_VARIABLES),
+      }),
+    };
+    const field = blocksFieldType(undefined, () => composition);
+    return (value: unknown) =>
+      field.validate?.(value, {
+        path: "content",
+        field: { name: "content", type: "blocks" },
+        data: {},
+        mode: "create",
+        write: write({ id: "none" }),
+      } as never);
+  }
+
+  it("passes a reference to a variable the import adds", async () => {
+    const judge = judgedAsThePluginReads();
+    expect(
+      await withProvisionalVariables(["space.new"], async () =>
+        judge(padded("space.new", "color.brand"))
+      )
+    ).toBe(true);
+  });
+
+  it("still refuses another undefined variable in the same structured value", async () => {
+    const judge = judgedAsThePluginReads();
+    const result = await withProvisionalVariables(["space.new"], async () =>
+      judge(padded("space.new", "space.gone"))
+    );
+    expect(codes(result)).toEqual(["unknown-token"]);
+    expect(JSON.stringify(result)).toContain("space.gone");
+    // Only the undefined one: the variable the import adds is not named.
+    expect(JSON.stringify(result)).not.toContain("space.new");
+  });
+
+  it("refuses the same variable outside the judgement, as any other write", async () => {
+    const judge = judgedAsThePluginReads();
+    const result = await judge(padded("space.new", "color.brand"));
+    expect(codes(result)).toEqual(["unknown-token"]);
+    expect(JSON.stringify(result)).toContain("space.new");
   });
 });
