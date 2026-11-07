@@ -8,11 +8,11 @@
 "@nextlyhq/blocks-engine": patch
 "@nextlyhq/blocks-react": patch
 "@nextlyhq/builder": patch
-"create-nextly-app": patch
 "@nextlyhq/eslint-config": patch
 "@nextlyhq/eslint-plugin": patch
 "@nextlyhq/module-specifiers": patch
-"nextly": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-mcp": patch
 "@nextlyhq/plugin-page-builder": patch
@@ -25,6 +25,8 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+"create-nextly-app": patch
+"nextly": patch
 ---
 
-The composition manifest (`GET /manifest`) builds again: the page actions' JSON Schema now states a binding's `format` and an unbind's kept `value` as any value, which JSON Schema has no other way to say, instead of failing the whole manifest. The route still judges both.
+The composition manifest (`GET /manifest`) builds again. The page actions' JSON Schema now states a binding's `format` as an object, and an unbind's kept `value` as any JSON value, instead of failing the whole manifest on the functions that judge them. The route still judges both.
