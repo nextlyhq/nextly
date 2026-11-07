@@ -45,10 +45,7 @@ import {
   type PagesReader,
 } from "./address-claims/backfill";
 import { claimLocales } from "./address-claims/page-claims";
-import {
-  registerPageAddressClaims,
-  type ReadsById,
-} from "./address-claims/page-claims-hook";
+import { registerPageAddressClaims } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
@@ -2229,12 +2226,22 @@ export const pageBuilder = (
         pages: pagesSlug,
         claims: claimsStore,
         locales: siteLocales,
-        nextly: async () => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          return (await getCachedNextly()) as unknown as ReadsById;
+        // On the save's own connection, so naming a refusal takes no second
+        // connection from the pool while the save holds one.
+        readPage: async (tx, id) => {
+          try {
+            const found =
+              await ctx.services.ownCollections.findEntryByIdInTransaction(
+                tx,
+                pagesSlug,
+                id
+              );
+            return found as unknown as Readonly<Record<string, unknown>>;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return null;
+            throw error;
+          }
         },
-        collection: slug =>
-          ctx.services.collections.getCollection(slug, undefined as never),
         ...(opts.pagePreviewPath === undefined
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),

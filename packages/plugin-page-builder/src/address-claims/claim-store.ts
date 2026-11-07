@@ -3,12 +3,15 @@
  * transaction of the save that takes or gives one up.
  *
  * Every write here runs in the caller's transaction, so a claim stands or
- * falls with the save it belongs to. The store's reads are of COMMITTED rows:
- * a plugin's reads do not run on the transaction's connection on PostgreSQL
- * and MySQL, so a row this transaction wrote is invisible to them, and one it
- * deleted still shows. So each transaction's own writes and deletions are
- * kept beside it, and every read here is answered as the transaction sees
- * the store: committed rows less those it deleted, and the rows it wrote.
+ * falls with the save it belongs to, and every read runs on that
+ * transaction's connection too (`ownCollections.listEntriesInTransaction`):
+ * it sees what the transaction wrote, takes no second connection from the
+ * pool (which on a pool of one would wait for the connection the save
+ * holds), and on PostgreSQL and MySQL reads the latest commit under a row
+ * lock, whatever the isolation level. A lock row is read for update, so two
+ * saves contending for one take turns. Each transaction's own writes and
+ * deletions are still kept beside it, which a read on its connection already
+ * reflects, so they agree with it.
  *
  * Two holders of one address are refused by the claim key's unique index:
  * the second insert fails, and the refusal names the first. A paginated
@@ -169,17 +172,30 @@ async function claimsIn(
   claims: Claims,
   tx: Tx,
   where: Record<string, unknown>,
-  matches: (row: ClaimRow) => boolean
+  matches: (row: ClaimRow) => boolean,
+  /** `update` for a read that goes on to write the rows it read. */
+  lock: "share" | "update" = "share"
 ): Promise<ClaimRow[]> {
   const { gone, written } = pendingOf(tx);
   const found: ClaimRow[] = [];
   for (let page = 1; ; page++) {
-    const { rows, total } = await committedClaims(claims, where, {
-      limit: READ_PAGE,
-      page,
-    });
+    const { data } =
+      await claims.services.ownCollections.listEntriesInTransaction(
+        tx,
+        claims.slug,
+        {
+          where,
+          pagination: { limit: READ_PAGE, page },
+          sort: { field: "claimKey", direction: "asc" },
+          depth: 0,
+        },
+        { lock }
+      );
+    const rows = data.map(rowOf);
     found.push(...rows.filter(row => !gone.has(row.id) && matches(row)));
-    if (rows.length === 0 || page * READ_PAGE >= total) break;
+    // A short page ends the read: the total beside it is an unlocked count,
+    // which rows committed meanwhile may already have outgrown.
+    if (rows.length < READ_PAGE) break;
   }
   for (const row of written.values()) {
     if (matches(row) && !found.some(seen => seen.id === row.id)) {
@@ -193,11 +209,16 @@ async function claimsIn(
 function keyed(
   claims: Claims,
   tx: Tx,
-  keys: readonly string[]
+  keys: readonly string[],
+  lock: "share" | "update" = "share"
 ): Promise<ClaimRow[]> {
   const stored = keys.map(storedKey);
-  return claimsIn(claims, tx, { claimKey: { in: stored } }, row =>
-    stored.includes(row.key)
+  return claimsIn(
+    claims,
+    tx,
+    { claimKey: { in: stored } },
+    row => stored.includes(row.key),
+    lock
   );
 }
 
@@ -388,10 +409,12 @@ async function holdLockRow(
   touched: Record<string, unknown>
 ): Promise<void> {
   if (claims.dialect === "sqlite") return;
-  let [row] = await keyed(claims, tx, [key]);
+  // Read for update: the row is written next, and two saves that each held
+  // a shared lock on it would each wait for the other's write.
+  let [row] = await keyed(claims, tx, [key], "update");
   if (row === undefined) {
     if ((await insert(claims, tx, created)) !== null) return;
-    [row] = await keyed(claims, tx, [key]);
+    [row] = await keyed(claims, tx, [key], "update");
     if (row === undefined) {
       throw NextlyError.internal({
         logContext: { reason: "address-lock-vanished", key },
