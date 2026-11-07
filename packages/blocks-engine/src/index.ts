@@ -1355,10 +1355,14 @@ export {
   namesListSource,
   listRelationTarget,
   listSortText,
+  namedQueryHiddenReads,
   outerListOf,
   paginatedList,
   readListQuery,
 } from "./list-query";
+// The day an instant falls on in a zone, `YYYY-MM-DD`: a page's "today", as
+// a published page and the editor's canvas each read it for a named query.
+export { calendarDayIn } from "./calendar-day";
 // Named queries: a collection list's custom source, declared by a developer
 // in code. The declaration's types and checks, the process registry the page
 // builder fills at boot, and every message about one, shared by the
@@ -1367,6 +1371,7 @@ export {
   createNamedQueryRegistry,
   defineNamedQuery,
   isNamedQueryName,
+  isNamedQueryParamKey,
   judgeNamedParams,
   NAMED_QUERY_DEFAULT_TIMEOUT_MS,
   NAMED_QUERY_MAX_PARAMS,
@@ -1428,6 +1433,7 @@ export type {
   NamedQueryDeclaration,
   NamedQueryDefinition,
   NamedQueryKnown,
+  NamedQueryNeed,
   NamedQueryParam,
   NamedQueryParams,
   NamedQueryParamType,
@@ -1446,6 +1452,7 @@ export type {
 } from "./named-query";
 export type {
   ListNamedQuery,
+  NamedQueryHiddenRead,
   ListFieldCode,
   ListFieldKind,
   ListFields,

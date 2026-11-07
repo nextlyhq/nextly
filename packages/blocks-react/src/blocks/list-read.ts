@@ -77,8 +77,14 @@ const READER_OP: Readonly<Record<ListFilterOp, BlocksFilterOp>> = {
  * only: a sort that fell back to id order, or a read that failed.
  */
 export interface ListDiagnostic {
-  readonly kind: "sort-fallback" | "query-failed";
+  /**
+   * A sort that fell back, a read that failed, or (for a named query that
+   * ran) what a visitor's page goes without.
+   */
+  readonly kind: "sort-fallback" | "query-failed" | "query-caution";
   readonly message: string;
+  /** The log reference the message names, which an editor offers to copy. */
+  readonly ref?: string;
 }
 
 /** What a list's read came to: the entries, and anything worth telling. */

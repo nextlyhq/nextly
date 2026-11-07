@@ -54,6 +54,7 @@ import {
   NAMED_QUERY_MAX_PARAMS,
   NAMED_QUERY_TEXT,
   NAMED_QUERY_TEXT_MAX,
+  type NamedQueryDeclaration,
   type NamedQueryParamValue,
   type NamedQuerySource,
 } from "./named-query";
@@ -861,10 +862,17 @@ export interface PaginatedList {
  *
  * Bounded by `maxNodes`, and reading only plain records, because a stored
  * document is whatever the database returned.
+ *
+ * `propsOf` reads a list's props in place of the ones it stores, so a caller
+ * that fills a list's bindings judges it as drawn: a list whose split into
+ * pages is bound to an entry's value pages where that value is true, and the
+ * answer carries the props as read. Every other node is walked as stored.
  */
 export function paginatedList(
   nodes: readonly unknown[],
-  maxNodes: number = Number.MAX_SAFE_INTEGER
+  maxNodes: number = Number.MAX_SAFE_INTEGER,
+  propsOf: (list: Readonly<Record<string, unknown>>) => unknown = list =>
+    list.props
 ): PaginatedList | undefined {
   const stack: unknown[] = [...nodes].reverse();
   let left = maxNodes;
@@ -873,7 +881,8 @@ export function paginatedList(
     left -= 1;
     if (!isPlainRecord(node)) continue;
     if (node.type === COLLECTION_LIST_TYPE) {
-      const { query } = readListQuery(node.props);
+      const props = propsOf(node);
+      const { query } = readListQuery(props);
       if (
         query.paginate === true &&
         query.relation === undefined &&
@@ -884,7 +893,7 @@ export function paginatedList(
           ...(typeof node.name === "string" && node.name.trim() !== ""
             ? { name: node.name.trim() }
             : {}),
-          props: isPlainRecord(node.props) ? node.props : {},
+          props: isPlainRecord(props) ? props : {},
         };
       }
     }
@@ -1500,6 +1509,55 @@ function unreadable(
   return fields !== undefined && fields.readable.length === 0;
 }
 
+/** The fields every entry keeps, which say nothing about what is hidden. */
+const ENTRY_KEPT: ReadonlySet<string> = new Set([
+  "id",
+  "createdAt",
+  "updatedAt",
+]);
+
+/**
+ * One collection a named query reads that visitors can read nothing of: its
+ * name as authors read it, and the fields it declares, which a published
+ * page's rows go without.
+ *
+ * @experimental
+ */
+export interface NamedQueryHiddenRead {
+  readonly collection: string;
+  readonly label: string;
+  /** Its declared fields, the id and timestamps left out; none when unknown. */
+  readonly fields: readonly string[];
+}
+
+/**
+ * The collections a named query declares it reads, other than the one its
+ * rows are entries of, that visitors can read nothing of, as far as `fields`
+ * knows: the one answer the save's warning, the editor's inspector and its
+ * canvas share. A collection `fields` does not know is left out.
+ *
+ * @experimental
+ */
+export function namedQueryHiddenReads(
+  declaration: NamedQueryDeclaration,
+  fields: ListFieldSource
+): NamedQueryHiddenRead[] {
+  const rows = declaration.rows;
+  const rowsCollection = "collection" in rows ? rows.collection : undefined;
+  const hidden: NamedQueryHiddenRead[] = [];
+  for (const read of declaration.reads.collections ?? []) {
+    if (read === rowsCollection) continue;
+    const known = fields.fieldsOf(read);
+    if (known === undefined || known.readable.length > 0) continue;
+    hidden.push({
+      collection: read,
+      label: known.label ?? read,
+      fields: [...known.declared].filter(name => !ENTRY_KEPT.has(name)),
+    });
+  }
+  return hidden;
+}
+
 /**
  * The judgement of a list's custom source against its query's declaration:
  * a name nothing registers, each input missing, not fitting or no longer
@@ -1572,13 +1630,16 @@ function namedFindings(
       ),
     });
   }
-  for (const read of declaration.reads.collections ?? []) {
-    if (read === rowsCollection || !unreadable(judgement, read)) continue;
+  const hidden =
+    judgement.fields === undefined
+      ? []
+      : namedQueryHiddenReads(declaration, judgement.fields);
+  for (const read of hidden) {
     found.push({
       path: at("namedQuery"),
       nodeId,
       code: "list-named-query-reads-hidden",
-      message: NAMED_QUERY_TEXT.readsHidden(collectionWords(judgement, read)),
+      message: NAMED_QUERY_TEXT.readsHidden(read.label, read.fields),
     });
   }
   return found;

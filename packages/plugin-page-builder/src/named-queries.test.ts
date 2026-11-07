@@ -164,12 +164,13 @@ describe("named queries at boot", () => {
 
 describe("a named query's declaration, as the editor and the API read it", () => {
   it("lists each input with what its control needs, and never the run function", () => {
-    const item = namedQueryItem(upcoming, ["Events"]);
+    const hidden = { collection: "events", label: "Events", fields: ["title"] };
+    const item = namedQueryItem(upcoming, [hidden]);
     expect(item).toMatchObject({
       name: "events.upcoming",
       needsInput: true,
       total: true,
-      readsHidden: ["Events"],
+      readsHidden: [hidden],
       rows: { key: "id", fields: [{ name: "id", type: "text", kind: "text" }] },
     });
     expect(item.inputs).toEqual([
@@ -202,6 +203,12 @@ describe("a named query's declaration, as the editor and the API read it", () =>
       },
     ]);
     expect(JSON.stringify(item)).not.toContain("run");
+    // The declaration the editor judges inputs against is the declaration,
+    // run-free: a judgement over it refuses what the registry's would.
+    expect(item.declaration.params).toEqual(upcoming.params);
+    expect(judgeNamedParams(item.declaration, {}).problems).toEqual(
+      judgeNamedParams(upcoming, {}).problems
+    );
   });
 
   it("lists a group's own row fields, however deep, for a binding to name", () => {
@@ -317,11 +324,23 @@ describe("a named query's declaration, as the editor and the API read it", () =>
     expect(judged(Number.MAX_SAFE_INTEGER + 1)).toBe(1);
   });
 
-  it("names a declared collection visitors can read nothing of, judging each once", async () => {
-    // Events: visitors may read none of it. Venues: they may read it, but
-    // none of its own fields, so its id and timestamps still show.
-    const publicFields = vi.fn((slug: string) =>
-      Promise.resolve(slug === "events" ? undefined : [])
+  it("names a declared collection visitors can read nothing of, with its fields, judging each once", async () => {
+    // `events` is the rows' collection of none of these but the plugin's
+    // `venues`; visitors read nothing of `events`, and all of `venues`.
+    const listFields = vi.fn((slug: string) =>
+      Promise.resolve(
+        slug === "events"
+          ? {
+              label: "Events",
+              declared: new Set(["id", "createdAt", "title", "price"]),
+              readable: [],
+            }
+          : {
+              label: "Venues",
+              declared: new Set(["id", "name"]),
+              readable: [{ name: "name", type: "text" }],
+            }
+      )
     );
     const answer = await readNamedQueries({
       queries: () => [
@@ -329,16 +348,43 @@ describe("a named query's declaration, as the editor and the API read it", () =>
         fromPlugin,
         { ...upcoming, name: "events.again" },
       ],
-      publicFields,
-      collectionLabel: slug =>
-        Promise.resolve(slug === "events" ? "Events" : slug),
+      listFields,
     });
+    const events = {
+      collection: "events",
+      label: "Events",
+      fields: ["title", "price"],
+    };
     expect(answer.items.map(item => item.readsHidden)).toEqual([
-      ["Events"],
+      [events],
       [],
-      ["Events"],
+      [events],
     ]);
-    expect(publicFields).toHaveBeenCalledTimes(2);
+    expect(listFields).toHaveBeenCalledTimes(2);
     expect(answer.meta.total).toBe(3);
+  });
+
+  it("warns of a collection whose fields could not be read, rather than saying all is well", async () => {
+    const answer = await readNamedQueries({
+      queries: () => [upcoming],
+      listFields: () => Promise.reject(new Error("no record")),
+    });
+    // Nothing is known of its fields, so none is named.
+    expect(answer.items[0]?.readsHidden).toEqual([
+      { collection: "events", label: "events", fields: [] },
+    ]);
+  });
+
+  it("does not call a collection hidden whose own fields visitors cannot read, but whose entries they can", async () => {
+    const answer = await readNamedQueries({
+      queries: () => [upcoming],
+      listFields: () =>
+        Promise.resolve({
+          declared: new Set(["id", "createdAt", "secret"]),
+          // The id and timestamps a visitor still reads.
+          readable: [{ name: "id", type: "text" }],
+        }),
+    });
+    expect(answer.items[0]?.readsHidden).toEqual([]);
   });
 });

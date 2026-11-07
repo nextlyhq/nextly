@@ -52,6 +52,7 @@ import {
   INSTANCE_ATTRIBUTE,
   layoutPartSheets,
   LIST_ACTION_ATTRIBUTE,
+  LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   sharedStyleInputs,
@@ -406,6 +407,45 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isChrome(target: EventTarget | null): boolean {
   return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
+}
+
+/** How long a list note's Copy ref says "Copied" once pressed. */
+const COPIED_FOR_MS = 2000;
+
+/**
+ * A list note's Copy ref, when a press landed on it: the log reference it
+ * names goes to the clipboard, and the button says so for a moment. Answers
+ * whether it was one, so the press does nothing else.
+ */
+function copyNoteReference(target: EventTarget | null): boolean {
+  if (!isElement(target)) return false;
+  const button = target.closest(`[${LIST_ACTION_ATTRIBUTE}="copy-ref"]`);
+  const ref = button?.getAttribute(LIST_REF_ATTRIBUTE);
+  if (
+    button === null ||
+    button === undefined ||
+    ref === null ||
+    ref === undefined
+  ) {
+    return false;
+  }
+  // The editor's own clipboard, not the canvas frame's: a frame may not be
+  // allowed to write to it.
+  const clipboard: Clipboard | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  void clipboard?.writeText(ref).then(
+    () => {
+      button.setAttribute("data-nx-list-copied", "");
+      setTimeout(
+        () => button.removeAttribute("data-nx-list-copied"),
+        COPIED_FOR_MS
+      );
+    },
+    // A clipboard the page may not write to leaves the reference selectable
+    // in the note, where it is set apart to be copied by hand.
+    () => undefined
+  );
+  return true;
 }
 
 /** The action a list's note offers, when a press landed on it. */
@@ -1064,6 +1104,12 @@ function useCanvasPointer(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (onSelect === undefined || isChrome(event.target)) return;
       const id = nodeIdFromEvent(event.target);
+      // A failed list's Copy ref copies the reference and stays on the
+      // list: the author is about to paste it to a developer, not edit.
+      if (copyNoteReference(event.target)) {
+        if (id !== null) onSelect(id, "replace");
+        return;
+      }
       // A list note's "Choose a field", pressed or activated from the
       // keyboard: the host selects the list and takes the author to its sort,
       // in place of the plain selection a click inside the list makes.

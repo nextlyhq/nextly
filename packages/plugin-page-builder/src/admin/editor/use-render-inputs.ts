@@ -374,7 +374,8 @@ function useCanvasRender({
     editor.listsShowingEmpty,
     locale,
     initialDocument,
-    pagedList
+    pagedList,
+    editor.listsStillShowing
   );
   const pageInputs = useMemo(
     () =>
@@ -1007,7 +1008,14 @@ export function useBoundCanvasRender(
       ].filter((tree): tree is BlockDocument => tree !== null),
     [pageTree, regions, canvasRender]
   );
-  const bindings = useCanvasBindings(trees, locale, component);
+  // A custom source's row collection is asked for with the page's own, so
+  // its item bindings draw with that collection's field shapes.
+  const bindings = useCanvasBindings(
+    trees,
+    locale,
+    component,
+    canvasRender.context?.namedQueries
+  );
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),
     [canvasRender, bindings]

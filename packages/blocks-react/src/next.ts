@@ -16,6 +16,8 @@
 import {
   bindingDemand,
   bindingKindOf,
+  calendarDayIn,
+  COLLECTION_LIST_TYPE,
   conditionDemand,
   conditionFieldKind,
   DEFAULT_LIMITS,
@@ -24,6 +26,7 @@ import {
   hashId,
   isFetchableUrl,
   isListDay,
+  isPlainRecord,
   DOCUMENT_FORMAT_VERSION,
   paginatedList,
   type PaginatedList,
@@ -128,7 +131,11 @@ import type {
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
-import { listCollections, listCollectionsWhere } from "./list-collections";
+import {
+  listCollections,
+  listCollectionsWhere,
+  listPropsAsBound,
+} from "./list-collections";
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -567,37 +574,61 @@ function listPageSlug(slug: string, page: number | undefined): string {
 function pagedListOf(
   document: BlockDocument,
   page: DrawnDocument,
-  maxNodes: number
+  maxNodes: number,
+  /** The page's binding pass, so a bound query prop is read as drawn. */
+  run: BindingRun | undefined
 ): PaginatedList | undefined {
-  // The page's own: the list its stored nodes split into pages, an
-  // instance's exposed slot included, never one a component's definition
-  // brings, which shows on every page placing it. Both walks are held to the
-  // route's node cap, as the renderer's own reading is.
-  const owned = paginatedList(document.nodes, maxNodes);
-  if (owned === undefined || page.prepared === null) return undefined;
-  // That very list, found by its id in the page as drawn, so a component's
-  // own list ahead of it cannot stand in for it.
-  return listNamed(page.prepared.presented.nodes, owned.id, maxNodes);
+  if (page.prepared === null) return undefined;
+  // The page's own lists, walked in its stored order, an instance's exposed
+  // slot included, never one a component's definition brings, which shows
+  // on every page placing it. Each is judged by its props as the page's
+  // binding pass fills them, the ones it is drawn with, read from that very
+  // list in the page as drawn (found by its id, so a component's own list
+  // cannot stand in for it): a limit, offset, collection or split bound to
+  // the entry counts as the page shows it, so a list split into pages only
+  // by a bound value pages too, and the route serves exactly the pages the
+  // list's links name. Both walks are held to the route's node cap, as the
+  // renderer's own reading is.
+  const drawn = listsById(page.prepared.presented.nodes, maxNodes);
+  return paginatedList(document.nodes, maxNodes, stored => {
+    const list =
+      typeof stored.id === "string" ? drawn.get(stored.id) : undefined;
+    return list === undefined ? {} : listPropsAsBound(list, run);
+  });
 }
 
 /**
- * The list with id `id` in `nodes`, as it is drawn, where it is still a list
- * split into pages: the composed and repaired form of the stored one.
- * Bounded by `maxNodes`.
+ * Whether the page's stored document could split a list into pages: one
+ * split as stored, or one whose split is bound to the entry, which only the
+ * page's binding pass can settle. Asked before anything is read, so a page
+ * with neither costs the route nothing.
  */
-function listNamed(
+function mayPageAList(document: BlockDocument, maxNodes: number): boolean {
+  return (
+    paginatedList(document.nodes, maxNodes, list =>
+      isPlainRecord(list.bindings) && "paginate" in list.bindings
+        ? { ...(isPlainRecord(list.props) ? list.props : {}), paginate: true }
+        : list.props
+    ) !== undefined
+  );
+}
+
+/**
+ * The collection lists in `nodes`, as drawn, by id: the first of each id in
+ * document order. Bounded by `maxNodes`.
+ */
+function listsById(
   nodes: readonly BlockNode[],
-  id: string,
   maxNodes: number
-): PaginatedList | undefined {
+): Map<string, BlockNode> {
+  const lists = new Map<string, BlockNode>();
   const stack: BlockNode[] = [...nodes].reverse();
   let left = maxNodes;
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    if (left <= 0) return undefined;
+    if (left <= 0) break;
     left -= 1;
-    if (node.id === id) {
-      // Asked of this one node: a paginated list here is the page's own.
-      return paginatedList([node], 1);
+    if (node.type === COLLECTION_LIST_TYPE && !lists.has(node.id)) {
+      lists.set(node.id, node);
     }
     for (const children of Object.values(node.slots ?? {}).reverse()) {
       for (let at = children.length - 1; at >= 0; at -= 1) {
@@ -606,7 +637,7 @@ function listNamed(
       }
     }
   }
-  return undefined;
+  return lists;
 }
 
 /**
@@ -761,19 +792,6 @@ function publicReaderFor(
   };
 }
 
-/** A day in a time zone, `YYYY-MM-DD`. */
-function dayIn(zone: string, at: Date): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: zone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(at);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find(candidate => candidate.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
 /**
  * The most tags a named query's cached result carries: Next keeps 128 per
  * cache entry, and nextly's reads keep to it (`readTags`).
@@ -841,11 +859,14 @@ const TODAY_LIFETIME = 60;
  */
 async function todayFor(zone: string | undefined): Promise<string> {
   const safe = safeTimeZone(zone).zone;
-  return await cachedFind(() => Promise.resolve(dayIn(safe, new Date())), {
-    tags: nextlySiteSettingsTags(),
-    keyParts: ["nextly-named-query-today", safe],
-    revalidate: TODAY_LIFETIME,
-  });
+  return await cachedFind(
+    () => Promise.resolve(calendarDayIn(safe, new Date())),
+    {
+      tags: nextlySiteSettingsTags(),
+      keyParts: ["nextly-named-query-today", safe],
+      revalidate: TODAY_LIFETIME,
+    }
+  );
 }
 
 /**
@@ -3348,12 +3369,10 @@ function blocksRouteConfig(
     // own links do not name, nor refuses one they do.
     listPages: async (entry, context) => {
       const document = readDocument(entry, field, context);
-      // Nothing is read for a page whose stored document splits no list
-      // into pages: composing it cannot add one its own nodes do not hold.
-      if (
-        paginatedList(document.nodes, effectiveLimits(config).maxNodes) ===
-        undefined
-      ) {
+      // Nothing is read for a page whose stored document neither splits a
+      // list into pages nor binds a list's split: composing it cannot add
+      // one its own nodes do not hold.
+      if (!mayPageAList(document, effectiveLimits(config).maxNodes)) {
         return null;
       }
       // Counted under the page's read allowance, spent in the render's own
@@ -3381,7 +3400,10 @@ function blocksRouteConfig(
       const list = pagedListOf(
         document,
         page,
-        effectiveLimits(config).maxNodes
+        effectiveLimits(config).maxNodes,
+        bindings === undefined
+          ? undefined
+          : pageBindingRun(bindings, context.locale, resolver)
       );
       if (list === undefined) return null;
       // A list that makes no read shows one page, and claims nothing.
@@ -3559,7 +3581,10 @@ function blocksRouteConfig(
       const pagedList = pagedListOf(
         document,
         page,
-        effectiveLimits(config).maxNodes
+        effectiveLimits(config).maxNodes,
+        bindings === undefined
+          ? undefined
+          : pageBindingRun(bindings, context.locale, resolver)
       );
       const listPage = claimedListPage(pagedList, context, budget);
       const shared: SharedRendererProps = {

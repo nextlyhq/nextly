@@ -295,7 +295,7 @@ describe("a custom source at save", () => {
       listFields: fields(true),
     }).filter(issue => issue.code === "list-named-query-reads-hidden");
     expect(hidden?.message).toBe(
-      "It reads Notes, which visitors can't read, so a published list of it may show nothing."
+      "It reads title from Notes, which visitors can't read, so visitors see the rows without them."
     );
   });
 

@@ -431,7 +431,7 @@ describe("a list whose source is a named query", () => {
     expect(failure?.ref).toMatch(/^NQ-[0-9A-F]{6}$/);
     expect(failure?.error).toBeInstanceOf(Error);
     expect(note(element)).toContain(
-      `Upcoming events stopped with an error. A developer can find it in the server log as ${failure?.ref ?? "?"}.`
+      `Upcoming events stopped with an error. Ask your developer, quoting ref ${failure?.ref ?? "?"}.`
     );
   });
 
@@ -999,5 +999,257 @@ describe("a list whose source is a named query", () => {
       })
     );
     expect(element.innerHTML).toContain("shows a custom source's rows");
+  });
+});
+
+describe("a named query's run made somewhere else, as an editor's canvas makes it", () => {
+  /** A failure as the server judged and logged it, carried on an error. */
+  const carriedFailure = {
+    code: "threw",
+    detail:
+      "Upcoming events stopped with an error. Ask your developer, quoting ref NQ-4B2C9D.",
+    ref: "NQ-4B2C9D",
+  } as const;
+
+  it("draws a carried failure in its own words, under the reference the server logged", async () => {
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    const { element, host: made } = await draw(definition, {
+      host: {
+        cache: () =>
+          Promise.reject(
+            Object.assign(new Error("carried"), {
+              namedQueryFailure: carriedFailure,
+            })
+          ),
+      },
+    });
+    expect(emptyShown(element)).toBe(true);
+    expect(note(element)).toContain(carriedFailure.detail);
+    // The reference is the server's, not one made here: a fresh one would
+    // send the author's developer looking for a line the log never wrote.
+    expect(made.failures[0]?.ref).toBe("NQ-4B2C9D");
+    expect(element.querySelector("[data-nx-list-ref]")?.textContent).toBe(
+      "NQ-4B2C9D"
+    );
+  });
+
+  it("keeps a run for one render's generation only, so a renewed allowance runs it again", async () => {
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    let calls = 0;
+    let current = createQueryBudget();
+    // One budget object for the editor's life, renewed per draw.
+    const budget = {
+      take: () => current.take(),
+      generation: () => current,
+    };
+    const made = host(definition, base({ events: EVENTS }), {
+      cache: () => {
+        calls += 1;
+        return Promise.resolve({
+          rows: [{ id: "e1", title: "One" }],
+          reads: 0,
+        });
+      },
+    });
+    const ctx = context({
+      namedQueries: made,
+      queries: budget,
+      diagnostics: true,
+    });
+    await drawn(page(list(named())), ctx);
+    await drawn(page(list(named())), ctx);
+    // The same generation: the second draw joined the first's run.
+    expect(calls).toBe(1);
+    current = createQueryBudget();
+    await drawn(page(list(named())), ctx);
+    expect(calls).toBe(2);
+  });
+
+  it("hands its cache the list the run is for", async () => {
+    const asked: unknown[] = [];
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    await draw(definition, {
+      host: {
+        cache: request => {
+          asked.push(request.asked?.node);
+          return Promise.resolve({ rows: [], reads: 0 });
+        },
+      },
+    });
+    expect(asked).toEqual(["list"]);
+  });
+
+  it("claims the reads a carried failure made from the page's allowance, as a success's are", async () => {
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    const budget = createQueryBudget(3);
+    const made = host(definition, base({ events: EVENTS }), {
+      cache: () =>
+        Promise.reject(
+          Object.assign(new Error("carried"), {
+            namedQueryFailure: { ...carriedFailure, reads: 2 },
+          })
+        ),
+    });
+    await drawn(
+      page(list(named())),
+      context({ namedQueries: made, queries: budget, diagnostics: true })
+    );
+    // Three were allowed and the failed run spent two: one is left.
+    expect(budget.take()).toBe(true);
+    expect(budget.take()).toBe(false);
+  });
+
+  it("does not take an error's words for a carried failure unless it is one a run can have", async () => {
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    const { element } = await draw(definition, {
+      host: {
+        cache: () =>
+          Promise.reject(
+            Object.assign(new Error("ECONNREFUSED token=abc"), {
+              namedQueryFailure: { ...carriedFailure, ref: "token=abc" },
+            })
+          ),
+      },
+    });
+    expect(element.innerHTML).not.toContain("token=abc");
+    expect(note(element)).toMatch(/quoting ref NQ-[0-9A-F]{6}\./);
+  });
+
+  it("hands its cache the run as the list stores it, inputs unjudged", async () => {
+    const asked: unknown[] = [];
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    await draw(definition, {
+      props: { ...named({ city: "lahore" }), limit: 4, offset: 2 },
+      host: {
+        cache: request => {
+          asked.push(request.asked);
+          return Promise.resolve({ rows: [], reads: 0 });
+        },
+      },
+    });
+    expect(asked).toEqual([
+      expect.objectContaining({
+        params: { city: "lahore" },
+        window: { limit: 4, offset: 2 },
+      }),
+    ]);
+  });
+
+  it("runs a failed query again on the next draw, rather than keeping its failure", async () => {
+    const budget = createQueryBudget();
+    let calls = 0;
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    const made = host(definition, base({ events: EVENTS }), {
+      cache: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new Error("first"))
+          : Promise.resolve({ rows: [{ id: "e1", title: "One" }], reads: 0 });
+      },
+    });
+    // One allowance for both draws, as an editor keeps one for its life.
+    const ctx = context({
+      namedQueries: made,
+      queries: budget,
+      diagnostics: true,
+    });
+    const first = await drawn(page(list(named())), ctx);
+    expect(emptyShown(first)).toBe(true);
+    const second = await drawn(page(list(named())), ctx);
+    expect(headings(second)).toEqual(["One"]);
+    expect(calls).toBe(2);
+  });
+
+  it("says what a visitor's page goes without, for a run that succeeded, only to an author", async () => {
+    const definition = eventsQuery(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const caution = () =>
+      "Upcoming events reads Notes, which visitors can't read.";
+    const looking = await draw(definition, { host: { caution } });
+    expect(headings(looking.element)).toEqual(["One", "Two"]);
+    expect(
+      looking.element
+        .querySelector("[data-nx-list-diagnostic]")
+        ?.getAttribute("data-nx-list-diagnostic")
+    ).toBe("query-caution");
+    expect(note(looking.element)).toContain("reads Notes");
+    const visiting = await draw(definition, {
+      host: { caution },
+      diagnostics: false,
+    });
+    expect(note(visiting.element)).toBeNull();
+  });
+});
+
+describe("a failed run's reference, offered to copy", () => {
+  const failing = eventsQuery(() => Promise.reject(new Error("boom")));
+
+  it("offers Copy ref on the editor's canvas, naming the reference it copies", async () => {
+    const reader = base({ events: EVENTS });
+    const element = await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(failing, reader),
+        diagnostics: true,
+        listNoteActions: true,
+      })
+    );
+    const ref = element.querySelector("[data-nx-list-ref]")?.textContent;
+    expect(ref).toMatch(/^NQ-[0-9A-F]{6}$/);
+    const button = element.querySelector('[data-nx-list-action="copy-ref"]');
+    expect(button?.getAttribute("data-nx-list-copy-ref")).toBe(ref);
+    expect(button?.getAttribute("aria-label")).toBe(`Copy ref ${ref ?? ""}`);
+  });
+
+  it("offers no copy where nothing acts on it, as in a preview, and none for a failure naming no reference", async () => {
+    const preview = await draw(failing);
+    expect(preview.element.querySelector("[data-nx-list-ref]")).not.toBeNull();
+    expect(
+      preview.element.querySelector('[data-nx-list-action="copy-ref"]')
+    ).toBeNull();
+    const missing = await drawn(
+      page(list(named({}))),
+      context({
+        namedQueries: host(failing, base({ events: EVENTS })),
+        diagnostics: true,
+        listNoteActions: true,
+      })
+    );
+    expect(note(missing)).toContain("needs a city");
+    expect(
+      missing.querySelector('[data-nx-list-action="copy-ref"]')
+    ).toBeNull();
+  });
+});
+
+describe("a list whose new source waits for an input", () => {
+  it("wears the editor's tag while it draws what it stores, only where an author is looking", async () => {
+    const definition = eventsQuery(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const tags = new Map([["list", "Still showing Upcoming events"]]);
+    const looking = await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        diagnostics: true,
+        listsStillShowing: tags,
+      })
+    );
+    expect(
+      looking
+        .querySelector("[data-nx-list-still]")
+        ?.getAttribute("data-nx-list-still")
+    ).toBe("Still showing Upcoming events");
+    expect(headings(looking)).toEqual(["One", "Two"]);
+    const visiting = await drawn(
+      page(list(named())),
+      context({
+        namedQueries: host(definition, base({ events: EVENTS })),
+        listsStillShowing: tags,
+      })
+    );
+    expect(visiting.querySelector("[data-nx-list-still]")).toBeNull();
   });
 });
