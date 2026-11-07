@@ -281,9 +281,14 @@ bound prop removed. The document still saves, with the binding as it was, and
 renders it as the list above says. The same binding added to another block is
 refused, since that one is the save's own.
 
-Not checked at save: a binding to a list item, whose fields depend on the list
-around it; a binding to the site settings, whose fields are a fixed set; and
-any binding in a write made inside a transaction (a batch or an import), whose
+A binding to a list item is checked against the list's items: the entries of
+the collection the list shows, or the rows of its named query, which bind as
+the collection's entries when the query returns them and as the query's own
+declared fields otherwise. A binding in the list's empty state draws no item
+and is not checked against one.
+
+Not checked at save: a binding to the site settings, whose fields are not
+declared anywhere; and any binding in a write made inside a transaction (a batch or an import), whose
 schema read could wait behind the transaction's own connection. A
 component's own document has no entry, so its bindings to the entry are checked
 when a page that places it is saved, against that page's entry, and named by
@@ -324,8 +329,9 @@ the component.
 The Page Builder keeps a report of every document holding a binding that no
 longer fits what it reads, so authors can find and fix them after a schema
 change. Each save marks its document, and a background job judges it as
-stored, soon after; every document is checked again once a collection's or a
-Single's fields, a block's props, a component or a Layout change, the job
+stored, soon after; every document is checked again once a collection's, a
+Single's or a field group's fields, a block's props, a component or a Layout
+change, the job
 walking the site a part at a time. A page is judged with the components it
 places and its Layout's regions, against its own entry, as its published page
 draws them. Each row says which block and prop the binding fills, what it reads, the
