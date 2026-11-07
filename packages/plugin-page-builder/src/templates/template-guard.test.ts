@@ -32,6 +32,8 @@ function setup(
     ownCollections: () => new Set(["pages", "templates", "components"]),
     readCollection: async slug => (slug === "posts" ? POSTS : null),
     holderOf: async () => null,
+    declaredAddresses: new Map(),
+    addressHolderOf: async () => null,
     ...overrides,
   };
 }

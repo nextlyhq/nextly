@@ -28,6 +28,10 @@ import {
   sameCollectionRecord,
   withCollectionRegistryWrite,
 } from "./db-sync-registry";
+import {
+  storedTemplateAddress,
+  templateAddressNote,
+} from "./db-sync-promote-template-address";
 
 /**
  * Whether `db:sync --yes` was given, answering the confirmation of
@@ -52,6 +56,11 @@ export interface PromoteCollectionArgs {
   confirm: (code: string) => Promise<boolean>;
   /** How long a held schema lock is waited for, in milliseconds. */
   lockWaitMs?: number;
+  /**
+   * The template address the collection's entries are served at, stored on its page builder
+   * template, or null for none. Absent, none is read.
+   */
+  templateAddress?: (slug: string) => Promise<string | null>;
 }
 
 /**
@@ -72,8 +81,13 @@ export async function promoteCollection(
 
   const fields = (confirmed.fields ?? []) as unknown[];
   const code = serializeCollection({ slug, fields: fields as never[] });
+  // A collection whose template stores an address keeps its entries there only if the address is
+  // declared in code too, so the declaration is shown and appended beside its code.
+  const address = (await args.templateAddress?.(slug)) ?? null;
+  const note = address === null ? [] : templateAddressNote(slug, address);
+  const preview = [code, ...note.map(line => `// ${line}`)].join("\n");
 
-  if (!(await args.confirm(code))) {
+  if (!(await args.confirm(preview))) {
     logger.info("Promote cancelled.");
     return "cancelled";
   }
@@ -106,13 +120,14 @@ export async function promoteCollection(
         logger.warn(
           "Could not locate nextly.config.ts. The snippet is printed below; paste it into the collections array manually."
         );
-        logger.info(code);
+        logger.info(preview);
       } else {
         const snippet = [
           "",
           `// Promoted from UI source on ${new Date().toISOString()}.`,
           "// Move this entry into your collections array:",
           ...code.split("\n").map(line => `// ${line}`),
+          ...note.map(line => `// ${line}`),
           "",
         ].join("\n");
         appendFileSync(configPath, snippet);
@@ -130,6 +145,7 @@ export async function promoteCollection(
   logger.info(
     `Collection '${slug}' removed from UI source. Move the snippet into your collections array, then restart dev server.`
   );
+  if (note.length > 0) logger.info(note.join("\n"));
   return "promoted";
 }
 
@@ -180,6 +196,14 @@ export async function runPromote(
       cwd: context.cwd,
       registry,
       adapter,
+      templateAddress: collection =>
+        storedTemplateAddress(
+          {
+            getCollectionBySlug: found => registry.getCollectionBySlug(found),
+            queryStatement: statement => adapter.queryStatement(statement),
+          },
+          collection
+        ),
       // `--yes` answers the confirmation: append, without asking.
       confirm: code =>
         confirmationAnswered(context)

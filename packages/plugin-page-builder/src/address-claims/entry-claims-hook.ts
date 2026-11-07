@@ -3,7 +3,9 @@
  * save that takes or gives them up.
  *
  * Registered on core's in-transaction phase for every collection given a
- * template address in code, and for the templates collection:
+ * template address in code, for every other collection that has a template
+ * (whose address is set at runtime, stored on the template, and may be set
+ * after start), and for the templates collection:
  *
  * - An entry's save holds `<address>/<slug>` in each language while the entry
  *   and its collection's template are published, and is refused, naming the
@@ -12,16 +14,26 @@
  * - A template's first publish claims every published entry's address, pages
  *   first: an entry whose address is held is left waiting for it, not
  *   refused, since nobody is saving the entry. Unpublishing or deleting the
- *   template gives up every entry's address.
+ *   template gives up every entry's address. Changing a published template's
+ *   stored address moves every entry: its old addresses are given up, handing
+ *   them to whatever waited, and its new ones claimed, each waiting where it
+ *   is held.
  *
- * An entry's save and its template's publish take the collection's lock
- * before either reads the other, so neither commits past the other unseen: an
- * entry published while its template is being published is claimed by
- * whichever of the two commits second.
+ * A collection's address declared in code wins over one its template
+ * stores, so a collection promoted into code moves to the declared address,
+ * and until it starts with the declaration its entries stay at the stored
+ * one.
+ *
+ * An entry's save, its template's publish and a change of its address take
+ * the collection's lock before any reads the other, so none commits past
+ * another unseen: an entry published while its template is being published,
+ * or its address moved, is claimed by whichever commits second.
  *
  * @module address-claims/entry-claims-hook
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
+
+import { addressSegments } from "../templates/template-addresses";
 
 import { claimKey, spaceHolding, type ServedAddress } from "./claim-key";
 import {
@@ -29,7 +41,7 @@ import {
   claimOrWait,
   claimSpace,
   committedClaims,
-  holdLocks,
+  lockCollection,
   reconcileHolder,
   releaseClaims,
   sharePending,
@@ -51,17 +63,46 @@ const BATCH = 100;
 /** A committed row as the walks read it. */
 type Row = Readonly<Record<string, unknown>>;
 
+/** A collection's template as the claims read it, as last committed. */
+export interface ServingTemplate {
+  readonly published: boolean;
+  /** The address it stores, as segments, or null for none. */
+  readonly address: readonly string[] | null;
+}
+
 /** What entries' claims need, resolved per save. */
 export interface EntryClaimsDeps {
   readonly claims: Claims;
-  /** Each collection's address segments, by collection slug. */
+  /** Each address declared in code, as segments, by collection slug. */
   readonly addresses: ReadonlyMap<string, readonly string[]>;
   /** The templates collection's slug, as the host named it. */
   readonly templates: string;
   /** The languages an entry's address is held in. */
   readonly locales: () => readonly string[];
-  /** Whether `collection`'s template is published, as last committed. */
-  readonly templatePublished: (collection: string) => Promise<boolean>;
+  /** `collection`'s template, as last committed, or null when it has none. */
+  readonly templateOf: (collection: string) => Promise<ServingTemplate | null>;
+  /**
+   * Every collection whose template stores an address, with it as segments,
+   * as last committed.
+   */
+  readonly storedAddresses: () => Promise<
+    ReadonlyMap<string, readonly string[]>
+  >;
+  /**
+   * Whether `collection` is one whose writes never move an entry's address:
+   * the page builder's own collections, whose documents are not entries
+   * served under a template address.
+   */
+  readonly neverServed: (collection: string) => boolean;
+  /**
+   * Why a stored address cannot be `address` for `collection`, judged
+   * without reading, or null: the guard's own words, asked again of the
+   * template as its write leaves it, whichever path the write took.
+   */
+  readonly storedAddressProblem: (
+    address: unknown,
+    collection: string
+  ) => string | null;
   /**
    * Whether `collection` has a Draft/Published lifecycle: without one,
    * every entry is live, whatever a field named `status` holds.
@@ -98,6 +139,8 @@ export interface EntryClaimsDeps {
 
 /** The slice of an in-transaction write the hooks read. */
 interface HostWrite {
+  /** The collection written to, or `single:<slug>` for a Single. */
+  readonly collection?: string;
   readonly operation: "create" | "update" | "delete";
   readonly id: unknown;
   readonly data: unknown;
@@ -125,26 +168,63 @@ export function registerEntryAddressClaims(
       holdEntryClaims(collection, write, deps)
     );
   }
+  // Every other collection: one created at runtime is served at the address
+  // its template stores, which may be set long after start.
+  hooks.onInTransaction("*", write => holdRuntimeEntryClaims(write, deps));
   hooks.onInTransaction(deps.templates, write =>
     settleTemplateClaims(write, deps)
   );
 }
 
+/**
+ * An entry's claims in a collection not given an address in code. A
+ * collection with no template holds no address and takes no lock, so a
+ * save in any of the site's other collections costs one read; one with a
+ * template takes its lock and is judged as a declared collection's entry is,
+ * at the address its template stores.
+ *
+ * A template created and published with an address while an entry of its
+ * collection is being saved can miss that entry, which read no template
+ * before the template's walk read the entries; the entry is claimed at its
+ * next save or the next start.
+ */
+async function holdRuntimeEntryClaims(
+  write: HostWrite,
+  deps: EntryClaimsDeps
+): Promise<void> {
+  const collection = write.collection;
+  if (
+    typeof collection !== "string" ||
+    collection.startsWith("single:") ||
+    deps.addresses.has(collection) ||
+    collection === deps.templates ||
+    deps.neverServed(collection)
+  ) {
+    return;
+  }
+  if ((await deps.templateOf(collection)) === null) return;
+  await holdEntryClaims(collection, write, deps);
+}
+
+/** Whether two addresses, as segments, are one, or both none. */
+function sameAddress(
+  a: readonly string[] | null,
+  b: readonly string[] | null
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.length === b.length && a.every((part, at) => part === b[at]);
+}
+
+/** A stored address as its segments, or null for none. */
+function segmentsOf(stored: unknown): readonly string[] | null {
+  return typeof stored === "string" && stored !== ""
+    ? addressSegments(stored)
+    : null;
+}
+
 /** A record, or null for anything else. */
 function recordOf(value: unknown): Row | null {
   return typeof value === "object" && value !== null ? (value as Row) : null;
-}
-
-/**
- * The lock an entry's save and its template's publish take first: the
- * collection's address, in the first language claims are held in.
- */
-function collectionLock(
-  address: readonly string[],
-  locales: readonly string[]
-): { locale: string; segments: readonly string[] }[] {
-  const locale = locales[0];
-  return locale === undefined ? [] : [{ locale, segments: address }];
 }
 
 /**
@@ -159,8 +239,6 @@ async function holdEntryClaims(
   deps: EntryClaimsDeps
 ): Promise<void> {
   if (typeof write.id !== "string" && typeof write.id !== "number") return;
-  const address = deps.addresses.get(collection);
-  if (address === undefined) return;
   const holder: Holder = { collection, id: String(write.id) };
   if (write.transactionKey !== undefined) {
     sharePending(write.transaction, write.transactionKey);
@@ -168,34 +246,30 @@ async function holdEntryClaims(
   if (write.operation === "delete") {
     // Under the collection's lock, so a template's walk that read this entry
     // before the delete committed cannot claim for it afterwards.
-    await holdLocks(
-      deps.claims,
-      write.transaction,
-      collectionLock(address, deps.locales())
-    );
+    await lockCollection(deps.claims, write.transaction, collection);
     await releaseClaims(deps.claims, write.transaction, holder);
     return;
   }
   const data = recordOf(write.data);
   if (data === null || data._isWorkingDraft === true) return;
   const locales = deps.locales();
-  // Before the template is read, so a publish of it in flight is waited for
-  // and then seen, and the template's walk sees this entry once committed.
-  await holdLocks(
-    deps.claims,
-    write.transaction,
-    collectionLock(address, locales)
-  );
-  const wanted = (await deps.templatePublished(collection))
-    ? entryAddresses(data, address, locales, await deps.lifecycle(collection))
-    : [];
+  // Before the template is read, so a publish of it or a change of its
+  // address in flight is waited for and then seen, and the template's walk
+  // sees this entry once committed.
+  await lockCollection(deps.claims, write.transaction, collection);
+  const template = await deps.templateOf(collection);
+  const address = deps.addresses.get(collection) ?? template?.address ?? null;
+  const wanted =
+    template?.published === true && address !== null
+      ? entryAddresses(data, address, locales, await deps.lifecycle(collection))
+      : [];
   if (wanted === NO_ADDRESS) {
     throw NextlyError.validation({
       errors: [
         {
           path: ENTRY_SLUG_FIELD,
           code: "NO_ADDRESS",
-          message: `This entry is published under /${address.join("/")}, so it needs a slug that can be its address: one segment, not empty, without "/".`,
+          message: `This entry is published under /${(address ?? []).join("/")}, so it needs a slug that can be its address: one segment, not empty, without "/".`,
         },
       ],
       logContext: { reason: "entry-without-address", collection },
@@ -268,10 +342,12 @@ async function claimPagesAt(
 }
 
 /**
- * When a template is first published, claim every published entry of its
- * collection, each waiting where its address is held; when it is unpublished
- * or deleted, give every entry's address up. A save that leaves it published
- * or unpublished as it was changes no entry.
+ * Bring a collection's entries to where its template, as this write leaves
+ * it, serves them: claimed when it is first published, given up when it is
+ * unpublished or deleted, and moved when its stored address changes while it
+ * is published. A stored address that changes is judged again first, in the
+ * guard's words, so no write path stores one the guard would refuse. A save
+ * that changes neither changes no entry.
  */
 async function settleTemplateClaims(
   write: HostWrite,
@@ -281,47 +357,63 @@ async function settleTemplateClaims(
   if (data === null || data._isWorkingDraft === true) return;
   const collection = data.collection;
   if (typeof collection !== "string") return;
-  const address = deps.addresses.get(collection);
-  if (address === undefined) return;
   const before =
-    write.operation === "create" ? null : recordOf(write.originalData);
-  const wasPublished =
-    write.operation === "delete"
-      ? data.status === "published"
-      : before?.status === "published";
-  const nowPublished =
-    write.operation !== "delete" && data.status === "published";
-  if (wasPublished === nowPublished) return;
+    write.operation === "create"
+      ? null
+      : write.operation === "delete"
+        ? data
+        : recordOf(write.originalData);
+  const storedBefore = segmentsOf(before?.address);
+  const storedAfter =
+    write.operation === "delete" ? null : segmentsOf(data.address);
+  if (
+    write.operation !== "delete" &&
+    storedAfter !== null &&
+    !sameAddress(storedBefore, storedAfter)
+  ) {
+    const problem = deps.storedAddressProblem(data.address, collection);
+    if (problem !== null) {
+      throw NextlyError.validation({
+        errors: [
+          { path: "address", code: "TEMPLATE_ADDRESS", message: problem },
+        ],
+        logContext: { reason: "template-address-refused", collection },
+      });
+    }
+  }
+  const declared = deps.addresses.get(collection) ?? null;
+  const servedBefore =
+    before?.status === "published" ? (declared ?? storedBefore) : null;
+  const servedAfter =
+    write.operation !== "delete" && data.status === "published"
+      ? (declared ?? storedAfter)
+      : null;
+  if (sameAddress(servedBefore, servedAfter)) return;
   if (write.transactionKey !== undefined) {
     sharePending(write.transaction, write.transactionKey);
   }
-  await settleEntries(deps, write.transaction, collection, nowPublished);
+  await settleEntries(deps, write.transaction, collection, servedAfter);
 }
 
 /**
- * Bring every published entry of `collection` to what it should hold while
- * its template is published (`served`) or not, in `tx`, a page of entries at
- * a time. An entry whose address is held waits for it; one with no address
- * holds nothing. Takes the collection's lock first.
+ * Bring every published entry of `collection` to what it should hold at
+ * `address` (none while its template serves it nowhere), in `tx`, a page of
+ * entries at a time. An entry whose address is held waits for it; one with
+ * no address holds nothing. Takes the collection's lock first.
  */
 async function settleEntries(
   deps: EntryClaimsDeps,
   tx: Tx,
   collection: string,
-  served: boolean
+  address: readonly string[] | null
 ): Promise<void> {
-  const address = deps.addresses.get(collection);
-  if (address === undefined) return;
   const locales = deps.locales();
-  await holdLocks(deps.claims, tx, collectionLock(address, locales));
+  await lockCollection(deps.claims, tx, collection);
   const lifecycle = await deps.lifecycle(collection);
   for (let page = 1; ; page += 1) {
     const rows = await deps.publishedEntries(collection, page, BATCH);
     for (const row of rows) {
-      await settleEntry(deps, tx, collection, address, locales, row, {
-        served,
-        lifecycle,
-      });
+      await settleEntry(deps, tx, collection, address, locales, row, lifecycle);
     }
     if (rows.length < BATCH) return;
   }
@@ -332,16 +424,16 @@ async function settleEntry(
   deps: EntryClaimsDeps,
   tx: Tx,
   collection: string,
-  address: readonly string[],
+  address: readonly string[] | null,
   locales: readonly string[],
   row: Row,
-  state: { readonly served: boolean; readonly lifecycle: boolean }
+  lifecycle: boolean
 ): Promise<void> {
   const id = row.id;
   if (typeof id !== "string" && typeof id !== "number") return;
   const found =
-    state.served && isPublished(row, state.lifecycle)
-      ? entryAddresses(row, address, locales, state.lifecycle)
+    address !== null && isPublished(row, lifecycle)
+      ? entryAddresses(row, address, locales, lifecycle)
       : [];
   // An entry with no address holds nothing; its next save is refused,
   // which tells its author.
@@ -375,21 +467,29 @@ export interface EntryClaimsPassDeps extends EntryClaimsDeps {
 export async function settleEntryClaimsAtStart(
   deps: EntryClaimsPassDeps
 ): Promise<void> {
-  for (const collection of deps.addresses.keys()) {
+  let stored: ReadonlyMap<string, readonly string[]>;
+  try {
+    stored = await deps.storedAddresses();
+  } catch (error) {
+    deps.warn("Could not read the template addresses set in the admin.", {
+      error: String(error),
+    });
+    stored = new Map();
+  }
+  const collections = new Set([...deps.addresses.keys(), ...stored.keys()]);
+  for (const collection of collections) {
     try {
       await deps.withTransaction(async tx => {
-        const address = deps.addresses.get(collection) ?? [];
-        await holdLocks(
-          deps.claims,
-          tx,
-          collectionLock(address, deps.locales())
-        );
-        // Read under the lock, so a publish or unpublish of the template in
-        // flight is waited for and then seen.
+        await lockCollection(deps.claims, tx, collection);
+        // Read under the lock, so a publish, an unpublish or an address
+        // change of the template in flight is waited for and then seen.
         // An unpublished template's entries hold nothing already: its
         // unpublish gave their addresses up, and no save claims one since.
-        if (!(await deps.templatePublished(collection))) return;
-        await settleEntries(deps, tx, collection, true);
+        const template = await deps.templateOf(collection);
+        const address =
+          deps.addresses.get(collection) ?? template?.address ?? null;
+        if (template?.published !== true || address === null) return;
+        await settleEntries(deps, tx, collection, address);
       });
     } catch (error) {
       deps.warn("Could not settle the addresses of a collection's entries.", {
@@ -404,16 +504,30 @@ export async function settleEntryClaimsAtStart(
 const SWEEP_PAGE = 500;
 
 /**
- * Give up every address and wait held by an entry of a collection no longer
- * given a template address in code (removed since the last start), so its
- * entries stop being served there and pages may take the paths. Never
- * throws: what it cannot release is warned about and left for the next
- * start.
+ * Give up every address and wait held by an entry of a collection given a
+ * template address neither in code nor on its template (removed since the
+ * last start), so its entries stop being served there and pages may take the
+ * paths. Never throws: what it cannot release is warned about and left for
+ * the next start, as is everything when the stored addresses cannot be read,
+ * since a collection served at one would otherwise lose its entries' claims.
  */
 export async function releaseUndeclared(
   deps: EntryClaimsPassDeps
 ): Promise<void> {
-  const known = new Set([deps.pages, ...deps.addresses.keys()]);
+  let stored: ReadonlyMap<string, readonly string[]>;
+  try {
+    stored = await deps.storedAddresses();
+  } catch (error) {
+    deps.warn("Could not read the template addresses set in the admin.", {
+      error: String(error),
+    });
+    return;
+  }
+  const known = new Set([
+    deps.pages,
+    ...deps.addresses.keys(),
+    ...stored.keys(),
+  ]);
   const stale = new Map<string, Holder>();
   try {
     for (let page = 1; ; page += 1) {

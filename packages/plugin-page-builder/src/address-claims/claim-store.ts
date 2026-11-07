@@ -30,6 +30,7 @@ import { asOverwrite } from "../document-version";
 
 import {
   claimKey,
+  collectionLockKey,
   holderLockKey,
   pathOf,
   servedAddress,
@@ -363,6 +364,27 @@ export async function lockHolder(
   holder: Holder
 ): Promise<void> {
   const key = holderLockKey(holder);
+  await holdLockRow(
+    claims,
+    tx,
+    key,
+    { claimKey: storedKey(key), kind: "lock" },
+    { kind: "lock" }
+  );
+}
+
+/**
+ * Hold `collection`'s own lock row until this transaction ends (see
+ * {@link collectionLockKey}): taken by an entry's save before it reads where
+ * its collection is served, and by whatever changes that, so neither commits
+ * past the other unseen. Taken before any holder's or address's lock.
+ */
+export async function lockCollection(
+  claims: Claims,
+  tx: Tx,
+  collection: string
+): Promise<void> {
+  const key = collectionLockKey(collection);
   await holdLockRow(
     claims,
     tx,
@@ -816,19 +838,6 @@ export async function reconcileHolder(
     });
   }
   return true;
-}
-
-/**
- * Hold the locks on `addresses` until `tx` ends, in key order, so saves that
- * must not judge the same thing at once take turns: whatever else locks one
- * of them waits for this transaction, then reads what it committed.
- */
-export async function holdLocks(
-  claims: Claims,
-  tx: Tx,
-  addresses: readonly ServedAddress[]
-): Promise<void> {
-  await lockInOrder(claims, tx, addresses);
 }
 
 /** Who holds an address, as the route serving it is told. */

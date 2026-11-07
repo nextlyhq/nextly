@@ -165,6 +165,17 @@ export function holderLockKey(holder: {
 }
 
 /**
+ * The key of the lock row a collection's entries are claimed under, so an
+ * entry's save, its template's publish and a change of its address take
+ * turns. Keyed by the collection rather than its address, so a save that has
+ * not yet read the address takes the same lock as a change that moves it.
+ * Like a holder's lock key, it holds no `|`, so it never meets an address's.
+ */
+export function collectionLockKey(collection: string): string {
+  return `${NAMESPACE.lock}:collection:${encodeURIComponent(collection)}`;
+}
+
+/**
  * The list whose page-segment space holds `address`, or null when `address`
  * is not a later page of any list. `/news/page/2` is in the space of `/news`;
  * `/news` itself is not, since the list's first page is a document's own
