@@ -784,7 +784,12 @@ async function siteZone(
   window: number | false | undefined
 ): Promise<string | undefined> {
   if (config.timeZone !== undefined) return config.timeZone;
-  const site = await readSite(config.cacheScope, budget, window);
+  const site = await readSite(
+    siteSettingsSourceFor(config),
+    config.cacheScope,
+    budget,
+    window
+  );
   if (site === undefined) {
     throw new Error(
       "The site settings could not be read, so the site's time zone, and today in it, is not known."
@@ -835,9 +840,14 @@ function namedQueryHostFor(args: {
     definitionOf: name => config.namedQueries?.definitionOf(name),
     reader: {
       ...reader,
+      // The route's own instance's settings, as the page's own read takes
+      // them, so a process serving several sites never hands a query
+      // another site's name or zone. The reader already counted this read.
       siteSettings: async () => {
+        const from = siteSettingsSourceFor(config);
+        if (from instanceof ProcessSiteSettings) warnOfStandIn(from);
         const settings = await cachedFind(
-          async () => await readPublicSiteSettings(),
+          async () => await readPublicSiteSettings(from),
           {
             tags: nextlySiteSettingsTags(),
             keyParts: ["nextly-public-site-settings", config.cacheScope ?? ""],
