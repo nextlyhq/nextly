@@ -10,10 +10,8 @@
  * delete removes them with the collection, or not at all.
  *
  * A template names its collection in `collection`. An entry's own design
- * names the collection of its entry in `entryCollection`, which the
- * templates collection declares once own designs ship; until then only the
- * templates are found, and the field is not asked about, so no read names a
- * field the collection does not have.
+ * names the collection of its entry in `entryCollection`, and the entry in
+ * `entryId`.
  *
  * The plugin's own collections are skipped: none of them is drawn with a
  * template, and deleting one is not this module's to answer for.
@@ -31,24 +29,14 @@
  */
 import {
   TEMPLATE_COLLECTION_FIELD,
-  templatesCollection,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
 } from "../collections/templates";
 
 import { templateCollectionRefusal } from "./template-guard";
 
-/** The field naming the collection whose entry an own design draws. */
-export const ENTRY_COLLECTION_FIELD = "entryCollection";
-
-/** The field naming the entry an own design draws. */
-const ENTRY_ID_FIELD = "entryId";
-
 /** How many designs one read takes. */
 const PAGE = 100;
-
-/** Whether the templates collection declares own designs. */
-const DECLARES_OWN_DESIGNS = templatesCollection().fields.some(
-  field => "name" in field && field.name === ENTRY_COLLECTION_FIELD
-);
 
 /** One thing deleting a collection takes with it, as the dialog lists it. */
 export interface DeleteImpactItem {
@@ -99,7 +87,10 @@ export function holdTemplateCollection<Tx>(
 ): (write: TemplateWrite<Tx>) => Promise<void> {
   return async write => {
     if (write.operation === "delete") return;
-    for (const field of [TEMPLATE_COLLECTION_FIELD, ENTRY_COLLECTION_FIELD]) {
+    for (const field of [
+      TEMPLATE_COLLECTION_FIELD,
+      TEMPLATE_ENTRY_COLLECTION_FIELD,
+    ]) {
       const collection = write.data?.[field];
       if (typeof collection !== "string" || collection === "") continue;
       if (
@@ -119,12 +110,12 @@ export function holdTemplateCollection<Tx>(
 
 /** The templates rows that name `collection`: its template and own designs. */
 function namingCollection(collection: string): Record<string, unknown> {
-  const template = { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } };
-  return DECLARES_OWN_DESIGNS
-    ? {
-        or: [template, { [ENTRY_COLLECTION_FIELD]: { equals: collection } }],
-      }
-    : template;
+  return {
+    or: [
+      { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
+      { [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection } },
+    ],
+  };
 }
 
 /** A row's string field, or undefined. */
@@ -160,10 +151,10 @@ export function templateCollectionDelete<Tx>(args: {
         // A page's own designs are named by their entries' titles, read in
         // one list per page rather than one read per design.
         const designs = found.data.filter(
-          row => stringOf(row, ENTRY_COLLECTION_FIELD) === slug
+          row => stringOf(row, TEMPLATE_ENTRY_COLLECTION_FIELD) === slug
         );
         const entryIds = designs.flatMap(row => {
-          const id = stringOf(row, ENTRY_ID_FIELD);
+          const id = stringOf(row, TEMPLATE_ENTRY_ID_FIELD);
           return id === undefined ? [] : [id];
         });
         const titles = new Map<string, string>();
@@ -177,8 +168,8 @@ export function templateCollectionDelete<Tx>(args: {
         }
         for (const row of found.data) {
           const id = stringOf(row, "id") ?? "";
-          if (stringOf(row, ENTRY_COLLECTION_FIELD) === slug) {
-            const entryId = stringOf(row, ENTRY_ID_FIELD);
+          if (stringOf(row, TEMPLATE_ENTRY_COLLECTION_FIELD) === slug) {
+            const entryId = stringOf(row, TEMPLATE_ENTRY_ID_FIELD);
             items.push({
               label:
                 (entryId === undefined ? undefined : titles.get(entryId)) ??

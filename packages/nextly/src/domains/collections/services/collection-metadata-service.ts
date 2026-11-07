@@ -1135,12 +1135,12 @@ export class CollectionMetadataService extends BaseService {
     tx: TransactionContext,
     slug: string
   ): Promise<boolean> {
-    const held = await this.collectionService.holdCollectionsIn(
+    const { existing } = await this.collectionService.holdCollectionsIn(
       tx,
       [slug],
       "share"
     );
-    return held.includes(slug);
+    return existing.includes(slug);
   }
 
   private async deleteCollectionExcluded(
@@ -1347,29 +1347,43 @@ export class CollectionMetadataService extends BaseService {
         // (`holdCollectionsIn`), so it either commits before the plugins'
         // handlers below read what to remove, or waits and finds the
         // collection gone.
-        await this.collectionService.holdCollectionsIn(tx, slugs, "update");
-        // The plugins' handlers next: what they remove is plain rows, so
-        // here, before any DDL, a handler that throws rolls the whole delete
-        // back on every dialect, MySQL included, whose table drops below
-        // commit what ran before them.
-        await runCollectionDeleteHandlers(getActiveHookRegistry(), slugs, tx);
-        ddlStarted = true;
-        const teardownAdapter = teardownAdapterIn(this.adapter, tx);
-        for (const { slug, collection } of ordered) {
-          await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
-        }
-        // Development drops the tables now, in this transaction; elsewhere
-        // `nextly migrate` applies the file.
-        if (this.isDevelopment()) {
-          for (const statement of splitStatements([drop.migrationSQL])) {
-            await tx.execute(statement);
+        const hold = await this.collectionService.holdCollectionsIn(
+          tx,
+          slugs,
+          "update"
+        );
+        // Released once the last statement below has run, failed or not: on
+        // MySQL the hold outlives the first table drop's commit only through
+        // it, and it belongs to this connection, which the transaction hands
+        // back next.
+        try {
+          // The plugins' handlers next: what they remove is plain rows, so
+          // here, before any DDL, a handler that throws rolls the whole
+          // delete back on every dialect, MySQL included, whose table drops
+          // below commit what ran before them.
+          await runCollectionDeleteHandlers(getActiveHookRegistry(), slugs, tx);
+          ddlStarted = true;
+          const teardownAdapter = teardownAdapterIn(this.adapter, tx);
+          for (const { slug, collection } of ordered) {
+            await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
           }
-        }
-        for (const { slug } of ordered) {
-          unregistered.set(
-            slug,
-            await this.collectionService.unregisterCollectionIn(tx, slug)
-          );
+          // Development drops the tables now, in this transaction; elsewhere
+          // `nextly migrate` applies the file.
+          if (this.isDevelopment()) {
+            for (const statement of splitStatements([drop.migrationSQL])) {
+              await tx.execute(statement);
+            }
+          }
+          for (const { slug } of ordered) {
+            unregistered.set(
+              slug,
+              await this.collectionService.unregisterCollectionIn(tx, slug)
+            );
+          }
+        } finally {
+          // A release that fails means the connection is gone, and its locks
+          // with it; the delete's own outcome is what the caller is told.
+          await hold.release().catch(() => undefined);
         }
       });
     } catch (error) {

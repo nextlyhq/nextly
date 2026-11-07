@@ -5,11 +5,9 @@
  * admin's Schema Builder makes both calls.
  *
  * The collection is created at runtime, as the Schema Builder creates one,
- * since a collection declared in code cannot be deleted from the admin. Own
- * designs name their entry's collection in the templates collection's
- * `entryCollection`; a templates collection that does not declare it yet has
- * no own designs to make, and the case for them says so rather than passing
- * on nothing.
+ * since a collection declared in code cannot be deleted from the admin. It
+ * is created as in development, where the Builder builds its table, so its
+ * entries can be written and given designs of their own.
  *
  * @module __tests__/template-collection-delete.integration.test
  */
@@ -27,13 +25,12 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { templatesCollection, TEMPLATES_SLUG } from "../collections/templates";
+import { TEMPLATES_SLUG } from "../collections/templates";
 import { pageBuilder } from "../plugin";
-import { ENTRY_COLLECTION_FIELD } from "../templates/collection-delete";
 
-import { person, sessionOf } from "./transfer-harness";
+import { person, post, sessionOf } from "./transfer-harness";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
@@ -41,11 +38,6 @@ const CSRF = "c".repeat(64);
 /** The collection created at runtime, and one kept beside it. */
 const HOST = "tcd_articles";
 const KEPT = "posts";
-
-/** Whether the templates collection holds entries' own designs yet. */
-const OWN_DESIGNS = templatesCollection().fields.some(
-  field => "name" in field && field.name === ENTRY_COLLECTION_FIELD
-);
 
 /** A call to Nextly's own API, as the admin makes it. */
 async function api(
@@ -102,15 +94,22 @@ describe.each(getConfiguredTestDialects())(
       current = t;
       // The instance's first user is its super admin.
       const cookie = await sessionOf(t, await person(t, "owner"));
-      const made = await api(cookie, "POST", ["collections"], {
-        name: HOST,
-        label: "Articles",
-        fields: [
-          { name: "title", type: "text" },
-          { name: "slug", type: "text" },
-        ],
-      });
-      expect(made.status).toBe(201);
+      // As in development, where the Builder builds the table at once; the
+      // rest of the case runs as the suite does.
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        const made = await api(cookie, "POST", ["collections"], {
+          name: HOST,
+          label: "Articles",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "slug", type: "text" },
+          ],
+        });
+        expect(made.status).toBe(201);
+      } finally {
+        vi.unstubAllEnvs();
+      }
       return { t, cookie };
     }
 
@@ -160,42 +159,54 @@ describe.each(getConfiguredTestDialects())(
       expect(await templateTitles(t)).toEqual(["Post page"]);
     });
 
-    it.skipIf(!OWN_DESIGNS)(
-      "lists and deletes the entries' own designs with the collection",
-      async () => {
-        const { t, cookie } = await boot();
-        const entry = await t.nextly.create({
-          collection: HOST,
-          data: { title: "Hello world" },
-          overrideAccess: true,
-        });
-        await t.nextly.create({
-          collection: TEMPLATES_SLUG,
-          data: {
-            title: "Own design",
-            [ENTRY_COLLECTION_FIELD]: HOST,
-            entryId: String(entry.item.id),
-          },
-          overrideAccess: true,
-        });
+    it("lists and deletes the entries' own designs with the collection", async () => {
+      const { t, cookie } = await boot();
+      const entry = await t.nextly.create({
+        collection: HOST,
+        data: { title: "Hello world", slug: "hello-world" },
+        overrideAccess: true,
+      });
+      const act = (action: Record<string, unknown>) =>
+        post(cookie, ["templates", "actions"], { action });
+      expect(
+        (
+          await act({
+            kind: "create-template",
+            collection: HOST,
+            publish: true,
+          })
+        ).status
+      ).toBe(200);
+      expect(
+        (
+          await act({
+            kind: "give-entry-design",
+            collection: HOST,
+            entry: String(entry.item.id),
+          })
+        ).status
+      ).toBe(200);
 
-        const impact = await api(cookie, "GET", [
-          "collections",
-          "schema",
-          HOST,
-          "delete-impact",
-        ]);
-        const groups = impact.body.impact as {
-          items: { label: string; kind: string }[];
-        }[];
-        expect(groups.flatMap(group => group.items)).toEqual([
-          { label: "Hello world", kind: "design" },
-        ]);
+      const impact = await api(cookie, "GET", [
+        "collections",
+        "schema",
+        HOST,
+        "delete-impact",
+      ]);
+      const groups = impact.body.impact as {
+        items: { label: string; kind: string }[];
+      }[];
+      const items = groups.flatMap(group => group.items);
+      expect(items.map(item => item.kind).sort()).toEqual([
+        "design",
+        "template",
+      ]);
+      expect(items).toContainEqual({ label: "Hello world", kind: "design" });
+      expect((await templateTitles(t)).length).toBe(2);
 
-        const deleted = await api(cookie, "DELETE", ["collections", HOST]);
-        expect(deleted.status).toBe(200);
-        expect(await templateTitles(t)).toEqual([]);
-      }
-    );
+      const deleted = await api(cookie, "DELETE", ["collections", HOST]);
+      expect(deleted.status).toBe(200);
+      expect(await templateTitles(t)).toEqual([]);
+    });
   }
 );

@@ -56,6 +56,35 @@ describe("collectionDeleteImpact", () => {
     ]);
   });
 
+  it("lists a plugin that registered more than once as one group, in its first place, its items in order", async () => {
+    const registry = new HookRegistry();
+    const naming =
+      (label: string) =>
+      async (): Promise<{ label: string; kind: string }[]> => [
+        { label, kind: "design" },
+      ];
+    registry.registerCollectionDelete(
+      { impact: naming("first") },
+      "plugin:@a/designs"
+    );
+    registry.registerCollectionDelete({ impact: naming("other") }, "app");
+    registry.registerCollectionDelete(
+      { impact: naming("second") },
+      "plugin:@a/designs"
+    );
+
+    expect(await collectionDeleteImpact(registry, ["posts"])).toEqual([
+      {
+        plugin: "@a/designs",
+        items: [
+          { label: "first", kind: "design" },
+          { label: "second", kind: "design" },
+        ],
+      },
+      { plugin: "app", items: [{ label: "other", kind: "design" }] },
+    ]);
+  });
+
   it("refuses an answer that is not a list of labelled items, naming the plugin", async () => {
     const registry = new HookRegistry();
     registry.registerCollectionDelete(

@@ -50,8 +50,10 @@ function shownAs(owner: HookOwner): string {
 }
 
 /**
- * What deleting `slugs` together takes with it, by plugin, in registration
- * order. A plugin that names nothing is left out. Reads only: each plugin's
+ * What deleting `slugs` together takes with it, one group per plugin, in the
+ * order each plugin first registered, its items in the order its handlers
+ * registered and named them: a plugin that registered more than once is
+ * listed once. A plugin that names nothing is left out. Reads only: each
  * `impact` is asked of every slug, and the delete is not started.
  *
  * @throws NextlyError `INTERNAL_ERROR` naming the plugin when its `impact`
@@ -61,10 +63,13 @@ export async function collectionDeleteImpact(
   registry: CollectionDeleteSource,
   slugs: readonly string[]
 ): Promise<CollectionDeleteImpactGroup[]> {
-  const groups: CollectionDeleteImpactGroup[] = [];
+  // Keyed by owner, not by the name shown: the app and a plugin called
+  // "app" are two owners.
+  const byOwner = new Map<HookOwner, CollectionDeleteImpactItem[]>();
   for (const { handler, owner } of registry.collectionDeleteEntries()) {
     if (handler.impact === undefined) continue;
-    const items: CollectionDeleteImpactItem[] = [];
+    const items = byOwner.get(owner) ?? [];
+    byOwner.set(owner, items);
     for (const slug of slugs) {
       let answer: unknown;
       try {
@@ -78,9 +83,10 @@ export async function collectionDeleteImpact(
       }
       items.push(...parsed.data);
     }
-    if (items.length > 0) groups.push({ plugin: shownAs(owner), items });
   }
-  return groups;
+  return [...byOwner]
+    .filter(([, items]) => items.length > 0)
+    .map(([owner, items]) => ({ plugin: shownAs(owner), items }));
 }
 
 /** A plugin's `impact` that failed, named by its owner in the log. */

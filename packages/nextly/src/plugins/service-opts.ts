@@ -609,8 +609,9 @@ export type PluginCollectionService = Pick<
    * (`ctx.hooks.onCollectionDelete`) read what to remove with it, or waits
    * for the delete and is told the collection is gone. Asks nothing of the
    * caller's access, and reads nothing but whether the row is there. On
-   * MySQL a delete that drops tables commits at its first drop, which ends
-   * its hold early. A settled token is refused.
+   * MySQL, where a table drop commits a transaction's row locks, both sides
+   * also take the collection's named lock, which the delete holds until it
+   * has removed the row. A settled token is refused.
    */
   holdCollectionInTransaction(
     tx: PluginCollectionTransaction,

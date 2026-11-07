@@ -225,8 +225,9 @@ init(ctx) {
   `ctx.services.collections.holdCollectionInTransaction(tx, slug)` (`@experimental`), and
   refuse the write when it answers `false`: the delete holds the collection's registry row
   for update before your handler runs, so the write either commits first and is removed
-  with the collection, or waits and is told the collection is gone. On MySQL a delete
-  that drops tables releases its hold at its first drop.
+  with the collection, or waits and is told the collection is gone. On MySQL, where a
+  table drop commits the delete's row locks, both also take a named lock on the
+  collection, which the delete holds until its registry row is removed.
 
 **Never hardcode your own slugs** in `init`. Use `ctx.self` so your plugin keeps working when an integrator renames an entity:
 

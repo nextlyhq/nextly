@@ -21,7 +21,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, expect, it } from "vitest";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
@@ -63,6 +64,8 @@ const handled: string[] = [];
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   refusing.on = false;
   pausing.at = undefined;
   designerContext = undefined;
@@ -292,5 +295,67 @@ describeEachDialect("a plugin's collection-delete hook", dialect => {
     await deleting;
 
     expect(await held).toBe(false);
+  });
+
+  it("goes on holding the collection past the delete's table drop, in development", async () => {
+    const t = await boot(dialect);
+    const plugin = designerContext;
+    if (!plugin) throw new Error("not booted");
+    const collections = plugin.services.collections;
+    // Each transaction's statements, with the delete held just after it
+    // drops HOST's table: on MySQL that drop has committed the transaction
+    // so far, row locks included, while the registry row is still there.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    let reached!: () => void;
+    const dropped = new Promise<void>(resolve => (reached = resolve));
+    const dropOfHost = new RegExp(
+      `DROP TABLE IF EXISTS [\`"]dc_${HOST}[\`"](\\s+CASCADE)?;?\\s*$`
+    );
+    const transaction = t.adapter.transaction.bind(t.adapter);
+    vi.spyOn(t.adapter, "transaction").mockImplementation((work, options) =>
+      transaction(
+        tx =>
+          work(
+            new Proxy(tx, {
+              get(target, key) {
+                if (key === "execute") {
+                  return async (
+                    statement: string,
+                    params?: Parameters<TransactionContext["execute"]>[1]
+                  ) => {
+                    const rows = await target.execute(statement, params);
+                    if (dropOfHost.test(statement)) {
+                      reached();
+                      await gate;
+                    }
+                    return rows;
+                  };
+                }
+                const value: unknown = Reflect.get(target, key);
+                return typeof value === "function"
+                  ? (value as (...args: unknown[]) => unknown).bind(target)
+                  : value;
+              },
+            })
+          ),
+        options
+      )
+    );
+
+    vi.stubEnv("NODE_ENV", "development");
+    const deleting = builderDelete(HOST);
+    await dropped;
+    // Asked once the table is gone and the registry row is not: a hold the
+    // drop's commit had released would answer that the collection exists.
+    const held = collections.withTransaction(tx =>
+      collections.holdCollectionInTransaction(tx, HOST)
+    );
+    await new Promise(resolve => setTimeout(resolve, 200));
+    release();
+    await deleting;
+
+    expect(await held).toBe(false);
+    expect(await registered(t, HOST)).toBe(false);
   });
 });

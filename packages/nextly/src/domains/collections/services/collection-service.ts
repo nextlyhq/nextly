@@ -614,8 +614,9 @@ export class CollectionService extends BaseService {
    * the collection holds the row for update before it removes anything, so
    * the write either commits before the delete reads what to remove with it,
    * or waits for the delete and is told the collection is gone. On SQLite,
-   * with one writer at a time, the row is only read. On MySQL a delete that
-   * drops tables commits at its first drop, which ends its hold early.
+   * with one writer at a time, the row is only read. On MySQL, where a table
+   * drop commits the delete's row locks, the collection's named lock holds
+   * the two apart until the delete has removed the row.
    *
    * @param tx - The transaction the write runs in
    * @param collectionName - The collection the write names
