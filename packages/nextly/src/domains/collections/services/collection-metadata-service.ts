@@ -1158,7 +1158,16 @@ export class CollectionMetadataService extends BaseService {
    * writer at a time, the row is only read. A collection that is not
    * registered holds no entry.
    *
-   * Both reads run on `tx`'s connection, so a pool of one connection is not
+   * The collection is held first, as `holdCollectionIn` holds it. A
+   * collection delete locks the registry row, not its entries' rows, before
+   * it runs its in-transaction handlers (`onCollectionDelete`), so holding
+   * the entry's row alone would let those handlers run before the write has
+   * stored what names the entry, and miss it. Held first, the registry row
+   * makes the write and a collection delete take turns too, and the record
+   * the entry's table is named by is read only once the collection can no
+   * longer go.
+   *
+   * Every read runs on `tx`'s connection, so a pool of one connection is not
    * asked for a second one while the transaction holds it.
    */
   async holdEntryIn(
@@ -1166,6 +1175,7 @@ export class CollectionMetadataService extends BaseService {
     slug: string,
     entryId: string
   ): Promise<boolean> {
+    if (!(await this.holdCollectionIn(tx, slug))) return false;
     let collection: unknown;
     try {
       collection = await this.collectionService.getCollection(

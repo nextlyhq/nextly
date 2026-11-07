@@ -637,8 +637,11 @@ export class CollectionService extends BaseService {
    * entry locks its row for update before it removes it, and runs its
    * in-transaction handlers after, so the write either commits before the
    * delete goes on, and those handlers see it, or waits for the delete and is
-   * told the entry is gone. On SQLite, with one writer at a time, the row is
-   * only read. Reads only whether the row is there, on `tx`'s connection.
+   * told the entry is gone. The entry's collection is held first, as
+   * {@link holdCollectionInTransaction} holds it, so a delete of the whole
+   * collection takes turns with the write as well. On SQLite, with one writer
+   * at a time, the rows are only read. Reads only whether the collection and
+   * the row are there, on `tx`'s connection.
    *
    * @param tx - The transaction the write runs in
    * @param collectionName - The collection of the entry the write names

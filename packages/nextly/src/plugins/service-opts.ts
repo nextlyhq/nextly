@@ -626,10 +626,15 @@ export type PluginCollectionService = Pick<
    * in-transaction handlers (`ctx.hooks.onInTransaction`) after, so a write
    * that must not outlive the entry it names either commits before the
    * delete goes on, and those handlers see it, or waits for the delete and is
+   * told the entry is gone. It holds the entry's collection first, as
+   * `holdCollectionInTransaction` does, so a delete of the whole collection,
+   * which locks its registry row rather than the entries' rows before its
+   * `ctx.hooks.onCollectionDelete` handlers run, takes turns with the write
+   * too: the write commits first and those handlers see it, or waits and is
    * told the entry is gone. Asks nothing of the caller's access, and reads
-   * nothing but whether the row is there. On SQLite, with one writer at a
-   * time, the row is only read. A collection that does not exist holds no
-   * entry. A settled token is refused.
+   * nothing but whether the collection and the row are there. On SQLite, with
+   * one writer at a time, the rows are only read. A collection that does not
+   * exist holds no entry. A settled token is refused.
    */
   holdEntryInTransaction(
     tx: PluginCollectionTransaction,
