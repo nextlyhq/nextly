@@ -15,6 +15,8 @@
  */
 import {
   addressPropOf,
+  bindingRefsFor,
+  checkBinding,
   COLLECTION_LIST_TYPE,
   DEFAULT_BINDING_SOURCE,
   DOCUMENT_FORMAT_VERSION,
@@ -23,6 +25,8 @@ import {
   LIST_ENTRY_SLOT,
   readListQuery,
   resolveNodeBindings,
+  runDrawsImageField,
+  sameJsonValue,
   visitorUnreadableBindings,
   walkNodes,
   type BindingRun,
@@ -67,22 +71,35 @@ export function unbindPlan(
 ): UnbindPlan {
   if (view.unreadable !== undefined) {
     const fallback = view.unreadable.fallback;
-    return fallback === undefined
-      ? {
-          kept: { set: {} },
-          answer: {
-            kept: "own",
-            reason: `Visitors can't read “${path}”, so its value wasn't copied in. The block keeps its own value.`,
-          },
-        }
-      : {
-          kept: { set: { [prop]: fallback.value } },
-          answer: {
-            kept: "fallback",
-            value: fallback.value,
-            reason: `Visitors can't read “${path}”, so its value wasn't copied in. The fallback is kept.`,
-          },
-        };
+    const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
+    if (fallback === undefined) {
+      return {
+        kept: { set: {} },
+        answer: {
+          kept: "own",
+          reason: `${unread} The block keeps its own value.`,
+        },
+      };
+    }
+    // An image's fallback is an address, which the media prop can't hold: it
+    // goes where the image's own address is kept, as any address does.
+    if (isMediaProp(declared, prop)) {
+      return addressPlan(
+        prop,
+        fallback.value,
+        "fallback",
+        declared,
+        `${unread} The fallback is kept in the image's address.`
+      );
+    }
+    return {
+      kept: { set: { [prop]: fallback.value } },
+      answer: {
+        kept: "fallback",
+        value: fallback.value,
+        reason: `${unread} The fallback is kept.`,
+      },
+    };
   }
   const bound = view.bound;
   const value = view.filled[prop];
@@ -135,6 +152,32 @@ function imagePlan(
       answer: { kept, value, reason: "The image keeps what visitors saw." },
     };
   }
+  return addressPlan(
+    prop,
+    value,
+    kept,
+    declared,
+    "Visitors saw an image address, not a library image, so it's kept in the image's address."
+  );
+}
+
+/** Whether the block declares `prop` as an image from the media library. */
+function isMediaProp(declared: DeclaredProps, prop: string): boolean {
+  const type = declared?.[prop]?.type;
+  return type === "media" || type === "upload";
+}
+
+/**
+ * An image address kept in the block's declared address prop, the media prop
+ * emptied: it holds a library id only. Refused where the block declares none.
+ */
+function addressPlan(
+  prop: string,
+  value: unknown,
+  kept: "visitor" | "fallback",
+  declared: DeclaredProps,
+  reason: string
+): UnbindPlan {
   const into = addressPropOf(declared, prop);
   if (into === undefined) {
     return {
@@ -143,13 +186,7 @@ function imagePlan(
   }
   return {
     kept: { set: { [into]: value }, empty: [prop] },
-    answer: {
-      kept,
-      value,
-      into,
-      reason:
-        "Visitors saw an image address, not a library image, so it's kept in the image's address.",
-    },
+    answer: { kept, value, into, reason },
   };
 }
 
@@ -171,14 +208,19 @@ export interface UnbindNeeds {
 /** The keep a visitor's value is read for: all but a value given. */
 type ReadKeep = Exclude<UnbindKeep, { value: unknown }>;
 
-/** The list a node is drawn in, as its entries slot holds it; none for a page's own. */
-function listOf(
+/**
+ * The list a node is drawn in, as its entries slot holds it; none for a
+ * page's own. The nearest one: a list inside another list's entries draws
+ * the node with its own items, and the walk reaches an outer list before the
+ * lists inside it, so the last list holding the node is the nearest.
+ */
+export function listOf(
   document: BlockDocument,
   nodeId: string
 ): BlockNode | undefined {
   let found: BlockNode | undefined;
   walkNodes(document.nodes, node => {
-    if (found !== undefined || node.type !== COLLECTION_LIST_TYPE) return;
+    if (node.type !== COLLECTION_LIST_TYPE) return;
     const entries = node.slots?.[LIST_ENTRY_SLOT] ?? [];
     let inside = false;
     walkNodes(entries, child => {
@@ -293,12 +335,48 @@ export async function visitorViewOf(
   );
   const scope = await scopeOf(reader, reads.item);
   if ("needs" in scope) return scope;
+  const foreign = foreignMediaOf(node, prop, run, scope);
+  if (foreign !== undefined) return foreign;
   const result = resolveNodeBindings(node, run, scope);
   const unreadable = unreadableOf(alone, run, nodeId, prop);
   return {
     filled: result.props,
     bound: result.bound?.[prop],
     ...(unreadable === undefined ? {} : { unreadable }),
+  };
+}
+
+/**
+ * An image bound to an upload field of a collection other than the media
+ * library. The renderer may be set to draw images from such a collection
+ * (`mediaCollection`), and that setting lives in the site's page code, out of
+ * this route's reach: what a visitor sees can't be told here, so the value to
+ * keep has to be given.
+ */
+export function foreignMediaOf(
+  node: BlockNode,
+  prop: string,
+  run: BindingRun,
+  scope: BindingScope
+): UnbindNeeds | undefined {
+  const props = run.props.get(node.type)?.props;
+  const check = checkBinding({
+    nodeId: node.id,
+    prop,
+    binding: node.bindings?.[prop],
+    ...(props === undefined ? {} : { props }),
+    ...(run.schema === undefined ? {} : { schema: run.schema }),
+    refs: bindingRefsFor(run, scope),
+  });
+  if (check.outcome !== "resolve" || check.binding.kind !== "image") {
+    return undefined;
+  }
+  const field = check.binding.field;
+  if (field?.relationTo === undefined || runDrawsImageField(run, field)) {
+    return undefined;
+  }
+  return {
+    needs: `This image is read from “${[field.relationTo].flat().join(", ")}”, which the site's pages may be set to draw images from: give the value to keep.`,
   };
 }
 
@@ -389,4 +467,25 @@ async function publicItem(
     : {
         needs: `No published item “${item.id}” is there for a visitor to see: give the value to keep.`,
       };
+}
+
+/**
+ * The unbind's answer, when the document as written holds it: the binding
+ * gone and the value it names kept where it says. A collection hook may store
+ * something other than the plan, and then no answer is given rather than one
+ * telling of a write that did not happen.
+ */
+export function unboundAsWritten(
+  answer: UnbindAnswer,
+  document: BlockDocument | undefined,
+  nodeId: string,
+  prop: string
+): { readonly unbound?: UnbindAnswer } {
+  const node =
+    document === undefined ? undefined : findNode(document.nodes, nodeId);
+  if (node === undefined || node.bindings?.[prop] !== undefined) return {};
+  // The block's own value: nothing was written in the binding's place.
+  if (answer.kept === "own") return { unbound: answer };
+  const at = answer.into ?? prop;
+  return sameJsonValue(node.props[at], answer.value) ? { unbound: answer } : {};
 }

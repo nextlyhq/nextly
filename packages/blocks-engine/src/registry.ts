@@ -193,23 +193,27 @@ function assertValidPropRoles(def: AnyBlockDefinition): void {
 }
 
 /**
- * Refuse an `addressProp` that is not a media prop's pairing with a `url` prop
+ * Refuse a media prop's `addressProp` that is not a pairing with a `url` prop
  * of the same block: unbinding an image kept by its address writes the
  * address there, and a pairing to nothing, or to a prop that is no address,
  * would write it where no image is drawn from.
+ *
+ * Only a media or upload prop's key is read: on any other prop it stays the
+ * free extension key `PropSchema` has always allowed, so a block already using
+ * that name for its own option still registers.
  */
 function assertValidAddressProps(def: AnyBlockDefinition): void {
   if (!isPlainRecord(def.props)) return;
   const props = def.props as Record<string, unknown>;
   for (const [propName, schema] of Object.entries(props)) {
     if (!isPlainRecord(schema) || schema.addressProp === undefined) continue;
+    if (schema.type !== "media" && schema.type !== "upload") continue;
     const target = schema.addressProp;
     const paired = typeof target === "string" ? props[target] : undefined;
-    const isMedia = schema.type === "media" || schema.type === "upload";
-    if (!isMedia || !isPlainRecord(paired) || paired.type !== "url") {
+    if (!isPlainRecord(paired) || paired.type !== "url") {
       fail(
         "NEXTLY_BLOCK_INVALID",
-        `block "${def.name}" prop "${propName}" addressProp must name a "url" prop of the block, on a "media" or "upload" prop.`
+        `block "${def.name}" prop "${propName}" addressProp must name a "url" prop of the block.`
       );
     }
   }

@@ -494,6 +494,21 @@ function boundImageOf(
  */
 const MEDIA_COLLECTION = "media";
 
+/**
+ * Whether `run` draws an image field's records: the field names no
+ * collection, or names the one the run resolves media ids against. A caller
+ * judging a bound image outside a render asks this, so the rule is the one
+ * the image is filled by.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function runDrawsImageField(
+  run: BindingRun,
+  field: BindingFieldShape | undefined
+): boolean {
+  return mayHoldMedia(field, run.mediaCollection ?? MEDIA_COLLECTION);
+}
+
 /** Whether a field may hold media: it names no collection, or names this one. */
 function mayHoldMedia(
   field: BindingFieldShape | undefined,
@@ -586,8 +601,17 @@ function fillOf(
   return { value: shaped.value, bound: shaped.bound };
 }
 
-/** The schema refs of the entry, and of the item when one is being drawn. */
-function refsFor(run: BindingRun, scope: BindingScope): BindingRefs {
+/**
+ * The schema refs of the entry, and of the item when one is being drawn: what
+ * a binding in `scope` is checked against, for a caller that checks one as
+ * this pass does.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function bindingRefsFor(
+  run: BindingRun,
+  scope: BindingScope
+): BindingRefs {
   const item =
     scope.phase === "item" && scope.itemRef !== undefined
       ? { item: scope.itemRef }
@@ -667,7 +691,7 @@ export function resolveNodeBindings(
     // A node no definition answers for draws a placeholder, so nothing of it
     // is read.
     if (props === undefined) return unchanged;
-    const refs = refsFor(run, scope);
+    const refs = bindingRefsFor(run, scope);
     const issues: BindingIssue[] = [];
     const filled: Record<string, unknown> = {};
     const bound: Record<string, BoundValue> = {};

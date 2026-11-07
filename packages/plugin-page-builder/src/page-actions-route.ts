@@ -102,16 +102,17 @@ import {
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
 import {
+  carryingTemplateTarget,
+  templateTargetOf,
+  type TemplateTarget,
+} from "./templates/template-target";
+import {
+  unboundAsWritten,
   unbindPlan,
   visitorViewOf,
   type UnbindPlan,
   type UnbindSource,
 } from "./unbind-kept";
-import {
-  carryingTemplateTarget,
-  templateTargetOf,
-  type TemplateTarget,
-} from "./templates/template-target";
 
 /** The blocks field a page action edits when the address names none. */
 const DEFAULT_FIELD = "content";
@@ -287,7 +288,14 @@ export async function runPageAction(
       ...(planned.insertedId === undefined
         ? {}
         : { insertedId: planned.insertedId }),
-      ...(planned.unbound === undefined ? {} : { unbound: planned.unbound }),
+      ...(planned.unbound === undefined || body.action.kind !== "unbind-prop"
+        ? {}
+        : unboundAsWritten(
+            planned.unbound,
+            shown.document,
+            body.action.nodeId,
+            body.action.prop
+          )),
       refusals,
       fingerprint: read.fingerprint,
       by,

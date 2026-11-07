@@ -382,7 +382,7 @@ describe("an image's declared address prop", () => {
     );
   });
 
-  it("refuses a pairing to no prop, to one that is no address, or from a prop that is no image", () => {
+  it("refuses a media prop's pairing to no prop, or to one that is no address", () => {
     for (const props of [
       { mediaId: { type: "media", addressProp: "missing" } },
       {
@@ -390,8 +390,8 @@ describe("an image's declared address prop", () => {
         alt: { type: "text" },
       },
       {
-        title: { type: "text", addressProp: "src" },
-        src: { type: "url" },
+        file: { type: "upload", addressProp: "alt" },
+        alt: { type: "text" },
       },
     ]) {
       expect(() =>
@@ -401,5 +401,24 @@ describe("an image's declared address prop", () => {
       );
       clearBlocks();
     }
+  });
+
+  it("leaves the key alone on a prop that is no image, as a block's own option", () => {
+    // `addressProp` was a free extension key on any prop before it named a
+    // media prop's pairing: a block using it for its own option still
+    // registers, and the key is never read as a pairing there.
+    expect(() =>
+      registerBlocks(
+        [
+          withAddress({
+            title: { type: "text", addressProp: "headline-anchor" },
+          }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).not.toThrow();
+    expect(addressPropOf(getBlock("acme/picture")?.props, "title")).toBe(
+      undefined
+    );
   });
 });

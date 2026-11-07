@@ -3,10 +3,24 @@
  * can't see, and an image kept as they saw it, by its library id or its
  * address.
  */
-import type { PropSchema } from "@nextlyhq/blocks-engine";
+import {
+  COLLECTION_LIST_TYPE,
+  createBindingRun,
+  DOCUMENT_FORMAT_VERSION,
+  LIST_ENTRY_SLOT,
+  type BlockDocument,
+  type BlockNode,
+  type PropSchema,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { unbindPlan, type VisitorView } from "./unbind-kept";
+import {
+  foreignMediaOf,
+  listOf,
+  unboundAsWritten,
+  unbindPlan,
+  type VisitorView,
+} from "./unbind-kept";
 
 const view = (over: Partial<VisitorView>): VisitorView => ({
   filled: { text: "Spring sale: 30% off" },
@@ -126,5 +140,129 @@ describe("unbindPlan", () => {
     expect(plan).toEqual({
       refusal: expect.stringContaining("no address prop"),
     });
+  });
+
+  it("keeps a private image's fallback address in the address prop, the media prop emptied", () => {
+    const address = "https://cdn.example.com/members-only.jpg";
+    const plan = unbindPlan(
+      "mediaId",
+      "memberPhoto",
+      view({
+        filled: { mediaId: address },
+        unreadable: { fallback: { value: address } },
+      }),
+      IMAGE
+    );
+    // Written into the media prop, the address would read as a library id
+    // and the image visitors saw would vanish.
+    expect(plan).toMatchObject({
+      kept: { set: { src: address }, empty: ["mediaId"] },
+      answer: { kept: "fallback", value: address, into: "src" },
+    });
+  });
+});
+
+describe("the list a list child is drawn in", () => {
+  const list = (id: string, collection: string, entries: BlockNode[]) =>
+    ({
+      id,
+      type: COLLECTION_LIST_TYPE,
+      version: 1,
+      props: { query: { collection } },
+      slots: { [LIST_ENTRY_SLOT]: entries },
+    }) as unknown as BlockNode;
+  const title: BlockNode = {
+    id: "title",
+    type: "core/heading",
+    version: 1,
+    props: { text: "" },
+  };
+  const page: BlockDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [list("authors", "authors", [list("posts", "posts", [title])])],
+  };
+
+  it("is the nearest list, not an outer one whose entries hold it too", () => {
+    expect(listOf(page, "title")?.id).toBe("posts");
+    expect(listOf(page, "posts")?.id).toBe("authors");
+    expect(listOf(page, "authors")).toBeUndefined();
+  });
+});
+
+describe("an image bound into a collection other than the media library", () => {
+  const node: BlockNode = {
+    id: "img",
+    type: "core/image",
+    version: 1,
+    props: {},
+    bindings: { mediaId: { $bind: "photo" } },
+  };
+  const runWith = (relationTo: string, mediaCollection?: string) =>
+    createBindingRun({
+      sources: { entry: { photo: "p1" } },
+      entryRef: { collection: "articles" },
+      schema: {
+        fieldsOf: () => [{ name: "photo", type: "upload", relationTo }],
+      },
+      ...(mediaCollection === undefined ? {} : { mediaCollection }),
+      props: { get: () => ({ props: IMAGE }) },
+    });
+
+  it("asks for the value: the site's pages may draw images from it", () => {
+    expect(
+      foreignMediaOf(node, "mediaId", runWith("photos"), { phase: "page" })
+    ).toEqual({ needs: expect.stringContaining("“photos”") });
+  });
+
+  it("reads the media library's own images as a visitor does", () => {
+    expect(
+      foreignMediaOf(node, "mediaId", runWith("media"), { phase: "page" })
+    ).toBeUndefined();
+    // A run that draws from the collection asks nothing either.
+    expect(
+      foreignMediaOf(node, "mediaId", runWith("photos", "photos"), {
+        phase: "page",
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe("the unbind's answer, as the page was written", () => {
+  const answer = {
+    kept: "visitor" as const,
+    value: "Spring sale",
+    reason: "The prop keeps what visitors saw.",
+  };
+  const written = (node: Partial<BlockNode>): BlockDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [{ id: "h", type: "core/heading", version: 1, props: {}, ...node }],
+  });
+
+  it("is given when the page holds the value it names, the binding gone", () => {
+    expect(
+      unboundAsWritten(
+        answer,
+        written({ props: { text: "Spring sale" } }),
+        "h",
+        "text"
+      )
+    ).toEqual({ unbound: answer });
+  });
+
+  it("is left out where a hook stored something else", () => {
+    // A hook rewrote the text, kept the binding, or dropped the block.
+    for (const document of [
+      written({ props: { text: "SPRING SALE" } }),
+      written({
+        props: { text: "Spring sale" },
+        bindings: { text: { $bind: "title" } },
+      }),
+      written({ id: "other" }),
+      undefined,
+    ]) {
+      expect(unboundAsWritten(answer, document, "h", "text")).toEqual({});
+    }
   });
 });

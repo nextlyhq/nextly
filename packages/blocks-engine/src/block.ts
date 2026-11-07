@@ -118,7 +118,11 @@ export function addressPropOf(
   props: Readonly<Partial<Record<string, PropSchema>>> | undefined,
   prop: string
 ): string | undefined {
-  const declared = props?.[prop]?.addressProp;
+  const schema = props?.[prop];
+  // Read on a media prop alone, as registration judges it: elsewhere the key
+  // is a block's own extension option.
+  if (schema?.type !== "media" && schema?.type !== "upload") return undefined;
+  const declared = schema.addressProp;
   return typeof declared === "string" && declared !== "" ? declared : undefined;
 }
 

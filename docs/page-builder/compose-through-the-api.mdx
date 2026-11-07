@@ -182,11 +182,16 @@ visitor can't see is never copied in: the binding's fallback is kept, or the pro
 value. `keep` changes whose value is kept: `{ "entry": id }` names the entry, which a
 template's bindings need, since each of its entries shows its own value; `{ "item": id }`
 names the entry of a Collection list's collection, which a block inside the list needs; and
-`{ "value": … }` gives the value. An image a visitor saw by its address, not a library
-image, is kept in the block's address prop (`src` on the Image block), the media prop
-emptied; a block declaring none refuses the unbind. The answer's `unbound` says what was
-kept (`visitor`, `fallback`, `own` or `value`), the value, where an address went (`into`),
-and why, in words an author reads.
+`{ "value": … }` gives the value; in a list inside another list's items, the item is
+the nearest list's. An image a visitor saw by its address, not a library image, is kept
+in the block's address prop (`src` on the Image block), the media prop emptied, and so is
+an image fallback kept in place of a private field; a block declaring none refuses the
+unbind. An image bound to an upload field of a collection other than the media library
+needs `{ "value": … }`, since the site's pages may be set to draw images from it
+(`mediaCollection`) and the server can't tell. The answer's `unbound` says what was kept
+(`visitor`, `fallback`, `own` or `value`), the value, where an address went (`into`), and
+why, in words an author reads; it is left out when a collection hook stored something
+other than that.
 
 ## Change a component's definition
 

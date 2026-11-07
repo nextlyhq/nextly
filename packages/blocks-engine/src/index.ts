@@ -1315,10 +1315,12 @@ export type {
 export {
   bindDocument,
   bindingDemand,
+  bindingRefsFor,
   createBindingRun,
   DEFAULT_BINDING_LOCALE,
   hasItemBindings,
   resolveNodeBindings,
+  runDrawsImageField,
 } from "./resolve-bindings";
 export type {
   BindingDemand,
