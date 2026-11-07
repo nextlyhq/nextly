@@ -11,20 +11,26 @@
  *
  * That is also what fences a shared style's removal: the remove route counts
  * the style's uses just before it writes, and a page saved after that count
- * cannot add a reference to the style once it is gone.
+ * cannot add a reference to the style once it is gone. This judgement runs
+ * before the page's transaction, so it is made again inside it, under the
+ * composition graph lock the removal's write takes too
+ * (`composition-rejudge`).
  *
  * @module fields/class-reference-judgement
  */
 import { DEFAULT_LIMITS, type DocumentLimits } from "@nextlyhq/blocks-engine";
-import type {
-  PluginFieldIssue,
-  PluginFieldValidateArgs,
-} from "@nextlyhq/plugin-sdk";
+import type { PluginFieldIssue } from "@nextlyhq/plugin-sdk";
 
 import { classUsageOf } from "../class-usage";
 
-import { addedUndefinedIds, type StoredForms } from "./added-undefined-ids";
-import { isTopLevel } from "./layers-lock-judgement";
+import {
+  addedUndefinedIds,
+  storedFormsFor,
+  storedReadReaches,
+  type JudgedField,
+  type StoredForms,
+} from "./added-undefined-ids";
+import { closedWhenUnreachable } from "./token-reference-judgement";
 
 /** The engine's code for a reference to a class the site does not define. */
 const UNKNOWN_CLASS = "unknown-class";
@@ -39,12 +45,19 @@ const NAMED_AT_MOST = 5;
  * The site's classes are read only when the value references a class, and
  * the stored forms only when one of those is undefined, so an ordinary save
  * pays nothing. A value with no entry write behind it, and a field whose
- * stored value cannot be read (inside a group or repeater, or a language not
+ * stored value cannot be read (in a repeater's rows, or a language not
  * ready), are not judged: nothing tells a new reference from an old one.
+ *
+ * A blocks field inside named groups (`hero.body`) is judged as the variable
+ * check judges it (`token-reference-judgement`), with the same reach and the
+ * same answer where the group is kept per language: the editor opens it, so
+ * a fence that skipped it would let a page apply a shared style just removed.
  */
 export async function newClassReferenceIssues(
   value: unknown,
-  args: PluginFieldValidateArgs,
+  // The field's write as a reference check reads it: the validation's whole
+  // arguments, or the in-transaction judgement's narrower view.
+  args: JudgedField,
   label: string,
   site: {
     readonly classIds: () => Promise<ReadonlySet<string>>;
@@ -53,7 +66,7 @@ export async function newClassReferenceIssues(
     readonly storedForms?: () => Promise<StoredForms>;
   }
 ): Promise<PluginFieldIssue[]> {
-  if (args.write === undefined || !isTopLevel(args.path)) return [];
+  if (args.write === undefined || !storedReadReaches(args.path)) return [];
   const limits = site.limits ?? DEFAULT_LIMITS;
   // Every node the compiler reads, gated and hidden ones included: a class
   // there is applied whenever the node shows.
@@ -62,7 +75,10 @@ export async function newClassReferenceIssues(
     classUsageOf(value, limits).ids,
     site.classIds,
     form => classUsageOf(form, limits).ids,
-    site.storedForms
+    closedWhenUnreachable(
+      site.storedForms ?? (() => storedFormsFor(args)),
+      args.path
+    )
   );
   if (added.length === 0) return [];
   const named = added

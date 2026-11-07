@@ -20,6 +20,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
+import { appliedConditionsOf } from "./applied-conditions";
 import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
@@ -28,6 +29,7 @@ import {
   SELECTED_ATTRIBUTE,
 } from "./canvas";
 import { CanvasMarks } from "./canvas-marks";
+import { conditionFieldsOfShapes } from "./condition-model";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import { markLookReach } from "./look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
@@ -359,6 +361,69 @@ describe("selection marks", () => {
       "Conditional",
       "Can’t be checked",
     ]);
+  });
+
+  it("badges a block shown for the previewed entry so, and draws a hidden one as its marker with its id", async () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/leaf",
+          version: 1,
+          props: {},
+          visibility: {
+            conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+          },
+        },
+        {
+          id: "b",
+          type: "acme/leaf",
+          version: 1,
+          props: {},
+          visibility: {
+            conditions: [[{ field: "tier", op: "equals", value: "gold" }]],
+          },
+        },
+      ],
+    };
+    const fields = [{ name: "tier", type: "text" }] as const;
+    const applied = appliedConditionsOf(
+      document,
+      {
+        subject: {
+          fields: { declared: new Set(["tier"]), readable: fields },
+          values: { tier: "vip" },
+        },
+        noun: "post",
+        fields: conditionFieldsOfShapes(fields),
+      },
+      node => (node.id === "b" ? "Gold offer" : node.id)
+    );
+    const { container } = render(
+      <Canvas
+        document={document}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        conditionsApplied={applied}
+        overlay={<CanvasMarks shownLabel="Shown for this post" />}
+      />
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+      );
+    // One badge, the shown block's: the hidden one's marker says it all.
+    await waitFor(() => expect(badges()).toHaveLength(1));
+    expect(badges()[0]?.getAttribute("data-condition")).toBe("shown");
+    expect(badges()[0]?.textContent).toBe("Shown for this post");
+    // In the hidden block's place, by its id, so the canvas selects it.
+    const marker = container.querySelector(".nx-condition-hidden");
+    expect(marker?.getAttribute("data-nx-node")).toBe("b");
+    expect(marker?.textContent).toBe(
+      "Gold offer · hidden for this post: tier is not gold"
+    );
   });
 
   it("draws one badge for a conditioned placement whose definition has several roots", async () => {

@@ -3,8 +3,10 @@
  * shared styles naming a variable, and says when it is a floor; a variable in
  * use is refused removal on the remove route and on a whole-section write of
  * the site style alike; the stored pages are read again rather than an index
- * zero trusted; once nothing uses it, it is removed; and a page may not add a
- * reference to a variable the site does not define.
+ * zero trusted; once nothing uses it, it is removed; a page may not add a
+ * reference to a variable the site does not define; and a role that may read
+ * Design but not change it is refused every variable change, on the Single's
+ * write and the remove route alike, while it can still read them.
  */
 
 import { randomUUID } from "node:crypto";
@@ -57,6 +59,10 @@ const variable = (id: string, label: string) => ({
   kind: "color",
   values: { light: "#123456" },
 });
+/** A stored variable, with or without a dark value. */
+type StoredVariable = Omit<ReturnType<typeof variable>, "values"> & {
+  values: { light: string; dark?: string };
+};
 const accent = variable("t-accent", "Accent");
 const styled = variable("t-styled", "Styled");
 const spare = variable("t-spare", "Spare");
@@ -260,6 +266,27 @@ describe.each(getConfiguredTestDialects())(
     const SINGLE = `singles/${SITE_STYLE_SLUG}`;
     const DESIGN = ["read-site-style", "update-site-style"];
 
+    /** A page's stored content, set past every check on the page's row. */
+    async function plantContent(
+      t: TestNextly,
+      id: string,
+      content: unknown
+    ): Promise<void> {
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(
+          slug: string
+        ): Promise<{ tableName: string } | null>;
+      };
+      const table = (await registry.getCollectionBySlug("pages"))?.tableName;
+      if (table === undefined) throw new Error("the pages table is missing");
+      await t.adapter.update(
+        table,
+        // SQLite stores a JSON column as text; the others take the value.
+        { content: dialect === "sqlite" ? JSON.stringify(content) : content },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+    }
+
     /** The stored variables' ids, read as the system. */
     async function storedIds(t: TestNextly): Promise<string[]> {
       const doc = (await t.nextly.findSingle({
@@ -398,6 +425,107 @@ describe.each(getConfiguredTestDialects())(
       const gone = await remove(["t-accent", "t-spare"]);
       expect(gone.status).toBe(200);
       expect(await storedIds(t)).toEqual(["t-styled"]);
+    });
+
+    /** The stored tokens section, read as the system, as JSON to compare. */
+    async function storedSection(t: TestNextly): Promise<string> {
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.tokens;
+      return JSON.stringify(typeof raw === "string" ? JSON.parse(raw) : raw);
+    }
+
+    it("refuses every variable change to a role that may read Design but not change it, and lets it read", async () => {
+      const { t, tick } = await boot();
+      // Whole, so a removal below is judged on who asks and not refused as
+      // not counted yet.
+      await tick();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+
+      // The Variables panel's whole-section save, as each action makes it,
+      // each built from the set as the previous accepted step left it.
+      let shown: StoredVariable[] = [accent, styled, spare];
+      const added = variable("t-added", "Added");
+      const steps: [string, StoredVariable[]][] = [];
+      const step = (name: string, next: StoredVariable[]) => {
+        steps.push([name, next]);
+        shown = next;
+      };
+      step("adds a variable", [...shown, added]);
+      step(
+        "changes a value",
+        shown.map(entry =>
+          entry.id === "t-accent"
+            ? { ...entry, values: { light: "#654321" } }
+            : entry
+        )
+      );
+      step(
+        "sets a dark value",
+        shown.map(entry =>
+          entry.id === "t-spare"
+            ? { ...entry, values: { light: "#123456", dark: "#abcdef" } }
+            : entry
+        )
+      );
+      step(
+        "clears the dark value",
+        shown.map(entry =>
+          entry.id === "t-spare"
+            ? { ...entry, values: { light: "#123456" } }
+            : entry
+        )
+      );
+      step(
+        "removes a variable nothing uses",
+        shown.filter(entry => entry.id !== "t-added")
+      );
+
+      for (const [name, tokens] of steps) {
+        const before = await storedSection(t);
+        const body = { tokens: { tokens }, _overwrite: true };
+        const refused = await call("PATCH", SINGLE, reader, body);
+        expect(refused.status, `the reader ${name}`).toBe(403);
+        expect(await storedSection(t), `the reader ${name}`).toBe(before);
+        // CONTROL: the same save by a Design manager is stored, so the
+        // refusal above is about who asked and not about the save.
+        const accepted = await call("PATCH", SINGLE, designer, body);
+        expect(accepted.status, `the designer ${name}`).toBe(200);
+        expect(
+          JSON.parse(await storedSection(t)),
+          `the designer ${name}`
+        ).toMatchObject({ tokens });
+      }
+
+      // The remove route declares Design's update: refused before its write.
+      const removal = { ids: ["t-spare"] };
+      const routeRefused = await call("POST", route("remove"), reader, removal);
+      expect(routeRefused.status).toBe(403);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-spare"]);
+      // CONTROL: the same removal by a Design manager goes ahead.
+      const routeRemoved = await call(
+        "POST",
+        route("remove"),
+        designer,
+        removal
+      );
+      expect(routeRemoved.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+
+      // Still read, so the panel can show the variables read-only: the
+      // Single itself and how widely each is used.
+      const read = await call("GET", SINGLE, reader);
+      expect(read.status).toBe(200);
+      // SQLite hands the section back as text, so it is matched as text.
+      expect(JSON.stringify(read.body)).toContain("t-styled");
+      const usage = await call("GET", `${route("usage")}?id=t-styled`, reader);
+      expect(usage.status).toBe(200);
+      expect(usage.body).toMatchObject({
+        variables: { "t-styled": { sharedStyles: ["c-card"] } },
+      });
     });
 
     it("refuses removing a variable a stored page still uses though the index counts none", async () => {
@@ -562,18 +690,22 @@ describe.each(getConfiguredTestDialects())(
         code: "VALIDATION_ERROR",
       });
 
-      // A page holding `spare`, which a trusted write then removes from the
-      // site: the page's reference is now to a variable the site lacks.
-      const created = await t.nextly.create({
-        collection: "pages",
-        data: { title: "Old", slug: "old", content: pageUsing("t-spare") },
-        overrideAccess: true,
-      });
+      // A page holding `spare` after the site removed it: the page's
+      // reference is to a variable the site lacks. Removed while nothing uses
+      // it, since a removal is refused while a page does, then planted in the
+      // page's stored row past every check, as a page stored before the
+      // removal rules existed holds it.
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
         data: { tokens: { tokens: [accent, styled] }, _overwrite: true },
         overrideAccess: true,
       });
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: { title: "Old", slug: "old", content: pageUsing() },
+        overrideAccess: true,
+      });
+      await plantContent(t, String(created.item.id), pageUsing("t-spare"));
       const kept = await t.nextly.update({
         collection: "pages",
         id: String(created.item.id),

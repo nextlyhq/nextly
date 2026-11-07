@@ -39,6 +39,7 @@ export {
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
   // The component-definition contract, published so the stores and the admin
   // DERIVE the vocabulary rather than restating it. A schema branch or a
   // picker that listed these values itself would agree on the day it was
@@ -1333,6 +1334,11 @@ export type {
 // The bound props a visitor will not see: the page's own binding check, asked
 // with the field shapes a visitor may read, for an editor to say so.
 export { visitorUnreadableBindings } from "./visitor-unreadable-bindings";
+export {
+  SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_FIELD_TYPES,
+  type SiteSettingName,
+} from "./site-setting-fields";
 export type {
   VisitorUnreadableBinding,
   VisitorUnreadableInput,

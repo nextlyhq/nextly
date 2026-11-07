@@ -86,6 +86,23 @@ describe("a document's bindings to fix", () => {
     expect(rows[0]?.codes).toContain("binding-fallback-invalid");
   });
 
+  it("names the site setting a misfit reaches, and its type", async () => {
+    const { rows } = await report([
+      node(
+        "s",
+        "core/heading",
+        { text: "Own", level: 2 },
+        // A heading's level is a choice; the site's address cannot fill it.
+        { level: { $bind: "siteUrl", source: "site" } }
+      ),
+    ]);
+    expect(rows[0]).toMatchObject({
+      prop: "level",
+      binding: { source: "site", path: "siteUrl" },
+      reaches: { name: "siteUrl", type: "url" },
+    });
+  });
+
   it("shows nothing for a prop the block no longer has", async () => {
     const { rows } = await report([
       node(

@@ -12,6 +12,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "nextly/errors";
 import type { BindingSourceRef } from "nextly/runtime";
 import { createElement, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
@@ -20,7 +21,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // The real reader, told the fake's declarations (it hides no field), since
 // no Nextly services are registered in this process for it to read a schema
 // from; and each cached read's tags and key, so what refreshes a page, and
-// what it is cached under, is seen.
+// what it is cached under, is seen; and the waits for the request among the
+// address lookups, in order.
 const runtime = vi.hoisted(() => ({
   tags: [] as string[][],
   keys: [] as string[][],
@@ -28,6 +30,7 @@ const runtime = vi.hoisted(() => ({
   // Next's cache answers them, so a key that is not the entry's own is seen
   // serving one entry another's design.
   designCache: null as Map<string, Promise<unknown>> | null,
+  events: [] as string[],
 }));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
@@ -59,6 +62,9 @@ vi.mock("nextly/runtime", async importOriginal => {
       throw new Error("no site settings");
     },
     bindingFieldShapes: async (_ref: BindingSourceRef) => undefined,
+    deferToRequest: async () => {
+      runtime.events.push("request");
+    },
   };
 });
 
@@ -164,6 +170,7 @@ function store(held: Record<string, ContentAddressHolder>) {
     lookups,
     resolveAddress: async (locale: string | undefined, path: string) => {
       lookups.push([locale, path]);
+      runtime.events.push(`lookup ${path}`);
       return held[path] ?? null;
     },
   };
@@ -225,6 +232,7 @@ async function served(
 
 beforeEach(() => {
   runtime.tags = [];
+  runtime.events = [];
   runtime.keys = [];
   runtime.designCache = null;
 });
@@ -290,6 +298,92 @@ describe("the content route", () => {
     await expect(route.ContentPage({ params: { slug } })).rejects.toMatchObject(
       NOT_FOUND
     );
+  });
+
+  describe("an entry the public is refused", () => {
+    /** The route's options over an instance whose read of posts fails with `error`. */
+    function failing(error: () => unknown) {
+      const options = config();
+      const nextly = options.pages.nextly as unknown as ReturnType<
+        typeof instance
+      >;
+      const read = nextly.find.getMockImplementation();
+      nextly.find.mockImplementation(async (args: Record<string, unknown>) => {
+        if (args.collection === "posts") throw error();
+        return await read!(args);
+      });
+      return options;
+    }
+
+    it.each([
+      [
+        "an access-enforced route",
+        "a visitor asked to sign in",
+        createContentPage,
+        () => NextlyError.authRequired(),
+      ],
+      [
+        "a public route",
+        "a visitor asked to sign in",
+        createPublicContentPage,
+        () => NextlyError.authRequired(),
+      ],
+      [
+        "an access-enforced route",
+        "a denial",
+        createContentPage,
+        () => NextlyError.forbidden(),
+      ],
+      [
+        "a public route",
+        "a denial",
+        createPublicContentPage,
+        () => NextlyError.forbidden(),
+      ],
+    ] as const)(
+      "answers not found, as for an unpublished entry (%s, %s)",
+      async (_route, _refusal, factory, refusal) => {
+        const route = factory(failing(refusal));
+        await expect(
+          route.ContentPage({ params: { slug: ["blog", "hello"] } })
+        ).rejects.toMatchObject(NOT_FOUND);
+        expect(
+          await route.generateMetadata({ params: { slug: ["blog", "hello"] } })
+        ).toEqual({});
+      }
+    );
+
+    it.each([
+      ["a fault", () => new Error("database unreachable")],
+      ["a credential to fix", () => NextlyError.tokenExpired()],
+      ["a 403 that is not a denial", () => NextlyError.emailNotVerified()],
+    ] as const)(
+      "throws %s rather than answering not found",
+      async (_why, error) => {
+        const thrown = error();
+        const route = createContentPage(failing(() => thrown));
+        await expect(
+          route.ContentPage({ params: { slug: ["blog", "hello"] } })
+        ).rejects.toBe(thrown);
+      }
+    );
+  });
+
+  it("waits for the request before an access-enforced route's uncached lookup, and a public route's cached one does not", async () => {
+    await createContentPage(config()).generateMetadata({
+      params: { slug: ["blog", "hello"] },
+    });
+    expect(runtime.events.slice(0, 2)).toEqual([
+      "request",
+      "lookup /blog/hello",
+    ]);
+
+    runtime.events = [];
+    await createPublicContentPage(config()).generateMetadata({
+      params: { slug: ["blog", "hello"] },
+    });
+    expect(runtime.events).not.toContain("request");
+    expect(runtime.events).toContain("lookup /blog/hello");
   });
 
   it("never asks the store about a path the runtime keeps", async () => {

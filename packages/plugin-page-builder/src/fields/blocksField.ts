@@ -111,9 +111,14 @@ export const BLOCKS_FIELD_COMPONENT =
 /**
  * `read`, asked at most once: every caller shares the first call's answer,
  * so the checks judging one write see one read. Nothing when there is no
- * `read`.
+ * `read`. Exported for the same checks made again inside the write's
+ * transaction (`composition-rejudge`), which share their reads the same way.
  */
-function onceAsked<T>(
+export function onceAsked<T>(read: () => Promise<T>): () => Promise<T>;
+export function onceAsked<T>(
+  read: (() => Promise<T>) | undefined
+): (() => Promise<T>) | undefined;
+export function onceAsked<T>(
   read: (() => Promise<T>) | undefined
 ): (() => Promise<T>) | undefined {
   if (read === undefined) return undefined;

@@ -6,13 +6,15 @@
  * write rather than being overwritten. The refusal is not the route's answer:
  * the route reads again and makes only its own change on what is stored now,
  * a bounded number of times. Only a refusal for a replaced version is tried
- * again; any other failure is the answer, since it may have committed or
- * would fail the same way.
+ * again, or one whose transaction read from before the composition graph
+ * lock's last holder committed (`composition-graph-lock`); any other failure
+ * is the answer, since it may have committed or would fail the same way.
  *
  * @module stale-retry
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { isGraphSnapshotRefusal } from "./composition-graph-lock";
 import { inCauses } from "./judged-writes";
 import { attemptUntilFresh, STALE_WRITE_ATTEMPTS } from "./stale-attempts";
 
@@ -23,6 +25,16 @@ export { STALE_WRITE_ATTEMPTS };
 /** Whether a write was refused because the document changed since it was read. */
 export function isStaleVersion(error: unknown): boolean {
   return inCauses(error, NextlyError)?.code === "STALE_VERSION";
+}
+
+/**
+ * Whether a refused write is made again from a fresh read: refused for a
+ * replaced version, or because its transaction read from a snapshot older than
+ * the composition graph lock. Both say only that something committed since the
+ * write's read; read again, it is judged on that.
+ */
+function isWrittenAgain(error: unknown): boolean {
+  return isStaleVersion(error) || isGraphSnapshotRefusal(error);
 }
 
 /**
@@ -38,9 +50,10 @@ export async function retryOnStale<TRead, TResult>(
   attempt: (read: TRead) => Promise<TResult>,
   first?: { readonly read: TRead }
 ): Promise<TResult> {
-  // The one loop, with the server's recogniser of the refusal.
+  // The one loop, with the server's recogniser of a refusal worth a fresh
+  // read: a replaced version, or a snapshot older than the graph lock.
   return attemptUntilFresh(read, attempt, {
-    isStale: isStaleVersion,
+    isStale: isWrittenAgain,
     ...(first === undefined ? {} : { first }),
   });
 }

@@ -287,9 +287,16 @@ the collection's entries when the query returns them and as the query's own
 declared fields otherwise. A binding in the list's empty state draws no item
 and is not checked against one.
 
-Not checked at save: a binding to the site settings, whose fields are not
-declared anywhere; and any binding in a write made inside a transaction (a batch or an import), whose
-schema read could wait behind the transaction's own connection. A
+A binding to the site settings is checked against the four a page is handed:
+`applicationName` and `timezone` as text, `siteUrl` and `logoUrl` as URLs. The
+renderer reads the same list, so a setting the save refuses is one the page
+would fall back for. A binding to another setting saved before this check is
+kept, as a schema change's binding is above, and listed among the bindings to
+fix.
+
+Not checked at save: any binding in a write made inside a transaction (a batch
+or an import), whose schema read could wait behind the transaction's own
+connection. A
 component's own document has no entry, so its bindings to the entry are checked
 when a page that places it is saved, against that page's entry, and named by
 the component.

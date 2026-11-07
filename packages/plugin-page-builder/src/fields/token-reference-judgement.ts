@@ -13,16 +13,14 @@
  * That is what fences a variable's removal: the remove route checks the
  * variable's uses just before it writes the site style without it, and a page
  * saved after that write cannot add a first use of the variable once it is
- * gone (`variables-routes`).
+ * gone (`variables-routes`). This judgement runs before the page's
+ * transaction, so it is made again inside it, under the composition graph
+ * lock the removal's write takes too (`composition-rejudge`).
  *
  * @module fields/token-reference-judgement
  */
 import { DEFAULT_LIMITS, type DocumentLimits } from "@nextlyhq/blocks-engine";
-import {
-  NextlyError,
-  type PluginFieldIssue,
-  type PluginFieldValidateArgs,
-} from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginFieldIssue } from "@nextlyhq/plugin-sdk";
 
 import {
   tokenUsageOf,
@@ -34,6 +32,7 @@ import {
   addedUndefinedIds,
   storedFormsFor,
   storedReadReaches,
+  type JudgedField,
   type StoredForms,
 } from "./added-undefined-ids";
 import { isTopLevel } from "./layers-lock-judgement";
@@ -47,7 +46,7 @@ const NOTHING_HELD: StoredForms = { forms: [], readable: true };
  * answers that nothing is held, which refuses every undefined reference
  * instead of passing the write unjudged. Any other failure propagates.
  */
-function closedWhenUnreachable(
+export function closedWhenUnreachable(
   stored: () => Promise<StoredForms>,
   path: string
 ): () => Promise<StoredForms> {
@@ -85,7 +84,9 @@ function closedWhenUnreachable(
  */
 export async function newTokenReferenceIssues(
   value: unknown,
-  args: PluginFieldValidateArgs,
+  // The field's write as a reference check reads it: the validation's whole
+  // arguments, or the in-transaction judgement's narrower view.
+  args: JudgedField,
   label: string,
   site: {
     /** The identities of the variables the site defines, every tier merged. */

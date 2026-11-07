@@ -23,6 +23,8 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
+  conditionedBlocksIn,
+  useAppliedConditions,
   useConditionsUnchecked,
   CanvasFrame,
   CanvasFrameProvider,
@@ -38,6 +40,8 @@ import {
   SpacingOverlay,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
+  type AppliedConditions,
+  type AppliedConditionsOptions,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -53,6 +57,7 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -91,6 +96,10 @@ import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
 import { previewedCanvas } from "./canvas-preview-mode";
+import {
+  PlacedConditionsStrip,
+  type TemplateConditions,
+} from "./conditions-strip";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -175,6 +184,14 @@ type EditorView = EditorMount &
     reveal: Reveal;
     /** The conditioned blocks the page can't check, which the canvas badges red. */
     conditionsUnchecked: ReadonlySet<string>;
+    /**
+     * The page with its conditions applied for the previewed entry, while
+     * the author's switch is on; the canvas then draws a hidden block as a
+     * marker and badges a shown one so.
+     */
+    conditionsApplied: AppliedConditions | undefined;
+    /** What a block shown for the previewed entry is badged with. */
+    conditionsShownLabel: string;
     /** A stored media id's name, picture and alt text, for the image fields. */
     readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
@@ -801,6 +818,7 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                       componentLibrary.titleOf
                     )
                   }
+                  shownLabel={view.conditionsShownLabel}
                 />
                 {/* A block whose bound value a visitor will not see says
                     so above its corner; pressing the badge selects it, and
@@ -899,6 +917,11 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The conditioned blocks visitors never see, because the page
               // can't check their conditions: badged in red on the canvas.
               conditionsUnchecked={view.conditionsUnchecked}
+              // While the author applies the conditions for the previewed
+              // entry: a hidden block drawn as its marker, a shown one badged.
+              {...(view.conditionsApplied === undefined
+                ? {}
+                : { conditionsApplied: view.conditionsApplied })}
               // The same object those handlers came from, forwarded whole.
               // The canvas draws what the pointer currently means — which
               // block is in flight, which container is receiving it — and
@@ -1257,6 +1280,26 @@ function EditorBody<TFieldValues extends FieldValues>({
     // in the tree the canvas composes.
     canvas.canvasRender.definitions
   );
+  // The switch that applies the conditions for the entry a template is
+  // previewed with: the author's own, for this session, never saved.
+  const conditions = useAppliedConditionsSwitch(
+    reveal.document,
+    templatePreview,
+    {
+      services: conditionServices,
+      componentTitle: mount.componentLibrary.titleOf,
+      // Every block the canvas draws, under the limits it draws with.
+      limits: canvas.canvasRender.limits,
+      // The placed components, whose own conditioned blocks go unchecked.
+      definitions: canvas.canvasRender.definitions,
+      // The regions of the page's Layout, whose conditioned blocks go
+      // unchecked too.
+      regions: panels.canvasRegions,
+      // The site's zone, as the canvas's bindings read it, for a date a
+      // condition compares by day.
+      timeZone: canvasRender.bindings.timeZone,
+    }
+  );
   const view: EditorView = {
     ...mount,
     ...style,
@@ -1275,6 +1318,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     // entries of the pages placing it, as its save judges them.
     entryCollection,
     conditionsUnchecked,
+    conditionsApplied: conditions.applied,
+    conditionsShownLabel: `Shown for this ${conditions.noun}`,
   };
   useOpenAtSection({
     sectionId: openAt?.sectionId,
@@ -1333,7 +1378,12 @@ function EditorBody<TFieldValues extends FieldValues>({
             canvas: canvas.canvasElement,
           })}
           // Pinned above a template's canvas: the entry it is drawn with.
-          canvasStrip={templateStrip(templatePreview)}
+          canvasStrip={editorStrip(
+            templatePreview,
+            conditions,
+            mount.initialDocument.kind,
+            page.title
+          )}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page)}
           // The shell owns the region; this fills it. Rendered unconditionally
@@ -1491,13 +1541,93 @@ function useConditionServices(
   );
 }
 
-/** The Previewing strip for a template's preview, or none for any other document. */
-function templateStrip(
-  preview: ReturnType<typeof useTemplatePreviewState>
+/**
+ * The strip above the canvas: a template's Previewing strip, with the switch
+ * that applies its conditions while it holds a block whose conditions read
+ * the entry; a component's or a Layout's own strip, with the switch disabled,
+ * while it holds a conditioned block; none otherwise.
+ */
+function editorStrip(
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  conditions: AppliedConditionsSwitch,
+  kind: DocumentKind,
+  title: string | undefined
 ): React.JSX.Element | undefined {
-  return preview === undefined ? undefined : (
-    <TemplatePreviewStrip preview={preview} />
+  if (preview !== undefined) {
+    return conditions.template === undefined ? (
+      <TemplatePreviewStrip preview={preview} />
+    ) : (
+      <TemplatePreviewStrip
+        preview={preview}
+        conditions={conditions.template}
+      />
+    );
+  }
+  if (!conditions.held || (kind !== "component" && kind !== "region")) {
+    return undefined;
+  }
+  return (
+    <PlacedConditionsStrip
+      kind={kind === "component" ? "Component" : "Layout"}
+      name={title ?? (kind === "component" ? "Component" : "Layout")}
+    />
   );
+}
+
+/** The switch that applies a document's conditions, and what it did. */
+interface AppliedConditionsSwitch {
+  /** The switch's state in a template's strip; absent outside a template. */
+  readonly template: TemplateConditions | undefined;
+  /** The page with its conditions applied, while they are. */
+  readonly applied: AppliedConditions | undefined;
+  /** Whether the document holds a conditioned block at all. */
+  readonly held: boolean;
+  /** What the previewed entry is called in words, lower case: "post". */
+  readonly noun: string;
+}
+
+/**
+ * The author's switch that applies the conditions for the entry a template
+ * is previewed with, and the page as they leave it. Applied only to the
+ * blocks that read the entry; checked against the entry as a visitor reads
+ * it, so the canvas hides what the published page would.
+ */
+function useAppliedConditionsSwitch(
+  document: BlockDocument,
+  preview: ReturnType<typeof useTemplatePreviewState>,
+  options: Omit<AppliedConditionsOptions, "noun">
+): AppliedConditionsSwitch {
+  const [on, setOn] = useState(false);
+  const toggle = useCallback(() => setOn(was => !was), []);
+  const { limits } = options;
+  const held = useMemo(
+    () => conditionedBlocksIn(document, limits),
+    [document, limits]
+  );
+  const noun =
+    preview === undefined ? "entry" : preview.labels.singular.toLowerCase();
+  const previewed = preview?.previewed;
+  // The entry is handed over only while the switch is on: the canvas then
+  // draws the page as a visitor reading that entry would get it.
+  const applied = useAppliedConditions(
+    document,
+    on && held.readingEntry ? previewed : undefined,
+    { ...options, noun }
+  );
+  const template = useMemo<TemplateConditions | undefined>(
+    () =>
+      preview === undefined || !held.readingEntry
+        ? undefined
+        : {
+            on,
+            toggle,
+            available: previewed?.kind === "entry",
+            applied,
+            noun,
+          },
+    [preview, held.readingEntry, on, toggle, previewed, applied, noun]
+  );
+  return { template, applied, held: held.any, noun };
 }
 
 /**

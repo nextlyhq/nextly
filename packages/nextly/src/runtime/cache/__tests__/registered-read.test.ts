@@ -215,7 +215,10 @@ describe("applyCache under Cache Components", () => {
       revalidate: 60,
     });
     expect(result).toEqual({ id: "x" });
-    expect(seen).toEqual([['["posts","x"]', ["nextly:posts"], 60]]);
+    // The read's own key parts, then the part naming the shape it holds.
+    expect(seen).toEqual([
+      ['["posts","x","nextly:kept-v1"]', ["nextly:posts"], 60],
+    ]);
   });
 
   it("stays on unstable_cache when no cached function is registered", async () => {
@@ -228,7 +231,7 @@ describe("applyCache under Cache Components", () => {
       tags: ["nextly:posts"],
       keyParts: ["posts", "y"],
     });
-    expect(used).toEqual([["posts", "y"]]);
+    expect(used).toEqual([["posts", "y", "nextly:kept-v1"]]);
   });
 
   // Next.js's two refusals of a `"use cache"` call with no App Router scope:
