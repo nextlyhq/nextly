@@ -199,10 +199,20 @@ const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href"]);
 const DATA_ATTRIBUTE = /^data-[a-z0-9][a-z0-9._:-]*$/;
 
 /**
- * What browsers ignore in a URL before reading it: ASCII whitespace and
- * control characters, which is how `java\tscript:` still runs.
+ * A URL with what browsers ignore before reading it taken out: ASCII
+ * whitespace and control characters (U+0000 to U+0020, U+007F to U+009F),
+ * which is how `java\tscript:` still runs. Read by code point, so no
+ * pattern has to spell control characters.
  */
-const IGNORED_IN_URL = /[\u0000- \u007f-\u009f]/g;
+function withoutIgnored(value: string): string {
+  let read = "";
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x20 || (code >= 0x7f && code <= 0x9f)) continue;
+    read += char;
+  }
+  return read;
+}
 
 /**
  * Why a URL may not be used, or `undefined` when it may: it must be `https:`
@@ -213,7 +223,7 @@ export function siteCodeUrlProblem(value: string): string | undefined {
   if (value.length > SITE_CODE_LIMITS.urlLength) {
     return `is longer than ${SITE_CODE_LIMITS.urlLength} characters`;
   }
-  const read = value.replace(IGNORED_IN_URL, "");
+  const read = withoutIgnored(value);
   // A path on this site, but not `//host` or `/\host`, which browsers read
   // as another host.
   if (read.startsWith("/")) {
@@ -259,8 +269,30 @@ function attributeProblem(
   return undefined;
 }
 
+/**
+ * Referrer policies that send a page's full address to another site. Meta tags
+ * and links are written as they are on every page `<SiteCode>` is mounted on,
+ * the admin's included when it shares the layout, so one of these would let a
+ * link hint send an admin address (a reset or preview query among it) to the
+ * site it loads from.
+ */
+const FULL_URL_REFERRERS: ReadonlySet<string> = new Set([
+  "unsafe-url",
+  "no-referrer-when-downgrade",
+]);
+
 /** Why an element's own attribute values may not be used, by element. */
 function valueProblem(tag: string, attrs: SiteCodeAttrs): string | undefined {
+  // A referrer meta tag changes the policy of the whole page it is on.
+  if (tag === "meta" && attrs.name?.trim().toLowerCase() === "referrer") {
+    return "a referrer meta tag isn't allowed: it would change what every page, the admin's included, tells other sites about where a visitor came from";
+  }
+  if (
+    tag === "link" &&
+    FULL_URL_REFERRERS.has(attrs.referrerpolicy?.trim().toLowerCase() ?? "")
+  ) {
+    return `a link with referrerpolicy "${attrs.referrerpolicy ?? ""}" isn't allowed: it would send the full address of the page, the admin's included, to the site it loads from`;
+  }
   if (tag === "script") {
     if (siteCodeScriptKind(attrs.type) === undefined) {
       return `a script of type "${attrs.type}" isn't allowed`;

@@ -28,6 +28,7 @@
 import {
   listFieldKind,
   listPageCount,
+  NAMED_QUERY_TEXT,
   readListQuery,
   safeTimeZone,
   isListDay,
@@ -38,6 +39,7 @@ import {
   type ConditionDayStart,
   type ListFilter,
   type ListFilterOp,
+  type ListNamedQuery,
   type ListQuery,
   type ListRelation,
 } from "@nextlyhq/blocks-engine";
@@ -75,8 +77,14 @@ const READER_OP: Readonly<Record<ListFilterOp, BlocksFilterOp>> = {
  * only: a sort that fell back to id order, or a read that failed.
  */
 export interface ListDiagnostic {
-  readonly kind: "sort-fallback" | "query-failed";
+  /**
+   * A sort that fell back, a read that failed, or (for a named query that
+   * ran) what a visitor's page goes without.
+   */
+  readonly kind: "sort-fallback" | "query-failed" | "query-caution";
   readonly message: string;
+  /** The log reference the message names, which an editor offers to copy. */
+  readonly ref?: string;
 }
 
 /** What a list's read came to: the entries, and anything worth telling. */
@@ -316,6 +324,11 @@ async function relatedIds(
   reads: ListReads
 ): Promise<RelatedIds> {
   if (relation.of === "item") {
+    // A named query's rows are not entries a relation is read from, as the
+    // save refuses; one stored before is drawn empty and its author told.
+    if (ctx.itemQuery !== undefined) {
+      return { problem: NAMED_QUERY_TEXT.nestedRelated };
+    }
     return ctx.item === undefined
       ? {
           problem:
@@ -747,6 +760,39 @@ function listReadBase(
     limit,
     sort: sortProblem === undefined ? sortTexts(query) : [],
     ...(sortProblem === undefined ? {} : { sortProblem: sortProblem.message }),
+  };
+}
+
+/**
+ * A stored list whose source is a named query, read before it is run: the
+ * query and its inputs as the engine reads them, and the window it is run
+ * with. `undefined` for a list with another source; `blocking` when the
+ * stored source cannot be read as stored (a malformed one, or one beside a
+ * collection), which fails the list rather than reading something else.
+ */
+export function namedListBase(props: unknown):
+  | undefined
+  | { readonly blocking: string }
+  | {
+      readonly named: ListNamedQuery;
+      readonly limit: number;
+      readonly offset: number;
+    } {
+  const { query, problems } = readListQuery(props);
+  const stored = (props as { namedQuery?: unknown } | null)?.namedQuery;
+  if (
+    query.namedQuery === undefined &&
+    (stored === undefined || stored === null)
+  ) {
+    return undefined;
+  }
+  const blocking = blockingProblem(problems);
+  if (blocking !== undefined) return { blocking };
+  if (query.namedQuery === undefined) return undefined;
+  return {
+    named: query.namedQuery,
+    limit: safeLimit((props as { limit?: unknown } | null)?.limit),
+    offset: query.offset ?? 0,
   };
 }
 

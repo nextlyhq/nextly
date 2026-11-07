@@ -16,6 +16,8 @@
 import {
   bindingDemand,
   bindingKindOf,
+  calendarDayIn,
+  COLLECTION_LIST_TYPE,
   conditionDemand,
   conditionFieldKind,
   DEFAULT_LIMITS,
@@ -24,6 +26,7 @@ import {
   hashId,
   isFetchableUrl,
   isListDay,
+  isPlainRecord,
   DOCUMENT_FORMAT_VERSION,
   paginatedList,
   type PaginatedList,
@@ -36,7 +39,6 @@ import {
   type BlockDocument,
   type BlockNode,
   type ConditionDemand,
-  type ConditionSubject,
   type SourceDemand,
   type BlockSeoContribution,
   type DefinitionsById,
@@ -65,6 +67,7 @@ import {
   nextlySiteSettingsTags,
   readPublicSiteSettings,
   LIST_PAGE_SEGMENT,
+  openNamedQueryFrame,
   slugToPath,
 } from "nextly/runtime";
 import type {
@@ -75,6 +78,8 @@ import type {
   ContentRouteConfig,
   NextlyContentReader,
   NextlySingleReader,
+  PublicSiteSettings,
+  PublicSiteSettingsSource,
   RenderContext,
   SingleContext,
   SingleDocument,
@@ -91,6 +96,7 @@ import {
   listPagesOf,
   listWillRead,
 } from "./blocks/list-read";
+import { namedQueryFailureLine } from "./blocks/named-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -117,13 +123,19 @@ import type {
   BlocksPublicReader,
   BlocksSiteSettings,
   ListPageContext,
+  NamedQueryHost,
+  NamedQueryLookup,
   PageBindings,
   PageContext,
   QueryBudget,
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
-import { listCollections, listCollectionsWhere } from "./list-collections";
+import {
+  listCollections,
+  listCollectionsWhere,
+  listPropsAsBound,
+} from "./list-collections";
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -255,6 +267,21 @@ export interface BlocksPageConfig
    * mismatch loud instead (see {@link readDocument}).
    */
   field: string;
+  /**
+   * A booted Nextly instance, or a reader of one (defaults to
+   * `requireNextly()`). The page's records AND the site settings it shows,
+   * its site name, address, logo and the time zone its dates and day filters
+   * use, are read through it, so a process serving several sites, each
+   * through an instance of its own, shows each page its own site.
+   *
+   * A reader of your own forwards `publicSiteSettings` from the instance, as
+   * it forwards `find`. One that does not shows the process's registered
+   * instance's settings, as before, and the route warns once that on a
+   * process serving several sites they are another site's. Routes over
+   * different instances in one process also need their own `cacheScope`: the
+   * site settings are cached under it, as every public read of the route is.
+   */
+  nextly?: NextlyContentReader & Partial<PublicSiteSettingsSource>;
   /** Where block definitions come from. Defaults to the process registry. */
   blocks?: BlockResolver;
   /**
@@ -421,6 +448,16 @@ export interface BlocksPageConfig
    */
   timeZone?: string;
   /**
+   * The site's named queries, which its pages' collection lists may take as
+   * their source: `namedQueriesOf(pageBuilderPlugin)` from
+   * `@nextlyhq/plugin-page-builder`, the queries that page builder
+   * registered for this site. Absent, the route knows of none, and a list
+   * naming one shows its empty state.
+   *
+   * @experimental
+   */
+  namedQueries?: NamedQueryLookup;
+  /**
    * The caps this site holds its documents to, used while repairing a stored
    * shape. Passed to the renderer AND used when deriving metadata, so a site
    * that raised `maxNodes` for long pages does not have its metadata derived
@@ -537,37 +574,61 @@ function listPageSlug(slug: string, page: number | undefined): string {
 function pagedListOf(
   document: BlockDocument,
   page: DrawnDocument,
-  maxNodes: number
+  maxNodes: number,
+  /** The page's binding pass, so a bound query prop is read as drawn. */
+  run: BindingRun | undefined
 ): PaginatedList | undefined {
-  // The page's own: the list its stored nodes split into pages, an
-  // instance's exposed slot included, never one a component's definition
-  // brings, which shows on every page placing it. Both walks are held to the
-  // route's node cap, as the renderer's own reading is.
-  const owned = paginatedList(document.nodes, maxNodes);
-  if (owned === undefined || page.prepared === null) return undefined;
-  // That very list, found by its id in the page as drawn, so a component's
-  // own list ahead of it cannot stand in for it.
-  return listNamed(page.prepared.presented.nodes, owned.id, maxNodes);
+  if (page.prepared === null) return undefined;
+  // The page's own lists, walked in its stored order, an instance's exposed
+  // slot included, never one a component's definition brings, which shows
+  // on every page placing it. Each is judged by its props as the page's
+  // binding pass fills them, the ones it is drawn with, read from that very
+  // list in the page as drawn (found by its id, so a component's own list
+  // cannot stand in for it): a limit, offset, collection or split bound to
+  // the entry counts as the page shows it, so a list split into pages only
+  // by a bound value pages too, and the route serves exactly the pages the
+  // list's links name. Both walks are held to the route's node cap, as the
+  // renderer's own reading is.
+  const drawn = listsById(page.prepared.presented.nodes, maxNodes);
+  return paginatedList(document.nodes, maxNodes, stored => {
+    const list =
+      typeof stored.id === "string" ? drawn.get(stored.id) : undefined;
+    return list === undefined ? {} : listPropsAsBound(list, run);
+  });
 }
 
 /**
- * The list with id `id` in `nodes`, as it is drawn, where it is still a list
- * split into pages: the composed and repaired form of the stored one.
- * Bounded by `maxNodes`.
+ * Whether the page's stored document could split a list into pages: one
+ * split as stored, or one whose split is bound to the entry, which only the
+ * page's binding pass can settle. Asked before anything is read, so a page
+ * with neither costs the route nothing.
  */
-function listNamed(
+function mayPageAList(document: BlockDocument, maxNodes: number): boolean {
+  return (
+    paginatedList(document.nodes, maxNodes, list =>
+      isPlainRecord(list.bindings) && "paginate" in list.bindings
+        ? { ...(isPlainRecord(list.props) ? list.props : {}), paginate: true }
+        : list.props
+    ) !== undefined
+  );
+}
+
+/**
+ * The collection lists in `nodes`, as drawn, by id: the first of each id in
+ * document order. Bounded by `maxNodes`.
+ */
+function listsById(
   nodes: readonly BlockNode[],
-  id: string,
   maxNodes: number
-): PaginatedList | undefined {
+): Map<string, BlockNode> {
+  const lists = new Map<string, BlockNode>();
   const stack: BlockNode[] = [...nodes].reverse();
   let left = maxNodes;
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    if (left <= 0) return undefined;
+    if (left <= 0) break;
     left -= 1;
-    if (node.id === id) {
-      // Asked of this one node: a paginated list here is the page's own.
-      return paginatedList([node], 1);
+    if (node.type === COLLECTION_LIST_TYPE && !lists.has(node.id)) {
+      lists.set(node.id, node);
     }
     for (const children of Object.values(node.slots ?? {}).reverse()) {
       for (let at = children.length - 1; at >= 0; at -= 1) {
@@ -576,7 +637,7 @@ function listNamed(
       }
     }
   }
-  return undefined;
+  return lists;
 }
 
 /**
@@ -699,11 +760,249 @@ function publicReaderFor(
   };
 }
 
+/**
+ * The most tags a named query's cached result carries: Next keeps 128 per
+ * cache entry, and nextly's reads keep to it (`readTags`).
+ */
+const NAMED_QUERY_CACHE_TAGS = 128;
+
+/** This process's own identity, for a deployment that names none. */
+const PROCESS_IDENTITY = `process:${globalThis.crypto.randomUUID()}`;
+
+/**
+ * Which deployment this code is: the one the platform names
+ * (`NEXT_DEPLOYMENT_ID`, which Next sets from its `deploymentId`, or
+ * Vercel's), else this process's own identity. A named query's cached
+ * result is kept under it, because a deployment can change what `run`
+ * computes (an imported helper, a constant) without changing a character of
+ * its source: a result is never served across deployments. With no
+ * deployment named, it is never served across processes either, which
+ * costs a fresh run after a restart and never serves stale rows.
+ */
+function deploymentIdentity(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  const named = [
+    env.NEXT_DEPLOYMENT_ID,
+    env.VERCEL_DEPLOYMENT_ID,
+    env.VERCEL_GIT_COMMIT_SHA,
+  ].find(value => value !== undefined && value.trim() !== "");
+  return named === undefined ? PROCESS_IDENTITY : `deployment:${named}`;
+}
+
+/**
+ * The site's time zone, for a named query's day: the route's, else the one
+ * the site settings name, UTC only when they name none. Settings that could
+ * not be read (the page's reads spent, or the read failing) are not settings
+ * that name no zone: that refuses, and the list draws its empty state rather
+ * than run a query on another zone's day.
+ */
+async function siteZone(
+  config: BlocksPageConfig,
+  budget: QueryBudget,
+  window: number | false | undefined
+): Promise<string | undefined> {
+  if (config.timeZone !== undefined) return config.timeZone;
+  const site = await readSite(
+    siteSettingsSourceFor(config),
+    config.cacheScope,
+    budget,
+    window
+  );
+  if (site === undefined) {
+    throw new Error(
+      "The site settings could not be read, so the site's time zone, and today in it, is not known."
+    );
+  }
+  return site.timezone ?? undefined;
+}
+
+/** How long a cached "today" may live before it is asked again, in seconds. */
+const TODAY_LIFETIME = 60;
+
+/**
+ * Today in the site's time zone, for a named query: cached, because a
+ * prerender under Cache Components refuses the current time outside the
+ * cache, and tagged with the site settings, whose time zone it is read in.
+ */
+async function todayFor(zone: string | undefined): Promise<string> {
+  const safe = safeTimeZone(zone).zone;
+  return await cachedFind(
+    () => Promise.resolve(calendarDayIn(safe, new Date())),
+    {
+      tags: nextlySiteSettingsTags(),
+      keyParts: ["nextly-named-query-today", safe],
+      revalidate: TODAY_LIFETIME,
+    }
+  );
+}
+
+/**
+ * How a published page runs its lists' named queries: over the route's
+ * public reader, as an anonymous visitor reads, each run inside nextly's
+ * named-query frame, which refuses a trusted Direct API call from developer
+ * code. A run's result is cached like the page around it, keyed by its
+ * query, inputs and window, and tagged by everything the query DECLARES, so
+ * a write to any collection, Single or setting it may read refreshes the
+ * page, whether or not this run happened to read it.
+ */
+function namedQueryHostFor(args: {
+  readonly config: BlocksPageConfig;
+  readonly locale: string | undefined;
+  readonly window: number | false | undefined;
+  readonly budget: QueryBudget;
+  readonly context: RenderContext;
+}): NamedQueryHost {
+  const { config, locale, window, budget, context } = args;
+  const reader = publicReaderFor(config, locale, window);
+  let today: Promise<string> | undefined;
+  return {
+    // The site's own queries, as the route was handed them: none when it
+    // was handed none, so a list naming one shows its empty state.
+    definitionOf: name => config.namedQueries?.definitionOf(name),
+    reader: {
+      ...reader,
+      // The route's own instance's settings, as the page's own read takes
+      // them, so a process serving several sites never hands a query
+      // another site's name or zone. The reader already counted this read.
+      siteSettings: async () => {
+        const from = siteSettingsSourceFor(config);
+        if (from instanceof ProcessSiteSettings) warnOfStandIn(from);
+        const settings = await cachedFind(
+          async () => await readPublicSiteSettings(from),
+          {
+            tags: nextlySiteSettingsTags(),
+            keyParts: ["nextly-public-site-settings", config.cacheScope ?? ""],
+            revalidate: await releaseBoundedRevalidate(window),
+          }
+        );
+        return { ...settings };
+      },
+    },
+    today: () => {
+      today ??= (async () =>
+        await todayFor(await siteZone(config, budget, window)))();
+      return today;
+    },
+    fieldsOf: async collection =>
+      await cachedFieldShapes(
+        { collection },
+        { scope: config.cacheScope ?? "", locale, window }
+      ),
+    // nextly's frame: inside it the Direct API refuses every call, and the
+    // query's reader reads through the frame's own door.
+    frame: name => openNamedQueryFrame(name),
+    cache: async ({ declaration, key, read }) => {
+      const tags = [
+        ...(declaration.reads.collections ?? []).flatMap(slug =>
+          nextlyTags(slug)
+        ),
+        ...(declaration.reads.singles ?? []).flatMap(slug =>
+          nextlySingleTags(slug)
+        ),
+        ...(declaration.reads.site === true ? nextlySiteSettingsTags() : []),
+      ];
+      // A result is kept only when every source it declares can expire it.
+      // The cache keeps a bounded number of tags per entry, and a read past
+      // the bound would stay cached after a write to a source left off. The
+      // registry bounds a query's reads below this; this holds it whatever
+      // a tag costs.
+      if (new Set(tags).size > NAMED_QUERY_CACHE_TAGS) return await read();
+      const route = await releaseBoundedRevalidate(window);
+      const own = declaration.revalidate;
+      return await cachedFind(read, {
+        tags,
+        keyParts: [
+          "nextly-named-query",
+          config.cacheScope ?? "",
+          deploymentIdentity(),
+          ...key,
+        ],
+        revalidate:
+          own === undefined
+            ? route
+            : route === false
+              ? own
+              : Math.min(route, own),
+      });
+    },
+    // The log names the page, the list and the query, under the reference
+    // an author is shown in place of the error, and the error by its code or
+    // class only: its message may hold whatever the query's code put in it.
+    report: failure => {
+      console.warn(
+        namedQueryFailureLine(
+          failure,
+          `"${context.collection}" page "${context.slug}"`
+        )
+      );
+    },
+  };
+}
+
 /** The instance's Single read, when the reader the route holds has one. */
 function singleReaderOf(reader: object): NextlySingleReader | undefined {
   return "findSingle" in reader && typeof reader.findSingle === "function"
     ? (reader as NextlySingleReader)
     : undefined;
+}
+
+/**
+ * The process's registered instance, standing in for the site settings of a
+ * reader of the app's own that offers no site-settings read.
+ *
+ * It reads what such a route read before an instance could be asked, so a
+ * single-site app whose reader predates `publicSiteSettings` keeps its site
+ * name and time zone. It is a stand-in rather than a quiet fallback because on
+ * a process serving several sites it is another site's settings: the read
+ * that uses one says so, naming the reader's missing line.
+ *
+ * Whether a process serves several sites cannot be asked of Nextly. Every
+ * handle `getNextly`, `getCachedNextly` and `requireNextly` give out is one
+ * process-wide instance over one service container, both kept on
+ * `globalThis`, so a process never holds two instances to count; its other
+ * sites are readers of the app's own, which nothing here can see.
+ */
+class ProcessSiteSettings implements PublicSiteSettingsSource {
+  constructor(readonly reader: object) {}
+
+  async publicSiteSettings(): Promise<PublicSiteSettings> {
+    return await readPublicSiteSettings();
+  }
+}
+
+/** The readers already warned about, so each is named once per process. */
+const warnedReaders = new WeakSet<object>();
+
+/**
+ * Said once per reader, in every environment, when a page reads the site
+ * settings through a stand-in: a production log is where a site showing
+ * another site's name would otherwise go unexplained.
+ */
+function warnOfStandIn(standIn: ProcessSiteSettings): void {
+  if (warnedReaders.has(standIn.reader)) return;
+  warnedReaders.add(standIn.reader);
+  console.warn(
+    "[blocks] This route's `nextly` reader has no `publicSiteSettings`, so its pages show the site settings of the process's registered Nextly instance. On a process serving several sites those are another site's name and time zone. Add one line to the reader: `publicSiteSettings: async () => (await instance()).publicSiteSettings()`."
+  );
+}
+
+/**
+ * Where a route's pages read the site settings: the instance the route reads
+ * its records through, chosen by {@link readerFor} and nowhere else, so a
+ * page's site name and time zone come from the same instance as its content.
+ * A route given no instance reads the process's, as its records do. A reader
+ * of the app's own without a site-settings read gets the process's registered
+ * instance as a {@link ProcessSiteSettings} stand-in.
+ */
+function siteSettingsSourceFor(
+  config: BlocksPageConfig
+): PublicSiteSettingsSource {
+  const reader: object = readerFor(config);
+  return "publicSiteSettings" in reader &&
+    typeof reader.publicSiteSettings === "function"
+    ? (reader as PublicSiteSettingsSource)
+    : new ProcessSiteSettings(reader);
 }
 
 /** The route's data provider for one render: the caller's, or the default. */
@@ -2058,18 +2357,28 @@ async function readSingles(
 }
 
 /**
- * The site settings the public may read: one claim, cached under the
+ * The site settings the public may read, from `from`, or from the process's
+ * registered instance when it is `undefined`: one claim, cached under the
  * settings' own tag, so changing the site's name or time zone refreshes the
- * pages that show them.
+ * pages that show them. A stand-in for a reader without the read is named
+ * before it is read, whether or not the cache then answers.
+ *
+ * The cache key holds the route's `cacheScope`, as every public read of a
+ * route does: two routes over different instances in one process name their
+ * own scopes, or their pages share one site's settings. The key cannot be
+ * derived from the instance itself, since the cache outlives the process and
+ * an instance has no name that is the same in the next one.
  */
 async function readSite(
+  from: PublicSiteSettingsSource | undefined,
   cacheScope: string | undefined,
   budget: QueryBudget,
   window: number | false | undefined
 ): Promise<BlocksSiteSettings | undefined> {
+  if (from instanceof ProcessSiteSettings) warnOfStandIn(from);
   if (!budget.take()) return undefined;
   try {
-    return await cachedFind(async () => await readPublicSiteSettings(), {
+    return await cachedFind(async () => await readPublicSiteSettings(from), {
       tags: nextlySiteSettingsTags(),
       keyParts: ["nextly-public-site-settings", cacheScope ?? ""],
       revalidate: await releaseBoundedRevalidate(window),
@@ -2201,7 +2510,12 @@ async function listZone(args: {
   const site =
     args.bindings?.site ??
     (args.config.timeZone === undefined
-      ? await readSite(args.config.cacheScope, args.budget, args.window)
+      ? await readSite(
+          siteSettingsSourceFor(args.config),
+          args.config.cacheScope,
+          args.budget,
+          args.window
+        )
       : undefined);
   return (
     args.bindings?.timeZone ??
@@ -2361,6 +2675,11 @@ export interface BindingSourcesArgs {
   readonly budget: QueryBudget;
   /** The route's cache scope, for the public, shared reads. */
   readonly cacheScope?: string;
+  /**
+   * The instance the site settings are read from: the one the page's records
+   * come from. Absent, the process's registered instance, as before.
+   */
+  readonly siteSettings?: PublicSiteSettingsSource;
   /** The route's own time zone, which wins over the site's. */
   readonly timeZone?: string;
   /** The release window the public, shared reads are bounded by. */
@@ -2480,14 +2799,25 @@ function warnOfUnknownTimeZone(zone: string | undefined): void {
 async function siteAndZone(
   args: Pick<
     BindingSourcesArgs,
-    "slug" | "page" | "budget" | "cacheScope" | "timeZone" | "window"
+    | "slug"
+    | "page"
+    | "budget"
+    | "cacheScope"
+    | "siteSettings"
+    | "timeZone"
+    | "window"
   >,
   demand: BindingDemand
 ): Promise<{ site?: BlocksSiteSettings; timeZone?: string }> {
   const needsZone = demand.formatsDates && args.timeZone === undefined;
   const site =
     demand.site || needsZone
-      ? await readSite(args.cacheScope, args.budget, args.window)
+      ? await readSite(
+          args.siteSettings,
+          args.cacheScope,
+          args.budget,
+          args.window
+        )
       : undefined;
   const timeZone = pageTimeZone(args.timeZone, site, {
     collection: args.slug,
@@ -2654,6 +2984,9 @@ async function readPageInputs(args: {
     ...(config.cacheScope === undefined
       ? {}
       : { cacheScope: config.cacheScope }),
+    // The route's instance, as its records are read through, so the page
+    // shows its own site's settings and never the process's.
+    siteSettings: siteSettingsSourceFor(config),
     ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
     ...(args.window === undefined ? {} : { window: args.window }),
     ...(conditioned
@@ -2947,12 +3280,10 @@ function blocksRouteConfig(
     // own links do not name, nor refuses one they do.
     listPages: async (entry, context) => {
       const document = readDocument(entry, field, context);
-      // Nothing is read for a page whose stored document splits no list
-      // into pages: composing it cannot add one its own nodes do not hold.
-      if (
-        paginatedList(document.nodes, effectiveLimits(config).maxNodes) ===
-        undefined
-      ) {
+      // Nothing is read for a page whose stored document neither splits a
+      // list into pages nor binds a list's split: composing it cannot add
+      // one its own nodes do not hold.
+      if (!mayPageAList(document, effectiveLimits(config).maxNodes)) {
         return null;
       }
       // Counted under the page's read allowance, spent in the render's own
@@ -2980,7 +3311,10 @@ function blocksRouteConfig(
       const list = pagedListOf(
         document,
         page,
-        effectiveLimits(config).maxNodes
+        effectiveLimits(config).maxNodes,
+        bindings === undefined
+          ? undefined
+          : pageBindingRun(bindings, context.locale, resolver)
       );
       if (list === undefined) return null;
       // A list that makes no read shows one page, and claims nothing.
@@ -3063,6 +3397,14 @@ function blocksRouteConfig(
         resolveEntryPath,
         // The published page draws the Lucide set, vendored with this package.
         resolveIcon: resolveLucideIcon,
+        // A list whose source is a named query runs it as a visitor reads.
+        namedQueries: namedQueryHostFor({
+          config,
+          locale: context.locale,
+          window: listWindow,
+          budget,
+          context,
+        }),
         // The page of its list this address draws, and where the others are.
       });
 
@@ -3134,7 +3476,10 @@ function blocksRouteConfig(
       const pagedList = pagedListOf(
         document,
         page,
-        effectiveLimits(config).maxNodes
+        effectiveLimits(config).maxNodes,
+        bindings === undefined
+          ? undefined
+          : pageBindingRun(bindings, context.locale, resolver)
       );
       // Claimed only for a list that reads: one with no collection yet, or
       // a stored query it cannot run, spends nothing another list needs.
@@ -3375,8 +3720,14 @@ export interface BlocksSinglePageConfig
    * over collections through `find`/`findByID`. A reader carrying only one of
    * the two renders either a blank page or a page with no pictures, and neither
    * says which half was missing.
+   *
+   * The site settings the page shows are read through it too, as on the page
+   * route: a reader of your own forwards `publicSiteSettings`, or the page
+   * shows the process's registered instance's and the route warns once.
    */
-  nextly?: NextlyContentReader & NextlySingleReader;
+  nextly?: NextlyContentReader &
+    NextlySingleReader &
+    Partial<PublicSiteSettingsSource>;
 }
 
 /**

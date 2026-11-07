@@ -1,15 +1,23 @@
 import {
   allBlocks,
+  createNamedQueryRegistry,
   breakpointContexts,
   DEFAULT_LIMITS,
+  namedQueryDeclaration,
   resolveSiteTokens,
   tokenIdentity,
   type DocumentLimits,
   type NamedClass,
+  type NamedQueryDefinition,
+  type NamedQueryRegistry,
+  type NamedQuerySource,
   type RemotePattern,
   type RetiredExposures,
 } from "@nextlyhq/blocks-engine";
-import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
+import {
+  COMPONENT_DOCUMENT_FIELD,
+  type NamedQueryLookup,
+} from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   NextlyError,
@@ -32,14 +40,15 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import {
   backfillPageClaims,
+  publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
+import type { Tx } from "./address-claims/claim-store";
 import {
   CONTENT_ADDRESS_SERVICE,
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
-import type { Tx } from "./address-claims/claim-store";
 import {
   registerEntryAddressClaims,
   releaseUndeclared,
@@ -109,6 +118,12 @@ import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
+  registerComponentGuards,
+  storedUseCheck,
+} from "./component-delete/guards";
+import { componentDeleteRoutes } from "./component-delete/route";
+import { componentDeleteJob } from "./component-delete/sweep";
+import {
   componentFactsRoute,
   componentStoreShape,
   reconciledRetired,
@@ -150,10 +165,10 @@ import type {
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
-import { registerFencedWriteReport } from "./host-rewrite/after-commit";
 import type { HostAddress } from "./host-rewrite/contract";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
-import { progressStore } from "./host-rewrite/progress";
+import { readSiteFieldGroups } from "./host-rewrite/field-groups";
+import { registerInTransactionFence } from "./host-rewrite/in-transaction";
 import {
   COMPONENT_DELETE_REWRITE_SERVICE,
   componentDeleteRewriteService,
@@ -184,6 +199,7 @@ import {
 } from "./library-route";
 import { listEntriesRoute } from "./list-entries-route";
 import { loopCollectionsRoute } from "./loop-collections-route";
+import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pageActionsRoute } from "./page-actions-route";
@@ -241,8 +257,16 @@ import {
 } from "./site-fonts/options";
 import { siteFontRoutes } from "./site-fonts/routes";
 import {
+  SITE_CODE_SAVED_AUDIT,
+  SITE_CODE_SAVED_METADATA,
+  siteCodeRoutes,
+  type PageBuilderSiteCodeOptions,
+} from "./site-code/route";
+import { siteCodeSingle } from "./site-code/storage";
+import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
+  MANAGE_SITE_PERMISSION,
   siteBreakpointRemovalRoute,
   siteBreakpointRemovalStatusRoute,
   siteBreakpointsRoute,
@@ -511,6 +535,14 @@ export interface PageBuilderOptions {
    */
   limits?: DocumentLimits;
   /**
+   * The site's named queries: a collection list's custom sources, made with
+   * `defineNamedQuery` from `@nextlyhq/plugin-sdk/blocks`. Registered on each
+   * boot beside the ones plugins declare, all or nothing.
+   *
+   * @experimental
+   */
+  namedQueries?: readonly NamedQueryDefinition[];
+  /**
    * Where component definitions live: what publishing a page checks when it
    * warns that some are not live, and what the EDITOR reads to draw them.
    *
@@ -707,6 +739,16 @@ export interface PageBuilderOptions {
    * false }` turns the catalogue off; uploading a font file still works.
    */
   fonts?: PageBuilderFontOptions;
+
+  /**
+   * Site code: the code people who may change the site's settings add to
+   * every published page, in Settings, under Site. Declare the site's
+   * Content Security Policy here (`csp`, a header value or a function read on
+   * each check) so code is checked against it before it is saved.
+   *
+   * @experimental
+   */
+  siteCode?: PageBuilderSiteCodeOptions;
 
   /**
    * Collection templates: where each collection defined in code serves its
@@ -1127,6 +1169,9 @@ function rewriteInstallFor(
         ctx.config.localization?.locales.map(locale => locale.code) ?? [],
       defaultLocale: () => ctx.config.localization?.defaultLocale,
       layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+      // A document whose field groups hold no blocks field is no host: its
+      // field groups' values are stored apart, where no copy can be.
+      fieldGroups: siteFieldGroups(ctx, nextly),
     },
     hints: async componentId => {
       const found = await composition.hostsOf?.placing([componentId]);
@@ -1269,6 +1314,46 @@ function configuredSingles(ctx: {
 }
 
 /**
+ * The site's field groups, read once per walk from the registry through the
+ * Direct API, with the code's declarations for a slug the registry does not
+ * hold; nothing at all where the registry cannot be read to the end
+ * (`host-rewrite/field-groups`).
+ */
+function siteFieldGroups(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  nextly: () => Promise<RewriteDirectApi>
+): () => Promise<(slug: string) => { readonly fields?: unknown } | undefined> {
+  const inCode = declaredFieldGroups(ctx);
+  return () =>
+    readSiteFieldGroups({
+      page: async (offset, limit) =>
+        (await nextly()).fieldGroups.find({ limit, offset }),
+      inCode,
+      warn: (message, meta) => ctx.logger.warn(message, meta),
+    });
+}
+
+/**
+ * The field groups the site declares in code, by slug, as its config states
+ * them.
+ */
+function declaredFieldGroups(ctx: {
+  config?: { fieldGroups?: unknown };
+}): (slug: string) => { readonly fields?: unknown } | undefined {
+  const groups = ctx.config?.fieldGroups;
+  const bySlug = new Map<string, { readonly fields?: unknown }>();
+  if (Array.isArray(groups)) {
+    for (const group of groups) {
+      const slug = (group as { slug?: unknown } | null)?.slug;
+      if (typeof slug === "string") {
+        bySlug.set(slug, group as { readonly fields?: unknown });
+      }
+    }
+  }
+  return slug => bySlug.get(slug);
+}
+
+/**
  * The live Singles on one registry page whose declaration holds a blocks
  * field; `undefined` when a live row carries no readable slug, since a Single
  * that cannot be named cannot be read.
@@ -1291,6 +1376,28 @@ function singlesDeclaringBlocksIn(
   return found;
 }
 
+/** The named queries each page builder this process made registers. */
+const sitesQueries = new WeakMap<PluginDefinition, NamedQueryLookup>();
+
+/**
+ * The named queries the page builder `plugin` registers for its site, run
+ * functions included: what a route rendering that site's pages takes as its
+ * `namedQueries`. Bound to that one page builder, so two sites served from
+ * one process never resolve each other's queries. Nothing for a plugin that
+ * is not a page builder.
+ *
+ * ```ts
+ * export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
+ * // app/[...slug]/page.tsx
+ * createBlocksPage({ ..., namedQueries: namedQueriesOf(builder) });
+ * ```
+ *
+ * @experimental
+ */
+export function namedQueriesOf(plugin: PluginDefinition): NamedQueryLookup {
+  return sitesQueries.get(plugin) ?? { definitionOf: () => undefined };
+}
+
 export const pageBuilder = (
   opts: PageBuilderOptions = {}
 ): PluginDefinition => {
@@ -1309,6 +1416,19 @@ export const pageBuilder = (
    * and every pass resolves the API itself.
    */
   let installed: BackfillHost | null = null;
+  // This page builder's named queries: the site's own from the start, so a
+  // route built before boot already knows them, and rebuilt with the ones
+  // plugins declare on each boot. Its own, so two sites in one process never
+  // resolve each other's.
+  let namedQueries: NamedQueryRegistry = createNamedQueryRegistry();
+  namedQueries.register(opts.namedQueries ?? [], {
+    source: "pageBuilder({ namedQueries })",
+  });
+  const namedQuerySource: NamedQuerySource = {
+    declarationOf: name => namedQueries.declarationOf(name),
+  };
+  const namedQueryDeclarations = () =>
+    namedQueries.all().map(namedQueryDeclaration);
 
   /**
    * What the default-Layout repair needs from the installed plugin: the
@@ -1450,6 +1570,28 @@ export const pageBuilder = (
       );
     }
     return rewriteInstall;
+  };
+  // What Delete component's sweep reads and moves, resolved per pass.
+  const componentDeleteSweepDeps = () => {
+    const installed = requireRewriteInstall();
+    const runs = fenceStore(installed.db, installed.dialect);
+    return {
+      deleting: () => runs.runsAt("deleting"),
+      store: () => runs,
+      exists: async (componentId: string) => {
+        const nextly = await installed.site.nextly();
+        const found = await nextly.find({
+          collection: installed.store.collection,
+          where: { id: { equals: componentId } },
+          status: "all",
+          limit: 1,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return found.items.length > 0;
+      },
+      now: () => new Date(),
+    };
   };
 
   /**
@@ -1697,7 +1839,7 @@ export const pageBuilder = (
         removalLogger?.error(message, meta),
     },
   };
-  return definePlugin({
+  const plugin = definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
@@ -1751,6 +1893,9 @@ export const pageBuilder = (
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // The site's named queries and the ones plugins declare, into a
+      // registry emptied for this boot.
+      namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
       refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
@@ -1879,6 +2024,8 @@ export const pageBuilder = (
         // collection's declared fields from its record, and the ones the
         // public may read as a published page's bindings are judged. Read per
         // write, so a field hidden a moment ago is refused at the next save.
+        // This site's named queries, for a list whose source is one.
+        namedQueries: namedQuerySource,
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -2054,21 +2201,10 @@ export const pageBuilder = (
           ? {}
           : { pathTemplate: opts.pagePreviewPath }),
         backfillDone: () => pageClaimsBackfilled,
-        pagesUnder: async prefix => {
+        publishedPages: async function* () {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          const found = await nextly.find({
-            collection: pagesSlug,
-            where: {
-              status: { equals: "published" },
-              slug: { contains: prefix },
-            },
-            sort: "createdAt",
-            limit: 500,
-            overrideAccess: true,
-            depth: 0,
-          });
-          return found.items as readonly Readonly<Record<string, unknown>>[];
+          yield* publishedPages(nextly, pagesSlug);
         },
       });
       pageClaimsBackfill = async () => {
@@ -2085,10 +2221,11 @@ export const pageBuilder = (
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
         });
-        // Only a pass that settled every page: after one that warned, saves
-        // keep claiming the existing pages they would fall on themselves,
-        // until a later start completes it.
-        pageClaimsBackfilled = complete;
+        // Only a pass that settled every page ends the saves' part in it: a
+        // page it failed to read or claim is still unclaimed, so saves keep
+        // claiming the pages in a list's way until a later boot's pass
+        // finishes.
+        if (complete) pageClaimsBackfilled = true;
         return complete;
       };
       // Each collection's entries hold `<its address>/<slug>` while it and
@@ -2333,15 +2470,31 @@ export const pageBuilder = (
           walkAgain: () => Promise.resolve(),
         };
       }
-      // A write that keeps a reference to a component being deleted, committed
-      // after the deletion converted that document, sends the document back to
-      // be converted again from what was saved.
-      registerFencedWriteReport({
+      // Every write holding a component being deleted is judged again last
+      // inside its own transaction: before the delete, it sends its document
+      // back to be converted again from what was saved; once the delete is
+      // under way, it is refused as made from a stale copy.
+      registerInTransactionFence({
         ctx,
-        fence: () => fenceStore(ctx.db, ctx.dialect),
-        progress: () => progressStore(ctx.db, ctx.dialect),
         limits: () => opts.limits ?? DEFAULT_LIMITS,
+        // A component being deleted may not itself change meanwhile.
+        components: composition.store.collection,
       });
+      // A component's own delete only through Delete component, and no
+      // unpublish of one documents place. Registered after the Layout guard,
+      // so a component a Layout uses is refused naming the Layout first.
+      {
+        const placing = composition.hostsOf;
+        registerComponentGuards({
+          ctx,
+          components: composition.store.collection,
+          runs: () => fenceStore(ctx.db, ctx.dialect),
+          hostsOf: () => placing,
+          confirmUnused: storedUseCheck(() =>
+            componentDeleteRewriteService(requireRewriteInstall)
+          ),
+        });
+      }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
       // The breakpoints the write path judges a save against: one read of
       // the site's style, the same answer the blocks field gets. A removal's
@@ -2444,6 +2597,11 @@ export const pageBuilder = (
             kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
             metadataKeys: [...BREAKPOINT_REMOVAL_UNDONE_METADATA],
           },
+          // One per site code save: hashes, sizes and counts, never the code.
+          {
+            kind: SITE_CODE_SAVED_AUDIT,
+            metadataKeys: [...SITE_CODE_SAVED_METADATA],
+          },
         ],
       },
       // The channel another plugin adds blocks through. Core carries no
@@ -2489,6 +2647,7 @@ export const pageBuilder = (
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
             templates: { guard: requireTemplateGuard },
+            namedQueries: namedQueryDeclarations,
           }),
         // Who holds a path, for the site's one content route: a page, or a
         // collection's entry under its template address. Read as committed,
@@ -2532,6 +2691,9 @@ export const pageBuilder = (
         // The breakpoint removal a write opened again, which nobody is
         // waiting on: carried on each pass until it is done.
         breakpointRemovalJob(removalService),
+        // Delete component's sweep: a delete that stopped after its write
+        // becomes its tombstone. Never a host write or a delete.
+        componentDeleteJob(componentDeleteSweepDeps),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -2610,6 +2772,9 @@ export const pageBuilder = (
         // not any Layout exists yet, because the repair writes it on a site
         // that has none, and the make-default route writes it on every other.
         pageBuilderSettingsSingle(),
+        // The code every published page carries, written only by the site
+        // code route, which judges it first.
+        siteCodeSingle(),
       ],
       // One field type, where there were two. The other named the previous
       // editor's document — a shape this package defined itself, stored under a
@@ -2756,6 +2921,7 @@ export const pageBuilder = (
         manifestRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          namedQueries: namedQueryDeclarations,
         }),
         // Detach, duplicate and update a pattern, each with a dry run.
         ...componentActionRoutes({
@@ -2775,9 +2941,14 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
+        // The site's named queries, without their run functions: what the
+        // editor offers as a list's custom sources.
+        namedQueriesRoute(namedQueryDeclarations),
         // A collection list's entries on the canvas, read as the author asking
-        // reads them, drafts included, for a collection they may read.
-        listEntriesRoute(),
+        // reads them, drafts included, for a collection they may read. A
+        // list whose source is a named query runs it here, on the server,
+        // where its run function lives.
+        listEntriesRoute(name => namedQueries.definitionOf(name)),
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),
@@ -2799,6 +2970,19 @@ export const pageBuilder = (
         // under it. The Layout's own delete and unpublish refuse every write
         // that does not come through here.
         removeLayoutRoute(),
+        // Delete component: the dry run, each step of the delete as the
+        // person who started it, and its progress. A component's own delete
+        // refuses every write that does not come through here.
+        ...componentDeleteRoutes({
+          store: componentStoreOf(opts),
+          install: () => {
+            const installed = requireRewriteInstall();
+            return {
+              rewrite: componentDeleteRewriteService(requireRewriteInstall),
+              runs: fenceStore(installed.db, installed.dialect),
+            };
+          },
+        }),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the
@@ -2824,6 +3008,20 @@ export const pageBuilder = (
         siteBreakpointUndoRoute(breakpointRemoval),
         // Where one removal stands, read by its id.
         siteBreakpointRemovalStatusRoute(breakpointRemoval),
+        // The site's code, read, checked and saved under the site settings
+        // permission; saved by a signed-in person only.
+        ...siteCodeRoutes({
+          nextly: async () => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            return {
+              findSingle: args => nextly.findSingle(args),
+              updateSingle: args => nextly.updateSingle(args),
+            };
+          },
+          options: opts.siteCode,
+          permission: MANAGE_SITE_PERMISSION,
+        }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.
@@ -2996,4 +3194,11 @@ export const pageBuilder = (
       },
     },
   });
+  // The route a site renders its pages with reads this page builder's own
+  // queries through `namedQueriesOf`: bound to this definition, never to a
+  // registry another site's boot can replace.
+  sitesQueries.set(plugin, {
+    definitionOf: name => namedQueries.definitionOf(name),
+  });
+  return plugin;
 };

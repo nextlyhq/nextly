@@ -638,6 +638,7 @@ export {
   carryDocumentDeviceVisibility,
   deviceVisibility,
   hiddenOnDevice,
+  revealConditioned,
   revealDeviceHidden,
   setDeviceVisibility,
 } from "./device-visibility";
@@ -1351,12 +1352,40 @@ export {
   listKindSortable,
   listPageCount,
   listQueryIssues,
+  namesListSource,
   listRelationTarget,
   listSortText,
+  namedQueryHiddenReads,
   outerListOf,
   paginatedList,
   readListQuery,
 } from "./list-query";
+// The day an instant falls on in a zone, `YYYY-MM-DD`: a page's "today", as
+// a published page and the editor's canvas each read it for a named query.
+export { calendarDayIn } from "./calendar-day";
+// Named queries: a collection list's custom source, declared by a developer
+// in code. The declaration's types and checks, the process registry the page
+// builder fills at boot, and every message about one, shared by the
+// validator, the renderer, the editor and the plugin SDK.
+export {
+  createNamedQueryRegistry,
+  defineNamedQuery,
+  isNamedQueryName,
+  isNamedQueryParamKey,
+  judgeNamedParams,
+  NAMED_QUERY_DEFAULT_TIMEOUT_MS,
+  NAMED_QUERY_MAX_PARAMS,
+  NAMED_QUERY_MAX_TIMEOUT_MS,
+  NAMED_QUERY_TEXT,
+  NAMED_QUERY_TEXT_MAX,
+  namedQueryDeclaration,
+  namedQueryNeedsInput,
+  namedQueryParamNeedsInput,
+  namedQueryProblem,
+  namedQueryRowFields,
+  namedQueryTimeout,
+  param,
+} from "./named-query";
 
 // A block's visibility conditions: the operator vocabulary and its render
 // classes, the evaluator the renderer asks, and their save-time judgement.
@@ -1394,6 +1423,36 @@ export type {
   ConditionSubject,
 } from "./visibility-conditions";
 export type {
+  BooleanParam,
+  ChoiceParam,
+  DayParam,
+  EntryParam,
+  NamedParamJudgement,
+  NamedParamProblem,
+  NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
+  NamedQueryKnown,
+  NamedQueryNeed,
+  NamedQueryParam,
+  NamedQueryParams,
+  NamedQueryParamType,
+  NamedQueryParamValue,
+  NamedQueryParamValues,
+  NamedQueryReader,
+  NamedQueryRegistry,
+  NamedQueryResult,
+  NamedQueryRows,
+  NamedQueryRunArgs,
+  NamedQuerySource,
+  NamedReadFilter,
+  NamedReadQuery,
+  NumberParam,
+  TextParam,
+} from "./named-query";
+export type {
+  ListNamedQuery,
+  NamedQueryHiddenRead,
   ListFieldCode,
   ListFieldKind,
   ListFields,

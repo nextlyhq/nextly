@@ -703,7 +703,12 @@ export function PageRenderer({
   const bindingRun =
     bindings === undefined
       ? undefined
-      : pageBindingRun(bindings, pageContext.locale, resolver);
+      : pageBindingRun(
+          bindings,
+          pageContext.locale,
+          resolver,
+          pageContext.namedQueries
+        );
   const stages = readStagesFor(
     document,
     {

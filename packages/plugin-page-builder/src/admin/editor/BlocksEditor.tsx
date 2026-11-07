@@ -23,6 +23,7 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
+  useConditionsUnchecked,
   CanvasFrame,
   CanvasFrameProvider,
   CanvasMarks,
@@ -52,7 +53,13 @@ import {
   useDocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useEffect, useState, type ComponentProps, type JSX } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type JSX,
+} from "react";
 import {
   useFormState,
   useWatch,
@@ -70,6 +77,7 @@ import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import { canvasListReadsIn } from "../list-entries-client";
 import { listLoopCollections } from "../loop-collections-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
@@ -154,6 +162,8 @@ type EditorView = EditorMount &
     layerVerbs: CardVerbs;
     /** What the canvas draws: the document, with selected hidden blocks shown. */
     reveal: Reveal;
+    /** The conditioned blocks the page can't check, which the canvas badges red. */
+    conditionsUnchecked: ReadonlySet<string>;
     /** A stored media id's name, picture and alt text, for the image fields. */
     readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
@@ -361,6 +371,33 @@ type ContentServices = NonNullable<
 
 let contentServices: ContentServices | undefined;
 
+/** Each person's read of the loop collections, one function per language. */
+const loopCollectionReads = new Map<
+  string,
+  NonNullable<ContentServices["listLoopCollections"]>
+>();
+
+/**
+ * The read of the collections a list or condition may name, in a language:
+ * the same function for every caller, so the inspector and the canvas's
+ * condition badges share one read and one answer (`useLoopCollections`
+ * shares a read by the function's identity).
+ */
+function loopCollectionsIn(
+  locale: string | undefined,
+  userId: string | null
+): NonNullable<ContentServices["listLoopCollections"]> {
+  // Per person too: the answer is read with their access, and a read still in
+  // flight when one person signs out must never be handed to the next.
+  const key = JSON.stringify([locale ?? "", userId]);
+  let read = loopCollectionReads.get(key);
+  if (read === undefined) {
+    read = () => listLoopCollections(locale);
+    loopCollectionReads.set(key, read);
+  }
+  return read;
+}
+
 /**
  * What the inspector's Content tab borrows from the admin: the media library,
  * to choose an image, the shared rich-text editor, and the page builder's
@@ -424,10 +461,17 @@ function servicesFor(
       // as the author reads it.
       findLinkTargets: findLinkTargetsIn(locale),
       // The fields a list may name, as a save in this language judges them.
-      listLoopCollections: () => listLoopCollections(locale),
+      listLoopCollections: loopCollectionsIn(locale, userId),
+      // The site's named queries, a list's custom sources, as judged in
+      // this language: one read the canvas shares.
+      listCustomSources: canvasNamedQueriesIn(locale, userId).sources,
       // The selected list's "N entries match, so M show", taken from the
-      // canvas's own read of the list in this language.
-      countListEntries: canvasListReadsIn(locale, userId).count,
+      // canvas's own read of the list in this language, or its named
+      // query's run where that is its source.
+      countListEntries: props =>
+        props.namedQuery === undefined || props.namedQuery === null
+          ? canvasListReadsIn(locale, userId).count(props)
+          : canvasNamedQueriesIn(locale, userId).count(props),
       ...(entryCollection === undefined ? {} : { entryCollection }),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),
@@ -810,6 +854,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The regions of the page's Layout, drawn locked around it from
               // the published Layout, as a visitor gets them.
               regions={view.canvasRegions}
+              // The conditioned blocks visitors never see, because the page
+              // can't check their conditions: badged in red on the canvas.
+              conditionsUnchecked={view.conditionsUnchecked}
               // The same object those handlers came from, forwarded whole.
               // The canvas draws what the pointer currently means — which
               // block is in flight, which container is receiving it — and
@@ -1124,6 +1171,26 @@ function EditorBody<TFieldValues extends FieldValues>({
   // reads it.
   const readMedia = useMediaSummaryReader();
   const identity = useDocumentIdentity();
+  const entryCollection = listEntryCollectionOf(
+    identity,
+    mount.initialDocument
+  );
+  // The conditioned blocks the page can't check, badged in red on the canvas,
+  // judged with the collections the inspector lists, in this language.
+  const conditionServices = useMemo(
+    () => ({
+      // The inspector's own function, so both share one read of the list.
+      listLoopCollections: loopCollectionsIn(mount.locale, mount.userId),
+      ...(entryCollection === undefined ? {} : { entryCollection }),
+    }),
+    [mount.locale, mount.userId, entryCollection]
+  );
+  const conditionsUnchecked = useConditionsUnchecked(
+    componentView.preview.document,
+    conditionServices,
+    // The limit the canvas draws and the save surveys under.
+    canvas.canvasRender.limits?.maxNodes
+  );
   const view: EditorView = {
     ...mount,
     ...style,
@@ -1140,7 +1207,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     preview: componentView.preview,
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.
-    entryCollection: listEntryCollectionOf(identity, mount.initialDocument),
+    entryCollection,
+    conditionsUnchecked,
   };
   useOpenAtSection({
     sectionId: openAt,

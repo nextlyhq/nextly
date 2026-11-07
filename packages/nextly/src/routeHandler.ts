@@ -180,11 +180,11 @@ import {
   type ContributionAudience,
 } from "./plugins/admin-contributions-offer";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
-import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import {
   contributionAudienceFor,
   NOBODY,
 } from "./plugins/contribution-audience";
+import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,

@@ -228,6 +228,19 @@ export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 export { isLocaleSelector } from "nextly";
 
 /**
+ * Where an entry is served, and what names it, as the core answers both.
+ * @experimental `previewUrlFromTemplate` fills a path template such as
+ *   `/blog/{slug}` from an entry, the way the admin's preview and page search
+ *   do, so a plugin holding or linking an entry's address names the one the
+ *   host serves rather than a second spelling of it. `readableTitleText`
+ *   answers whether a title field's value can name an entry, and as what
+ *   text, the way the admin and the activity feed read it. Intended to be
+ *   stable; `plugin-page-builder`'s address claims exercise both, and they
+ *   graduate per D55 once that ships in a release.
+ */
+export { previewUrlFromTemplate, readableTitleText } from "nextly/config";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
@@ -710,6 +723,25 @@ export type {
   PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";
+
+/**
+ * @experimental Whether a person may delete one entry, asked of the delete's
+ *   own gate without deleting it. Graduates with the stored reads above.
+ *
+ * `ctx.caller.can(action, resource, { anyEntry: true })` answers yes for a
+ *   rule that lets a person delete only some entries, so a plugin that does
+ *   work before a delete cannot rely on it. `mayDeleteEntry` runs the very
+ *   gate the collection delete runs before its hooks: the person's grant, and
+ *   a rule's row filter matched against this entry, in every language it
+ *   holds. No hook runs, nothing is written, and an entry that does not exist
+ *   answers `false`, as one the person may not delete. `mayWriteEntry` asks
+ *   the same of a write: the update gate, the lifecycle gate only where the
+ *   status the write names moves the document into or out of published (as
+ *   core's update decides it), and each named field's update rule, for an
+ *   entry or a Single.
+ */
+export { mayDeleteEntry, mayWriteEntry } from "nextly";
+export type { PluginDeleteCheck, PluginWriteCheck } from "nextly";
 
 /**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.

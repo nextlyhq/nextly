@@ -18,7 +18,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -33,6 +33,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { pageBuilder } from "../plugin";
+import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
@@ -57,6 +58,24 @@ function messageOf(error: unknown): string {
  * Another plugin whose own `beforeUpdate` hook retires a component renamed
  * "Retired": an ordinary save that a hook, not the caller, makes an unpublish.
  */
+/** The plugin's own backfill job, as it contributes it. */
+function backfillTick(plugin: PluginDefinition): () => Promise<unknown> {
+  const job = plugin.contributes?.jobs?.find(
+    entry => entry.slug === USAGE_BACKFILL_JOB
+  );
+  if (job === undefined) throw new Error("the page builder has no backfill");
+  return async () =>
+    job.handler(
+      null as never,
+      {
+        user: null,
+        now: new Date(),
+        deadline: new Date(Date.now() + 60_000),
+        content: {},
+      } as never
+    );
+}
+
 const retiring = definePlugin({
   name: "@test/retiring",
   version: "1.0.0",
@@ -87,9 +106,10 @@ describe.each(getConfiguredTestDialects())(
     async function site(
       others: NonNullable<CreateTestNextlyOptions["plugins"]> = []
     ) {
+      const plugin = pageBuilder();
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder(), ...others],
+        plugins: [plugin, ...others],
       });
       const t = current;
       const component = async (slug: string) =>
@@ -118,6 +138,9 @@ describe.each(getConfiguredTestDialects())(
         );
       const used = await component("site-header");
       const spare = await component("spare-header");
+      // The usage index walked whole, so an unpublish of a component no
+      // document places is let through rather than refused as unconfirmed.
+      await backfillTick(plugin)();
       await t.nextly.create({
         collection: LAYOUTS_SLUG,
         data: {
@@ -252,7 +275,12 @@ describe.each(getConfiguredTestDialects())(
 
       await expect(s.unpublish(s.spare)).resolves.toBeDefined();
       expect(await s.statusOf(s.spare)).toBe("draft");
-      await expect(s.remove(s.spare)).resolves.toBeDefined();
+      // A component's own delete goes only through Delete component, so the
+      // delete is refused all the same, but by that rule: this guard let it
+      // through.
+      const refused = await refusalOf(s.remove(s.spare));
+      expect(messageOf(refused)).toContain("Delete component");
+      expect(messageOf(refused)).not.toContain("Layout");
     });
   }
 );

@@ -9,8 +9,8 @@
  * @module address-claims/page-claims
  */
 import { paginatedList } from "@nextlyhq/blocks-engine";
+import { previewUrlFromTemplate } from "@nextlyhq/plugin-sdk";
 import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
-import { previewUrlFromTemplate } from "nextly/config";
 
 import { asDocument } from "../component-store-source";
 

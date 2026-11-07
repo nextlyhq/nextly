@@ -55,6 +55,7 @@ import {
 import { propLabel, type EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
 import { loadLucideIcons } from "./lucide-icon-source";
+import type { CustomSource } from "./named-query-model";
 import type { OpenPassages } from "./open-passages";
 import { useRecentIcons } from "./recent-icons";
 import { RelationControl } from "./relation-control";
@@ -232,6 +233,13 @@ export interface ContentServices {
    * typed as text.
    */
   readonly listLoopCollections?: () => Promise<readonly LoopCollection[]>;
+  /**
+   * The custom sources a collection list may show: the named queries the
+   * site registers, each without its run function, with the collections it
+   * reads that visitors can read nothing of. Absent, the Source menu offers
+   * collections and related entries only.
+   */
+  readonly listCustomSources?: () => Promise<readonly CustomSource[]>;
   /**
    * How many entries a list's stored query matches as the canvas reads them,
    * and how many of those its window shows, from one count read. Asked only

@@ -26,7 +26,7 @@
  * package registers them. The editor is `@nextlyhq/builder`; blocks render
  * through `@nextlyhq/blocks-react`.
  */
-export { pageBuilder } from "./plugin";
+export { namedQueriesOf, pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
 export type {
   FontAddLimits,
@@ -332,3 +332,16 @@ export type {
   SiteCodeLoad,
   SiteCodeResourceKind,
 } from "./site-code/csp";
+// Where site code is kept and changed, `@experimental`: the route Settings
+// reads and saves it through, and how a site declares its policy.
+export { SITE_CODE_SLUG } from "./site-code/storage";
+export type { PageBuilderSiteCodeOptions } from "./site-code/route";
+export { SITE_CODE_ROUTE_PATH } from "./library-contract";
+export type {
+  SiteCodeChecked,
+  SiteCodePolicyChecked,
+  SiteCodeRead,
+  SiteCodeRequest,
+  SiteCodeSaved,
+  SiteCodeSlotJudged,
+} from "./library-contract";
