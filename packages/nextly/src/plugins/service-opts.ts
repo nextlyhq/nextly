@@ -40,7 +40,11 @@ import type { AuthUser } from "../types/auth";
 import { assertRunnableAsPrincipal } from "./principals/run-as";
 import type { Principal } from "./principals/types";
 import { methodFacade } from "./service-facade";
-import { type TransactionScope, transactionScope } from "./transaction-scope";
+import {
+  type PluginTransactionMethod,
+  type TransactionScope,
+  transactionScope,
+} from "./transaction-scope";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.
@@ -596,6 +600,23 @@ export type PluginCollectionService = Pick<
   withTransaction<T>(
     work: (tx: PluginCollectionTransaction) => Promise<T>
   ): Promise<T>;
+  /**
+   * @experimental Hold a collection for the rest of the transaction `tx`
+   * stands for, and answer whether it exists: its registry row, locked for
+   * share. A delete of the collection locks the row for update before it
+   * removes anything, so a write that must not outlive the collection it
+   * names either commits before the delete's collection-delete handlers
+   * (`ctx.hooks.onCollectionDelete`) read what to remove with it, or waits
+   * for the delete and is told the collection is gone. Asks nothing of the
+   * caller's access, and reads nothing but whether the row is there. On
+   * MySQL, where a table drop commits a transaction's row locks, both sides
+   * also take the collection's named lock, which the delete holds until it
+   * has removed the row. A settled token is refused.
+   */
+  holdCollectionInTransaction(
+    tx: PluginCollectionTransaction,
+    collectionName: string
+  ): Promise<boolean>;
 };
 
 /**
@@ -627,13 +648,16 @@ const writeTransactionKeys = new WeakMap<object, object>();
  * Run `work` with a token for the write transaction `tx`, as the collection
  * service's in-transaction methods take it, open while `work` runs and
  * refusing once it has settled, as every token a plugin holds does; and with
- * the key that transaction's every handler call shares.
+ * the key that transaction's every handler call shares. `method` is what a
+ * refusal of the settled token names as the callback the work belongs in.
  *
- * @internal The in-transaction phase's, for `InTransactionContext`.
+ * @internal The in-transaction phase's, for `InTransactionContext`, and a
+ * collection delete's, for `ctx.hooks.onCollectionDelete`.
  */
 export function withWriteTransactionToken<R>(
   tx: TransactionContext,
-  work: (token: PluginCollectionTransaction, key: object) => Promise<R>
+  work: (token: PluginCollectionTransaction, key: object) => Promise<R>,
+  method: PluginTransactionMethod = "ctx.hooks.onInTransaction"
 ): Promise<R> {
   const adapterTx = tx as unknown as object;
   let key = writeTransactionKeys.get(adapterTx);
@@ -642,7 +666,7 @@ export function withWriteTransactionToken<R>(
     writeTransactionKeys.set(adapterTx, key);
   }
   const token = Object.freeze({}) as PluginCollectionTransaction;
-  const scope = transactionScope("ctx.hooks.onInTransaction");
+  const scope = transactionScope(method);
   pluginTransactions.set(token, { tx, scope });
   const shared = key;
   return scope.run(() => work(token, shared));
@@ -732,6 +756,19 @@ export function wrapCollectionsForPlugin(
     createEntryInTransaction: inTransaction("createEntryInTransaction"),
     updateEntryInTransaction: inTransaction("updateEntryInTransaction"),
     deleteEntryInTransaction: inTransaction("deleteEntryInTransaction"),
+    // Checked and tracked as the writes are, with no `ServiceOpts`: it reads
+    // only whether the collection's registry row is there.
+    holdCollectionInTransaction: async (
+      token: unknown,
+      collectionName: string
+    ): Promise<boolean> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        collections.holdCollectionInTransaction(tx, collectionName),
+        "read"
+      );
+    },
   }) as unknown as PluginCollectionService;
 }
 

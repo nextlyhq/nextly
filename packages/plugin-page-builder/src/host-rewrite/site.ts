@@ -336,6 +336,33 @@ async function hintedDocuments(
   return found;
 }
 
+/**
+ * One document's hosts, as the walk would list them: each blocks field in
+ * each language it stores. Empty for a document holding no blocks field, and
+ * for a Single the site does not list as holding one.
+ */
+export async function documentHosts(
+  site: DocumentSite,
+  at: Pick<HostAddress, "kind" | "slug" | "id">
+): Promise<HostCandidate[]> {
+  // The field groups a declaration places, as the walk reads them, so a
+  // blocks field inside one is found here too.
+  const fieldGroups = await site.fieldGroups?.();
+  if (at.kind === "collection") {
+    return hostsOf(
+      at,
+      await site.resolveCollection(at.slug),
+      site.locales(),
+      fieldGroups
+    );
+  }
+  const singles = await site.singles();
+  const single = singles?.find(entry => entry.slug === at.slug);
+  return single === undefined
+    ? []
+    : hostsOf(at, single, site.locales(), fieldGroups);
+}
+
 /** Where a document sits in the walk. */
 function cursorOfDocument(document: HostDocument): Cursor {
   const host = document.hosts[0]?.host;

@@ -109,6 +109,7 @@ import {
   SITE_STYLE_SLUG,
   VARIABLE_REMOVE_WRITE_CONTEXT,
   sharedStylesOverCode,
+  storedVariableIdentity,
   storedVariables,
   suppliedVariableIds,
   type NamedVariable,
@@ -422,16 +423,10 @@ function withoutVariables(
   return {
     ...section,
     tokens: entries.filter(entry => {
-      const id = identityOfEntry(entry);
+      const id = storedVariableIdentity(entry);
       return id === undefined || !gone.has(id);
     }),
   };
-}
-
-/** A stored entry's identity, read by the Single's own token rules. */
-function identityOfEntry(entry: unknown): string | undefined {
-  const [only] = storedVariables({ tokens: [entry] }).keys();
-  return only;
 }
 
 /**

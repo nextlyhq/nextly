@@ -36,6 +36,8 @@ import { AlertCircle, FileText, Plus, Repeat } from "lucide-react";
 import * as React from "react";
 
 import { LoopPicker, useLoopCollections } from "./collection-loop-controls";
+import { storedGroups } from "./condition-checks";
+import { gatedAsStored } from "./condition-gate";
 import {
   asListField,
   booleanValueOf,
@@ -50,7 +52,6 @@ import {
   type ConditionField,
   type DraftCondition,
 } from "./condition-model";
-import { storedGroups } from "./condition-checks";
 import { conditionsOp } from "./condition-ops";
 import type {
   ContentServices,
@@ -691,16 +692,20 @@ function OneGroup({
  */
 function UnreadableConditions({
   disabled,
+  shown,
   onRemove,
 }: {
   disabled: boolean;
+  /** Whether the page shows the block anyway, as it does for `null`. */
+  shown: boolean;
   onRemove: () => void;
 }): React.JSX.Element {
   return (
     <>
       <p className="nx-inspector__note nx-list-query__hint">
-        These conditions aren’t stored as groups of conditions, so they can’t be
-        shown here. Remove them to set new ones.
+        {shown
+          ? "Visitors see this block, but its conditions are stored in a shape the page can’t save. Remove them to save the page, or to set new ones."
+          : "These conditions aren’t stored as groups of conditions, so they can’t be shown here. Remove them to set new ones."}
       </p>
       <Button
         type="button"
@@ -720,15 +725,19 @@ function UnreadableConditions({
 function GroupBody({
   groups,
   stored,
+  gated,
   ...one
 }: OneGroupProps & {
   groups: readonly (readonly Condition[])[] | undefined;
   stored: readonly Condition[];
+  /** Whether the page judges the block by its conditions at all. */
+  gated: boolean;
 }): React.JSX.Element {
   if (groups === undefined) {
     return (
       <UnreadableConditions
         disabled={one.disabled}
+        shown={!gated}
         onRemove={() => one.writes.write([])}
       />
     );
@@ -836,6 +845,7 @@ export function ShowWhen({
   if (source === undefined) return null;
 
   const disabled = heldBy !== undefined;
+  const gated = node !== undefined && gatedAsStored(node);
   const problems = problemsOf(
     editor,
     nodeId,
@@ -863,11 +873,17 @@ export function ShowWhen({
           {source.words}
         </span>
       </div>
-      <ShowWhenNotice problems={problems} unreadable={groups === undefined} />
+      {/* Red only where the page leaves the block out: a shape it reads as
+          no restriction, such as `null`, is shown to everyone. */}
+      <ShowWhenNotice
+        problems={problems}
+        unreadable={groups === undefined && gated}
+      />
       <FieldsUnavailable listing={listing} />
       <GroupBody
         groups={groups}
         stored={stored}
+        gated={gated}
         id={id}
         state={state}
         writes={writes}

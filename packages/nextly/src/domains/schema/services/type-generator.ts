@@ -40,6 +40,7 @@ import {
   isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 import { NextlyError } from "../../../errors";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
@@ -1205,9 +1206,15 @@ export class TypeGenerator {
       allCollections,
       allComponents
     );
+    // Each row is saved with an id, which a write keeps when it is sent
+    // back; optional, as a create may leave it out. Rows that declare an
+    // `id` field of their own hold the author's value there instead.
+    const rowId = declaresOwnId(arrayField.fields)
+      ? ""
+      : "    /** The row's saved id; send it back to keep the row's identity. */\n    id?: string;\n";
 
     return `Array<{
-${properties}
+${rowId}${properties}
   }>`;
   }
 

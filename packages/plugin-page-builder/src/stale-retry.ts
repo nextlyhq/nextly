@@ -16,12 +16,11 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import { isGraphSnapshotRefusal } from "./composition-graph-lock";
 import { inCauses } from "./judged-writes";
+import { attemptUntilFresh, STALE_WRITE_ATTEMPTS } from "./stale-attempts";
 
-/**
- * How many times, in all, a write made from a read is tried before its
- * refusal as stale is the answer.
- */
-export const STALE_WRITE_ATTEMPTS = 3;
+// The bound lives with the loop, which the editor runs too; named here as
+// well for the routes that state it.
+export { STALE_WRITE_ATTEMPTS };
 
 /** Whether a write was refused because the document changed since it was read. */
 export function isStaleVersion(error: unknown): boolean {
@@ -51,13 +50,10 @@ export async function retryOnStale<TRead, TResult>(
   attempt: (read: TRead) => Promise<TResult>,
   first?: { readonly read: TRead }
 ): Promise<TResult> {
-  let current = first === undefined ? await read() : first.read;
-  for (let tried = 1; ; tried += 1) {
-    try {
-      return await attempt(current);
-    } catch (error) {
-      if (!isWrittenAgain(error) || tried >= STALE_WRITE_ATTEMPTS) throw error;
-      current = await read();
-    }
-  }
+  // The one loop, with the server's recogniser of a refusal worth a fresh
+  // read: a replaced version, or a snapshot older than the graph lock.
+  return attemptUntilFresh(read, attempt, {
+    isStale: isWrittenAgain,
+    ...(first === undefined ? {} : { first }),
+  });
 }

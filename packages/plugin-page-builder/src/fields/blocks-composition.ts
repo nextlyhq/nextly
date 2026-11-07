@@ -95,6 +95,10 @@ import {
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import type { StoredForms } from "./added-undefined-ids";
+import {
+  composedBindingIssues,
+  type DeclaredShapesReader,
+} from "./binding-judgement";
 import { isForest } from "./blocks-document";
 import {
   LAYERS_LOCK_CHANGED,
@@ -264,6 +268,17 @@ export interface CompositionSetup {
    */
   readonly listFields?: ListFieldsReader;
   /**
+   * The fields a collection or a Single declares, whoever may read them, for
+   * judging a page's bindings at save. Absent where the schema cannot be
+   * read, and then bindings are judged by their shape alone.
+   */
+  readonly bindingShapes?: DeclaredShapesReader;
+  /**
+   * Told of binding problems a save kept because the stored value they may
+   * already be part of could not be read; absent, they are kept silently.
+   */
+  readonly onBindingsUnjudged?: (found: BindingsUnjudged) => void;
+  /**
    * This site's named queries, for a list whose source is one; absent, such
    * a list is judged by its shape alone.
    */
@@ -296,6 +311,14 @@ export interface PlacementUnjudged extends WrittenTo {
   readonly field: string;
   /** How many breaks were kept. */
   readonly breaks: number;
+}
+
+/** Binding problems a write kept unjudged, for the server log. */
+export interface BindingsUnjudged extends WrittenTo {
+  /** The blocks field written. */
+  readonly field: string;
+  /** How many problems were kept. */
+  readonly bindings: number;
 }
 
 /** A write whose Layers locks were not judged, for the server log. */
@@ -978,6 +1001,22 @@ async function judgeComposedLists(args: {
     )),
   ];
   for (const issue of found) args.report.add(issue.code, issue.message);
+  // And the bindings its placed components bring, against this page's entry.
+  const bindingShapes = args.setup.bindingShapes;
+  if (bindingShapes === undefined) return;
+  const bound = await composedBindingIssues(
+    args.composed,
+    args.document,
+    args.write,
+    {
+      shapesOf: bindingShapes,
+      storedForms: site.storedForms,
+      maxNodes: site.maxNodes,
+      onUnjudged: (bindings: number) =>
+        args.setup.onBindingsUnjudged?.({ ...args.unjudged, bindings }),
+    }
+  );
+  for (const issue of bound) args.report.add(issue.code, issue.message);
 }
 
 /**
