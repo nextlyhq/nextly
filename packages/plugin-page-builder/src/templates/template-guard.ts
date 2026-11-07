@@ -21,8 +21,18 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-import { TEMPLATE_COLLECTION_FIELD } from "../collections/templates";
+import {
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_COLLECTION_FIELD,
+  TEMPLATE_ENTRY_ID_FIELD,
+} from "../collections/templates";
 import { JUDGEMENT_CONTEXT } from "../judged-writes";
+
+import {
+  designShapeProblem,
+  designShapeRefusal,
+  isEntryDesign,
+} from "./entry-designs";
 
 /** The template drawing a collection, as a refusal names it. */
 export interface TemplateHolder {
@@ -184,6 +194,8 @@ export interface TemplateGuardSetup {
   readonly ownCollections: () => ReadonlySet<string>;
   readonly readCollection: CollectionRecordRead;
   readonly holderOf: TemplateHolderRead;
+  /** Whether `collection` holds an entry `id`, in any state, read as the system. */
+  readonly entryExists: (collection: string, id: string) => Promise<boolean>;
 }
 
 /** The parts of a `beforeChange` hook context the guard reads. */
@@ -237,9 +249,31 @@ export async function guardWrite(
   const data = recordOf(context.data);
   if (data === null) return;
   const collection = data[TEMPLATE_COLLECTION_FIELD];
+  const creating = context.operation === "create";
+  const original = creating ? null : recordOf(context.originalData);
 
-  if (context.operation !== "create") {
-    const original = recordOf(context.originalData);
+  // What the template serves, read from the write alone, before anything
+  // else: an own design names its entry and no collection, and no template
+  // changes what it serves.
+  const shape = designShapeProblem(creating ? null : (original ?? {}), data);
+  if (shape !== null) throw designShapeRefusal(shape);
+  if (isEntryDesign(creating ? data : { ...original, ...data })) {
+    if (creating) await judgeEntryDesign(setup, context, data);
+    return;
+  }
+  // A collection's template names its collection. The field itself is not
+  // required, since an own design leaves it empty, so it is required here.
+  if (
+    (creating ||
+      Object.prototype.hasOwnProperty.call(data, TEMPLATE_COLLECTION_FIELD)) &&
+    (typeof collection !== "string" || collection === "")
+  ) {
+    throw templateCollectionRefusal(
+      "A template names the collection whose entries it draws."
+    );
+  }
+
+  if (!creating) {
     const before = original?.[TEMPLATE_COLLECTION_FIELD];
     if (
       !Object.prototype.hasOwnProperty.call(data, TEMPLATE_COLLECTION_FIELD) ||
@@ -271,6 +305,39 @@ export async function guardWrite(
   }
 
   await judgeCollection(setup, context, collection, null);
+}
+
+/**
+ * Judge a new own design's entry: one in a collection that may have a
+ * template, and one that exists. Its uniqueness is the index's to hold.
+ */
+async function judgeEntryDesign(
+  setup: TemplateGuardSetup,
+  context: GuardContext,
+  data: Record<string, unknown>
+): Promise<void> {
+  const collection = data[TEMPLATE_ENTRY_COLLECTION_FIELD];
+  const id = data[TEMPLATE_ENTRY_ID_FIELD];
+  // Both are strings here: the shape check refused anything else.
+  if (typeof collection !== "string" || typeof id !== "string") return;
+  if (skipsReads(context)) return;
+  const problem = await templateCollectionProblem(
+    collection,
+    setup.readCollection,
+    setup.ownCollections()
+  );
+  if (problem !== null) {
+    throw designShapeRefusal({
+      path: TEMPLATE_ENTRY_COLLECTION_FIELD,
+      message: problem,
+    });
+  }
+  if (!(await setup.entryExists(collection, id))) {
+    throw designShapeRefusal({
+      path: TEMPLATE_ENTRY_ID_FIELD,
+      message: `The collection "${collection}" has no entry "${id}" to give its own design.`,
+    });
+  }
 }
 
 /**

@@ -32,6 +32,8 @@ function setup(
     ownCollections: () => new Set(["pages", "templates", "components"]),
     readCollection: async slug => (slug === "posts" ? POSTS : null),
     holderOf: async () => null,
+    entryExists: async (collection, id) =>
+      collection === "posts" && id === "p1",
     ...overrides,
   };
 }
@@ -260,5 +262,98 @@ describe("a saved template", () => {
       })
     );
     expect(NextlyError.isValidation(refused)).toBe(true);
+  });
+});
+
+describe("an entry's own design", () => {
+  const design = (extra: Record<string, unknown> = {}) => ({
+    title: "Hello world design",
+    entry: "posts/p1",
+    entryCollection: "posts",
+    entryId: "p1",
+    ...extra,
+  });
+
+  it("is let through for an entry that exists, without asking for a collection's template", async () => {
+    const holderOf = vi.fn(async () => ({ id: "t1", title: "Post page" }));
+    await guardWrite(setup({ holderOf }), {
+      operation: "create",
+      data: design(),
+    });
+    expect(holderOf).not.toHaveBeenCalled();
+  });
+
+  it("is refused when it also names a collection", async () => {
+    const refused = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "create",
+        data: design({ collection: "posts" }),
+      })
+    );
+    expect(messagesOf(refused)).toEqual([
+      "An entry's own design serves its entry, not a collection: leave its collection empty.",
+    ]);
+  });
+
+  it("is refused under a key its entry does not make", async () => {
+    const refused = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "create",
+        data: design({ entry: "posts/p2" }),
+      })
+    );
+    expect(messagesOf(refused)[0]).toContain('"posts/p1"');
+  });
+
+  it("is refused for an entry that does not exist", async () => {
+    const refused = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "create",
+        data: design({ entry: "posts/p9", entryId: "p9" }),
+      })
+    );
+    expect(messagesOf(refused)).toEqual([
+      'The collection "posts" has no entry "p9" to give its own design.',
+    ]);
+  });
+
+  it("keeps its entry, and a collection's template never becomes one", async () => {
+    const moved = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "update",
+        originalData: { id: "d1", ...design() },
+        data: { entryId: "p2" },
+      })
+    );
+    expect(moved.code).toBe("VALIDATION_ERROR");
+    const turned = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "update",
+        originalData: { id: "t1", title: "Post page", collection: "posts" },
+        data: { entry: "posts/p1" },
+      })
+    );
+    expect(turned.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("saves its design without its entry being judged again", async () => {
+    const entryExists = vi.fn(async () => false);
+    await guardWrite(setup({ entryExists }), {
+      operation: "update",
+      originalData: { id: "d1", ...design() },
+      data: { title: "Renamed" },
+    });
+    expect(entryExists).not.toHaveBeenCalled();
+  });
+});
+
+describe("a collection's template without its collection", () => {
+  it("is refused, since only an own design leaves it empty", async () => {
+    const refused = await refusalOf(() =>
+      guardWrite(setup(), { operation: "create", data: { title: "Post" } })
+    );
+    expect(messagesOf(refused)).toEqual([
+      "A template names the collection whose entries it draws.",
+    ]);
   });
 });
