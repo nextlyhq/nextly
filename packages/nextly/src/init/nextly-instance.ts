@@ -70,6 +70,7 @@ import type {
   FindSinglesArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
   FindRoleByIDArgs,
@@ -655,6 +656,12 @@ export interface Nextly {
     upload: (args: UploadMediaArgs) => Promise<MediaFile>;
     find: (args?: FindMediaArgs) => Promise<ListResult<MediaFile>>;
     findByID: (args: FindMediaByIDArgs) => Promise<MediaFile | null>;
+    /**
+     * Up to 100 files by id in one read, judged as `findByID` judges one.
+     *
+     * @experimental
+     */
+    findByIDs: (args: FindMediaByIDsArgs) => Promise<MediaFile[]>;
     update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
     delete: (args: DeleteMediaArgs) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;

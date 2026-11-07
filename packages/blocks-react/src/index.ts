@@ -493,7 +493,12 @@ export {
   type CountedRegion,
   type PageReadCountArgs,
 } from "./page-read-count";
-export type { BindingsAsk, EntrySource, PageWhere } from "./page-read-stages";
+export type {
+  BindingsAsk,
+  EntrySource,
+  PageWhere,
+  RouteMedia,
+} from "./page-read-stages";
 
 // How a page and the regions of its Layout share one site sheet and keep
 // their own styles apart: one answer for the published route and the editor's

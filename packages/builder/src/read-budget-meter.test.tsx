@@ -77,6 +77,10 @@ describe("a Layout region's unread block", () => {
     });
     expect(edit.getAttribute("href")).toBe("/admin/layouts/main");
     expect(screen.queryByText("A removed block")).toBeNull();
+    // The count's own default, said as the default limit is.
+    expect(
+      screen.getByText(/Images are counted as the media library reads them/)
+    ).toBeTruthy();
   });
 
   it("reads as a removed block where the editor is not told of the Layout", () => {
