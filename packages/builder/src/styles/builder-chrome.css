@@ -11524,6 +11524,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-success);
 }
 
+/* Kept in place of a field visitors can't read: amber, with its eye-off mark. */
+.nx-binding-note[data-tone="private"] > svg {
+  color: var(--nx-warning);
+}
+
+.nx-binding-note[data-tone="private"],
 .nx-binding-note[data-tone="refused"] {
   border-color: color-mix(in oklch, var(--nx-warning) 45%, transparent);
   background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));

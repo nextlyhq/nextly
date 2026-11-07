@@ -395,6 +395,57 @@ describe("a bound prop's Open source", () => {
     mount({ label: { $bind: "title" } });
     await openMenu();
     expect(screen.queryByRole("menuitem", { name: /source$/ })).toBeNull();
+
+describe("an unbind of a field visitors can't read", () => {
+  it("says the field's value wasn't copied in, and what was kept instead", async () => {
+    const plan: UnbindPlanAnswer = {
+      kept: { set: { label: "Ask us at the front desk" } },
+      answer: {
+        kept: "fallback",
+        value: "Ask us at the front desk",
+        unreadable: true,
+        reason: "Visitors can't read …",
+      },
+    };
+    mount(
+      {
+        label: {
+          $bind: "internalNote",
+          source: "single",
+          sourceKey: "contact-details",
+        },
+      },
+      {
+        planUnbind: vi.fn(async () => plan),
+        listBindingFields: async () => [
+          {
+            binding: { source: "single", sourceKey: "contact-details" },
+            label: "Contact details",
+            fields: [
+              {
+                name: "internalNote",
+                type: "text",
+                label: "Internal note",
+                public: false,
+              },
+            ],
+          },
+        ],
+      }
+    );
+    const chip = await screen.findByRole("button", {
+      name: /^Text: bound to Internal note of Contact details/,
+    });
+    fireEvent.keyDown(chip, { key: "Enter" });
+    fireEvent.pointerUp(
+      await screen.findByRole("menuitem", { name: "Unbind, keep the text" }),
+      { pointerType: "mouse", button: 0 }
+    );
+    const note = await screen.findByRole("status");
+    expect(note.textContent).toBe(
+      "Unbound. Visitors can't read “Internal note”, so its value wasn't copied in. The badge keeps the fallback: “Ask us at the front desk”."
+    );
+    expect(note.getAttribute("data-tone")).toBe("private");
   });
 });
 

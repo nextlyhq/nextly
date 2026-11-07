@@ -30,6 +30,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ADDRESS_CLAIMS_SLUG } from "../collections/address-claims";
 import { PAGES_SLUG } from "../collections/pages";
 import { TEMPLATES_SLUG } from "../collections/templates";
+import { asOverwrite } from "../document-version";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilderContent } from "../page-content";
 import { pageBuilder } from "../plugin";
@@ -205,7 +206,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id,
-        data: { status },
+        data: asOverwrite({ status }),
         overrideAccess: true,
       });
     }
@@ -240,17 +241,21 @@ describe.each(getConfiguredTestDialects())(
       const { cookie } = await holding(t, DESIGNER);
       const template = await publishedTemplate(t, cookie);
       // The template as published, then a working draft of it the copy must
-      // not take: the copy is of what visitors see.
+      // not take: the copy is of what visitors see. The first save names its
+      // status, or it too would be held as a working draft.
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id: template,
-        data: { content: templateDocument("published-heading") },
+        data: asOverwrite({
+          content: templateDocument("published-heading"),
+          status: "published",
+        }),
         overrideAccess: true,
       });
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id: template,
-        data: { content: templateDocument("draft-heading") },
+        data: asOverwrite({ content: templateDocument("draft-heading") }),
         draft: true,
         overrideAccess: true,
       });
@@ -515,7 +520,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id: own,
-        data: { content: templateDocument("own-heading") },
+        data: asOverwrite({ content: templateDocument("own-heading") }),
         overrideAccess: true,
       });
       // A draft own design is not the public's: the template still draws it.
@@ -536,7 +541,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id: own,
-        data: { content: templateDocument("draft-heading") },
+        data: asOverwrite({ content: templateDocument("draft-heading") }),
         draft: true,
         overrideAccess: true,
       });
@@ -717,13 +722,13 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: TEMPLATES_SLUG,
           id,
-          data: { content: templateDocument("published-heading") },
+          data: asOverwrite({ content: templateDocument("published-heading") }),
           overrideAccess: true,
         });
         await t.nextly.update({
           collection: TEMPLATES_SLUG,
           id,
-          data: { status: "published" },
+          data: asOverwrite({ status: "published" }),
           overrideAccess: true,
         });
       }
@@ -731,7 +736,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: TEMPLATES_SLUG,
         id: waiting,
-        data: { content: templateDocument("unfinished-heading") },
+        data: asOverwrite({ content: templateDocument("unfinished-heading") }),
         draft: true,
         overrideAccess: true,
       });
@@ -915,7 +920,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "posts",
         id: hello,
-        data: { title: "Hello again" },
+        data: asOverwrite({ title: "Hello again" }),
         overrideAccess: true,
       });
       expect(

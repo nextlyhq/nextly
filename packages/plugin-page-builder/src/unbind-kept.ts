@@ -80,41 +80,10 @@ export function unbindPlan(
   declared: DeclaredProps
 ): UnbindPlan {
   if (view.unreadable !== undefined) {
-    const fallback = view.unreadable.fallback;
-    const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
-    if (fallback === undefined) {
-      // A private image shows the block's own image, as any image bound to
-      // nothing does.
-      if (isMediaProp(declared, prop)) return ownImagePlan(prop, declared);
-      return {
-        kept: { set: {} },
-        answer: {
-          kept: "own",
-          reason: `${unread} The block keeps its own value.`,
-        },
-      };
-    }
-    // An image's fallback is an address, which the media prop can't hold: it
-    // goes where the image's own address is kept, as any address does.
-    if (isMediaProp(declared, prop)) {
-      return addressPlan(
-        prop,
-        fallback.value,
-        "fallback",
-        declared,
-        `${unread} The fallback is kept in the image's address.`
-      );
-    }
-    return {
-      kept: { set: { [prop]: fallback.value } },
-      answer: {
-        kept: "fallback",
-        value: fallback.value,
-        reason: `${unread} The fallback is kept.`,
-      },
-    };
+    return asUnreadable(unreadablePlan(prop, path, view.unreadable, declared));
   }
   const bound = view.bound;
+
   const value = view.filled[prop];
   if (bound === undefined) {
     return {
@@ -143,6 +112,58 @@ export function unbindPlan(
           : "The prop keeps what visitors saw.",
     },
   };
+}
+
+/**
+ * The plan where the binding reads a field visitors can't read: its value is
+ * never copied in; the binding's fallback is kept, or the prop's own value.
+ */
+function unreadablePlan(
+  prop: string,
+  path: string,
+  unreadable: NonNullable<VisitorView["unreadable"]>,
+  declared: DeclaredProps
+): UnbindPlan {
+  const fallback = unreadable.fallback;
+  const unread = `Visitors can't read “${path}”, so its value wasn't copied in.`;
+  if (fallback === undefined) {
+    // A private image shows the block's own image, as any image bound to
+    // nothing does.
+    if (isMediaProp(declared, prop)) return ownImagePlan(prop, declared);
+    return {
+      kept: { set: {} },
+      answer: {
+        kept: "own",
+        reason: `${unread} The block keeps its own value.`,
+      },
+    };
+  }
+  // An image's fallback is an address, which the media prop can't hold: it
+  // goes where the image's own address is kept, as any address does.
+  if (isMediaProp(declared, prop)) {
+    return addressPlan(
+      prop,
+      fallback.value,
+      "fallback",
+      declared,
+      `${unread} The fallback is kept in the image's address.`
+    );
+  }
+  return {
+    kept: { set: { [prop]: fallback.value } },
+    answer: {
+      kept: "fallback",
+      value: fallback.value,
+      reason: `${unread} The fallback is kept.`,
+    },
+  };
+}
+
+/** The plan's answer marked as kept in place of a field visitors can't read. */
+function asUnreadable(plan: UnbindPlan): UnbindPlan {
+  return "refusal" in plan
+    ? plan
+    : { ...plan, answer: { ...plan.answer, unreadable: true } };
 }
 
 /**

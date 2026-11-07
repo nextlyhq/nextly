@@ -8,11 +8,16 @@
  * does around every plugin field editor. A saved template keeps its
  * collection, so it is shown read-only there, as the name with the slug
  * beside it. A template being made chooses one from the collections the
- * author may read that have an address to serve an entry at. For a saved
- * template whose collection is no longer listed, the server is asked whether
- * it may be pointed at another, by the guard's own rule, since the list
- * leaves out what the author may not read: the choice is offered only where
- * that rule would let the save through, and the note says why it is not.
+ * server answers by the guard's own rule (the choices route): those the
+ * author may read that a template may draw. For a saved template whose
+ * collection is no longer listed, the server is asked whether it may be
+ * pointed at another, by the guard's own rule, since the list leaves out
+ * what the author may not read: the choice is offered only where that rule
+ * would let the save through, and the note says why it is not.
+ *
+ * Every read is asked again on mount, and its cached answer is not shown
+ * while that refresh is in flight: a collection added, removed or changed
+ * since is offered, or not, only once the fresh answer says so.
  *
  * It decides nothing: the template guard judges every collection a write
  * names, whichever control wrote it, and refuses the rest in its own words.
@@ -44,24 +49,18 @@ import {
 } from "react-hook-form";
 
 // The CONTRACTS, not the routes: the routes reach server-only modules.
-import {
-  PAGE_COLLECTION_ROUTE_PATH,
-  type PageCollectionResponse,
-} from "../layout-choices-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
   loopCollectionsPath,
-  type LoopCollectionItem,
   type LoopCollectionsResponse,
 } from "../loop-collections-contract";
 import {
+  TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH,
   templateCollectionRetargetPath,
+  type TemplateCollectionChoicesResponse,
   type TemplateCollectionRetarget,
 } from "../templates/template-actions-contract";
-import {
-  TEMPLATE_ADDRESS_FIELD,
-  TEMPLATE_ENTRY_ADDRESS_FIELD,
-} from "../templates/template-preview-contract";
+import { TEMPLATE_ADDRESS_FIELD } from "../templates/template-preview-contract";
 
 import { loopCollectionsOf } from "./loop-collections-client";
 
@@ -86,17 +85,22 @@ export interface CollectionChoice {
   readonly label: string;
 }
 
-/** Where the list of collections stands. */
-export type CollectionChoices =
+/** Where one read stands: still being asked, failed, or answered. */
+type ReadState<T> =
   | { readonly state: "pending" }
   | { readonly state: "failed" }
-  | {
-      readonly state: "answered";
-      /** Every collection listed, by slug and name. */
-      readonly named: ReadonlyMap<string, string>;
-      /** The ones a template may be made for, by name. */
-      readonly offered: readonly CollectionChoice[];
-    };
+  | { readonly state: "answered"; readonly value: T };
+
+/** What the control knows of the collections, from its two reads. */
+export interface CollectionChoices {
+  /** Every collection the author may read, by slug and name. */
+  readonly named: ReadState<ReadonlyMap<string, string>>;
+  /**
+   * The ones a template may draw, as the choices route answers by the
+   * guard's rule, in its order.
+   */
+  readonly offered: ReadState<readonly CollectionChoice[]>;
+}
 
 /**
  * Whether a saved template the list leaves out may be pointed at another
@@ -189,14 +193,15 @@ export function collectionFieldView(
   retarget: CollectionRetarget
 ): CollectionFieldView {
   const { value, stored } = flags;
+  const { named, offered } = choices;
   const name =
-    choices.state === "answered" ? (choices.named.get(value) ?? null) : null;
+    named.state === "answered" ? (named.value.get(value) ?? null) : null;
   // A version being read changes nothing, whatever the template is.
   if (flags.readOnly === true) {
     return { kind: "fixed", label: name, slug: value, note: null };
   }
   if (flags.saved && stored !== "") {
-    switch (choices.state) {
+    switch (named.state) {
       // The slug alone for the moment the names take, rather than a choice
       // that turns into text under the author's cursor.
       case "pending":
@@ -209,13 +214,13 @@ export function collectionFieldView(
           note: LIST_FAILED_NOTE,
         };
       case "answered":
-        if (choices.named.has(stored)) {
+        if (named.value.has(stored)) {
           return { kind: "fixed", label: name, slug: value, note: null };
         }
-        return unlistedView(value, stored, choices.offered, retarget);
+        return unlistedView(value, stored, offered, retarget);
     }
   }
-  switch (choices.state) {
+  switch (offered.state) {
     case "pending":
       return { kind: "choose", options: [], loading: true, note: null };
     case "failed":
@@ -223,7 +228,7 @@ export function collectionFieldView(
     case "answered":
       return {
         kind: "choose",
-        options: choices.offered,
+        options: offered.value,
         loading: false,
         note: null,
       };
@@ -235,12 +240,13 @@ export function collectionFieldView(
  * out collections this author may not read, so only the retarget answer says
  * whether it may be changed, by the rule the guard judges the save with. Kept
  * fixed by its slug unless that answer allows it, so a failed or slow answer
- * offers nothing that cannot save.
+ * offers nothing that cannot save; and, where it allows it, until the choices
+ * are in, so nothing stale is offered either.
  */
 function unlistedView(
   value: string,
   stored: string,
-  offered: readonly CollectionChoice[],
+  offered: CollectionChoices["offered"],
   retarget: CollectionRetarget
 ): CollectionFieldView {
   const fixed = (note: string | null): CollectionFieldView => ({
@@ -251,12 +257,15 @@ function unlistedView(
   });
   switch (retarget) {
     case "allowed":
-      return {
-        kind: "choose",
-        options: offered,
-        loading: false,
-        note: removedNote(stored),
-      };
+      if (offered.state === "answered") {
+        return {
+          kind: "choose",
+          options: offered.value,
+          loading: false,
+          note: removedNote(stored),
+        };
+      }
+      return fixed(offered.state === "failed" ? LIST_FAILED_NOTE : null);
     // No note for the moment the answer takes, rather than one that changes
     // under the author's eyes.
     case "pending":
@@ -274,72 +283,94 @@ function unlistedView(
 }
 
 /**
- * The collections a template may be made for: those with a `slug` field, an
- * entry's part of its address, other than the page builder's own pages,
- * which are served as themselves. By name, then slug, so two collections
- * of one name keep one order.
+ * A read's answer once it is fresh: `undefined` while it is still being
+ * asked, and also while a refresh of a cached answer is in flight, so an
+ * answer from before a collection was added, removed or changed is never
+ * shown as though it were current.
  */
-export function offeredCollections(
-  listed: readonly LoopCollectionItem[],
-  pagesCollection: string | undefined
-): CollectionChoice[] {
-  return listed
-    .filter(
-      item =>
-        item.slug !== pagesCollection &&
-        item.declared.includes(TEMPLATE_ENTRY_ADDRESS_FIELD) &&
-        slugIsText(item)
-    )
-    .map(item => ({ slug: item.slug, label: item.label }))
-    .sort(
-      (a, b) => a.label.localeCompare(b.label) || a.slug.localeCompare(b.slug)
-    );
+function freshAnswer<T>(read: {
+  readonly data: T | undefined;
+  readonly fetching: boolean;
+}): T | undefined {
+  return read.fetching ? undefined : read.data;
+}
+
+/** A read's state, its answer parsed by `parse`; one it cannot parse failed. */
+function readState<T>(
+  read: {
+    readonly data: unknown;
+    readonly error: Error | null;
+    readonly fetching: boolean;
+  },
+  parse: (answer: unknown) => T | undefined
+): ReadState<T> {
+  // A read asked again is pending whatever it answered last, error included:
+  // the query keeps an earlier error beside the retry in flight.
+  if (read.fetching) return { state: "pending" };
+  if (read.error !== null) return { state: "failed" };
+  const answer = freshAnswer(read);
+  if (answer === undefined) return { state: "pending" };
+  const value = parse(answer);
+  return value === undefined
+    ? { state: "failed" }
+    : { state: "answered", value };
+}
+
+/** A list answer's items, or `undefined` where the answer holds no list. */
+function itemsOf(answer: unknown): readonly unknown[] | undefined {
+  const items = fieldOf(answer, "items");
+  return Array.isArray(items) ? items : undefined;
+}
+
+/** One `{ slug, label }` item, or `undefined` for one of another shape. */
+function choiceOf(item: unknown): CollectionChoice | undefined {
+  const slug = fieldOf(item, "slug");
+  const label = fieldOf(item, "label");
+  return typeof slug === "string" && slug !== "" && typeof label === "string"
+    ? { slug, label }
+    : undefined;
+}
+
+/** A list answer's `{ slug, label }` items, in its order. */
+function choicesIn(answer: unknown): CollectionChoice[] | undefined {
+  return itemsOf(answer)?.flatMap(item => {
+    const choice = choiceOf(item);
+    return choice === undefined ? [] : [choice];
+  });
 }
 
 /**
- * Whether the collection's `slug` field holds text, as an entry's address
- * needs. Its type is known where visitors can read the field; elsewhere
- * the collection is offered and the guard judges the field on save.
+ * The names of the collections the author may read, by slug, for a saved
+ * template's collection. Asked again on every mount, as the choices are:
+ * collections are added, renamed and removed in the Schema Builder, whose
+ * writes do not refresh these reads.
  */
-function slugIsText(item: LoopCollectionItem): boolean {
-  const slug = item.readable.find(
-    field => field.name === TEMPLATE_ENTRY_ADDRESS_FIELD
-  );
-  return slug === undefined || slug.type === "text";
-}
-
-/** The list of collections, asked once per form, with the pages slug. */
-function useCollectionChoices(): CollectionChoices {
+function useCollectionNames(): CollectionChoices["named"] {
   const listed = usePluginRoute<LoopCollectionsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: loopCollectionsPath(),
-    // Asked again on every mount: collections are added, renamed and
-    // removed in the Schema Builder, whose writes do not refresh this read.
     staleTime: 0,
   });
-  const resolved = usePluginRoute<PageCollectionResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: PAGE_COLLECTION_ROUTE_PATH,
+  return readState(listed, answer => {
+    const collections = loopCollectionsOf(answer);
+    return collections === undefined
+      ? undefined
+      : new Map(collections.map(item => [item.slug, item.label]));
   });
-  if (listed.error !== null || resolved.error !== null) {
-    return { state: "failed" };
-  }
-  // Answered only once both reads have: before the pages slug arrives, Pages
-  // would be offered, and a template for it cannot be saved.
-  if (listed.data === undefined || resolved.data === undefined) {
-    return { state: "pending" };
-  }
-  const collections =
-    listed.data === null ? undefined : loopCollectionsOf(listed.data);
-  const pagesCollection = fieldOf(resolved.data, "pagesCollection");
-  if (collections === undefined || typeof pagesCollection !== "string") {
-    return { state: "failed" };
-  }
-  return {
-    state: "answered",
-    named: new Map(collections.map(item => [item.slug, item.label])),
-    offered: offeredCollections(collections, pagesCollection),
-  };
+}
+
+/**
+ * The collections a template may draw, as the choices route answers them by
+ * the guard's own rule, asked only where `offer` says a choice may be drawn.
+ */
+function useOfferedCollections(offer: boolean): CollectionChoices["offered"] {
+  const choices = usePluginRoute<TemplateCollectionChoicesResponse>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH,
+    enabled: offer,
+    staleTime: 0,
+  });
+  return readState(choices, choicesIn);
 }
 
 /**
@@ -361,9 +392,12 @@ function useCollectionRetarget(
     staleTime: 0,
   });
   useAskedAgainOn(savedAddress, ask, read.refetch);
+  // Asked again (after the address is cleared, say), it is pending whatever
+  // it answered last: the query keeps an earlier error beside the retry.
+  if (read.fetching) return "pending";
   if (read.error !== null) return "failed";
-  if (read.data === undefined) return "pending";
-  return retargetOf(read.data);
+  const answer = freshAnswer(read);
+  return answer === undefined ? "pending" : retargetOf(answer);
 }
 
 /** The retarget answer as the control reads it; anything else is unanswered. */
@@ -477,15 +511,23 @@ function useCollectionFieldState(
   saved: { readonly savedAddress: string }
 ): { view: CollectionFieldView; busy: boolean } {
   const identity = useDocumentIdentity();
-  const choices = useCollectionChoices();
   const template =
     typeof identity?.documentId === "string" ? identity.documentId : "";
+  const named = useCollectionNames();
   const askRetarget =
     !readOnly &&
     template !== "" &&
     stored !== "" &&
-    choices.state === "answered" &&
-    !choices.named.has(stored);
+    named.state === "answered" &&
+    !named.value.has(stored);
+  // The choices only where they may be drawn: a template being made, or a
+  // saved one the list leaves out, asked beside the retarget question.
+  const choices: CollectionChoices = {
+    named,
+    offered: useOfferedCollections(
+      !readOnly && (template === "" || stored === "" || askRetarget)
+    ),
+  };
   const retarget = useCollectionRetarget(
     template,
     askRetarget,
@@ -497,9 +539,26 @@ function useCollectionFieldState(
       choices,
       retarget
     ),
-    busy:
-      choices.state === "pending" || (askRetarget && retarget === "pending"),
+    busy: stillAsking(choices, askRetarget, retarget),
   };
+}
+
+/**
+ * Whether a fixed collection still waits on an answer: the names, or, for a
+ * saved collection the list leaves out, the retarget question and, where it
+ * allows a change, the choices.
+ */
+function stillAsking(
+  choices: CollectionChoices,
+  askRetarget: boolean,
+  retarget: CollectionRetarget
+): boolean {
+  if (choices.named.state === "pending") return true;
+  if (!askRetarget) return false;
+  return (
+    retarget === "pending" ||
+    (retarget === "allowed" && choices.offered.state === "pending")
+  );
 }
 
 /** What each of the control's three forms is handed. */

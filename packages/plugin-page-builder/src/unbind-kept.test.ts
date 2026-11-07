@@ -71,7 +71,8 @@ describe("unbindPlan", () => {
     );
     expect(withFallback).toMatchObject({
       kept: { set: { text: "Ask us at the front desk" } },
-      answer: { kept: "fallback" },
+      // Marked, so the inspector says why the field's value wasn't kept.
+      answer: { kept: "fallback", unreadable: true },
     });
     expect(
       "answer" in withFallback ? withFallback.answer.reason : ""
@@ -320,7 +321,8 @@ describe("an image bound into a collection other than the media library", () => 
       type: "core/heading",
       version: 1,
       props: {},
-      bindings: { text: { $bind: "startsAt" } },
+      // A date reaches a text prop only through a format.
+      bindings: { text: { $bind: "startsAt", format: { type: "date" } } },
     };
     const runOf = (shape: Record<string, unknown>) =>
       createBindingRun({

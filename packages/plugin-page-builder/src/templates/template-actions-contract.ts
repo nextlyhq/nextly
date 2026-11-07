@@ -12,6 +12,7 @@
  * @module templates/template-actions-contract
  */
 import type { TemplateAction } from "@nextlyhq/builder/ops";
+import type { PaginationMeta } from "@nextlyhq/plugin-sdk";
 
 import type { ActionBy } from "../component-actions-contract";
 
@@ -61,6 +62,29 @@ export type TemplateCollectionRetarget =
 /** The retarget question's path for one template, by its id. */
 export function templateCollectionRetargetPath(template: string): string {
   return `${TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH}?template=${encodeURIComponent(template)}`;
+}
+
+/**
+ * Where the template form lists the collections a template may draw:
+ * `GET /templates/collection-choices`.
+ */
+export const TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH =
+  "/templates/collection-choices";
+
+/** One collection a template may draw, by slug and by name. */
+export interface TemplateCollectionChoice {
+  readonly slug: string;
+  /** Its plural name where it has one, else its name, else its slug. */
+  readonly label: string;
+}
+
+/**
+ * What the choices route answers: the canonical list envelope, every
+ * collection on one page, ordered by name and then slug.
+ */
+export interface TemplateCollectionChoicesResponse {
+  readonly items: readonly TemplateCollectionChoice[];
+  readonly meta: PaginationMeta;
 }
 
 /** One template action request. */

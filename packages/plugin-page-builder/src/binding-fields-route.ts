@@ -365,7 +365,7 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
       return {
         name: shape.name,
         type: shape.type,
-        // The settings screen's name for it: "Site URL", not "Site url".
+        // Its name in words: "Site URL", not the key's "Site url".
         ...siteSettingLabel(shape.name),
         public: true,
         ...(preview === undefined ? {} : { preview }),
