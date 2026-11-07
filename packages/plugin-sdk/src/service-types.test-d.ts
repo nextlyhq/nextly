@@ -67,6 +67,12 @@ const hostTxList: Promise<PaginatedResult<unknown>> =
   own.listHostEntriesInTransaction(tx, "pages", q, { lock: "update" });
 const hostTxSingle: Promise<Record<string, unknown>> =
   own.getHostSingleInTransaction(tx, "home");
+// Which content those reads accept: the collections and Singles, as the
+// plugin's own listings of them name them.
+const hostTypes: Promise<{
+  collections: readonly { name: string }[];
+  singles: readonly { slug: string }[];
+}> = own.listHostTypesInTransaction(tx);
 
 // Exported so eslint does not flag the assertions as unused.
 export const __d56TypeCheck = {
@@ -81,4 +87,5 @@ export const __d56TypeCheck = {
   ownTxSingle,
   hostTxList,
   hostTxSingle,
+  hostTypes,
 };

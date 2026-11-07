@@ -203,7 +203,12 @@ describe.each(getConfiguredTestDialects())(
       } as never)) as Record<string, unknown>;
 
       expect(read.hero).toEqual(written.hero);
-      expect(read.links).toEqual(written.links);
+      // Every write gives a repeater row a saved id, beside the values written.
+      expect(read.links).toEqual(
+        [{ url: "https://example.com" }, { url: "https://example.org" }].map(
+          row => ({ ...row, id: expect.any(String) })
+        )
+      );
     });
   }
 );

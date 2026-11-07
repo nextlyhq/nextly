@@ -253,6 +253,7 @@ Reads are unchanged and return their value directly.
 ```ts
 ctx.hooks.on(type, collectionSlug | "*", handler); // beforeCreate/afterCreate/… — can modify/abort
 ctx.hooks.onInTransaction(collectionSlug | `single:${slug}` | "*", handler); // @experimental: inside the write's transaction, with a bound `db`; throwing aborts; may run again on a retry
+ctx.hooks.onCollectionDelete({ impact?, inTransaction? }); // @experimental: what deleting a collection takes with it, for the delete dialog, and its removal in the delete's transaction; throwing refuses the delete
 ctx.events.on(eventName, handler); // observe-only; e.g. `collection.${slug}.created`
 ctx.events.emit(eventName, payload); // your own `<slug>.…` names, declared in contributes.events
 ```
@@ -862,6 +863,13 @@ them keeps its place there. A contribution may take a
 built-in part's place with `replaces`. The edit page's side panel names its
 four built-in sections, in order: `status`, `publishing`, `language` and
 `details`.
+
+**On a phone.** Where a collection entry's editor is too narrow to keep the
+side panel beside the fields, the panel opens only when asked for. A side
+panel section declared with `narrow: "above-form"` (`@experimental`) is drawn
+there under the title, above the fields, and left out of the panel, so an
+author meets it without opening the panel. Without it, the section stays in
+the panel at every width.
 
 **Who sees one.** Contributions are sent only in the signed-in workspace
 metadata, the login page's alone in the public one, and each reader receives

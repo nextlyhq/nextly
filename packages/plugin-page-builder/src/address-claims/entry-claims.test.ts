@@ -5,8 +5,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { claimKey } from "./claim-key";
-import { entryAddresses, NO_ADDRESS } from "./entry-claims";
+import { claimKey, servedAddress, type ServedAddress } from "./claim-key";
+import {
+  entryAddresses,
+  NO_ADDRESS,
+  pageCandidates,
+  templateChanges,
+} from "./entry-claims";
 
 const keys = (found: ReturnType<typeof entryAddresses>) =>
   found === NO_ADDRESS ? found : found.map(at => claimKey("address", at));
@@ -68,5 +73,82 @@ describe("an entry's addresses", () => {
     expect(
       entryAddresses({ status: "published", slug }, ["blog"], ["en"], true)
     ).toBe(NO_ADDRESS);
+  });
+});
+
+const addressOf = (path: string, locale = "en"): ServedAddress => {
+  const address = servedAddress(locale, path);
+  if (address === null) throw new Error(`${path} names no address`);
+  return address;
+};
+
+describe("the pages an entry's address could fall on", () => {
+  it("are those whose slug is an ending of the path, with the address's keys", () => {
+    const found = pageCandidates([
+      addressOf("/blog/hello"),
+      addressOf("/blog/hello", "fr"),
+    ]);
+    expect(found.slugs).toEqual(["blog/hello", "hello"]);
+    expect([...found.addresses]).toEqual([
+      "addr:en|/blog/hello",
+      "addr:fr|/blog/hello",
+    ]);
+    expect([...found.lists]).toEqual([]);
+  });
+
+  it("include the page whose paginated list the address is a later page of", () => {
+    const found = pageCandidates([addressOf("/blog/page/2")]);
+    expect(found.slugs).toEqual(["blog/page/2", "page/2", "2", "blog"]);
+    expect([...found.lists]).toEqual(["space:en|/blog"]);
+  });
+
+  it("are none for no address", () => {
+    expect(pageCandidates([]).slugs).toEqual([]);
+  });
+});
+
+describe("what a template's write changes about the entries it serves", () => {
+  const published = (collection: string) => ({
+    collection,
+    status: "published",
+  });
+  const draft = (collection: string) => ({ collection, status: "draft" });
+
+  it("starts serving on a first publish, as created or as updated", () => {
+    expect(templateChanges("create", published("posts"), null)).toEqual([
+      { collection: "posts", served: true },
+    ]);
+    expect(
+      templateChanges("update", published("posts"), draft("posts"))
+    ).toEqual([{ collection: "posts", served: true }]);
+  });
+
+  it("stops serving on an unpublish or a delete of a published template", () => {
+    expect(
+      templateChanges("update", draft("posts"), published("posts"))
+    ).toEqual([{ collection: "posts", served: false }]);
+    expect(templateChanges("delete", published("posts"), null)).toEqual([
+      { collection: "posts", served: false },
+    ]);
+  });
+
+  it("moves serving from the old collection to the new when a published template is pointed at another", () => {
+    expect(
+      templateChanges("update", published("articles"), published("posts"))
+    ).toEqual([
+      { collection: "posts", served: false },
+      { collection: "articles", served: true },
+    ]);
+  });
+
+  it("changes nothing for a write that leaves it serving what it served", () => {
+    expect(
+      templateChanges("update", published("posts"), published("posts"))
+    ).toEqual([]);
+    expect(templateChanges("update", draft("posts"), draft("posts"))).toEqual(
+      []
+    );
+    expect(templateChanges("create", draft("posts"), null)).toEqual([]);
+    expect(templateChanges("delete", draft("posts"), null)).toEqual([]);
   });
 });

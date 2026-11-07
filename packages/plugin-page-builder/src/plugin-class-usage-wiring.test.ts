@@ -82,6 +82,7 @@ function initContext(renameMap: Record<string, string> = {}) {
       offBeforeOperation: vi.fn(),
       onInTransaction: vi.fn(),
       offInTransaction: vi.fn(),
+      onCollectionDelete: vi.fn(),
     },
     services: {
       collections: { getCollection: vi.fn(async () => ({})) },

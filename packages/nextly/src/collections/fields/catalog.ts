@@ -457,6 +457,10 @@ export function isBlockFieldType(type: string): type is BlockFieldCatalogType {
   return (BLOCK_FIELD_TYPES as readonly string[]).includes(type);
 }
 
+// Which repeaters get a saved row id, for the admin's new rows: the rule the
+// server gives ids by, read where the admin reads the catalog.
+export { declaresOwnId } from "./repeater-row-identity";
+
 // The engine's own functions, not wrappers: `bindingKindOf` answers the kind
 // a field produces, and `canBindFieldToProp` whether a field fits a prop, by
 // the one table the renderer and validator read. Each takes any

@@ -271,6 +271,16 @@ export interface BuilderShellProps {
    */
   checklist?: React.ReactNode;
   /**
+   * A strip pinned along the top of the canvas, above the page and outside
+   * the region that scrolls it, so it stays in view while the page scrolls
+   * under it: what the canvas is drawn with, where that is the author's to
+   * choose (the entry a template is previewed with). Absent, the canvas
+   * keeps the whole region.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  canvasStrip?: React.ReactNode;
+  /**
    * Leaving the editor. Explicit and LABELLED, never an unmarked X: the author
    * is one click from losing a canvas full of work, and an ambiguous glyph is
    * how that happens.
@@ -1494,6 +1504,57 @@ function CanvasRegion({
   );
 }
 
+/**
+ * The canvas panel's contents: the strip, where the host gives one, above the
+ * canvas's region rather than inside it (the region is what scrolls, so the
+ * strip stays pinned while the page scrolls under it, inset by the canvas's
+ * own gutter so its edges line up with the page's), then the region, with the
+ * checklist floated over it.
+ */
+function CanvasPanelBody({
+  canvasStrip,
+  checklist,
+  regionRef,
+  children,
+}: {
+  canvasStrip: React.ReactNode | undefined;
+  checklist: React.ReactNode | undefined;
+  regionRef: (element: HTMLElement | null) => void;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div className="flex h-full flex-col">
+      {canvasStrip === undefined ? null : (
+        <div
+          className="nx-canvas-strip-slot shrink-0"
+          style={{
+            paddingTop: CANVAS_GUTTER,
+            paddingInline: CANVAS_GUTTER,
+          }}
+        >
+          {canvasStrip}
+        </div>
+      )}
+      {/* The canvas's region: see `CanvasRegion`. */}
+      <div className="relative min-h-0 flex-1">
+        {/*
+          The same gutter on every side, a strip above or not: a block's badge
+          drawn just above the first block has the room it has without one.
+        */}
+        <CanvasRegion regionRef={regionRef}>{children}</CanvasRegion>
+        {checklist === undefined ? null : (
+          // The positioner takes no pointer events, so it cannot swallow a
+          // click aimed at the page underneath it; the card itself takes them
+          // back.
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
+            <div className="pointer-events-auto">{checklist}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ShellRegions({
   appliedScale = 1,
   onZoomPick,
@@ -1508,6 +1569,7 @@ function ShellRegions({
   topBarEnd,
   breadcrumb,
   checklist,
+  canvasStrip,
   onExit,
   preferences,
   update,
@@ -1730,24 +1792,15 @@ function ShellRegions({
           ) : null}
 
           <ResizablePanel id="canvas" minSize={MIN_CANVAS_PANEL_WIDTH}>
-            {/* The canvas's region: see `CanvasRegion`. */}
-            <div className="relative h-full">
-              <CanvasRegion
-                regionRef={element => {
-                  regionRefs.current.canvas = element;
-                }}
-              >
-                {children}
-              </CanvasRegion>
-              {checklist === undefined ? null : (
-                // The positioner takes no pointer events, so it cannot swallow
-                // a click aimed at the page underneath it; the card itself
-                // takes them back.
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
-                  <div className="pointer-events-auto">{checklist}</div>
-                </div>
-              )}
-            </div>
+            <CanvasPanelBody
+              canvasStrip={canvasStrip}
+              checklist={checklist}
+              regionRef={element => {
+                regionRefs.current.canvas = element;
+              }}
+            >
+              {children}
+            </CanvasPanelBody>
           </ResizablePanel>
 
           {inspectorShown ? (

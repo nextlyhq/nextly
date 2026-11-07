@@ -83,6 +83,11 @@ export interface PageCollectionResponse {
    * form (Remove Layout) can tell a Layout's form, renamed or not.
    */
   readonly layoutsCollection: string;
+  /**
+   * The templates collection's RESOLVED slug, so the builder can tell a
+   * template's document, renamed or not, and offer its own designs.
+   */
+  readonly templatesCollection: string;
 }
 
 /**

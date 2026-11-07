@@ -24,6 +24,7 @@ import { holdsFieldOfType } from "../domains/versions/tag-component-types";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
 import type {
+  Collection,
   CollectionEntry,
   CollectionService,
 } from "../services/collections/collection-service";
@@ -37,10 +38,15 @@ import type { RequestContext } from "../services/shared";
 import { runReadsInTransaction } from "../shared/lib/read-transaction-scope";
 import type { AuthUser } from "../types/auth";
 
+import type { PluginSingleRecord } from "./plugin-singles";
 import { assertRunnableAsPrincipal } from "./principals/run-as";
 import type { Principal } from "./principals/types";
 import { methodFacade } from "./service-facade";
-import { type TransactionScope, transactionScope } from "./transaction-scope";
+import {
+  type PluginTransactionMethod,
+  type TransactionScope,
+  transactionScope,
+} from "./transaction-scope";
 
 /**
  * @public Elevation options for the managed `ctx.services` path.
@@ -596,6 +602,23 @@ export type PluginCollectionService = Pick<
   withTransaction<T>(
     work: (tx: PluginCollectionTransaction) => Promise<T>
   ): Promise<T>;
+  /**
+   * @experimental Hold a collection for the rest of the transaction `tx`
+   * stands for, and answer whether it exists: its registry row, locked for
+   * share. A delete of the collection locks the row for update before it
+   * removes anything, so a write that must not outlive the collection it
+   * names either commits before the delete's collection-delete handlers
+   * (`ctx.hooks.onCollectionDelete`) read what to remove with it, or waits
+   * for the delete and is told the collection is gone. Asks nothing of the
+   * caller's access, and reads nothing but whether the row is there. On
+   * MySQL, where a table drop commits a transaction's row locks, both sides
+   * also take the collection's named lock, which the delete holds until it
+   * has removed the row. A settled token is refused.
+   */
+  holdCollectionInTransaction(
+    tx: PluginCollectionTransaction,
+    collectionName: string
+  ): Promise<boolean>;
 };
 
 /**
@@ -627,13 +650,16 @@ const writeTransactionKeys = new WeakMap<object, object>();
  * Run `work` with a token for the write transaction `tx`, as the collection
  * service's in-transaction methods take it, open while `work` runs and
  * refusing once it has settled, as every token a plugin holds does; and with
- * the key that transaction's every handler call shares.
+ * the key that transaction's every handler call shares. `method` is what a
+ * refusal of the settled token names as the callback the work belongs in.
  *
- * @internal The in-transaction phase's, for `InTransactionContext`.
+ * @internal The in-transaction phase's, for `InTransactionContext`, and a
+ * collection delete's, for `ctx.hooks.onCollectionDelete`.
  */
 export function withWriteTransactionToken<R>(
   tx: TransactionContext,
-  work: (token: PluginCollectionTransaction, key: object) => Promise<R>
+  work: (token: PluginCollectionTransaction, key: object) => Promise<R>,
+  method: PluginTransactionMethod = "ctx.hooks.onInTransaction"
 ): Promise<R> {
   const adapterTx = tx as unknown as object;
   let key = writeTransactionKeys.get(adapterTx);
@@ -642,7 +668,7 @@ export function withWriteTransactionToken<R>(
     writeTransactionKeys.set(adapterTx, key);
   }
   const token = Object.freeze({}) as PluginCollectionTransaction;
-  const scope = transactionScope("ctx.hooks.onInTransaction");
+  const scope = transactionScope(method);
   pluginTransactions.set(token, { tx, scope });
   const shared = key;
   return scope.run(() => work(token, shared));
@@ -732,6 +758,19 @@ export function wrapCollectionsForPlugin(
     createEntryInTransaction: inTransaction("createEntryInTransaction"),
     updateEntryInTransaction: inTransaction("updateEntryInTransaction"),
     deleteEntryInTransaction: inTransaction("deleteEntryInTransaction"),
+    // Checked and tracked as the writes are, with no `ServiceOpts`: it reads
+    // only whether the collection's registry row is there.
+    holdCollectionInTransaction: async (
+      token: unknown,
+      collectionName: string
+    ): Promise<boolean> => {
+      const { tx, scope } = transactionOf(token);
+      scope.assertOpen();
+      return scope.track(
+        collections.holdCollectionInTransaction(tx, collectionName),
+        "read"
+      );
+    },
   }) as unknown as PluginCollectionService;
 }
 
@@ -1012,6 +1051,60 @@ export interface PluginOwnCollectionReads {
     slug: string,
     opts?: OwnCollectionReadOpts
   ): Promise<SingleDocument>;
+  /**
+   * @experimental Which collections and Singles hold a field of a type this
+   * plugin registered, at any depth, read on the transaction `tx` stands
+   * for: the content the host reads above would accept, found without
+   * naming it first.
+   *
+   * Each kind is listed whole, each entry as
+   * `services.collections.listCollections` or `services.singles.list`
+   * describes it, and judged by the rule the host reads judge a slug by,
+   * from the fields read in the same statement as the entry itself, so a
+   * collection or Single renamed or changed while the walk runs is listed
+   * under the one name and judged by the one schema. A host read of a slug
+   * listed here is therefore not refused on the same transaction unless the
+   * schema changes after the walk. Those listings take a pooled connection,
+   * which on a pool of one waits for the connection the transaction holds;
+   * this reads on that connection, so it sees the schemas as the
+   * transaction does.
+   *
+   * Its reads are a fixed handful whatever the number of entries: the
+   * collections, the Singles, and every component's fields once some schema
+   * names a component, each one statement, made one after another. The
+   * components are the one read apart from the entries naming them: a
+   * component renamed between the two reads, with the schemas naming it,
+   * is not found under either name, and an entry holding the type only
+   * through it is left out of that walk. It reads schemas only, never
+   * content rows, so it takes none of the row locks the reads above take.
+   *
+   * The plugin's own collections and Singles are judged like any other, as
+   * the host reads judge them: one is listed only when it holds such a
+   * field itself. A plugin that registered no field type is answered empty
+   * without reading anything. A settled token is refused before anything
+   * is read.
+   */
+  listHostTypesInTransaction(
+    tx: PluginCollectionTransaction
+  ): Promise<PluginHostTypes>;
+}
+
+/**
+ * @experimental What {@link PluginOwnCollectionReads.listHostTypesInTransaction}
+ * answers: the content holding a field of a type the plugin registered.
+ */
+export interface PluginHostTypes {
+  /**
+   * Each collection holding one, as `services.collections.listCollections`
+   * lists it, in slug order.
+   */
+  readonly collections: readonly Collection[];
+  /**
+   * Each Single holding one, as `services.singles.list` lists it, in the
+   * order it lists them. A code-first Single's row that outlived its config
+   * is included, as it is there, and says so with `source: "code"`.
+   */
+  readonly singles: readonly PluginSingleRecord[];
 }
 
 /**
@@ -1038,6 +1131,63 @@ export interface HostSchemaSource {
   ): Promise<readonly unknown[] | null>;
   /** A component's own fields, or null where there is none. */
   componentFields(slug: string): Promise<FieldConfig[] | null>;
+  /**
+   * The first `limit` collections, as `services.collections.listCollections`
+   * lists them sorted by slug, each beside the fields it is judged by,
+   * taken from the listed record itself as {@link fieldsOf} takes them from
+   * a registry row. Its rows come from one statement, so a collection added,
+   * removed or renamed while the walk runs cannot shift one past another or
+   * be judged by a schema it did not have when listed.
+   */
+  listCollections(
+    limit: number
+  ): Promise<readonly HostListedEntry<Collection>[]>;
+  /**
+   * Every Single, as `services.singles.list` describes it, each beside its
+   * declared fields as {@link fieldsOf} answers them, both from the one
+   * statement that read its row. The description reduces each field and
+   * drops the component it names, which the rule follows, so the declared
+   * fields come beside it rather than from it.
+   */
+  listSingles(): Promise<readonly HostListedEntry<PluginSingleRecord>[]>;
+  /**
+   * Every component's own fields by slug, from one statement: for each, what
+   * {@link componentFields} answers.
+   */
+  allComponentFields(): Promise<ReadonlyMap<string, FieldConfig[]>>;
+}
+
+/**
+ * A collection or Single a host-types walk listed, beside the declared
+ * fields it is judged by, both from the statement that read it.
+ */
+interface HostListedEntry<R> {
+  readonly record: R;
+  readonly fields: readonly unknown[];
+}
+
+/**
+ * How many collections the host-types walk first asks the listing for. A
+ * listing that comes back full is asked again from the start for twice as
+ * many, until one comes back short and so holds every collection.
+ */
+export const HOST_TYPES_PAGE_SIZE = 100;
+
+/**
+ * Whether declared `fields` hold a field of one of `fieldTypes` at any
+ * depth, `componentFields` answering each component they name; false for
+ * content with no schema (`null`). The one rule a host read and the
+ * host-types walk both judge by, whichever way each came by the fields.
+ */
+async function holdsOwnFieldType(
+  fields: readonly unknown[] | null,
+  fieldTypes: readonly string[],
+  componentFields: (slug: string) => Promise<FieldConfig[] | null>
+): Promise<boolean> {
+  return (
+    fields !== null &&
+    (await holdsFieldOfType(fields, fieldTypes, componentFields))
+  );
 }
 
 /**
@@ -1101,19 +1251,78 @@ export function ownCollectionReads(
    * read as the transaction sees it, on its connection.
    */
   const hostGrant = async (kind: Kind, slug: string): Promise<ReadGrant> => {
-    let eligible = false;
     const source = host;
-    if (source !== undefined && source.fieldTypes.length > 0) {
-      const fields = await source.fieldsOf(kind, slug);
-      eligible =
-        fields !== null &&
-        (await holdsFieldOfType(fields, source.fieldTypes, componentSlug =>
-          source.componentFields(componentSlug)
-        ));
-    }
+    const eligible =
+      source !== undefined &&
+      source.fieldTypes.length > 0 &&
+      (await holdsOwnFieldType(
+        await source.fieldsOf(kind, slug),
+        source.fieldTypes,
+        componentSlug => source.componentFields(componentSlug)
+      ));
     return {
       grant: issueHookExemptRead(eligible ? [slug] : []),
       refuse: holdsNoOwnField(kind),
+    };
+  };
+
+  /**
+   * The content a host read would accept, kind by kind: each collection and
+   * each Single the listings name, kept when {@link holdsOwnFieldType} says
+   * its fields hold a field of a type this plugin registered, the question
+   * `hostGrant` asks, so the two cannot disagree about a schema.
+   *
+   * Each entry is judged from the fields its own listing statement read,
+   * never from a later read: on READ COMMITTED isolation each statement sees
+   * the latest commit, so a schema read apart from its listing could name a
+   * collection renamed in between under its new slug only, and the listed
+   * one would find no schema. The reads run one after another on the
+   * transaction's connection, a fixed handful whatever the number of entries,
+   * since every read here holds the transaction, and on a pool of one every
+   * other request too.
+   */
+  const listHostTypes = async (): Promise<PluginHostTypes> => {
+    const source = host;
+    if (source === undefined || source.fieldTypes.length === 0) {
+      return { collections: [], singles: [] };
+    }
+    // A full listing may have stopped short of the last collection, so it is
+    // asked again for more until one is short: each answer is a single
+    // statement, consistent in itself, where pages taken by offset in
+    // separate statements would shift past a collection added or removed
+    // between them.
+    let limit = HOST_TYPES_PAGE_SIZE;
+    let listedCollections = await source.listCollections(limit);
+    while (listedCollections.length >= limit) {
+      limit *= 2;
+      listedCollections = await source.listCollections(limit);
+    }
+    const listedSingles = await source.listSingles();
+    // Read once, when a schema first names a component: the walk asks for
+    // several at a time, and all of them wait on the one statement, so a
+    // failed read fails them together and starts nothing after it.
+    let components: Promise<ReadonlyMap<string, FieldConfig[]>> | undefined;
+    const componentFields = async (
+      slug: string
+    ): Promise<FieldConfig[] | null> =>
+      (await (components ??= source.allComponentFields())).get(slug) ?? null;
+    const kept = async <R>(
+      listed: readonly HostListedEntry<R>[]
+    ): Promise<R[]> => {
+      const holding: R[] = [];
+      for (const { record, fields } of listed) {
+        if (
+          await holdsOwnFieldType(fields, source.fieldTypes, componentFields)
+        ) {
+          holding.push(record);
+        }
+      }
+      return holding;
+    };
+
+    return {
+      collections: await kept(listedCollections),
+      singles: await kept(listedSingles),
     };
   };
 
@@ -1269,5 +1478,8 @@ export function ownCollectionReads(
       onTransaction(tx, async () =>
         getSingleUnder(await hostGrant("Single", slug), slug, opts)
       ),
+    // Listings and schemas only: no content row is read, so no grant is
+    // issued, and the token is checked and the work tracked as above.
+    listHostTypesInTransaction: tx => onTransaction(tx, listHostTypes),
   } satisfies PluginOwnCollectionReads);
 }

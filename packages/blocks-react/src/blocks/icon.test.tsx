@@ -129,7 +129,8 @@ describe("core/icon", () => {
         partClass: () => "",
       } as never)
     );
-    expect(resolveEntryPath).toHaveBeenCalledWith("pages", "p1");
+    // Drawn outside a page, so its read is claimed unnamed.
+    expect(resolveEntryPath).toHaveBeenCalledWith("pages", "p1", undefined);
   });
 
   it("draws a filled icon with no stroke, so a page's stroke cannot outline it", async () => {

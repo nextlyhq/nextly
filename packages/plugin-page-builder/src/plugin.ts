@@ -22,12 +22,14 @@ import {
   definePlugin,
   NextlyError,
   type HookContext,
+  readableTitleText,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginCollectionTransaction,
   type PluginCollectionView,
   type PluginDefinition,
-  type PluginCollectionTransaction,
   type PluginRouteContext,
+  type PluginRouteIdentity,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
@@ -46,6 +48,7 @@ import {
   type PagesReader,
 } from "./address-claims/backfill";
 import {
+  committedClaims,
   lockHolder,
   releaseHolderLock,
   type Tx,
@@ -67,6 +70,27 @@ import {
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
+import { schemaFingerprint } from "./bindings-report/fingerprint";
+import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
+import { layoutRegionsOf } from "./bindings-report/layout-regions";
+import {
+  readableAsCaller,
+  readableSingles,
+  visibleBindings,
+} from "./bindings-report/readable";
+import { bindingsToFixRoute } from "./bindings-report/route";
+import {
+  registerBindingReportOnWrite,
+  runFullCheck,
+  type BindingReportDeps,
+} from "./bindings-report/scan";
+import { bindingReportStore } from "./bindings-report/store";
+import {
+  bindingsToFixAttention,
+  bindingsToFixWidget,
+  EDIT_PAGES_PERMISSION,
+} from "./bindings-report/widget";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -87,11 +111,15 @@ import {
   nameDocumentsOnSite,
 } from "./breakpoint-removal/site-counter";
 import {
+  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
+  ENTRY_DESIGN_SECTION_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "./builder-view";
 import { canvasBindingsRoute } from "./canvas-bindings-route";
 import { canvasPathOption } from "./canvas-path";
@@ -169,9 +197,10 @@ import {
   PAGE_BUILDER_SETTINGS_SLUG,
   pageBuilderSettingsSingle,
 } from "./default-layout/settings-single";
+import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
 import { asOverwrite } from "./document-version";
-import { entriesRoute } from "./entries-route";
+import { entriesRoute, titleFieldIn } from "./entries-route";
 import type {
   CompositionSetup,
   LayersLockUnjudged,
@@ -189,6 +218,9 @@ import {
   type RewriteInstall,
 } from "./host-rewrite/service";
 import {
+  documentHosts,
+  siteHostReader,
+  siteWalkSource,
   singleToWalk,
   type RewriteDirectApi,
   type SingleToWalk,
@@ -316,20 +348,42 @@ import {
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
 import {
+  holdTemplateCollection,
+  templateCollectionDelete,
+} from "./templates/collection-delete";
+import {
   designUnderWhere,
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
-import { templateActionsRoute } from "./templates/template-actions-route";
+import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
+  templateActionsRoute,
+  templateRoutingRoute,
+} from "./templates/template-actions-route";
+import {
+  addressSegments,
   checkedTemplateAddresses,
   type PageBuilderTemplateOptions,
 } from "./templates/template-addresses";
 import {
+  addressHolderReader,
   registerTemplateGuard,
+  storedAddressesReader,
   templateCollectionProblem,
   templateHolderReader,
+  templateTargets,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
+import {
+  templatePreviewEntriesRoute,
+  templatePreviewEntryRoute,
+} from "./templates/template-preview-route";
+import {
+  MANAGE_TEMPLATE_ROUTING_DECLARATION,
+  storedAddressOf,
+  storedAddressProblem,
+  TEMPLATE_ADDRESS_FIELD,
+} from "./templates/template-routing";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
@@ -1018,6 +1072,78 @@ async function* singlesRegistryPages(
 const REGISTRY_PAGE_SIZE = 100;
 
 /**
+ * Every collection's registry record, page by page, for the schema
+ * fingerprint the bindings report checks against. Refused when a page cannot
+ * be read, so a fingerprint is never taken over part of the registry.
+ */
+async function collectionRegistryRows(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed: unknown = await ctx.services.collections.listCollections(
+      { page, limit: REGISTRY_PAGE_SIZE, sortBy: "slug", sortOrder: "asc" },
+      undefined as never
+    );
+    const data = (listed as { data?: unknown }).data;
+    const hasMore = (listed as { pagination?: { hasMore?: unknown } })
+      .pagination?.hasMore;
+    if (!Array.isArray(data) || typeof hasMore !== "boolean") {
+      throw new Error(
+        "[page-builder] the collection registry could not be read for the bindings report"
+      );
+    }
+    rows.push(...data);
+    if (!hasMore || data.length === 0) return rows;
+  }
+}
+
+/** Every Single's registry record, for the same fingerprint. */
+async function singleRegistryRows(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for await (const page of singlesRegistryPages(ctx)) {
+    if (page === UNREADABLE_PAGE) {
+      throw new Error(
+        "[page-builder] the Singles registry could not be read for the bindings report"
+      );
+    }
+    rows.push(...page);
+  }
+  return rows;
+}
+
+/** How many field groups one read of the registry asks for. */
+const FIELD_GROUP_PAGE_SIZE = 100;
+
+/**
+ * Every field group's registry record, for the same fingerprint: a binding
+ * reaches a field group's fields where a collection or a Single places it, so
+ * a change to one changes what those bindings are judged against.
+ */
+async function fieldGroupRows(): Promise<unknown[]> {
+  const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+  const nextly = await getCachedNextly();
+  const rows: unknown[] = [];
+  for (let offset = 0; ; offset += FIELD_GROUP_PAGE_SIZE) {
+    const page = await nextly.fieldGroups.find({
+      limit: FIELD_GROUP_PAGE_SIZE,
+      offset,
+    });
+    rows.push(...page.items);
+    // Bounded by a short page, so an empty one ends the read.
+    if (page.items.length < FIELD_GROUP_PAGE_SIZE) return rows;
+  }
+}
+
+/** How often a read of the bindings report may start a check, at most. */
+const BINDINGS_REFRESH_MS = 60_000;
+
+/** How long a check a read starts may run. */
+const BINDINGS_REFRESH_RUN_MS = 20_000;
+
+/**
  * How long a save removing breakpoints walks the site before it answers with
  * the run to carry on: short enough to answer well inside a request's time,
  * long enough that a small site finishes in the save itself.
@@ -1548,6 +1674,13 @@ export const pageBuilder = (
   // Each collection's code-declared template address, checked when the
   // plugin is defined, so a malformed or shared one refuses to start.
   const templateAddresses = checkedTemplateAddresses(opts.templates);
+  // The same addresses as written, each in its one spelling once checked:
+  // what a stored address is compared with.
+  const declaredPaths: ReadonlyMap<string, string> = new Map(
+    Object.entries(opts.templates?.addresses ?? {}).filter(([collection]) =>
+      templateAddresses.has(collection)
+    )
+  );
   // Who holds a path, for the site's content route, set by `init`.
   let contentAddresses: ContentAddressService | null = null;
   const requireContentAddresses = (): ContentAddressService => {
@@ -1569,6 +1702,20 @@ export const pageBuilder = (
   // sweep, then entries. The addresses listed for pre-rendering wait for it,
   // so a build never lists a store the passes are still filling or moving.
   let addressStartup: Promise<void> | null = null;
+  // How many of a collection's entries wait for an address, set by `init`.
+  let waitingEntriesOf: ((collection: string) => Promise<number>) | null = null;
+  // What the template actions run with, for the route and the service.
+  const templateActions = {
+    guard: (): TemplateGuardSetup => requireTemplateGuard(),
+    waitingEntries: (collection: string): Promise<number> => {
+      if (waitingEntriesOf === null) {
+        throw new Error(
+          "[page-builder] a template action ran before the plugin was installed"
+        );
+      }
+      return waitingEntriesOf(collection);
+    },
+  };
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -1668,6 +1815,180 @@ export const pageBuilder = (
    * contributed before `init` runs and called long after it.
    */
   let rewriteInstall: RewriteInstall | null = null;
+  /**
+   * The installed plugin as the "Bindings to fix" report reads it, published
+   * by `init`: its job and its route are contributed before `init` runs.
+   */
+  let bindingReportCtx:
+    | Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+    | null = null;
+  const bindingReportDeps: BindingReportDeps = {
+    store: () =>
+      bindingReportCtx === null
+        ? null
+        : bindingReportStore(bindingReportCtx.db, bindingReportCtx.dialect),
+    // Each source's declared fields, as a save judges bindings by them.
+    shapesOf: async ref => {
+      const { declaredFieldShapes } = await import("nextly/runtime");
+      return declaredFieldShapes(ref);
+    },
+    // Documents read as the walk reads them, and the components they place as
+    // visitors are served them.
+    reading: () => {
+      const install = rewriteInstall;
+      if (install === null) return null;
+      const site = install.site;
+      const read = siteHostReader(site);
+      return {
+        hostsOf: at => documentHosts(site, at),
+        read,
+        // A page's Layout, as visitors are served it: its regions' components
+        // placed, so their bindings are judged against the page's entry.
+        layoutOf: at => {
+          const ctx = bindingReportCtx;
+          const setup = defaultLayoutSetup;
+          return ctx === null || setup === null
+            ? Promise.resolve(undefined)
+            : layoutRegionsOf(at, {
+                pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+                slugs: setup.slugs,
+              });
+        },
+        components: async (id, draft) => {
+          try {
+            const found = await read({
+              kind: "collection",
+              slug: install.store.collection,
+              id,
+              path: [install.store.field],
+            });
+            const value =
+              draft && found.draft !== null && found.draft.kind === "value"
+                ? found.draft
+                : found.published;
+            return value.kind === "value"
+              ? { kind: "document", document: value.value }
+              : { kind: "absent" };
+          } catch {
+            return { kind: "unreadable" };
+          }
+        },
+      };
+    },
+    // The sweep, started as soon as a write marks a document, at most once a
+    // second; the jobs pass runs it where nothing starts it.
+    kick: () => {
+      const ctx = bindingReportCtx;
+      const now = Date.now();
+      if (ctx === null || now - bindingsKickedAt < 1000) return;
+      bindingsKickedAt = now;
+      ctx.services.jobs
+        .runSweepNow(BINDINGS_REPORT_JOB, {
+          maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+        })
+        .catch((error: unknown) =>
+          ctx.logger.warn(
+            "[page-builder] the bindings report's judgement could not start; the next jobs pass runs it.",
+            { error }
+          )
+        );
+    },
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    placeOf: at => {
+      if (at.kind === "single") return "singles";
+      const own = bindingReportCtx?.self.collections ?? {};
+      const named = (slug: string) => own[slug] ?? slug;
+      if (at.slug === named(PAGES_SLUG)) return "pages";
+      // The component store the composition reads, a configured one included.
+      if (
+        at.slug === (rewriteInstall?.store.collection ?? named(COMPONENTS_SLUG))
+      )
+        return "components";
+      if (at.slug === named(PATTERNS_SLUG)) return "patterns";
+      if (at.slug === named(LAYOUTS_SLUG)) return "layouts";
+      return "entries";
+    },
+  };
+  let bindingsKickedAt = 0;
+  /**
+   * How many broken bindings a person may see, read as them by the report
+   * route's own read, for the dashboard's card and attention line.
+   */
+  const bindingsVisibleTo = async (
+    user: PluginRouteIdentity["user"]
+  ): Promise<number> => {
+    const ctx = bindingReportCtx;
+    const store = bindingReportDeps.store();
+    if (ctx === null || store === null) return 0;
+    return visibleBindings(
+      {
+        caller: { identity: () => Promise.resolve({ user }) },
+        services: ctx.services,
+      },
+      await store.list()
+    );
+  };
+  /** The latest save among the documents named, for the fingerprint. */
+  const latestSave = async (collections: readonly string[]) => {
+    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+    const nextly = await getCachedNextly();
+    const parts: string[] = [];
+    for (const collection of collections) {
+      const found = await nextly.find({
+        collection,
+        sort: "-updatedAt",
+        limit: 1,
+        depth: 0,
+        status: "all",
+        overrideAccess: true,
+      });
+      const latest = (found.items[0] as { updatedAt?: unknown } | undefined)
+        ?.updatedAt;
+      parts.push(
+        `${collection}:${String(found.meta.total)}:${JSON.stringify(latest ?? null)}`
+      );
+    }
+    return parts.join("|");
+  };
+  /** One pass of the report's check of every document, until `deadline`. */
+  const bindingReportPass = async (deadline: Date) => {
+    const ctx = bindingReportCtx;
+    const site = rewriteInstall?.site;
+    if (ctx === null || site === undefined) return "paused" as const;
+    const walk = siteWalkSource(site);
+    return runFullCheck(
+      {
+        documents: cursor => walk.documents(cursor),
+        cursorOf: document => walk.cursorOf(document),
+        fingerprint: () =>
+          schemaFingerprint({
+            collections: () => collectionRegistryRows(ctx),
+            singles: () => singleRegistryRows(ctx),
+            fieldGroups: () => fieldGroupRows(),
+            blocks: () => allBlocks(),
+            designs: async () => {
+              const saves = await latestSave([
+                rewriteInstall?.store.collection ?? COMPONENTS_SLUG,
+                defaultLayoutSetup?.slugs.layouts ?? LAYOUTS_SLUG,
+              ]);
+              // And the site's default Layout, which every page naming none
+              // is drawn in.
+              const setup = defaultLayoutSetup;
+              if (setup === null) return saves;
+              const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+              const settings = await readLayoutSettings(
+                await getCachedNextly(),
+                setup.slugs
+              );
+              return `${saves}|default:${settings.defaultLayout ?? ""}`;
+            },
+          }),
+      },
+      bindingReportDeps,
+      deadline
+    );
+  };
+  let bindingsRefreshedAt = 0;
   const requireRewriteInstall = (): RewriteInstall => {
     if (rewriteInstall === null) {
       throw new Error(
@@ -2080,6 +2401,11 @@ export const pageBuilder = (
             throw error;
           }
         },
+        declaredAddresses: declaredPaths,
+        addressHolderOf: addressHolderReader(
+          ctx.services.ownCollections,
+          templates
+        ),
       };
       registerTemplateGuard(ctx, templateGuard);
       // An entry's own design is deleted with its entry, in the delete's
@@ -2175,6 +2501,75 @@ export const pageBuilder = (
         deleteInTransaction: (tx, slug, id) =>
           ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
       });
+      // A template written while its collection is deleted holds the
+      // collection in its own transaction, so the two take turns: see
+      // `holdTemplateCollection`.
+      ctx.hooks.onInTransaction(
+        templates,
+        holdTemplateCollection<PluginCollectionTransaction>(
+          (transaction, collection) =>
+            ctx.services.collections.holdCollectionInTransaction(
+              transaction,
+              collection
+            )
+        )
+      );
+      // A collection's template and its entries' own designs go with the
+      // collection: listed in its delete dialog, and removed in the delete's
+      // transaction, so none is left drawing a collection that is gone.
+      ctx.hooks.onCollectionDelete(
+        templateCollectionDelete<PluginCollectionTransaction>({
+          own: () => new Set(Object.values(ctx.self.collections)),
+          services: {
+            listTemplates: options =>
+              ctx.services.ownCollections.listEntries(templates, options),
+            listTemplatesInTransaction: (transaction, options) =>
+              ctx.services.ownCollections.listEntriesInTransaction(
+                transaction,
+                templates,
+                options,
+                { lock: "update" }
+              ),
+            deleteTemplateInTransaction: (transaction, id) =>
+              ctx.services.collections.deleteEntryInTransaction(
+                transaction,
+                templates,
+                id,
+                {}
+              ),
+            // Named by the field the collection names its entries by, and
+            // its value read as core reads a title, so the dialog shows the
+            // names people recognise.
+            entryTitles: async (collection, ids) => {
+              const config = await ctx.services.collections
+                .getCollection(collection, undefined as never)
+                .catch(() => null);
+              const field =
+                (typeof config === "object" && config !== null
+                  ? titleFieldIn(config)?.name
+                  : undefined) ?? "title";
+              const found = await ctx.services.collections.listEntries(
+                collection,
+                {
+                  where: { id: { in: [...ids] } },
+                  pagination: { limit: ids.length },
+                  select: { id: true, [field]: true },
+                  depth: 0,
+                },
+                { as: "system" }
+              );
+              const titles = new Map<string, string>();
+              for (const entry of found.data as Record<string, unknown>[]) {
+                const title = readableTitleText(entry[field]);
+                if (entry.id !== undefined && title !== undefined) {
+                  titles.set(String(entry.id), title);
+                }
+              }
+              return titles;
+            },
+          },
+        })
+      );
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
@@ -2262,6 +2657,10 @@ export const pageBuilder = (
         // write, so a field hidden a moment ago is refused at the next save.
         // This site's named queries, for a list whose source is one.
         namedQueries: namedQuerySource,
+        // Where templates live, under the host's name for them, so a
+        // template's lists and conditions are judged against the collection
+        // it draws, read from the template itself.
+        templates: templateTargets(ctx.services.ownCollections, templates),
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -2276,6 +2675,15 @@ export const pageBuilder = (
             );
           },
         }),
+        // What a page's bindings may read: each source's declared fields,
+        // whoever may read them, since binding a field the public may not read
+        // is allowed. Read per write, so a field renamed a moment ago is judged
+        // at the next save.
+        bindingShapes: async ref => {
+          // Imported at call time, for the reason the readers above give.
+          const { declaredFieldShapes } = await import("nextly/runtime");
+          return declaredFieldShapes(ref);
+        },
         siteDefinitions: async () => {
           const style = await siteStyleNow();
           // Imported at call time: it imports `node:async_hooks`, which a
@@ -2339,6 +2747,16 @@ export const pageBuilder = (
             }
           ),
         onLayersLockUnjudged: warnLayersLockUnjudged,
+        onBindingsUnjudged: found =>
+          ctx.logger.warn(
+            `[page-builder] a save kept ${String(found.bindings)} binding problem(s) the schema refuses, because the stored value they may already be part of could not be read; repair them in the editor`,
+            {
+              field: found.field,
+              kind: found.kind,
+              slug: found.slug,
+              id: found.id,
+            }
+          ),
         // The components being deleted, read from the plugin's own table on
         // each write that places a component. A table that cannot be read
         // refuses only writes adding a component, and says so here.
@@ -2443,7 +2861,7 @@ export const pageBuilder = (
               pagesSlug,
               id
             );
-          return found as unknown as Readonly<Record<string, unknown>>;
+          return found;
         } catch (error) {
           if (NextlyError.isNotFound(error)) return null;
           throw error;
@@ -2510,6 +2928,34 @@ export const pageBuilder = (
           throw error;
         }
       };
+      const readStoredAddresses = storedAddressesReader(
+        ctx.services.ownCollections,
+        templatesSlug
+      );
+      // The entries of `collection` waiting for an address another document
+      // holds, as last committed, for the template action's answer.
+      waitingEntriesOf = async collection => {
+        const waiting = new Set<string>();
+        for (let page = 1; ; page += 1) {
+          const { rows, total } = await committedClaims(
+            claimsStore,
+            {
+              kind: { equals: "waiting" },
+              holderCollection: { equals: collection },
+            },
+            { limit: 500, page }
+          );
+          for (const row of rows) {
+            if (
+              row.kind === "waiting" &&
+              row.holder?.collection === collection
+            ) {
+              waiting.add(row.holder.id);
+            }
+          }
+          if (rows.length === 0 || page * 500 >= total) return waiting.size;
+        }
+      };
       const claimsDeps: EntryClaimsDeps = {
         claims: claimsStore,
         addresses: templateAddresses,
@@ -2549,22 +2995,68 @@ export const pageBuilder = (
         },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.
-        templatePublished: async collection => {
-          const found = await ctx.services.ownCollections.listEntries(
-            templatesSlug,
-            {
-              where: { collection: { equals: collection } },
-              pagination: { limit: 1 },
-              depth: 0,
-            }
-          );
+        templateOf: async (collection, tx) => {
+          const read = {
+            where: { collection: { equals: collection } },
+            pagination: { limit: 1 },
+            // Asked on every save of a collection with a slug: the routing
+            // columns alone, never the template's design.
+            select: {
+              id: true,
+              collection: true,
+              status: true,
+              [TEMPLATE_ADDRESS_FIELD]: true,
+            },
+            depth: 0,
+          };
+          // On a save's transaction, its own connection: a save holding the
+          // pool's last connection never waits for a second one.
+          const found =
+            tx === undefined
+              ? await ctx.services.ownCollections.listEntries(
+                  templatesSlug,
+                  read
+                )
+              : await ctx.services.ownCollections.listEntriesInTransaction(
+                  tx,
+                  templatesSlug,
+                  read
+                );
           const row = found.data[0] as Record<string, unknown> | undefined;
+          if (row === undefined || row.collection !== collection) return null;
+          const address = storedAddressOf(row[TEMPLATE_ADDRESS_FIELD]);
+          return {
+            published: row.status === "published",
+            address: address === null ? null : addressSegments(address),
+          };
+        },
+        storedAddresses: async () =>
+          new Map(
+            [...(await readStoredAddresses()).entries()].map(
+              ([collection, address]) => [collection, addressSegments(address)]
+            )
+          ),
+        // The page builder's own documents are pages, stores and
+        // bookkeeping, never entries served under a template address.
+        neverServed: collection =>
+          Object.values(ctx.self.collections).includes(collection),
+        // The template guard's own judgement of which collections may have
+        // one; a localized collection is refused an address.
+        mayHaveTemplate: async collection => {
+          const problem = await templateCollectionProblem(
+            collection,
+            collectionRecord,
+            new Set(Object.values(ctx.self.collections))
+          );
           return (
-            row !== undefined &&
-            row.collection === collection &&
-            row.status === "published"
+            problem === null &&
+            (await collectionRecord(collection))?.localized !== true
           );
         },
+        storedAddressProblem: (address, collection) =>
+          storedAddressProblem(address, collection, {
+            declared: declaredPaths,
+          }),
         publishedEntries: async (collection, page, size) => {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;
@@ -2585,9 +3077,9 @@ export const pageBuilder = (
           return found.items as readonly Readonly<Record<string, unknown>>[];
         },
       };
-      if (templateAddresses.size > 0) {
-        registerEntryAddressClaims(ctx.hooks, claimsDeps);
-      }
+      // Whatever is declared in code: a collection created at runtime is
+      // given its address on its template, at any time after start.
+      registerEntryAddressClaims(ctx.hooks, claimsDeps);
       const passDeps = {
         ...claimsDeps,
         withTransaction: <T>(work: (tx: Tx) => Promise<T>) =>
@@ -2600,6 +3092,20 @@ export const pageBuilder = (
       checkTemplateAddresses = async () => {
         const own = new Set(Object.values(ctx.self.collections));
         const problems: string[] = [];
+        // An address declared in code is compared with every other
+        // collection's stored one: two collections may not share one. A
+        // collection promoted into code taking over its own stored address
+        // is no clash.
+        const stored = await readStoredAddresses();
+        for (const [collection, address] of declaredPaths) {
+          for (const [other, held] of stored) {
+            if (held === address && other !== collection) {
+              problems.push(
+                `"${collection}" is given the address "${address}" in code, which the collection "${other}" is already served at, set on its template in the admin. Each collection needs an address of its own: change one of them.`
+              );
+            }
+          }
+        }
         for (const collection of templateAddresses.keys()) {
           const problem = await templateCollectionProblem(
             collection,
@@ -2638,6 +3144,20 @@ export const pageBuilder = (
           ...templateAddresses.keys(),
         ],
         holders: [pagesSlug, ...templateAddresses.keys()],
+        // Served while its template stores an address and it may still have
+        // a template: one that lost its `slug` field or became localized
+        // is served nowhere, whatever claims its entries still hold.
+        storesAddress: async collection =>
+          ((await claimsDeps.templateOf(collection))?.address ?? null) !==
+            null && (await claimsDeps.mayHaveTemplate(collection)),
+        // Listed for pre-rendering: those given an address in code, and
+        // those whose template stores one.
+        entryHolders: async () => [
+          ...new Set([
+            ...templateAddresses.keys(),
+            ...(await readStoredAddresses()).keys(),
+          ]),
+        ],
         startup: () => addressStartup,
       });
       // A page published naming a Layout that is not: it is served inside the
@@ -2764,6 +3284,10 @@ export const pageBuilder = (
         });
       }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
+      // The "Bindings to fix" report: each committed write's document judged
+      // again, and every document by the sweep once the schema changes.
+      bindingReportCtx = ctx;
+      registerBindingReportOnWrite(ctx, bindingReportDeps);
       // The breakpoints the write path judges a save against: one read of
       // the site's style, the same answer the blocks field gets. A removal's
       // walk, its locks and the write report all ask it, so they agree on
@@ -2920,7 +3444,7 @@ export const pageBuilder = (
             store: componentStoreOf(opts),
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
-            templates: { guard: requireTemplateGuard },
+            templates: templateActions,
             namedQueries: namedQueryDeclarations,
           }),
         // Who holds a path, for the site's one content route: a page, or a
@@ -2965,6 +3489,9 @@ export const pageBuilder = (
         // The breakpoint removal a write opened again, which nobody is
         // waiting on: carried on each pass until it is done.
         breakpointRemovalJob(removalService),
+        // The check of every document for the bindings report, when the
+        // schema changed since the last complete one.
+        bindingsReportJob(bindingReportPass),
         // Delete component's sweep: a delete that stopped after its write
         // becomes its tombstone. Never a host write or a delete.
         componentDeleteJob(componentDeleteSweepDeps),
@@ -3190,8 +3717,22 @@ export const pageBuilder = (
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           readRetired: readRetiredFor,
         }),
-        // Give a collection its template and publish it, each with a dry run.
-        templateActionsRoute({ guard: requireTemplateGuard }),
+        // Give a collection its template, publish or delete it, set its address,
+        // and give an entry its own design or take it away, each with a dry run.
+        templateActionsRoute(templateActions),
+        // A template's preview in the editor: the entries of its collection
+        // the author may preview, and the one being previewed, read as the
+        // author asking. Reads only: which entry is previewed is not stored.
+        templatePreviewEntriesRoute({ guard: requireTemplateGuard }),
+        templatePreviewEntryRoute({ guard: requireTemplateGuard }),
+        // Whether this caller may set or change a template address: what the
+        // template form asks before it offers the address for editing. Not a
+        // security boundary: the field's rules and the action decide.
+        templateRoutingRoute(),
+        // A collection's own designs, its template and its names, read as
+        // the caller: what the admin's Design section, Design column and the
+        // template's own designs list draw from.
+        entryDesignsRoute({ guard: requireTemplateGuard }),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.
@@ -3229,6 +3770,39 @@ export const pageBuilder = (
         // The canvas's bound props: the entry being edited, the Singles its
         // bindings read and the site settings, read as the author asking.
         canvasBindingsRoute(),
+        // The documents whose bindings no longer fit, for those who edit
+        // pages, each listed only when the caller may read it.
+        bindingsToFixRoute({
+          store: bindingReportDeps.store,
+          readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
+          // A read starts a check when the schema may have changed, at most
+          // once a minute, and never waits for it.
+          refresh: routeCtx => {
+            const now = Date.now();
+            if (now - bindingsRefreshedAt < BINDINGS_REFRESH_MS) return;
+            bindingsRefreshedAt = now;
+            routeCtx.services.jobs
+              .runSweepNow(BINDINGS_REPORT_JOB, {
+                maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+              })
+              .catch((error: unknown) =>
+                bindingReportCtx?.logger.warn(
+                  "[page-builder] the bindings report's check could not start; the next jobs pass runs it.",
+                  { error }
+                )
+              );
+          },
+          // Where a Layout region's binding is edited, and the language the
+          // builder edits, for each row's way into the editor.
+          componentStore: () =>
+            rewriteInstall?.store.collection ??
+            bindingReportCtx?.self.collections[COMPONENTS_SLUG] ??
+            COMPONENTS_SLUG,
+          defaultLocale: () =>
+            bindingReportCtx?.config.localization?.defaultLocale,
+          readableSingles: (routeCtx, slugs) =>
+            readableSingles(routeCtx, slugs),
+        }),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
@@ -3386,6 +3960,11 @@ export const pageBuilder = (
         // Design (`update-site-style`), so a lock protects a style from every
         // Design manager who does not hold it. Asked by the lock route alone.
         LOCK_SHARED_STYLES_DECLARATION,
+        // Setting or changing where a collection's entries are served moves
+        // live addresses, so it is a grant of its own, apart from updating
+        // templates. Asked by the address field's rules and the template
+        // action.
+        MANAGE_TEMPLATE_ROUTING_DECLARATION,
       ],
 
       // No `publish` permission. One was declared here and nothing ever read
@@ -3393,6 +3972,13 @@ export const pageBuilder = (
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
+      // The "Bindings to fix" card, for those who edit pages, hidden while
+      // they may see no broken binding.
+      dashboard: {
+        widgets: [bindingsToFixWidget(bindingsVisibleTo)],
+        // And a line on the Needs your attention card every dashboard shows.
+        attention: [bindingsToFixAttention(bindingsVisibleTo)],
+      },
       admin: {
         // What the editor in the browser needs of the options: see
         // `adminClientConfig`.
@@ -3401,6 +3987,16 @@ export const pageBuilder = (
           canvasPath,
           fontsOff: fonts.off,
         }),
+        // The "Bindings to fix" page, at
+        // `/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`,
+        // reached from its dashboard card and the editor's notice.
+        pages: [
+          {
+            path: "/bindings-to-fix",
+            component: BINDINGS_TO_FIX_PAGE_COMPONENT,
+            requiredPermission: EDIT_PAGES_PERMISSION,
+          },
+        ],
         // The three LIBRARIES, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
@@ -3450,6 +4046,28 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // An entry's own design, where an author meets it.
+        //
+        // The Design section of an entry's side panel, first, before Status:
+        // which design the entry is shown with, and its own design. Declared
+        // at the `collection.edit` place with no collections named, so it is
+        // offered on every collection's entries, a collection the Schema
+        // Builder adds later included; it draws nothing for an entry whose
+        // collection cannot have a template, which leaves no section.
+        contributions: [
+          {
+            id: "nextlyhq-plugin-page-builder.entry-design",
+            kind: "sidebarSection",
+            place: "collection.edit",
+            label: "Design",
+            component: ENTRY_DESIGN_SECTION_COMPONENT,
+            before: "status",
+            // On a phone the panel opens only from the document's menu, so
+            // the section sits above the form there, where an author meets
+            // which design the entry is shown with before its fields.
+            narrow: "above-form",
+          },
+        ],
         // Delete component on the component store, wherever it is: the
         // plugin's own collection (followed through a rename, as every view
         // key is), or the host's store named by `componentReadiness`. The
@@ -3458,7 +4076,24 @@ export const pageBuilder = (
         // run (a past version on screen, a colleague's claim). A host's store
         // also gets the delete tools above its list, for the row action; the
         // plugin's own collection declares them itself.
-        views: deleteComponentViews(componentStoreOf(opts)),
+        //
+        // On a template's own document screen: the entries with their own
+        // design, in its panel, and a Delete that says what deleting the
+        // template, or an own design, does to the site before it happens.
+        views: {
+          ...deleteComponentViews(componentStoreOf(opts)),
+          [TEMPLATES_SLUG]: {
+            documentActions: {
+              delete: { component: TEMPLATE_DELETE_COMPONENT },
+            },
+            panelSections: [
+              {
+                title: "Own designs",
+                component: TEMPLATE_OWN_DESIGNS_COMPONENT,
+              },
+            ],
+          },
+        },
         // A host's own store's list gets Delete component on each row through
         // tools drawn in the header, which is on every page: the slot above a
         // list is the host's own to fill, and a second one there would be
@@ -3484,6 +4119,22 @@ export const pageBuilder = (
             collection: LAYOUTS_SLUG,
             to: `/admin/collections/${LAYOUTS_SLUG}`,
             icon: "PanelsTopLeft",
+          },
+          // The designs collections' entries are drawn with, and where each
+          // collection's entries are served.
+          {
+            label: "Templates",
+            collection: TEMPLATES_SLUG,
+            to: `/admin/collections/${TEMPLATES_SLUG}`,
+            icon: "LayoutDashboard",
+          },
+          // The site-wide report of bindings that no longer fit, for those
+          // who edit pages, as its page asks.
+          {
+            label: "Bindings to fix",
+            to: BINDINGS_TO_FIX_PAGE_HREF,
+            icon: "AlertTriangle",
+            requiredPermission: EDIT_PAGES_PERMISSION,
           },
         ],
         // No `schemaBuilderSlot`. It named a component this package no longer

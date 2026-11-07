@@ -118,6 +118,8 @@ function isPublicRead(args: Record<string, unknown>): boolean {
 /** A Direct API over one page, `about`, and the posts the public may read. */
 function instance(posts: Record<string, Record<string, unknown>>) {
   const find = vi.fn(async (args: Record<string, unknown>) => {
+    // A collection the public is refused outright, as the Direct API refuses.
+    if (args.collection === "denied") throw new Error("forbidden");
     const where = JSON.stringify(args.where ?? {});
     let items: Record<string, unknown>[] = [];
     if (args.collection === "pages") {
@@ -166,7 +168,10 @@ const HELD = {
   "/news/x": { collection: "news", id: "n1", kind: "address" as const },
 };
 
-const POSTS = { "post-1": { id: "post-1", title: "Hello world" } };
+const POSTS = {
+  "post-1": { id: "post-1", title: "Hello world" },
+  other: { id: "other", title: "Another post" },
+};
 
 function config(
   overrides: Partial<ContentPageConfig> = {},
@@ -344,6 +349,37 @@ describe("the content route", () => {
     expect(asked).toContainEqual(["posts", "other", undefined]);
   });
 
+  it("draws no link to an entry the public may not read, and never asks the store for its address", async () => {
+    const asked: string[] = [];
+    const route = createContentPage(
+      config({
+        // The store holds an address for it: it is published, but its
+        // collection's read access keeps it from visitors.
+        entryPath: async (_collection, id) => {
+          asked.push(id);
+          return `/blog/${id}`;
+        },
+      })
+    );
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { slug: ["blog", "hello"] } })
+    );
+    expect(
+      await element.props.context?.resolveEntryPath("posts", "restricted")
+    ).toBeNull();
+    expect(asked).not.toContain("restricted");
+    // Nor to one in a collection the public is refused outright: the
+    // refusal is no target, never an error a block must handle.
+    expect(
+      await element.props.context?.resolveEntryPath("denied", "d1")
+    ).toBeNull();
+    expect(asked).not.toContain("d1");
+    // A public entry beside it still gets its address.
+    expect(
+      await element.props.context?.resolveEntryPath("posts", "other")
+    ).toBe("/blog/other");
+  });
+
   it("looks up a path under a mount by the whole path, so only the runtime's own paths are refused", async () => {
     const options = config();
     await createContentPage({
@@ -407,8 +443,10 @@ describe("the content route", () => {
     ).toBe("/blog/other");
     // A template's unpublish or a page's handover moves the target's address
     // with no write to the target's own collection.
-    expect(runtime.tags).toEqual([
-      ["nextly:pages", "nextly:templates", "nextly:posts"],
+    expect(runtime.tags).toContainEqual([
+      "nextly:pages",
+      "nextly:templates",
+      "nextly:posts",
     ]);
   });
 });

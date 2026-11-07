@@ -10,7 +10,7 @@ import {
   DialogTitle,
   Spinner,
 } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -95,6 +95,19 @@ export interface BulkDeleteDialogProps {
    * If not provided, a default description will be used based on entityType
    */
   description?: string;
+
+  /**
+   * More the delete takes with it, shown below the items and before the
+   * confirm, such as what plugins hold for a collection being deleted.
+   */
+  children?: ReactNode;
+
+  /**
+   * Hold the confirm, without the loading state: while what `children` show
+   * is still being asked for.
+   * @default false
+   */
+  confirmDisabled?: boolean;
 }
 
 /**
@@ -165,6 +178,8 @@ export function BulkDeleteDialog({
   entityType = "User",
   entityTypePlural = "Users",
   description,
+  children,
+  confirmDisabled = false,
 }: BulkDeleteDialogProps): JSX.Element {
   // Support both new `items` prop and deprecated `users` prop for backward compatibility
   const normalizedItems: DeleteItem[] =
@@ -238,6 +253,8 @@ export function BulkDeleteDialog({
           )}
         </div>
 
+        {children}
+
         <DialogFooter>
           <Button
             variant="outline"
@@ -249,7 +266,7 @@ export function BulkDeleteDialog({
           <Button
             variant="destructive"
             onClick={onConfirm}
-            disabled={isLoading}
+            disabled={isLoading || confirmDisabled}
           >
             {isLoading && <Spinner size="md" className="mr-2" />}
             Delete {count} {entityLabel}
