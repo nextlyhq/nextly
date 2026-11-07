@@ -26,7 +26,12 @@ describe("the template address control", () => {
   });
 
   it("is read-only while the answer is coming, and when it failed", () => {
-    expect(addressFieldView({}, { state: "pending" }).editable).toBe(false);
+    // Unexplained while pending, so no note appears and then goes.
+    expect(addressFieldView({}, { state: "pending" })).toEqual({
+      editable: false,
+      note: null,
+      locked: false,
+    });
     const failed = addressFieldView({}, { state: "failed" });
     expect(failed.editable).toBe(false);
     expect(failed.note).toMatch(/Couldn't check/);

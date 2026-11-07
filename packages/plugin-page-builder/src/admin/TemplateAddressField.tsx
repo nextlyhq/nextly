@@ -83,12 +83,11 @@ export function addressFieldView(
     return { editable: false, note: null, locked: false };
   }
   switch (answer.state) {
+    // Read-only and unexplained for the moment the answer takes: a note
+    // drawn and then taken away would move everything below it for the
+    // authors who may edit, who are the ones this form is for.
     case "pending":
-      return {
-        editable: false,
-        note: "Checking whether you can change this address…",
-        locked: false,
-      };
+      return { editable: false, note: null, locked: false };
     case "failed":
       return {
         editable: false,
@@ -134,7 +133,9 @@ export function TemplateAddressField<
   disabled = false,
 }: TemplateAddressFieldProps<TFieldValues>): JSX.Element {
   const { field, fieldState } = useController({ name, control });
-  const view = addressFieldView({ readOnly, disabled }, useRoutingAnswer());
+  const answer = useRoutingAnswer();
+  const view = addressFieldView({ readOnly, disabled }, answer);
+  const answerPending = answer.state === "pending";
   const noteId = useId();
   const label =
     typeof declaration?.label === "string" ? declaration.label : "Address";
@@ -153,6 +154,7 @@ export function TemplateAddressField<
         aria-label={label}
         aria-describedby={view.note === null ? undefined : noteId}
         aria-invalid={fieldState.invalid || undefined}
+        aria-busy={answerPending || undefined}
         value={value}
         onChange={event => field.onChange(event.target.value)}
         onBlur={field.onBlur}
@@ -175,17 +177,19 @@ export function TemplateAddressField<
             : "bg-muted/40 font-mono text-muted-foreground"
         }
       />
-      {/* Always drawn, so the answer arriving moves nothing below it. */}
-      <p
-        id={noteId}
-        className="flex min-h-4 items-center gap-1.5 text-xs text-muted-foreground"
-        aria-live="polite"
-      >
-        {view.locked ? (
-          <Lock className="size-3.5 shrink-0" aria-hidden="true" />
-        ) : null}
-        {view.note === null ? null : <span>{view.note}</span>}
-      </p>
+      {/* Only when there is something to say, so the field's description
+          sits under the input as every other field's does. */}
+      {view.note === null ? null : (
+        <p
+          id={noteId}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          {view.locked ? (
+            <Lock className="size-3.5 shrink-0" aria-hidden="true" />
+          ) : null}
+          <span>{view.note}</span>
+        </p>
+      )}
     </div>
   );
 }
