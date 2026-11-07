@@ -28,13 +28,12 @@ import {
   SITE_CODE_DATA_ATTRIBUTE,
 } from "../site-code/bootstrap";
 import {
-  siteCodeEntryProblem,
   siteCodeScriptKind,
   type SiteCodeAttrs,
   type SiteCodeEntry,
   type SiteCodeSlot,
 } from "../site-code/rules";
-import { SITE_CODE_SLUG } from "../site-code/storage";
+import { SITE_CODE_SLUG, storedSiteCodeEntries } from "../site-code/storage";
 
 /** What `<SiteCode>` is given. */
 export interface SiteCodeProps {
@@ -104,23 +103,6 @@ async function readStoredSiteCode(slug: string): Promise<unknown> {
       keyParts: ["page-builder", "site-code", slug],
     }
   );
-}
-
-/**
- * The stored entries for `slot` that the rules still accept; any other is
- * left out, and the server log says so.
- */
-function entriesOf(doc: unknown, slot: SiteCodeSlot): SiteCodeEntry[] {
-  const stored = (doc as Record<string, unknown> | null)?.[slot];
-  if (!Array.isArray(stored)) return [];
-  return stored.filter((entry: unknown): entry is SiteCodeEntry => {
-    const problem = siteCodeEntryProblem(entry, slot);
-    if (problem === undefined) return true;
-    console.warn(
-      `[page-builder] A stored site code entry was left out of the ${slot}: ${problem}.`
-    );
-    return false;
-  });
 }
 
 /** The React names of the attributes HTML spells otherwise. */
@@ -218,7 +200,7 @@ export async function SiteCode(
   // The preview pane shows drafts in draft mode, framed by the admin.
   if ((await draftMode()).isEnabled) return null;
   const slug = props.slug ?? SITE_CODE_SLUG;
-  const entries = entriesOf(
+  const entries = storedSiteCodeEntries(
     await (props.read ?? readStoredSiteCode)(slug),
     props.slot
   );

@@ -531,7 +531,6 @@ export const NAMED_QUERY_TEXT: {
   readonly counted: (matching: number, shown: number) => string;
   readonly uncounted: (query: string) => string;
   readonly nestedRelated: string;
-  readonly paginated: string;
   readonly needsInput: string;
   readonly inputsNote: (
     query: string,
@@ -596,8 +595,6 @@ export const NAMED_QUERY_TEXT: {
     `${query} doesn't count its entries, so this list can't be split into pages. Turn this off, or ask a developer to make it return a total.`,
   nestedRelated:
     "The list around this one shows a custom source's rows, which have no related entries. Choose a collection.",
-  paginated:
-    "A custom source's list can't be split into pages yet. Turn off Split into pages, or choose a collection.",
   // The Source menu's tag on a query an author must give a value to.
   needsInput: "Needs input",
   inputsNote: (query, required, { others, waiting }) => {
@@ -863,11 +860,15 @@ export interface NamedQueryKnown {
   readonly single: (slug: string) => boolean;
 }
 
-/** Whether a value is a list of non-empty strings. */
+/** Whether a value is a list of non-empty strings, with no holes. */
 function isSlugList(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) &&
-    value.every(each => typeof each === "string" && each !== "")
+    // `Array.from` reads every slot, so a hole is judged as undefined
+    // rather than skipped, as `every` alone would skip it.
+    Array.from(value as unknown[]).every(
+      each => typeof each === "string" && each !== ""
+    )
   );
 }
 
@@ -919,7 +920,9 @@ function choiceShapeProblem(
   if (
     !Array.isArray(options) ||
     options.length === 0 ||
-    !options.every(
+    // Every slot is read, so a hole (serialized as null) is refused rather
+    // than skipped, as `every` alone would skip it.
+    !Array.from(options as unknown[]).every(
       option =>
         isPlainRecord(option) &&
         typeof option.value === "string" &&
@@ -1085,19 +1088,28 @@ function rowsProblem(
   if (!isPlainRecord(rows)) {
     return "its rows are not { collection } or { fields, key }";
   }
+  // Read as every consumer reads it (`"fields" in rows`): rows holding
+  // `fields` are a schema of their own, whatever else they hold, so both
+  // shapes at once are refused, and `fields` is judged whenever it is there.
+  if ("fields" in rows && "collection" in rows) {
+    return "its rows name both a collection and fields; give { collection } or { fields, key }, not both";
+  }
+  if ("fields" in rows) {
+    const fields = rows.fields;
+    if (!Array.isArray(fields) || fields.length === 0) {
+      return "its rows are not { collection } or { fields, key }";
+    }
+    return (
+      rowFieldsProblem(fields, "its rows") ??
+      rowKeyProblem(rows, fields as BindingFieldShape[])
+    );
+  }
   if (typeof rows.collection === "string") {
     return collections.has(rows.collection)
       ? undefined
       : `its rows are entries of "${rows.collection}", which it does not declare in reads.collections`;
   }
-  const fields = rows.fields;
-  if (!Array.isArray(fields) || fields.length === 0) {
-    return "its rows are not { collection } or { fields, key }";
-  }
-  return (
-    rowFieldsProblem(fields, "its rows") ??
-    rowKeyProblem(rows, fields as BindingFieldShape[])
-  );
+  return "its rows are not { collection } or { fields, key }";
 }
 
 /** Why a declaration's reads are not lists of slugs, or nothing. */
@@ -1116,15 +1128,25 @@ function readsProblem(reads: unknown): string | undefined {
   }
   // Each declared read tags the query's cached result, and a cache entry
   // keeps a bounded number of tags: past it, a write to a source left off
-  // would not refresh the page.
+  // would not refresh the page. The lists are counted as written, repeats
+  // included, since every element is served and expanded into tags.
   const count =
-    new Set(reads.collections ?? []).size +
-    new Set(reads.singles ?? []).size +
+    (reads.collections?.length ?? 0) +
+    (reads.singles?.length ?? 0) +
     (reads.site === true ? 1 : 0);
   if (count > NAMED_QUERY_MAX_READS) {
     return `it declares ${String(count)} reads; at most ${String(NAMED_QUERY_MAX_READS)} are allowed, so each can refresh the page`;
   }
   return undefined;
+}
+
+/** Why a declaration's `total` flag is not true or false, or nothing. */
+function totalProblem(total: unknown): string | undefined {
+  // Clients read the flag as `=== true`, so any other present value would be
+  // advertised as uncounted while the run still returned a count.
+  return total === undefined || typeof total === "boolean"
+    ? undefined
+    : "its total is not true or false";
 }
 
 /** Why a declaration's own words and numbers are out of bounds, or nothing. */
@@ -1216,6 +1238,7 @@ export function namedQueryProblem(
   const reads = readsProblem(definition.reads);
   const problem =
     headerProblem(definition) ??
+    totalProblem(definition.total) ??
     reads ??
     (() => {
       const collections = new Set(

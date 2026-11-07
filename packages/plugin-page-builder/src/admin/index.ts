@@ -32,6 +32,9 @@ import {
 
 import {
   BUILDER_VIEW_COMPONENT,
+  COMPONENT_STORE_DELETE_HOST_COMPONENT,
+  COMPONENT_LIST_TOOLS_COMPONENT,
+  DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "../builder-view";
 import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
@@ -53,6 +56,11 @@ import "../styles/editor.css";
 
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
+import {
+  ComponentListTools,
+  ComponentStoreDeleteHost,
+  DeleteComponentReplacement,
+} from "./DeleteComponentAction";
 import { PageBuilderView } from "./editor/PageBuilderView";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
 import { TemplateAddressField } from "./TemplateAddressField";
@@ -97,6 +105,13 @@ const COMPONENTS = {
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
+  // Above the Components list: Import from file, and the row action's
+  // Delete component dialog; for a host's component store, the same tools
+  // drawn through the header slot.
+  [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
+  [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
+  // The component store's own Delete, opening Delete component instead.
+  [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
   // The template's address, editable under the routing permission.
   [TEMPLATE_ADDRESS_FIELD_PATH]: TemplateAddressField,
 };
@@ -105,6 +120,8 @@ const COMPONENTS = {
 registerComponents(COMPONENTS);
 // "Export" on the Components, Patterns and Layouts lists.
 registerExportActions();
+// "Delete component…" on the component store's list is registered by the
+// list's own tools, under the slug the site resolved.
 
 // Lazy fallback: the host can trigger registration on demand by package prefix.
 registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
@@ -116,6 +133,9 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 export {
   BlocksField,
   BlocksSummary,
+  ComponentListTools,
+  ComponentStoreDeleteHost,
+  DeleteComponentReplacement,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
   TemplateAddressField,

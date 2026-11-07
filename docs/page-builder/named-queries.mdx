@@ -127,7 +127,9 @@ sources register, stops the boot and names both sources.
 - **`rows`** is what a row is: a collection's entries (`{ collection }`, keyed by id), or
   a field schema of your own with a text or number `key`. The editor's binding picker and
   the binding checks read a list's items from it.
-- **`total`** says `run` returns how many rows match before the window.
+- **`total`** says `run` returns how many rows match before the window. A list split into
+  pages needs it: its pages are counted from the total, so the save refuses Split into
+  pages on a list whose query does not declare it.
 - **`timeoutMs`** bounds how long `run` may take: 5000 by default, at most 30000.
 - **`revalidate`** bounds how long a cached result lives, in seconds. Set it when the
   answer depends on the date.
@@ -203,6 +205,15 @@ The save refuses a list missing a required input, a value an input does not take
 query the site does not register, in the words the editor shows. A page saved before a
 query was removed keeps saving, with a warning, and the list shows its empty state. An
 input the query no longer takes is left out, with a warning.
+
+## Split into pages
+
+A list whose query declares `total: true` can be split into pages, as a collection list
+can: page `n` at `<address>/page/n` asks `run` for the window that starts `limit` rows
+further on for each page before it, after Skip the first, and the number of pages is the
+total less the skipped rows, divided by Number of items and rounded up. A page past the
+last is not found. A query that stops returning a total draws the list's empty state, and
+the editor says why, rather than guessing how many pages there are.
 
 ## When a query fails
 

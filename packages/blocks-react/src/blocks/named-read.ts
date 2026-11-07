@@ -31,6 +31,7 @@ import {
   judgeNamedParams,
   NAMED_QUERY_TEXT,
   namedQueryDeclaration,
+  namedQueryRowFields,
   namedQueryTimeout,
   type BindingFieldShape,
   type ListNamedQuery,
@@ -366,10 +367,32 @@ async function execute(
  * the run and the binding checks of its rows share, so a list's items are
  * judged against the query that made them.
  */
-export function namedQueryLookup(
+function namedQueryLookup(
   host: Pick<NamedQueryHost, "definitionOf"> | undefined
 ): (name: string) => NamedQueryDefinition | undefined {
   return host?.definitionOf ?? (() => undefined);
+}
+
+/**
+ * The fields a row of the named query `query` carries, as a host's queries
+ * declare them: its own schema, or the public fields of the collection its
+ * rows are entries of (`collectionFields`). `undefined` when either is not
+ * known. The one reading a row's bindings and its blocks' visibility
+ * conditions share, so both judge a row by the same fields.
+ */
+export function queryRowFields(
+  host: Pick<NamedQueryHost, "definitionOf"> | undefined,
+  query: string,
+  collectionFields: (
+    collection: string
+  ) => readonly BindingFieldShape[] | undefined
+): readonly BindingFieldShape[] | undefined {
+  const lookup = namedQueryLookup(host);
+  return namedQueryRowFields(
+    { declarationOf: name => lookup(name) },
+    query,
+    collectionFields
+  );
 }
 
 /** What an error is, for a log: its code or its class, never its words. */
@@ -465,6 +488,7 @@ const FAILURE_CODES: ReadonlySet<string> = new Set<NamedQueryFailureCode>([
   "bad-rows",
   "rows-hidden",
   "threw",
+  "uncounted",
 ]);
 
 /** A log reference as a failure names it: `NQ-` and six hex digits. */
@@ -622,7 +646,10 @@ function failed(
     failed: true,
     diagnostic: {
       kind: "query-failed",
-      message: NAMED_QUERY_TEXT.runFailed(detail),
+      // A query that doesn't count is a setting refused, not a read that
+      // failed: its own words say what to change, and nothing failed to load.
+      message:
+        code === "uncounted" ? detail : NAMED_QUERY_TEXT.runFailed(detail),
       // Offered to copy only where the words name it, as a thrown error's do.
       ...(detail.includes(ref) ? { ref } : {}),
     },
@@ -765,13 +792,19 @@ function succeeded(
  * that fails comes back as `failed` with what failed, and the list draws its
  * empty state.
  *
- * `window` is the list's own limit and offset, as `list-read` reads them.
+ * `window` is the list's own limit and offset, as `list-read` reads them,
+ * moved to the page drawn where the list is split into pages. `counted`
+ * says the list counts its pages from the run's total, so a run that
+ * returns none fails (`uncounted`) rather than letting anything guess how
+ * many pages there are: a query whose declaration changed since the page
+ * was saved.
  */
 export async function readNamedList(
   named: ListNamedQuery,
   window: { readonly limit: number; readonly offset: number },
   ctx: PageContext & { readonly namedQueries: NamedQueryHost },
-  nodeId: string
+  nodeId: string,
+  options: { readonly counted?: boolean } = {}
 ): Promise<NamedListOutcome> {
   const host = ctx.namedQueries;
   const claim = () => ctx.queries?.take() !== false;
@@ -851,6 +884,20 @@ export async function readNamedList(
   // made for it.
   if (!ranHere && !joined && !replayClaims(data.reads, claim)) {
     return failed("budget", NAMED_QUERY_TEXT.budget(declaration.label), at);
+  }
+  // Checked after the run's reads are claimed, so a page costs the same
+  // whether or not its query still counts. Counting is what the query
+  // declares, as the save and the editor judge it: a total a query returns
+  // without declaring one is not counted on.
+  if (
+    options.counted === true &&
+    (declaration.total !== true || data.total === undefined)
+  ) {
+    return failed(
+      "uncounted",
+      NAMED_QUERY_TEXT.uncounted(declaration.label),
+      at
+    );
   }
   return succeeded(data, declaration, host);
 }

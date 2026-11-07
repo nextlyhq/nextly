@@ -563,6 +563,36 @@ describe("rewriting every host of a component", () => {
     expect(s.run().phase).toBe("converting");
   });
 
+  it("holds no write's body on a dry run that does not ask for them", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 1 } },
+    });
+
+    const report = await rewriteHosts(s.deps, { ...args, dryRun: true });
+
+    // The usage confirmation walks thousands of documents this way.
+    expect(report.rewritten.map(host => host.id)).toEqual(["a", "b"]);
+    expect(report.writes).toBeUndefined();
+  });
+
+  it("reports each write with its body on a dry run that asks for them", async () => {
+    const s = site({
+      a: { published: { copies: 1 } },
+      b: { published: { copies: 0 } },
+    });
+
+    const report = await rewriteHosts(s.deps, {
+      ...args,
+      dryRun: true,
+      plannedWrites: true,
+    });
+
+    expect(report.writes?.map(write => write.host.id)).toEqual(["a"]);
+    expect(report.writes?.[0]?.value).toBeDefined();
+    expect(s.writes).toEqual([]);
+  });
+
   it("walks only the run it was given, never one opened in its place", async () => {
     const s = site({ a: { published: { copies: 1 } } });
     const read: string[] = [];

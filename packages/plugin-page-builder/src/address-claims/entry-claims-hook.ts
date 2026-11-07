@@ -142,8 +142,12 @@ export interface EntryClaimsDeps {
     page: number,
     size: number
   ) => Promise<readonly Row[]>;
-  /** Names the document an address is held by, in a refusal. */
-  readonly describe: DescribeHolder;
+  /**
+   * Names the document an address is held by, in a refusal, reading it on
+   * the write's own transaction, so naming it takes no second connection
+   * from the pool while the save holds one.
+   */
+  readonly describe: (tx: Tx) => DescribeHolder;
 }
 
 /** The slice of an in-transaction write the hooks read. */
@@ -295,7 +299,7 @@ async function holdEntryClaims(
     write.transaction,
     holder,
     { addresses: wanted, spaces: [] },
-    deps.describe
+    deps.describe(write.transaction)
   );
 }
 
@@ -337,7 +341,7 @@ async function claimPagesAt(
       await claimSpace(deps.claims, tx, {
         list,
         holder,
-        describe: deps.describe,
+        describe: deps.describe(tx),
       });
     }
     for (const address of page.addresses) {
@@ -348,7 +352,7 @@ async function claimPagesAt(
         await claimAddress(deps.claims, tx, {
           address,
           holder,
-          describe: deps.describe,
+          describe: deps.describe(tx),
         });
       }
     }
@@ -511,7 +515,7 @@ async function settleEntry(
     tx,
     { collection, id: String(id) },
     { addresses: wanted, spaces: [] },
-    deps.describe,
+    deps.describe(tx),
     { wait: true }
   );
 }

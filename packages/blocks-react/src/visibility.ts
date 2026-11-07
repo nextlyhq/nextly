@@ -3,6 +3,7 @@ import {
   declaresNoMarkup,
   evaluateConditions,
   isConditionGated,
+  type BindingFieldShape,
   type BlockDocument,
   type BlockNode,
   type ConditionDayStart,
@@ -12,6 +13,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { conditionDayStart } from "./blocks/list-read";
+import { queryRowFields } from "./blocks/named-read";
 import type { PageBindings, PageContext } from "./context";
 import type { BlockResolver } from "./resolver";
 
@@ -232,7 +234,8 @@ export function drawsNothing(
  * (`decided.held`). Any other conditioned block that reaches a render is
  * one a list's item decides, since the route removed every entry-scoped one
  * that did not hold: inside a list it is decided now, against the item being
- * drawn and its collection's public fields, and reported through
+ * drawn and its collection's public fields (or, for a named query's row, the
+ * fields its rows declare), and reported through
  * `decided.report` when it cannot be checked. Outside a list nothing can decide it, so it
  * stays out.
  *
@@ -240,10 +243,7 @@ export function drawsNothing(
  */
 export function conditionAllows(
   node: BlockNode,
-  context: Pick<
-    PageContext,
-    "item" | "itemSource" | "fieldShapes" | "timeZone"
-  >,
+  context: ItemContext & Pick<PageContext, "timeZone">,
   decided: {
     /** The blocks the route kept because their conditions held, by id. */
     readonly held?: ReadonlySet<string>;
@@ -262,19 +262,38 @@ export function conditionAllows(
   return evaluation.shown;
 }
 
+/** What a condition reads of the item being drawn, and where it came from. */
+type ItemContext = Pick<
+  PageContext,
+  "item" | "itemSource" | "itemQuery" | "fieldShapes" | "namedQueries"
+>;
+
 /**
- * The item being drawn as a condition reads it: its values, and its
- * collection's fields as the public sees them. Nothing when the collection
- * or its fields are not known, so its conditions fail closed.
+ * The fields of the item being drawn, as the public sees them: its
+ * collection's, or, for a named query's row with a schema of its own, the
+ * fields its query declares, as the row's bindings are checked against.
  */
-function itemSubject(
-  context: Pick<PageContext, "item" | "itemSource" | "fieldShapes">
-): { subject?: ConditionSubject } {
+function itemFields(
+  context: ItemContext
+): readonly BindingFieldShape[] | undefined {
   const source = context.itemSource;
-  const readable =
-    context.item === undefined || source === undefined || source === ""
-      ? undefined
-      : context.fieldShapes?.fieldsOf({ collection: source });
+  if (source !== undefined && source !== "") {
+    return context.fieldShapes?.fieldsOf({ collection: source });
+  }
+  return typeof context.itemQuery === "string"
+    ? queryRowFields(context.namedQueries, context.itemQuery, collection =>
+        context.fieldShapes?.fieldsOf({ collection })
+      )
+    : undefined;
+}
+
+/**
+ * The item being drawn as a condition reads it: its values, and its fields
+ * as the public sees them. Nothing when its fields are not known, so its
+ * conditions fail closed.
+ */
+function itemSubject(context: ItemContext): { subject?: ConditionSubject } {
+  const readable = context.item === undefined ? undefined : itemFields(context);
   if (readable === undefined || context.item === undefined) return {};
   return {
     subject: {

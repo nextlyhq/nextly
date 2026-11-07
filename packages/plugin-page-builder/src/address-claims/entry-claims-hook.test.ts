@@ -95,7 +95,7 @@ function harness(options: {
     pagesBackfilled: () => true,
     pagesWithSlugs: async () => [],
     publishedEntries: async () => [],
-    describe: async holder => holder.id,
+    describe: () => async holder => holder.id,
   };
   const handlers = new Map<string, Handler>();
   registerEntryAddressClaims(

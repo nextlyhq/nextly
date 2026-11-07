@@ -55,7 +55,8 @@ export interface ContentAddressService {
   ): Promise<string | null>;
   /**
    * Up to `limit` of the addresses held in `locale`, as path segments, from
-   * `page` (1 first), with how many there are in all.
+   * `page` (1 first), with how many there are in all, once any start-up pass
+   * over the store still running has finished.
    */
   addresses(
     locale: string | undefined,
@@ -90,6 +91,13 @@ export interface ContentAddressSetup {
    * nothing.
    */
   readonly storesAddress: (collection: string) => Promise<boolean>;
+  /**
+   * The start-up passes over the store while they run, or null. The listing
+   * of addresses joins it, so what is pre-rendered is the store the passes
+   * leave, never one they are still filling or moving. A lookup of one path
+   * does not wait: it answers per request, and the passes settle it.
+   */
+  readonly startup?: () => Promise<unknown> | null;
 }
 
 /** The service over the installed store. */
@@ -136,6 +144,8 @@ export function contentAddressService(
       return row?.address ? pathOf(row.address) : null;
     },
     addresses: async (locale, { limit, page = 1 }) => {
+      // The passes never reject, so joining one only waits for it.
+      await setup.startup?.();
       const { addresses, total } = await committedAddresses(
         setup.claims,
         locale ?? setup.defaultLocale(),
