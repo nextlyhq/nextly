@@ -65,7 +65,8 @@ export interface VisitorUnreadableInput {
   /**
    * Whether a source exists for the person editing but the public may read
    * none of it: the published page reads nothing of it and every binding to
-   * it falls back. Absent, no source is judged whole.
+   * it falls back. Asked of a binding's own source, and of the collection its
+   * path follows a relation into. Absent, no source is judged whole.
    */
   readonly unreadableSource?: (ref: BindingSchemaRef) => boolean;
 }
@@ -82,6 +83,23 @@ function sourceRefOf(
   return undefined;
 }
 
+/**
+ * The collection a binding's path follows its first field into, when that
+ * field is a relation to one collection: `author.email` reads `users`.
+ */
+function relationTargetOf(
+  binding: CheckedBinding,
+  ref: BindingSchemaRef,
+  schema: BindingSchemaSource
+): BindingSchemaRef | undefined {
+  const [first, next] = binding.segments;
+  if (first === undefined || next === undefined) return undefined;
+  const field = schema.fieldsOf(ref)?.find(shape => shape.name === first);
+  return typeof field?.relationTo === "string"
+    ? { collection: field.relationTo }
+    : undefined;
+}
+
 /** A binding the page would fill, whose whole source the public may not read. */
 function unreadableWhole(
   check: BindingCheck,
@@ -93,7 +111,14 @@ function unreadableWhole(
   }
   const { binding } = check;
   const ref = sourceRefOf(binding, input.entryRef);
-  if (ref === undefined || !input.unreadableSource(ref)) return undefined;
+  if (ref === undefined) return undefined;
+  // The source itself, or the collection the path's relation leads into:
+  // either one the public reads none of leaves the published page nothing.
+  const target = relationTargetOf(binding, ref, input.schema);
+  const unreadable =
+    input.unreadableSource(ref) ||
+    (target !== undefined && input.unreadableSource(target));
+  if (!unreadable) return undefined;
   return {
     prop,
     path: binding.path,
