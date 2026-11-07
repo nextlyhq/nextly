@@ -530,7 +530,11 @@ function publishes(
  * file's own ids here, which no check reads. The shared styles the import
  * adds are not in the site style until it applies, and a write may only add
  * a class the site holds, so the judging writes leave those classes off; the
- * documents written for real carry them, after the site style does.
+ * documents written for real carry them, after the site style does. The
+ * variables it adds are the same: a write may only add a reference to a
+ * variable the site defines (`token-reference-judgement`), so the judging
+ * writes leave off each style property naming one, and the real writes,
+ * judged again once the site style holds them, carry it.
  */
 async function judgeWrites(
   ctx: ImportContext,
@@ -550,8 +554,17 @@ async function judgeWrites(
       map: new Map([...plan.classes.map].filter(([, to]) => !added.has(to))),
     },
   };
+  const withheldTokens = new Set(plan.tokens.create.map(tokenIdentity));
   try {
-    await writeDocuments(ctx, file, judged, slugs, media);
+    await writeDocuments(
+      ctx,
+      file,
+      judged,
+      slugs,
+      media,
+      false,
+      withheldTokens
+    );
   } catch (error) {
     const verdict = verdictOf(error);
     if (verdict.refusal === null) return [];
@@ -576,7 +589,8 @@ interface Written {
 /**
  * The file's components, patterns and Layouts written in one transaction,
  * with every reference mapped. With no `commit`, the transaction is rolled
- * back once every write has answered (see {@link judgeWrites}).
+ * back once every write has answered (see {@link judgeWrites}), and a style
+ * property naming one of `withheldTokens` is left out of what is written.
  */
 async function writeDocuments(
   ctx: ImportContext,
@@ -584,7 +598,8 @@ async function writeDocuments(
   plan: ImportPlan,
   slugs: Collections,
   media: ReadonlyMap<string, string>,
-  commit = false
+  commit = false,
+  withheldTokens?: ReadonlySet<string>
 ): Promise<Written> {
   const collections = ctx.services.collections;
   await collections.warmLocalizedReadiness(slugs.component);
@@ -609,6 +624,7 @@ async function writeDocuments(
       tokens: plan.tokens.map,
       breakpoints: plan.breakpoints,
       media,
+      ...(withheldTokens === undefined ? {} : { withheldTokens }),
     });
     const lookups = {
       mediaProps: registryMediaProps,

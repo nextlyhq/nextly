@@ -29,6 +29,8 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
+import { collectStyleTokens } from "../style-token-refs";
+
 import { imageExposureIds, mediaIdOf } from "./transfer-references";
 
 /** The destination's id for each source reference, one map per kind. */
@@ -39,6 +41,13 @@ export interface ReferenceMaps {
   /** Kept breakpoints only; a breakpoint absent here is dropped. */
   readonly breakpoints: ReadonlyMap<string, string>;
   readonly media: ReadonlyMap<string, string>;
+  /**
+   * Destination variables a style value may not name: a property whose value
+   * names one, after mapping, is left out. Only an import's judging writes
+   * set it, for the variables the site style does not hold until the import
+   * applies; a write that commits leaves it unset and keeps every value.
+   */
+  readonly withheldTokens?: ReadonlySet<string>;
 }
 
 /** What the rewrite needs to read beyond the maps. */
@@ -218,7 +227,12 @@ function rewriteStyles(
     const kept: Record<string, unknown> = {};
     for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
       const to = breakpointTo(breakpoint, maps);
-      if (to !== undefined) kept[to] = rewriteTokens(values, maps);
+      if (to === undefined) continue;
+      const rewritten = withoutWithheld(
+        rewriteTokens(values, maps),
+        maps.withheldTokens
+      );
+      if (rewritten !== undefined) kept[to] = rewritten;
     }
     if (Object.keys(kept).length > 0) next[state] = kept;
   }
@@ -232,6 +246,31 @@ function breakpointTo(
 ): string | undefined {
   if (breakpoint === BASE_BREAKPOINT) return BASE_BREAKPOINT;
   return maps.breakpoints.get(breakpoint);
+}
+
+/**
+ * One breakpoint's values without the properties naming a withheld variable,
+ * or `undefined` when every property named one. The whole property goes, not
+ * just the reference, so a structured value is never left half made. Read by
+ * the walk the variable fence and usage index read (`style-token-refs`), so
+ * what is left names none of them.
+ */
+function withoutWithheld(
+  values: unknown,
+  withheld: ReadonlySet<string> | undefined
+): unknown {
+  if (withheld === undefined || withheld.size === 0 || !isRecord(values)) {
+    return values;
+  }
+  const kept: Record<string, unknown> = {};
+  for (const [property, value] of Object.entries(values)) {
+    const named = new Set<string>();
+    collectStyleTokens(value, named);
+    if (![...named].some(id => withheld.has(id))) kept[property] = value;
+  }
+  const emptied =
+    Object.keys(kept).length === 0 && Object.keys(values).length > 0;
+  return emptied ? undefined : kept;
 }
 
 function rewriteTokens(value: unknown, maps: ReferenceMaps): unknown {
