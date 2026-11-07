@@ -13,7 +13,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { BlockDocument, SiteSheetInput } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+import { afterOverrunLines } from "./__tests__/overrun-quiet";
 
 import { createBlocksPage, DEFAULT_MAX_QUERIES } from "./next";
 import type { DerivedPageSeo } from "./next";
@@ -1947,3 +1949,6 @@ describe("createBlocksPage and the site stylesheet", () => {
     expect(props.siteStyles).toBeUndefined();
   });
 });
+
+// Pages here outrun their caps, and a route logs that after a short quiet.
+afterAll(afterOverrunLines);

@@ -3531,40 +3531,42 @@ function decideConditions(
  * report, naming the page and counting each problem, never a value.
  */
 /**
- * The page's overrun, said in the server log once its refusals go quiet:
- * the page, its cap, how many reads were refused and which blocks were drawn
- * as if their data were missing, by id. Never a value.
+ * The page's overrun, said in the server log: the page, its cap, how many
+ * reads it was refused and which blocks were drawn as if their data were
+ * missing, by id. Never a value.
  *
- * Refusals come as the page streams, block by block, so the line waits for a
- * short quiet rather than for a render end it cannot see. A page whose later
- * blocks are refused after that says so in another line, naming only those.
+ * Once per render, when its refusals first go quiet: they come as the page
+ * streams, block by block, so the line waits for a short quiet rather than
+ * for a render end it cannot see; reads refused after it are not added. And
+ * at most once per page per process in {@link OVERRUN_INTERVAL_MS}, so a
+ * page over its cap that is rendered on every visit says so once in a while,
+ * not on every visit.
  */
 function overrunLog(context: RenderContext): {
   refused(budget: QueryBudget): void;
 } {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let told = 0;
-  let named = new Set<string>();
+  let said = false;
   return {
     refused: budget => {
+      if (said) return;
       if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = undefined;
+        said = true;
         const report = budget.report?.();
-        if (report === undefined || report.refused === told) return;
+        const page = `${context.collection}\u0000${context.slug}`;
+        if (report === undefined || !overrunMayBeSaid(page, Date.now())) {
+          return;
+        }
         // Each block once, whatever it missed.
-        const fresh = [
-          ...new Set(report.unread.map(block => block.nodeId)),
-        ].filter(id => !named.has(id));
-        named = new Set([...named, ...fresh]);
-        const refusedNow = report.refused - told;
-        told = report.refused;
+        const ids = [...new Set(report.unread.map(block => block.nodeId))];
         const blocks =
-          fresh.length === 0
+          ids.length === 0
             ? "no block could be named"
-            : `${String(fresh.length)} block(s) drawn as if their data were missing: ${fresh.join(", ")}`;
+            : `${String(ids.length)} block(s) drawn as if their data were missing: ${ids.join(", ")}`;
         console.warn(
-          `[blocks] "${context.collection}" page "${context.slug}" needed more than its ${String(report.cap)} reads: ${String(refusedNow)} read(s) refused; ${blocks}.`
+          `[blocks] "${context.collection}" page "${context.slug}" needed more than its ${String(report.cap)} reads: at least ${String(report.refused)} read(s) refused; ${blocks}.`
         );
       }, OVERRUN_QUIET_MS);
       // Never what keeps a process alive.
@@ -3575,6 +3577,34 @@ function overrunLog(context: RenderContext): {
 
 /** How long a page's refusals must go quiet before its overrun is logged. */
 const OVERRUN_QUIET_MS = 50;
+
+/** How long one page's overrun stays said, per process: ten minutes. */
+const OVERRUN_INTERVAL_MS = 10 * 60 * 1000;
+
+/** How many pages' last overrun line a process remembers, oldest dropped. */
+const OVERRUN_PAGES_KEPT = 1000;
+
+/** When each page's overrun was last said in this process, oldest first. */
+const overrunSaid = new Map<string, number>();
+
+/**
+ * Whether a page's overrun may be said now, recording it when it may: not
+ * within {@link OVERRUN_INTERVAL_MS} of the last time. The record is bounded,
+ * so a site of many pages over their caps cannot grow it without end; a page
+ * dropped from it may be said again early, which is the safe direction.
+ */
+function overrunMayBeSaid(page: string, now: number): boolean {
+  const last = overrunSaid.get(page);
+  if (last !== undefined && now - last < OVERRUN_INTERVAL_MS) return false;
+  // Moved to the end, so the oldest page is the first one dropped.
+  overrunSaid.delete(page);
+  overrunSaid.set(page, now);
+  if (overrunSaid.size > OVERRUN_PAGES_KEPT) {
+    const oldest = overrunSaid.keys().next().value;
+    if (oldest !== undefined) overrunSaid.delete(oldest);
+  }
+  return true;
+}
 
 /**
  * What a page's lists read ahead for their entries: relations through the

@@ -288,7 +288,19 @@ function described(reads: readonly Row[]): string[] {
   });
 }
 
+// Each test a quarter of an hour after the last, as the process sees it, so
+// one test's overrun line does not hold back the next one's.
+const startedAt = Date.now();
+let minutesOn = 0;
+function later(minutes: number): void {
+  minutesOn += minutes;
+  vi.spyOn(Date, "now").mockImplementation(
+    () => startedAt + minutesOn * 60_000
+  );
+}
+
 beforeEach(() => {
+  later(15);
   runtime.shapes = new Map<string, unknown>([
     ["collection:pages", [{ name: "title", type: "text" }]],
     [
@@ -353,7 +365,7 @@ describe("a list's reads", () => {
     await quiet();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      '[blocks] "pages" page "journal" needed more than its 0 reads: 1 read(s) refused; 1 block(s) drawn as if their data were missing: posts.'
+      '[blocks] "pages" page "journal" needed more than its 0 reads: at least 1 read(s) refused; 1 block(s) drawn as if their data were missing: posts.'
     );
   });
 
@@ -371,7 +383,7 @@ describe("a list's reads", () => {
     await quiet();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      '[blocks] "pages" page "journal" needed more than its 2 reads: 101 read(s) refused; 3 block(s) drawn as if their data were missing: posts, picture, more.'
+      '[blocks] "pages" page "journal" needed more than its 2 reads: at least 101 read(s) refused; 3 block(s) drawn as if their data were missing: posts, picture, more.'
     );
   });
 });
@@ -481,6 +493,27 @@ function postPage(): BlockDocument {
     })
   ) as BlockDocument;
 }
+
+describe("the overrun line", () => {
+  it("is said once per page in ten minutes, however often the page renders over its cap", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const nextly = site(5, listing(5));
+    await journal(nextly, { maxQueries: 0 });
+    await quiet();
+    await journal(nextly, { maxQueries: 0 });
+    await quiet();
+    later(9);
+    await journal(nextly, { maxQueries: 0 });
+    await quiet();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Past ten minutes, the same page says it again.
+    later(2);
+    await journal(nextly, { maxQueries: 0 });
+    await quiet();
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[1]?.[0])).toContain('"pages" page "journal"');
+  });
+});
 
 describe("what a page costs to read, measured", () => {
   it("the rebuilt post page, and a 100-item listing with and without the read-ahead", async () => {
