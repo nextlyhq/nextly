@@ -3952,7 +3952,7 @@ export const pageBuilder = (
         bindingFieldsRoute(),
         // An unbind's plan for the inspector, against the document it holds:
         // the same decision as the page actions API's, applied by the editor.
-        unbindPlanRoute(),
+        unbindPlanRoute({ limits: () => opts.limits ?? DEFAULT_LIMITS }),
         // The documents whose bindings no longer fit, for those who edit
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({

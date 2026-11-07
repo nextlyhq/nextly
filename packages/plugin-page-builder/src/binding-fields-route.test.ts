@@ -85,7 +85,8 @@ const rowKey = (ref: FieldsRef) =>
 function reads(): BindingFieldsReads {
   return {
     declared: async ref => DECLARED[keyOf(ref)],
-    publicShapes: async ref => PUBLIC[keyOf(ref)] ?? [],
+    // None for a source no visitor may read; a list, even empty, otherwise.
+    publicShapes: async ref => PUBLIC[keyOf(ref)],
     asEditor: vi.fn(async (ref: FieldsRef) => AS_EDITOR[rowKey(ref)] ?? null),
     published: async ref => PUBLISHED[rowKey(ref)] ?? null,
     singles: async () => [
@@ -222,6 +223,37 @@ describe("the picker's fields", () => {
         public: true,
       }
     );
+  });
+
+  it("counts a public Single's timestamps public, though it has no public field", async () => {
+    const base = reads();
+    const answer = await readBindingFields(
+      { source: { kind: "collection", slug: "posts", id: "p1" } },
+      {
+        ...base,
+        singles: async () => [{ slug: "news", label: "News" }],
+        declared: async ref =>
+          "single" in ref && ref.single === "news"
+            ? [{ name: "updatedAt", type: "date" }]
+            : base.declared(ref),
+        // Readable by visitors, with no custom field they read.
+        publicShapes: async ref =>
+          "single" in ref && ref.single === "news"
+            ? []
+            : base.publicShapes(ref),
+        asEditor: async (ref, select) =>
+          "single" in ref && ref.single === "news"
+            ? { updatedAt: "2026-03-02T10:00:00.000Z" }
+            : base.asEditor(ref, select),
+        published: async (ref, select) =>
+          "single" in ref && ref.single === "news"
+            ? { updatedAt: "2026-03-02T10:00:00.000Z" }
+            : base.published(ref, select),
+      }
+    );
+    expect(named(fieldsOf(answer, "News"), "updatedAt")).toMatchObject({
+      public: true,
+    });
   });
 
   it("leaves out a Single no visitor may read any of", async () => {

@@ -3,7 +3,10 @@
  * anything is planned, only an unbind is planned, and the plan is the one
  * decision's, made against the document the editor sends.
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import type { planUnbind } from "./unbind-kept";
@@ -96,6 +99,21 @@ describe("the editor's unbind plan", () => {
       answerUnbindPlan(unbindPlanRequestOf(body()), r)
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(r.plan).not.toHaveBeenCalled();
+  });
+
+  it("judges the document by the site's own limits", () => {
+    // Two blocks: within the defaults, past a site allowing one.
+    const two = {
+      ...document,
+      nodes: [...document.nodes, { ...document.nodes[0], id: "h2" }],
+    };
+    expect(() => unbindPlanRequestOf(body({ document: two }))).not.toThrow();
+    expect(() =>
+      unbindPlanRequestOf(body({ document: two }), {
+        ...DEFAULT_LIMITS,
+        maxNodes: 1,
+      })
+    ).toThrow(/larger than a page may be/);
   });
 
   it("refuses anything but an unbind, and a body that is no document", () => {
