@@ -1,7 +1,7 @@
 /**
  * The picker's read is kept a short while per person, page and language, a
- * failed read is not kept, and an unbind is planned only for a saved
- * collection entry.
+ * failed read is not kept, and an unbind is planned for a saved entry or a
+ * Single.
  */
 import type { BindingFieldSource } from "@nextlyhq/builder/ops";
 import { describe, expect, it, vi } from "vitest";
@@ -67,13 +67,13 @@ describe("the picker's read of the fields", () => {
 });
 
 describe("the unbind planner", () => {
-  it("is offered for a saved collection entry only", () => {
+  it("is offered for a saved entry and a Single, not an entry never saved", () => {
     expect(unbindPlanner(post, "en")).toBeTypeOf("function");
+    expect(unbindPlanner({ kind: "single", slug: "home" }, "en")).toBeTypeOf(
+      "function"
+    );
     expect(
       unbindPlanner({ kind: "collection", slug: "posts" }, "en")
-    ).toBeUndefined();
-    expect(
-      unbindPlanner({ kind: "single", slug: "home", documentId: "s" }, "en")
     ).toBeUndefined();
     expect(unbindPlanner(null, "en")).toBeUndefined();
   });
