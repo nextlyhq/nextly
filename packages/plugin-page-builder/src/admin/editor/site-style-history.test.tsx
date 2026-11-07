@@ -27,9 +27,9 @@ vi.mock("../site-style-read", () => ({
 }));
 
 /**
- * What the Single was asked to store, in order. The stubbed read gives no
- * version, so each write is the section alone, written as a server that
- * issues none takes it, which the expectations state.
+ * What the Single was asked to store, in order. Each write is saved over
+ * whatever the style holds and says so with `_overwrite: true`, which the
+ * expectations state.
  */
 const singleWrites: Record<string, unknown>[] = [];
 // No `useSingleDocument`: the editor reads the style only through the route,
@@ -269,7 +269,7 @@ describe("a Design writer's save and its undo, through the editor's read", () =>
       await writer.result.current.save("tokens", AFTER);
     });
     // The Single stored it, and the editor's read was asked again.
-    expect(singleWrites).toEqual([{ tokens: AFTER }]);
+    expect(singleWrites).toEqual([{ _overwrite: true, tokens: AFTER }]);
     expect(refetch).toHaveBeenCalledTimes(1);
     read = { data: { tokens: AFTER }, refetch };
     history.rerender();
@@ -281,7 +281,10 @@ describe("a Design writer's save and its undo, through the editor's read", () =>
       undone = await recorded[0]?.undo();
     });
     expect(undone).toBe(true);
-    expect(singleWrites).toEqual([{ tokens: AFTER }, { tokens: BEFORE }]);
+    expect(singleWrites).toEqual([
+      { _overwrite: true, tokens: AFTER },
+      { _overwrite: true, tokens: BEFORE },
+    ]);
     // Waiting on the route's read, which still holds the undone value.
     expect(history.result.current.replay.settling).toBe(true);
     expect(history.result.current.replay.revision).toBe(before);

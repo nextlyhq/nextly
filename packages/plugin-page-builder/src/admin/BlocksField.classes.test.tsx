@@ -47,9 +47,9 @@ let storedRead: { data: unknown; isPending: boolean; error: unknown };
 /** What a save answers, and what it was handed. */
 let saveResult: { success: boolean } | Error;
 /**
- * The bodies the Single was handed. The stubbed read gives no version, so
- * each is the section alone, written as a server that issues none takes it;
- * the expectations state the whole body, so a key added to it fails here.
+ * The bodies the Single was handed. Each is saved over whatever the style
+ * holds, which the body says with `_overwrite: true`; the expectations state
+ * that key, so a save that stops saying it fails here.
  */
 const saved: Array<Record<string, unknown>> = [];
 /** How many times the top bar's breakpoint manager has been mounted. */
@@ -487,6 +487,7 @@ describe("adding a shared style made from a block", () => {
     expect(saved).toHaveLength(1);
     // The block is the builder's write, after this one lands.
     expect(saved[0]).toEqual({
+      _overwrite: true,
       classes: [
         { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
         MADE,
@@ -585,6 +586,7 @@ describe("writing a shared style's styles while it is the target", () => {
 
     expect(refused).toBeUndefined();
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [{ ...stored, styles }],
     });
   });
@@ -604,6 +606,7 @@ describe("writing a shared style's styles while it is the target", () => {
     });
 
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...stored,
@@ -635,6 +638,7 @@ describe("writing a shared style's styles while it is the target", () => {
     });
     expect(recorded).toHaveLength(2);
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...stored,
@@ -672,7 +676,7 @@ describe("writing a shared style's styles while it is the target", () => {
     await act(async () => {
       await recorded[0]?.undo();
     });
-    expect(saved.at(-1)).toEqual({ classes: [stored] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [stored] });
   });
 });
 
@@ -753,12 +757,12 @@ describe("undoing an edit to a shared style the site's code supplies", () => {
     await act(async () => {
       await recorded[0]?.undo();
     });
-    expect(saved.at(-1)).toEqual({ classes: [] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [] });
 
     await act(async () => {
       await recorded[0]?.redo();
     });
-    expect(saved.at(-1)).toEqual({ classes: edited });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: edited });
   });
 });
 
@@ -789,7 +793,7 @@ describe("replaying an edit to a code-supplied style after the code changed", ()
     await act(async () => {
       await recorded[0]?.undo();
     });
-    expect(saved.at(-1)).toEqual({ classes: [] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [] });
 
     clientConfig = { siteStyle: { classes: [after] } };
     rerender(<Host />);
@@ -797,6 +801,7 @@ describe("replaying an edit to a code-supplied style after the code changed", ()
       await recorded[0]?.redo();
     });
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...after,
@@ -839,7 +844,7 @@ describe("undoing an edit to a code-supplied style after the code changed", () =
       await recorded[0]?.undo();
     });
     // Nothing of the author's is left: the code's own style shows.
-    expect(saved.at(-1)).toEqual({ classes: [] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [] });
 
     storedRead = { data: { classes: [] }, isPending: false, error: null };
     rerender(<Host />);
@@ -847,6 +852,7 @@ describe("undoing an edit to a code-supplied style after the code changed", () =
       await recorded[0]?.redo();
     });
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...after,
@@ -885,7 +891,7 @@ describe("redoing an edit the code has since made itself", () => {
       await recorded[0]?.undo();
     });
     // The rename keeps the override, at the colour the code had.
-    expect(saved.at(-1)).toEqual({ classes: [renamed] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [renamed] });
 
     // The code now sets the very colour the redo would.
     const later = {
@@ -907,6 +913,7 @@ describe("redoing an edit the code has since made itself", () => {
     expect(redone).toBe(true);
     expect(saved).toHaveLength(writes + 1);
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [{ ...later, label: "Mine" }],
     });
   });
@@ -950,6 +957,7 @@ describe("replaying across two changes to the code", () => {
       await recorded[0]?.undo();
     });
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [{ ...at(0.6), label: "Mine" }],
     });
     follow(0.7);
@@ -957,6 +965,7 @@ describe("replaying across two changes to the code", () => {
       await recorded[0]?.redo();
     });
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...at(0.7),
@@ -1008,7 +1017,7 @@ describe("undoing a shared style's edit after the library changed elsewhere", ()
       await recorded[0]?.undo();
     });
 
-    expect(saved.at(-1)).toEqual({ classes: [card] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [card] });
   });
 
   it("does nothing, and says so, once the style itself is gone", async () => {
@@ -1055,7 +1064,7 @@ describe("undoing a shared style added from the editor", () => {
       undone = await recorded[0]?.undo();
     });
     expect(undone).toBe(true);
-    expect(saved.at(-1)).toEqual({ classes: [hero] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [hero] });
 
     await act(async () => {
       await recorded[0]?.redo();

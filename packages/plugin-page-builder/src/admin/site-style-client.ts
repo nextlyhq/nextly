@@ -65,7 +65,7 @@ import {
   type Context,
 } from "react";
 
-import { documentVersionOf } from "../document-version";
+import { asOverwrite, documentVersionOf } from "../document-version";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
@@ -682,9 +682,10 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         }
         const latest = newest(section);
         if (latest === undefined) {
-          // No version to merge onto or send: the write is made as it
-          // always was, unjudged, over whatever the style holds.
-          await mutation.mutateAsync({ [section]: value });
+          // No version to merge onto or send: the write says it is made
+          // over whatever the style holds, as it always was. A write naming
+          // neither a version nor an overwrite is refused.
+          await mutation.mutateAsync(asOverwrite({ [section]: value }));
           void refetch();
           return { result: { saved: true, issues: {} } };
         }
@@ -791,7 +792,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       chain: SectionChain,
       section: SiteStyleSection,
       value: (before: unknown) => unknown,
-      plan: TurnPlan = { prefer: "mine" }
+      plan: TurnPlan | (() => Promise<TurnPlan>) = { prefer: "mine" }
     ) => {
       const before = chain.tail;
       chain.pending += 1;
@@ -825,9 +826,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             wrote: false,
           };
         }
+        // A replay's plan is read once its target is known, from the step.
+        const how = typeof plan === "function" ? await plan() : plan;
         const { result, merged } = await writeSection(section, next, {
-          prefer: plan.prefer,
-          base: { value: plan.base === undefined ? held : plan.base },
+          prefer: how.prefer,
+          base: { value: how.base === undefined ? held : how.base },
         });
         // What the section holds now is what was written: the merge, where
         // the write was merged onto a newer save.
@@ -937,7 +940,11 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       // queued in the meantime then writes nothing.
       let withdrawn = false;
       const replay =
-        (pick: (known: Filled, held: unknown) => unknown) =>
+        (
+          pick: (known: Filled, held: unknown) => unknown,
+          /** The half of the step the replay moves away from. */
+          from: (known: Filled) => Promise<unknown>
+        ) =>
         async (): Promise<SiteStyleReplay> => {
           const known = await filled;
           const { result, holds } = await inTurn(
@@ -945,24 +952,32 @@ export function useSaveSiteStyle(): SiteStyleWrite {
             section,
             held => (withdrawn || known === null ? SKIP : pick(known, held)),
             // A replay is merged onto the newest stored copy too, and yields
-            // to theirs where the change to take back is no longer there.
-            REPLAY_PLAN
+            // to theirs where the change to take back is no longer there. A
+            // whole-section step is merged from its own recorded half; one
+            // composed against the section as it stands, from that.
+            known === null || known.inverse !== undefined
+              ? REPLAY_PLAN
+              : recordedPlan(() => from(known))
           ).done;
           return { stored: result.saved, section, value: holds };
         };
       const withdraw = history.record({
         // Back to what stood just before the change was stored, as the
         // write found it, so a save it was merged onto stays.
-        undo: replay(async (known, held) =>
-          known.inverse === undefined
-            ? replacedBy(await known.done, known.before)
-            : replayedValue(known.inverse.undo(held))
+        undo: replay(
+          async (known, held) =>
+            known.inverse === undefined
+              ? replacedBy(await known.done, known.before)
+              : replayedValue(known.inverse.undo(held)),
+          async known => (await known.done).holds
         ),
         // What the change stored: the merge, not the studio's value alone.
-        redo: replay(async (known, held) =>
-          known.inverse === undefined
-            ? (await known.done).holds
-            : replayedValue(known.inverse.redo(held))
+        redo: replay(
+          async (known, held) =>
+            known.inverse === undefined
+              ? (await known.done).holds
+              : replayedValue(known.inverse.redo(held)),
+          async known => replacedBy(await known.done, known.before)
         ),
       });
       const drop = (): void => {
@@ -1043,7 +1058,12 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       // step left to take it back.
       let withdrawn = false;
       const replay =
-        (target: () => unknown) => async (): Promise<SiteStyleReplay> => {
+        (
+          target: () => unknown,
+          /** The half of the step the replay moves away from. */
+          from: () => Promise<unknown>
+        ) =>
+        async (): Promise<SiteStyleReplay> => {
           let sent: unknown = SKIP;
           const chainNow = chainOf(settled, section);
           // Whether this step's write is still the section's latest attempt,
@@ -1069,7 +1089,9 @@ export function useSaveSiteStyle(): SiteStyleWrite {
               history.preview?.(section, sent, "held");
               return sent;
             },
-            REPLAY_PLAN
+            // Merged from the step's own recorded half, not from what the
+            // section holds now: a save read in since then is theirs, kept.
+            recordedPlan(from)
           ).done;
           if (sent !== SKIP) {
             history.preview?.(
@@ -1088,11 +1110,17 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         // back where mine replaced it.
         undo: () => {
           chainOf(settled, section).waiting?.release();
-          return replay(async () => replacedBy(await done, before))();
+          return replay(
+            async () => replacedBy(await done, before),
+            async () => (await done).holds
+          )();
         },
         // What the change stored, read when the step is replayed: the value
         // the burst came to, merged onto any save it met.
-        redo: replay(async () => (await done).holds),
+        redo: replay(
+          async () => (await done).holds,
+          async () => replacedBy(await done, before)
+        ),
       });
       const { result, wrote } = await done;
       // Refused, or not written because the edits came back to where they
@@ -1139,8 +1167,23 @@ interface TurnPlan {
   readonly base?: unknown;
 }
 
-/** An undo or redo: from what the section held, theirs kept on a conflict. */
+/**
+ * An undo or redo composed against the section as it stands: merged from
+ * what the section held, theirs kept on a conflict.
+ */
 const REPLAY_PLAN: TurnPlan = { prefer: "theirs" };
+
+/**
+ * An undo or redo of a whole-section step: merged from the half of the step
+ * it moves away from, as recorded (the section after the change, for an
+ * undo; before it, for a redo), theirs kept on a conflict. Not from what the
+ * section holds now, which may already be another author's save read in
+ * since: taken as the base, their edits would read as unchanged and be
+ * replaced by the step's other half.
+ */
+function recordedPlan(from: () => Promise<unknown>): () => Promise<TurnPlan> {
+  return async () => ({ prefer: "theirs", base: await from() });
+}
 
 /** What a write in turn answers once it is done. */
 interface TurnAnswer {
