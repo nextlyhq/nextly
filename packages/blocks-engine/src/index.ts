@@ -1343,6 +1343,7 @@ export { visitorUnreadableBindings } from "./visitor-unreadable-bindings";
 export {
   SITE_SETTING_FIELD_SHAPES,
   SITE_SETTING_FIELD_TYPES,
+  SITE_SETTING_LABELS,
   type SiteSettingName,
 } from "./site-setting-fields";
 export type {

@@ -29,6 +29,7 @@ import {
   isPlainRecord,
   sameJsonValue,
   SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_LABELS,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -346,6 +347,13 @@ function isReachable(field: PickerField): boolean {
   return field.public || (field.fields ?? []).some(isReachable);
 }
 
+/** A site setting's label, from the engine's table of them. */
+function siteSettingLabel(name: string): { readonly label?: string } {
+  return Object.hasOwn(SITE_SETTING_LABELS, name)
+    ? { label: SITE_SETTING_LABELS[name as keyof typeof SITE_SETTING_LABELS] }
+    : {};
+}
+
 /** The site settings, every one public, previewed as visitors see them. */
 async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
   const values = await reads.site();
@@ -357,6 +365,8 @@ async function siteSource(reads: BindingFieldsReads): Promise<PickerSource> {
       return {
         name: shape.name,
         type: shape.type,
+        // The settings screen's name for it: "Site URL", not "Site url".
+        ...siteSettingLabel(shape.name),
         public: true,
         ...(preview === undefined ? {} : { preview }),
       };
