@@ -183,7 +183,9 @@ function inputItem(key: string, param: NamedQueryParam): NamedQueryInputItem {
 
 /**
  * A row field as the binding picker lists it, a group's own fields with it,
- * however deep, so every path a row's bindings may name is listed.
+ * however deep, so every path a row's bindings may name is listed. A field
+ * holding several (`hasMany`) lists none of its children: a binding may not
+ * follow a path through one, so none is offered.
  */
 function rowField(shape: BindingFieldShape): NamedQueryRowField {
   const kind = listFieldKind(shape);
@@ -191,7 +193,7 @@ function rowField(shape: BindingFieldShape): NamedQueryRowField {
     name: shape.name,
     type: shape.type,
     ...(kind === undefined ? {} : { kind }),
-    ...(shape.fields === undefined
+    ...(shape.fields === undefined || shape.hasMany === true
       ? {}
       : { fields: shape.fields.map(rowField) }),
   };

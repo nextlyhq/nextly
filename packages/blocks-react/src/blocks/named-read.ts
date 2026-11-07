@@ -886,8 +886,13 @@ export async function readNamedList(
     return failed("budget", NAMED_QUERY_TEXT.budget(declaration.label), at);
   }
   // Checked after the run's reads are claimed, so a page costs the same
-  // whether or not its query still counts.
-  if (options.counted === true && data.total === undefined) {
+  // whether or not its query still counts. Counting is what the query
+  // declares, as the save and the editor judge it: a total a query returns
+  // without declaring one is not counted on.
+  if (
+    options.counted === true &&
+    (declaration.total !== true || data.total === undefined)
+  ) {
     return failed(
       "uncounted",
       NAMED_QUERY_TEXT.uncounted(declaration.label),

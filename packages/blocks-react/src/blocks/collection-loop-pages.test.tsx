@@ -289,7 +289,7 @@ describe("a list split into pages, rendered", () => {
  * the window it is asked for, with their total unless `counts` is false.
  * Records each window and each failure the host is told of.
  */
-function countedQuery(count: number, counts = true) {
+function countedQuery(count: number, counts = true, declares = true) {
   const rows = Array.from({ length: count }, (_, index) => ({
     id: `p${String(index + 1)}`,
     title: `Post ${String(index + 1)}`,
@@ -307,7 +307,7 @@ function countedQuery(count: number, counts = true) {
         { name: "title", type: "text" },
       ],
     },
-    total: true,
+    total: declares,
     run: ({ window }) => {
       windows.push(window);
       const shown = rows.slice(window.offset, window.offset + window.limit);
@@ -388,6 +388,20 @@ describe("a named query's list split into pages, rendered", () => {
     expect(visited.textContent).toContain("Nothing yet");
     expect(visited.querySelector("[data-nx-list-diagnostic]")).toBeNull();
     expect(visited.querySelector("nav")).toBeNull();
+  });
+
+  it("fails visibly when its query returns a total it no longer declares", async () => {
+    // A declaration changed to uncounted after the page was saved, whose
+    // run still returns a number: the declaration, not the number, decides.
+    const { host: namedQueries, failures } = countedQuery(25, true, false);
+    const authored = await drawn(page(list("news", NAMED_NEWS)), {
+      namedQueries,
+      listPage: listPage("news", 1),
+      diagnostics: true,
+    });
+    expect(titles(authored)).toEqual([]);
+    expect(authored.querySelector("nav")).toBeNull();
+    expect(failures.map(failure => failure.code)).toEqual(["uncounted"]);
   });
 
   it("draws the same run's rows where no route pages the list", async () => {

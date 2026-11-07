@@ -12,6 +12,7 @@
 import {
   CONDITION_KIND_OPS,
   conditionFieldKind,
+  type BindingFieldShape,
   type Condition,
   type ConditionFieldKind,
   type ConditionOp,
@@ -77,9 +78,22 @@ export function conditionFieldsOf(
  * each of the kind the save judges it by.
  */
 export function conditionFieldsOfShapes(
-  shapes: readonly ReadableField[]
+  shapes: readonly BindingFieldShape[]
 ): readonly ConditionField[] {
-  return shapes.map(conditionFieldOf);
+  return shapes.map(shape => {
+    const field = conditionFieldOf(shape);
+    // A row's choices are declared as their stored values, which are also
+    // what an author picks between; a day-only date is entered as a day.
+    if (field.kind === "choice" && shape.options !== undefined) {
+      return {
+        ...field,
+        options: shape.options.map(value => ({ value, label: value })),
+      };
+    }
+    return field.kind === "date" && shape.dateOnly === true
+      ? { ...field, dateOnly: true }
+      : field;
+  });
 }
 
 /**
