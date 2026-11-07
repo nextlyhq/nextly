@@ -19,10 +19,11 @@ import {
 import { useState, type JSX } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  ComponentDeleteResult,
-  DeletePlan,
-  DocumentList,
+import {
+  DELETE_BUSY_REASON,
+  type ComponentDeleteResult,
+  type DeletePlan,
+  type DocumentList,
 } from "../component-delete/contract";
 import { MESSAGES, SOMEONE_ELSE_IS_DELETING } from "../component-delete/words";
 
@@ -36,7 +37,8 @@ interface Body {
 class ApiError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    readonly data?: { errors: { code: string; message: string }[] }
   ) {
     super(message);
   }
@@ -55,7 +57,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     typeof (error as { status?: unknown }).status === "number",
   apiErrorMessage: (error: Error, fallback: string) =>
     error.message === "" ? fallback : error.message,
-  validationIssues: () => [],
+  // The issues as the admin's helper reads them, from `data.errors`.
+  validationIssues: (error: unknown) =>
+    (error as { data?: { errors?: { code: string }[] } }).data?.errors ?? [],
   usePluginRouteMutation: () => ({}),
 }));
 
@@ -631,11 +635,37 @@ describe("the delete", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
-  it("says someone else is deleting it when the start is refused with 409", async () => {
+  it("tells someone else's delete by the refusal's code, not its words", async () => {
+    // The busy words with no busy code: an ordinary conflict, to retry.
     answer = body =>
       body.dryRun === true
         ? envelope(USED)
         : Promise.reject(new ApiError(SOMEONE_ELSE_IS_DELETING, 409));
+    show();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Turn each copy into plain blocks, then delete",
+      })
+    );
+    expect(
+      await screen.findByRole("button", { name: "Try again" })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Delete in progress" })
+    ).toBeNull();
+  });
+
+  it("says someone else is deleting it when the start is refused with the busy code", async () => {
+    answer = body =>
+      body.dryRun === true
+        ? envelope(USED)
+        : Promise.reject(
+            new ApiError(SOMEONE_ELSE_IS_DELETING, 409, {
+              errors: [
+                { code: DELETE_BUSY_REASON, message: SOMEONE_ELSE_IS_DELETING },
+              ],
+            })
+          );
     show();
     fireEvent.click(
       await screen.findByRole("button", {

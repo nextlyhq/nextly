@@ -12,19 +12,23 @@
  *
  * @module admin/component-delete-client
  */
-import { isApiError, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  isApiError,
+  validationIssues,
+  writePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 
 // The CONTRACT, not the route: the route reaches the store through
 // server-only modules.
 import {
   COMPONENT_DELETE_ROUTE_PATH,
+  DELETE_BUSY_REASON,
   type ComponentDeleteResult,
   type DeleteProgress,
   type DocumentList,
   type LeftDocument,
   type NamedDocument,
 } from "../component-delete/contract";
-import { SOMEONE_ELSE_IS_DELETING } from "../component-delete/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import { refusalMessage } from "./save-pattern-client";
@@ -80,15 +84,14 @@ async function call(
     if (isApiError(error) && error.status === 403) return { kind: "forbidden" };
     const message =
       error instanceof Error ? refusalMessage(error, unexplained) : unexplained;
-    // Only the route's busy refusal is someone else's delete. It is told
-    // by its words, the shared constant the route refuses with, since the
-    // refusal carries no public code of its own. Any other conflict, such as
-    // the component's own delete refusing, is a failure to retry, in its own
-    // words.
+    // Only the route's busy refusal is someone else's delete, told by the
+    // code its one issue carries (`DELETE_BUSY_REASON`). Any other conflict,
+    // such as the component's own delete refusing, is a failure to retry, in
+    // its own words.
     if (
       isApiError(error) &&
       error.status === 409 &&
-      error.message === SOMEONE_ELSE_IS_DELETING
+      validationIssues(error)[0]?.code === DELETE_BUSY_REASON
     ) {
       return { kind: "busy", message };
     }
