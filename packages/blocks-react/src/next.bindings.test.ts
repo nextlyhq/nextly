@@ -401,6 +401,56 @@ describe("a routed page's bindings", () => {
     expect(title).toBe("Public");
   });
 
+  it("offers a list item's bound image outside any list as the page draws it: its fallback, never its own", async () => {
+    // An image bound to a list item, placed outside every list: the page
+    // draws the binding's fallback there, so the share image is that too,
+    // not the picture the block holds of its own. The heading bound to the
+    // entry makes the page read its bindings, which is when an item's are
+    // filled at all; with none read, the page and its metadata both keep the
+    // block's own value.
+    const document = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "h",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Own", level: "h1" },
+            bindings: { text: { $bind: "title" } },
+          },
+          {
+            id: "picture",
+            type: "core/image",
+            version: 1,
+            props: { src: "/own.jpg", alt: "Own" },
+            bindings: {
+              mediaId: {
+                source: "item",
+                $bind: "photo",
+                fallback: "/fallback.jpg",
+              },
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    let image: string | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      nextly: instance(document) as never,
+      metadata: (_entry, _context, derived) => {
+        image = derived.image;
+        return {};
+      },
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    expect(image).toBe("/fallback.jpg");
+  });
+
   it("metadata takes the document's own title, joined from literal and bound segments, over its blocks'", async () => {
     runtime.site = {
       applicationName: "Acme",
