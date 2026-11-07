@@ -25,11 +25,10 @@
  * loaded before anything after it starts, as the parser would, but a script
  * that writes into the page as it loads (`document.write`) can't be site code.
  *
- * Once code has started, the page never takes the visitor into the admin
- * without a new document: a navigation within the app (a `<Link>` into
- * `/admin`, Back into it) to a path the loader skips loads that page afresh,
- * where the loader starts nothing, so code that ran never shares a document
- * with the admin.
+ * A navigation within the app that crosses into or out of a path the loader
+ * skips (a `<Link>` into `/admin`, Back out of it) loads the new page afresh:
+ * code that ran never shares a document with the admin, and a public page
+ * reached from the admin starts its code as on any first load.
  *
  * @module site-code/bootstrap
  * @experimental
@@ -90,8 +89,9 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
     var root = document.documentElement;
     if (root.hasAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard")) return;
     root.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-guard", "");
+    var wasSkipped = skipped();
     function leaveIfSkipped() {
-      if (skipped()) location.reload();
+      if (skipped() !== wasSkipped) location.reload();
     }
     ["pushState", "replaceState"].forEach(function (name) {
       var original = history[name];
@@ -114,8 +114,9 @@ export const SITE_CODE_BOOTSTRAP: string = `(function () {
     return element;
   }
   function start() {
-    if (framedBySite() || skipped() || document.querySelector("[${CANVAS_MOUNT_ATTRIBUTE}]")) return;
+    if (framedBySite() || document.querySelector("[${CANVAS_MOUNT_ATTRIBUTE}]")) return;
     guardNavigation();
+    if (skipped()) return;
     document.documentElement.setAttribute("${SITE_CODE_DATA_ATTRIBUTE}-" + data.slot, "started");
     var into = data.slot === "head" ? document.head : document.body;
     var entries = data.entries || [];

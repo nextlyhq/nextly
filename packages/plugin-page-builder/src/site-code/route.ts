@@ -75,7 +75,7 @@ export interface SiteCodeDirectApi {
     slug: string;
     depth: number;
     overrideAccess: true;
-    createIfMissing: false;
+    createIfMissing: boolean;
     user: undefined;
     req: undefined;
   }): Promise<Record<string, unknown> | null>;
@@ -371,31 +371,51 @@ async function auditMetadata(
   };
 }
 
+/** Whether a stored document holds any site code. */
+function holdsCode(doc: Record<string, unknown> | null): boolean {
+  return textOf(doc, "headSource") !== "" || textOf(doc, "bodySource") !== "";
+}
+
 /**
  * The write's data with the version it was made from. A save names the
- * version it read; one that names none is the first save of a site that has
- * none stored yet (nothing to overwrite but an empty document), and is
- * refused once code is stored, so it can't replace a save it never saw.
+ * version it read. One that names none says it read none stored: it is made
+ * against the version of the Single as it is now, created empty if missing,
+ * and refused when code is stored by then. Two such saves at once are made
+ * against the same version, so the second is refused as stale rather than
+ * replacing the first.
  */
-function versionedWrite(
+async function versionedWrite(
   data: Record<string, unknown>,
   version: string | undefined,
-  before: Record<string, unknown> | null
-): Record<string, unknown> {
+  nextly: SiteCodeDirectApi,
+  ctx: SiteCodeRouteContext
+): Promise<Record<string, unknown>> {
   if (version !== undefined) return withVersionFrom(data, version);
-  if (before === null || documentVersionOf(before) === undefined) {
-    return asOverwrite(data);
-  }
-  throw NextlyError.validation({
-    errors: [
-      {
-        path: "version",
-        code: "VERSION_REQUIRED",
-        message:
-          "Site code is already saved: read it again, and save naming the version you read.",
-      },
-    ],
+  const now = await nextly.findSingle({
+    slug: slugOf(ctx),
+    depth: 0,
+    overrideAccess: true,
+    createIfMissing: true,
+    user: undefined,
+    req: undefined,
   });
+  if (holdsCode(now)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "version",
+          code: "VERSION_REQUIRED",
+          message:
+            "Site code is already saved: read it again, and save naming the version you read.",
+        },
+      ],
+    });
+  }
+  // A server that issues no versions has none to be stale against.
+  const current = documentVersionOf(now);
+  return current === undefined
+    ? asOverwrite(data)
+    : withVersionFrom(data, current);
 }
 
 /** Parse a request's body, refusing one that is not a site code request. */
@@ -442,7 +462,7 @@ async function changeSiteCode(
   const before = await readStored(nextly, ctx);
   const saved = await nextly.updateSingle({
     slug: slugOf(ctx),
-    data: versionedWrite(
+    data: await versionedWrite(
       {
         headSource: body.head,
         bodySource: body.body,
@@ -451,7 +471,8 @@ async function changeSiteCode(
         changedBy: `user:${userId}`,
       },
       body.version,
-      before
+      nextly,
+      ctx
     ),
     overrideAccess: true,
     context: { ...SITE_CODE_WRITE_CONTEXT },

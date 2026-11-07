@@ -148,6 +148,26 @@ describe("the loader, in order and kept out of the admin", () => {
     window.history.pushState({}, "", "/admin/collections/pages");
     expect(errors.some(message => message.includes("navigation"))).toBe(true);
   });
+
+  it("loads a public page afresh when the admin moves out to it within the app", async () => {
+    const errors: string[] = [];
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", error => errors.push(error.message));
+    const window = await pageWith(
+      "https://acme.example/admin",
+      [{ tag: "script", attrs: {}, text: "window.ran = ['site']" }],
+      virtualConsole
+    );
+    // Nothing starts in the admin, and moving within it reloads nothing.
+    expect(window.ran).toBeUndefined();
+    window.history.pushState({}, "", "/admin/collections/pages");
+    expect(errors.filter(message => message.includes("navigation"))).toEqual(
+      []
+    );
+    // Out onto the site: a fresh document, where the code starts.
+    window.history.pushState({}, "", "/pricing");
+    expect(errors.some(message => message.includes("navigation"))).toBe(true);
+  });
 });
 
 describe("what the loader starts", () => {

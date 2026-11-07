@@ -754,10 +754,10 @@ function hintFindings(
   context: LoadContext
 ): Blocked[] {
   // CSP's resource-hint rule: no `default-src`, no restriction; else allowed
-  // where any of these directives allows it.
+  // where any fetch directive allows it, `default-src` itself included.
   if (!policy.has("default-src")) return [];
   const fetchDirectives = [...policy]
-    .filter(([name]) => HINT_DIRECTIVES.has(name))
+    .filter(([name]) => name === "default-src" || HINT_DIRECTIVES.has(name))
     .map(([, sources]) => sources);
   const findings: Blocked[] = [];
   for (const hint of hints) {

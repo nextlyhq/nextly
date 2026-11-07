@@ -24,7 +24,11 @@ function store(initial: Record<string, unknown> | null = null) {
   let doc = initial;
   const updates: Parameters<SiteCodeDirectApi["updateSingle"]>[0][] = [];
   const nextly: SiteCodeDirectApi = {
-    findSingle: async () => doc,
+    // A Single read with `createIfMissing` is created empty, at a version.
+    findSingle: async args => {
+      if (doc === null && args.createIfMissing) doc = { _rev: "rev-0" };
+      return doc;
+    },
     updateSingle: async args => {
       updates.push(args);
       doc = { ...doc, ...args.data, _rev: `rev-${updates.length}` };
@@ -201,7 +205,7 @@ describe("saving site code", () => {
 });
 
 describe("the version a save is made from", () => {
-  it("lets the first save of a site with none stored name no version", async () => {
+  it("makes the first save of a site with none stored against the empty Single's version", async () => {
     const { nextly, updates } = store();
     const { ctx } = contextFor("session");
     await call(
@@ -209,12 +213,31 @@ describe("the version a save is made from", () => {
       post({ head: "<script>a()</script>", body: "" }),
       ctx
     );
-    expect(updates[0]?.data).toMatchObject({ _overwrite: true });
-    expect(updates[0]?.data).not.toHaveProperty("_rev");
+    // Never an overwrite: a second first save at once is refused as stale.
+    expect(updates[0]?.data).toMatchObject({ _rev: "rev-0" });
+    expect(updates[0]?.data).not.toHaveProperty("_overwrite");
+  });
+
+  it("refuses a second save naming no version once the first has stored code", async () => {
+    const { nextly, updates } = store();
+    const { ctx } = contextFor("session");
+    const route = routeOf("POST", nextly);
+    await call(
+      route,
+      post({ head: "<script>first()</script>", body: "" }),
+      ctx
+    );
+    await expect(
+      call(route, post({ head: "<script>second()</script>", body: "" }), ctx)
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(updates).toHaveLength(1);
   });
 
   it("refuses a save naming no version once code is stored, writing nothing", async () => {
-    const { nextly, updates } = store({ headSource: "", _rev: "rev-7" });
+    const { nextly, updates } = store({
+      headSource: "<script>stored()</script>",
+      _rev: "rev-7",
+    });
     const { ctx } = contextFor("session");
     await expect(
       call(

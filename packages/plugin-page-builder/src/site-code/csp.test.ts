@@ -591,6 +591,17 @@ describe("what site code loads", () => {
     ).toEqual([]);
   });
 
+  it("lets default-src's own sources allow a connection hint", async () => {
+    expect(
+      await blockedBy("default-src https://api.example", [
+        {
+          tag: "link",
+          attrs: { rel: "preconnect", href: "https://api.example" },
+        },
+      ])
+    ).toEqual([]);
+  });
+
   it("restricts a connection hint only under default-src", async () => {
     const hint: SiteCodeEntry = {
       tag: "link",
