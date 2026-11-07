@@ -11,6 +11,8 @@ import type { PluginCollectionTransaction } from "@nextlyhq/plugin-sdk";
 
 import { entryDesignKey, TEMPLATE_ENTRY_FIELD } from "../collections/templates";
 
+import { isEntryDesign } from "./entry-designs";
+
 /** The slice of an in-transaction write the cascade reads. */
 interface DeletedWrite {
   readonly collection: string;
@@ -19,6 +21,8 @@ interface DeletedWrite {
   readonly transaction: PluginCollectionTransaction;
   /** The same for every handler call on one transaction. */
   readonly transactionKey?: object;
+  /** The document as it stood before the write: for a delete, what it removes. */
+  readonly originalData?: unknown;
 }
 
 /** What the cascade needs. */
@@ -130,6 +134,16 @@ async function deleteEntryDesign(
 ): Promise<void> {
   if (write.operation !== "delete") return;
   if (write.collection === setup.templates) {
+    // Only a collection's template is copied: an own design deleted (with
+    // its entry, or removed) has no copies to look for.
+    const removed = write.originalData;
+    if (
+      typeof removed === "object" &&
+      removed !== null &&
+      isEntryDesign(removed as Record<string, unknown>)
+    ) {
+      return;
+    }
     await setup.unlinkCopiesOf(write.transaction, write.id);
     return;
   }

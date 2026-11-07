@@ -2066,35 +2066,42 @@ export const pageBuilder = (
         // holds one.
         designUnder: (tx, key) => designIdUnder(tx, key, "update"),
         unlinkCopiesOf: async (tx, id) => {
-          // Every copy first, then each emptied: paged by a short page, as an
-          // in-transaction list's total is an unlocked count.
-          const copies: string[] = [];
-          for (let page = 1; ; page += 1) {
+          // The first page again after each is emptied, so a copy made or
+          // removed meanwhile cannot shift one past a page number. A copy
+          // read twice (its link not emptied) ends the walk rather than
+          // looping on it.
+          const emptied = new Set<string>();
+          for (;;) {
             const found =
               await ctx.services.ownCollections.listEntriesInTransaction(
                 tx,
                 templates,
                 {
                   where: { [TEMPLATE_FORKED_FROM_FIELD]: { equals: id } },
-                  pagination: { limit: 100, page },
+                  pagination: { limit: 100 },
                   depth: 0,
                 },
                 { lock: "update" }
               );
-            for (const row of found.data as { id?: unknown }[]) {
-              if (typeof row.id === "string" || typeof row.id === "number") {
-                copies.push(String(row.id));
-              }
+            const copies = (found.data as { id?: unknown }[])
+              .map(row => row.id)
+              .filter(
+                (copy): copy is string | number =>
+                  typeof copy === "string" || typeof copy === "number"
+              )
+              .map(String)
+              .filter(copy => !emptied.has(copy));
+            if (copies.length === 0) return;
+            for (const copy of copies) {
+              await ctx.services.collections.updateEntryInTransaction(
+                tx,
+                templates,
+                copy,
+                asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null })
+              );
+              emptied.add(copy);
             }
-            if (found.data.length < 100) break;
-          }
-          for (const copy of copies) {
-            await ctx.services.collections.updateEntryInTransaction(
-              tx,
-              templates,
-              copy,
-              asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null })
-            );
+            if (found.data.length < 100) return;
           }
         },
         deleteInTransaction: (tx, slug, id) =>
