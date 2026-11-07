@@ -121,6 +121,13 @@ const globalForInit = globalThis as unknown as {
    * the app starts, not state, so `shutdownNextly` leaves it registered.
    */
   __nextly_start?: () => Promise<Nextly>;
+  /**
+   * Whether `shutdownNextly` stopped Nextly and no explicit `getNextly` has
+   * started it since. While stopped, a read never runs the registered start:
+   * a late read during teardown (a request or task still in flight) would
+   * otherwise reopen the database and plugins just shut down.
+   */
+  __nextly_stopped?: boolean;
 };
 
 // ============================================================
@@ -297,6 +304,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // with no pointer back to the cause. Warn loudly ONCE with the fix
   // command instead. (Warn, not throw: the mismatch only bites when the
   // app's own copy is actually imported.)
+  // An explicit start ends a shutdown: reads may run the registered start
+  // again once this one is made.
+  globalForInit.__nextly_stopped = false;
+
   if (!globalForInit.__nextly_drizzleVersionChecked) {
     globalForInit.__nextly_drizzleVersionChecked = true;
     const mismatch = checkConsumerDrizzleVersion(process.cwd());
@@ -489,6 +500,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   initPromise.then(
     () => {
       globalForInit.__nextly_failedStartOptions = undefined;
+      globalForInit.__nextly_stopped = true;
     },
     () => {
       globalForInit.__nextly_failedStartOptions = options;
@@ -607,8 +619,9 @@ export async function getCachedNextly(): Promise<Nextly> {
   // not run) finds it starting. Only here, after every other path, so an app
   // page that calls `getNextly` with its own options first is the start that
   // counts.
+  // Not after a shutdown, until the app starts Nextly again itself.
   const start = globalForInit.__nextly_start;
-  if (start !== undefined) {
+  if (start !== undefined && globalForInit.__nextly_stopped !== true) {
     return start();
   }
 

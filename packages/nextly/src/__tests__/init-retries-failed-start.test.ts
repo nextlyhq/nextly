@@ -45,6 +45,8 @@ afterEach(async () => {
   // A registered start outlives `shutdownNextly` by design, and the API has no
   // way to take one back, so each test leaves none behind for the next.
   delete (globalThis as { __nextly_start?: unknown }).__nextly_start;
+  // The shutdown above leaves the process stopped; each test starts afresh.
+  delete (globalThis as { __nextly_stopped?: unknown }).__nextly_stopped;
 });
 
 describe("getCachedNextly() after a failed start", () => {
@@ -103,6 +105,28 @@ describe("getCachedNextly() with a start the app registered", () => {
     expect(typeof nextly.find).toBe("function");
     expect(start).toHaveBeenCalledTimes(1);
     expect(registeredBasePaths).toEqual(["/registered"]);
+  });
+
+  it("does not run it after a shutdown, until the app starts Nextly again", async () => {
+    // A late read during teardown must not reopen what was just shut down.
+    const start = vi.fn(() =>
+      getNextly({ config: defineConfig({}), basePath: "/registered" })
+    );
+    registerNextlyStart(start);
+    await getNextly({ config: defineConfig({}), basePath: "/app" });
+    await shutdownNextly();
+
+    await expect(getCachedNextly()).rejects.toMatchObject({
+      code: "CONFIGURATION_ERROR",
+    });
+    expect(start).not.toHaveBeenCalled();
+
+    // An explicit start ends the shutdown, and reads answer again; the
+    // registered start is still never what started it.
+    await getNextly({ config: defineConfig({}), basePath: "/app" });
+    const nextly = await getCachedNextly();
+    expect(typeof nextly.find).toBe("function");
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("does not run it once the app's own getNextly started Nextly", async () => {
