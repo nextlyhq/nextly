@@ -182,6 +182,44 @@ function BindingsTable({
   );
 }
 
+/** The pages of a long report: previous, where you are, next. */
+function Pager({
+  page,
+  totalPages,
+  onPage,
+}: {
+  page: number;
+  totalPages: number;
+  onPage: (page: number) => void;
+}): JSX.Element {
+  return (
+    <nav
+      aria-label="Report pages"
+      className="mt-4 flex items-center justify-end gap-3 text-sm text-muted-foreground"
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={page <= 1}
+        onClick={() => onPage(page - 1)}
+      >
+        Previous
+      </Button>
+      <span aria-live="polite">
+        Page {page} of {totalPages}
+      </span>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={page >= totalPages}
+        onClick={() => onPage(page + 1)}
+      >
+        Next
+      </Button>
+    </nav>
+  );
+}
+
 /** What the page shows when nothing is broken. */
 function AllFit(): JSX.Element {
   return (
@@ -197,15 +235,78 @@ function AllFit(): JSX.Element {
   );
 }
 
+/** The report's body: loading, an error, all fitting, or the table. */
+function ReportBody({
+  report,
+  place,
+  page,
+  onPlace,
+  onPage,
+}: {
+  report: ReturnType<typeof useBindingsToFix>;
+  place: string;
+  page: number;
+  onPlace: (place: string) => void;
+  onPage: (page: number) => void;
+}): JSX.Element {
+  const meta = report.data?.meta;
+  if (report.pending && report.data === undefined) {
+    return (
+      <div
+        aria-busy="true"
+        className="h-48 animate-pulse rounded-lg border border-border bg-card"
+      />
+    );
+  }
+  if (meta === undefined) {
+    return (
+      <div
+        role="alert"
+        className="rounded-lg border border-border bg-card px-6 py-10 text-center text-sm text-muted-foreground"
+      >
+        The report could not be read. Reload the page to try again.
+      </div>
+    );
+  }
+  if (meta.bindings === 0) return <AllFit />;
+  const places = PLACES.filter(entry => (meta.byPlace[entry.value] ?? 0) > 0);
+  return (
+    <>
+      <Tabs value={place} onValueChange={onPlace} className="mb-4">
+        <TabsList aria-label="Show bindings in">
+          <TabsTrigger value="all">
+            All
+            <span className="ml-1.5 text-muted-foreground">
+              {meta.bindings}
+            </span>
+          </TabsTrigger>
+          {places.map(entry => (
+            <TabsTrigger key={entry.value} value={entry.value}>
+              {entry.label}
+              <span className="ml-1.5 text-muted-foreground">
+                {meta.byPlace[entry.value] ?? 0}
+              </span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      <BindingsTable items={report.data?.items ?? []} />
+      {meta.totalPages > 1 ? (
+        <Pager page={page} totalPages={meta.totalPages} onPage={onPage} />
+      ) : null}
+    </>
+  );
+}
+
 /** The page. */
 export function BindingsToFixPage(): JSX.Element {
-  const report = useBindingsToFix();
   const [place, setPlace] = useState("all");
-  const items = report.data?.items ?? [];
+  const [page, setPage] = useState(1);
+  const report = useBindingsToFix({
+    ...(place === "all" ? {} : { place }),
+    page,
+  });
   const meta = report.data?.meta;
-  const shown =
-    place === "all" ? items : items.filter(item => item.place === place);
-  const places = PLACES.filter(entry => (meta?.byPlace[entry.value] ?? 0) > 0);
   return (
     <div className="min-h-[calc(100vh-4rem)] w-full max-w-full px-4 py-6 @sm/content:px-6 @sm/content:py-8 @2xl/content:px-8">
       <Breadcrumb />
@@ -215,9 +316,9 @@ export function BindingsToFixPage(): JSX.Element {
             Bindings to fix
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            A field, a Single or a block changed after these were bound, so
-            each one shows its fallback on the published page. Open one to bind
-            it to another field or unbind it.
+            A field, a Single or a block changed after these were bound, so each
+            one shows its fallback on the published page. Open one to bind it to
+            another field or unbind it.
           </p>
         </div>
         {meta === undefined ? null : (
@@ -229,43 +330,16 @@ export function BindingsToFixPage(): JSX.Element {
           </p>
         )}
       </div>
-      {report.pending && report.data === undefined ? (
-        <div
-          aria-busy="true"
-          className="h-48 animate-pulse rounded-lg border border-border bg-card"
-        />
-      ) : report.error !== undefined && report.error !== null ? (
-        <div
-          role="alert"
-          className="rounded-lg border border-border bg-card px-6 py-10 text-center text-sm text-muted-foreground"
-        >
-          The report could not be read. Reload the page to try again.
-        </div>
-      ) : items.length === 0 ? (
-        <AllFit />
-      ) : (
-        <>
-          <Tabs value={place} onValueChange={setPlace} className="mb-4">
-            <TabsList aria-label="Show bindings in">
-              <TabsTrigger value="all">
-                All
-                <span className="ml-1.5 text-muted-foreground">
-                  {meta?.bindings ?? 0}
-                </span>
-              </TabsTrigger>
-              {places.map(entry => (
-                <TabsTrigger key={entry.value} value={entry.value}>
-                  {entry.label}
-                  <span className="ml-1.5 text-muted-foreground">
-                    {meta?.byPlace[entry.value] ?? 0}
-                  </span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <BindingsTable items={shown} />
-        </>
-      )}
+      <ReportBody
+        report={report}
+        place={place}
+        page={page}
+        onPlace={value => {
+          setPlace(value);
+          setPage(1);
+        }}
+        onPage={setPage}
+      />
     </div>
   );
 }

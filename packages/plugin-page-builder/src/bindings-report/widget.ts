@@ -9,14 +9,70 @@
  *
  * @module bindings-report/widget
  */
-import { defineWidget, type AnyWidget } from "@nextlyhq/plugin-sdk";
+import {
+  defineWidget,
+  type AnyWidget,
+  type WidgetReadServices,
+} from "@nextlyhq/plugin-sdk";
 
 import { BINDINGS_TO_FIX_CARD_COMPONENT } from "../builder-view";
 
-import type { BindingReportStore } from "./store";
+import type { BindingReportStore, StoredDocumentReport } from "./store";
 
 /** The permission the card, the page and the route ask for. */
 export const EDIT_PAGES_PERMISSION = "update-pages";
+
+/**
+ * The report's documents grouped for counting: each collection's documents
+ * by id, with how many broken bindings each holds, and the Singles' bindings
+ * in all.
+ */
+function grouped(stored: readonly StoredDocumentReport[]): {
+  readonly singles: number;
+  readonly byCollection: ReadonlyMap<string, ReadonlyMap<string, number>>;
+} {
+  let singles = 0;
+  const byCollection = new Map<string, Map<string, number>>();
+  for (const entry of stored) {
+    if (entry.kind === "single" || entry.documentId === undefined) {
+      singles += entry.rows.length;
+      continue;
+    }
+    const ids = byCollection.get(entry.slug) ?? new Map<string, number>();
+    ids.set(entry.documentId, entry.rows.length);
+    byCollection.set(entry.slug, ids);
+  }
+  return { singles, byCollection };
+}
+
+/** The broken bindings of one collection's documents the reader may read. */
+async function readableCount(
+  services: WidgetReadServices,
+  collection: string,
+  ids: ReadonlyMap<string, number>,
+  signal: AbortSignal | undefined
+): Promise<number> {
+  try {
+    const read = await services.find(collection, {
+      where: { id: { in: [...ids.keys()] } },
+      select: ["id"],
+      limit: ids.size,
+      status: "all",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    return read.items.reduce(
+      (sum, row) =>
+        sum +
+        (typeof row.id === "string" || typeof row.id === "number"
+          ? (ids.get(String(row.id)) ?? 0)
+          : 0),
+      0
+    );
+  } catch {
+    // A collection the reader may not read adds nothing.
+    return 0;
+  }
+}
 
 /** The card's declaration, reading the report's store when it loads. */
 export function bindingsToFixWidget(
@@ -34,34 +90,10 @@ export function bindingsToFixWidget(
     load: async ({ services, signal }) => {
       const kept = store();
       if (kept === null) return { bindings: 0 };
-      const stored = await kept.list();
-      let bindings = 0;
-      // Each collection's documents, as the reader may read them.
-      const byCollection = new Map<string, Map<string, number>>();
-      for (const entry of stored) {
-        if (entry.kind === "single" || entry.documentId === undefined) {
-          bindings += entry.rows.length;
-          continue;
-        }
-        const ids = byCollection.get(entry.slug) ?? new Map<string, number>();
-        ids.set(entry.documentId, entry.rows.length);
-        byCollection.set(entry.slug, ids);
-      }
+      const { singles, byCollection } = grouped(await kept.list());
+      let bindings = singles;
       for (const [collection, ids] of byCollection) {
-        try {
-          const read = await services.find(collection, {
-            where: { id: { in: [...ids.keys()] } },
-            select: ["id"],
-            limit: ids.size,
-            status: "all",
-            signal,
-          });
-          for (const row of read.items) {
-            bindings += ids.get(String(row.id)) ?? 0;
-          }
-        } catch {
-          // A collection the reader may not read adds nothing.
-        }
+        bindings += await readableCount(services, collection, ids, signal);
       }
       return { bindings };
     },

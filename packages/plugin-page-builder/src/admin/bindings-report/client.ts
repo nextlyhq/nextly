@@ -24,26 +24,42 @@ import {
 /** The route's answer. */
 export interface BindingsToFixAnswer {
   readonly items: readonly BindingsToFixItem[];
-  readonly meta: BindingsToFixMeta & { readonly total: number };
+  readonly meta: BindingsToFixMeta & {
+    readonly total: number;
+    readonly totalPages: number;
+  };
+}
+
+/** Which part of the report to read. */
+export interface BindingsToFixQuery {
+  /** One document's part, by its key. */
+  readonly document?: string;
+  /** One place's documents: pages, components, patterns, layouts, entries, singles. */
+  readonly place?: string;
+  /** Which page of a hundred documents, from 1. */
+  readonly page?: number;
 }
 
 /**
- * The report as the signed-in person may see it; one document's part of it
- * when `document` names one. Read fresh on each mount and kept for half a
- * minute, so a count shown on many screens is not asked again on each.
+ * The report as the signed-in person may see it, or the part `query` names.
+ * Its counts are always of everything they may see. Kept for half a minute,
+ * so a count shown on many screens is not asked again on each.
  */
-export function useBindingsToFix(document?: string): {
+export function useBindingsToFix(query: BindingsToFixQuery = {}): {
   readonly data: BindingsToFixAnswer | undefined;
   readonly pending: boolean;
   readonly error: unknown;
 } {
-  const query =
-    document === undefined
-      ? ""
-      : `?${new URLSearchParams({ document }).toString()}`;
+  const params = new URLSearchParams();
+  if (query.document !== undefined) params.set("document", query.document);
+  if (query.place !== undefined) params.set("place", query.place);
+  if (query.page !== undefined && query.page > 1) {
+    params.set("page", String(query.page));
+  }
+  const search = params.size === 0 ? "" : `?${params.toString()}`;
   return usePluginRoute<BindingsToFixAnswer>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: `${BINDINGS_TO_FIX_ROUTE_PATH}${query}`,
+    path: `${BINDINGS_TO_FIX_ROUTE_PATH}${search}`,
     staleTime: 30_000,
   });
 }

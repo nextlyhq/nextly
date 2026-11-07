@@ -69,6 +69,7 @@ import {
 } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
@@ -279,8 +280,11 @@ const COMPONENT_READ_NOTES: Readonly<
  */
 function editorTopBar(
   view: EditorView,
-  /** The page's title as the form has it now, and the field being edited. */
-  page: { title: string | undefined; field: string }
+  /**
+   * The page's title as the form has it now, the field being edited, and the
+   * canvas, which a binding's Select brings its block into view in.
+   */
+  page: { title: string | undefined; field: string; canvas: HTMLElement | null }
 ): {
   topBar: React.JSX.Element;
   topBarCenter: React.JSX.Element;
@@ -316,6 +320,14 @@ function editorTopBar(
           onAllPages={() => view.requestPanel("pages")}
         />
         <DocumentStatusPill isDirty={documentDirty} />
+        {/* The page's bindings that no longer fit, beside its status: shown
+            only when it has one. */}
+        <BindingsToFixChip
+          editor={editor}
+          field={page.field}
+          canvas={page.canvas}
+          requestPanel={view.requestPanel}
+        />
         <HistoryButtons editor={editor} inline={inline} />
       </>
     ),
@@ -1252,7 +1264,11 @@ function EditorBody<TFieldValues extends FieldValues>({
           // the editor's OWN dirty signal: the form's is false for as long as the
           // editor is open, because the document is committed on the way out.
           // The title is the top bar's switcher, so the shell draws none.
-          {...editorTopBar(view, { title: page.title, field: name })}
+          {...editorTopBar(view, {
+            title: page.title,
+            field: name,
+            canvas: canvas.canvasElement,
+          })}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page)}
           // The shell owns the region; this fills it. Rendered unconditionally

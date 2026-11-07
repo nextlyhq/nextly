@@ -63,7 +63,9 @@ export function BindingsToFixChip({
   requestPanel,
 }: BindingsToFixChipProps): JSX.Element | null {
   const key = useDocumentKey();
-  const report = useBindingsToFix(key);
+  // This document's bindings, and the whole report's count for the rest.
+  const report = useBindingsToFix(key === undefined ? {} : { document: key });
+  const everything = useBindingsToFix();
   const [open, setOpen] = useState(false);
   if (key === undefined) return null;
   const item = report.data?.items.find(entry => entry.documentKey === key);
@@ -71,7 +73,10 @@ export function BindingsToFixChip({
     row => row.blocksField === undefined || row.blocksField === field
   );
   if (item === undefined || rows.length === 0) return null;
-  const elsewhere = (report.data?.meta.bindings ?? rows.length) - rows.length;
+  const elsewhere = Math.max(
+    0,
+    (everything.data?.meta.bindings ?? 0) - item.rows.length
+  );
   const select = (nodeId: string): void => {
     setOpen(false);
     editor.select(nodeId);
@@ -140,7 +145,9 @@ export function BindingsToFixChip({
           </span>
           <a
             href={BINDINGS_TO_FIX_PAGE_HREF}
-            onClick={navigateWithin(BINDINGS_TO_FIX_PAGE_HREF, navigateTo).onClick}
+            onClick={
+              navigateWithin(BINDINGS_TO_FIX_PAGE_HREF, navigateTo).onClick
+            }
             className="inline-flex items-center gap-1.5 font-medium text-foreground hover:underline"
           >
             All bindings to fix
