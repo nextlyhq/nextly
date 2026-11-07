@@ -150,9 +150,12 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(read.items)).not.toContain("SENTINEL");
     });
 
-    it("leaves a trusted read outside the frame as it was", async () => {
+    it("leaves a trusted read, and the instance's services, outside the frame as they were", async () => {
       const read = await t.nextly.find({ collection: SLUG });
       expect(JSON.stringify(read.items)).toContain("SENTINEL");
+      // The getter the frame refuses hands the service out outside it.
+      expect(typeof t.nextly.collectionsHandler.listEntries).toBe("function");
+      expect(t.nextly.userService).toBeDefined();
     });
   }
 );

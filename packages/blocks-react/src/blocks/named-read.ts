@@ -425,16 +425,6 @@ function referenceFor(name: string, nodeId: string): string {
   return `NQ-${hashText(seed).slice(0, 6).toUpperCase()}`;
 }
 
-/** Whether a query's answer depends on the day it is run. */
-function dependsOnToday(declaration: NamedQueryDeclaration): boolean {
-  return (
-    declaration.revalidate !== undefined ||
-    Object.values(declaration.params ?? {}).some(
-      each => each.type === "day" && each.default === "today"
-    )
-  );
-}
-
 /**
  * Each render's runs, by key, so a query a page draws several times (inside
  * an outer list) runs once per render. Owned by the render's read allowance
@@ -615,13 +605,18 @@ function failed(
   }
 ): NamedListOutcome {
   const ref = context.ref ?? referenceFor(context.name, context.nodeId);
-  context.host.report?.({
-    code,
-    query: context.name,
-    nodeId: context.nodeId,
-    ref,
-    ...(context.error === undefined ? {} : { error: context.error }),
-  });
+  // A log that fails must not fail the list: it still draws its empty state.
+  try {
+    context.host.report?.({
+      code,
+      query: context.name,
+      nodeId: context.nodeId,
+      ref,
+      ...(context.error === undefined ? {} : { error: context.error }),
+    });
+  } catch {
+    // Nothing more to do: the outcome below is what the page draws.
+  }
   return {
     items: [],
     failed: true,
@@ -805,7 +800,9 @@ export async function readNamedList(
     String(window.limit),
     String(window.offset),
     ctx.locale ?? "",
-    dependsOnToday(declaration) ? today : "",
+    // Today always: `run` is handed it whether or not the query declares
+    // that it depends on it, so a result never outlives its day.
+    today,
   ];
   let ranHere = false;
   const read = () => {

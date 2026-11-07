@@ -248,6 +248,41 @@ describe("a named query's declaration", () => {
       "not a safe whole number",
     ],
     [
+      "an input key longer than a list's action takes",
+      { params: { ["k".repeat(65)]: param.text({ label: "K" }) } },
+      "at most 64 characters",
+    ],
+    [
+      "more choices than an editor lists",
+      {
+        params: {
+          c: param.choice({
+            label: "C",
+            options: Array.from({ length: 201 }, (_, i) => ({
+              value: `v${String(i)}`,
+              label: `V${String(i)}`,
+            })),
+          }),
+        },
+      },
+      "201 options",
+    ],
+    [
+      "row groups that hold themselves",
+      {
+        rows: (() => {
+          const group: { name: string; type: string; fields: unknown[] } = {
+            name: "loop",
+            type: "group",
+            fields: [],
+          };
+          group.fields.push(group);
+          return { key: "id", fields: [{ name: "id", type: "text" }, group] };
+        })(),
+      },
+      "more than 8 groups deep",
+    ],
+    [
       "a choice value no list could store",
       {
         params: {
@@ -258,6 +293,26 @@ describe("a named query's declaration", () => {
         },
       },
       "longer than 200 characters",
+    ],
+    [
+      "a required flag that is not true or false",
+      { params: { c: { type: "text", label: "C", required: "yes" } } },
+      "required is not true or false",
+    ],
+    [
+      "a choice option with no visible label",
+      {
+        params: {
+          c: param.choice({
+            label: "C",
+            options: [
+              { value: "a", label: "A" },
+              { value: "b", label: "  " },
+            ],
+          }),
+        },
+      },
+      "no options of { value, label }",
     ],
     [
       "a choice with no options",

@@ -35,12 +35,17 @@ import {
   previewStateClass,
   resolveSiteTokens,
   resolveTokenPrefix,
+  revealConditioned,
   statePropagatesToAncestors,
   STYLE_STATES,
   tokenCustomProperty,
   tokenIdentity,
   walkNodes,
+  DEFAULT_LIMITS,
+  resolveComponentInstances,
   type BlockDocument,
+  type BlockNode,
+  type DefinitionsById,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -74,7 +79,12 @@ import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { guardCanvasNavigation } from "./canvas-link-guard";
-import { CanvasRegionFrame, type CanvasRegion } from "./canvas-regions";
+import {
+  CANVAS_REGION_CLASS,
+  CanvasRegionFrame,
+  type CanvasRegion,
+} from "./canvas-regions";
+import { gatedAsStored } from "./condition-gate";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import {
@@ -145,6 +155,75 @@ export function lockMarksOf(document: BlockDocument): Map<string, LockMark> {
     }
   });
   return marks;
+}
+
+/**
+ * Marks a block whose visibility conditions decide who sees it. The canvas
+ * draws it whoever the page would show it to, so the author can see and
+ * select it, and this says it isn't shown to everyone: `conditional`, or
+ * `unchecked` for one whose conditions the page can't check, which visitors
+ * never see.
+ */
+export const CONDITIONED_ATTRIBUTE = "data-nx-conditioned";
+
+/** How a conditioned block is marked on the canvas. */
+type ConditionMark = "conditional" | "unchecked";
+
+/**
+ * Every conditioned block's mark, from one walk, asked of the engine's own
+ * gate so the canvas marks exactly the blocks the page judges. `unchecked`
+ * names the blocks whose conditions the page can't check, which only a host
+ * knowing the collections' fields can say.
+ */
+function conditionMarksOf(
+  document: BlockDocument,
+  unchecked: ReadonlySet<string> | undefined,
+  composed: { definitions?: DefinitionsById; maxNodes?: number }
+): Map<string, ConditionMark> {
+  const marks = new Map<string, ConditionMark>();
+  const mark = (node: BlockNode): void => {
+    if (marks.has(node.id) || !gatedAsStored(node)) return;
+    marks.set(
+      node.id,
+      unchecked?.has(node.id) === true ? "unchecked" : "conditional"
+    );
+  };
+  const bound = { maxNodes: composed.maxNodes ?? DEFAULT_LIMITS.maxNodes };
+  // The page's own blocks, a placement among them, by their ids, which are
+  // the addresses the canvas draws them with.
+  walkNodes(document.nodes, mark, bound);
+  // And the blocks a placed component's definition holds, by the ids the
+  // composed tree gives them, which the canvas draws them with: composed as
+  // the renderer composes, each conditioned placement expanded too.
+  if (composed.definitions !== undefined && composed.definitions.size > 0) {
+    const tree = resolveComponentInstances(document, composed.definitions, {
+      conditioned: "carry",
+    }).document;
+    walkNodes(tree.nodes, mark, bound);
+  }
+  return marks;
+}
+
+/**
+ * The mark a drawn element carries: a definition's own conditioned block by
+ * its composed id, else the block or placement it is the outermost element
+ * of, by its address. Never inside a Layout region, a document of its own
+ * whose ids may repeat the page's.
+ */
+function conditionMarkFor(
+  element: Element,
+  container: HTMLElement,
+  marks: ReadonlyMap<string, ConditionMark>
+): ConditionMark | undefined {
+  const address = nodeAddressOf(element);
+  if (address === null) return undefined;
+  if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
+  const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+  const own = id !== null && id !== address ? marks.get(id) : undefined;
+  if (own !== undefined) return own;
+  return isOutermostForAddress(element, address, container)
+    ? marks.get(address)
+    : undefined;
 }
 
 /**
@@ -584,7 +663,8 @@ function useCanvasMarkers(
   page: React.ReactNode,
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
-  lockedIds: ReadonlyMap<string, LockMark>
+  lockedIds: ReadonlyMap<string, LockMark>,
+  conditionMarks: ReadonlyMap<string, ConditionMark>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -647,6 +727,7 @@ function useCanvasMarkers(
             `[${DROP_PARENT_ATTRIBUTE}]`,
             `[${DROP_REFUSED_ATTRIBUTE}]`,
             `[${LOCKED_ATTRIBUTE}]`,
+            `[${CONDITIONED_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
@@ -726,6 +807,13 @@ function useCanvasMarkers(
           element,
           LOCKED_ATTRIBUTE,
           address === null ? undefined : lockedIds.get(address)
+        );
+        // On the block's own outermost element, so a block a list draws once
+        // per entry is marked once per copy and its parts are not marked again.
+        setMark(
+          element,
+          CONDITIONED_ATTRIBUTE,
+          conditionMarkFor(element, container, conditionMarks)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -841,6 +929,7 @@ function useCanvasMarkers(
     parentId,
     refusedId,
     lockedIds,
+    conditionMarks,
   ]);
 }
 
@@ -1279,6 +1368,13 @@ export interface CanvasProps {
    * page exactly as it always has.
    */
   regions?: readonly CanvasRegion[];
+  /**
+   * The blocks whose visibility conditions the page can't check, which the
+   * canvas marks in red: visitors never see them. Judged by the host, which
+   * knows the collections' fields. Absent, every conditioned block is marked
+   * only as conditional.
+   */
+  conditionsUnchecked?: ReadonlySet<string>;
 }
 
 /**
@@ -1945,12 +2041,32 @@ function useDrawnPage({
   environment: BlockEnvironment | undefined;
 }): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
   const drawn = useLayoutParts(regions, rendered, sheet);
+  // Every conditioned block drawn, whoever the page would show it to, so the
+  // author can see and select it; the marks say it isn't shown to everyone.
+  const drawable = useMemo(() => revealConditioned(document), [document]);
+  // A placed component's definition too: its conditioned blocks are drawn,
+  // as the page's are.
+  const drawnRender = useMemo(
+    () =>
+      rendered?.definitions === undefined
+        ? rendered
+        : {
+            ...rendered,
+            definitions: new Map(
+              [...rendered.definitions].map(([id, definition]) => [
+                id,
+                revealConditioned(definition),
+              ])
+            ),
+          },
+    [rendered]
+  );
   const page = useMemo(
     () => (
       <BlockEnvironmentProvider value={environment}>
         <PageRenderer
-          {...rendered}
-          document={document}
+          {...drawnRender}
+          document={drawable}
           siteStyles={sheet}
           {...drawn?.page}
           // What makes the hit-testing above possible at all. The renderer emits
@@ -1963,7 +2079,7 @@ function useDrawnPage({
         />
       </BlockEnvironmentProvider>
     ),
-    [rendered, document, sheet, environment, drawn]
+    [drawnRender, drawable, sheet, environment, drawn]
   );
   return { drawn, page };
 }
@@ -1985,6 +2101,7 @@ export function Canvas({
   onListSortField,
   overlay,
   regions,
+  conditionsUnchecked,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -2024,6 +2141,18 @@ export function Canvas({
    * a locked block, which the lock covers too.
    */
   const lockedIds = useMemo(() => lockMarksOf(document), [document]);
+  const conditionMarks = useMemo(
+    () =>
+      conditionMarksOf(document, conditionsUnchecked, {
+        ...(render?.definitions === undefined
+          ? {}
+          : { definitions: render.definitions }),
+        ...(render?.limits?.maxNodes === undefined
+          ? {}
+          : { maxNodes: render.limits.maxNodes }),
+      }),
+    [document, conditionsUnchecked, render?.definitions, render?.limits]
+  );
 
   useCanvasMarkers(
     root,
@@ -2032,7 +2161,8 @@ export function Canvas({
     page,
     forcedState,
     drag,
-    lockedIds
+    lockedIds,
+    conditionMarks
   );
 
   // The refusal the cursor shows, asked of the same rule the notice draws by.

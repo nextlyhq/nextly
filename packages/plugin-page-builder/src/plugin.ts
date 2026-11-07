@@ -63,6 +63,7 @@ import {
   BUILDER_VIEW_PATH,
   REMOVE_LAYOUT_ACTION_COMPONENT,
 } from "./builder-view";
+import { canvasBindingsRoute } from "./canvas-bindings-route";
 import { canvasPathOption } from "./canvas-path";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldReach } from "./class-usage-blocks-fields";
@@ -103,7 +104,9 @@ import {
 } from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { seedCompositionGraphLock } from "./composition-graph-lock";
 import { manifestRoute } from "./composition-manifest";
+import { registerCompositionRejudge } from "./composition-rejudge";
 import { COMPOSITION_SERVICE, compositionService } from "./composition-service";
 import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
@@ -1365,6 +1368,12 @@ export const pageBuilder = (
     warn: (message: string, meta?: Record<string, unknown>) => void;
   } | null = null;
 
+  /**
+   * Put the composition graph lock's row in place, once the plugin's tables
+   * exist. Published by `init` for the reason `defaultLayoutSetup` is.
+   */
+  let seedGraphLock: (() => Promise<void>) | null = null;
+
   /** The installed spacing-model store, or a refusal naming why it is missing. */
   const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
     if (spacingSetup === null) {
@@ -1947,6 +1956,18 @@ export const pageBuilder = (
           ),
       };
 
+      // Every write changing a blocks value is judged again in its own
+      // transaction under the graph lock, so two saves made at once cannot
+      // each pass against the graph as it stood before the other.
+      registerCompositionRejudge(ctx, () => composition);
+      seedGraphLock = () =>
+        seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
+          ctx.logger.warn(
+            "[page-builder] the composition graph lock's row could not be put in place; the first write locking it inserts it",
+            { error }
+          )
+        );
+
       usage.reconcile = registerClassUsageMaintenance({
         ctx,
         // Both indexes' rows, in the plugin's own tables.
@@ -2124,6 +2145,7 @@ export const pageBuilder = (
     // Then record the site's spacing model, once: AFTER the seed, so the seed
     // is recorded and not taken for content. Neither step throws.
     onReady: () => {
+      void seedGraphLock?.();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
       const seeded =
@@ -2496,6 +2518,9 @@ export const pageBuilder = (
         // list whose source is a named query runs it here, on the server,
         // where its run function lives.
         listEntriesRoute(name => namedQueries.definitionOf(name)),
+        // The canvas's bound props: the entry being edited, the Singles its
+        // bindings read and the site settings, read as the author asking.
+        canvasBindingsRoute(),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),

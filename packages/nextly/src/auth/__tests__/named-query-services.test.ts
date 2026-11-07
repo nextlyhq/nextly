@@ -1,9 +1,10 @@
 /**
- * Inside a page builder named query's frame, the services plugins contribute
- * refuse to run, as the Direct API does: a query reads only through the
- * reader it is handed, and a service reaching data through its own plugin
- * context would read past it, undeclared, uncounted and untagged. Outside
- * the frame, and through the frame's own door, nothing changes.
+ * Inside a page builder named query's frame, resolving a service a plugin
+ * contributes is refused before its factory runs, as the Direct API is: a
+ * query reads only through the reader it is handed. Nothing a plugin service
+ * is or returns is ever wrapped: outside the frame, and resolved before one,
+ * a service and everything it hands out is the plugin's own object, frozen,
+ * written to, sealed and called exactly as the plugin made it.
  */
 import { describe, expect, it } from "vitest";
 
@@ -15,19 +16,6 @@ import { openNamedQueryFrame } from "../named-query-scope";
 
 const PLUGIN = "@test/named-query-services";
 
-class Store {
-  readonly #rows = ["SENTINEL"];
-  read(): string[] {
-    return this.#rows;
-  }
-}
-
-registerPluginService(PLUGIN, "store", () => ({
-  read: () => ["SENTINEL"],
-  nested: { read: () => ["SENTINEL"] },
-}));
-registerPluginService(PLUGIN, "classy", () => new Store());
-
 /** The reason a refusal logs, or the value when the call went through. */
 function outcome(call: () => unknown): unknown {
   try {
@@ -37,136 +25,87 @@ function outcome(call: () => unknown): unknown {
   }
 }
 
-describe("plugin services inside a named query's frame", () => {
-  const services = () =>
-    buildPluginServicesNamespace()[PLUGIN] as Record<
-      string,
-      { read: () => string[]; nested?: { read: () => string[] } }
-    >;
+const services = () =>
+  buildPluginServicesNamespace()[PLUGIN] as Record<string, unknown>;
 
-  it("answer outside the frame as they always did, a class's private state included", () => {
-    expect(services().store?.read()).toEqual(["SENTINEL"]);
-    expect(services().store?.nested?.read()).toEqual(["SENTINEL"]);
-    expect(services().classy?.read()).toEqual(["SENTINEL"]);
-  });
-
-  it("refuse every method inside the frame, however deep", () => {
-    // Resolved outside the frame first, so the refusal tested is the
-    // method's own.
-    const store = services().store;
-    const classy = services().classy;
-    const frame = openNamedQueryFrame("notes.all");
-    for (const call of [
-      () => store?.read(),
-      () => store?.nested?.read(),
-      () => classy?.read(),
-    ]) {
-      expect(outcome(() => frame.run(call))).toBe("named-query-trusted-read");
-    }
-    for (const call of [
-      () => services().store?.read(),
-      () => services().store?.nested?.read(),
-      () => services().classy?.read(),
-    ]) {
-      expect(outcome(() => frame.run(call))).toBe("named-query-trusted-read");
-    }
-  });
-
-  it("refuse a method taken outside the frame and called inside it", () => {
-    const read = services().store?.read;
-    const frame = openNamedQueryFrame("notes.all");
-    expect(outcome(() => frame.run(() => read?.()))).toBe(
-      "named-query-trusted-read"
-    );
-  });
-
-  it("are not even resolved inside the frame, so a factory never runs there", () => {
+describe("plugin services and a named query's frame", () => {
+  it("refuses resolving a service inside the frame, before its factory runs, and resolves it outside", () => {
     let built = 0;
     registerPluginService(PLUGIN, "lazy", () => {
       built += 1;
       return { read: () => ["SENTINEL"] };
     });
     const frame = openNamedQueryFrame("notes.all");
-    // First reached inside the frame: refused before its factory runs.
     expect(outcome(() => frame.run(() => services().lazy))).toBe(
       "named-query-trusted-read"
     );
     expect(built).toBe(0);
-    // Reached outside it, it resolves as it always did.
-    expect(services().lazy?.read()).toEqual(["SENTINEL"]);
+    const service = services().lazy as { read: () => string[] };
+    expect(service.read()).toEqual(["SENTINEL"]);
     expect(built).toBe(1);
   });
 
-  it("run no getter inside the frame, read as a property or through its descriptor", () => {
-    let evaluated = 0;
-    registerPluginService(PLUGIN, "withGetter", () => ({
-      get count() {
-        evaluated += 1;
-        return 7;
-      },
-    }));
-    // Resolved outside the frame, as a query's module might capture it.
-    const service = services().withGetter as unknown as { count: number };
-    const frame = openNamedQueryFrame("notes.all");
-    expect(outcome(() => frame.run(() => service.count))).toBe(
-      "named-query-trusted-read"
-    );
-    expect(
-      outcome(() =>
-        frame.run(() => Object.getOwnPropertyDescriptor(service, "count"))
-      )
-    ).toBe("named-query-trusted-read");
-    expect(evaluated).toBe(0);
-    // Outside the frame the getter runs as it always did.
-    expect(service.count).toBe(7);
-    expect(evaluated).toBe(1);
-  });
-
-  it("guard a handle a service method hands out, kept outside the frame and used in it", async () => {
+  it("hands out the plugin's own service and results, untouched", () => {
     class Repository {
       readonly #rows = ["SENTINEL"];
       read(): string[] {
         return this.#rows;
       }
     }
-    registerPluginService(PLUGIN, "factory", () => ({
-      repository: () => new Repository(),
-      reader: () => () => ["SENTINEL"],
-      later: () => Promise.resolve(new Repository()),
-      data: () => ({ rows: ["plain"] }),
-    }));
-    const service = services().factory as unknown as {
-      repository: () => Repository;
-      reader: () => () => string[];
-      later: () => Promise<Repository>;
-      data: () => { rows: string[] };
+    const repository = new Repository();
+    const data = {
+      rows: ["a"],
+      read() {
+        return this.rows;
+      },
     };
-    // Taken outside the frame, as a query's module might keep them.
-    const repository = service.repository();
-    const reader = service.reader();
-    const later = await service.later();
-    const frame = openNamedQueryFrame("notes.all");
-    for (const call of [
-      () => repository.read(),
-      () => reader(),
-      () => later.read(),
-    ]) {
-      expect(outcome(() => frame.run(call))).toBe("named-query-trusted-read");
-    }
-    // Outside the frame each works as it always did, a class's private
-    // state included, and plain data passes through as it is.
-    expect(repository.read()).toEqual(["SENTINEL"]);
-    expect(reader()).toEqual(["SENTINEL"]);
-    expect(later.read()).toEqual(["SENTINEL"]);
-    const data = service.data();
-    expect(Object.getPrototypeOf(data)).toBe(Object.prototype);
-    expect(data).toEqual({ rows: ["plain"] });
+    const own = {
+      setting: "before",
+      repository: () => repository,
+      data: () => data,
+    };
+    registerPluginService(PLUGIN, "own", () => own);
+    const service = services().own as typeof own;
+    // The very objects the plugin made.
+    expect(service).toBe(own);
+    expect(service.repository()).toBe(repository);
+    expect(service.data()).toBe(data);
+    // Each behaves natively: private state, `this`, writes, freeze, seal.
+    expect(service.repository().read()).toEqual(["SENTINEL"]);
+    expect(service.data().read()).toEqual(["a"]);
+    service.setting = "after";
+    expect(own.setting).toBe("after");
+    expect(Object.isSealed(Object.seal(service.data()))).toBe(true);
+    expect(Object.isFrozen(Object.freeze(service))).toBe(true);
   });
 
-  it("answer through the frame's own door", () => {
+  it("works normally when frozen, outside the frame and resolved before one", async () => {
+    const frozen = Object.freeze({
+      read: () => ["SENTINEL"],
+      open: () => Object.freeze({ count: 2 }),
+    });
+    registerPluginService(PLUGIN, "frozen", () => frozen);
+    // Outside the frame: read, call, freeze again.
+    const service = services().frozen as typeof frozen;
+    expect(service).toBe(frozen);
+    expect(service.read()).toEqual(["SENTINEL"]);
+    expect(service.open().count).toBe(2);
+    expect(Object.isFrozen(Object.freeze(service))).toBe(true);
+    // Resolved before a frame, it is still the plain frozen object inside
+    // it: what the frame refuses is reaching the service, not the object.
     const frame = openNamedQueryFrame("notes.all");
-    expect(frame.run(() => frame.read(() => services().store?.read()))).toEqual(
-      ["SENTINEL"]
-    );
+    expect(await frame.run(() => Promise.resolve(service.read()))).toEqual([
+      "SENTINEL",
+    ]);
+  });
+
+  it("answers through the frame's own door", () => {
+    registerPluginService(PLUGIN, "door", () => ({ read: () => ["SENTINEL"] }));
+    const frame = openNamedQueryFrame("notes.all");
+    expect(
+      frame.run(() =>
+        frame.read(() => (services().door as { read: () => string[] }).read())
+      )
+    ).toEqual(["SENTINEL"]);
   });
 });

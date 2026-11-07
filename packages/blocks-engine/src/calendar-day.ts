@@ -14,7 +14,9 @@ export function isCalendarDay(value: unknown): value is string {
   const match = DAY.exec(value);
   if (match === null) return false;
   const [year, month, day] = [match[1], match[2], match[3]].map(Number);
-  const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1));
+  const date = new Date(Date.UTC(2000, (month ?? 1) - 1, day ?? 1));
+  // Set apart, since `Date.UTC` reads years 0 to 99 as 1900 to 1999.
+  date.setUTCFullYear(year ?? 0, (month ?? 1) - 1, day ?? 1);
   return (
     date.getUTCFullYear() === year &&
     date.getUTCMonth() + 1 === month &&

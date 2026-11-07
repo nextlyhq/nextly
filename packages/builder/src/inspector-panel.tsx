@@ -70,6 +70,7 @@ import {
   ComponentVariantsContext,
   ComponentVariantsSection,
 } from "./component-variants-panel";
+import { ShowWhen } from "./condition-controls";
 import {
   ContentServicesContext,
   contentControlFor,
@@ -123,6 +124,10 @@ import type { StylePolicy } from "./style-values";
 import { useCanvasReading } from "./use-canvas-reading";
 import { placedDefinition } from "./variant-picker";
 import { VisibleOn, type BreakpointsStatus } from "./visible-on";
+import {
+  useVisitorUnreadable,
+  VisitorUnreadableNote,
+} from "./visitor-unreadable-context";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -922,6 +927,18 @@ function ContentTab({
         heldBy={designLocked}
         reasonId={reasonId}
       />
+      {/* Whether the block shows at all, by the entry or list item it is drawn
+          with: beside where it shows, as the design draws the Content tab. */}
+      {/* Keyed by the block, so a row added and not yet finished stays with
+          the block it was added to rather than moving to the next one. */}
+      <ShowWhen
+        key={block.nodeId}
+        editor={editor}
+        nodeId={block.nodeId}
+        services={services}
+        heldBy={designLocked}
+        reasonId={reasonId}
+      />
       <details className="nx-inspector__advanced" open={advancedOpen}>
         {/*
         Opened from the summary's own click, which a keyboard's Enter and
@@ -1172,6 +1189,9 @@ function ContentSurface({
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
+  // A block's own inspector knows nothing of bindings visitors will not see,
+  // so beside one, every such binding on the block is said above it.
+  const unreadable = useVisitorUnreadable(inspection.nodeId);
   const generated = (
     <ContentFields
       inspection={inspection}
@@ -1217,6 +1237,10 @@ function ContentSurface({
   return (
     <>
       {visibility}
+      <VisitorUnreadableNote
+        bindings={unreadable}
+        props={new Set(unreadable.map(binding => binding.prop))}
+      />
       <CustomInspectorBoundary fallback={generated}>
         <CustomInspector
           Inspector={Custom}
@@ -1434,6 +1458,9 @@ function ContentFields({
   /** The component's own view, when the document is a component. */
   fields?: ComponentFieldsBinding | undefined;
 }): React.JSX.Element {
+  // The bindings on this block a visitor will not see filled, each said under
+  // the field that draws its prop.
+  const unreadable = useVisitorUnreadable(inspection.nodeId);
   // A prop the inspector leaves out draws no control, but in a component's
   // view keeps its expose icon: a page may clear what hides it.
   const drawn = inspection.props.filter(
@@ -1499,6 +1526,14 @@ function ContentFields({
               })}
             </React.Fragment>
           );
+        // Under the field: the props it draws whose bound value a visitor
+        // will not see, a group's included.
+        const note = (
+          <VisitorUnreadableNote
+            bindings={unreadable}
+            props={group === undefined ? new Set([prop.name]) : group.drawn}
+          />
+        );
         // Named as the block names it, so its icon is not drawn bare.
         const field = !prop.offered ? (
           <p className="nx-inspector__note">
@@ -1524,7 +1559,16 @@ function ContentFields({
             </HeldByLock>
           ))
         );
-        if (fields === undefined) return field;
+        if (fields === undefined) {
+          // Always a fragment under one key, so a note appearing or going
+          // never remounts the field above it and its uncommitted text.
+          return (
+            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+              {field}
+              {note}
+            </React.Fragment>
+          );
+        }
         // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
         // still one a designer may try to expose, and the refusal that says
         // why is the answer they need, which a disabled switch would withhold.
@@ -1534,6 +1578,7 @@ function ContentFields({
             className="nx-inspector__prop"
           >
             {field}
+            {note}
             <PropExposeControl
               binding={fields}
               nodeId={inspection.nodeId}

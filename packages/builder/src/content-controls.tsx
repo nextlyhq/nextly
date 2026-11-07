@@ -183,6 +183,8 @@ export interface LoopCollection {
    */
   readonly readable?: readonly {
     readonly name: string;
+    /** What the admin calls it: "Cover image". */
+    readonly label?: string;
     readonly type: string;
     readonly hasMany?: boolean;
     readonly relationTo?: string | readonly string[];
