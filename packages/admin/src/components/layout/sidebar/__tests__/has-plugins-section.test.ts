@@ -106,4 +106,17 @@ describe("hasPluginsSection", () => {
       )
     ).toBe(false);
   });
+
+  it("shows it to anyone who may open a plugin menu item it lists", () => {
+    // A plugin page with no collection beside it, for a reader who neither
+    // manages settings nor views collections: the item is the destination.
+    const neither = { canManageSettings: false, canViewCollections: false };
+    expect(
+      hasPluginsSection(neither, { ...SETTLED, hasVisibleMenuItem: true })
+    ).toBe(true);
+    // The control: the same reader with no such item sees no entry.
+    expect(
+      hasPluginsSection(neither, { ...SETTLED, hasVisibleMenuItem: false })
+    ).toBe(false);
+  });
 });

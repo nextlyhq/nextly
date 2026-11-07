@@ -40,17 +40,78 @@ function filterAndSort(
 export function resolveVisibleMenuItems(
   plugins: PluginMetadata[] | undefined,
   can: (permission: string) => boolean,
-  section?: ActiveNavSection
+  section?: ActiveNavSection,
+  hasPanel?: (section: ActiveNavSection) => boolean
 ): PluginMenuItemMeta[] {
   if (!plugins || plugins.length === 0) return [];
   const all = plugins.flatMap(plugin => {
     const items = plugin.menu ?? [];
     if (section === undefined) return items;
     const slug = pluginSlug(plugin.name);
-    return items.filter(
-      item =>
-        pluginSurfaceSection(item.section, plugin.placement, slug) === section
+    return items.filter(item =>
+      listedIn(
+        pluginSurfaceSection(item.section, plugin.placement, slug),
+        section,
+        hasPanel
+      )
     );
   });
   return filterAndSort(all, can);
+}
+
+/**
+ * Whether an item attributed to `attributed` is listed in `section`'s panel:
+ * its own section's, or, where that section draws no panel (the dashboard,
+ * or media while its folder tree is hidden), the Plugins panel's, so every
+ * item has somewhere it can be reached. Without `hasPanel`, each item is
+ * listed in its own section alone.
+ */
+function listedIn(
+  attributed: ActiveNavSection,
+  section: ActiveNavSection,
+  hasPanel: ((section: ActiveNavSection) => boolean) | undefined
+): boolean {
+  if (attributed === section) return true;
+  return (
+    section === "plugins" && hasPanel !== undefined && !hasPanel(attributed)
+  );
+}
+
+/**
+ * The menu items a sidebar search matches: an item whose label contains the
+ * search, ignoring case, with all its children; or one with a child that
+ * does, with those children alone. An empty search matches everything, so a
+ * panel that searches its other entries filters these the same way.
+ */
+export function menuItemsMatching(
+  items: readonly PluginMenuItemMeta[],
+  search: string
+): PluginMenuItemMeta[] {
+  const term = search.trim().toLowerCase();
+  if (term === "") return [...items];
+  const matches = (item: PluginMenuItemMeta) =>
+    item.label.toLowerCase().includes(term);
+  return items.flatMap(item => {
+    if (matches(item)) return [item];
+    const children = (item.children ?? []).filter(matches);
+    return children.length > 0 ? [{ ...item, children }] : [];
+  });
+}
+
+/**
+ * Every address the given menu items lead to, children included: a plugin
+ * collection one the reader can see already offers is listed once, by the
+ * plugin's own item, and not again among the plugins' collections. Given the
+ * items as `resolveVisibleMenuItems` keeps them for the reader, so an item
+ * they may not open never hides a collection they may.
+ */
+export function menuDestinations(
+  items: readonly PluginMenuItemMeta[]
+): ReadonlySet<string> {
+  const destinations = new Set<string>();
+  for (const item of items) {
+    destinations.add(item.to);
+    for (const child of item.children ?? []) destinations.add(child.to);
+  }
+  return destinations;
 }
