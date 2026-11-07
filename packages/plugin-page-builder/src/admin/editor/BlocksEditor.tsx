@@ -102,6 +102,7 @@ import {
   useMediaSummaryReader,
   type ReadMediaSummary,
 } from "./media-summary-reader";
+import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { recentIconsStore } from "./recent-icons-store";
@@ -342,6 +343,16 @@ function editorTopBar(
             own design, opening the list; nothing on any other document. */}
         <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
+        {/* What the page costs to read, against its allowance: a page's
+            alone, since a component is read as part of each page placing it. */}
+        {view.initialDocument.kind === "page" ? (
+          <PageReadMeter
+            editor={editor}
+            drawnWith={view.canvasRender}
+            regions={view.canvasRegions}
+            componentTitle={view.componentLibrary.titleOf}
+          />
+        ) : null}
       </>
     ),
     topBarCenter: (
