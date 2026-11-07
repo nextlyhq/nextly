@@ -110,7 +110,10 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../../../nextly.config";
 
@@ -120,11 +123,16 @@ const instance = () => getNextly({ config: nextlyConfig });
 
 // Annotated rather than inferred: without a contextual type these `args`
 // parameters are implicitly `any`, which fails `next build` under strict mode.
-const reader: NextlyContentReader & {
-  media: Pick<NextlyInstance["media"], "findByID">;
-} = {
+const reader: NextlyContentReader &
+  PublicSiteSettingsSource & {
+    media: Pick<NextlyInstance["media"], "findByID">;
+  } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // The site's name, address, logo and time zone a page shows, read from this
+  // instance. Omit it and the page shows the settings of the process's
+  // registered instance, and the route warns once.
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // Images that store a media id resolve through this. Omit it and those images
   // render nothing, while images holding a literal URL keep working.
   media: {
@@ -158,6 +166,24 @@ export default ContentPage;
   them, and pages come out structurally correct and visually bare. Declare at
   least a `base` breakpoint.
 </Callout>
+
+### One process, several sites
+
+A page reads everything through the `nextly` it is given: its entry, the lists and Singles it
+shows, and the site settings, the site's name, address, logo and the time zone its dates and day
+filters use. A process serving several sites, each through an instance of its own, gives each
+route its own `nextly`, and each page shows its own site. Only a route given no `nextly` reads the
+process's registered instance.
+
+Give each of those routes its own `cacheScope` too, such as the site's id. Every public read a
+route makes, its site settings among them, is cached under it, and two routes over different
+instances with the same scope, or none, share their cached reads.
+
+A reader of your own forwards `publicSiteSettings` from the instance, as the example above does.
+A reader without it still shows the settings of the process's registered instance, as it did
+before, so a single-site app keeps working. On a process serving several sites those are
+another site's settings, so the route warns once per reader, in every environment, naming the
+line to add.
 
 ### Public sites read differently
 
@@ -263,7 +289,11 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
-import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  NextlySingleReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../../../nextly.config";
 
@@ -272,13 +302,15 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 const instance = () => getNextly({ config: nextlyConfig });
 
 const reader: NextlyContentReader &
-  NextlySingleReader & {
+  NextlySingleReader &
+  PublicSiteSettingsSource & {
     media: Pick<NextlyInstance["media"], "findByID">;
   } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
   // The site style is a single, read through this.
   findSingle: async args => (await instance()).findSingle(args),
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   media: {
     findByID: async args => (await instance()).media.findByID(args),
   },
@@ -523,6 +555,8 @@ Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
   comes back: not the administrator's email, not the preview links' revocation counter, and not
   a setting added later. Saving the settings expires the tag `nextlySiteSettingsTags()` names, so
   tag a cached read with it and a page shows a new site name or time zone on its next request.
+  Given an instance, `readPublicSiteSettings(nextly)` reads that instance's settings instead,
+  through the same allowlist; an instance answers the same from `nextly.publicSiteSettings()`.
 - `bindingFieldShapes({ collection })` or `bindingFieldShapes({ single })` answers the fields a
   visitor may read, each with its `type`, and where they apply `hasMany`, `relationTo`, the
   select or radio `options`, and `dateOnly` or `monthOnly` for a date picked as a day or a month.
@@ -530,7 +564,8 @@ Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
   decide. A source the visitor may not read, or one that does not exist, has no shapes
   (`undefined`).
 
-The settings and the shapes read the process's running instance, as `requireNextly` does.
+The shapes, and the settings when no instance is given, read the process's running instance,
+as `requireNextly` does.
 
 <Callout type="warn">
   Field bindings inside a loop are stored but not resolved yet. Each repeated

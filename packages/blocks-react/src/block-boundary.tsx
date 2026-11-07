@@ -169,7 +169,10 @@ function withItemBindings(
     ...(context.item === undefined ? {} : { item: context.item }),
     ...(typeof itemSource === "string" && itemSource !== ""
       ? { itemRef: { collection: itemSource } }
-      : {}),
+      : // A named query's rows with their own schema bind as the query's.
+        typeof context.itemQuery === "string"
+        ? { itemRef: { query: context.itemQuery } }
+        : {}),
   });
   if (result.issues.length > 0) bindings.report(result.issues);
   if (result.bound === undefined) return { node, bound: fromPage };

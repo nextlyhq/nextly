@@ -3914,6 +3914,78 @@
 }
 
 /*
+ * A block whose visibility conditions decide who sees it. The canvas draws it
+ * for whoever the page would show it to, and this badge says it isn't shown
+ * to everyone: a faint dashed outline round the block with a tab on its top
+ * edge, so the badge reads as this block's and never covers what it draws. Red when its
+ * conditions can't be checked, since visitors then never see it.
+ */
+.nx-canvas-mark[data-mark="conditioned"] {
+  box-sizing: border-box;
+  border: 1px dashed
+    color-mix(in oklch, var(--nx-muted-foreground) 55%, transparent);
+  border-radius: 2px;
+  outline: none;
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="conditioned"][data-condition="unchecked"] {
+  border-color: color-mix(in oklch, var(--nx-destructive) 70%, transparent);
+}
+
+/* Selected, the selection ring outlines the block, and the dash steps back:
+   after the red rule, so it wins on order at the same specificity. */
+.nx-canvas-mark[data-mark="conditioned"][data-condition-selected] {
+  border-color: transparent;
+}
+
+/* The badge: a tab on the outline's top edge, its foot on the dash, so it
+   reads as this block's mark and not the one above. */
+.nx-canvas-mark__condition {
+  position: absolute;
+  right: calc(var(--nx-tag-inset-side, 0px) - 1px);
+  bottom: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+}
+
+.nx-canvas-mark__condition > svg {
+  flex: none;
+}
+
+/* At the top of what's on screen: a tab on the outline's bottom edge. */
+.nx-canvas-mark[data-condition-tag="below"] > .nx-canvas-mark__condition {
+  top: 100%;
+  bottom: auto;
+  border-radius: 0 0 4px 4px;
+}
+
+/* A block taller than what's on screen: inside its top corner, the outer
+   corner square with the dash, so it's seen. */
+.nx-canvas-mark[data-condition-tag="inside"] > .nx-canvas-mark__condition {
+  top: -1px;
+  bottom: auto;
+  border-radius: 0 0 0 4px;
+}
+
+.nx-canvas-mark[data-condition="unchecked"] > .nx-canvas-mark__condition {
+  border-color: var(--nx-destructive);
+  color: var(--nx-destructive);
+}
+
+/*
  * A selected block locked in Layers, by its own lock or one around it: the
  * ring is dashed, so the canvas says it is held before anything is tried on
  * it.

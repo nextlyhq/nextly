@@ -59,6 +59,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   isPlainRecord,
   migrateDocument,
+  namedQueryRowFields,
   resolveComponentInstances,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -79,7 +80,12 @@ import type {
   UnresolvedInstance,
 } from "@nextlyhq/blocks-engine";
 
-import type { BlocksSiteSettings, PageBindings } from "./context";
+import { namedQueryLookup } from "./blocks/named-read";
+import type {
+  BlocksSiteSettings,
+  NamedQueryHost,
+  PageBindings,
+} from "./context";
 import type { BlockResolver } from "./resolver";
 import { migrationSourceFor } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
@@ -143,12 +149,29 @@ const SITE_FIELD_SHAPES: readonly BindingFieldShape[] = Object.entries(
 export function pageBindingRun(
   bindings: PageBindings,
   locale: string | undefined,
-  resolver: BlockResolver
+  resolver: BlockResolver,
+  /**
+   * The render's named queries, whose declared rows a list item's bindings
+   * are checked against: the same lookup the list runs its query through.
+   */
+  namedQueries?: Pick<NamedQueryHost, "definitionOf">
 ): BindingRun {
   const shapes = bindings.fieldShapes;
   const schema: BindingSchemaSource = {
-    fieldsOf: ref =>
-      "site" in ref ? SITE_FIELD_SHAPES : shapes?.fieldsOf(ref),
+    fieldsOf: ref => {
+      if ("site" in ref) return SITE_FIELD_SHAPES;
+      // A named query's rows with their own field schema: the fields it
+      // declares, as the process registry holds it.
+      if ("query" in ref) {
+        const lookup = namedQueryLookup(namedQueries);
+        return namedQueryRowFields(
+          { declarationOf: name => lookup(name) },
+          ref.query,
+          slug => shapes?.fieldsOf({ collection: slug })
+        );
+      }
+      return shapes?.fieldsOf(ref);
+    },
   };
   return createBindingRun({
     sources: {
