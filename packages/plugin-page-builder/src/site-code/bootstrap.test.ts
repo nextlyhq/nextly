@@ -196,6 +196,26 @@ describe("where the loaders skip", () => {
     await new Promise(resolve => setTimeout(resolve, 50));
     expect((dom.window as unknown as { ran?: string[] }).ran).toBeUndefined();
   });
+
+  it("skips a path named by a place that holds no code", async () => {
+    // The head holds no code but skips /studio; only the body has a loader.
+    const head = JSON.stringify({
+      slot: "head",
+      skip: ["/admin", "/studio"],
+      entries: [],
+    });
+    const body = JSON.stringify({
+      slot: "body",
+      skip: ["/admin"],
+      entries: [{ tag: "script", attrs: {}, text: "window.ran = true" }],
+    });
+    const dom = new JSDOM(
+      `<!doctype html><html><head><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="head">${head}</script></head><body><script type="application/json" ${SITE_CODE_DATA_ATTRIBUTE}="body">${body}</script><script>${SITE_CODE_BOOTSTRAP}</script></body></html>`,
+      { url: "https://acme.example/studio", runScripts: "dangerously" }
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect((dom.window as unknown as { ran?: boolean }).ran).toBeUndefined();
+  });
 });
 
 describe("what the loader starts", () => {

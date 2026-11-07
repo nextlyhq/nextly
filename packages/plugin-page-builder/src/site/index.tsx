@@ -203,8 +203,12 @@ function scriptData(value: unknown): string {
 }
 
 /**
- * The site's code for one place on the page. Nothing under draft mode, and
- * nothing when none is stored.
+ * The site's code for one place on the page. Nothing under draft mode.
+ *
+ * The data block is written even when the place holds no code, as it carries
+ * the paths this place skips: the other place's loader skips them too, so an
+ * empty head with `skip={["/studio"]}` still keeps the body's scripts off
+ * `/studio`. A data block runs nothing, so it costs a page a few bytes.
  *
  * @experimental
  */
@@ -218,7 +222,6 @@ export async function SiteCode(
     await (props.read ?? readStoredSiteCode)(slug),
     props.slot
   );
-  if (entries.length === 0) return null;
   const gated = entries.filter(isGatedSiteCode);
   return (
     <>
@@ -227,24 +230,23 @@ export async function SiteCode(
         .map((entry, index) => (
           <DirectEntry key={`direct-${index}`} entry={entry} />
         ))}
+      <script
+        type="application/json"
+        {...{ [SITE_CODE_DATA_ATTRIBUTE]: props.slot }}
+        dangerouslySetInnerHTML={{
+          __html: scriptData({
+            slot: props.slot,
+            skip: skippedPaths(props),
+            entries: gated,
+          }),
+        }}
+      />
+      {/* The loader reads the data block just before it. */}
       {gated.length === 0 ? null : (
-        <>
-          <script
-            type="application/json"
-            {...{ [SITE_CODE_DATA_ATTRIBUTE]: props.slot }}
-            dangerouslySetInnerHTML={{
-              __html: scriptData({
-                slot: props.slot,
-                skip: skippedPaths(props),
-                entries: gated,
-              }),
-            }}
-          />
-          <script
-            {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
-            dangerouslySetInnerHTML={{ __html: SITE_CODE_BOOTSTRAP }}
-          />
-        </>
+        <script
+          {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
+          dangerouslySetInnerHTML={{ __html: SITE_CODE_BOOTSTRAP }}
+        />
       )}
     </>
   );

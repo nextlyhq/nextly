@@ -1,7 +1,8 @@
 /**
  * `<SiteCode>`: what runs or styles the page reaches it only through the
  * loader, as inert data; what is inert is written as is; nothing renders in
- * draft mode; and a stored entry the rules refuse is left out.
+ * draft mode; a place with no code still writes the paths it skips; and a
+ * stored entry the rules refuse is left out.
  *
  * @module site/index.test
  */
@@ -158,12 +159,25 @@ describe("<SiteCode>", () => {
         { tag: "meta", attrs: { name: "a", content: "b" } },
       ]),
     });
-    expect(markup).toBe('<meta name="a" content="b"/>');
+    expect(markup).toContain('<meta name="a" content="b"/>');
+    // The refused style is in neither the page nor the data block.
+    expect(markup).not.toContain("x()");
+    expect(markup).toContain('"entries":[]');
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
 
-  it("renders nothing where nothing is stored", async () => {
-    expect(await SiteCode({ slot: "head", read: async () => null })).toBeNull();
+  it("writes only the paths it skips where nothing is stored", async () => {
+    const markup = await html({
+      slot: "head",
+      skip: ["/admin", "/studio"],
+      read: async () => null,
+    });
+    // The other place's loader reads this block, so an empty head's skip
+    // list still keeps the body's scripts off /studio.
+    expect(markup).toBe(
+      '<script type="application/json" data-nx-site-code="head">' +
+        '{"slot":"head","skip":["/admin","/studio"],"entries":[]}</script>'
+    );
   });
 });

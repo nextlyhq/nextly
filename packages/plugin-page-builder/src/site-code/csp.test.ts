@@ -566,6 +566,34 @@ describe("what site code loads", () => {
     expect(await runs("script-src 'nonce-x'")).toBe(false);
   });
 
+  it("reports Trusted Types enforcement once, on the first script it starts", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      {
+        policy:
+          "script-src 'unsafe-inline'; require-trusted-types-for 'script'",
+        siteOrigin: ORIGIN,
+      },
+      { head: [style("a{}"), inline("a()"), inline("b()")], body: [] }
+    );
+    expect(check).toEqual({
+      checked: true,
+      findings: [
+        expect.objectContaining({
+          slot: "head",
+          index: 1,
+          directive: "require-trusted-types-for",
+        }),
+      ],
+    });
+    // Styles alone are built without a Trusted Types sink.
+    expect(
+      await checkSiteCodeAgainstCsp(
+        { policy: "require-trusted-types-for 'script'", siteOrigin: ORIGIN },
+        { head: [style("a{}")], body: [] }
+      )
+    ).toEqual({ checked: true, findings: [] });
+  });
+
   it("says nothing of the loader for code it doesn't start", async () => {
     const check = await checkSiteCodeAgainstCsp(
       { policy: "script-src 'self'; img-src *", siteOrigin: ORIGIN },

@@ -847,18 +847,45 @@ async function policyFindings(
   if (loader !== undefined && blocked !== undefined) {
     found.push({ ...loader, level, ...blocked });
   }
+  const script = firstGated(slots, entry => entry.tag === "script");
+  const untrusted =
+    script === undefined ? undefined : trustedTypesBlocked(policy);
+  if (script !== undefined && untrusted !== undefined) {
+    found.push({ ...script, level, ...untrusted });
+  }
   return found;
 }
 
-/** The first entry the loader starts, which a block of the loader is told on. */
+/**
+ * The first entry the loader starts (of those `which` picks), which a block
+ * of the loader is told on.
+ */
 function firstGated(
-  slots: Readonly<Record<SiteCodeSlot, readonly SiteCodeEntry[]>>
+  slots: Readonly<Record<SiteCodeSlot, readonly SiteCodeEntry[]>>,
+  which: (entry: SiteCodeEntry) => boolean = () => true
 ): { slot: SiteCodeSlot; index: number } | undefined {
   for (const slot of ["head", "body"] as const) {
-    const index = slots[slot].findIndex(isGatedSiteCode);
+    const index = slots[slot].findIndex(
+      entry => isGatedSiteCode(entry) && which(entry)
+    );
     if (index !== -1) return { slot, index };
   }
   return undefined;
+}
+
+/**
+ * Trusted Types enforced for scripts. The loader sets each script's address
+ * and text from plain strings, which such a policy refuses, so no script it
+ * starts would run. Said once, on the first script.
+ */
+function trustedTypesBlocked(policy: CspPolicy): Blocked | undefined {
+  const sinks = policy.get("require-trusted-types-for") ?? [];
+  if (!sinks.some(sink => sink.toLowerCase() === "'script'")) return undefined;
+  return {
+    directive: "require-trusted-types-for",
+    message:
+      "the policy enforces Trusted Types, which site code doesn't support yet: no script here would run",
+  };
 }
 
 /** How a policy blocks the loader that starts gated code, if it does. */

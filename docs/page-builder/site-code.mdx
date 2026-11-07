@@ -39,7 +39,10 @@ with a reason, never quietly removed, so what is stored is what you wrote:
 
 Event handler attributes (`onload=`), a `nonce`, `<base>`, `<iframe>` outside
 `<noscript>`, and any URL that isn't `https:` or a path on your site are refused,
-including URLs a stylesheet loads. Each place holds up to 50,000 characters and 40
+including URLs a stylesheet loads. So are a referrer `<meta>` tag and a link whose
+`referrerpolicy` sends a page's full address (`unsafe-url`,
+`no-referrer-when-downgrade`): they would tell other sites the address of every
+page, the admin's included. Each place holds up to 50,000 characters and 40
 elements.
 
 ## Put it on your pages
@@ -78,14 +81,19 @@ guards against this even when it is mounted in the wrong place:
   site (the canvas and the preview are), isn't under `/admin`, and isn't the canvas.
   Pass `skip` to name more paths, as the app names them (a base path is added for you):
   `<SiteCode slot="head" skip={["/admin", "/studio"]} />`. A path either place skips is
-  skipped in both.
+  skipped in both, even when that place holds no code.
 - Meta tags, link hints, icons, structured data and the no-script pixel run nothing,
   so they are written as they are, where crawlers and pages without scripting see
   them.
 
 Because the loader starts scripts as the page finishes parsing, they run in order
-but after the page's own markup. A script that writes into the page as it loads
-(`document.write`) doesn't work as site code.
+but after the page's own markup. Two things follow:
+
+- A script that writes into the page as it loads (`document.write`) doesn't work as
+  site code.
+- The loader waits for an external script before starting the next entry, but not
+  for a stylesheet. A script that reads the styles a stylesheet in site code sets
+  should wait for that stylesheet's `load` event, or come from your own code.
 
 ## Your Content Security Policy
 
@@ -145,3 +153,7 @@ const policy = mergeSiteCodeIntoCsp("script-src 'self' 'sha256-abc'", facts);
 
 What a running script loads afterwards (its own requests, the images it adds) can't
 be seen before it runs, so the check doesn't cover it.
+
+Site code doesn't support Trusted Types yet. Under a policy with
+`require-trusted-types-for 'script'`, the loader can't build scripts, so none
+runs; the check reports this on the first script. Styles still apply.
