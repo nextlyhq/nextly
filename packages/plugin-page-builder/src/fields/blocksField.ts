@@ -312,12 +312,16 @@ export function blocksFieldType(
         if (emptied || args.write === undefined) return [];
         const maxNodes = composition?.()?.limits.maxNodes;
         const namedQueries = composition?.()?.namedQueries;
+        // Where templates are stored, so a template's lists and bindings are
+        // judged against the collection it draws.
+        const templates = composition?.()?.templates;
         const bound =
           bindingShapes === undefined
             ? []
             : await newBindingIssues(value, args, label, {
                 shapesOf: bindingShapes,
                 storedForms,
+                ...(templates === undefined ? {} : { templates }),
                 ...(maxNodes === undefined ? {} : { maxNodes }),
                 // A list's item bindings, against its query's rows.
                 ...(namedQueries === undefined ? {} : { namedQueries }),
@@ -329,9 +333,6 @@ export function blocksFieldType(
                   }),
               });
         if (listFields === undefined) return bound;
-        // Where templates are stored, so a template's lists are judged
-        // against the collection it draws.
-        const templates = composition?.()?.templates;
         const site = {
           fieldsOf: listFields,
           storedForms,

@@ -42,8 +42,12 @@ import type {
 import type { StoredForms } from "./added-undefined-ids";
 import {
   asFieldIssues,
+  isStoredTemplate,
   nodesOf,
   placedComponents,
+  TEMPLATE_TARGET_UNKNOWN,
+  writeSettingOf,
+  type TemplateTargets,
 } from "./list-query-judgement";
 
 /**
@@ -68,6 +72,12 @@ export interface BindingJudging {
    * the rows its query declares; absent, a named query's rows are unknown.
    */
   readonly namedQueries?: NamedQuerySource;
+  /**
+   * Where templates are stored and what a stored one draws, so a template's
+   * bindings read the entry of the collection it draws, as its lists and
+   * conditions are judged; absent, a template is judged as any entry.
+   */
+  readonly templates?: TemplateTargets;
 }
 
 /** A collection's or a Single's ref: the sources whose fields are read. */
@@ -121,6 +131,33 @@ function entryOf(
   return write.kind === "collection"
     ? { collection: write.slug }
     : { single: write.slug };
+}
+
+/**
+ * The entry a write's bindings read. A template's is the collection it
+ * draws, by the one rule its lists and conditions are judged by
+ * ({@link writeSettingOf}): the collection the write carries, or the one
+ * stored; {@link TEMPLATE_TARGET_UNKNOWN} where neither can be read, and the
+ * lists' judgement refuses that write once. Any other document's is its own
+ * ({@link entryOf}).
+ */
+async function bindingEntryOf(
+  write: PluginFieldWrite,
+  document: unknown,
+  data: Readonly<Record<string, unknown>>,
+  templates: TemplateTargets | undefined
+): Promise<BindingSchemaRef | undefined | typeof TEMPLATE_TARGET_UNKNOWN> {
+  if (
+    write.kind !== "collection" ||
+    !isStoredTemplate(write.slug, document, templates)
+  ) {
+    return entryOf(write, document);
+  }
+  const setting = await writeSettingOf(write, document, data, templates);
+  if (setting === TEMPLATE_TARGET_UNKNOWN) return TEMPLATE_TARGET_UNKNOWN;
+  return typeof setting.entryCollection === "string"
+    ? { collection: setting.entryCollection }
+    : undefined;
 }
 
 /** What a judgement reads with, kept across its passes. */
@@ -355,13 +392,22 @@ export async function newBindingIssues(
   if (nodes === undefined || !judges(args.write) || shapesOf === undefined) {
     return [];
   }
+  const entry = await bindingEntryOf(
+    args.write,
+    value,
+    args.data,
+    site.templates
+  );
+  // A template whose collection can't be known: its lists' judgement refuses
+  // the write, once, rather than its bindings judged against no entry.
+  if (entry === TEMPLATE_TARGET_UNKNOWN) return [];
   const document: BindingDocument = {
     nodes,
     settings: (value as { settings?: unknown }).settings,
   };
   const judged = await judgedErrors(
     document,
-    entryOf(args.write, value),
+    entry,
     { ...site, shapesOf },
     () => true
   );
@@ -396,16 +442,19 @@ export async function composedBindingIssues(
   composed: unknown,
   host: BlockDocument,
   write: PluginFieldWrite,
-  site: BindingJudging
+  site: BindingJudging,
+  /** The write's data, where a template names the collection it draws. */
+  data: Readonly<Record<string, unknown>> = {}
 ): Promise<ComposedBindingIssue[]> {
   const nodes = nodesOf(composed);
   const shapesOf = site.shapesOf;
-  const entry = entryOf(write, host);
+  const entry = await bindingEntryOf(write, host, data, site.templates);
   if (
     nodes === undefined ||
     !judges(write) ||
     shapesOf === undefined ||
-    entry === undefined
+    entry === undefined ||
+    entry === TEMPLATE_TARGET_UNKNOWN
   ) {
     return [];
   }

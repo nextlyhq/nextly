@@ -372,3 +372,90 @@ describe("the bindings a page's placed components bring", () => {
     ).toEqual([]);
   });
 });
+
+describe("a template's bindings", () => {
+  // Templates are entries of their own collection, whose fields are not the
+  // ones a template binds: it binds the entries of the collection it draws.
+  const SHAPES: Readonly<Record<string, readonly BindingFieldShape[]>> = {
+    ...DECLARED,
+    "collection:posts": [
+      ...(DECLARED["collection:posts"] ?? []),
+      { name: "excerpt", type: "text" },
+    ],
+    "collection:templates": [
+      { name: "title", type: "text" },
+      { name: "content", type: "blocks" },
+    ],
+  };
+  const read: DeclaredShapesReader = async ref =>
+    SHAPES[
+      "collection" in ref
+        ? `collection:${ref.collection}`
+        : `single:${ref.single}`
+    ];
+  const templates = {
+    collection: "templates",
+    fields: ["collection", "entryCollection"],
+    storedTargetsOf: async (ids: readonly string[]) =>
+      new Map(ids.map(id => [id, "posts"])),
+  };
+  const template = (...nodes: unknown[]) => ({
+    formatVersion: 1,
+    kind: "template",
+    nodes,
+  });
+  const write = (data: Record<string, unknown>, more = {}) =>
+    ({
+      ...args({ slug: "templates", ...more }),
+      data,
+    }) as PluginFieldValidateArgs;
+  const judge = (value: unknown, on: PluginFieldValidateArgs) =>
+    newBindingIssues(value, on, "Content", {
+      shapesOf: read,
+      templates,
+      storedForms: async () => ({ readable: true, forms: [] }),
+    });
+
+  it("reads the collection it draws: a post's excerpt saves", async () => {
+    expect(
+      await judge(
+        template(heading("e", { $bind: "excerpt" })),
+        write({ collection: "posts" })
+      )
+    ).toEqual([]);
+  });
+
+  it("still refuses a field that misfits there", async () => {
+    // A relation can't fill a heading's text, in the posts it draws.
+    const issues = await judge(
+      template(heading("a", { $bind: "author" })),
+      write({ collection: "posts" })
+    );
+    expect(issues).toHaveLength(1);
+  });
+
+  it("reads an entry's own design by its entry's collection", async () => {
+    expect(
+      await judge(
+        template(heading("e", { $bind: "excerpt" })),
+        write({ entryCollection: "posts" })
+      )
+    ).toEqual([]);
+  });
+
+  it("reads the stored collection on a write that doesn't name it", async () => {
+    expect(
+      await judge(
+        template(heading("e", { $bind: "excerpt" })),
+        write({}, { id: "t1" })
+      )
+    ).toEqual([]);
+  });
+
+  it("judges no binding where the collection can't be known", async () => {
+    // A new template naming none: its lists' judgement refuses the write once.
+    expect(
+      await judge(template(heading("e", { $bind: "excerpt" })), write({}))
+    ).toEqual([]);
+  });
+});

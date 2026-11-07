@@ -1043,7 +1043,12 @@ async function judgeComposedLists(args: {
       ...(args.setup.namedQueries === undefined
         ? {}
         : { namedQueries: args.setup.namedQueries }),
-    }
+      // A template's, against the collection it draws.
+      ...(args.setup.templates === undefined
+        ? {}
+        : { templates: args.setup.templates }),
+    },
+    args.data
   );
   for (const issue of bound) args.report.add(issue.code, issue.message);
 }
