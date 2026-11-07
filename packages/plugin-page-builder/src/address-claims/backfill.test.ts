@@ -30,12 +30,13 @@ function depsOver(
   now: Record<string, Record<string, unknown> | undefined>
 ): BackfillDeps & { find: ReturnType<typeof vi.fn> } {
   const find = vi.fn(async (args: Record<string, unknown>) => {
-    const where = args.where as { id?: { equals: string } };
+    const where = args.where as { id?: { equals: string }; and?: unknown };
     if (where.id !== undefined) {
       const row = now[where.id.equals];
       return { items: row === undefined ? [] : [row] };
     }
-    return { items: args.page === 1 ? walk : [] };
+    // The first batch is the walk; one resuming after it finds nothing.
+    return { items: where.and === undefined ? walk : [] };
   });
   return {
     pages: "pages",
@@ -96,6 +97,48 @@ describe("backfillPageClaims", () => {
     const page = { id: "p", slug: "about", status: "published" };
     expect(await backfillPageClaims(depsOver([page], { p: page }))).toBe(true);
     expect(claimOrWait).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the address a clashing page has now, read again under its lock", async () => {
+    const page = { id: "p", slug: "about", status: "published" };
+    const now: Record<string, Record<string, unknown>> = { p: page };
+    // The page moves between the refused reconcile and the wait.
+    vi.mocked(reconcileHolder).mockImplementationOnce(async () => {
+      now.p = { id: "p", slug: "about-us", status: "published" };
+      throw NextlyError.conflict({ reason: "state" });
+    });
+    expect(await backfillPageClaims(depsOver([page], now))).toBe(true);
+    expect(
+      vi
+        .mocked(claimOrWait)
+        .mock.calls.map(call => `/${call[2].address.segments.join("/")}`)
+    ).toEqual(["/about-us"]);
+    expect(lockHolder).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes each batch after the last page read, not at a page number", async () => {
+    const walk = Array.from({ length: 100 }, (_, at) => ({
+      id: `p${String(at).padStart(3, "0")}`,
+      slug: `page-${at}`,
+      status: "published",
+      createdAt: `2026-01-01T00:00:${String(at % 60).padStart(2, "0")}.000Z`,
+    }));
+    const deps = depsOver(
+      walk,
+      Object.fromEntries(walk.map(row => [row.id, row]))
+    );
+    expect(await backfillPageClaims(deps)).toBe(true);
+    const reads = deps.find.mock.calls
+      .map(call => call[0] as Record<string, unknown>)
+      .filter(args => !("id" in (args.where as object)));
+    expect(reads).toHaveLength(2);
+    expect(reads[1]?.page).toBeUndefined();
+    expect(JSON.stringify(reads[1]?.where)).toContain(
+      JSON.stringify({ id: { greater_than: "p099" } })
+    );
+    expect(JSON.stringify(reads[1]?.where)).toContain(
+      JSON.stringify({ createdAt: { greater_than: walk[99]?.createdAt } })
+    );
   });
 
   it("is incomplete when a page could not be claimed", async () => {

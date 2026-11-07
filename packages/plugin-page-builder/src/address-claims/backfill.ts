@@ -48,31 +48,78 @@ export interface BackfillDeps {
   readonly warn: (message: string, context: Record<string, unknown>) => void;
 }
 
+/** Which pages the walk reads. */
+const PUBLISHED = { status: { equals: "published" } };
+
 /**
  * Every published page, oldest first (ids are random, so their order says
  * nothing), a batch at a time, as committed. The one walk over a site's
  * pages: the start-up pass claims from it, and a save made while that pass
  * runs finds the pages in its list's way from it. A read that fails throws.
+ *
+ * Each batch starts after the last page the one before it read, by when it
+ * was made and then its id (the order the read sorts by), rather than at a
+ * page number: a page unpublished or deleted meanwhile would shift every
+ * later one back a place, and a numbered walk would skip one of them.
  */
 export async function* publishedPages(
   nextly: PagesReader,
   pages: string
 ): AsyncGenerator<readonly Readonly<Record<string, unknown>>[]> {
-  for (let page = 1; ; page += 1) {
+  let after: { readonly createdAt: unknown; readonly id: unknown } | null =
+    null;
+  for (;;) {
     const { items } = await nextly.find({
       collection: pages,
-      where: { status: { equals: "published" } },
+      where:
+        after === null
+          ? PUBLISHED
+          : {
+              and: [
+                PUBLISHED,
+                {
+                  or: [
+                    { createdAt: { greater_than: after.createdAt } },
+                    {
+                      and: [
+                        { createdAt: { equals: after.createdAt } },
+                        { id: { greater_than: after.id } },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
       // A page published while this pages through is claimed by its own
       // save, or by the next boot's pass.
-      sort: "createdAt",
+      sort: ["createdAt", "id"],
       limit: BATCH,
-      page,
       overrideAccess: true,
       depth: 0,
     });
-    yield items as readonly Readonly<Record<string, unknown>>[];
-    if (items.length < BATCH) return;
+    const batch = items as readonly Readonly<Record<string, unknown>>[];
+    yield batch;
+    if (batch.length < BATCH) return;
+    after = cursorAfter(batch.at(-1));
   }
+}
+
+/** Where the walk resumes after `row`; a row it cannot resume after throws. */
+function cursorAfter(row: Readonly<Record<string, unknown>> | undefined): {
+  readonly createdAt: unknown;
+  readonly id: unknown;
+} {
+  if (
+    row === undefined ||
+    row.createdAt === undefined ||
+    row.createdAt === null ||
+    (typeof row.id !== "string" && typeof row.id !== "number")
+  ) {
+    throw NextlyError.internal({
+      logContext: { reason: "page-walk-cursor-missing" },
+    });
+  }
+  return { createdAt: row.createdAt, id: row.id };
 }
 
 /**
@@ -124,7 +171,7 @@ async function currentPage(
 /**
  * One page's claims: reconciled as a save would, or, where another document
  * already holds its address, left waiting for it. Its row is read again
- * inside the transaction, under its lock, rather than taken from the walk:
+ * inside each transaction, under its lock, rather than taken from the walk:
  * a page saved since the walk read it (moved from `/about` to `/about-us`)
  * is reconciled to what it is now, never back to what it was.
  *
@@ -132,16 +179,13 @@ async function currentPage(
  */
 async function claimPage(deps: BackfillDeps, id: string): Promise<boolean> {
   const holder = { collection: deps.pages, id };
-  let wanted: PageClaims = { addresses: [], spaces: [] };
   try {
     await deps.withTransaction(async tx => {
-      await lockHolder(deps.claims, tx, holder);
-      const row = await currentPage(deps, id);
+      const wanted = await wantedNow(deps, tx, holder);
       // Gone since the walk read it: its delete released what it held.
-      if (row === null) return;
+      if (wanted === null) return;
       // Reconciled even when it holds nothing now, so claims for an address
       // it is no longer served at are given up.
-      wanted = pageClaims(row, deps.locales, deps.pathTemplate);
       await reconcileHolder(
         deps.claims,
         tx,
@@ -160,28 +204,45 @@ async function claimPage(deps: BackfillDeps, id: string): Promise<boolean> {
       return false;
     }
   }
-  return waitForAddresses(deps, holder, wanted);
+  return waitForAddresses(deps, holder);
+}
+
+/**
+ * What the page should hold, from its row as committed now, read under its
+ * own lock (taken here, first): null when it is gone.
+ */
+async function wantedNow(
+  deps: BackfillDeps,
+  tx: Tx,
+  holder: Holder
+): Promise<PageClaims | null> {
+  await lockHolder(deps.claims, tx, holder);
+  const row = await currentPage(deps, holder.id);
+  return row === null ? null : pageClaims(row, deps.locales, deps.pathTemplate);
 }
 
 /**
  * Where another document holds the page's address: wait for each address
  * rather than refuse, and claim no space, which a later save of the page
  * settles (refused, naming the page in its way, which tells its author).
+ * The page is read again under its lock, as in the first attempt, since a
+ * save may have moved or unpublished it between the two: a wait recorded
+ * for an address it has left would later hand it that address.
  */
 async function waitForAddresses(
   deps: BackfillDeps,
-  holder: Holder,
-  wanted: PageClaims
+  holder: Holder
 ): Promise<boolean> {
-  if (wanted.spaces.length > 0) {
-    deps.warn(
-      "A page's list could not hold its later pages: another page is published among them. Its next save is refused, naming that page.",
-      { page: holder.id }
-    );
-  }
   try {
     await deps.withTransaction(async tx => {
-      await lockHolder(deps.claims, tx, holder);
+      const wanted = await wantedNow(deps, tx, holder);
+      if (wanted === null) return;
+      if (wanted.spaces.length > 0) {
+        deps.warn(
+          "A page's list could not hold its later pages: another page is published among them. Its next save is refused, naming that page.",
+          { page: holder.id }
+        );
+      }
       for (const address of wanted.addresses) {
         await claimOrWait(deps.claims, tx, { address, holder });
       }
