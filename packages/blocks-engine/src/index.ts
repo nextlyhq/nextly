@@ -673,6 +673,7 @@ export type {
   BlockIsland,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoRead,
   BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,
@@ -1283,6 +1284,7 @@ export type {
   BindingSchemaRef,
   BindingSchemaSource,
   CheckedBinding,
+  ImageValue,
 } from "./binding-rules";
 export {
   checkFormat,
