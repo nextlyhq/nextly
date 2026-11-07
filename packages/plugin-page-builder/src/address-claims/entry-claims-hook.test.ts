@@ -12,7 +12,9 @@
  * And, over a claim store kept in memory, which entries hold an address as
  * their collection's template and their own designs are published,
  * unpublished and deleted: an entry is served while it is published and
- * either is, and only where its collection still has an address.
+ * either is, and only where its collection still has an address and may
+ * still have a template; and a template unpublished over many own designs
+ * reads their entries in batches.
  *
  * What the claims do once taken is proved against a real instance on every
  * dialect by `__tests__/template-addresses-runtime.integration.test.ts` and
@@ -130,7 +132,10 @@ function harness(options: {
     },
     ownDesignPublished: async () => false,
     publishedDesigns: async () => new Set(),
-    publishedEntry: async () => null,
+    entriesWithIds: async (_collection, _ids, tx) => {
+      if (tx === undefined) throw new Error("entries read off the write");
+      return [];
+    },
     storedAddresses: async () => new Map(),
     neverServed: collection => collection === "pages",
     mayHaveTemplate: async collection => {
@@ -381,6 +386,8 @@ function designHarness(options: {
   declared: boolean;
   templatePublished?: boolean;
 }) {
+  /** The ids each read of entries by id asked for, in order. */
+  const entryReads: string[][] = [];
   const { claims, held } = memoryClaims();
   const collection = options.declared ? "posts" : "events";
   const stored = options.declared ? null : "/events";
@@ -391,6 +398,9 @@ function designHarness(options: {
     } as ServingTemplate | null,
     entries: new Map<string, Row>(),
     designs: new Map<string, boolean>(),
+    // Whether the collection may still have a template: false once it is
+    // made localized, or loses its `slug` field.
+    eligible: true,
   };
   const ours = (asked: string) => asked === collection;
   const deps: EntryClaimsDeps = {
@@ -412,14 +422,25 @@ function designHarness(options: {
           : []
       );
     },
-    publishedEntry: async (asked, id) => {
-      const row = state.entries.get(id);
-      return ours(asked) && row?.status === "published" ? row : null;
+    entriesWithIds: async (asked, ids, tx) => {
+      // Asked inside a write, so always on its transaction.
+      if (tx === undefined) throw new Error("entries read off the write");
+      entryReads.push([...ids]);
+      return ours(asked)
+        ? ids.flatMap(id => {
+            const row = state.entries.get(id);
+            return row === undefined ? [] : [row];
+          })
+        : [];
     },
     storedAddresses: async () =>
       stored === null ? new Map() : new Map([[collection, ["events"]]]),
     neverServed: asked => asked === "pages",
-    mayHaveTemplate: async () => true,
+    mayHaveTemplate: async (_asked, tx) => {
+      // Asked inside a write, so always on its transaction.
+      if (tx === undefined) throw new Error("registry read off the write");
+      return state.eligible;
+    },
     storedAddressProblem: () => null,
     lifecycle: async (_asked, tx) => {
       // Every write here runs on a transaction, and every lifecycle read
@@ -490,6 +511,11 @@ function designHarness(options: {
   };
   return {
     held,
+    entryReads,
+    /** Make the collection one that may, or may no longer, have a template. */
+    setEligible: (eligible: boolean) => {
+      state.eligible = eligible;
+    },
     /** Save the entry `id`, published unless said, with the slug `id`. */
     save: async (id: string, status: "published" | "draft" = "published") => {
       const data = { id, slug: id, status };
@@ -652,6 +678,82 @@ describe("an entry drawn with its own design", () => {
     // reads the entry as still committed, and must not claim for it.
     await h.deleteWithDesign("hello");
 
+    expect(h.held()).toEqual([]);
+  });
+});
+
+describe("a template with many entries drawn with their own designs", () => {
+  it("reads those entries in batches when it is unpublished, never one read per entry", async () => {
+    const h = designHarness({ declared: true });
+    const ids = Array.from(
+      { length: 250 },
+      (_, at) => `e${String(at).padStart(3, "0")}`
+    );
+    for (const id of ids) {
+      await h.save(id);
+      // Under the published template, a design's publish changes no claim
+      // and reads no entry.
+      await h.giveDesign(id, true);
+    }
+    expect(h.entryReads).toEqual([]);
+
+    await h.unpublishTemplate();
+
+    // Every entry is still served, by its own design.
+    expect(h.held()).toHaveLength(250);
+    expect(h.held()).toContain("address /blog/e249 posts:e249");
+    // Three reads, each of at most a hundred ids, covering every entry
+    // once: one read per entry would be 250 reads of one.
+    expect(h.entryReads.map(read => read.length)).toEqual([100, 100, 50]);
+    expect(h.entryReads.flat().sort()).toEqual(ids);
+  });
+});
+
+describe("an entry drawn with its own design in a collection that may no longer have a template", () => {
+  it("is not claimed when its design is published, and is once the collection may have a template again (the control)", async () => {
+    const h = designHarness({ declared: false, templatePublished: false });
+    await h.save("hello");
+    await h.giveDesign("hello");
+    // Made localized: its template and stored address remain.
+    h.setEligible(false);
+
+    await h.publishDesign("hello");
+    expect(h.held()).toEqual([]);
+
+    // CONTROL: the same publish, with the collection eligible again,
+    // claims the address, so the gate is what held it back.
+    await h.unpublishDesign("hello");
+    h.setEligible(true);
+    await h.publishDesign("hello");
+    expect(h.held()).toEqual(["address /events/hello events:hello"]);
+  });
+
+  it("gives its address up when its design is unpublished, and does not claim it back when the design is published again", async () => {
+    const h = designHarness({ declared: false, templatePublished: false });
+    await h.save("hello");
+    await h.giveDesign("hello", true);
+    expect(h.held()).toEqual(["address /events/hello events:hello"]);
+
+    h.setEligible(false);
+    await h.unpublishDesign("hello");
+    await h.publishDesign("hello");
+
+    expect(h.held()).toEqual([]);
+  });
+
+  it("keeps nothing when the collection's template is unpublished, own design or not", async () => {
+    const h = designHarness({ declared: false });
+    await h.save("hello");
+    await h.save("other");
+    await h.giveDesign("hello", true);
+    h.setEligible(false);
+
+    await h.unpublishTemplate();
+
+    // Where the collection may still have a template, the entry with a
+    // published own design keeps its address (see "keeps its address at a
+    // runtime collection's stored address when the template is
+    // unpublished" above).
     expect(h.held()).toEqual([]);
   });
 });

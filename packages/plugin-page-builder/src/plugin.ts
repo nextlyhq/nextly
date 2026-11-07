@@ -58,6 +58,7 @@ import {
   contentAddressService,
   type ContentAddressService,
 } from "./address-claims/content-addresses";
+import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
   registerEntryAddressClaims,
   releaseUndeclared,
@@ -3106,27 +3107,23 @@ export const pageBuilder = (
             if (found.data.length < 500) return ids;
           }
         },
-        // Read as `publishedEntries` reads a template's walk, through the
-        // Direct API: the entry's collection is the host's, which the
-        // plugin can read on a transaction only when it holds one of the
-        // plugin's field types.
-        publishedEntry: async (collection, id) => {
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = (await getCachedNextly()) as unknown as PagesReader;
-          const found = await nextly.find({
+        // The host's collection, read as the system, as a template's walk
+        // reads it, but on the write's own transaction: a write holding the
+        // pool's last connection never waits for a second one. One read
+        // for every id asked, the columns an entry's address is judged by
+        // alone; whether each is published is the hook's to judge.
+        entriesWithIds: async (collection, ids, tx) => {
+          const found = await ctx.services.collections.listEntriesInTransaction(
+            tx,
             collection,
-            where: { id: { equals: id } },
-            // Published only, and a no-op on a collection without a
-            // Draft/Published lifecycle, whose entries are all live.
-            status: "published",
-            limit: 1,
-            overrideAccess: true,
-            depth: 0,
-          });
-          const row = found.items[0] as
-            | Readonly<Record<string, unknown>>
-            | undefined;
-          return row !== undefined && String(row.id) === id ? row : null;
+            {
+              where: { id: { in: [...ids] } },
+              pagination: { limit: ids.length },
+              select: { id: true, [ENTRY_SLUG_FIELD]: true, status: true },
+              depth: 0,
+            }
+          );
+          return found.data as readonly Readonly<Record<string, unknown>>[];
         },
         storedAddresses: async () =>
           new Map(
@@ -3140,15 +3137,16 @@ export const pageBuilder = (
           Object.values(ctx.self.collections).includes(collection),
         // The template guard's own judgement of which collections may have
         // one; a localized collection is refused an address.
-        mayHaveTemplate: async collection => {
+        // Given a write's transaction, the registry is read on it.
+        mayHaveTemplate: async (collection, tx) => {
           const problem = await templateCollectionProblem(
             collection,
-            collectionRecord,
+            slug => collectionRecord(slug, tx),
             new Set(Object.values(ctx.self.collections))
           );
           return (
             problem === null &&
-            (await collectionRecord(collection))?.localized !== true
+            (await collectionRecord(collection, tx))?.localized !== true
           );
         },
         storedAddressProblem: (address, collection) =>

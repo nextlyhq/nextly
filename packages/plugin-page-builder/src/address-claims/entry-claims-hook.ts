@@ -26,6 +26,11 @@
  * - A collection created at runtime is addressed only by its template, so
  *   once the template is deleted its entries hold nothing, own designs or
  *   not: there is no address left to serve them at.
+ * - A collection that may no longer have a template (its `slug` field
+ *   removed, or made localized) is served nowhere, whatever address its
+ *   template still stores: the start-up pass gives its entries' addresses
+ *   up, and neither an own design's write nor its template's unpublish
+ *   claims one back (see `servable`).
  *
  * A collection's address declared in code wins over one its template
  * stores, so a collection promoted into code moves to the declared address,
@@ -126,15 +131,17 @@ export interface EntryClaimsDeps {
     tx: Tx
   ) => Promise<ReadonlySet<string>>;
   /**
-   * The entry `id` of `collection` as last committed, while it is published
-   * (every entry of a collection without a Draft/Published lifecycle is),
-   * or null. Read as `publishedEntries` reads, not on the write's
-   * transaction: the entry's collection is the host's, not this plugin's.
+   * The entries of `collection` among `ids`, published or not, as the
+   * write's transaction `tx` sees them, in one read: the hook asks at most
+   * `BATCH` ids at a time, and an id with no entry is left out. Read on the
+   * transaction's own connection, so a write asking takes no second
+   * connection from the pool while it holds one.
    */
-  readonly publishedEntry: (
+  readonly entriesWithIds: (
     collection: string,
-    id: string
-  ) => Promise<Row | null>;
+    ids: readonly string[],
+    tx: Tx
+  ) => Promise<readonly Row[]>;
   /**
    * Every collection whose template stores an address, with it as segments,
    * as last committed.
@@ -152,9 +159,9 @@ export interface EntryClaimsDeps {
    * Whether `collection` may have a template at all (a `slug` text field,
    * shown in the admin, not localized): one that has a template still but
    * may no longer serves nothing, and the start-up pass gives its entries'
-   * addresses up.
+   * addresses up. Given a write's transaction, read on it.
    */
-  readonly mayHaveTemplate: (collection: string) => Promise<boolean>;
+  readonly mayHaveTemplate: (collection: string, tx?: Tx) => Promise<boolean>;
   /**
    * Why a stored address cannot be `address` for `collection`, judged
    * without reading, or null: the guard's own words, asked again of the
@@ -240,6 +247,25 @@ export function registerEntryAddressClaims(
   hooks.onInTransaction("*", write => holdRuntimeEntryClaims(write, deps));
   hooks.onInTransaction(deps.templates, write =>
     settleTemplateClaims(write, deps)
+  );
+}
+
+/**
+ * Whether `collection`'s entries may be served at all: one given an address
+ * in code always may (start-up refuses a declared collection that cannot
+ * have a template), and any other only while it may still have a template.
+ * The one answer the start-up pass, an own design's write and a template's
+ * unpublish ask, so a write never claims back what start-up gave up. Given a
+ * write's transaction, the registry is read on it.
+ */
+async function servable(
+  deps: EntryClaimsDeps,
+  collection: string,
+  tx?: Tx
+): Promise<boolean> {
+  return (
+    deps.addresses.has(collection) ||
+    (await deps.mayHaveTemplate(collection, tx))
   );
 }
 
@@ -595,20 +621,20 @@ async function settleTemplateClaims(
     return;
   }
   if (write.operation !== "delete") judgeStoredAddress(deps, data, before);
+  const tx = write.transaction;
   for (const change of servingChanges(write.operation, data, before, deps)) {
-    await (change.served && change.address !== null
-      ? settleEntries(
-          deps,
-          write.transaction,
-          change.collection,
-          change.address
-        )
-      : settleUnserved(
-          deps,
-          write.transaction,
-          change.collection,
-          change.address
-        ));
+    if (change.served && change.address !== null) {
+      await settleEntries(deps, tx, change.collection, change.address);
+      continue;
+    }
+    // A collection that may no longer have a template is served nowhere,
+    // as the start-up pass decides, so no own design keeps an address in
+    // it: every entry gives its address up, as with no address left.
+    const address =
+      change.address !== null && (await servable(deps, change.collection, tx))
+        ? change.address
+        : null;
+    await settleUnserved(deps, tx, change.collection, address);
   }
 }
 
@@ -621,7 +647,9 @@ async function settleTemplateClaims(
  * claim, and a design deleted with its entry never claims for the entry
  * being deleted. Read on the write's transaction and under the collection's
  * lock, as an entry's save reads, so the two never commit past each other
- * unseen.
+ * unseen. A collection that may no longer have a template is served
+ * nowhere (see `servable`): the write gives the entry's address up, and
+ * never claims it back after start-up gave it up.
  */
 async function settleDesignClaims(
   deps: EntryClaimsDeps,
@@ -644,6 +672,10 @@ async function settleDesignClaims(
   const template = await templateUnderLock(deps, tx, collection);
   const serving = collectionServing(deps, collection, template);
   if (serving === undefined) return;
+  if (!(await servable(deps, collection, tx))) {
+    await releaseClaims(deps.claims, tx, { collection, id });
+    return;
+  }
   const from = await servedAt({ ...serving, ownDesignPublished: () => was });
   const to = await servedAt({ ...serving, ownDesignPublished: () => now });
   if (sameAddress(from, to)) return;
@@ -654,7 +686,13 @@ async function settleDesignClaims(
  * Bring each of `ids` (entries of `collection`) to what it should hold at
  * `address`, or give up all it holds where `address` is null, in `tx`: an
  * entry no longer published, or gone, holds nothing, and one whose address
- * is held waits for it.
+ * is held waits for it. The entries are read on `tx`, `BATCH` to a read,
+ * so a template with many own designs costs a read per batch, not per
+ * entry, and a write holding the pool's last connection never waits for a
+ * second. They are read held for share: an entry's save in flight holds its
+ * row and waits for this write's lock, or its design's row, and the
+ * database refuses one of the two as a deadlock, which the adapter runs
+ * again, so the second reads what the first committed.
  */
 async function settleDesigned(
   deps: EntryClaimsDeps,
@@ -663,14 +701,30 @@ async function settleDesigned(
   address: readonly string[] | null,
   ids: Iterable<string>
 ): Promise<void> {
+  const all = [...ids];
+  if (address === null) {
+    for (const id of all) {
+      await releaseClaims(deps.claims, tx, { collection, id });
+    }
+    return;
+  }
   const locales = deps.locales();
   const lifecycle = await deps.lifecycle(collection, tx);
-  for (const id of ids) {
-    const row =
-      address === null ? null : await deps.publishedEntry(collection, id);
-    await (address === null || row === null
-      ? releaseClaims(deps.claims, tx, { collection, id })
-      : settleEntry(deps, tx, collection, address, locales, row, lifecycle));
+  for (let at = 0; at < all.length; at += BATCH) {
+    const batch = all.slice(at, at + BATCH);
+    const rows = new Map<string, Row>();
+    for (const row of await deps.entriesWithIds(collection, batch, tx)) {
+      // Matched to the id asked exactly: a database may compare loosely.
+      if (typeof row.id === "string" || typeof row.id === "number") {
+        rows.set(String(row.id), row);
+      }
+    }
+    for (const id of batch) {
+      const row = rows.get(id);
+      await (row === undefined || !isPublished(row, lifecycle)
+        ? releaseClaims(deps.claims, tx, { collection, id })
+        : settleEntry(deps, tx, collection, address, locales, row, lifecycle));
+    }
   }
 }
 
@@ -889,9 +943,7 @@ export async function settleEntryClaimsAtStart(
     try {
       // Asked of the registry before the transaction opens, so the read
       // never waits on the connection the transaction holds.
-      const eligible =
-        deps.addresses.has(collection) ||
-        (await deps.mayHaveTemplate(collection));
+      const eligible = await servable(deps, collection);
       await deps.withTransaction(tx =>
         settleAtStart(deps, tx, collection, eligible)
       );
