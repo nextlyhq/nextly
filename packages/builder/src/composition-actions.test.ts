@@ -299,6 +299,71 @@ describe("the definition action schema", () => {
   });
 });
 
+describe("the page actions' JSON Schema", () => {
+  /** Every schema the form names under `key`, wherever it sits. */
+  function propertiesNamed(schema: unknown, key: string): unknown[] {
+    const found: unknown[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      if (typeof node !== "object" || node === null) return;
+      const properties = (node as { properties?: Record<string, unknown> })
+        .properties;
+      if (properties !== undefined && key in properties) {
+        found.push(properties[key]);
+      }
+      Object.values(node).forEach(walk);
+    };
+    walk(schema);
+    return found;
+  }
+
+  it("states a binding's format as an object, and leaves a kept value open", () => {
+    const schema = pageActionJsonSchema();
+    const formats = propertiesNamed(schema, "format");
+    expect(formats.length).toBeGreaterThan(0);
+    // The route refuses a format that is not a plain object, so the form a
+    // client validates against says so too.
+    for (const format of formats) {
+      expect(format).toMatchObject({ type: "object" });
+    }
+    // An unbind may keep any JSON value: its `{ value }` keep states no
+    // constraint at all, and still requires the value.
+    const unbind = (
+      schema.oneOf as { properties: { kind: { const: string } } }[]
+    ).find(option => option.properties.kind.const === "unbind-prop");
+    expect(unbind).toBeDefined();
+    const keepsValue: {
+      properties: Record<string, unknown>;
+      required?: string[];
+    }[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (typeof node !== "object" || node === null) return;
+      const shaped = node as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      if (
+        shaped.properties !== undefined &&
+        Object.keys(shaped.properties).join() === "value"
+      ) {
+        keepsValue.push({
+          properties: shaped.properties,
+          required: shaped.required,
+        });
+      }
+      Object.values(node).forEach(walk);
+    };
+    walk(unbind);
+    expect(keepsValue).toHaveLength(1);
+    expect(keepsValue[0]?.properties.value).toEqual({});
+    expect(keepsValue[0]?.required).toContain("value");
+  });
+});
+
 describe("planDefinitionAction", () => {
   const sources = () => ({ definitions: registryBlockSource() });
 
