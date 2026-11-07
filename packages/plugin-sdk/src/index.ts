@@ -721,10 +721,13 @@ export type {
  *   gate the collection delete runs before its hooks: the person's grant, and
  *   a rule's row filter matched against this entry, in every language it
  *   holds. No hook runs, nothing is written, and an entry that does not exist
- *   answers `false`, as one the person may not delete.
+ *   answers `false`, as one the person may not delete. `mayWriteEntry` asks
+ *   the same of a write: the update gate, the publish gate where the write
+ *   puts the document live, and each named field's update rule, for an entry
+ *   or a Single.
  */
-export { mayDeleteEntry } from "nextly";
-export type { PluginDeleteCheck } from "nextly";
+export { mayDeleteEntry, mayWriteEntry } from "nextly";
+export type { PluginDeleteCheck, PluginWriteCheck } from "nextly";
 
 /**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.

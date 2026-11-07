@@ -2089,6 +2089,8 @@ export const pageBuilder = (
       registerInTransactionFence({
         ctx,
         limits: () => opts.limits ?? DEFAULT_LIMITS,
+        // A component being deleted may not itself change meanwhile.
+        components: composition.store.collection,
       });
       // A component's own delete only through Delete component, and no
       // unpublish of one documents place. Registered after the Layout guard,

@@ -27,7 +27,7 @@ export const COMPONENT_DELETE_JOB = "page-builder:component-delete";
 export interface ComponentDeleteSweepDeps {
   /** Every run stopped at its delete, of every purpose. */
   readonly deleting: () => Promise<readonly DeletionRun[]>;
-  readonly store: () => Pick<FenceStore, "advance">;
+  readonly store: () => Pick<FenceStore, "markDeleted">;
   /** Whether a component still exists, read as the system. */
   readonly exists: (componentId: string) => Promise<boolean>;
   readonly now: () => Date;
@@ -40,9 +40,8 @@ export async function sweepComponentDeletes(
   for (const run of await deps.deleting()) {
     if (run.purpose !== "delete" || run.phase !== "deleting") continue;
     if (!(await deps.exists(run.componentId))) {
-      await deps
-        .store()
-        .advance(run.id, "deleting", "deleted", deps.now().toISOString());
+      // The tombstone, and the run's progress dropped with the move.
+      await deps.store().markDeleted(run.id, deps.now().toISOString());
     }
   }
 }

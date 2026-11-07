@@ -23,6 +23,7 @@ import { z } from "zod";
 
 import { getService } from "../di";
 import { NextlyError } from "../errors";
+import type { CollectionsHandler } from "../services/collections-handler";
 
 import type { PluginRouteIdentity } from "./routes/route-types";
 
@@ -64,7 +65,8 @@ export async function mayDeleteEntry(
   if (!named.success) {
     throw NextlyError.invalidInput({ message: ENTRY_REFUSAL });
   }
-  return getService("collectionsHandler").canDeleteEntry({
+  const handler: CollectionsHandler = getService("collectionsHandler");
+  return handler.canDeleteEntry({
     collectionName: named.data.collection,
     entryId: named.data.id,
     user: identity.user,

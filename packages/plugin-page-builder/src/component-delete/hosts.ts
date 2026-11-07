@@ -41,26 +41,62 @@ export async function namedDocuments(
 ): Promise<DocumentList> {
   const unique = [...new Set(keys)];
   const listed = unique.slice(0, MOST_NAMED);
-  const more = unique.length - listed.length;
-  const named: NamedDocument[] = [];
-  let unreadable = 0;
-  const byCollection = new Map<string, string[]>();
-  for (const key of listed) {
+  const sorted = sortedByKind(listed);
+  const singles = await namedSingles(deps, sorted.singles);
+  const entries = await namedEntries(deps, sorted.entries);
+  return {
+    named: [...singles.named, ...entries.named],
+    unreadable: sorted.unaddressed + singles.unreadable + entries.unreadable,
+    more: unique.length - listed.length,
+  };
+}
+
+/** Document keys, sorted into Singles and entries by collection. */
+function sortedByKind(keys: readonly string[]): {
+  singles: string[];
+  entries: Map<string, string[]>;
+  unaddressed: number;
+} {
+  const singles: string[] = [];
+  const entries = new Map<string, string[]>();
+  let unaddressed = 0;
+  for (const key of keys) {
     const address = documentAddressOf(key);
     if (address === undefined) {
-      unreadable += 1;
+      unaddressed += 1;
     } else if (address.kind === "single") {
-      if ((await deps.mayReadSingle?.(address.slug)) === true) {
-        named.push({ kind: "single", slug: address.slug, title: address.slug });
-      } else {
-        unreadable += 1;
-      }
+      singles.push(address.slug);
     } else {
-      const ids = byCollection.get(address.slug) ?? [];
-      ids.push(address.id ?? "");
-      byCollection.set(address.slug, ids);
+      entries.set(address.slug, [
+        ...(entries.get(address.slug) ?? []),
+        address.id ?? "",
+      ]);
     }
   }
+  return { singles, entries, unaddressed };
+}
+
+/** The Singles the person may read, named by slug; the rest counted. */
+async function namedSingles(
+  deps: NamingDeps,
+  slugs: readonly string[]
+): Promise<{ named: NamedDocument[]; unreadable: number }> {
+  const named: NamedDocument[] = [];
+  for (const slug of slugs) {
+    if ((await deps.mayReadSingle?.(slug)) === true) {
+      named.push({ kind: "single", slug, title: slug });
+    }
+  }
+  return { named, unreadable: slugs.length - named.length };
+}
+
+/** The entries the person may read, named by title; the rest counted. */
+async function namedEntries(
+  deps: NamingDeps,
+  byCollection: ReadonlyMap<string, readonly string[]>
+): Promise<{ named: NamedDocument[]; unreadable: number }> {
+  const named: NamedDocument[] = [];
+  let unreadable = 0;
   for (const [slug, ids] of byCollection) {
     const titles = await titlesIn(deps, slug, ids);
     for (const id of ids) {
@@ -69,7 +105,7 @@ export async function namedDocuments(
       else named.push({ kind: "collection", slug, id, title });
     }
   }
-  return { named, unreadable, more };
+  return { named, unreadable };
 }
 
 /** The titles of the entries of one collection the person may read, by id. */

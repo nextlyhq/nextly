@@ -11190,6 +11190,50 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether this user may publish the entry, decided without writing: the
+   * gate an update that puts it live asks (`publish`, a rule's filter matched
+   * against this entry), with no hook run. A collection with no lifecycle has
+   * no publish gate, so the answer there is yes; an entry that is not there
+   * answers as a refusal, as {@link canUpdateEntry} does.
+   *
+   * @experimental
+   */
+  async canPublishEntry(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    /** The language the publish acts in, which a rule's filter is matched in. */
+    locale?: string;
+  }): Promise<boolean> {
+    const existingEntry = await this.storedEntry(
+      params.collectionName,
+      params.entryId
+    );
+    if (!existingEntry) return false;
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    // As `resolveTransitionAuthorization` reads it: no lifecycle, no gate.
+    if ((collection as { status?: boolean }).status !== true) return true;
+    const denied = await this.refusalOfStoredUpdate(
+      {
+        collectionName: params.collectionName,
+        operation: "publish",
+        entryId: params.entryId,
+        user: params.user,
+        // Never overridden, and never route-authorized: a route attests
+        // update, never publish.
+        overrideAccess: false,
+        routeAuthorized: false,
+        authenticatedScope: params.authenticatedScope,
+      },
+      params.locale
+    );
+    return denied === null;
+  }
+
+  /**
    * The refusal of an update of `params.entryId` as it is stored, or `null`
    * where the caller may make it: the update gate's own refusal, or, where
    * its rule answers a filter, that of an entry the filter does not match, in
@@ -13652,13 +13696,13 @@ export class CollectionMutationService extends BaseService {
       // For a conditional write made whole, what this pass takes out or keeps
       // is recorded, and refuses it once every hook has run.
       const storedForAccess = await this.storedForCarryForward({
-          row: existingEntry as Record<string, unknown>,
-          fields,
-          tableName,
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          locale: params.locale,
-          overrideAccess: params.overrideAccess,
+        row: existingEntry as Record<string, unknown>,
+        fields,
+        tableName,
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        locale: params.locale,
+        overrideAccess: params.overrideAccess,
       });
       await fieldAccessPass(
         params.context,
@@ -13674,9 +13718,9 @@ export class CollectionMutationService extends BaseService {
             storedId: String(existingEntry.id),
             collectionName: params.collectionName,
             stored: storedForAccess,
-        tableName,
-        fields,
-        params,
+            tableName,
+            fields,
+            params,
           })
       );
 

@@ -44,7 +44,8 @@ function transaction(
     select: (table: unknown) => {
       reads += 1;
       const rows = async () => (table === componentDeletions ? runs : []);
-      return { all: rows, where: () => ({ all: rows }) };
+      const first = async () => (await rows())[0] ?? null;
+      return { all: rows, where: () => ({ all: rows, first }) };
     },
     update: (table: unknown, set: Record<string, unknown>) => ({
       where: async () => {
@@ -56,8 +57,10 @@ function transaction(
   return { db: db as never, updates, reads: () => reads };
 }
 
-const write = (db: never, data: unknown) => ({
-  collection: "notes",
+const SETTINGS = { maxNodes: 1000, components: "components", stamp: () => "s" };
+
+const write = (db: never, data: unknown, collection = "notes") => ({
+  collection,
   operation: "update" as const,
   id: "n1",
   data,
@@ -70,8 +73,7 @@ describe("judging a write inside its transaction", () => {
 
     await judgeInTransaction(
       write(tx.db, { title: "x", content: doc([]) }),
-      1000,
-      () => "s"
+      SETTINGS
     );
 
     expect(tx.reads()).toBe(0);
@@ -85,8 +87,7 @@ describe("judging a write inside its transaction", () => {
     await expect(
       judgeInTransaction(
         write(tx.db, { content: doc([copyOf("i", "card")]) }),
-        1000,
-        () => "s"
+        SETTINGS
       )
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
@@ -98,8 +99,7 @@ describe("judging a write inside its transaction", () => {
 
     await judgeInTransaction(
       write(tx.db, { content: doc([copyOf("i", "card")]) }),
-      1000,
-      () => "s"
+      SETTINGS
     );
 
     expect(tx.updates).toEqual([
@@ -123,23 +123,48 @@ describe("judging a write inside its transaction", () => {
     await expect(
       judgeInTransaction(
         write(tx.db, { content: doc([copyOf("i", "card")]) }),
-        1000,
-        () => "s"
+        SETTINGS
       )
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
-  it("leaves alone runs of other components, retired-field runs and a run still judging", async () => {
+  it("restarts a run still judging its hosts, rather than refusing the save", async () => {
     const tx = transaction([
-      { id: "a", componentId: "other", purpose: "delete", phase: "deleted" },
-      { id: "b", componentId: "card", purpose: "strip-retired", phase: "done" },
       { id: "c", componentId: "card", purpose: "delete", phase: "preflight" },
     ]);
 
     await judgeInTransaction(
       write(tx.db, { content: doc([copyOf("i", "card")]) }),
-      1000,
-      () => "s"
+      SETTINGS
+    );
+
+    expect(tx.updates).toEqual([
+      { table: componentDeletions, set: { cursor: "restart:s" } },
+    ]);
+  });
+
+  it("refuses an update of the component itself while its copies convert", async () => {
+    const tx = transaction([
+      { id: "r", componentId: "card", purpose: "delete", phase: "converting" },
+    ]);
+
+    await expect(
+      judgeInTransaction(
+        { ...write(tx.db, { title: "x" }, "components"), id: "card" },
+        SETTINGS
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("leaves alone runs of other components and retired-field runs", async () => {
+    const tx = transaction([
+      { id: "a", componentId: "other", purpose: "delete", phase: "deleted" },
+      { id: "b", componentId: "card", purpose: "strip-retired", phase: "done" },
+    ]);
+
+    await judgeInTransaction(
+      write(tx.db, { content: doc([copyOf("i", "card")]) }),
+      SETTINGS
     );
 
     expect(tx.updates).toEqual([]);
@@ -167,7 +192,10 @@ describe("judging a write inside its transaction", () => {
     const content = doc([copyOf("i", "other"), copyOf("j", "other")]);
 
     await expect(
-      judgeInTransaction(write(tx.db, { content }), 1, () => "s")
+      judgeInTransaction(write(tx.db, { content }), {
+        ...SETTINGS,
+        maxNodes: 1,
+      })
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 });

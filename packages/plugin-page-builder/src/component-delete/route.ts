@@ -19,6 +19,7 @@
 import {
   getCachedNextly,
   mayDeleteEntry,
+  mayWriteEntry,
   NextlyError,
   respondMutation,
   type PluginRouteContext,
@@ -39,16 +40,21 @@ import {
 } from "./job";
 
 /**
- * The request body. Unknown keys are refused rather than dropped: a typo of
- * `dryRun` silently ignored would start the delete the caller meant to
- * preview.
+ * The request body: a dry run, which may say where its next slice starts, or
+ * a step of the delete, which says nothing more. Unknown keys are refused
+ * rather than dropped: a typo of `dryRun` silently ignored would start the
+ * delete the caller meant to preview, and a cursor sent with a step would be
+ * one the step never reads.
  */
-const DeleteBody = z.strictObject({
-  dryRun: z.boolean().optional(),
-  // Where a dry run's next slice starts, as the last one answered it. An
-  // opaque cursor, bounded as the run row stores one.
-  after: z.string().min(1).max(1024).optional(),
-});
+const DeleteBody = z.union([
+  z.strictObject({
+    dryRun: z.literal(true),
+    // Where the next slice starts, as the last one answered it. An opaque
+    // cursor, bounded as the run row stores one.
+    after: z.string().min(1).max(1024).optional(),
+  }),
+  z.strictObject({ dryRun: z.literal(false).optional() }),
+]);
 
 /** The body, parsed at the boundary; an empty body is `{}`. */
 async function readBody(req: Request): Promise<z.infer<typeof DeleteBody>> {
@@ -102,9 +108,10 @@ async function depsFor(
     caller: ctx,
     nextly,
     asPerson,
-    may: (action, resource, anyEntry) =>
-      caller.can(action, resource, anyEntry ? { anyEntry } : undefined),
     mayReadSingle: slug => caller.can("read", slug),
+    // Core's own gates for one write the conversion will make, asked without
+    // writing: update, publish where it puts the row live, and field rules.
+    mayWrite: async check => mayWriteEntry(await caller.identity(), check),
     // Core's own delete gate for this component's row, asked without
     // deleting it or running a hook.
     mayDeleteIt: async () =>
@@ -137,7 +144,10 @@ export function componentDeleteRoutes(setup: ComponentDeleteRouteSetup): {
         const deps = await depsFor(setup, ctx);
         const answer =
           body.dryRun === true
-            ? await planComponentDelete(deps, body.after ?? null)
+            ? await planComponentDelete(
+                deps,
+                "after" in body ? (body.after ?? null) : null
+              )
             : await stepComponentDelete(deps);
         return respondMutation(answer.message, answer.item);
       },

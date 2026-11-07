@@ -60,6 +60,10 @@ const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
 const HARNESS = "@t/delete-harness";
 const NOTES = "notes";
+/** A collection with a lifecycle of its own, beside the pages. */
+const BRIEFS = "briefs";
+/** The plugin's run table, as its adapter names it. */
+const RUNS = "page_builder__component_deletions";
 /** The slug of a field group made in the admin, after start. */
 const ADMIN_GROUP = "promo";
 /** A collection whose blocks values sit in a repeater: no fixed path reaches them. */
@@ -323,6 +327,8 @@ describe.each(getConfiguredTestDialects())(
         settings?: boolean;
         /** A Single embedding a field group whose definition holds blocks. */
         blocksInGroup?: boolean;
+        /** A collection with a lifecycle of its own, beside the pages. */
+        briefs?: boolean;
         /**
          * A Single embedding a field group made in the admin after start:
          * one of plain fields, or one holding a blocks field.
@@ -347,6 +353,18 @@ describe.each(getConfiguredTestDialects())(
               { name: "content", type: BLOCKS_TYPE },
             ],
           } as never,
+          ...(site.briefs === true
+            ? [
+                {
+                  slug: BRIEFS,
+                  status: true,
+                  fields: [
+                    { name: "title", type: "text" },
+                    { name: "content", type: BLOCKS_TYPE },
+                  ],
+                } as never,
+              ]
+            : []),
           ...(site.boards === true
             ? [
                 {
@@ -377,6 +395,25 @@ describe.each(getConfiguredTestDialects())(
           const id = await person(t, name);
           await grant(t, id, grants);
           return sessionOf(t, id);
+        },
+      };
+    }
+
+    /** A site, and a read of a component's run row as the adapter stores it. */
+    async function bootWithRuns() {
+      const booted = await boot();
+      return {
+        ...booted,
+        adapterRun: async (componentId: string) => {
+          const rows = await booted.t.adapter.select<{ cursor: string | null }>(
+            RUNS,
+            {
+              where: {
+                and: [{ column: "componentId", op: "=", value: componentId }],
+              },
+            }
+          );
+          return rows[0];
         },
       };
     }
@@ -1189,6 +1226,143 @@ describe.each(getConfiguredTestDialects())(
       expect(answered.item.left).toEqual([
         expect.objectContaining({ reason: "unreadable" }),
       ]);
+    });
+    it("starts its check again when a save holding the component lands after its slice was judged", async () => {
+      const { t, cookie, adapterRun } = await bootWithRuns();
+      const cardId = await card(t);
+      // The early document, judged in the first slice, and enough after it
+      // that the check takes two.
+      const early = await note(t, "Early", [copyOf("e1", cardId)]);
+      for (let n = 0; n < 30; n += 1) {
+        await note(t, `Plain ${String(n)}`, [heading(`h${String(n)}`, "x")]);
+      }
+      const late = await note(t, "Late", [copyOf("l1", cardId)]);
+
+      const first = await call(cookie, cardId, "POST", {});
+      // A save keeping the copy, after the first slice judged it.
+      await t.nextly.update({
+        collection: NOTES,
+        id: early,
+        data: {
+          title: "Early, edited",
+          content: pageDoc([copyOf("e1", cardId), heading("x", "More")]),
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      const restarted = await adapterRun(cardId);
+      const second = await call(cookie, cardId, "POST", {});
+
+      expect(first.item.status, JSON.stringify(first.body)).toBe("preflight");
+      expect(restarted?.cursor).toMatch(/^restart:/);
+      // The first slice judged again, rather than the second one and on to
+      // converting.
+      expect(second.item.status, JSON.stringify(second.body)).toBe("preflight");
+      expect(copies(await nodesOf(t, NOTES, early), cardId)).toBe(1);
+      expect(copies(await nodesOf(t, NOTES, late), cardId)).toBe(1);
+      // CONTROL: carried on, the check reaches the end and the delete does.
+      expect((await deleteToTheEnd(cookie, cardId)).item.status).toBe("done");
+    });
+
+    it("refuses changing the component itself while its copies are converted", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      await note(t, "Holding", [copyOf("i1", cardId)]);
+      // The check passes in one step on a site this small: converting next.
+      expect((await call(cookie, cardId, "POST", {})).item.status).toBe(
+        "running"
+      );
+
+      await expect(
+        t.nextly.update({
+          collection: COMPONENTS_SLUG,
+          id: cardId,
+          data: { title: "Renamed", _overwrite: true },
+          overrideAccess: true,
+        })
+      ).rejects.toThrow("This component is being deleted");
+      expect((await deleteToTheEnd(cookie, cardId)).item.status).toBe("done");
+    });
+
+    it("stops before changing anything for a person who may update but not publish one collection", async () => {
+      const { t, anAuthor } = await boot({}, { briefs: true });
+      const cardId = await card(t);
+      const page = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: `live-${String(Math.random()).slice(2, 10)}`,
+          status: "published",
+          content: pageDoc([copyOf("p1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const brief = await t.nextly.create({
+        collection: BRIEFS,
+        data: {
+          title: "Brief",
+          status: "published",
+          content: pageDoc([copyOf("b1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const editor = await anAuthor("editor", [
+        "read-components",
+        "delete-components",
+        "read-pages",
+        "update-pages",
+        "publish-pages",
+        `read-${BRIEFS}`,
+        `update-${BRIEFS}`,
+      ]);
+
+      const started = await deleteToTheEnd(editor, cardId);
+
+      expect(started.item.status, JSON.stringify(started.body)).toBe("refused");
+      expect(started.item.left).toEqual([
+        expect.objectContaining({
+          document: expect.objectContaining({ slug: BRIEFS }),
+          reason: "not-permitted",
+        }),
+      ]);
+      // Neither document changed, the one they may publish included.
+      const pageId = String(page.item.id);
+      const briefId = String(brief.item.id);
+      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+      expect(copies(await nodesOf(t, BRIEFS, briefId), cardId)).toBe(1);
+      expect(await exists(t, cardId)).toBe(true);
+    });
+
+    it("reports a delete stopped at its delete as running, and carries it on", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      expect((await call(cookie, cardId, "POST", {})).item.status).toBe(
+        "running"
+      );
+      // As a request that stopped after moving the run to its delete, and
+      // before the delete committed, leaves it.
+      await t.adapter.update(
+        RUNS,
+        { phase: "deleting", cursor: null },
+        { and: [{ column: "componentId", op: "=", value: cardId }] }
+      );
+
+      const seen = await call(cookie, cardId, "GET");
+      const resumed = await call(cookie, cardId, "POST", {});
+
+      expect(seen.item.status, JSON.stringify(seen.body)).toBe("running");
+      expect(resumed.item.status, JSON.stringify(resumed.body)).toBe("done");
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("refuses a cursor sent with a step of the delete", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+
+      const refused = await call(cookie, cardId, "POST", { after: "x" });
+
+      expect(refused.status).toBe(400);
+      expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
     });
   }
 );

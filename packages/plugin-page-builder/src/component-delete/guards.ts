@@ -91,7 +91,9 @@ export function storedUseCheck(
         )
       ),
     ];
-    if (keys.length > 0) return { kind: "used", keys };
+    if (keys.length > 0) {
+      return { kind: "used", keys, complete: slice.complete };
+    }
     return slice.complete ? { kind: "unused" } : { kind: "unsure" };
   };
 }
@@ -122,8 +124,15 @@ export interface ComponentGuardArgs {
 /** What reading every document as stored found. */
 export type UseCheck =
   | { readonly kind: "unused" }
-  /** The documents placing it, or that could not be judged. */
-  | { readonly kind: "used"; readonly keys: readonly string[] }
+  /**
+   * The documents placing it, or that could not be judged; `complete` false
+   * when the walk stopped before the last document, so there may be more.
+   */
+  | {
+      readonly kind: "used";
+      readonly keys: readonly string[];
+      readonly complete: boolean;
+    }
   /** The walk ran out of budget before the last document. */
   | { readonly kind: "unsure" };
 
@@ -156,13 +165,29 @@ async function admitDelete(
   hook: GuardHookContext
 ): Promise<void> {
   if (hook.executor !== undefined) throw refusal(NOT_IN_A_BATCH, "batch");
-  const id = idIn(hook.data) ?? idIn(hook.originalData);
-  const token = hook.context?.[COMPONENT_DELETE_CONTEXT_KEY];
-  if (id !== null && typeof token === "string" && token !== "") {
-    const run = await args.runs().runFor(id, "delete");
-    if (run !== null && run.id === token && run.phase === "deleting") return;
-  }
+  if (await isTheDeleteStep(args, hook)) return;
   throw refusal(DELETE_THROUGH_THE_ACTION, "not-the-delete-action");
+}
+
+/**
+ * Whether this delete is the delete action's own: its hook context carries the
+ * id of the component's open `delete` run, and that run is at `deleting`.
+ */
+async function isTheDeleteStep(
+  args: ComponentGuardArgs,
+  hook: GuardHookContext
+): Promise<boolean> {
+  const id = idIn(hook.data) ?? idIn(hook.originalData);
+  const token = tokenIn(hook.context);
+  if (id === null || token === null) return false;
+  const run = await args.runs().runFor(id, "delete");
+  return run !== null && run.id === token && run.phase === "deleting";
+}
+
+/** The run id a hook context carries for the delete action, or null. */
+function tokenIn(context: Record<string, unknown> | undefined): string | null {
+  const token = context?.[COMPONENT_DELETE_CONTEXT_KEY];
+  return typeof token === "string" && token !== "" ? token : null;
 }
 
 /** Refuse unpublishing a component any document places, or may place. */
@@ -185,7 +210,8 @@ async function refuseUnpublishWhileUsed(
   const confirmed = await args.confirmUnused(id);
   if (confirmed.kind === "unused") return;
   if (confirmed.kind === "used") {
-    throw await usedRefusal(hook, confirmed.keys, true);
+    // "At least N" where the walk stopped early.
+    throw await usedRefusal(hook, confirmed.keys, confirmed.complete);
   }
   throw refusal(
     unpublishRefusal({ titles: [], others: 0, whole: false }),
