@@ -1967,6 +1967,7 @@ export const pageBuilder = (
             collections: () => collectionRegistryRows(ctx),
             singles: () => singleRegistryRows(ctx),
             fieldGroups: () => fieldGroupRows(),
+            namedQueries: () => namedQueryDeclarations(),
             blocks: () => allBlocks(),
             designs: async () => {
               const saves = await latestSave([
