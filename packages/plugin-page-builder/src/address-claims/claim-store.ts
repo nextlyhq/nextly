@@ -1065,22 +1065,40 @@ export async function committedHolderAt(
 }
 
 /**
- * Up to `limit` of the addresses held in `locale`, as last committed, from
- * `page`, with how many there are in all: what a route pre-renders.
+ * Up to `limit` of the addresses held in `locale` by documents of `holders`,
+ * as last committed, from `page`, with how many there are in all: what a
+ * route pre-renders.
  */
 export async function committedAddresses(
   claims: Claims,
   locale: string,
-  { limit, page = 1 }: { limit: number; page?: number }
+  {
+    limit,
+    page = 1,
+    holders,
+  }: {
+    limit: number;
+    page?: number;
+    /** Only addresses held by documents of these collections. */
+    holders: readonly string[];
+  }
 ): Promise<{ addresses: ServedAddress[]; total: number }> {
+  if (holders.length === 0) return { addresses: [], total: 0 };
+  // Narrowed in the database, so only these holders' addresses count toward
+  // `limit` and `total`.
   const { rows, total } = await committedClaims(
     claims,
-    { kind: { equals: "address" }, locale: { equals: locale } },
+    {
+      kind: { equals: "address" },
+      locale: { equals: locale },
+      holderCollection: { in: [...holders] },
+    },
     { limit, page }
   );
   const addresses = rows.flatMap(row =>
     row.kind === "address" &&
     row.holder !== null &&
+    holders.includes(row.holder.collection) &&
     row.address !== null &&
     row.address.locale === locale
       ? [row.address]

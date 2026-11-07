@@ -344,7 +344,7 @@ async function sourceFor(
 }
 
 /** A stored form's nodes, when it has a forest to walk. */
-function nodesOf(document: unknown): readonly unknown[] | undefined {
+export function nodesOf(document: unknown): readonly unknown[] | undefined {
   return isPlainRecord(document) && Array.isArray(document.nodes)
     ? document.nodes
     : undefined;
@@ -476,7 +476,7 @@ function listErrorsIn(
 }
 
 /** A write's errors as the field reports them, each naming where it is. */
-function asFieldIssues(
+export function asFieldIssues(
   found: readonly ForestIssue[],
   args: PluginFieldValidateArgs,
   label: string

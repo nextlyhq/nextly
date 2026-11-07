@@ -16,15 +16,18 @@ import {
   type BlockDefinition,
   blockTypeClassName,
   defineBlock,
+  type ImageValue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import type { BlockRenderArgs, PageContext } from "../context";
+import type { BlockRenderArgs, PageContext, ResolvedMedia } from "../context";
 
 import { MEDIA } from "./categories";
 import { imageLooks } from "./looks";
 import {
+  boundImage,
   fetchableUrl,
+  type BoundImage,
   flag,
   canLink,
   isAuthoredText,
@@ -61,13 +64,9 @@ export async function renderImage({
   ctx,
   hostPolicy,
   partClass,
+  bound,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
   const mediaId = text(props.mediaId);
-  // A resolver that throws must not take the page with it: media lives behind
-  // a network call for a signed-URL host, and one unreachable image is not a
-  // reason to lose the article around it.
-  const record =
-    mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
 
   // A candidate has to clear BOTH filters, and both are asked before the two are
   // chosen between rather than after.
@@ -89,15 +88,15 @@ export async function renderImage({
   const fetchable = (value: unknown): string | undefined =>
     fetchableUrl(value, patterns);
 
-  // A record whose url either filter refused is dropped WHOLE, not just for its
-  // url. Its alt text and intrinsic size describe the asset that was refused, so
-  // keeping them beside the fallback announces one image to a screen reader
-  // while reserving the other one's space.
-  const usable = fetchable(record?.url) === undefined ? null : record;
-  const src = fetchable(usable?.url) ?? fetchable(props.src);
+  const picture = await firstDrawable(
+    pictureCandidates(mediaId, props.src, boundImage(bound?.mediaId)),
+    ctx,
+    fetchable
+  );
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
-  if (src === undefined) return null;
+  if (picture === undefined) return null;
+  const { src, record: usable } = picture;
 
   const decorative = flag(props.decorative);
   // Three states, not two, and `text()` collapses two of them: it answers `""`
@@ -157,6 +156,72 @@ export async function renderImage({
     // goes, does instead, so the link is never unnamed.
     linkName: alt !== "" ? undefined : caption !== "" ? caption : link?.href,
   });
+}
+
+/** One place a picture may come from: a media id, or an address. */
+type PictureCandidate = ImageValue;
+
+/** The picture drawn: its address, and the media record it came from. */
+interface Picture {
+  readonly src: string;
+  readonly record: ResolvedMedia | null;
+}
+
+/**
+ * Where the picture may come from, in order.
+ *
+ * Unbound: the picked media, then the typed address. Bound: what the binding
+ * filled `mediaId` with, a media id resolved exactly as a picked one is or an
+ * image address, then the binding's fallback, and nothing after it. The
+ * typed address is not a fallback for a binding, which names its own.
+ */
+function pictureCandidates(
+  mediaId: string,
+  typed: unknown,
+  image: BoundImage | undefined
+): PictureCandidate[] {
+  if (image === undefined) {
+    return [
+      ...(mediaId === "" ? [] : [{ holds: "media" as const, value: mediaId }]),
+      ...(typeof typed === "string" && typed !== ""
+        ? [{ holds: "address" as const, value: typed }]
+        : []),
+    ];
+  }
+  return [
+    ...(mediaId === "" ? [] : [{ holds: image.holds, value: mediaId }]),
+    ...(image.fallback === undefined ? [] : [image.fallback]),
+  ];
+}
+
+/**
+ * The first candidate actually allowed, asked in order.
+ *
+ * A media record whose url either filter refused is dropped WHOLE, not just
+ * for its url. Its alt text and intrinsic size describe the asset that was
+ * refused, so keeping them beside the next candidate announces one image to a
+ * screen reader while reserving the other one's space. A record the host
+ * cannot find, deleted since it was picked or bound, moves on the same way.
+ */
+async function firstDrawable(
+  candidates: readonly PictureCandidate[],
+  ctx: PageContext,
+  fetchable: (value: unknown) => string | undefined
+): Promise<Picture | undefined> {
+  for (const candidate of candidates) {
+    if (candidate.holds === "address") {
+      const src = fetchable(candidate.value);
+      if (src !== undefined) return { src, record: null };
+      continue;
+    }
+    // A resolver that throws must not take the page with it: media lives
+    // behind a network call for a signed-URL host, and one unreachable image
+    // is not a reason to lose the article around it.
+    const record = await ctx.resolveMedia(candidate.value).catch(() => null);
+    const src = fetchable(record?.url);
+    if (record !== null && src !== undefined) return { src, record };
+  }
+  return undefined;
 }
 
 /**
@@ -422,16 +487,19 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   // id came from `mediaId` and the address from `src`, and no inspection of the
   // text can tell them apart — a UUID is a valid relative URL and a bare word
   // is a valid src.
-  seo: props => {
-    const mediaId = text(props.mediaId);
-    const src = url(props.src) ?? "";
-    return {
-      image: [
-        ...(mediaId === "" ? [] : [{ media: mediaId }]),
-        ...(src === "" ? [] : [{ url: src }]),
-      ],
-    };
-  },
+  // A bound image offers what the page draws for it, from the same
+  // candidates, so metadata never names a picture the page does not show.
+  seo: (props, read) => ({
+    image: pictureCandidates(
+      text(props.mediaId),
+      url(props.src),
+      boundImage(read?.bound?.mediaId)
+    ).map(candidate =>
+      candidate.holds === "media"
+        ? { media: candidate.value }
+        : { url: candidate.value }
+    ),
+  }),
   // The address only, for the same reason: blocks are placed with their
   // example, and an example alt would be stored as the page's own words in
   // place of the library's.
