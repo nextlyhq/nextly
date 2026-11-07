@@ -273,6 +273,12 @@ function useBuilderReturn(
   address: string | undefined
 ) {
   const box = useRef<HTMLDivElement>(null);
+  // The keeping in view outlives the effect that starts it: the identity is a
+  // new object on each render, so the effect runs again on the next one, and
+  // a cleanup there would end the keeping while the form is still settling.
+  // It ends on its own, at the author's first move, or when the field goes.
+  const settling = useRef<(() => void) | null>(null);
+  useEffect(() => () => settling.current?.(), []);
   useEffect(() => {
     if (address === undefined || !claimBuilderReturn(identity, address)) {
       return;
@@ -283,8 +289,9 @@ function useBuilderReturn(
       .querySelector<HTMLElement>("[data-builder-open]")
       ?.focus({ preventScroll: true });
     // Centred, so the row's own header above the card is in view too, and
-    // kept centred while the form above it finishes drawing.
-    return centreWhileSettling(element);
+    // kept centred while the form around it finishes drawing.
+    settling.current?.();
+    settling.current = centreWhileSettling(element);
   }, [identity, address]);
   return box;
 }
