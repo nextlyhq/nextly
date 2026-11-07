@@ -70,6 +70,7 @@ import {
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
 import { layoutRegionsOf } from "./bindings-report/layout-regions";
@@ -4054,6 +4055,14 @@ export const pageBuilder = (
             collection: TEMPLATES_SLUG,
             to: `/admin/collections/${TEMPLATES_SLUG}`,
             icon: "LayoutDashboard",
+          },
+          // The site-wide report of bindings that no longer fit, for those
+          // who edit pages, as its page asks.
+          {
+            label: "Bindings to fix",
+            to: BINDINGS_TO_FIX_PAGE_HREF,
+            icon: "AlertTriangle",
+            requiredPermission: EDIT_PAGES_PERMISSION,
           },
         ],
         // No `schemaBuilderSlot`. It named a component this package no longer

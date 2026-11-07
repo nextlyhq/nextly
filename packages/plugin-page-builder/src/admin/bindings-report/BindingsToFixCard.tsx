@@ -16,18 +16,15 @@ import { Button, Widget } from "@nextlyhq/plugin-sdk/admin";
 import { AlertTriangle } from "lucide-react";
 import type { JSX } from "react";
 
-import type {
-  BindingsToFixItem,
-  BindingsToFixRow,
+import {
+  BINDINGS_TO_FIX_PAGE_HREF,
+  type BindingsToFixItem,
+  type BindingsToFixRow,
 } from "../../bindings-report/contract";
 
 import { checkedWords } from "./checked-words";
 import { editorAddressOf, useBindingsToFix } from "./client";
 import { whatChanged, whereBound } from "./words";
-
-/** Where the whole report is. */
-export const BINDINGS_TO_FIX_PAGE_HREF =
-  "/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix";
 
 /** What the card's `load` answers: how many bindings the reader may see. */
 export interface BindingsToFixCardData {

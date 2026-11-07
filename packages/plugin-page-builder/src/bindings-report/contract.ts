@@ -9,6 +9,12 @@ import type { BindingReportRow } from "./rows";
 /** Where the route is mounted under the plugin. */
 export const BINDINGS_TO_FIX_ROUTE_PATH = "/bindings-to-fix";
 
+/**
+ * Where the "Bindings to fix" page is in the admin: the plugin's admin page
+ * at the same path, linked from its menu entry, its card and the editor.
+ */
+export const BINDINGS_TO_FIX_PAGE_HREF = `/admin/plugins/nextlyhq-plugin-page-builder${BINDINGS_TO_FIX_ROUTE_PATH}`;
+
 /** How many documents one page of the answer lists. */
 export const BINDINGS_TO_FIX_PAGE_SIZE = 100;
 

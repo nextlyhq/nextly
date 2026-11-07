@@ -20,11 +20,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import { AlertTriangle, ArrowRight, MousePointer2 } from "lucide-react";
 import { useState, type JSX } from "react";
 
+import { BINDINGS_TO_FIX_PAGE_HREF } from "../../bindings-report/contract";
 import { documentKeyOf } from "../../host-rewrite/contract";
 import { revealWhileSettling } from "../editor/use-open-at-section";
 import { navigateWithin } from "../plain-click";
 
-import { BINDINGS_TO_FIX_PAGE_HREF } from "./BindingsToFixCard";
 import { useBindingsToFix } from "./client";
 import { visitorsSee, whatChanged, whereBound } from "./words";
 
