@@ -1,8 +1,9 @@
 /**
  * A template's write judged again in its own transaction, against a stand-in
  * hold: the shape of the row about to commit, the collections it newly names
- * held to those the guard let through, and a new own design's entry, held on
- * the write's transaction and refused once it is gone.
+ * held to those the guard let through, a new own design's entry, held on the
+ * write's transaction and refused once it is gone, and the template a write
+ * newly links its row to as the one it was copied from, held the same way.
  *
  * That the hold takes turns with a delete of the entry on every dialect is
  * core's, proved by `nextly`'s
@@ -46,12 +47,21 @@ const template = (extra: Record<string, unknown> = {}) => ({
 
 /** The handler over a hold answering `exists`, recording what it held. */
 function judging(exists: boolean) {
+  return judgingWith(() => exists);
+}
+
+/**
+ * The handler over a hold answering `exists` for each row it is asked to
+ * hold, recording what it held.
+ */
+function judgingWith(exists: (collection: string, id: string) => boolean) {
   const held: [unknown, string, string][] = [];
   const handler = judgeTemplateInTransaction<typeof TX>(
     async (tx, collection, id) => {
       held.push([tx, collection, id]);
-      return exists;
-    }
+      return exists(collection, id);
+    },
+    "templates"
   );
   return { handler, held };
 }
@@ -384,5 +394,149 @@ describe("a collection a hook names after the guard", () => {
     expect(JSON.stringify(refused.publicData)).toContain(
       "after the collection was checked"
     );
+  });
+});
+
+describe("the template a write links its row to, in its transaction", () => {
+  /** A hold over every entry, and every template but `gone`. */
+  const allBut = (gone: string) =>
+    judgingWith(
+      (collection, id) => !(collection === "templates" && id === gone)
+    );
+
+  it("holds the template a new own design was copied from, after its entry, and lets it through", async () => {
+    const { handler, held } = allBut("none");
+
+    await handler({
+      operation: "create",
+      data: design({ forkedFrom: "t1" }),
+      transaction: TX,
+    });
+
+    expect(held).toEqual([
+      [TX, "posts", "p1"],
+      [TX, "templates", "t1"],
+    ]);
+  });
+
+  it("refuses a new row linked to a template that is gone by the time it holds it", async () => {
+    const { handler, held } = allBut("t1");
+
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "create",
+        data: design({ forkedFrom: "t1" }),
+        transaction: TX,
+      })
+    );
+
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(pathOf(refused)).toBe("forkedFrom");
+    expect(JSON.stringify(refused.publicData)).toContain(
+      'There is no template \\"t1\\" for forkedFrom to name'
+    );
+    expect(held).toContainEqual([TX, "templates", "t1"]);
+  });
+
+  it("holds the link on any template row, not only an own design", async () => {
+    const { handler, held } = allBut("t9");
+
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "create",
+        data: template({ forkedFrom: "t9" }),
+        transaction: TX,
+      })
+    );
+
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(held).toEqual([[TX, "templates", "t9"]]);
+  });
+
+  it("holds nothing for a row linked to no template, or to an empty one", async () => {
+    const { handler, held } = allBut("none");
+
+    await handler({
+      operation: "create",
+      data: template({ forkedFrom: null }),
+      transaction: TX,
+    });
+    await handler({
+      operation: "create",
+      data: template({ forkedFrom: "" }),
+      transaction: TX,
+    });
+
+    expect(held).toEqual([]);
+  });
+
+  it("asks nothing of an update that leaves the link as it was, even to a template since deleted", async () => {
+    // The hold would refuse "t1": a copy whose template was deleted while a
+    // draft waited keeps the link on its live row, and still saves.
+    const { handler, held } = allBut("t1");
+
+    await handler({
+      operation: "update",
+      originalData: design({ forkedFrom: "t1" }),
+      data: design({ forkedFrom: "t1", title: "Renamed" }),
+      transaction: TX,
+    });
+
+    expect(held).toEqual([]);
+  });
+
+  it("holds the template an update links its row to anew, and refuses it once gone", async () => {
+    const { handler, held } = allBut("t2");
+
+    await handler({
+      operation: "update",
+      originalData: design({ forkedFrom: null }),
+      data: design({ forkedFrom: "t1" }),
+      transaction: TX,
+    });
+    expect(held).toEqual([[TX, "templates", "t1"]]);
+
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "update",
+        originalData: design({ forkedFrom: "t1" }),
+        data: design({ forkedFrom: "t2" }),
+        transaction: TX,
+      })
+    );
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(pathOf(refused)).toBe("forkedFrom");
+    expect(held).toEqual([
+      [TX, "templates", "t1"],
+      [TX, "templates", "t2"],
+    ]);
+  });
+
+  it("asks nothing of an update emptying the link", async () => {
+    const { handler, held } = allBut("t1");
+
+    await handler({
+      operation: "update",
+      originalData: design({ forkedFrom: "t1" }),
+      data: design({ forkedFrom: null }),
+      transaction: TX,
+    });
+
+    expect(held).toEqual([]);
+  });
+
+  it("holds the link an update without the stored row names, having nothing to tell it from", async () => {
+    const { handler, held } = allBut("t1");
+
+    const refused = await refusalOf(() =>
+      handler({
+        operation: "update",
+        data: design({ forkedFrom: "t1" }),
+        transaction: TX,
+      })
+    );
+
+    expect(refused.code).toBe("VALIDATION_ERROR");
+    expect(held).toEqual([[TX, "templates", "t1"]]);
   });
 });

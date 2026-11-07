@@ -2470,9 +2470,10 @@ export const pageBuilder = (
         )
       );
       // After the collection is held: the row a template write commits is
-      // judged again on its transaction, and a new own design holds its
-      // entry, so one written while the entry is deleted is refused or
-      // deleted with it, whichever path wrote it: see `entry-design-write`.
+      // judged again on its transaction, a new own design holds its entry,
+      // and a write linking a row to the template it was copied from holds
+      // that template, so one written while either is deleted is refused or
+      // seen by the delete, whichever path wrote it: see `entry-design-write`.
       ctx.hooks.onInTransaction(
         templates,
         judgeTemplateInTransaction<PluginCollectionTransaction>(
@@ -2481,7 +2482,8 @@ export const pageBuilder = (
               transaction,
               collection,
               id
-            )
+            ),
+          templates
         )
       );
       // A collection's template and its entries' own designs go with the

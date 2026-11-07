@@ -63,11 +63,7 @@ import {
   type ActionAnswer,
   type CompositionRouteContext,
 } from "../composition-route-kit";
-import {
-  asOverwrite,
-  documentVersionOf,
-  withVersionFrom,
-} from "../document-version";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 import { titleFieldIn } from "../entries-route";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
@@ -328,12 +324,14 @@ async function designSource(
     { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
     "published"
   );
-  return (
-    base ??
-    refusedAction([
-      `The collection "${collection}" has no published template to copy. Publish its template first.`,
-    ])
-  );
+  return base ?? noPublishedTemplate(collection);
+}
+
+/** The refusal of an own design for a collection with no published template. */
+function noPublishedTemplate(collection: string): NextlyError {
+  return refusedAction([
+    `The collection "${collection}" has no published template to copy. Publish its template first.`,
+  ]);
 }
 
 /**
@@ -348,6 +346,15 @@ async function designSource(
  * other path), so on MySQL a delete reading the new design's key never waits
  * on this transaction while it waits on the delete. Two gives meet at the
  * unique key; the one that loses is told the entry has one now.
+ *
+ * The template the design is copied from is held the same way, after the
+ * entry and before the write: a delete of that template that held its row
+ * first has committed by then, and the give is refused as one finding no
+ * published template; a delete that comes after waits for this one and
+ * empties the new design's link with the others it finds. Held before the
+ * write for the same reason, so on MySQL the delete's walk of the copies
+ * never waits on this transaction's new row while this one waits on the
+ * delete.
  */
 async function createDesign(
   ctx: TemplateActionsContext,
@@ -368,6 +375,13 @@ async function createDesign(
           logContext: { reason: "entry-design-entry-deleted" },
         });
       }
+      const source = data[TEMPLATE_FORKED_FROM_FIELD];
+      if (
+        typeof source === "string" &&
+        !(await guard.holdEntry(tx, templates, source))
+      ) {
+        throw noPublishedTemplate(action.collection);
+      }
       return collections.createEntryInTransaction(tx, templates, data, {
         ...asCaller(ctx),
         context: { [ASKED_BEFORE_CONTEXT]: true },
@@ -383,37 +397,7 @@ async function createDesign(
     if (winner === null) throw error;
     throw alreadyHasDesign(winner);
   }
-  await unlinkIfSourceGone(ctx, data, created, guard);
   return created;
-}
-
-/**
- * Empty the new design's link to the template it was copied from when that
- * template was deleted while the copy was being made: the delete emptied the
- * link of every copy it found, and this one was not yet there to find.
- */
-async function unlinkIfSourceGone(
-  ctx: TemplateActionsContext,
-  data: Record<string, unknown>,
-  item: unknown,
-  guard: TemplateGuardSetup
-): Promise<void> {
-  const source = data[TEMPLATE_FORKED_FROM_FIELD];
-  const id = idOf(item);
-  if (typeof source !== "string" || id === undefined) return;
-  const templates = guard.templatesCollection;
-  const stillThere = await templateWhere(
-    templates,
-    { id: { equals: source } },
-    "all"
-  );
-  if (stillThere !== null) return;
-  await ctx.services.collections.updateEntry(
-    templates,
-    id,
-    asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null }),
-    { as: "system" }
-  );
 }
 
 /** The refusal of a second own design for an entry, naming the first by id. */
