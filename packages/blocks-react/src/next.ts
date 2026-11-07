@@ -18,6 +18,7 @@ import {
   bindingKindOf,
   calendarDayIn,
   COLLECTION_LIST_TYPE,
+  composeEntryContent,
   conditionDemand,
   conditionFieldKind,
   DEFAULT_LIMITS,
@@ -3506,7 +3507,21 @@ function blocksRouteConfig(
         : listPagesOf(list.props, counted.matching);
     },
     render: async (entry, context) => {
-      const document = readDocument(entry, field, context);
+      // A template drawing an entry draws the entry's own blocks content in
+      // its Entry content block: composed here, before anything reads the
+      // page, so the entry's blocks are drawn, styled, bound and composed
+      // with their components in the one render the template is drawn by.
+      // Read from the entry as the route read it, with the public's access,
+      // so a field the public may not read is absent and draws nothing, and
+      // nothing of it reaches the page. A page that is no template is drawn
+      // as it is stored.
+      const document = composeEntryContent(
+        readDocument(entry, field, context),
+        {
+          valueOf: name => entry[name],
+          maxNodes: effectiveLimits(config).maxNodes,
+        }
+      );
       const resolved = styles ? await styles(entry, context) : undefined;
 
       // Built from the reader the ROUTE resolved this entry through, handed
