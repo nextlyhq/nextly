@@ -16,6 +16,7 @@
  * - the route's lookup answers the holder as committed: a page, an entry,
  *   or nothing.
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -28,6 +29,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ADDRESS_CLAIMS_SLUG } from "../collections/address-claims";
 import { TEMPLATES_SLUG } from "../collections/templates";
+import { asOverwrite } from "../document-version";
 import { pageBuilderContent } from "../page-content";
 import { pageBuilder } from "../plugin";
 
@@ -42,6 +44,31 @@ async function refusal(write: Promise<unknown>): Promise<string> {
   )) as { publicMessage?: unknown; message?: unknown } | undefined;
   if (error === undefined) return "no refusal";
   return String(error.publicMessage ?? error.message);
+}
+
+/**
+ * Why a boot was refused, in the plugin's own words. A plugin that throws
+ * from `onReady` fails the boot with an internal error whose public message
+ * is generic on purpose; what the plugin said is kept in its log context,
+ * which is where an operator reads it.
+ */
+async function startRefusal(boot: Promise<TestNextly>): Promise<string> {
+  const error = await boot.then(
+    async started => {
+      await started.destroy();
+      return undefined;
+    },
+    (caught: unknown) => caught
+  );
+  if (error === undefined) return "no refusal";
+  if (!NextlyError.is(error)) return `not a refused start: ${String(error)}`;
+  const context = error.logContext as
+    | { reason?: unknown; message?: unknown }
+    | undefined;
+  if (context?.reason !== "plugin-onready-failed") {
+    return `not a plugin's refusal: ${String(context?.reason)}`;
+  }
+  return String(context.message);
 }
 
 /** The content route's provider, over the test's own instance. */
@@ -136,13 +163,20 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    // These tests are about claims, not stale writes: each update replaces
+    // whatever is stored.
     function update(
       t: TestNextly,
       collection: string,
       id: string,
       data: Record<string, unknown>
     ) {
-      return t.nextly.update({ collection, id, data, overrideAccess: true });
+      return t.nextly.update({
+        collection,
+        id,
+        data: asOverwrite(data),
+        overrideAccess: true,
+      });
     }
 
     /** Every claim row of `kinds`: its kind, path and holder, sorted. */
@@ -300,33 +334,39 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses to start when a localized collection is given an address, naming it", async () => {
-      await expect(
-        createTestNextly({
-          dialect,
-          localization: { locales: ["en", "de"], defaultLocale: "en" },
-          plugins: [
-            pageBuilder({ templates: { addresses: { stories: "/stories" } } }),
-          ],
-          collections: [
-            defineCollection({
-              slug: "stories",
-              localized: true,
-              fields: [text({ name: "title" }), text({ name: "slug" })],
-            }),
-          ],
-        })
-      ).rejects.toThrow(/"stories" is localized/);
+      expect(
+        await startRefusal(
+          createTestNextly({
+            dialect,
+            localization: { locales: ["en", "de"], defaultLocale: "en" },
+            plugins: [
+              pageBuilder({
+                templates: { addresses: { stories: "/stories" } },
+              }),
+            ],
+            collections: [
+              defineCollection({
+                slug: "stories",
+                localized: true,
+                fields: [text({ name: "title" }), text({ name: "slug" })],
+              }),
+            ],
+          })
+        )
+      ).toMatch(/"stories" is localized/);
     });
 
     it("refuses to start when a collection given an address cannot have a template, naming it", async () => {
-      await expect(
-        createTestNextly({
-          dialect,
-          plugins: [
-            pageBuilder({ templates: { addresses: { ghosts: "/ghosts" } } }),
-          ],
-        })
-      ).rejects.toThrow(/There is no collection "ghosts"/);
+      expect(
+        await startRefusal(
+          createTestNextly({
+            dialect,
+            plugins: [
+              pageBuilder({ templates: { addresses: { ghosts: "/ghosts" } } }),
+            ],
+          })
+        )
+      ).toMatch(/There is no collection "ghosts"/);
     });
   }
 );
