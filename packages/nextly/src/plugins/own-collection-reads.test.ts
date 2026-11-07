@@ -334,17 +334,25 @@ describe("ctx.services.ownCollections", () => {
           state.components.push(slug);
           return later(components[slug] ?? null);
         },
+        // Each entry carries the fields read with it; `ledger` is listed
+        // with none.
         listCollections: (limit: number) => {
           state.reads.push(`listCollections:${limit}`);
-          return later(collectionSlugs.slice(0, limit).map(listedCollection));
+          return later(
+            collectionSlugs.slice(0, limit).map(slug => ({
+              record: listedCollection(slug),
+              fields: fields[`collection:${slug}`] ?? [],
+            }))
+          );
         },
         listSingles: () => {
           state.reads.push("listSingles");
-          return later(["home", "footer"].map(listedSingle));
-        },
-        allFieldsOf: (kind: "collection" | "Single") => {
-          state.reads.push(`allFieldsOf:${kind}`);
-          return later(schemasOf(fields, kind));
+          return later(
+            [...schemasOf(fields, "Single")].map(([slug, schema]) => ({
+              record: listedSingle(slug),
+              fields: schema,
+            }))
+          );
         },
         allComponentFields: async () => {
           state.reads.push("allComponentFields");
@@ -507,8 +515,6 @@ describe("ctx.services.ownCollections", () => {
       const ONE_WALK = [
         `listCollections:${HOST_TYPES_PAGE_SIZE}`,
         "listSingles",
-        "allFieldsOf:collection",
-        "allFieldsOf:Single",
         "allComponentFields",
       ];
 
@@ -569,7 +575,7 @@ describe("ctx.services.ownCollections", () => {
           reads.listHostTypesInTransaction(tx)
         );
 
-        // Six collections and two Singles judged from five reads; `addons`
+        // Six collections and two Singles judged from three reads; `addons`
         // asks for `cta` and `hero` together, and both wait on the one
         // component read.
         expect(schema.reads).toEqual(ONE_WALK);
@@ -581,18 +587,15 @@ describe("ctx.services.ownCollections", () => {
       it("reads no component when no schema names one", async () => {
         const { facade } = standIn();
         const base = hostSchema();
+        // Only the entries naming no component: `pages` among the
+        // collections, and both Singles.
         const schema: HostSchemaSource = {
           ...base,
-          allFieldsOf: kind =>
+          listCollections: limit =>
             base
-              .allFieldsOf(kind)
-              .then(
-                schemas =>
-                  new Map(
-                    [...schemas].filter(
-                      ([slug]) => slug === "pages" || slug === "home"
-                    )
-                  )
+              .listCollections(limit)
+              .then(listed =>
+                listed.filter(({ record }) => record.name === "pages")
               ),
         };
         const reads = ownCollectionReads(facade, [], undefined, schema);
@@ -623,26 +626,19 @@ describe("ctx.services.ownCollections", () => {
           componentFields: () => Promise.resolve(null),
           listCollections: limit => {
             limits.push(limit);
-            return Promise.resolve(slugs.slice(0, limit).map(listedCollection));
+            return Promise.resolve(
+              slugs.slice(0, limit).map(slug => ({
+                record: listedCollection(slug),
+                fields: [
+                  {
+                    name: "body",
+                    type: slug === first || slug === last ? "doc" : "text",
+                  },
+                ],
+              }))
+            );
           },
           listSingles: () => Promise.resolve([]),
-          allFieldsOf: kind =>
-            Promise.resolve(
-              new Map(
-                kind === "Single"
-                  ? []
-                  : slugs.map(slug => [
-                      slug,
-                      [
-                        {
-                          name: "body",
-                          type:
-                            slug === first || slug === last ? "doc" : "text",
-                        },
-                      ],
-                    ])
-              )
-            ),
           allComponentFields: () => Promise.resolve(new Map()),
         });
 
@@ -661,6 +657,42 @@ describe("ctx.services.ownCollections", () => {
           first,
           last,
         ]);
+      });
+
+      it("judges each entry by the fields read with it, so one renamed after the listing stays listed", async () => {
+        const { facade } = standIn();
+        const asked: string[] = [];
+        const holding = [{ name: "body", type: "doc" }];
+        // The listings read `pages` and `home` with their fields; by the time
+        // anything else is read, both have been renamed, so a read of either
+        // old slug finds no schema.
+        const reads = ownCollectionReads(facade, [], undefined, {
+          fieldTypes: ["doc"],
+          fieldsOf: (kind, slug) => {
+            asked.push(`${kind}:${slug}`);
+            return Promise.resolve(null);
+          },
+          componentFields: () => Promise.resolve(null),
+          listCollections: () =>
+            Promise.resolve([
+              { record: listedCollection("pages"), fields: holding },
+            ]),
+          listSingles: () =>
+            Promise.resolve([
+              { record: listedSingle("home"), fields: holding },
+            ]),
+          allComponentFields: () => Promise.resolve(new Map()),
+        });
+
+        const found = await withWriteTransactionToken(
+          {} as TransactionContext,
+          tx => reads.listHostTypesInTransaction(tx)
+        );
+
+        expect(found.collections.map(listed => listed.name)).toEqual(["pages"]);
+        expect(found.singles.map(listed => listed.slug)).toEqual(["home"]);
+        // Nothing read apart from the listings decided it.
+        expect(asked).toEqual([]);
       });
 
       it("starts nothing more once the component read fails", async () => {

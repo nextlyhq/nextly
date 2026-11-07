@@ -5,7 +5,7 @@
  *
  * `ctx.services.collections.withTransaction` holds the pool's only
  * connection until its work returns. The listing asks the database for every
- * collection and every Single, then for every schema and, when one names a
+ * collection and every Single with their schemas and, when one names a
  * component, every component's fields. The plugin's own `services.collections.listCollections` and
  * `services.singles.list` ask through the pool, so inside the transaction they
  * wait for the connection it holds, until the pool's wait bound, and fail.
