@@ -1,0 +1,200 @@
+/**
+ * The page with its visibility conditions applied for the entry a template is
+ * previewed with: each block that reads the entry judged as the published
+ * page judges it, a hidden one drawn as a marker naming why.
+ */
+import {
+  COLLECTION_LIST_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  LIST_ENTRY_SLOT,
+  type BindingFieldShape,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+import { describe, expect, it } from "vitest";
+
+import {
+  appliedConditionsOf,
+  conditionedBlocksIn,
+  CONDITION_HIDDEN_TYPE,
+  type ConditionsPreview,
+} from "./applied-conditions";
+import { conditionFieldsOfShapes } from "./condition-model";
+
+const FIELDS: readonly BindingFieldShape[] = [
+  { name: "category", type: "text" },
+  { name: "readingTime", type: "number" },
+];
+
+/** The entry as a visitor reads it, with these published values. */
+function previewFor(
+  values: Readonly<Record<string, unknown>> | undefined
+): ConditionsPreview {
+  return {
+    subject:
+      values === undefined
+        ? undefined
+        : {
+            fields: {
+              declared: new Set(FIELDS.map(field => field.name)),
+              readable: FIELDS,
+            },
+            values,
+          },
+    noun: "post",
+    fields: conditionFieldsOfShapes(FIELDS).map(field =>
+      field.name === "category" ? { ...field, label: "Category" } : field
+    ),
+  };
+}
+
+function block(id: string, extra: Partial<BlockNode> = {}): BlockNode {
+  return { id, type: "core/text", version: 1, props: {}, ...extra };
+}
+
+const guides = { field: "category", op: "equals", value: "Guides" };
+const long = { field: "readingTime", op: "greater_than", value: 5 };
+
+function page(...nodes: BlockNode[]): BlockDocument {
+  return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "template", nodes };
+}
+
+const worksheet = block("worksheet", {
+  visibility: { conditions: [[guides]] },
+});
+
+const nameOf = (node: BlockNode): string =>
+  node.id === "worksheet" ? "Members’ worksheet" : node.id;
+
+describe("the page with its conditions applied", () => {
+  it("draws a block whose conditions hold as itself, with its conditions lifted", () => {
+    const applied = appliedConditionsOf(
+      page(worksheet),
+      previewFor({ category: "Guides" }),
+      nameOf
+    );
+    expect([...applied.shown]).toEqual(["worksheet"]);
+    expect(applied.hidden).toEqual([]);
+    expect(applied.document.nodes[0]).toMatchObject({
+      id: "worksheet",
+      type: "core/text",
+    });
+    // Lifted, so the renderer draws it rather than leaving it out.
+    expect(applied.document.nodes[0]?.visibility).toBeUndefined();
+  });
+
+  it("draws a block whose conditions fail as a marker with its id, naming the condition that fails", () => {
+    const applied = appliedConditionsOf(
+      page(block("intro"), worksheet),
+      previewFor({ category: "News" }),
+      nameOf
+    );
+    expect(applied.shown.size).toBe(0);
+    expect(applied.hidden).toEqual([
+      {
+        id: "worksheet",
+        name: "Members’ worksheet",
+        reason: "hidden for this post: Category is not Guides",
+        unchecked: false,
+      },
+    ]);
+    // In its place, keeping its id, so the canvas selects the block.
+    expect(applied.document.nodes.map(node => node.type)).toEqual([
+      "core/text",
+      CONDITION_HIDDEN_TYPE,
+    ]);
+    expect(applied.document.nodes[1]).toMatchObject({
+      id: "worksheet",
+      props: { name: "Members’ worksheet", unchecked: false },
+    });
+  });
+
+  it("names the first failing condition and counts the rest, an order said with isn't", () => {
+    const both = block("worksheet", {
+      visibility: { conditions: [[long, guides]] },
+    });
+    const applied = appliedConditionsOf(
+      page(both),
+      previewFor({ category: "News", readingTime: 2 }),
+      nameOf
+    );
+    expect(applied.hidden[0]?.reason).toBe(
+      "hidden for this post: readingTime isn’t more than 5, and 1 more"
+    );
+  });
+
+  it("hides every conditioned block for an entry a visitor reads none of, saying so", () => {
+    const applied = appliedConditionsOf(
+      page(worksheet),
+      previewFor(undefined),
+      nameOf
+    );
+    expect(applied.hidden[0]).toMatchObject({
+      reason: "hidden: this post isn’t published yet",
+      unchecked: false,
+    });
+  });
+
+  it("hides a block whose conditions can't be checked, as the published page does, marked so", () => {
+    const secret = block("worksheet", {
+      visibility: { conditions: [[{ field: "secret", op: "exists" }]] },
+    });
+    const applied = appliedConditionsOf(
+      page(secret),
+      previewFor({ category: "Guides" }),
+      nameOf
+    );
+    expect(applied.hidden[0]).toMatchObject({
+      reason: "can’t be checked, so visitors never see it",
+      unchecked: true,
+    });
+    expect(applied.document.nodes[0]).toMatchObject({
+      type: CONDITION_HIDDEN_TYPE,
+      props: { unchecked: true },
+    });
+  });
+
+  it("leaves a block in a list's per-entry slot unjudged, drawn as when conditions aren't applied", () => {
+    const featured = block("featured", {
+      visibility: { conditions: [[guides]] },
+    });
+    const list = block("list", {
+      type: COLLECTION_LIST_TYPE,
+      props: { collection: "posts" },
+      slots: { [LIST_ENTRY_SLOT]: [featured] },
+    });
+    const applied = appliedConditionsOf(
+      page(list),
+      previewFor({ category: "News" }),
+      nameOf
+    );
+    // It reads each drawn item, not the previewed entry.
+    expect(applied.shown.size).toBe(0);
+    expect(applied.hidden).toEqual([]);
+    const drawn = applied.document.nodes[0]?.slots?.[LIST_ENTRY_SLOT]?.[0];
+    expect(drawn).toMatchObject({ id: "featured", type: "core/text" });
+    expect(drawn?.visibility).toBeUndefined();
+  });
+});
+
+describe("the conditioned blocks a document holds", () => {
+  it("tells a block reading the entry from one only a list's items read", () => {
+    expect(conditionedBlocksIn(page(worksheet))).toEqual({
+      any: true,
+      readingEntry: true,
+    });
+    const list = block("list", {
+      type: COLLECTION_LIST_TYPE,
+      props: { collection: "posts" },
+      slots: { [LIST_ENTRY_SLOT]: [worksheet] },
+    });
+    expect(conditionedBlocksIn(page(list))).toEqual({
+      any: true,
+      readingEntry: false,
+    });
+    expect(conditionedBlocksIn(page(block("plain")))).toEqual({
+      any: false,
+      readingEntry: false,
+    });
+  });
+});

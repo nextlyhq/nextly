@@ -386,6 +386,33 @@ again, rather than naming an entry the canvas isn't drawing.
 Which entry you preview is not saved with the template. When the template is saved, its
 lists and conditions are checked against the collection it draws.
 
+### Applying conditions
+
+While the canvas draws every block, a block with visibility conditions carries a
+**Conditional** badge, whoever the page would show it to. When a template holds such a
+block, the **Previewing** strip offers an **Apply conditions** switch after the entry.
+Turn it on to see the page as a visitor reading that entry would get it:
+
+- **A block a visitor would see** is drawn as usual, with the badge **Shown for this
+  post** (named after the collection's entries).
+- **A block a visitor wouldn't see** is drawn as one dashed line in its place, naming
+  it and why: "Members' worksheet · hidden for this post: Category is not Guides". It
+  stays selectable, so you can change its conditions.
+- **The strip's far end** says what the conditions did: "1 block hidden for this post",
+  or "Every conditioned block shows for this post".
+
+The conditions are checked against the entry as a visitor reads it: its published values
+and the fields visitors may read, not your unpublished changes. An entry that was never
+published hides every conditioned block, and its line says so. A condition that can't be
+checked, for example on a field visitors can't see, hides its block from every visitor,
+and its line is red.
+
+Blocks inside a list's entries are checked against each entry the list draws, and blocks
+inside a placed component are drawn from the component, so both keep their
+**Conditional** badge while conditions are applied. Editing a component or a Layout that
+holds a conditioned block, the switch is shown but turned off: there's no entry to check against until the block is
+placed in a page or a template. The switch is yours for this session and is never saved.
+
 ## Help
 
 Help lists the keyboard shortcuts the editor has right now, read from the same list the

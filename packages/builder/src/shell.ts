@@ -406,6 +406,21 @@ export {
   usePreviewedEntry,
 } from "./previewed-entry";
 export type { PreviewedEntry } from "./previewed-entry";
+/**
+ * @experimental Visibility conditions applied for the entry a template is
+ * previewed with: what the host hands the canvas (`conditionsApplied`) and
+ * the Previewing strip's switch and count.
+ */
+export {
+  conditionedBlocksIn,
+  type AppliedConditions,
+  type ConditionsPreview,
+  type HiddenBlock,
+} from "./applied-conditions";
+export {
+  conditionsPreviewOf,
+  useAppliedConditions,
+} from "./use-applied-conditions";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";
 
