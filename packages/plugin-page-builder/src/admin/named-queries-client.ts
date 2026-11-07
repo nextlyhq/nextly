@@ -48,6 +48,7 @@ import {
   LIST_ENTRIES_ROUTE_PATH,
   type ListEntriesNamedRequest,
   type ListEntriesNamedResponse,
+  type ListEntriesVisitor,
 } from "../list-entries-contract";
 import {
   namedQueriesPath,
@@ -399,19 +400,31 @@ let runsFor: string | null | undefined;
  * the moment another person asks, every earlier person's runs are dropped
  * before anything is answered, as the canvas's list reads are. A failed read
  * of the sources is not kept, so the next asks again.
+ *
+ * With `visitor`, the document being edited, each run is made as a visitor
+ * of that document makes it, kept apart from the person's own runs.
  */
 export function canvasNamedQueriesIn(
   locale: string | undefined,
-  userId: string | null
+  userId: string | null,
+  visitor?: ListEntriesVisitor
 ): CanvasNamedQueries {
   if (runsFor !== userId) {
     BY_LANGUAGE.clear();
     runsFor = userId;
   }
-  const key = locale ?? "";
+  const key = JSON.stringify([
+    locale ?? "",
+    visitor?.collection ?? null,
+    visitor?.id ?? null,
+  ]);
   const known = BY_LANGUAGE.get(key);
   if (known !== undefined) return known;
-  const runs = canvasNamedRuns();
+  const runs = canvasNamedRuns(
+    visitor === undefined
+      ? runThrough
+      : body => runThrough({ ...body, visitor })
+  );
   let read: Promise<readonly CanvasCustomSource[]> | undefined;
   const sources = () => {
     if (read === undefined) {

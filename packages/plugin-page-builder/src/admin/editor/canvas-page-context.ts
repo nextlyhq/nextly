@@ -38,6 +38,7 @@ import {
 import { useCurrentUserId, useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState } from "react";
 
+import type { ListEntriesVisitor } from "../../list-entries-contract";
 import { canvasListReadsIn } from "../list-entries-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
 
@@ -133,7 +134,14 @@ export function useCanvasPageContext(
   /** The list the page splits into pages, which draws its first page's links. */
   pagedList?: string,
   /** The lists whose new source waits for an input, with each one's tag. */
-  listsStillShowing?: ReadonlyMap<string, string>
+  listsStillShowing?: ReadonlyMap<string, string>,
+  /**
+   * The document being edited while its visibility conditions are applied:
+   * its lists are then read as a visitor reads them, published entries and
+   * public fields only, so each item's conditions are judged as the
+   * published page judges them.
+   */
+  visitor?: ListEntriesVisitor
 ): PageContext {
   const readMedia = useMediaResolver();
   const budget = useMemo(canvasQueryBudget, []);
@@ -154,11 +162,11 @@ export function useCanvasPageContext(
   // The person's and language's one set of list reads, which the inspector's
   // count shares: the rows are read as the person signed in.
   const userId = useCurrentUserId();
-  const lists = canvasListReadsIn(locale, userId);
+  const lists = canvasListReadsIn(locale, userId, visitor);
   // The site's named queries, whose runs the server makes as that person:
   // until they are read, a list whose source is one draws its template, as
   // with no host.
-  const namedQueries = useCanvasNamedHost(locale, userId);
+  const namedQueries = useCanvasNamedHost(locale, userId, visitor);
   const base = useMemo(
     () =>
       createStandaloneContext({
@@ -234,22 +242,38 @@ export function namedHostRetryDelay(attempt: number): number {
  */
 function useCanvasNamedHost(
   locale: string | undefined,
-  userId: string | null
+  userId: string | null,
+  visitor: ListEntriesVisitor | undefined
 ): NamedQueryHost | undefined {
   const [found, setFound] = useState<{
     readonly locale: string | undefined;
     readonly userId: string | null;
+    readonly visitorKey: string | undefined;
     readonly host: NamedQueryHost;
   }>();
+  // The visitor by its parts, so a new object naming the same document asks
+  // for nothing again.
+  const visitorCollection = visitor?.collection;
+  const visitorId = visitor?.id;
+  const visitorKey =
+    visitorCollection === undefined || visitorId === undefined
+      ? undefined
+      : JSON.stringify([visitorCollection, visitorId]);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    canvasNamedQueriesIn(locale, userId)
+    canvasNamedQueriesIn(
+      locale,
+      userId,
+      visitorCollection === undefined || visitorId === undefined
+        ? undefined
+        : { collection: visitorCollection, id: visitorId }
+    )
       .host()
       .then(
         host => {
-          if (live) setFound({ locale, userId, host });
+          if (live) setFound({ locale, userId, visitorKey, host });
         },
         () => {
           // The shared read keeps no failure, so the next ask reads again.
@@ -264,11 +288,13 @@ function useCanvasNamedHost(
       live = false;
       if (retry !== undefined) clearTimeout(retry);
     };
-  }, [locale, userId, attempt]);
-  // The host for THIS person and language only, so one never draws another's.
+  }, [locale, userId, visitorCollection, visitorId, visitorKey, attempt]);
+  // The host for THIS person, language and visitor only, so one never draws
+  // another's.
   return found !== undefined &&
     found.locale === locale &&
-    found.userId === userId
+    found.userId === userId &&
+    found.visitorKey === visitorKey
     ? found.host
     : undefined;
 }
