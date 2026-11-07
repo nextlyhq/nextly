@@ -398,11 +398,18 @@ describe("the collection control", () => {
   });
 
   it("falls back to typing the slug when the pages slug cannot be read", () => {
-    pages = { data: undefined, error: new Error("refused") };
-    renderField("");
-    expect(screen.getByRole("textbox", { name: "Collection" })).toBeTruthy();
-    expect(screen.queryByRole("combobox")).toBeNull();
-    expect(screen.getByText(TYPE_SLUG_NOTE)).toBeTruthy();
+    // Refused, and answered without a slug: neither says what Pages is.
+    for (const answer of [
+      { data: undefined, error: new Error("refused") },
+      { data: null, error: null },
+    ]) {
+      pages = answer;
+      renderField("");
+      expect(screen.getByRole("textbox", { name: "Collection" })).toBeTruthy();
+      expect(screen.queryByRole("combobox")).toBeNull();
+      expect(screen.getByText(TYPE_SLUG_NOTE)).toBeTruthy();
+      cleanup();
+    }
   });
 
   it("asks whether a saved collection exists only where the list leaves it out", () => {
