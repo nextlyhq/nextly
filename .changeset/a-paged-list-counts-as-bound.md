@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A Collection list split into pages is counted, and pages, as the page draws it: where its number of items, entries to skip, collection or split into pages is bound to the page's entry, the route serves the pages the bound values make, so every page link under the list resolves.
+A Collection list split into pages is counted, and pages, as the page draws it: where its number of items, entries to skip, collection or split into pages is bound to the page's entry, the route serves the pages the bound values make, so every page link under the list resolves. A list split into pages only by a bound value pages too. `paginatedList` in `@nextlyhq/blocks-engine` takes an optional reader of a list's props, so a caller judges a list as drawn.

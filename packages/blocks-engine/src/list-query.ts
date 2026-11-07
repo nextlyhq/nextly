@@ -712,10 +712,17 @@ export interface PaginatedList {
  *
  * Bounded by `maxNodes`, and reading only plain records, because a stored
  * document is whatever the database returned.
+ *
+ * `propsOf` reads a list's props in place of the ones it stores, so a caller
+ * that fills a list's bindings judges it as drawn: a list whose split into
+ * pages is bound to an entry's value pages where that value is true, and the
+ * answer carries the props as read. Every other node is walked as stored.
  */
 export function paginatedList(
   nodes: readonly unknown[],
-  maxNodes: number = Number.MAX_SAFE_INTEGER
+  maxNodes: number = Number.MAX_SAFE_INTEGER,
+  propsOf: (list: Readonly<Record<string, unknown>>) => unknown = list =>
+    list.props
 ): PaginatedList | undefined {
   const stack: unknown[] = [...nodes].reverse();
   let left = maxNodes;
@@ -724,7 +731,8 @@ export function paginatedList(
     left -= 1;
     if (!isPlainRecord(node)) continue;
     if (node.type === COLLECTION_LIST_TYPE) {
-      const { query } = readListQuery(node.props);
+      const props = propsOf(node);
+      const { query } = readListQuery(props);
       if (
         query.paginate === true &&
         query.relation === undefined &&
@@ -735,7 +743,7 @@ export function paginatedList(
           ...(typeof node.name === "string" && node.name.trim() !== ""
             ? { name: node.name.trim() }
             : {}),
-          props: isPlainRecord(node.props) ? node.props : {},
+          props: isPlainRecord(props) ? props : {},
         };
       }
     }
