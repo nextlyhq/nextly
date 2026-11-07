@@ -261,10 +261,12 @@ the component.
 
 The Page Builder keeps a report of every document holding a binding that no
 longer fits what it reads, so authors can find and fix them after a schema
-change. A document is judged again each time it is saved, and every document
-is checked again once a collection's or a Single's fields, or a block's props,
-change: a background job notices the change and walks the site, a part at a
-time. Each row says which block and prop the binding fills, what it reads, the
+change. Each save marks its document, and a background job judges it as
+stored, soon after; every document is checked again once a collection's or a
+Single's fields, a block's props, a component or a Layout change, the job
+walking the site a part at a time. A page is judged with the components it
+places and its Layout's regions, against its own entry, as its published page
+draws them. Each row says which block and prop the binding fills, what it reads, the
 codes above, and what a visitor sees instead: the binding's fallback, the
 block's own value, or nothing for a prop the block no longer has.
 

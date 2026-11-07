@@ -34,6 +34,12 @@ export interface FingerprintSources {
   readonly collections: () => Promise<readonly unknown[]>;
   readonly singles: () => Promise<readonly unknown[]>;
   readonly blocks: () => readonly BlockRow[];
+  /**
+   * When a component or a Layout was last saved: a placed component's, or a
+   * Layout region's, bindings read the entry of each page drawing it, so a
+   * change to one is judged on every page.
+   */
+  readonly designs?: () => Promise<string>;
 }
 
 /** One record's part: its slug and what says its fields changed. */
@@ -59,9 +65,10 @@ function recordPart(kind: string, row: unknown): string {
 export async function schemaFingerprint(
   sources: FingerprintSources
 ): Promise<string> {
-  const [collections, singles] = await Promise.all([
+  const [collections, singles, designs] = await Promise.all([
     sources.collections(),
     sources.singles(),
+    sources.designs?.() ?? Promise.resolve(""),
   ]);
   const parts = [
     ...collections.map(row => recordPart("c", row)),
@@ -69,6 +76,7 @@ export async function schemaFingerprint(
     ...sources
       .blocks()
       .map(block => `b:${block.name}:${JSON.stringify(block.props ?? {})}`),
+    `d:${designs}`,
   ].sort();
   return hashId(parts.join("\n"));
 }

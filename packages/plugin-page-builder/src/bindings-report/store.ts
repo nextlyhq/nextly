@@ -8,13 +8,24 @@
  * every page each time. A document is judged again when it is saved, and every
  * document when the schema it is judged against changes.
  *
- * A document judged whole keeps its row, with no issues: the time it was
- * judged is what stops a slower check of every document, which read the
- * document before a save fixed it, from putting back what the save removed.
+ * Each write to a document marks its row dirty with a fresh token, and one
+ * judgement at a time settles it: the row's issues are replaced, and the mark
+ * cleared, only while the token is still the one the judgement read. A write
+ * made meanwhile, or a judgement that failed, leaves the row dirty to be
+ * judged again, so the report never keeps an answer older than the document.
+ * The check of every document leaves a dirty row to that judgement.
  *
  * @module bindings-report/store
  */
-import { and, asc, desc, eq, lt } from "@nextlyhq/plugin-sdk/db";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  isNotNull,
+  isNull,
+  lt,
+} from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -31,11 +42,17 @@ const FULL_CHECK = "full";
 const LIST_PAGE = 500;
 
 /**
- * How much earlier than a check's read a row must have been judged for the
- * check to replace it: a timestamp column may keep whole seconds, so a save
- * judged in the same second as the read could otherwise read as older.
+ * How much earlier than a complete check's start a row must have been judged
+ * to count as one the check no longer found: a timestamp column may keep
+ * whole seconds.
  */
 const CLOCK_GRAIN_MS = 1000;
+
+/** A document waiting to be judged, and the mark its judgement must still find. */
+export interface DirtyDocument {
+  readonly document: ReportedDocument;
+  readonly token: string;
+}
 
 /** Where the check of every document stands. */
 export interface FullCheck {
@@ -70,15 +87,25 @@ export interface StoredDocumentReport extends ReportedDocument {
 /** The report's store. */
 export interface BindingReportStore {
   /**
-   * Record a document's rows, replacing its last. With `readAt`, as a check
-   * of every document records: only when the row was judged before that read,
-   * so a save judged since is kept.
+   * Record a document's rows, as the check of every document judged them;
+   * a row marked dirty is left to the judgement that settles it.
    */
   record(
     document: ReportedDocument,
-    rows: readonly BindingReportRow[],
-    readAt?: Date
+    rows: readonly BindingReportRow[]
   ): Promise<void>;
+  /** Mark a document to be judged again, with a fresh token. */
+  markDirty(document: ReportedDocument): Promise<void>;
+  /** Up to `limit` documents marked to be judged again. */
+  dirty(limit: number): Promise<DirtyDocument[]>;
+  /**
+   * Settle a marked document with its rows; `false`, changing nothing, when
+   * it was marked again since `token` was read.
+   */
+  settle(
+    marked: DirtyDocument,
+    rows: readonly BindingReportRow[]
+  ): Promise<boolean>;
   /** Every document with a broken binding, newest judged first. */
   list(): Promise<StoredDocumentReport[]>;
   /** One document's row, when it has a broken binding. */
@@ -156,7 +183,7 @@ export function bindingReportStore(
   };
 
   return {
-    record: async (document, rows, readAt) => {
+    record: async (document, rows) => {
       const keyed = eq(issues().documentKey, document.documentKey);
       const values = {
         kind: document.kind,
@@ -166,26 +193,78 @@ export function bindingReportStore(
         issues: rows,
         updatedAt: new Date(),
       };
-      if (readAt === undefined) {
-        if ((await db.update(bindingIssues, values).where(keyed)) > 0) return;
-        if (await insert({ documentKey: document.documentKey, ...values })) {
-          return;
-        }
-        await db.update(bindingIssues, values).where(keyed);
-        return;
-      }
-      // Fenced: only a row judged before the read this check made.
-      const before = new Date(readAt.getTime() - CLOCK_GRAIN_MS);
-      const replaced = await db
-        .update(bindingIssues, values)
-        .where(and(keyed, lt(issues().updatedAt, before)) ?? keyed);
-      if (replaced > 0) return;
-      // No row older than the read: none at all, or one a save judged since,
-      // which the insert then meets and leaves.
+      // A row a write marked is the judgement's to settle.
+      const clean = and(keyed, isNull(issues().dirty)) ?? keyed;
+      if ((await db.update(bindingIssues, values).where(clean)) > 0) return;
       const held = await db.select(bindingIssues).where(keyed).first();
       if (held === null) {
         await insert({ documentKey: document.documentKey, ...values });
       }
+    },
+
+    markDirty: async document => {
+      const keyed = eq(issues().documentKey, document.documentKey);
+      const token = crypto.randomUUID();
+      if ((await db.update(bindingIssues, { dirty: token }).where(keyed)) > 0) {
+        return;
+      }
+      if (
+        await insert({
+          documentKey: document.documentKey,
+          kind: document.kind,
+          slug: document.slug,
+          documentId: document.documentId ?? null,
+          place: document.place,
+          issues: [],
+          dirty: token,
+        })
+      ) {
+        return;
+      }
+      await db.update(bindingIssues, { dirty: token }).where(keyed);
+    },
+
+    dirty: async limit => {
+      const found = await db
+        .select(bindingIssues)
+        .where(isNotNull(issues().dirty))
+        .orderBy(asc(issues().updatedAt))
+        .limit(limit)
+        .all();
+      return found.flatMap(row =>
+        row.dirty === null
+          ? []
+          : [
+              {
+                document: {
+                  documentKey: row.documentKey,
+                  kind: row.kind === "single" ? "single" : "collection",
+                  slug: row.slug,
+                  ...(row.documentId === null
+                    ? {}
+                    : { documentId: row.documentId }),
+                  place: row.place,
+                },
+                token: row.dirty,
+              },
+            ]
+      );
+    },
+
+    settle: async (marked, rows) => {
+      const where =
+        and(
+          eq(issues().documentKey, marked.document.documentKey),
+          eq(issues().dirty, marked.token)
+        ) ?? eq(issues().dirty, marked.token);
+      const settled = await db
+        .update(bindingIssues, {
+          issues: rows,
+          dirty: null,
+          updatedAt: new Date(),
+        })
+        .where(where);
+      return settled > 0;
     },
 
     list: async () => {
@@ -215,7 +294,11 @@ export function bindingReportStore(
 
     dropCheckedBefore: async at => {
       const before = new Date(at.getTime() - CLOCK_GRAIN_MS);
-      await db.delete(bindingIssues).where(lt(issues().updatedAt, before));
+      // Not a row a write marked since: that document is there to judge.
+      const stale = lt(issues().updatedAt, before);
+      await db
+        .delete(bindingIssues)
+        .where(and(stale, isNull(issues().dirty)) ?? stale);
     },
 
     fullCheck: async () => {
