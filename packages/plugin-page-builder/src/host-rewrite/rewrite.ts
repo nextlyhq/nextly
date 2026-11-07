@@ -30,6 +30,7 @@ import {
   type HostStep,
   type LeftHost,
   type LeftReason,
+  type PlannedHostWrite,
   type RewriteReport,
   type StepOutcome,
 } from "./contract";
@@ -198,6 +199,12 @@ export interface RewriteArgs {
    * rewrite and leave. Progress and phase are untouched.
    */
   readonly dryRun?: boolean;
+  /**
+   * With `dryRun`, report each write with the body it sends
+   * (`RewriteReport.writes`). Off by default: every body is held until the
+   * call ends, so only a caller walking a few documents a call asks.
+   */
+  readonly plannedWrites?: boolean;
 }
 
 /** How many times a host changing under the rewrite is read again by default. */
@@ -215,7 +222,7 @@ type HostResult =
 /** The report being built over one call. */
 interface Tally {
   rewritten: HostAddress[];
-  statuses: { host: HostAddress; status: string }[];
+  writes: PlannedHostWrite[];
   unchanged: HostAddress[];
   left: LeftHost[];
   caught: HostAddress[];
@@ -248,7 +255,7 @@ export async function rewriteHosts(
   }
   const tally: Tally = {
     rewritten: [],
-    statuses: [],
+    writes: [],
     unchanged: [],
     left: [],
     caught: [],
@@ -274,7 +281,9 @@ function report(walk: Walk, finished: boolean): RewriteReport {
     unchanged: walk.tally.unchanged,
     left: walk.tally.left,
     caughtByFinalWalk: walk.tally.caught,
-    statuses: walk.tally.statuses,
+    ...(walk.args.dryRun === true && walk.args.plannedWrites === true
+      ? { writes: walk.tally.writes }
+      : {}),
     finished,
   };
 }
@@ -468,14 +477,29 @@ async function attemptHost(
   if (candidate.access !== "write") {
     return { kind: "left", reason: "unaddressable" };
   }
-  if (decision.write.publishAs !== undefined) {
-    walk.tally.statuses.push({
-      host: candidate.host,
-      status: decision.write.publishAs,
-    });
+  if (!writes) {
+    // Kept only in a dry run that asks for them: a real run's values are
+    // not held past their write, and a long dry walk holds none.
+    if (walk.args.plannedWrites === true)
+      recordWrite(walk, candidate, decision);
+    return written(decision);
   }
-  if (!writes) return written(decision);
   return writtenBy(await walk.deps.write(decision.write), decision);
+}
+
+/** Hold one write a dry run would make, with the body it sends. */
+function recordWrite(
+  walk: Walk,
+  candidate: HostCandidate,
+  decision: Extract<Decision, { kind: "write" }>
+): void {
+  walk.tally.writes.push({
+    host: candidate.host,
+    value: decision.write.value,
+    ...(decision.write.publishAs === undefined
+      ? {}
+      : { status: decision.write.publishAs }),
+  });
 }
 
 /** What a write's result comes to for its host. */

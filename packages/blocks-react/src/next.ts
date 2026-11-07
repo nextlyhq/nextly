@@ -26,8 +26,8 @@ import {
   hashId,
   isFetchableUrl,
   isListDay,
-  isPlainRecord,
   DOCUMENT_FORMAT_VERSION,
+  mayPaginateList,
   paginatedList,
   type PaginatedList,
   regionDocument,
@@ -94,8 +94,13 @@ import {
   listEntryCount,
   listPagesOf,
   listWillRead,
+  namedListBase,
 } from "./blocks/list-read";
-import { namedQueryFailureLine } from "./blocks/named-read";
+import {
+  namedQueryFailureLine,
+  queryRowFields,
+  readNamedList,
+} from "./blocks/named-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -131,6 +136,7 @@ import type {
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
 import {
+  anyListWhere,
   listCollections,
   listCollectionsWhere,
   listPropsAsBound,
@@ -597,22 +603,6 @@ function pagedListOf(
 }
 
 /**
- * Whether the page's stored document could split a list into pages: one
- * split as stored, or one whose split is bound to the entry, which only the
- * page's binding pass can settle. Asked before anything is read, so a page
- * with neither costs the route nothing.
- */
-function mayPageAList(document: BlockDocument, maxNodes: number): boolean {
-  return (
-    paginatedList(document.nodes, maxNodes, list =>
-      isPlainRecord(list.bindings) && "paginate" in list.bindings
-        ? { ...(isPlainRecord(list.props) ? list.props : {}), paginate: true }
-        : list.props
-    ) !== undefined
-  );
-}
-
-/**
  * The collection lists in `nodes`, as drawn, by id: the first of each id in
  * document order. Bounded by `maxNodes`.
  */
@@ -658,6 +648,38 @@ function listPageFor(
     // The route's count, where it served this later page by one.
     ...(context.listPages === undefined ? {} : { pages: context.listPages }),
   };
+}
+
+/**
+ * The page of its paginated list a render draws, with the list's first read
+ * claimed for it, or nothing where the route serves no later pages (a
+ * Single's gives no addresses, so its list shows one page and claims its
+ * own read) or the list's read cannot be claimed, as the route then serves
+ * none of its later pages either.
+ *
+ * Claimed only for a list that reads: one with no collection yet, or a
+ * stored query it cannot run, spends nothing another list needs. A custom
+ * source claims nothing ahead: its run claims each read it makes, as the
+ * route's count of its pages claimed them.
+ */
+function claimedListPage(
+  list: PaginatedList | undefined,
+  context: RenderContext,
+  budget: QueryBudget
+): ListPageContext | undefined {
+  if (
+    list === undefined ||
+    context.listPagePath === undefined ||
+    !listWillRead(list.props)
+  ) {
+    return undefined;
+  }
+  if (namedListBase(list.props) !== undefined) {
+    return listPageFor(list, context);
+  }
+  if (!budget.take()) return undefined;
+  const page = listPageFor(list, context);
+  return page === undefined ? undefined : { ...page, claimed: true };
 }
 
 /**
@@ -937,6 +959,44 @@ function namedQueryHostFor(args: {
       );
     },
   };
+}
+
+/**
+ * How many pages a paginated list whose source is a named query has, from
+ * its run's total by the list's own window (`listPagesOf`, the collection
+ * list's count), or `undefined` for a list with another source.
+ *
+ * The run is the one the list's first page makes: the same host (frame,
+ * reader and cache), window, inputs and language, so a result the host
+ * kept serves both, and its reads are claimed from `budget` as the render
+ * claims them, as they are made or replayed. A run that fails, or returns
+ * no total, gives one page: the list draws its empty state, so no later
+ * page exists, and no count is guessed. The failure is logged here, through
+ * the host's own report: the later page asked for is then not found, so no
+ * render follows that would log it.
+ */
+async function namedListPages(
+  list: PaginatedList,
+  host: NamedQueryHost,
+  budget: QueryBudget,
+  locale: string | undefined
+): Promise<number | undefined> {
+  const base = namedListBase(list.props);
+  if (base === undefined) return undefined;
+  if ("blocking" in base) return 1;
+  const outcome = await readNamedList(
+    base.named,
+    { limit: base.limit, offset: base.offset },
+    {
+      ...createStandaloneContext({ locale, queries: budget }),
+      namedQueries: host,
+    },
+    list.id,
+    { counted: true }
+  );
+  return outcome.failed || outcome.total === undefined
+    ? 1
+    : listPagesOf(list.props, outcome.total);
 }
 
 /** The instance's Single read, when the reader the route holds has one. */
@@ -2374,6 +2434,38 @@ async function readSite(
   budget: QueryBudget,
   window: number | false | undefined
 ): Promise<BlocksSiteSettings | undefined> {
+  // One read per page request: the bindings, the lists' zone and a named
+  // query's day all ask the same question, and a request holds one budget,
+  // so the first ask claims the read and the rest share its answer.
+  const key = cacheScope ?? "";
+  let asked = siteReadsByRequest.get(budget);
+  if (asked === undefined) {
+    asked = new Map();
+    siteReadsByRequest.set(budget, asked);
+  }
+  const known = asked.get(key);
+  if (known !== undefined) return await known;
+  const reading = readSiteOnce(from, cacheScope, budget, window);
+  asked.set(key, reading);
+  return await reading;
+}
+
+/**
+ * The site-settings reads a page request has made, by its query budget (one
+ * per request) and cache scope: dropped with the request's budget.
+ */
+const siteReadsByRequest = new WeakMap<
+  QueryBudget,
+  Map<string, Promise<BlocksSiteSettings | undefined>>
+>();
+
+/** One read of the site settings, claimed from `budget`. */
+async function readSiteOnce(
+  from: PublicSiteSettingsSource | undefined,
+  cacheScope: string | undefined,
+  budget: QueryBudget,
+  window: number | false | undefined
+): Promise<BlocksSiteSettings | undefined> {
   if (from instanceof ProcessSiteSettings) warnOfStandIn(from);
   if (!budget.take()) return undefined;
   try {
@@ -2395,14 +2487,16 @@ async function readSite(
  */
 function listsComparingDays(
   documents: readonly BlockDocument[],
-  run: BindingRun | undefined
+  run: BindingRun | undefined,
+  namedQueries: NamedQueryLookup | undefined
 ): Set<string> {
   return listCollectionsWhere(
     documents,
     (query, list) =>
       query.filters.some(row => isListDay(row.value)) ||
       conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).any,
-    run
+    run,
+    namedQueries
   );
 }
 
@@ -2417,22 +2511,53 @@ function listsComparingDays(
 function listsNeedZone(
   documents: readonly BlockDocument[],
   run: BindingRun | undefined,
-  shapesOf: (collection: string) => readonly BindingFieldShape[] | undefined
+  shapesOf: (collection: string) => readonly BindingFieldShape[] | undefined,
+  namedQueries: NamedQueryLookup | undefined
 ): boolean {
   return (
     listCollectionsWhere(
       documents,
-      (query, list) =>
+      (query, list, collection) =>
         query.filters.some(row => isListDay(row.value)) ||
         ordersADay(
           conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
             new Set(),
-          query.collection === undefined
-            ? undefined
-            : shapesOf(query.collection)
+          shapesOf(collection)
         ),
-      run
+      run,
+      namedQueries
     ).size > 0
+  );
+}
+
+/**
+ * Whether a list whose source is a named query with rows of its own schema
+ * orders a date in its item conditions, and so needs the site's zone: such a
+ * list draws no collection, so the collections' walk never asks about it.
+ * Its fields are the ones its conditions are judged by (`queryRowFields`).
+ */
+function customRowsNeedZone(
+  documents: readonly BlockDocument[],
+  run: BindingRun | undefined,
+  namedQueries: NamedQueryLookup | undefined
+): boolean {
+  if (namedQueries === undefined) return false;
+  return anyListWhere(
+    documents,
+    (query, list) => {
+      const name = query.namedQuery?.name;
+      const rows =
+        name === undefined ? undefined : namedQueries.definitionOf(name)?.rows;
+      if (name === undefined || rows === undefined || !("fields" in rows)) {
+        return false;
+      }
+      return ordersADay(
+        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
+          new Set(),
+        queryRowFields(namedQueries, name, () => undefined)
+      );
+    },
+    run
   );
 }
 
@@ -2468,8 +2593,11 @@ async function listDayInputs(args: {
     args.bindings === undefined
       ? undefined
       : pageBindingRun(args.bindings, args.context.locale, args.resolver);
-  const collections = listsComparingDays(args.documents, run);
-  if (collections.size === 0) return {};
+  // A custom source's items are read as its rows' collection's.
+  const namedQueries = args.config.namedQueries;
+  const collections = listsComparingDays(args.documents, run, namedQueries);
+  const customDays = customRowsNeedZone(args.documents, run, namedQueries);
+  if (collections.size === 0 && !customDays) return {};
   const cache: ReadCache = {
     scope: args.config.cacheScope ?? "",
     locale: args.context.locale,
@@ -2484,11 +2612,16 @@ async function listDayInputs(args: {
     }
   }
   // Asked once the shapes are known, so only a date compared needs the zone.
-  const timeZone = listsNeedZone(args.documents, run, collection =>
-    known.get(collection)
-  )
-    ? await listZone(args)
-    : undefined;
+  const timeZone =
+    customDays ||
+    listsNeedZone(
+      args.documents,
+      run,
+      collection => known.get(collection),
+      namedQueries
+    )
+      ? await listZone(args)
+      : undefined;
   return {
     ...(timeZone === undefined ? {} : { timeZone }),
     fieldShapes: {
@@ -2653,6 +2786,13 @@ export interface BindingSourcesArgs {
    * from `documents`.
    */
   readonly lists?: readonly string[];
+  /**
+   * The site's named queries, so a custom source's list is asked about the
+   * collection its rows are entries of, whose fields its items bind by,
+   * where `lists` is read from `documents`. Undefined, such a list's items
+   * are judged by their values.
+   */
+  readonly namedQueries?: NamedQueryLookup | undefined;
   /** Whether the page's entry is a collection's entry or a Single. */
   readonly entrySource: "collection" | "single";
   /** The collection, or the Single, the page's entry belongs to. */
@@ -2716,7 +2856,9 @@ export async function readBindingSources(
     args.entrySource === "single"
       ? { single: args.slug }
       : { collection: args.slug };
-  const lists = args.lists ?? [...listCollections(args.documents)];
+  const lists = args.lists ?? [
+    ...listCollections(args.documents, args.namedQueries),
+  ];
   const shapes = await readFieldShapes(entryRef, demand, lists, {
     scope: args.cacheScope ?? "",
     locale: args.locale,
@@ -2988,6 +3130,8 @@ async function readPageInputs(args: {
     siteSettings: siteSettingsSourceFor(config),
     ...(config.timeZone === undefined ? {} : { timeZone: config.timeZone }),
     ...(args.window === undefined ? {} : { window: args.window }),
+    // A custom source's items bind as entries of its rows' collection.
+    namedQueries: config.namedQueries,
     ...(conditioned
       ? { conditions: conditionDemand(readingDocs.flatMap(doc => doc.nodes)) }
       : {}),
@@ -3282,7 +3426,10 @@ function blocksRouteConfig(
       // Nothing is read for a page whose stored document neither splits a
       // list into pages nor binds a list's split: composing it cannot add
       // one its own nodes do not hold.
-      if (!mayPageAList(document, effectiveLimits(config).maxNodes)) {
+      if (
+        mayPaginateList(document.nodes, effectiveLimits(config).maxNodes) ===
+        undefined
+      ) {
         return null;
       }
       // Counted under the page's read allowance, spent in the render's own
@@ -3327,6 +3474,22 @@ function blocksRouteConfig(
         window: listWindow,
         context,
       });
+      // A custom source counts its pages from its run's total, as the
+      // render runs it. Its reads claim from the allowance as they are
+      // made, so nothing is claimed ahead of the run.
+      const namedPages = await namedListPages(
+        list,
+        namedQueryHostFor({
+          config,
+          locale: context.locale,
+          window: listWindow,
+          budget,
+          context,
+        }),
+        budget,
+        context.locale
+      );
+      if (namedPages !== undefined) return namedPages;
       // The list's first read, claimed where the render claims it: after
       // the page's inputs and day terms, before any block is drawn.
       if (!budget.take()) return 1;
@@ -3480,22 +3643,12 @@ function blocksRouteConfig(
           ? undefined
           : pageBindingRun(bindings, context.locale, resolver)
       );
-      // Claimed only for a list that reads: one with no collection yet, or
-      // a stored query it cannot run, spends nothing another list needs.
-      const listPage =
-        pagedList !== undefined &&
-        context.listPagePath !== undefined &&
-        listWillRead(pagedList.props) &&
-        budget.take()
-          ? listPageFor(pagedList, context)
-          : undefined;
+      const listPage = claimedListPage(pagedList, context, budget);
       const shared: SharedRendererProps = {
         context: {
           ...pageContext,
           ...listDays,
-          ...(listPage === undefined
-            ? {}
-            : { listPage: { ...listPage, claimed: true } }),
+          ...(listPage === undefined ? {} : { listPage }),
         },
         blocks: resolver,
         styleContext,

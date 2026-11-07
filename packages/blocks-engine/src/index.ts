@@ -1355,6 +1355,7 @@ export {
   namesListSource,
   listRelationTarget,
   listSortText,
+  mayPaginateList,
   namedQueryHiddenReads,
   outerListOf,
   paginatedList,

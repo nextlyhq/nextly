@@ -9,6 +9,7 @@ import {
   completedCondition,
   conditionChoices,
   conditionFieldsOf,
+  conditionFieldsOfShapes,
   conditionLine,
   conditionSentence,
   valueOpFor,
@@ -199,5 +200,28 @@ describe("empty text", () => {
       "missing" in
         completedCondition({ field: "title", op: "contains", value: "" }, title)
     ).toBe(true);
+  });
+});
+
+describe("a custom source's own row fields, as conditions check them", () => {
+  it("offers a choice field's declared options to choose between", () => {
+    const [tier] = conditionFieldsOfShapes([
+      { name: "tier", type: "select", options: ["gold", "silver"] },
+    ]);
+    expect(tier?.kind).toBe("choice");
+    expect(tier?.options).toEqual([
+      { value: "gold", label: "gold" },
+      { value: "silver", label: "silver" },
+    ]);
+  });
+
+  it("takes a day-only date as a day", () => {
+    const [day, at] = conditionFieldsOfShapes([
+      { name: "on", type: "date", dateOnly: true },
+      { name: "at", type: "date" },
+    ]);
+    expect(day?.dateOnly).toBe(true);
+    // The control: a date with a time is not marked.
+    expect(at?.dateOnly).toBeUndefined();
   });
 });

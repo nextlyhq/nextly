@@ -2766,7 +2766,7 @@ function readCustomSources(
  * then offers collections and related entries, as it did before there were
  * custom sources.
  */
-function useCustomSources(
+export function useCustomSources(
   list: ListCustomSources | undefined
 ): readonly CustomSource[] | undefined {
   const [found, setFound] = React.useState<{
