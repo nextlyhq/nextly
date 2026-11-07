@@ -48,8 +48,8 @@ const SOURCES: readonly BindingFieldSource[] = [
       { name: "title", type: "text", public: true, preview: "Spring sale" },
       { name: "internalNote", type: "text", public: false },
       { name: "lede", type: "text", public: true, draft: true },
-      // A date reaches text only through a format, which this picker can't
-      // set yet: not offered.
+      // A date reaches text only through a format: offered with the one a
+      // pick writes, named beside it.
       { name: "publishedOn", type: "date", public: true },
       // A relation itself can't fill text, but its own fields can.
       {
@@ -161,6 +161,7 @@ describe("the field picker", () => {
       "TitleSpring sale",
       "Internal noteNot public",
       "LedeDraft",
+      "Published onLong date",
       "Author › NameAda",
     ]);
     expect(within(list).getByRole("group", { name: "Site" })).toBeTruthy();
@@ -210,6 +211,127 @@ describe("the field picker", () => {
       kind: "update",
       id: "a",
       patch: { bindings: { label: { $bind: "title" } } },
+    });
+  });
+});
+
+describe("a date or a number picked for a text prop", () => {
+  it("is offered with the format a pick writes, named in the option", async () => {
+    mount(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    const date = await screen.findByRole("option", {
+      name: /^Published on.*Long date$/,
+    });
+    expect(date).toBeTruthy();
+    // The control: a text field fills the prop as it is, and names none.
+    const title = screen.getByRole("option", { name: /^Title/ });
+    expect(title.textContent).not.toMatch(/Long date|Number/);
+  });
+
+  it("writes the binding with Long date, in one edit", async () => {
+    const editor = mount(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: /^Published on/ })
+    );
+    expect(vi.mocked(editor.apply)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {
+        bindings: {
+          label: {
+            $bind: "publishedOn",
+            format: { type: "date", options: { dateStyle: "long" } },
+          },
+        },
+      },
+    });
+  });
+
+  it("writes a number's binding with Number", async () => {
+    const editor = mount(undefined, {
+      listBindingFields: async () => [
+        {
+          binding: { source: "entry" },
+          label: "Post",
+          fields: [{ name: "price", type: "number", public: true }],
+        },
+      ],
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind Text to a field" })
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: /^Price.*Number$/ })
+    );
+    expect(vi.mocked(editor.apply).mock.calls[0]?.[0]).toMatchObject({
+      patch: {
+        bindings: { label: { $bind: "price", format: { type: "number" } } },
+      },
+    });
+  });
+
+  it("writes no format for a date filling a date prop", async () => {
+    // The control: a date prop takes a date as it is, so nothing is added.
+    registerBlocks(
+      [
+        {
+          name: "acme/event",
+          version: 1,
+          description: "An event.",
+          example: { props: {} },
+          editor: { label: "Event" },
+          props: { when: { label: "When", role: "content", type: "date" } },
+          defaultProps: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "binding-controls-date-prop-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "e", type: "acme/event", version: 1, props: {} }],
+    } as BlockDocument;
+    const apply = vi.fn((_op: BuilderOp) => document);
+    render(
+      <InspectorPanel
+        editor={
+          {
+            document,
+            selectedId: "e",
+            selection: { ids: ["e"], primary: "e" },
+            applyAll: vi.fn(() => document),
+            select: vi.fn(),
+            apply,
+            undo: vi.fn(),
+            redo: vi.fn(),
+            canUndo: false,
+            canRedo: false,
+            undoDepth: 0,
+            composed: () => undefined,
+          } as unknown as EditorState
+        }
+        contentServices={{ listBindingFields: async () => SOURCES }}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Bind When to a field" })
+    );
+    const option = await screen.findByRole("option", {
+      name: /^Published on/,
+    });
+    expect(option.textContent).not.toMatch(/Long date/);
+    fireEvent.click(option);
+    expect(apply.mock.calls[0]?.[0]).toEqual({
+      kind: "update",
+      id: "e",
+      patch: { bindings: { when: { $bind: "publishedOn" } } },
     });
   });
 });

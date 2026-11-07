@@ -188,6 +188,36 @@ function heldAs(field: BindingFieldShape): string {
   return bindingKindOf(field) === "date" ? "A date" : "A number";
 }
 
+/** The preset a bind starts from, for each kind of value that needs one. */
+const BIND_DEFAULTS: Readonly<Record<string, string>> = {
+  date: "date-long",
+  number: "number",
+};
+
+/**
+ * The format the inspector writes when it binds a text prop to a date or a
+ * number, which reaches text only through one: Long date, or Number. Taken
+ * from the presets the engine accepts for this field, so a field holding a
+ * month, or a time of day, starts from the first it can show instead.
+ * `undefined` for a pairing that needs no format, or can take none.
+ *
+ * The inspector's starting point, not the engine's: a bind written through
+ * the API with no format is still refused.
+ */
+export function defaultFormatFor(
+  kind: BindablePropKind | undefined,
+  field: BindingFieldShape
+): { readonly label: string; readonly format: BindingFormat } | undefined {
+  const offered = offeredPresets(kind, field);
+  const wanted = BIND_DEFAULTS[bindingKindOf(field) ?? ""];
+  const preset =
+    offered.find(each => each.key === wanted) ??
+    offered.find(each => each.key !== CURRENCY);
+  return preset === undefined
+    ? undefined
+    : { label: preset.label, format: preset.format };
+}
+
 /**
  * Whether a bound prop gets a Format row: a text prop bound to a date or a
  * number, the pairing that shows nothing without one.

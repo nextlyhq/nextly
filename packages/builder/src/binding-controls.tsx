@@ -48,7 +48,11 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { BindingFormatField, offersFormat } from "./binding-format-field";
+import {
+  BindingFormatField,
+  defaultFormatFor,
+  offersFormat,
+} from "./binding-format-field";
 import { bindOp, unbindOp } from "./binding-ops";
 import type {
   BindingFieldChoice,
@@ -69,25 +73,39 @@ interface FieldOption extends ListedChoice {
   readonly field: BindingFieldChoice;
   /** The relation or group it sits in, named, for a field one step in. */
   readonly parent?: string;
+  /**
+   * The format a pick writes, for a date or a number filling a text prop,
+   * which reaches it only through one; named in the option.
+   */
+  readonly format?: { readonly label: string; readonly format: BindingFormat };
 }
 
-/** The binding a pick writes: the path, and the source when not the entry. */
+/**
+ * The binding a pick writes: the path, the source when not the entry, and
+ * the format the option names, where it names one.
+ */
 function bindingFor(option: FieldOption, kept: Binding | undefined): Binding {
   const source = option.source.binding;
-  const fallback =
-    kept !== undefined && "fallback" in kept ? { fallback: kept.fallback } : {};
+  // The fallback is kept across a change of field, and the option's format
+  // is written with the pick, so a date or a number shows from the start.
+  const carried = {
+    ...(kept !== undefined && "fallback" in kept
+      ? { fallback: kept.fallback }
+      : {}),
+    ...(option.format === undefined ? {} : { format: option.format.format }),
+  };
   if (source.source === "single") {
     return {
       $bind: option.path,
       source: "single",
       sourceKey: source.sourceKey,
-      ...fallback,
+      ...carried,
     };
   }
   return {
     $bind: option.path,
     ...(source.source === "entry" ? {} : { source: source.source }),
-    ...fallback,
+    ...carried,
   };
 }
 
@@ -137,18 +155,26 @@ function fittingOptions(
     for (const field of source.fields) {
       const label = choiceLabel(field);
       if (fits(field, prop)) {
-        options.push(option(source, group, field, field.name, label));
+        options.push(
+          withFormatOnBind(
+            option(source, group, field, field.name, label),
+            prop
+          )
+        );
       }
       for (const inner of field.fields ?? []) {
         if (!fits(inner, prop)) continue;
         options.push(
-          option(
-            source,
-            group,
-            inner,
-            `${field.name}.${inner.name}`,
-            choiceLabel(inner),
-            label
+          withFormatOnBind(
+            option(
+              source,
+              group,
+              inner,
+              `${field.name}.${inner.name}`,
+              choiceLabel(inner),
+              label
+            ),
+            prop
           )
         );
       }
@@ -158,14 +184,39 @@ function fittingOptions(
 }
 
 /**
- * Whether a field fills the prop as it is: one that needs a format to (a
- * date or a number into text) waits for the Format control, since a binding
- * without one shows its fallback.
+ * Whether a field fills the prop: as it is, or, for a date or a number into
+ * text, with the format a pick writes (see {@link formatOnBind}). One that
+ * fills it neither way is not offered, since a binding to it shows its
+ * fallback.
  */
 function fits(field: BindingFieldChoice, prop: EditableProp): boolean {
   return (
-    canBindFieldToProp(field, prop.schema) && fieldFitsProp(field, prop.schema)
+    canBindFieldToProp(field, prop.schema) &&
+    (fieldFitsProp(field, prop.schema) ||
+      formatOnBind(field, prop) !== undefined)
   );
+}
+
+/**
+ * The format a pick of `field` writes: the inspector's starting preset where
+ * the field fills the prop only through a format, none where it fills it as
+ * it is.
+ */
+function formatOnBind(
+  field: BindingFieldChoice,
+  prop: EditableProp
+): FieldOption["format"] {
+  if (fieldFitsProp(field, prop.schema)) return undefined;
+  return defaultFormatFor(bindablePropKind(prop.schema), field);
+}
+
+/** An option with the format its pick writes, where it writes one. */
+function withFormatOnBind(
+  choice: FieldOption,
+  prop: EditableProp
+): FieldOption {
+  const format = formatOnBind(choice.field, prop);
+  return format === undefined ? choice : { ...choice, format };
 }
 
 /** One option, with its text as the list searches it and a reader hears it. */
@@ -200,6 +251,11 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
         )}
         {choiceLabel(field)}
       </span>
+      {/* The format a pick writes, said quietly beside the name and read
+          with it, so the author knows the value will be formatted. */}
+      {option.format === undefined ? null : (
+        <span className="nx-binding-option__tag">{option.format.label}</span>
+      )}
       {/* Words, not a colour or an icon alone: each is part of the option's
           own text, so a screen reader announces it with the field. */}
       {!field.public ? (
