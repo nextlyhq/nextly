@@ -312,23 +312,26 @@ function unreadableOf(
   return marked.fallback === undefined ? {} : { fallback: marked.fallback };
 }
 
+/** Where a node's bindings read, as {@link readsOf} names it. */
+type NodeReads = Exclude<ReturnType<typeof readsOf>, UnbindNeeds>;
+
 /**
- * What a visitor sees of `prop` on block `nodeId`, read as the published page
- * reads it: through its own binding pipeline, with the public reader. `keep`
- * names the entry, or the list item, a value varies by; a page's own entry is
- * the page itself, and a template's has to be named.
+ * The visitor's binding pass over the node alone, read through the published
+ * page's own pipeline with the public reader; `undefined` where the node's
+ * bindings read nothing.
  */
-async function visitorViewOf(
+async function visitorRun(
   source: UnbindSource,
-  document: BlockDocument,
-  nodeId: string,
-  prop: string,
-  keep: ReadKeep
-): Promise<VisitorView | UnbindNeeds> {
-  const node = findNode(document.nodes, nodeId);
-  if (node === undefined) return { needs: `There is no block “${nodeId}”.` };
-  const reads = readsOf(source, document, node, prop, keep);
-  if ("needs" in reads) return reads;
+  node: BlockNode,
+  reads: NodeReads
+): Promise<
+  | {
+      readonly run: BindingRun;
+      readonly reader: Awaited<ReturnType<typeof publicReader>>;
+      readonly alone: BlockDocument;
+    }
+  | undefined
+> {
   const [next, react, reader] = await Promise.all([
     import("@nextlyhq/blocks-react/next"),
     import("@nextlyhq/blocks-react"),
@@ -350,13 +353,39 @@ async function visitorViewOf(
     reader,
     budget: react.createQueryBudget(),
   });
+  if (bindings === undefined) return undefined;
+  return {
+    run: react.pageBindingRun(
+      bindings,
+      source.locale,
+      react.registeredBlocks()
+    ),
+    reader,
+    alone,
+  };
+}
+
+/**
+ * What a visitor sees of `prop` on block `nodeId`, read as the published page
+ * reads it: through its own binding pipeline, with the public reader. `keep`
+ * names the entry, or the list item, a value varies by; a page's own entry is
+ * the page itself, and a template's has to be named.
+ */
+async function visitorViewOf(
+  source: UnbindSource,
+  document: BlockDocument,
+  nodeId: string,
+  prop: string,
+  keep: ReadKeep
+): Promise<VisitorView | UnbindNeeds> {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined) return { needs: `There is no block “${nodeId}”.` };
+  const reads = readsOf(source, document, node, prop, keep);
+  if ("needs" in reads) return reads;
+  const visitor = await visitorRun(source, node, reads);
   // Nothing to read for a visitor: the binding fills nothing on the page.
-  if (bindings === undefined) return { filled: node.props, bound: undefined };
-  const run = react.pageBindingRun(
-    bindings,
-    source.locale,
-    react.registeredBlocks()
-  );
+  if (visitor === undefined) return { filled: node.props, bound: undefined };
+  const { run, reader, alone } = visitor;
   const scope = await scopeOf(reader, reads.item);
   if ("needs" in scope) return scope;
   const unreachable = outOfReachOf(node, prop, run, scope);
