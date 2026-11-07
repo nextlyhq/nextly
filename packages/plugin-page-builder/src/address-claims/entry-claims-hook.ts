@@ -698,7 +698,12 @@ async function settleDesignClaims(
  * second. They are read held for share: an entry's save in flight holds its
  * row and waits for this write's lock, or its design's row, and the
  * database refuses one of the two as a deadlock, which the adapter runs
- * again, so the second reads what the first committed.
+ * again, so the second reads what the first committed. A new own design's
+ * entry row is already held for share by the template write's earlier
+ * handler (`judgeTemplateInTransaction`) before the collection's lock is
+ * taken here, so on that path the row comes first, as an entry's save
+ * takes them; a race with the entry's save can still end in the deadlock
+ * above, and is run again the same way.
  */
 async function settleDesigned(
   deps: EntryClaimsDeps,
