@@ -13,7 +13,10 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
 import type { RevalidationIntent } from "../../revalidation/types";
-import type { TrustBound } from "../../services/collections/trust-grant";
+import type {
+  HookExemptRead,
+  TrustBound,
+} from "../../services/collections/trust-grant";
 
 /**
  * User context for Single operations.
@@ -186,6 +189,13 @@ export interface GetSingleOptions {
   context?: Record<string, unknown>;
   /** The HTTP request behind this operation, when one produced it. */
   request?: Request;
+  /**
+   * A grant waiving this Single's read hooks, issued to the plugin that
+   * declared it: its `beforeOperation`, `beforeRead` and `afterRead` hooks
+   * and its fields' `afterRead` hooks do not run. Effective only for a Single
+   * the grant covers; see `readHooksWaived`. Related rows keep their own.
+   */
+  hookExemptRead?: HookExemptRead;
 }
 
 /**

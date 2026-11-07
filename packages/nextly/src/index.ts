@@ -901,6 +901,15 @@ export type {
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";
+// A plugin's question "may this person delete this entry", asked of the
+// delete's own gate (its grant and a rule's row filter for the entry) with no
+// hook run and nothing written. Here for `@nextlyhq/plugin-sdk` to publish.
+export { mayDeleteEntry } from "./plugins/entry-delete-access";
+export type { PluginDeleteCheck } from "./plugins/entry-delete-access";
+// The same question for a write: the update gate, the publish gate where it
+// puts the document live, and each named field's update rule.
+export { mayWriteEntry } from "./plugins/entry-write-access";
+export type { PluginWriteCheck } from "./plugins/entry-write-access";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).

@@ -116,6 +116,71 @@ describe("validating bindings against the sources' schema", () => {
     expect(bindingCodes(shapeOnly)).toEqual([[], [], []]);
   });
 
+  it("refuses an image bound to plain text, and an image fallback that is not an image address", () => {
+    const imageFields: BindingSchemaSource = {
+      fieldsOf: ref =>
+        "collection" in ref && ref.collection === "posts"
+          ? [
+              { name: "title", type: "text" },
+              { name: "cover", type: "upload", relationTo: "media" },
+              { name: "photoUrl", type: "url" },
+            ]
+          : undefined,
+    };
+    const imageBoundTo = (id: string, path: string, fallback?: unknown) => ({
+      id,
+      type: "core/image",
+      version: 1,
+      props: {},
+      bindings: {
+        mediaId: {
+          $bind: path,
+          ...(fallback === undefined ? {} : { fallback }),
+        },
+      },
+    });
+    const images: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        imageBoundTo("text", "title"),
+        imageBoundTo("script", "cover", "javascript:alert(1)"),
+        imageBoundTo("data", "photoUrl", "data:image/png;base64,AAAA"),
+        imageBoundTo("other-host", "cover", "//elsewhere.example/a.png"),
+        // A media id is not one yet: a page's export and import would not
+        // carry the media a binding's fallback names.
+        imageBoundTo("media-id", "cover", "media-1"),
+        // CONTROLS: an image address is an image fallback.
+        imageBoundTo("address", "photoUrl", "https://cdn.example/a.png"),
+        imageBoundTo("site-path", "cover", "/media/a.png"),
+      ],
+    } as unknown as BlockDocument;
+    const imageContext: ValidationContext = {
+      ...context,
+      bindingSchema: imageFields,
+      definitions: {
+        get: type =>
+          type === "core/image"
+            ? { version: 1, props: { mediaId: { type: "media" } } }
+            : undefined,
+      },
+    };
+    const issues = validate(images, imageContext);
+    const codesAt = (index: number) =>
+      issues
+        .filter(issue => issue.path.startsWith(`/nodes/${String(index)}/`))
+        .map(issue => issue.code);
+    expect(images.nodes.map((_node, index) => codesAt(index))).toEqual([
+      ["binding-type-misfit"],
+      ["binding-fallback-invalid"],
+      ["binding-fallback-invalid"],
+      ["binding-fallback-invalid"],
+      ["binding-fallback-invalid"],
+      [],
+      [],
+    ]);
+  });
+
   it("reports every binding code under the validator's own table", () => {
     for (const [code, description] of Object.entries(BINDING_ISSUE_CODES)) {
       expect(ISSUE_CODES).toHaveProperty(code, description);

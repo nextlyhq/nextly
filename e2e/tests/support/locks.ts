@@ -50,6 +50,11 @@ export const LOCK = {
    */
   siteDefaultLayout: "site-default-layout",
   /**
+   * The site's code, which every page of the playground carries. Its writer
+   * stores code and clears it again; readers assert what a page runs.
+   */
+  siteCode: "site-code",
+  /**
    * The schema: collections created at runtime, which also write migration
    * files into the playground, and readers of the whole collection set.
    */

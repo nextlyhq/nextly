@@ -115,7 +115,7 @@ export function listFieldsFrom(reads: {
  * read it at all. An empty list is a collection visitors may read whose own
  * fields are all hidden: they still read its id and timestamps.
  */
-export function publicReadsNothing(
+function publicReadsNothing(
   shapes: readonly BindingFieldShape[] | undefined
 ): shapes is undefined {
   return shapes === undefined;

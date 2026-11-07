@@ -671,7 +671,14 @@ export function validateDocument(
   // work above is. A problem a stored form already held stays a warning, so a
   // list a schema change broke does not make its page unsavable.
   if (!overLimits) {
-    const judgement = schemaJudgement(ctx, survey.limits.maxNodes);
+    const judgement = {
+      ...schemaJudgement(ctx, survey.limits.maxNodes),
+      // A list whose source is a named query, and a condition on its rows,
+      // are judged against the query's declaration.
+      ...(ctx.namedQueries === undefined
+        ? {}
+        : { namedQueries: ctx.namedQueries }),
+    };
     issues.push(
       // As validation issues: the path names the block, so the block's id
       // each judgement also carries is left to the editor that asks for it.

@@ -509,7 +509,15 @@ export const NAMED_QUERY_TEXT: {
   readonly missingEnter: (query: string, label: string) => string;
   readonly missingAtRun: (query: string, label: string) => string;
   readonly paramUnknown: (query: string, key: string) => string;
-  readonly readsHidden: (collection: string) => string;
+  readonly readsHidden: (
+    collection: string,
+    fields?: readonly string[]
+  ) => string;
+  readonly readsHiddenCanvas: (
+    query: string,
+    collection: string,
+    fields: readonly string[]
+  ) => string;
   readonly rowsHidden: (query: string, collection: string) => string;
   readonly runFailed: (detail: string) => string;
   readonly threw: (query: string, ref: string) => string;
@@ -523,7 +531,18 @@ export const NAMED_QUERY_TEXT: {
   readonly counted: (matching: number, shown: number) => string;
   readonly uncounted: (query: string) => string;
   readonly nestedRelated: string;
-  readonly paginated: string;
+  readonly needsInput: string;
+  readonly inputsNote: (
+    query: string,
+    required: readonly NamedQueryNeed[],
+    state: { readonly others: boolean; readonly waiting: boolean }
+  ) => string;
+  readonly inputsKept: (
+    stored: readonly (readonly [string, NamedQueryParamValue])[]
+  ) => string;
+  readonly stillShowing: (previous: string) => string;
+  readonly copyRef: string;
+  readonly copiedRef: string;
 } = {
   unknown: name =>
     `"${name}" isn't set up on this site any more, so visitors see the empty state. Choose another source.`,
@@ -535,14 +554,28 @@ export const NAMED_QUERY_TEXT: {
     `${query} needs a ${inSentence(label)}, which this list doesn't set.`,
   paramUnknown: (query, key) =>
     `${query} no longer takes "${key}". It will be left out.`,
-  readsHidden: collection =>
-    `It reads ${collection}, which visitors can't read, so a published list of it may show nothing.`,
+  // The fields are named where the schema names them, so the author knows
+  // what goes missing: the rows still show, without what visitors can't read.
+  // `fields` is optional, so a caller of the one-argument form this shipped
+  // with is told what it always was.
+  readsHidden: (collection, fields = []) =>
+    fields.length === 0
+      ? `It reads ${collection}, which visitors can't read, so a published list of it may show nothing.`
+      : `It reads ${wordList(fields)} from ${collection}, which visitors can't read, so visitors see the rows without them.`,
+  // The canvas reads as the person editing, so it says what the published
+  // page does differently rather than claiming to be a visitor's view.
+  readsHiddenCanvas: (query, collection, fields) =>
+    fields.length === 0
+      ? `${query} reads ${collection}, which visitors can't read, so on the published page it gets nothing from it.`
+      : `${query} reads ${wordList(fields)} from ${collection}, which visitors can't read, so on the published page visitors see the rows without them.`,
   rowsHidden: (query, collection) =>
     `${query} lists entries of ${collection}, which visitors can't read, so this list can never show anything. Choose another source.`,
   runFailed: detail =>
     `This list couldn't load its entries, so visitors see its empty state. ${detail}`,
+  // What the author can do about it: the reference is the one the server
+  // log names the failure by, and the raw error never reaches the editor.
   threw: (query, ref) =>
-    `${query} stopped with an error. A developer can find it in the server log as ${ref}.`,
+    `${query} stopped with an error. Ask your developer, quoting ref ${ref}.`,
   timeout: (query, seconds) =>
     `${query} took longer than ${String(seconds)} seconds, so it was stopped.`,
   undeclaredRead: (query, what) =>
@@ -562,9 +595,57 @@ export const NAMED_QUERY_TEXT: {
     `${query} doesn't count its entries, so this list can't be split into pages. Turn this off, or ask a developer to make it return a total.`,
   nestedRelated:
     "The list around this one shows a custom source's rows, which have no related entries. Choose a collection.",
-  paginated:
-    "A custom source's list can't be split into pages yet. Turn off Split into pages, or choose a collection.",
+  // The Source menu's tag on a query an author must give a value to.
+  needsInput: "Needs input",
+  inputsNote: (query, required, { others, waiting }) => {
+    if (required.length === 0) return "Every input is optional.";
+    // Past two, a sentence naming each grows long: each needed input's label
+    // carries a dot instead, and the note says what the dot means.
+    const named =
+      required.length > 2
+        ? "The inputs marked with a dot are needed."
+        : `${query} needs ${wordList(required.map(need => `a ${inSentence(need.label)}`))}.`;
+    if (waiting) {
+      const until =
+        required.length === 1
+          ? required[0]?.chosen === true
+            ? "until one is chosen"
+            : "until it's entered"
+          : "until they're set";
+      return `${named} Nothing on the page changes ${until}.`;
+    }
+    return others ? `${named} The rest are optional.` : named;
+  },
+  inputsKept: stored =>
+    stored.length === 0
+      ? "Nothing was set for its inputs."
+      : `Kept as stored until you choose another source: ${stored
+          .map(
+            ([key, value]) =>
+              `${key} ${typeof value === "string" ? `\u201c${value}\u201d` : String(value)}`
+          )
+          .join(", ")}.`,
+  // The canvas's tag over a list whose new source waits for its inputs.
+  stillShowing: previous => `Still showing ${previous}`,
+  copyRef: "Copy ref",
+  copiedRef: "Copied",
 };
+
+/** One input a query needs, as its group's note names it. */
+export interface NamedQueryNeed {
+  readonly label: string;
+  /** Picked from a list (a choice, a day, an entry) rather than typed. */
+  readonly chosen: boolean;
+}
+
+/** "a", "a and b", "a, b and c", or "a, b, c and 2 more" for a long list. */
+function wordList(words: readonly string[]): string {
+  const shown = words.length > 4 ? [...words.slice(0, 3)] : [...words];
+  const more = words.length - shown.length;
+  if (more > 0) shown.push(`${String(more)} more`);
+  if (shown.length <= 1) return shown.join("");
+  return `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1] ?? ""}`;
+}
 
 /** One problem with a list's stored inputs, judged against a declaration. */
 export interface NamedParamProblem {
@@ -779,11 +860,15 @@ export interface NamedQueryKnown {
   readonly single: (slug: string) => boolean;
 }
 
-/** Whether a value is a list of non-empty strings. */
+/** Whether a value is a list of non-empty strings, with no holes. */
 function isSlugList(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) &&
-    value.every(each => typeof each === "string" && each !== "")
+    // `Array.from` reads every slot, so a hole is judged as undefined
+    // rather than skipped, as `every` alone would skip it.
+    Array.from(value as unknown[]).every(
+      each => typeof each === "string" && each !== ""
+    )
   );
 }
 
@@ -835,7 +920,9 @@ function choiceShapeProblem(
   if (
     !Array.isArray(options) ||
     options.length === 0 ||
-    !options.every(
+    // Every slot is read, so a hole (serialized as null) is refused rather
+    // than skipped, as `every` alone would skip it.
+    !Array.from(options as unknown[]).every(
       option =>
         isPlainRecord(option) &&
         typeof option.value === "string" &&
@@ -1001,19 +1088,28 @@ function rowsProblem(
   if (!isPlainRecord(rows)) {
     return "its rows are not { collection } or { fields, key }";
   }
+  // Read as every consumer reads it (`"fields" in rows`): rows holding
+  // `fields` are a schema of their own, whatever else they hold, so both
+  // shapes at once are refused, and `fields` is judged whenever it is there.
+  if ("fields" in rows && "collection" in rows) {
+    return "its rows name both a collection and fields; give { collection } or { fields, key }, not both";
+  }
+  if ("fields" in rows) {
+    const fields = rows.fields;
+    if (!Array.isArray(fields) || fields.length === 0) {
+      return "its rows are not { collection } or { fields, key }";
+    }
+    return (
+      rowFieldsProblem(fields, "its rows") ??
+      rowKeyProblem(rows, fields as BindingFieldShape[])
+    );
+  }
   if (typeof rows.collection === "string") {
     return collections.has(rows.collection)
       ? undefined
       : `its rows are entries of "${rows.collection}", which it does not declare in reads.collections`;
   }
-  const fields = rows.fields;
-  if (!Array.isArray(fields) || fields.length === 0) {
-    return "its rows are not { collection } or { fields, key }";
-  }
-  return (
-    rowFieldsProblem(fields, "its rows") ??
-    rowKeyProblem(rows, fields as BindingFieldShape[])
-  );
+  return "its rows are not { collection } or { fields, key }";
 }
 
 /** Why a declaration's reads are not lists of slugs, or nothing. */
@@ -1032,15 +1128,25 @@ function readsProblem(reads: unknown): string | undefined {
   }
   // Each declared read tags the query's cached result, and a cache entry
   // keeps a bounded number of tags: past it, a write to a source left off
-  // would not refresh the page.
+  // would not refresh the page. The lists are counted as written, repeats
+  // included, since every element is served and expanded into tags.
   const count =
-    new Set(reads.collections ?? []).size +
-    new Set(reads.singles ?? []).size +
+    (reads.collections?.length ?? 0) +
+    (reads.singles?.length ?? 0) +
     (reads.site === true ? 1 : 0);
   if (count > NAMED_QUERY_MAX_READS) {
     return `it declares ${String(count)} reads; at most ${String(NAMED_QUERY_MAX_READS)} are allowed, so each can refresh the page`;
   }
   return undefined;
+}
+
+/** Why a declaration's `total` flag is not true or false, or nothing. */
+function totalProblem(total: unknown): string | undefined {
+  // Clients read the flag as `=== true`, so any other present value would be
+  // advertised as uncounted while the run still returned a count.
+  return total === undefined || typeof total === "boolean"
+    ? undefined
+    : "its total is not true or false";
 }
 
 /** Why a declaration's own words and numbers are out of bounds, or nothing. */
@@ -1132,6 +1238,7 @@ export function namedQueryProblem(
   const reads = readsProblem(definition.reads);
   const problem =
     headerProblem(definition) ??
+    totalProblem(definition.total) ??
     reads ??
     (() => {
       const collections = new Set(

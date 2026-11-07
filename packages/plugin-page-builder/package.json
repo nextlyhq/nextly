@@ -36,6 +36,11 @@
       "import": "./dist/canvas/index.js",
       "default": "./dist/canvas/index.js"
     },
+    "./site": {
+      "types": "./dist/site/index.d.ts",
+      "import": "./dist/site/index.js",
+      "default": "./dist/site/index.js"
+    },
     "./styles/editor.css": "./dist/styles/editor.css"
   },
   "files": [

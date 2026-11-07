@@ -89,6 +89,8 @@ export function storedVisibilityOf(visibility: unknown): unknown {
  * `within`, on the document it draws, never on one stored (see
  * {@link storedVisibilityOf}); a value of it that is not a list is one gate
  * nothing can read.
+ *
+ * @experimental Settles with the editor's condition controls.
  */
 export function placementGatesOf(
   envelope: Readonly<Record<string, unknown>>

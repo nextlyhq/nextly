@@ -8,7 +8,8 @@
  * What only a server shows: that the save refuses a list missing a required
  * input, a query the site does not register, a value an input does not take
  * and a custom source beside a collection, in the editor's words, and keeps
- * a stored list whose query was since removed; that choosing a custom source
+ * a stored list whose query was since removed; that a list split into pages
+ * is refused when its query does not count its rows; that choosing a custom source
  * clears the collection, filters and sort in one write; and that a field the
  * public may not read never reaches the HTML, whether the query's rows are a
  * collection's entries or rows it builds itself, nor a draft, nor anything a
@@ -394,14 +395,6 @@ describe.each(getConfiguredTestDialects())(
         "Enter a whole number from 1 to 9.",
       ],
       [
-        "a custom source's list split into pages",
-        {
-          namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
-          paginate: true,
-        },
-        "A custom source's list can't be split into pages yet.",
-      ],
-      [
         "a custom source beside a collection",
         {
           namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
@@ -426,6 +419,39 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedProps(t, id)).toEqual({ collection: EVENTS });
       }
     );
+
+    it("refuses a split into pages when the query counts nothing, and splits one that counts", async () => {
+      const t = await boot();
+      const id = await homePage(t, { collection: EVENTS });
+      const { cookie } = await holding(t, AUTHOR);
+      // All events is declared without a total, so its pages can't be counted.
+      const uncounted: ListQueryChange = {
+        namedQuery: { name: "events.all" },
+        paginate: true,
+      };
+      const dry = await change(cookie, id, uncounted, { dryRun: true });
+      const said =
+        dry.status === 200
+          ? (dry.body.item as PageActionResult).refusals.join("\n")
+          : JSON.stringify(dry.body);
+      expect(said).toContain(
+        "All events doesn't count its entries, so this list can't be split into pages."
+      );
+      const applied = await change(cookie, id, uncounted);
+      expect(applied.status).toBe(422);
+      expect(await storedProps(t, id)).toEqual({ collection: EVENTS });
+      // The same split on a query declared with a total is taken: the
+      // refusal is the missing total, not the split or the custom source.
+      const counted = await change(cookie, id, {
+        namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
+        paginate: true,
+      });
+      expect(counted.status).toBe(200);
+      expect(await storedProps(t, id)).toEqual({
+        namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
+        paginate: true,
+      });
+    });
 
     it("takes a custom source sent beside empty or removed source parts", async () => {
       const t = await boot();
@@ -508,6 +534,9 @@ describe.each(getConfiguredTestDialects())(
           expect.objectContaining({ key: "within", min: 1, max: 9 }),
         ],
         readsHidden: [],
+        declaration: expect.objectContaining({
+          name: "events.upcoming",
+        }) as unknown,
       });
       expect(JSON.stringify(listed.body)).not.toContain("run");
       const manifest = await call("GET", cookie, ["manifest"]);

@@ -1,6 +1,6 @@
 /**
  * The plugin-owned `templates` collection: the designs a collection's entries
- * are drawn with.
+ * are drawn with, and the own designs single entries are drawn with instead.
  *
  * A template is a builder document of kind `template`, stored as an entry like
  * a page, so it has drafts, publishing, history, the soft lock and recovery
@@ -28,6 +28,31 @@ export const TEMPLATE_COLLECTION_FIELD = "collection";
 /** The blocks field holding the template's design. */
 export const TEMPLATE_CONTENT_FIELD = "content";
 
+/**
+ * The fields of an entry's own design: a template that serves one entry
+ * rather than its collection, forked from the collection's template. Its
+ * `collection` is empty, so everything that finds a collection's template
+ * by that field finds the base template and never an own design.
+ *
+ * `entry` is the key of the entry it serves (see {@link entryDesignKey}),
+ * unique, so an entry has one own design whatever writes race for it.
+ * `entryCollection` and `entryId` name the entry plainly, the first indexed
+ * so a collection's own designs are one query. `forkedFrom` is the base
+ * template it was copied from, emptied when that template is deleted.
+ */
+export const TEMPLATE_ENTRY_FIELD = "entry";
+export const TEMPLATE_ENTRY_COLLECTION_FIELD = "entryCollection";
+export const TEMPLATE_ENTRY_ID_FIELD = "entryId";
+export const TEMPLATE_FORKED_FROM_FIELD = "forkedFrom";
+
+/**
+ * The key an entry's own design is held under: its collection and id, each
+ * encoded, so no collection and id pair spells another's.
+ */
+export function entryDesignKey(collection: string, id: string): string {
+  return `${encodeURIComponent(collection)}/${encodeURIComponent(id)}`;
+}
+
 export function templatesCollection(): CollectionConfig {
   return defineCollection({
     slug: TEMPLATES_SLUG,
@@ -39,7 +64,9 @@ export function templatesCollection(): CollectionConfig {
       text({
         name: TEMPLATE_COLLECTION_FIELD,
         label: "Collection",
-        required: true,
+        // Not required of the field, since an entry's own design leaves it
+        // empty (stored as no value, which the unique index lets many rows
+        // share); the guard requires it of every base template.
         // The guard that holds under concurrent writes, on every dialect,
         // whichever path the write takes and whatever a hook does after the
         // plugin's: the database refuses a second template for a collection.
@@ -48,6 +75,29 @@ export function templatesCollection(): CollectionConfig {
           description:
             "The collection whose entries this template draws. A collection has one template, and it cannot be changed once the template exists.",
         },
+      }),
+      text({
+        name: TEMPLATE_ENTRY_FIELD,
+        label: "Entry",
+        // One own design per entry, held by the database on every dialect,
+        // whichever path the write takes.
+        unique: true,
+        admin: {
+          description:
+            "The entry this design serves, when it is an entry's own design rather than its collection's template. Set when it is made, and never changed.",
+        },
+      }),
+      text({
+        name: TEMPLATE_ENTRY_COLLECTION_FIELD,
+        label: "Entry's collection",
+        index: true,
+      }),
+      text({ name: TEMPLATE_ENTRY_ID_FIELD, label: "Entry id" }),
+      // Indexed: deleting a template finds the designs copied from it by it.
+      text({
+        name: TEMPLATE_FORKED_FROM_FIELD,
+        label: "Copied from",
+        index: true,
       }),
       blocks({
         name: TEMPLATE_CONTENT_FIELD,

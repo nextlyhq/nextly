@@ -54,6 +54,7 @@ import {
   NAMED_QUERY_MAX_PARAMS,
   NAMED_QUERY_TEXT,
   NAMED_QUERY_TEXT_MAX,
+  type NamedQueryDeclaration,
   type NamedQueryParamValue,
   type NamedQuerySource,
 } from "./named-query";
@@ -224,7 +225,8 @@ export type ListFieldCode =
   | "list-named-query-param-invalid"
   | "list-named-query-param-unknown"
   | "list-named-query-reads-hidden"
-  | "list-named-query-rows-hidden";
+  | "list-named-query-rows-hidden"
+  | "list-named-query-uncounted";
 
 /**
  * The codes a split into pages is refused with, by where the list sits: a
@@ -234,8 +236,7 @@ export type ListPageCode =
   | "list-paginate-twice"
   | "list-paginate-nested"
   | "list-paginate-related"
-  | "list-paginate-shared"
-  | "list-paginate-named";
+  | "list-paginate-shared";
 
 /** Every code a list query is judged with, each described for authors. */
 export const LIST_ISSUE_CODES: {
@@ -282,6 +283,8 @@ export const LIST_ISSUE_CODES: {
     "A list's custom source reads a collection visitors cannot read.",
   "list-named-query-rows-hidden":
     "A list's custom source lists entries of a collection visitors cannot read.",
+  "list-named-query-uncounted":
+    "A list split into pages has a custom source that does not count its entries.",
   "list-paginate-invalid":
     "A list's split into pages is not stored as on or off.",
   "list-paginate-twice": "More than one list on a page is split into pages.",
@@ -290,8 +293,6 @@ export const LIST_ISSUE_CODES: {
     "A list split into pages shows related entries, which have no count of pages.",
   "list-paginate-shared":
     "A list split into pages sits in a component or a Layout region, which shows on many pages.",
-  "list-paginate-named":
-    "A list split into pages takes its entries from a custom source, which can't be split into pages yet.",
 };
 
 /**
@@ -861,10 +862,17 @@ export interface PaginatedList {
  *
  * Bounded by `maxNodes`, and reading only plain records, because a stored
  * document is whatever the database returned.
+ *
+ * `propsOf` reads a list's props in place of the ones it stores, so a caller
+ * that fills a list's bindings judges it as drawn: a list whose split into
+ * pages is bound to an entry's value pages where that value is true, and the
+ * answer carries the props as read. Every other node is walked as stored.
  */
 export function paginatedList(
   nodes: readonly unknown[],
-  maxNodes: number = Number.MAX_SAFE_INTEGER
+  maxNodes: number = Number.MAX_SAFE_INTEGER,
+  propsOf: (list: Readonly<Record<string, unknown>>) => unknown = list =>
+    list.props
 ): PaginatedList | undefined {
   const stack: unknown[] = [...nodes].reverse();
   let left = maxNodes;
@@ -873,7 +881,8 @@ export function paginatedList(
     left -= 1;
     if (!isPlainRecord(node)) continue;
     if (node.type === COLLECTION_LIST_TYPE) {
-      const { query } = readListQuery(node.props);
+      const props = propsOf(node);
+      const { query } = readListQuery(props);
       if (
         query.paginate === true &&
         query.relation === undefined &&
@@ -884,7 +893,7 @@ export function paginatedList(
           ...(typeof node.name === "string" && node.name.trim() !== ""
             ? { name: node.name.trim() }
             : {}),
-          props: isPlainRecord(node.props) ? node.props : {},
+          props: isPlainRecord(props) ? props : {},
         };
       }
     }
@@ -904,6 +913,27 @@ export function paginatedList(
     }
   }
   return undefined;
+}
+
+/**
+ * The list a page's address may page, judged from the stored document
+ * alone: the one {@link paginatedList} finds, taking a list whose split into
+ * pages is bound to the entry as split, since only a page's binding pass
+ * settles whether it is. A page with none pages nothing whatever its entry
+ * holds; one with a bound split may. What a caller that cannot run the
+ * binding pass (a save, the route before it reads anything) asks.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function mayPaginateList(
+  nodes: readonly unknown[],
+  maxNodes: number = Number.MAX_SAFE_INTEGER
+): PaginatedList | undefined {
+  return paginatedList(nodes, maxNodes, list =>
+    isPlainRecord(list.bindings) && "paginate" in list.bindings
+      ? { ...(isPlainRecord(list.props) ? list.props : {}), paginate: true }
+      : list.props
+  );
 }
 
 /** The fields of one collection, as a list's filters and sort are judged. */
@@ -1500,11 +1530,61 @@ function unreadable(
   return fields !== undefined && fields.readable.length === 0;
 }
 
+/** The fields every entry keeps, which say nothing about what is hidden. */
+const ENTRY_KEPT: ReadonlySet<string> = new Set([
+  "id",
+  "createdAt",
+  "updatedAt",
+]);
+
+/**
+ * One collection a named query reads that visitors can read nothing of: its
+ * name as authors read it, and the fields it declares, which a published
+ * page's rows go without.
+ *
+ * @experimental
+ */
+export interface NamedQueryHiddenRead {
+  readonly collection: string;
+  readonly label: string;
+  /** Its declared fields, the id and timestamps left out; none when unknown. */
+  readonly fields: readonly string[];
+}
+
+/**
+ * The collections a named query declares it reads, other than the one its
+ * rows are entries of, that visitors can read nothing of, as far as `fields`
+ * knows: the one answer the save's warning, the editor's inspector and its
+ * canvas share. A collection `fields` does not know is left out.
+ *
+ * @experimental
+ */
+export function namedQueryHiddenReads(
+  declaration: NamedQueryDeclaration,
+  fields: ListFieldSource
+): NamedQueryHiddenRead[] {
+  const rows = declaration.rows;
+  const rowsCollection = "collection" in rows ? rows.collection : undefined;
+  const hidden: NamedQueryHiddenRead[] = [];
+  for (const read of declaration.reads.collections ?? []) {
+    if (read === rowsCollection) continue;
+    const known = fields.fieldsOf(read);
+    if (known === undefined || known.readable.length > 0) continue;
+    hidden.push({
+      collection: read,
+      label: known.label ?? read,
+      fields: [...known.declared].filter(name => !ENTRY_KEPT.has(name)),
+    });
+  }
+  return hidden;
+}
+
 /**
  * The judgement of a list's custom source against its query's declaration:
  * a name nothing registers, each input missing, not fitting or no longer
- * declared, and, where the schema is known, a query whose rows visitors can
- * never read or that reads a collection they cannot.
+ * declared, a list split into pages whose query does not count its rows,
+ * and, where the schema is known, a query whose rows visitors can never read
+ * or that reads a collection they cannot.
  */
 function namedFindings(
   query: ListQuery,
@@ -1546,6 +1626,18 @@ function namedFindings(
       message: NAMED_QUERY_TEXT.paramUnknown(declaration.label, key),
     })),
   ];
+  // A list split into pages counts its pages from its query's total, so a
+  // query declared without one gives the route nothing to count by. Judged
+  // here, against the declaration, so the save, the editor and the API all
+  // refuse it with the same words.
+  if (query.paginate === true && declaration.total !== true) {
+    found.push({
+      path: at("paginate"),
+      nodeId,
+      code: "list-named-query-uncounted",
+      message: NAMED_QUERY_TEXT.uncounted(declaration.label),
+    });
+  }
   const rows = declaration.rows;
   const rowsCollection = "collection" in rows ? rows.collection : undefined;
   if (rowsCollection !== undefined && unreadable(judgement, rowsCollection)) {
@@ -1559,13 +1651,16 @@ function namedFindings(
       ),
     });
   }
-  for (const read of declaration.reads.collections ?? []) {
-    if (read === rowsCollection || !unreadable(judgement, read)) continue;
+  const hidden =
+    judgement.fields === undefined
+      ? []
+      : namedQueryHiddenReads(declaration, judgement.fields);
+  for (const read of hidden) {
     found.push({
       path: at("namedQuery"),
       nodeId,
       code: "list-named-query-reads-hidden",
-      message: NAMED_QUERY_TEXT.readsHidden(collectionWords(judgement, read)),
+      message: NAMED_QUERY_TEXT.readsHidden(read.label, read.fields),
     });
   }
   return found;
@@ -1613,12 +1708,6 @@ function pageFindings(
       "list-paginate-nested",
       "This list is split into pages, but it sits inside another list, which repeats it for each entry with no address of its own. Turn off Split into pages, or move this list out of that list."
     );
-  }
-  // A custom source's rows have no page count a route can serve yet, so a
-  // list of them pages nothing: refused rather than left on one page with
-  // no word why.
-  if (query.namedQuery !== undefined) {
-    return refused("list-paginate-named", NAMED_QUERY_TEXT.paginated);
   }
   if (query.relation !== undefined) {
     return refused(
@@ -1766,7 +1855,8 @@ function walkFindings(
  * key, and a related source that is not a to-many relation to the list's
  * collection. Each is an error, except one a stored form already held on
  * the same block, which is a warning. A custom source's name and inputs are
- * judged when `judgement.namedQueries` is given; an input the query no
+ * judged when `judgement.namedQueries` is given, and so is whether its query
+ * counts its rows where the list is split into pages; an input the query no
  * longer takes, and a declared read visitors cannot read, are always
  * warnings.
  */
@@ -1820,4 +1910,5 @@ export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-named-query-param-unknown",
   "list-named-query-reads-hidden",
   "list-named-query-rows-hidden",
+  "list-named-query-uncounted",
 ]);

@@ -31,7 +31,9 @@
 
 import {
   findNode,
+  isPlainRecord,
   PAGE_ROOT_CLASS,
+  placementGatesOf,
   previewStateClass,
   resolveSiteTokens,
   resolveTokenPrefix,
@@ -46,12 +48,14 @@ import {
   type BlockDocument,
   type BlockNode,
   type DefinitionsById,
+  type DocumentLimits,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
   INSTANCE_ATTRIBUTE,
   layoutPartSheets,
   LIST_ACTION_ATTRIBUTE,
+  LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   sharedStyleInputs,
@@ -83,7 +87,11 @@ import {
   CanvasRegionFrame,
   type CanvasRegion,
 } from "./canvas-regions";
-import { gatedAsStored } from "./condition-gate";
+import {
+  asStoredDefinitions,
+  gatedAsDrawn,
+  gatedAsStored,
+} from "./condition-gate";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import {
@@ -165,8 +173,28 @@ export function lockMarksOf(document: BlockDocument): Map<string, LockMark> {
  */
 export const CONDITIONED_ATTRIBUTE = "data-nx-conditioned";
 
+/**
+ * Marks an element whose condition mark is its own block's, a block of a
+ * placed component's definition, rather than its placement's: the marks
+ * badge each such block apart, where a placement's roots share one badge.
+ * Its value names the placement nested in a component whose gate the block
+ * carries, when that gate is all it carries, so that placement's roots share
+ * one badge too; empty for a block's own conditions.
+ */
+export const CONDITIONED_OWN_ATTRIBUTE = "data-nx-conditioned-own";
+
 /** How a conditioned block is marked on the canvas. */
 type ConditionMark = "conditional" | "unchecked";
+
+/**
+ * Every conditioned block's mark, and for a composed block gated only by a
+ * placement nested in a component, which placement: the badge its roots
+ * share.
+ */
+interface ConditionMarks {
+  readonly marks: ReadonlyMap<string, ConditionMark>;
+  readonly nested: ReadonlyMap<string, string>;
+}
 
 /**
  * Every conditioned block's mark, from one walk, asked of the engine's own
@@ -177,30 +205,103 @@ type ConditionMark = "conditional" | "unchecked";
 function conditionMarksOf(
   document: BlockDocument,
   unchecked: ReadonlySet<string> | undefined,
-  composed: { definitions?: DefinitionsById; maxNodes?: number }
-): Map<string, ConditionMark> {
+  composed: { definitions?: DefinitionsById; limits?: DocumentLimits }
+): ConditionMarks {
   const marks = new Map<string, ConditionMark>();
-  const mark = (node: BlockNode): void => {
-    if (marks.has(node.id) || !gatedAsStored(node)) return;
+  const nested = new Map<string, string>();
+  const markIf = (node: BlockNode, gated: boolean): void => {
+    if (marks.has(node.id) || !gated) return;
     marks.set(
       node.id,
       unchecked?.has(node.id) === true ? "unchecked" : "conditional"
     );
   };
-  const bound = { maxNodes: composed.maxNodes ?? DEFAULT_LIMITS.maxNodes };
+  const bound = {
+    maxNodes: composed.limits?.maxNodes ?? DEFAULT_LIMITS.maxNodes,
+  };
   // The page's own blocks, a placement among them, by their ids, which are
   // the addresses the canvas draws them with.
-  walkNodes(document.nodes, mark, bound);
+  walkNodes(document.nodes, node => markIf(node, gatedAsStored(node)), bound);
   // And the blocks a placed component's definition holds, by the ids the
   // composed tree gives them, which the canvas draws them with: composed as
-  // the renderer composes, each conditioned placement expanded too.
+  // the renderer composes, each conditioned placement expanded too. The
+  // page's own conditions are lifted first, as the canvas draws the page, so
+  // what a composed block carries is its definition's: its own conditions,
+  // and the gates of the placements nested inside a component that were
+  // expanded into it, which only the composed tree still holds.
   if (composed.definitions !== undefined && composed.definitions.size > 0) {
-    const tree = resolveComponentInstances(document, composed.definitions, {
-      conditioned: "carry",
-    }).document;
-    walkNodes(tree.nodes, mark, bound);
+    // Under the limits the canvas renders with, so a page the site allows
+    // past the default is composed here as it is drawn, from the definitions
+    // as the renderer reads them.
+    const tree = resolveComponentInstances(
+      revealConditioned(document),
+      asStoredDefinitions(composed.definitions, composed.limits),
+      {
+        conditioned: "carry",
+        ...(composed.limits === undefined ? {} : { limits: composed.limits }),
+      }
+    ).document;
+    const placements = new Map<string, string>();
+    walkNodes(
+      tree.nodes,
+      node => {
+        markIf(node, gatedAsDrawn(node));
+        const placement = nestedPlacementOf(node);
+        if (placement === undefined) return;
+        // The innermost placement's gate is the first a root carries, the
+        // same for each of its roots, so they share one badge.
+        let group = placements.get(placement);
+        if (group === undefined) {
+          group = `p${String(placements.size + 1)}`;
+          placements.set(placement, group);
+        }
+        nested.set(node.id, group);
+      },
+      bound
+    );
   }
-  return marks;
+  return { marks, nested };
+}
+
+/**
+ * The gate of the innermost placement nested in a component that a composed
+ * block is a root of, as text, when that gate, and not conditions of its own,
+ * is what gates it.
+ */
+function nestedPlacementOf(node: BlockNode): string | undefined {
+  if (gatedAsStored(node) || !isPlainRecord(node.visibility)) return undefined;
+  const gates = placementGatesOf(node.visibility);
+  return gates.length === 0 ? undefined : JSON.stringify(gates[0]);
+}
+
+/**
+ * The definitions a page reaches, the components it places and those they
+ * place, with each one's conditions lifted so the canvas draws its
+ * conditioned blocks; every other definition as it is. The reached ones are
+ * those the resolver reads composing the page as the canvas does, so a
+ * component a variant or an override selects, at any depth and through any
+ * setting a placement rewrites, is lifted exactly when it is drawn. Only
+ * those are walked, so a large component library costs nothing on a page
+ * that places none of it.
+ */
+function revealedDefinitions(
+  document: BlockDocument,
+  definitions: DefinitionsById,
+  limits: DocumentLimits | undefined
+): DefinitionsById {
+  const reached = new Set(
+    resolveComponentInstances(document, definitions, {
+      conditioned: "carry",
+      ...(limits === undefined ? {} : { limits }),
+    }).referenced
+  );
+  if (reached.size === 0) return definitions;
+  const next = new Map(definitions);
+  for (const id of reached) {
+    const definition = definitions.get(id);
+    if (definition !== undefined) next.set(id, revealConditioned(definition));
+  }
+  return next;
 }
 
 /**
@@ -212,17 +313,28 @@ function conditionMarksOf(
 function conditionMarkFor(
   element: Element,
   container: HTMLElement,
-  marks: ReadonlyMap<string, ConditionMark>
-): ConditionMark | undefined {
+  { marks, nested }: ConditionMarks
+): { mark: ConditionMark; own: boolean; nested?: string } | undefined {
   const address = nodeAddressOf(element);
   if (address === null) return undefined;
   if (element.closest(`.${CANVAS_REGION_CLASS}`) !== null) return undefined;
   const id = element.getAttribute(NODE_ID_ATTRIBUTE);
   const own = id !== null && id !== address ? marks.get(id) : undefined;
-  if (own !== undefined) return own;
-  return isOutermostForAddress(element, address, container)
+  const placed = isOutermostForAddress(element, address, container)
     ? marks.get(address)
     : undefined;
+  if (own === undefined) {
+    return placed === undefined ? undefined : { mark: placed, own: false };
+  }
+  // A block with conditions of its own that is also the root of a
+  // conditioned placement is drawn only when both hold, so its one badge says
+  // "Can't be checked" when either can't be.
+  const placement = id === null ? undefined : nested.get(id);
+  return {
+    mark: placed === "unchecked" ? "unchecked" : own,
+    own: true,
+    ...(placement === undefined ? {} : { nested: placement }),
+  };
 }
 
 /**
@@ -406,6 +518,45 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isChrome(target: EventTarget | null): boolean {
   return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
+}
+
+/** How long a list note's Copy ref says "Copied" once pressed. */
+const COPIED_FOR_MS = 2000;
+
+/**
+ * A list note's Copy ref, when a press landed on it: the log reference it
+ * names goes to the clipboard, and the button says so for a moment. Answers
+ * whether it was one, so the press does nothing else.
+ */
+function copyNoteReference(target: EventTarget | null): boolean {
+  if (!isElement(target)) return false;
+  const button = target.closest(`[${LIST_ACTION_ATTRIBUTE}="copy-ref"]`);
+  const ref = button?.getAttribute(LIST_REF_ATTRIBUTE);
+  if (
+    button === null ||
+    button === undefined ||
+    ref === null ||
+    ref === undefined
+  ) {
+    return false;
+  }
+  // The editor's own clipboard, not the canvas frame's: a frame may not be
+  // allowed to write to it.
+  const clipboard: Clipboard | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard;
+  void clipboard?.writeText(ref).then(
+    () => {
+      button.setAttribute("data-nx-list-copied", "");
+      setTimeout(
+        () => button.removeAttribute("data-nx-list-copied"),
+        COPIED_FOR_MS
+      );
+    },
+    // A clipboard the page may not write to leaves the reference selectable
+    // in the note, where it is set apart to be copied by hand.
+    () => undefined
+  );
+  return true;
 }
 
 /** The action a list's note offers, when a press landed on it. */
@@ -624,7 +775,7 @@ function useCanvasMarkers(
   forcedState: StyleState | undefined,
   drag: CanvasDragState | undefined,
   lockedIds: ReadonlyMap<string, LockMark>,
-  conditionMarks: ReadonlyMap<string, ConditionMark>
+  conditionMarks: ConditionMarks
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -688,6 +839,7 @@ function useCanvasMarkers(
             `[${DROP_REFUSED_ATTRIBUTE}]`,
             `[${LOCKED_ATTRIBUTE}]`,
             `[${CONDITIONED_ATTRIBUTE}]`,
+            `[${CONDITIONED_OWN_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
@@ -770,10 +922,12 @@ function useCanvasMarkers(
         );
         // On the block's own outermost element, so a block a list draws once
         // per entry is marked once per copy and its parts are not marked again.
+        const condition = conditionMarkFor(element, container, conditionMarks);
+        setMark(element, CONDITIONED_ATTRIBUTE, condition?.mark);
         setMark(
           element,
-          CONDITIONED_ATTRIBUTE,
-          conditionMarkFor(element, container, conditionMarks)
+          CONDITIONED_OWN_ATTRIBUTE,
+          condition?.own === true ? (condition.nested ?? "") : undefined
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -1064,6 +1218,12 @@ function useCanvasPointer(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (onSelect === undefined || isChrome(event.target)) return;
       const id = nodeIdFromEvent(event.target);
+      // A failed list's Copy ref copies the reference and stays on the
+      // list: the author is about to paste it to a developer, not edit.
+      if (copyNoteReference(event.target)) {
+        if (id !== null) onSelect(id, "replace");
+        return;
+      }
       // A list note's "Choose a field", pressed or activated from the
       // keyboard: the host selects the list and takes the author to its sort,
       // in place of the plain selection a click inside the list makes.
@@ -2006,14 +2166,13 @@ function useDrawnPage({
         ? rendered
         : {
             ...rendered,
-            definitions: new Map(
-              [...rendered.definitions].map(([id, definition]) => [
-                id,
-                revealConditioned(definition),
-              ])
+            definitions: revealedDefinitions(
+              document,
+              rendered.definitions,
+              rendered.limits
             ),
           },
-    [rendered]
+    [rendered, document]
   );
   const page = useMemo(
     () => (
@@ -2101,9 +2260,7 @@ export function Canvas({
         ...(render?.definitions === undefined
           ? {}
           : { definitions: render.definitions }),
-        ...(render?.limits?.maxNodes === undefined
-          ? {}
-          : { maxNodes: render.limits.maxNodes }),
+        ...(render?.limits === undefined ? {} : { limits: render.limits }),
       }),
     [document, conditionsUnchecked, render?.definitions, render?.limits]
   );

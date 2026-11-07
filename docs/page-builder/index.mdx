@@ -412,6 +412,73 @@ or migration follows, no stored address is rewritten, and a collection
 without it keeps stripping `/` from its slugs. Two pages at one address are kept
 apart by the slug's uniqueness, as before.
 
+### One address, one page
+
+A published page holds its address, and a page whose Collection list is split into
+pages also holds that list's later pages (`/news/page/2`, `/news/page/3`, …) as one
+space, however many pages the list has today. Saving a page that would share an
+address with another document is refused, naming the other document: publishing a
+page at `/news/page/2` while the page at `/news` splits its list into pages, or
+splitting the list at `/news` into pages while a page is published at
+`/news/page/2`. The other document is named by its title where you may read it, and
+by its id where you may not. The address is held from the save that publishes the
+page, in the same transaction, so two saves at once can't both take it, whichever
+way the pages were saved (the editor, the API, a batch, a release or a scheduled
+publish). Unpublishing or deleting the page frees its address; turning off Split
+into pages frees the later pages and keeps the page's own address. A site upgrading
+to this claims its published pages' addresses in the background after start-up,
+oldest first; a page that clashes with an older one waits for it and appears in the
+waiting report.
+
+### Serving a collection's entries
+
+A collection defined in code can serve each of its entries at its own address,
+drawn with the collection's template. Declare where in the plugin's options:
+
+```ts
+pageBuilder({ templates: { addresses: { posts: "/blog" } } });
+```
+
+Once the collection's template is published, each published post is served at
+`/blog/<its slug>`. Write the address as a visitor requests it: starting with
+`/`, ending without one, with no empty or `.` segment, and not `/` itself or under
+a path the runtime keeps (`/admin`, `/api`, …). Two collections may not share an
+address, and the collection needs a `slug` text field. Anything else stops the
+site from starting, naming what is wrong.
+
+An entry's address is held like a page's, from the save that publishes it: saving
+an entry at an address another document holds is refused, naming it, and
+unpublishing, deleting or renaming the entry frees it. When a template is first
+published over entries whose addresses a page already holds, those entries wait
+and are served as soon as the page frees the address.
+
+Pages and entries are served by one route, which answers every path from the
+addresses the site holds:
+
+```tsx title="app/(frontend)/[...slug]/page.tsx"
+import { createContentPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
+import { previewDraftGate } from "nextly/runtime";
+
+const { ContentPage, generateMetadata } = createContentPage({
+  ...pageBuilderContent(),
+  pages: {
+    collections: ["pages"],
+    field: "content",
+    draft: previewDraftGate(),
+  },
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+A page is served as `createBlocksPage` serves it. An entry is drawn with its
+collection's published template, reading the entry as a visitor would, and takes
+its title, description and image from the template's SEO settings. A path nobody
+holds is not found, and so is an entry whose collection has no published template.
+`createPublicContentPage` is the cached, pre-rendered form.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your

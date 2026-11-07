@@ -23,8 +23,8 @@ import {
   stillReferences,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
-import { and, eq } from "@nextlyhq/plugin-sdk/db";
+import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
+import { and, eq, inArray, isNull } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -34,12 +34,37 @@ import { readStoredForms } from "../fields/lock-baselines";
 import { componentDeletionHosts, componentDeletions } from "../schema/tables";
 
 import { formsAWriteChanges } from "./lifecycle";
+import type { RunStore } from "./rewrite";
 
 /** The issue code a write adding a reference to a fenced component carries. */
 export const COMPONENT_BEING_DELETED = "COMPONENT_BEING_DELETED";
 
 /** Which walk a run is on. */
 export type RunPhase = "converting" | "final" | "done";
+
+/**
+ * The steps a component delete takes around its walks (`component-delete/`):
+ * `preflight` before the converting walk, judging every host and writing
+ * none; `deleting` once both walks are done, while the component itself is
+ * deleted; `deleted` for good after that, the row kept as the tombstone that
+ * refuses any save still holding the component. No walk runs in any of them.
+ */
+export type DeleteStep = "preflight" | "deleting" | "deleted";
+
+/** A run's stored phase: a walk, or a step of a component delete. */
+export type StoredPhase = RunPhase | DeleteStep;
+
+/**
+ * The phases a request may close a run at: every one before the component's
+ * own delete. A run at `deleting` or `deleted` is never closed: the second is
+ * the tombstone that refuses a save still holding a deleted component.
+ */
+export const CLOSABLE_PHASES: readonly StoredPhase[] = [
+  "preflight",
+  "converting",
+  "final",
+  "done",
+];
 
 /**
  * What a run is for. Only a `delete` run fences new references: the component
@@ -59,8 +84,12 @@ export interface DeletionRun {
    * `api-key:<id>`.
    */
   readonly startedBy: string;
-  readonly phase: RunPhase;
-  /** Where the final walk stopped, or `null` before it started. */
+  readonly phase: StoredPhase;
+  /**
+   * Where the final walk stopped, or `null` before it started. At
+   * `preflight`, where its check stopped; at `deleted`, when the component
+   * was deleted (an ISO time).
+   */
   readonly cursor: string | null;
 }
 
@@ -79,7 +108,9 @@ export interface FenceStore {
   open(
     componentId: string,
     purpose: RunPurpose,
-    startedBy: string
+    startedBy: string,
+    /** The phase a new run starts at; `converting` unless a delete asks for `preflight`. */
+    startAt?: "converting" | "preflight"
   ): Promise<{ readonly opened: boolean; readonly run: DeletionRun }>;
   /** The run for a component and purpose, or `null` when none is open. */
   runFor(componentId: string, purpose: RunPurpose): Promise<DeletionRun | null>;
@@ -92,22 +123,72 @@ export interface FenceStore {
    */
   advance(
     runId: string,
-    from: RunPhase,
-    to: RunPhase,
+    from: StoredPhase,
+    to: StoredPhase,
     cursor: string | null
   ): Promise<boolean>;
-  /** Every component a `delete` run is open for. */
-  fenced(): Promise<ReadonlySet<string>>;
-  /** Close a run, which lifts a `delete` run's fence, and drop its progress. */
+  /**
+   * Every component a `delete` run is open for, or deleted by one: among
+   * `among` alone when named, read by the run table's index.
+   */
+  fenced(among?: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Move a run at `phase` whose cursor is still `cursor` (as read) to
+   * `toPhase` and `toCursor`, by compare-and-set on both: a write that reset
+   * the cursor meanwhile (`preflight` restarted) makes the move change
+   * nothing. Answers whether it moved.
+   */
+  advanceFrom(
+    runId: string,
+    at: { readonly phase: StoredPhase; readonly cursor: string | null },
+    to: { readonly phase: StoredPhase; readonly cursor: string | null }
+  ): Promise<boolean>;
+  /**
+   * Move a run from `deleting` to `deleted`, its tombstone, and drop its
+   * progress, in one transaction: a tombstone keeps no rows but its own.
+   * Answers whether it moved.
+   */
+  markDeleted(runId: string, deletedAt: string): Promise<boolean>;
+  /**
+   * Every run at `phase`, of every purpose. The phase is not indexed, so this
+   * reads the table, tombstones included; it is asked by a sweep pass, never
+   * by a write.
+   */
+  runsAt(phase: StoredPhase): Promise<readonly DeletionRun[]>;
+  /**
+   * Close the run for a component and purpose, which lifts a `delete` run's
+   * fence, and drop its progress: only while it is at a phase in
+   * {@link CLOSABLE_PHASES}, so a deleted component's tombstone is never
+   * closed this way.
+   */
   close(componentId: string, purpose: RunPurpose): Promise<void>;
+  /**
+   * Close this run, by compare-and-set: only while it still has this id and
+   * is at one of `at`, so a request acting on a run it read earlier closes
+   * nothing a later request moved on. Answers whether it closed it.
+   */
+  closeRun(runId: string, at: readonly StoredPhase[]): Promise<boolean>;
 }
 
 /** The dialect, as `ctx.dialect` names it. */
 type Dialect = Parameters<typeof isUniqueViolation>[0];
 
+/** The phases a stored value may name; anything else is the converting walk. */
+const STORED_PHASES: ReadonlySet<string> = new Set<StoredPhase>([
+  "converting",
+  "final",
+  "done",
+  "preflight",
+  "deleting",
+  "deleted",
+]);
+
+/** How many component ids one indexed read of the runs names. */
+const IDS_PER_READ = 200;
+
 /** A stored phase, read strictly: anything else is the converting walk. */
-function phaseOf(value: string): RunPhase {
-  return value === "final" || value === "done" ? value : "converting";
+function phaseOf(value: string): StoredPhase {
+  return STORED_PHASES.has(value) ? (value as StoredPhase) : "converting";
 }
 
 /**
@@ -165,6 +246,37 @@ export function fenceStore(
     return row === null ? null : runOf(row);
   };
 
+  const runsAmong = (chunk: readonly string[]) =>
+    db
+      .select(componentDeletions)
+      .where(inArray(columns().componentId, [...chunk]))
+      .all();
+  const runsOf = async (ids: readonly string[]) => {
+    const rows: Awaited<ReturnType<typeof runsAmong>> = [];
+    for (let at = 0; at < ids.length; at += IDS_PER_READ) {
+      rows.push(...(await runsAmong(ids.slice(at, at + IDS_PER_READ))));
+    }
+    return rows;
+  };
+
+  const closeRun = (
+    runId: string,
+    at: readonly StoredPhase[]
+  ): Promise<boolean> =>
+    db.transaction(async tx => {
+      const t = tx.table(componentDeletions);
+      // The row removed only where it still has the phase read: a phase
+      // moved meanwhile is seen after the row lock on every dialect, and the
+      // count says so (a delete counts the rows it removed, MySQL too).
+      const removed = await tx
+        .delete(componentDeletions)
+        .where(both(eq(t.id, runId), inArray(t.phase, [...at])));
+      if (removed === 0) return false;
+      const h = tx.table(componentDeletionHosts);
+      await tx.delete(componentDeletionHosts).where(eq(h.deletionId, runId));
+      return true;
+    });
+
   return {
     runFor,
     runById: async runId => {
@@ -174,14 +286,14 @@ export function fenceStore(
         .first();
       return row === null ? null : runOf(row);
     },
-    open: async (componentId, purpose, startedBy) => {
+    open: async (componentId, purpose, startedBy, startAt = "converting") => {
       try {
         const run = await db.transaction(tx =>
           tx.insertReturning(componentDeletions, {
             componentId,
             purpose,
             startedBy,
-            phase: "converting",
+            phase: startAt,
           })
         );
         return { opened: true, run: runOf(run) };
@@ -202,28 +314,88 @@ export function fenceStore(
         .where(both(eq(r.id, runId), eq(r.phase, from)));
       return moved > 0;
     },
-    fenced: async () => {
-      // Every open run, filtered here: the table holds one row per run in
-      // flight, and a purpose read strictly fences when it cannot be told.
-      const rows = await db.select(componentDeletions).all();
+    fenced: async among => {
+      // The runs of the components named, by the index on the component's
+      // id: a deleted component's row stays for good, so the table grows,
+      // and reading all of it is kept for a document read only in part.
+      // Filtered here, as a purpose read strictly fences when it cannot be
+      // told.
+      const rows =
+        among === undefined
+          ? await db.select(componentDeletions).all()
+          : await runsOf(among);
       return new Set(
         rows
           .filter(row => purposeOf(row.purpose) === "delete")
           .map(row => row.componentId)
       );
     },
-    close: async (componentId, purpose) =>
+    runsAt: async phase =>
+      (
+        await db
+          .select(componentDeletions)
+          .where(eq(columns().phase, phase))
+          .all()
+      ).map(row => runOf(row)),
+    close: async (componentId, purpose) => {
+      const run = await runFor(componentId, purpose);
+      if (run !== null) await closeRun(run.id, CLOSABLE_PHASES);
+    },
+    closeRun,
+    advanceFrom: async (runId, at, to) => {
+      const r = columns();
+      const cursorIs =
+        at.cursor === null ? isNull(r.cursor) : eq(r.cursor, at.cursor);
+      // Every move writes a cursor or a phase it did not hold, so the count
+      // is the rows matched on MySQL too.
+      const moved = await db
+        .update(componentDeletions, { phase: to.phase, cursor: to.cursor })
+        .where(both(both(eq(r.id, runId), eq(r.phase, at.phase)), cursorIs));
+      return moved > 0;
+    },
+    markDeleted: (runId, deletedAt) =>
       db.transaction(async tx => {
         const t = tx.table(componentDeletions);
-        const run = await tx
-          .select(componentDeletions)
-          .where(both(eq(t.componentId, componentId), eq(t.purpose, purpose)))
-          .first();
-        if (run === null) return;
+        const moved = await tx
+          .update(componentDeletions, { phase: "deleted", cursor: deletedAt })
+          .where(both(eq(t.id, runId), eq(t.phase, "deleting")));
+        if (moved === 0) return false;
         const h = tx.table(componentDeletionHosts);
-        await tx.delete(componentDeletionHosts).where(eq(h.deletionId, run.id));
-        await tx.delete(componentDeletions).where(eq(t.id, run.id));
+        await tx.delete(componentDeletionHosts).where(eq(h.deletionId, runId));
+        return true;
       }),
+  };
+}
+
+/** Whether a stored phase is one of the walks. */
+function isWalkPhase(phase: StoredPhase): phase is RunPhase {
+  return phase === "converting" || phase === "final" || phase === "done";
+}
+
+/**
+ * The run table as the walk reads it. A run at a step of the component delete
+ * is walked by nothing but a dry run: before its converting walk, nothing may
+ * be written (`preflight`), and once the component is being deleted, nothing
+ * is left to convert. A dry run reads the phase not at all, so it is handed
+ * the run as converting.
+ */
+export function walkedRuns(
+  fence: Pick<FenceStore, "runById" | "advance">,
+  dryRun: boolean
+): RunStore {
+  return {
+    advance: (runId, from, to, cursor) =>
+      fence.advance(runId, from, to, cursor),
+    runById: async runId => {
+      const run = await fence.runById(runId);
+      if (run === null) return null;
+      if (isWalkPhase(run.phase)) return { ...run, phase: run.phase };
+      if (dryRun) return { ...run, phase: "converting" };
+      throw NextlyError.conflict({
+        reason: "state",
+        logContext: { reason: "host-rewrite-not-walking", phase: run.phase },
+      });
+    },
   };
 }
 
@@ -247,8 +419,11 @@ export interface FenceJudgement {
   readonly localized: boolean;
   /** How many nodes to read before a document counts as unreadable. */
   readonly maxNodes: number;
-  /** The fenced components, read when the write places any component. */
-  readonly fenced: () => Promise<FencedComponents>;
+  /**
+   * The fenced components, read when the write places any component: among
+   * the ones named, when the document was read to the end.
+   */
+  readonly fenced: (among?: readonly string[]) => Promise<FencedComponents>;
 }
 
 /**
@@ -263,7 +438,7 @@ export async function fenceIssues(
 ): Promise<FenceIssue[]> {
   const placed = componentReferencesIn(judged.document, judged.maxNodes);
   if (placed.complete && placed.ids.length === 0) return [];
-  const fenced = await judged.fenced();
+  const fenced = await judged.fenced(placed.complete ? placed.ids : undefined);
   // Neither side read to the end: the components the document places beyond
   // its surveyed prefix are unknown, and so is which ones are fenced. An empty
   // prefix proves nothing, so the write is refused as it stands.
@@ -376,10 +551,10 @@ function fencedMessage(componentId: string, unread: boolean): string {
 export function fencedComponentsReader(
   store: () => Pick<FenceStore, "fenced">,
   onUnreadable: (error: unknown) => void
-): () => Promise<FencedComponents> {
-  return async () => {
+): (among?: readonly string[]) => Promise<FencedComponents> {
+  return async among => {
     try {
-      return { kind: "read", ids: await store().fenced() };
+      return { kind: "read", ids: await store().fenced(among) };
     } catch (error) {
       onUnreadable(error);
       return { kind: "unreadable" };

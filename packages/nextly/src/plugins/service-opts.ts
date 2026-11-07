@@ -10,10 +10,17 @@ import {
 import { runAsPrincipal } from "../auth/principal-scope";
 import type { RequestActor } from "../auth/request-actor";
 import { buildUserContext } from "../auth/user-context";
-import { buildMutationMessage } from "../direct-api/namespaces/helpers";
+import type { FieldConfig } from "../collections/fields/types";
+import {
+  buildMutationMessage,
+  createErrorFromSingleResult,
+} from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { withCurrentLanguages } from "../domains/i18n/configured-locales";
 import { isLocaleSelector } from "../domains/i18n/locale-selector";
+import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
+import type { SingleDocument } from "../domains/singles/types";
+import { holdsFieldOfType } from "../domains/versions/tag-component-types";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
 import type {
@@ -21,11 +28,13 @@ import type {
   CollectionService,
 } from "../services/collections/collection-service";
 import {
+  type HookExemptRead,
   issueHookExemptRead,
   readHooksWaived,
 } from "../services/collections/trust-grant";
 import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
+import { runReadsInTransaction } from "../shared/lib/read-transaction-scope";
 import type { AuthUser } from "../types/auth";
 
 import { assertRunnableAsPrincipal } from "./principals/run-as";
@@ -606,6 +615,40 @@ export interface PluginTransactionRecord {
 const pluginTransactions = new WeakMap<object, PluginTransactionRecord>();
 
 /**
+ * The key each write's transaction hands its in-transaction handlers, by the
+ * adapter's transaction: one per transaction, so every handler call in it
+ * (each entry of a batch included) holds the same key, and work a plugin
+ * keys by it sees what its earlier calls on that transaction did. A key
+ * carries no capability: the token beside it is what reaches the database.
+ */
+const writeTransactionKeys = new WeakMap<object, object>();
+
+/**
+ * Run `work` with a token for the write transaction `tx`, as the collection
+ * service's in-transaction methods take it, open while `work` runs and
+ * refusing once it has settled, as every token a plugin holds does; and with
+ * the key that transaction's every handler call shares.
+ *
+ * @internal The in-transaction phase's, for `InTransactionContext`.
+ */
+export function withWriteTransactionToken<R>(
+  tx: TransactionContext,
+  work: (token: PluginCollectionTransaction, key: object) => Promise<R>
+): Promise<R> {
+  const adapterTx = tx as unknown as object;
+  let key = writeTransactionKeys.get(adapterTx);
+  if (key === undefined) {
+    key = Object.freeze({});
+    writeTransactionKeys.set(adapterTx, key);
+  }
+  const token = Object.freeze({}) as PluginCollectionTransaction;
+  const scope = transactionScope("ctx.hooks.onInTransaction");
+  pluginTransactions.set(token, { tx, scope });
+  const shared = key;
+  return scope.run(() => work(token, shared));
+}
+
+/**
  * The record a plugin's token stands for, or a refusal when the value is not
  * one `withTransaction` handed out.
  */
@@ -839,6 +882,18 @@ export type OwnCollectionReadOpts = Pick<
 >;
 
 /**
+ * @experimental What a read of the plugin's own collection on a transaction
+ * may also say: the lock its rows are read with on PostgreSQL and MySQL.
+ * `share` (the default) holds them against writes from elsewhere; `update`
+ * also holds them against other transactions' locking reads, for a read
+ * that goes on to write the rows it read, so two such transactions take
+ * turns rather than each holding a shared lock the other's write waits on.
+ */
+export type OwnTransactionReadOpts = OwnCollectionReadOpts & {
+  readonly lock?: "share" | "update";
+};
+
+/**
  * @experimental Reads of the collections this plugin declared, shaped by no
  * configured hook. Never return the result to a person: a site's read hooks
  * may be what keeps one tenant's rows from another.
@@ -864,6 +919,125 @@ export interface PluginOwnCollectionReads {
     options: Parameters<CollectionService["group"]>[1],
     opts?: OwnCollectionReadOpts
   ): ReturnType<CollectionService["group"]>;
+  /**
+   * @experimental {@link listEntries}, read on the transaction `tx` stands
+   * for: the token `ctx.services.collections.withTransaction` hands its work,
+   * or an in-transaction handler's `transaction`. Same options, same answer.
+   *
+   * The read runs on the transaction's own connection, so it sees what the
+   * transaction wrote and takes no second connection from the pool, which on
+   * a pool of one would wait for the connection the transaction holds. On
+   * PostgreSQL and MySQL the page's rows are read with a shared lock
+   * (`FOR SHARE`): the latest committed rows, whatever the transaction's
+   * isolation, held until it ends, so a write to them from elsewhere waits.
+   * The total in `pagination` is a count, which takes no lock: rows can be
+   * added beside the page before the transaction ends. Page with `limit` and
+   * stop on a short page rather than on the total. A settled token, or a
+   * collection this plugin did not declare, is refused before anything is
+   * read. `opts.lock: "update"` reads the rows for update instead, for a
+   * read that goes on to write them (see {@link OwnTransactionReadOpts}).
+   */
+  listEntriesInTransaction(
+    tx: PluginCollectionTransaction,
+    slug: string,
+    options?: Parameters<CollectionService["listEntries"]>[1],
+    opts?: OwnTransactionReadOpts
+  ): ReturnType<CollectionService["listEntries"]>;
+  /**
+   * @experimental {@link findEntryById}, read on the transaction `tx` stands
+   * for, as {@link listEntriesInTransaction} reads: on its connection, and on
+   * PostgreSQL and MySQL with a shared lock on the row, held until the
+   * transaction ends. Same answer.
+   */
+  findEntryByIdInTransaction(
+    tx: PluginCollectionTransaction,
+    slug: string,
+    id: string,
+    opts?: OwnTransactionReadOpts
+  ): ReturnType<CollectionService["findEntryById"]>;
+  /**
+   * @experimental A Single this plugin declared, as stored, read on the
+   * transaction `tx` stands for, as {@link listEntriesInTransaction} reads:
+   * on its connection, and on PostgreSQL and MySQL with a shared lock on the
+   * Single's row, held until the transaction ends.
+   *
+   * Answers the document the Singles read answers, shaped by none of the
+   * Single's read hooks (`beforeOperation`, `beforeRead`, `afterRead`) or its
+   * fields' `afterRead` hooks, as the system. A Single with no stored
+   * document answers the default document a first read would create, and
+   * nothing is written: no row, version or event. A settled token, or a
+   * Single this plugin did not declare, is refused before anything is read.
+   */
+  getSingleInTransaction(
+    tx: PluginCollectionTransaction,
+    slug: string,
+    opts?: OwnCollectionReadOpts
+  ): Promise<SingleDocument>;
+  /**
+   * @experimental {@link listEntriesInTransaction}, of a HOST collection: one
+   * this plugin did not declare, that holds a field of a type this plugin
+   * registered (`contributes.fieldTypes`) at any depth, inside groups,
+   * repeaters and the components it names included. Same options, same
+   * answer, same lock (`opts.lock`), as the system and past the collection's
+   * read hooks.
+   *
+   * Whether the collection holds such a field is decided at the call, from
+   * its schema as it stands on the transaction, so a collection created or
+   * changed at runtime is judged as it is now. One that holds none, or does
+   * not exist, is refused before anything is read, as a settled token is.
+   */
+  listHostEntriesInTransaction(
+    tx: PluginCollectionTransaction,
+    slug: string,
+    options?: Parameters<CollectionService["listEntries"]>[1],
+    opts?: OwnTransactionReadOpts
+  ): ReturnType<CollectionService["listEntries"]>;
+  /**
+   * @experimental {@link findEntryByIdInTransaction}, of a HOST collection,
+   * judged as {@link listHostEntriesInTransaction} judges one.
+   */
+  findHostEntryByIdInTransaction(
+    tx: PluginCollectionTransaction,
+    slug: string,
+    id: string,
+    opts?: OwnTransactionReadOpts
+  ): ReturnType<CollectionService["findEntryById"]>;
+  /**
+   * @experimental {@link getSingleInTransaction}, of a HOST Single: one that
+   * holds a field of a type this plugin registered, at any depth, judged at
+   * the call as {@link listHostEntriesInTransaction} judges a collection.
+   */
+  getHostSingleInTransaction(
+    tx: PluginCollectionTransaction,
+    slug: string,
+    opts?: OwnCollectionReadOpts
+  ): Promise<SingleDocument>;
+}
+
+/**
+ * The Singles a plugin declared, for its own reads of them: their RESOLVED
+ * slugs, and the Singles service, resolved on first use.
+ */
+export interface OwnSinglesSource {
+  owned: readonly string[];
+  service: () => Pick<SingleEntryService, "get">;
+}
+
+/**
+ * What a host read asks to decide whether a collection or Single holds a
+ * field of a type the plugin registered: those types, and the schema as it
+ * stands when it is asked.
+ */
+export interface HostSchemaSource {
+  /** The field types the plugin registered (`contributes.fieldTypes`). */
+  readonly fieldTypes: readonly string[];
+  /** A collection's or a Single's declared fields, or null where there is none. */
+  fieldsOf(
+    kind: "collection" | "Single",
+    slug: string
+  ): Promise<readonly unknown[] | null>;
+  /** A component's own fields, or null where there is none. */
+  componentFields(slug: string): Promise<FieldConfig[] | null>;
 }
 
 /**
@@ -874,27 +1048,85 @@ export interface PluginOwnCollectionReads {
  */
 export function ownCollectionReads(
   collections: CollectionService,
-  owned: readonly string[]
+  owned: readonly string[],
+  singles?: OwnSinglesSource,
+  host?: HostSchemaSource
 ): PluginOwnCollectionReads {
-  const grant = issueHookExemptRead(owned);
+  /**
+   * Which slugs a read may skip the read hooks of, and how one outside them
+   * is refused.
+   */
+  interface ReadGrant {
+    grant: HookExemptRead;
+    refuse: (slug: string) => NextlyError;
+  }
+  type Kind = "collection" | "Single";
+  const notDeclared =
+    (kind: Kind) =>
+    (slug: string): NextlyError =>
+      NextlyError.invalidInput({
+        message: `"${slug}" is not a ${kind} this plugin declared, so it cannot be read without its hooks.`,
+        logContext:
+          kind === "collection"
+            ? { reason: "own-collection-read-not-owned", collection: slug }
+            : { reason: "own-single-read-not-owned", single: slug },
+      });
+  const holdsNoOwnField =
+    (kind: Kind) =>
+    (slug: string): NextlyError =>
+      NextlyError.invalidInput({
+        message: `"${slug}" holds no field of a type this plugin registered, so it cannot be read without its hooks.`,
+        logContext:
+          kind === "collection"
+            ? { reason: "host-collection-read-not-eligible", collection: slug }
+            : { reason: "host-single-read-not-eligible", single: slug },
+      });
+
+  // One grant per kind: a collection and a Single may share a slug, and a
+  // grant for the one must not waive the other's hooks.
+  const collection: ReadGrant = {
+    grant: issueHookExemptRead(owned),
+    refuse: notDeclared("collection"),
+  };
+  const single: ReadGrant = {
+    grant: issueHookExemptRead(singles?.owned ?? []),
+    refuse: notDeclared("Single"),
+  };
+
+  /**
+   * The grant one host read runs under: the slug alone when it holds a field
+   * of a type this plugin registered, nothing otherwise. Issued for the one
+   * call, so it never widens the grants above and a slug found ineligible is
+   * never waived. Asked inside the read's transaction scope, so the schema is
+   * read as the transaction sees it, on its connection.
+   */
+  const hostGrant = async (kind: Kind, slug: string): Promise<ReadGrant> => {
+    let eligible = false;
+    const source = host;
+    if (source !== undefined && source.fieldTypes.length > 0) {
+      const fields = await source.fieldsOf(kind, slug);
+      eligible =
+        fields !== null &&
+        (await holdsFieldOfType(fields, source.fieldTypes, componentSlug =>
+          source.componentFields(componentSlug)
+        ));
+    }
+    return {
+      grant: issueHookExemptRead(eligible ? [slug] : []),
+      refuse: holdsNoOwnField(kind),
+    };
+  };
 
   const read = async <T>(
+    owner: ReadGrant,
     slug: string,
     opts: OwnCollectionReadOpts | undefined,
     run: (context: RequestContext) => Promise<T>
   ): Promise<T> => {
-    // Ownership is the precondition for the waiver, so it is refused before
-    // anything is resolved or read, and asked with the same function the query
-    // service asks before skipping a hook.
-    if (!readHooksWaived(grant, slug)) {
-      throw NextlyError.invalidInput({
-        message: `"${slug}" is not a collection this plugin declared, so it cannot be read without its hooks.`,
-        logContext: {
-          reason: "own-collection-read-not-owned",
-          collection: slug,
-        },
-      });
-    }
+    // The grant is the precondition for the waiver, so a slug outside it is
+    // refused before anything is resolved or read, and asked with the same
+    // function the query services ask before skipping a hook.
+    if (!readHooksWaived(owner.grant, slug)) throw owner.refuse(slug);
     // Named field by field, because what is left out is the point: a caller
     // passing `as`, `user` or a principal at runtime gets none of them.
     const resolved = await resolveServiceOpts({
@@ -903,7 +1135,10 @@ export function ownCollectionReads(
       locale: opts?.locale,
       fallbackLocale: opts?.fallbackLocale,
     });
-    const context: RequestContext = { ...resolved, hookExemptRead: grant };
+    const context: RequestContext = {
+      ...resolved,
+      hookExemptRead: owner.grant,
+    };
     // The same pins the ordinary facade puts around a system call. No person
     // from an enclosing request reaches this read, or a related row's hooks
     // inside it. A system call carries no scope of its own, so an API key's
@@ -919,16 +1154,120 @@ export function ownCollectionReads(
     );
   };
 
-  return Object.freeze({
-    listEntries: (slug, options, opts) =>
-      read(slug, opts, context =>
+  /**
+   * Run `readOwned` on the transaction `token` stands for. The token is
+   * checked as a write on it is (`wrapCollectionsForPlugin`): an unknown or
+   * settled one is refused before anything runs, and the read is tracked on
+   * its scope, so a read started and not awaited still finishes before the
+   * transaction ends. Every read the services make inside it runs on the
+   * transaction's connection (`runReadsInTransaction`).
+   */
+  const onTransaction = async <T>(
+    token: PluginCollectionTransaction,
+    readOwned: () => Promise<T>,
+    lock: "share" | "update" = "share"
+  ): Promise<T> => {
+    const { tx, scope } = transactionOf(token);
+    scope.assertOpen();
+    return scope.track(runReadsInTransaction(tx, readOwned, lock), "read");
+  };
+
+  /** The Single's stored document, as the Singles read answers it. */
+  const readSingle = async (
+    slug: string,
+    context: RequestContext
+  ): Promise<SingleDocument> => {
+    if (!singles) {
+      // A context built with no Singles source owns no Single, and a plugin
+      // context always has one; only a context built for a test with a host
+      // schema source and no Singles service reaches this. Kept as a guard
+      // over values in hand.
+      throw NextlyError.internal({
+        logContext: { reason: "own-single-read-without-service", single: slug },
+      });
+    }
+    const result = await singles.service().get(slug, {
+      overrideAccess: context.overrideAccess,
+      // The grant the read was judged under: the plugin's own Singles, or
+      // the one host Single this call found eligible.
+      hookExemptRead: context.hookExemptRead,
+      // A read writes nothing: a Single with no stored document answers the
+      // default one a first read would create, built and not stored.
+      createIfMissing: false,
+      whenAbsent: "default",
+      context: context.context,
+      locale: context.locale,
+      fallbackLocale: context.fallbackLocale,
+    });
+    if (!result.success) throw createErrorFromSingleResult(result);
+    if (result.data === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "own-single-read-no-document", single: slug },
+      });
+    }
+    return result.data;
+  };
+
+  // Each read once, under whichever grant the caller holds: the plugin's own
+  // collections, or the one host collection a host read found eligible.
+  const listUnder =
+    (owner: ReadGrant): PluginOwnCollectionReads["listEntries"] =>
+    (slug, options, opts) =>
+      read(owner, slug, opts, context =>
         collections.listEntries(slug, options, context)
-      ),
-    findEntryById: (slug, id, opts) =>
-      read(slug, opts, context => collections.findEntryById(slug, id, context)),
+      );
+  const findUnder =
+    (owner: ReadGrant): PluginOwnCollectionReads["findEntryById"] =>
+    (slug, id, opts) =>
+      read(owner, slug, opts, context =>
+        collections.findEntryById(slug, id, context)
+      );
+  const getSingleUnder = (
+    owner: ReadGrant,
+    slug: string,
+    opts: OwnCollectionReadOpts | undefined
+  ): Promise<SingleDocument> =>
+    read(owner, slug, opts, context => readSingle(slug, context));
+  const listEntries = listUnder(collection);
+  const findEntryById = findUnder(collection);
+
+  return Object.freeze({
+    listEntries,
+    findEntryById,
     count: (slug, options, opts) =>
-      read(slug, opts, context => collections.count(slug, options, context)),
+      read(collection, slug, opts, context =>
+        collections.count(slug, options, context)
+      ),
     group: (slug, options, opts) =>
-      read(slug, opts, context => collections.group(slug, options, context)),
+      read(collection, slug, opts, context =>
+        collections.group(slug, options, context)
+      ),
+    // The reads above, on the transaction: the same read, so the same answer.
+    listEntriesInTransaction: (tx, slug, options, opts) =>
+      onTransaction(tx, () => listEntries(slug, options, opts), opts?.lock),
+    findEntryByIdInTransaction: (tx, slug, id, opts) =>
+      onTransaction(tx, () => findEntryById(slug, id, opts), opts?.lock),
+    getSingleInTransaction: (tx, slug, opts) =>
+      onTransaction(tx, () => getSingleUnder(single, slug, opts)),
+    // The same reads under a grant decided at the call, inside the
+    // transaction's scope, before the service is reached.
+    listHostEntriesInTransaction: (tx, slug, options, opts) =>
+      onTransaction(
+        tx,
+        async () =>
+          listUnder(await hostGrant("collection", slug))(slug, options, opts),
+        opts?.lock
+      ),
+    findHostEntryByIdInTransaction: (tx, slug, id, opts) =>
+      onTransaction(
+        tx,
+        async () =>
+          findUnder(await hostGrant("collection", slug))(slug, id, opts),
+        opts?.lock
+      ),
+    getHostSingleInTransaction: (tx, slug, opts) =>
+      onTransaction(tx, async () =>
+        getSingleUnder(await hostGrant("Single", slug), slug, opts)
+      ),
   } satisfies PluginOwnCollectionReads);
 }

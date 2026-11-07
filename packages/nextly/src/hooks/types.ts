@@ -237,6 +237,18 @@ export interface HookContext<T = any> {
   originalData?: T;
 
   /**
+   * The status an update is classified against, where core reads it apart
+   * from `originalData`: on a collection that keeps its status per language,
+   * the status stored in the language the write names (its companion row's,
+   * or the main row's where that language has none), and for a write to every
+   * language, `"published"` when any language is. Absent where the write's
+   * status is the main row's, so `originalData.status` is the one to read.
+   *
+   * @experimental
+   */
+  storedStatus?: string | null;
+
+  /**
    * User performing the operation (if authenticated)
    *
    * Contains user ID and any additional user data passed from the request.

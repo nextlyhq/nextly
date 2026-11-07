@@ -13,6 +13,7 @@
 import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
+import { sha256Hex } from "../sha256-hex";
 
 import { toDate, type LayoutCopy } from "./store";
 
@@ -138,14 +139,7 @@ export async function versionOf(
   live: Record<string, unknown>,
   draft: Record<string, unknown> | null
 ): Promise<string> {
-  const text = JSON.stringify([contentOf(live), contentOf(draft)]);
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text)
-  );
-  return [...new Uint8Array(digest)]
-    .map(byte => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return sha256Hex(JSON.stringify([contentOf(live), contentOf(draft)]));
 }
 
 /** Whether a by-id read with `draft: true` answered a working draft. */
