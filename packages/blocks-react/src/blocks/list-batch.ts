@@ -24,6 +24,7 @@ import {
   LIST_ENTRY_SLOT,
   isBindPath,
   isPlainRecord,
+  listItemRef,
   resolveNodeBindings,
   type BindingIssue,
   type BindingRun,
@@ -426,15 +427,16 @@ function linkRefs(
 
 /** The schema the item being drawn binds against, where one is known. */
 function itemRefOf(context: PageContext): {
-  readonly itemRef?: { collection: string } | { query: string };
+  readonly itemRef?: { readonly collection: string } | { readonly query: string };
 } {
-  const itemSource = context.itemSource;
-  return typeof itemSource === "string" && itemSource !== ""
-    ? { itemRef: { collection: itemSource } }
-    : // A named query's rows with their own schema bind as the query's.
-      typeof context.itemQuery === "string"
-      ? { itemRef: { query: context.itemQuery } }
-      : {};
+  // The engine's one rule, which the save and the report judge by too: a
+  // collection's entries bind as that collection's, a named query's rows
+  // with their own schema as the query's.
+  const itemRef = listItemRef({
+    collection: context.itemSource,
+    query: context.itemQuery,
+  });
+  return itemRef === undefined ? {} : { itemRef };
 }
 
 /**
