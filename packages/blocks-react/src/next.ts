@@ -3538,11 +3538,16 @@ function decideConditions(
  * Once per render, when its refusals first go quiet: they come as the page
  * streams, block by block, so the line waits for a short quiet rather than
  * for a render end it cannot see; reads refused after it are not added. And
- * at most once per page per process in {@link OVERRUN_INTERVAL_MS}, so a
+ * at most once per page, language and page of its list per process in
+ * {@link OVERRUN_INTERVAL_MS}, so a
  * page over its cap that is rendered on every visit says so once in a while,
  * not on every visit.
  */
-function overrunLog(context: RenderContext): {
+function overrunLog(
+  context: RenderContext,
+  /** Which page of its list the render draws, once that is known. */
+  listPage: () => number | undefined
+): {
   refused(budget: QueryBudget): void;
 } {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -3555,7 +3560,13 @@ function overrunLog(context: RenderContext): {
         timer = undefined;
         said = true;
         const report = budget.report?.();
-        const page = `${context.collection}\u0000${context.slug}`;
+        // Each language and each page of a list said apart: they read apart.
+        const page = [
+          context.collection,
+          context.slug,
+          context.locale ?? "",
+          String(listPage() ?? 1),
+        ].join("\u0000");
         if (report === undefined || !overrunMayBeSaid(page, Date.now())) {
           return;
         }
@@ -3971,7 +3982,10 @@ function blocksRouteConfig(
       // one read that multiplies while ignoring the ones it multiplies INTO.
       // It says when it is outrun, so the page's overrun is logged once,
       // naming the page, the cap and the blocks drawn without their data.
-      const overrun = overrunLog(context);
+      // Which page of its list this render draws is known only once the
+      // list's first read is claimed, below.
+      const drawnPage: { number?: number | undefined } = {};
+      const overrun = overrunLog(context, () => drawnPage.number);
       const budget = createQueryBudget(
         config.maxQueries ?? DEFAULT_MAX_QUERIES,
         { onRefused: () => overrun.refused(budget) }
@@ -4103,6 +4117,7 @@ function blocksRouteConfig(
           : pageBindingRun(bindings, context.locale, resolver)
       );
       const listPage = claimedListPage(pagedList, context, budget);
+      drawnPage.number = listPage?.page;
       // What a list reads ahead for its entries, through the page's own
       // reads: relations as the public reads them, links as the blocks drawn
       // inside the entries would read them one by one.
@@ -4118,6 +4133,10 @@ function blocksRouteConfig(
           ...listDays,
           ...(listPage === undefined ? {} : { listPage }),
           listReads,
+          // The blocks the renderer keeps for the entry's conditions, from
+          // the same preparation it draws, so a list reads ahead for exactly
+          // the blocks it draws.
+          heldConditions: heldConditionsOf(page.prepared ?? undefined),
         },
         blocks: resolver,
         styleContext,

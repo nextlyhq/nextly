@@ -252,6 +252,11 @@ interface ListRead {
   readonly rowKey?: string;
   /** How many entries match before the window, where the read says. */
   readonly matching?: number;
+  /**
+   * The collection the entries are entries of, when they are one's: what
+   * their item bindings' relations are read ahead in.
+   */
+  readonly entriesOf?: string;
 }
 
 /**
@@ -320,6 +325,9 @@ async function readNamedSource(
   return {
     outcome,
     itemContext: itemOf(outcome.rowsCollection, base.named.name),
+    ...(outcome.rowsCollection === undefined
+      ? {}
+      : { entriesOf: outcome.rowsCollection }),
     ...(outcome.rowKey === undefined ? {} : { rowKey: outcome.rowKey }),
     ...(outcome.total === undefined ? {} : { matching: outcome.total }),
   };
@@ -398,8 +406,10 @@ export async function renderCollectionLoop({
     );
   }
   if (named !== undefined) {
+    // Rows that are a collection's entries read ahead as a list of that
+    // collection's entries does, drawn with the query's own item context.
     return drawList(
-      named,
+      await withReadAhead(named, node, ctx, named.entriesOf),
       { className, renderSlot, spacingMode, ctx, nodeId: node.id },
       pageLinks(paging, named, props, partClass)
     );
@@ -475,10 +485,12 @@ export async function renderCollectionLoop({
     itemSource: collection,
     itemQuery: undefined,
   });
-  const read = await withReadAhead(outcome, node, ctx, {
-    collection,
-    contextOf,
-  });
+  const read = await withReadAhead(
+    { outcome, itemContext: contextOf },
+    node,
+    ctx,
+    collection
+  );
   // The links between pages, under the entries, when the route pages this
   // list and its read said how many entries it matches.
   const pages = pageLinks(
@@ -488,10 +500,7 @@ export async function renderCollectionLoop({
     partClass
   );
   return drawList(
-    {
-      outcome: read,
-      itemContext: contextOf,
-    },
+    read,
     { className, renderSlot, spacingMode, ctx, nodeId: node.id },
     pages
   );
