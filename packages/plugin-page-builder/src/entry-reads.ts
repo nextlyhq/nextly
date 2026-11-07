@@ -12,7 +12,11 @@
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import type { PaginationMeta, WhereFilter } from "nextly";
 import { readableTitleText } from "nextly/config";
-import { requireNextly, type EditorSourceReader } from "nextly/runtime";
+import {
+  requireNextly,
+  type EditorSourceReader,
+  type PublicSourceReader,
+} from "nextly/runtime";
 
 import { readOrNull } from "./composition-route-kit";
 import { ENTRIES_UNTITLED, type EntryItem } from "./entries-contract";
@@ -79,6 +83,26 @@ export async function findAsCaller(
       : { unknownSort: args.unknownSort }),
   });
   return { items: result.items, meta: result.meta };
+}
+
+/**
+ * The public reader, as the published page reads with it: published entries
+ * and the fields the public may read, the same for everyone. Shared by every
+ * read made as a visitor (an unbind keeping what visitors see, a template's
+ * preview of its published entry), so each reads by the same statement.
+ */
+export async function publicSourceReader(
+  locale: string | undefined
+): Promise<PublicSourceReader> {
+  const { createPublicReader } = await import("nextly/runtime");
+  const nextly = requireNextly();
+  return createPublicReader(
+    {
+      find: async args => await nextly.find(args),
+      findSingle: async args => await nextly.findSingle(args),
+    },
+    locale === undefined ? {} : { locale }
+  );
 }
 
 /**

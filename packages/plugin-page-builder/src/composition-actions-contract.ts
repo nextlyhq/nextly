@@ -48,6 +48,7 @@ export type {
   ExposureTargetInput,
   ListQueryChange,
   PageAction,
+  UnbindKeep,
 } from "@nextlyhq/builder/ops";
 
 /** @experimental Settles when the composition API ships. */
@@ -59,6 +60,26 @@ export interface PageActionRequest {
   readonly expect?: string;
   /** Publish the page with the change, rather than saving its working draft. */
   readonly publish?: boolean;
+}
+
+/**
+ * What an `unbind-prop` action kept in the prop's place, and why, as the
+ * inspector's note and an API client both read it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface UnbindAnswer {
+  /**
+   * What was kept: what a visitor sees now, the binding's fallback, the
+   * prop's own value, or a value the caller gave.
+   */
+  readonly kept: "visitor" | "fallback" | "own" | "value";
+  /** The value kept; absent when the prop keeps its own. */
+  readonly value?: unknown;
+  /** The prop an image's address was kept in, where the bound prop could not hold it. */
+  readonly into?: string;
+  /** Why, in words an author reads. */
+  readonly reason: string;
 }
 
 /** @experimental Settles when the composition API ships. */
@@ -76,6 +97,8 @@ export interface PageActionResult {
   };
   /** The id of a block the action added, for the next action to address. */
   readonly insertedId?: string;
+  /** For `unbind-prop`: what was kept in the prop's place, and why. */
+  readonly unbound?: UnbindAnswer;
   /** Why the site would refuse the write, in its own words; empty when it accepts it. */
   readonly refusals: readonly string[];
   /** The stored state this answer was planned against, for `expect`. */

@@ -139,6 +139,12 @@ export {
   TYPOGRAPHY_DEFAULTS,
   withTypographyDefaults,
 } from "./blocks/typography-defaults";
+/**
+ * Whether an image or embed address may be requested, by the renderer's one
+ * filter: exported so a caller judging what a page draws, such as an unbind
+ * keeping what visitors see, asks the same question the image block does.
+ */
+export { fetchableUrl } from "./blocks/props";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the

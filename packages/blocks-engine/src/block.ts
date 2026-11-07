@@ -95,7 +95,35 @@ export interface PropSchema {
    * list (`image/*`), so an image is never given a PDF to draw.
    */
   accept?: string;
+  /**
+   * For a `media` or `upload` prop: the block's `url` prop that holds an image
+   * by its address rather than its library id, as core/image's `mediaId` and
+   * `src` are. Declared, never guessed from the props beside it: unbinding an
+   * image a visitor saw by its address keeps that address here, since the
+   * media prop can hold only a library id. Registration refuses one that
+   * names no `url` prop of the block.
+   */
+  addressProp?: string;
   [option: string]: unknown;
+}
+
+/**
+ * The prop that holds an image by its address for the media prop `prop`, as
+ * the block's definition declares it ({@link PropSchema.addressProp}), or
+ * `undefined` when it declares none.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function addressPropOf(
+  props: Readonly<Partial<Record<string, PropSchema>>> | undefined,
+  prop: string
+): string | undefined {
+  const schema = props?.[prop];
+  // Read on a media prop alone, as registration judges it: elsewhere the key
+  // is a block's own extension option.
+  if (schema?.type !== "media" && schema?.type !== "upload") return undefined;
+  const declared = schema.addressProp;
+  return typeof declared === "string" && declared !== "" ? declared : undefined;
 }
 
 /**

@@ -479,6 +479,9 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
       role: "content",
       type: "media",
       accept: "image/*",
+      // An image kept by its address, as an unbound one a visitor saw by
+      // address is, belongs in `src`: `mediaId` holds a library id only.
+      addressProp: "src",
     },
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
