@@ -52,6 +52,7 @@ function reads(page: Record<string, unknown> | null): UnbindPlanReads & {
   return {
     readPage: vi.fn(async () => page),
     plan: vi.fn<typeof planUnbind>(async () => PLANNED),
+    templates: "templates",
   };
 }
 
@@ -74,6 +75,7 @@ describe("the editor's unbind plan", () => {
     await answerUnbindPlan(
       unbindPlanRequestOf(
         body({
+          page: { collection: "templates", id: "p1", locale: "en" },
           action: {
             kind: "unbind-prop",
             nodeId: "h",
@@ -90,6 +92,22 @@ describe("the editor's unbind plan", () => {
       "h",
       "text",
       { entry: "e7" }
+    );
+  });
+
+  it("reads no template's collection from an ordinary page's same-named field", async () => {
+    // `events` has a field named `collection`; it is no template.
+    const r = reads({ id: "e1", collection: "workshops" });
+    await answerUnbindPlan(
+      unbindPlanRequestOf(body({ page: { collection: "events", id: "e1" } })),
+      r
+    );
+    expect(r.plan).toHaveBeenCalledWith(
+      { collection: "events", id: "e1" },
+      document,
+      "h",
+      "text",
+      "visitor"
     );
   });
 

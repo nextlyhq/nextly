@@ -40,7 +40,8 @@ export const SITE_SETTING_FIELD_SHAPES: readonly BindingFieldShape[] =
 
 /**
  * What each site setting a page may bind is called where an author picks or
- * reads one: the name the settings screen gives it.
+ * reads one in the page builder, in words: "Site URL", not the key's "site
+ * url".
  *
  * @experimental Settles with the editor's binding controls.
  */
