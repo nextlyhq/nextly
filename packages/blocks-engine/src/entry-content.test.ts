@@ -218,3 +218,64 @@ describe("composing an entry's content into its template", () => {
     expect(composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT]).toBeUndefined();
   });
 });
+
+describe("the entry's own DOM ids, once drawn inside its template", () => {
+  it("gives an id the template also uses one of its own, and keeps the entry's anchor on its own element", () => {
+    const template = documentOf(
+      "template",
+      { ...text("t-hero", "Template hero"), cssId: "hero" },
+      entryContent("ec")
+    );
+    const body = documentOf(
+      "page",
+      { ...text("e-hero", "Entry hero"), cssId: "hero" },
+      {
+        id: "e-link",
+        type: "core/button",
+        version: 1,
+        props: { label: "Back to top", href: "#hero" },
+        attributes: { "aria-describedby": "hero" },
+      }
+    );
+    const composed = composeEntryContent(template, { valueOf: () => body });
+    const drawn = composed.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    const entryHero = drawn[0]?.cssId;
+    // The template's own id is untouched; the entry's is its own.
+    expect(composed.nodes[0]?.cssId).toBe("hero");
+    expect(entryHero).toBeDefined();
+    expect(entryHero).not.toBe("hero");
+    // The entry's anchor and its aria reference follow its element.
+    expect(drawn[1]?.props.href).toBe(`#${entryHero ?? ""}`);
+    expect(drawn[1]?.attributes?.["aria-describedby"]).toBe(entryHero);
+    // The same on every render: drawn ids are derived, never random.
+    const again = composeEntryContent(template, { valueOf: () => body });
+    expect(again.nodes[1]?.slots?.[ENTRY_CONTENT_SLOT]?.[0]?.cssId).toBe(
+      entryHero
+    );
+  });
+
+  it("replaces an id set through the attribute bag, and leaves a link to another page alone (the control)", () => {
+    const body = documentOf(
+      "page",
+      {
+        ...text("e-intro", "Intro"),
+        attributes: { id: "intro", "data-x": "kept" },
+      },
+      {
+        id: "e-out",
+        type: "core/button",
+        version: 1,
+        props: { label: "Elsewhere", href: "/pricing#intro" },
+      }
+    );
+    const composed = composeEntryContent(
+      documentOf("template", entryContent("ec")),
+      { valueOf: () => body }
+    );
+    const drawn = composed.nodes[0]?.slots?.[ENTRY_CONTENT_SLOT] ?? [];
+    expect(drawn[0]?.attributes?.id).not.toBe("intro");
+    expect(drawn[0]?.attributes?.["data-x"]).toBe("kept");
+    // A fragment on another page's address names that page's id, not this one's.
+    expect(drawn[1]?.props.href).toBe("/pricing#intro");
+  });
+});

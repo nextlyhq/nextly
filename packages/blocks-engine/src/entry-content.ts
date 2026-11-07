@@ -29,12 +29,14 @@
  */
 import {
   DOCUMENT_FORMAT_VERSION,
+  renderedDomId,
   type BlockDocument,
   type BlockNode,
 } from "./document";
+import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { describeValue, pointer } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
-import { mapForest } from "./tree";
+import { mapForest, mintDomId, remapIdReferences, walkNodes } from "./tree";
 
 /**
  * The Entry content block's type.
@@ -283,6 +285,77 @@ function drawnId(host: string, id: unknown): string {
   return `${host}:${typeof id === "string" ? id : ""}`;
 }
 
+/**
+ * The DOM id each of the entry's authored ids becomes once drawn inside the
+ * template: minted from the drawn node's id, as a component's are, so an id
+ * the template's own blocks also use (`hero`) is never rendered twice, and
+ * the same on every render. Memoized on the original, so two of the entry's
+ * nodes spelling one id still address one target.
+ */
+function drawnDomIds(
+  nodes: readonly BlockNode[],
+  host: string
+): Map<string, string> {
+  const ids = new Map<string, string>();
+  walkNodes([...nodes], node => {
+    const rendered = renderedDomId(node);
+    if (rendered !== undefined && !ids.has(rendered)) {
+      ids.set(rendered, mintDomId(rendered, drawnId(host, node.id)));
+    }
+  });
+  return ids;
+}
+
+/**
+ * One of the entry's nodes as the template draws it: its id prefixed, its own
+ * DOM id replaced, and its references to the entry's ids (an anchor's
+ * `#hero`, an `aria-describedby`, a bound link's fallback) rewritten to the
+ * replacements, so what it pointed at it still points at.
+ */
+function drawnNode(
+  node: BlockNode,
+  host: string,
+  domIds: ReadonlyMap<string, string>
+): BlockNode {
+  const drawn: BlockNode = { ...node, id: drawnId(host, node.id) };
+  if (domIds.size === 0) return drawn;
+  const rendered = renderedDomId(node);
+  const minted = rendered === undefined ? undefined : domIds.get(rendered);
+  if (minted !== undefined && typeof node.cssId === "string") {
+    drawn.cssId = minted;
+  }
+  if (isPlainRecord(node.attributes)) {
+    drawn.attributes = drawnAttributes(node.attributes, minted, domIds);
+  }
+  drawn.props = remapFragmentProps(node.props, domIds) as BlockNode["props"];
+  if (node.bindings !== undefined) {
+    drawn.bindings = remapFragmentBindings(
+      node.bindings,
+      domIds
+    ) as BlockNode["bindings"];
+  }
+  return drawn;
+}
+
+/**
+ * An attribute bag as drawn: its `id` the minted one where the bag is what
+ * renders it, and its id references rewritten. Text values only, as the
+ * renderer emits.
+ */
+function drawnAttributes(
+  attributes: Readonly<Record<string, unknown>>,
+  minted: string | undefined,
+  domIds: ReadonlyMap<string, string>
+): Record<string, string> {
+  const bag: Record<string, string> = {};
+  for (const [name, value] of Object.entries(attributes)) {
+    if (typeof value !== "string") continue;
+    bag[name] =
+      name.toLowerCase() === "id" && minted !== undefined ? minted : value;
+  }
+  return remapIdReferences(bag, domIds);
+}
+
 /** A forest with every Entry content block left out, at any depth. */
 function withoutEntryContent(nodes: readonly BlockNode[]): BlockNode[] {
   const kept = nodes.filter(
@@ -335,10 +408,9 @@ export function composeEntryContent(
   const entry = entryBlocksDocumentOf(source.valueOf(field));
   if (entry === null || entry.nodes.length === 0) return document;
   const host = first.node.id;
-  const drawn = mapForest(withoutEntryContent(entry.nodes), node => ({
-    ...node,
-    id: drawnId(host, node.id),
-  }));
+  const kept = withoutEntryContent(entry.nodes);
+  const domIds = drawnDomIds(kept, host);
+  const drawn = mapForest(kept, node => drawnNode(node, host, domIds));
   // The block as stored, by identity: the walk hands back the very node the
   // rebuild below meets, so only that one is composed.
   const target: unknown = first.node;
