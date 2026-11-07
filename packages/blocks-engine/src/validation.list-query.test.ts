@@ -22,6 +22,7 @@ import {
   listQueryIssues,
   listRelationTarget,
   listSortText,
+  mayPaginateList,
   outerListOf,
   paginatedList,
   readListQuery,
@@ -1080,6 +1081,23 @@ describe("the list a page's address pages", () => {
         }),
         list("plain", { collection: "posts" }),
       ])
+    ).toBeUndefined();
+  });
+
+  it("takes a list whose split is bound as one that may page, and none other", () => {
+    const bound = {
+      ...list("bound", { collection: "posts" }),
+      bindings: { paginate: { source: "entry", field: "paged" } },
+    };
+    expect(
+      mayPaginateList([list("plain", { collection: "posts" }), bound])
+    ).toEqual({
+      id: "bound",
+      props: { collection: "posts", paginate: true },
+    });
+    expect(paginatedList([bound])).toBeUndefined();
+    expect(
+      mayPaginateList([list("plain", { collection: "posts" })])
     ).toBeUndefined();
   });
 

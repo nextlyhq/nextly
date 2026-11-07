@@ -915,6 +915,27 @@ export function paginatedList(
   return undefined;
 }
 
+/**
+ * The list a page's address may page, judged from the stored document
+ * alone: the one {@link paginatedList} finds, taking a list whose split into
+ * pages is bound to the entry as split, since only a page's binding pass
+ * settles whether it is. A page with none pages nothing whatever its entry
+ * holds; one with a bound split may. What a caller that cannot run the
+ * binding pass (a save, the route before it reads anything) asks.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function mayPaginateList(
+  nodes: readonly unknown[],
+  maxNodes: number = Number.MAX_SAFE_INTEGER
+): PaginatedList | undefined {
+  return paginatedList(nodes, maxNodes, list =>
+    isPlainRecord(list.bindings) && "paginate" in list.bindings
+      ? { ...(isPlainRecord(list.props) ? list.props : {}), paginate: true }
+      : list.props
+  );
+}
+
 /** The fields of one collection, as a list's filters and sort are judged. */
 export interface ListFields {
   /** Every field the collection declares, its id and timestamps included. */

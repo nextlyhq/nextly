@@ -26,8 +26,14 @@ import { titleFieldIn } from "../entries-route";
 import { titlesAsCaller } from "../publish-readiness";
 import { parseRouteQuery } from "../route-query";
 
-import { pathOf } from "./claim-key";
-import { committedClaims, type Claims, type Holder } from "./claim-store";
+import { pathOf, type ServedAddress } from "./claim-key";
+import {
+  committedClaims,
+  laterPage,
+  type ClaimRow,
+  type Claims,
+  type Holder,
+} from "./claim-store";
 
 export const ADDRESS_WAITING_ROUTE_PATH = "/address-claims/waiting";
 
@@ -80,19 +86,21 @@ async function readWaitingReport(
           { claimKey: { in: blockingKeys } },
           { limit: blockingKeys.length }
         );
-  const holderOf = new Map(blocking.map(row => [row.key, row.holder]));
+  const blockingRow = new Map(blocking.map(row => [row.key, row]));
   const named = await titles(ctx, reads, [
     ...rows.map(row => row.holder),
     ...blocking.map(row => row.holder),
   ]);
   const items = rows.flatMap((row): WaitingReportItem[] => {
     if (row.holder === null || row.address === null) return [];
-    const blocker =
-      row.blockedBy === null ? null : (holderOf.get(row.blockedBy) ?? null);
+    const held =
+      row.blockedBy === null ? undefined : blockingRow.get(row.blockedBy);
+    const blocker = held?.holder ?? null;
+    const waitedFor = waitedAddress(row, row.address, held);
     return [
       {
         document: named(row.holder),
-        address: { locale: row.address.locale, path: pathOf(row.address) },
+        address: { locale: waitedFor.locale, path: pathOf(waitedFor) },
         blockedBy: blocker === null ? null : named(blocker),
       },
     ];
@@ -109,6 +117,22 @@ async function readWaitingReport(
       hasPrev: page > 1,
     },
   };
+}
+
+/**
+ * The address a wait is for, as a visitor would ask for it: a document's own
+ * address, or, for a wait for a list's later pages, the later page in the
+ * way (the address the blocking document is at, or the list's second page
+ * where another list holds them).
+ */
+function waitedAddress(
+  wait: ClaimRow,
+  address: ServedAddress,
+  held: ClaimRow | undefined
+): ServedAddress {
+  if (wait.space === null) return address;
+  if (held?.kind === "address" && held.address !== null) return held.address;
+  return laterPage(address);
 }
 
 /**

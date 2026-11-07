@@ -20,6 +20,8 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import {
   claimOrWait,
+  claimSpaceOrWait,
+  dropStaleClaims,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -46,6 +48,12 @@ export interface BackfillDeps {
   readonly nextly: PagesReader;
   readonly withTransaction: <T>(work: (tx: Tx) => Promise<T>) => Promise<T>;
   readonly warn: (message: string, context: Record<string, unknown>) => void;
+  /**
+   * Whether this pass still belongs to the running site: false once a reload
+   * has started another, whose languages and page path may differ. Asked
+   * before each page, so a superseded pass stops writing.
+   */
+  readonly current?: () => boolean;
 }
 
 /** Which pages the walk reads. */
@@ -133,6 +141,9 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<boolean> {
   try {
     for await (const batch of publishedPages(deps.nextly, deps.pages)) {
       for (const row of batch) {
+        // Superseded: the newer pass settles every page, and this one is
+        // not complete.
+        if (deps.current?.() === false) return false;
         if (typeof row.id !== "string" && typeof row.id !== "number") continue;
         if (!(await claimPage(deps, String(row.id)))) complete = false;
       }
@@ -209,7 +220,8 @@ async function claimPage(deps: BackfillDeps, id: string): Promise<boolean> {
 
 /**
  * What the page should hold, from its row as committed now, read under its
- * own lock (taken here, first): null when it is gone.
+ * own lock (taken here, first): null when it is gone, or when this pass has
+ * been superseded.
  */
 async function wantedNow(
   deps: BackfillDeps,
@@ -217,14 +229,18 @@ async function wantedNow(
   holder: Holder
 ): Promise<PageClaims | null> {
   await lockHolder(deps.claims, tx, holder);
+  // Asked again under the lock: a pass superseded while it waited for the
+  // lock leaves the page to the newer one, which reads it after this.
+  if (deps.current?.() === false) return null;
   const row = await currentPage(deps, holder.id);
   return row === null ? null : pageClaims(row, deps.locales, deps.pathTemplate);
 }
 
 /**
- * Where another document holds the page's address: wait for each address
- * rather than refuse, and claim no space, which a later save of the page
- * settles (refused, naming the page in its way, which tells its author).
+ * Where another document holds the page's address, or one is published
+ * among its list's later pages: wait for each address and for the later
+ * pages rather than refuse, since nobody is saving the page now. It is
+ * served at each, and its list paged, once what is in the way is released.
  * The page is read again under its lock, as in the first attempt, since a
  * save may have moved or unpublished it between the two: a wait recorded
  * for an address it has left would later hand it that address.
@@ -237,15 +253,16 @@ async function waitForAddresses(
     await deps.withTransaction(async tx => {
       const wanted = await wantedNow(deps, tx, holder);
       if (wanted === null) return;
-      if (wanted.spaces.length > 0) {
-        deps.warn(
-          "A page's list could not hold its later pages: another page is published among them. Its next save is refused, naming that page.",
-          { page: holder.id }
-        );
-      }
+      // What it should hold first, then what it should not, as reconciling
+      // does: releasing a stale address first could hand another list a
+      // space over the page's new address before the page claims it.
       for (const address of wanted.addresses) {
         await claimOrWait(deps.claims, tx, { address, holder });
       }
+      for (const list of wanted.spaces) {
+        await claimSpaceOrWait(deps.claims, tx, { list, holder });
+      }
+      await dropStaleClaims(deps.claims, tx, holder, wanted);
     });
     return true;
   } catch (error) {
