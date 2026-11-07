@@ -9,6 +9,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { addressPropOf } from "./block";
 import { clearBlocks, getBlock, registerBlocks } from "./registry";
 
 const base = {
@@ -351,6 +352,53 @@ describe("prop role validation at registration", () => {
       expect(() =>
         registerBlocks([withRole(role)] as never, { source: "acme" })
       ).toThrow(/block "acme\/quote" prop "text" role must be "content"/);
+      clearBlocks();
+    }
+  });
+});
+
+describe("an image's declared address prop", () => {
+  const withAddress = (
+    props: Record<string, unknown>
+  ): Record<string, unknown> => ({ ...base, name: "acme/picture", props });
+
+  it("accepts a media prop paired with a url prop of the block", () => {
+    expect(() =>
+      registerBlocks(
+        [
+          withAddress({
+            mediaId: { type: "media", addressProp: "src" },
+            src: { type: "url" },
+          }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).not.toThrow();
+    expect(addressPropOf(getBlock("acme/picture")?.props, "mediaId")).toBe(
+      "src"
+    );
+    expect(addressPropOf(getBlock("acme/picture")?.props, "src")).toBe(
+      undefined
+    );
+  });
+
+  it("refuses a pairing to no prop, to one that is no address, or from a prop that is no image", () => {
+    for (const props of [
+      { mediaId: { type: "media", addressProp: "missing" } },
+      {
+        mediaId: { type: "media", addressProp: "alt" },
+        alt: { type: "text" },
+      },
+      {
+        title: { type: "text", addressProp: "src" },
+        src: { type: "url" },
+      },
+    ]) {
+      expect(() =>
+        registerBlocks([withAddress(props)] as never, { source: "acme" })
+      ).toThrow(
+        /block "acme\/picture" prop "\w+" addressProp must name a "url" prop/
+      );
       clearBlocks();
     }
   });

@@ -98,6 +98,51 @@ function card(): ComponentDocument {
   };
 }
 
+describe("the bind and unbind actions' shapes", () => {
+  const bind = (binding: unknown) =>
+    pageActionSchema.safeParse({
+      kind: "bind-prop",
+      nodeId: "n",
+      prop: "text",
+      binding,
+    }).success;
+  const unbind = (keep: unknown) =>
+    pageActionSchema.safeParse({
+      kind: "unbind-prop",
+      nodeId: "n",
+      prop: "text",
+      keep,
+    }).success;
+
+  it("takes a binding as a block stores it, a Single's with its key", () => {
+    expect(bind({ $bind: "title", source: "entry" })).toBe(true);
+    expect(bind({ $bind: "motto", source: "single", sourceKey: "brand" })).toBe(
+      true
+    );
+    // A Single named without its key, a source the engine has not, and a
+    // field the binding has not, are refused by shape.
+    expect(bind({ $bind: "motto", source: "single" })).toBe(false);
+    expect(bind({ $bind: "title", source: "elsewhere" })).toBe(false);
+    expect(bind({ $bind: "title", expression: "1+1" })).toBe(false);
+    expect(bind({ $bind: "" })).toBe(false);
+  });
+
+  it("keeps the visitor's value, a named entry's or item's, or a value given", () => {
+    for (const keep of [
+      "visitor",
+      { entry: "e1" },
+      { item: "i1" },
+      { value: "Spring sale" },
+      { value: null },
+    ]) {
+      expect(unbind(keep)).toBe(true);
+    }
+    // An empty object is no value: refused rather than read as "keep nothing".
+    expect(unbind({})).toBe(false);
+    expect(unbind({ entry: "e1", item: "i1" })).toBe(false);
+  });
+});
+
 describe("the page action schema", () => {
   it("takes each kind it lists, and nothing else", () => {
     const accepted = [
@@ -111,6 +156,13 @@ describe("the page action schema", () => {
         nodeId: "n",
         conditions: [[{ field: "title", op: "exists" }]],
       },
+      {
+        kind: "bind-prop",
+        nodeId: "n",
+        prop: "text",
+        binding: { $bind: "title", fallback: "Untitled" },
+      },
+      { kind: "unbind-prop", nodeId: "n", prop: "text" },
       { kind: "set-layout", layout: null },
     ];
     expect(accepted.map(action => action.kind)).toEqual(PAGE_ACTION_KINDS);

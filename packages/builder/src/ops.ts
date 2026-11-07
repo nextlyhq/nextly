@@ -89,6 +89,7 @@ export {
   type PageAction,
 } from "./composition-actions";
 
+export { bindOp, unbindOp, type KeptProps } from "./binding-ops";
 export { conditionsOp } from "./condition-ops";
 
 export {
