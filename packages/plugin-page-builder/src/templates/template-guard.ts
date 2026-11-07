@@ -345,10 +345,10 @@ export const GUARDED_COLLECTIONS_CONTEXT =
   "pageBuilder.templateGuardedCollections";
 
 /** The fields a template names the collection it draws from in. */
-export const TEMPLATE_COLLECTION_FIELDS = [
-  TEMPLATE_COLLECTION_FIELD,
-  TEMPLATE_ENTRY_COLLECTION_FIELD,
-] as const;
+export const TEMPLATE_COLLECTION_FIELDS: readonly [
+  typeof TEMPLATE_COLLECTION_FIELD,
+  typeof TEMPLATE_ENTRY_COLLECTION_FIELD,
+] = [TEMPLATE_COLLECTION_FIELD, TEMPLATE_ENTRY_COLLECTION_FIELD] as const;
 
 /** A collection field's value as it is compared: text, or null for none. */
 export function namedCollection(value: unknown): string | null {
