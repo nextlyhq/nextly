@@ -37,7 +37,10 @@ import {
   claimAddress,
   claimOrWait,
   claimSpace,
+  claimSpaceOrWait,
   committedClaims,
+  dropStaleClaims,
+  reconcileHolder,
   releaseClaims,
   storedKey,
   type Claims,
@@ -329,6 +332,116 @@ describe.each(getConfiguredTestDialects())(
         ["/news/page/2", waiting?.[1] ?? null],
       ]);
       expect(await stored(claims, "waiting")).toEqual([]);
+    });
+
+    const waitForSpace = (claims: Claims, path: string, holder: Holder) =>
+      saving(claims, tx =>
+        claimSpaceOrWait(claims, tx, { list: at(path), holder })
+      );
+
+    it("gives a waiting list its later pages once every page among them is released", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/news/page/2", page("p2"));
+      await claim(claims, "/news/page/3", page("p3"));
+      expect(await waitForSpace(claims, "/news", page("list"))).toBe("waiting");
+      expect(await stored(claims, "waiting")).toEqual([
+        ["/news", "list"],
+        ["/news", "list"],
+      ]);
+
+      await release(claims, page("p2"));
+      expect(await stored(claims, "space")).toEqual([]);
+      expect(await stored(claims, "waiting")).toEqual([["/news", "list"]]);
+
+      await release(claims, page("p3"));
+      expect(await stored(claims, "space")).toEqual([["/news", "list"]]);
+      expect(await stored(claims, "waiting")).toEqual([]);
+      await expect(claim(claims, "/news/page/2", page("p2"))).rejects.toThrow(
+        "pages list"
+      );
+    });
+
+    it("settles a list's wait for its later pages apart from its wait for its address", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/news", post("e1"));
+      await claim(claims, "/news/page/2", page("p2"));
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, { address: at("/news"), holder: page("list") })
+      );
+      await waitForSpace(claims, "/news", page("list"));
+
+      // Its address is still held by another, but nothing is left among its
+      // later pages: it takes them, and keeps waiting for its address.
+      await release(claims, page("p2"));
+      expect(await stored(claims, "space")).toEqual([["/news", "list"]]);
+      expect(await stored(claims, "waiting")).toEqual([["/news", "list"]]);
+      expect(await stored(claims, "address")).toEqual([["/news", "e1"]]);
+    });
+
+    it("drops a list's wait for its later pages once it stops paginating", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/news/page/2", page("p2"));
+      await waitForSpace(claims, "/news", page("list"));
+      await saving(claims, tx =>
+        reconcileHolder(
+          claims,
+          tx,
+          page("list"),
+          { addresses: [at("/news")], spaces: [] },
+          describeHolder
+        )
+      );
+      expect(await stored(claims, "waiting")).toEqual([]);
+
+      await release(claims, page("p2"));
+      expect(await stored(claims, "space")).toEqual([]);
+      expect(await stored(claims, "address")).toEqual([["/news", "list"]]);
+    });
+
+    it("lets a page move to a list's address as it starts holding the list's later pages", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/news/page/2", page("p1"));
+      await saving(claims, tx =>
+        reconcileHolder(
+          claims,
+          tx,
+          page("p1"),
+          { addresses: [at("/news")], spaces: [at("/news")] },
+          describeHolder
+        )
+      );
+      expect(await stored(claims, "address")).toEqual([["/news", "p1"]]);
+      expect(await stored(claims, "space")).toEqual([["/news", "p1"]]);
+    });
+
+    it("gives up the waits and claims a holder has left, handing a released one on", async () => {
+      const claims = claimsOf(await boot());
+      // p1 holds /old, which a stale hand-over could have given it; it also
+      // waits for /gone, held by p2; e1 waits for /old.
+      await claim(claims, "/old", page("p1"));
+      await claim(claims, "/gone", page("p2"));
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, { address: at("/gone"), holder: page("p1") })
+      );
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, { address: at("/old"), holder: post("e1") })
+      );
+
+      await saving(claims, tx =>
+        dropStaleClaims(claims, tx, page("p1"), {
+          addresses: [at("/new")],
+          spaces: [],
+        })
+      );
+      expect(await stored(claims, "address")).toEqual([
+        ["/gone", "p2"],
+        ["/old", "e1"],
+      ]);
+      expect(await stored(claims, "waiting")).toEqual([]);
+
+      // Releasing what it waited for no longer hands it anything.
+      await release(claims, page("p2"));
+      expect(await stored(claims, "address")).toEqual([["/old", "e1"]]);
     });
 
     it("keeps a document waiting when it moves to another address the same claim blocks", async () => {
@@ -719,6 +832,44 @@ describe.each(getConfiguredTestDialects())(
         page: 1,
         hasNext: false,
       });
+    });
+
+    it("lists a list waiting for its later pages at the later page in its way", async () => {
+      const t = await boot();
+      const author = await person(t, "author");
+      await grant(t, author, ["read-pages", "update-pages"]);
+      const waiting = await create(t, "pages", pageData("News page"));
+      const holder = await create(t, "pages", pageData("Second page"));
+      const spaceKey = storedKey("space:en|/news");
+      const addressKey = storedKey("addr:en|/news/page/2");
+      await create(t, ADDRESS_CLAIMS_SLUG, {
+        claimKey: addressKey,
+        kind: "address",
+        locale: "en",
+        path: "/news/page/2",
+        holderCollection: "pages",
+        holderId: holder,
+        space: spaceKey,
+      });
+      await create(t, ADDRESS_CLAIMS_SLUG, {
+        claimKey: storedKey(`wait:space:pages:${waiting}|${addressKey}`),
+        kind: "waiting",
+        locale: "en",
+        path: "/news",
+        holderCollection: "pages",
+        holderId: waiting,
+        space: spaceKey,
+        blockedBy: addressKey,
+      });
+
+      const answered = await report(await sessionOf(t, author));
+      expect(answered.body.items).toEqual([
+        {
+          document: { collection: "pages", id: waiting, title: "News page" },
+          address: { locale: "en", path: "/news/page/2" },
+          blockedBy: { collection: "pages", id: holder, title: "Second page" },
+        },
+      ]);
     });
 
     it("names a holder the caller may not read by its id alone", async () => {

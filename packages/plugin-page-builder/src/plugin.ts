@@ -1405,6 +1405,11 @@ export const pageBuilder = (
   // Set once that pass has finished, after which a page save need not claim
   // the existing pages its list's later pages would fall on.
   let pageClaimsBackfilled = false;
+  // Which initialization the flag belongs to. A reload under HMR runs
+  // `init` again on this same definition, so the flag is reset there, and a
+  // pass started by an earlier initialization, still running, never sets it
+  // for the new one (whose languages may differ).
+  let pageClaimsInit = 0;
 
   /**
    * The templates guard's lookups over the installed plugin: the RESOLVED
@@ -2128,6 +2133,9 @@ export const pageBuilder = (
           ctx.config.localization?.locales.map(locale => locale.code) ?? [],
           ctx.config.localization?.defaultLocale
         );
+      pageClaimsInit += 1;
+      pageClaimsBackfilled = false;
+      const claimsInit = pageClaimsInit;
       registerPageAddressClaims(ctx.hooks, {
         pages: pagesSlug,
         claims: claimsStore,
@@ -2161,12 +2169,15 @@ export const pageBuilder = (
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),
           warn: (message, meta) => ctx.logger.warn(message, meta),
+          current: () => claimsInit === pageClaimsInit,
         });
         // Only a pass that settled every page ends the saves' part in it: a
         // page it failed to read or claim is still unclaimed, so saves keep
         // claiming the pages in a list's way until a later boot's pass
         // finishes.
-        if (complete) pageClaimsBackfilled = true;
+        if (complete && claimsInit === pageClaimsInit) {
+          pageClaimsBackfilled = true;
+        }
       };
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
