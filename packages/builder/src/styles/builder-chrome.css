@@ -8925,6 +8925,21 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
+ * The variant's tag is drawn on the admin's card, so it takes the admin's
+ * component purple, keyed on the admin's `.dark` as the card is, not the
+ * page's: the layer it sits in follows the canvas page's scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and a dark page under a light
+ * admin would otherwise draw the dark page's light purple on a white card.
+ */
+.nx-variant-preview-tag {
+  --nx-builder-component: var(--nx-builder-component-on-light);
+}
+
+.dark .nx-variant-preview-tag {
+  --nx-builder-component: var(--nx-builder-component-on-dark);
+}
+
+/*
  * "Dark preview · Use device": a pill in the admin's own colours, at rest as
  * the variant's tag is, whose one control takes presses back from the layer.
  */

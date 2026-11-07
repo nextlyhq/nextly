@@ -241,8 +241,7 @@ export function TokensStudio({
    * database on the first edit — the same fault as saving the merged set, one
    * tier further down.
    */
-  const editable = merged === undefined ? undefined : resolveSiteTokens(merged);
-  const baseline = resolveSiteTokens(supplied);
+  const { editable, baseline } = resolvedTiers(merged, supplied);
   const { edits, shownNow, issue, setIssue, notice, commit } = useTokenCommits(
     baseline,
     editable,
@@ -268,7 +267,7 @@ export function TokensStudio({
     tokens: edits ?? editable,
     supplied: baseline,
     issue,
-    ...(notice === undefined ? {} : { notice }),
+    ...optionalNotice(notice),
     absence: absenceOf(pending),
     readOnly: !mayChange,
     onChange: commit,
@@ -282,7 +281,7 @@ export function TokensStudio({
 
   return (
     <VariablesStudio.Provider value={studio}>
-      {headerSlot === null ? null : createPortal(header.controls, headerSlot)}
+      <InHeaderSlot slot={headerSlot}>{header.controls}</InHeaderSlot>
       {/* Above whichever tab is open, since an import or export can be
           started from any of them. */}
       <div className="nx-pb-design__reports">{header.overlays}</div>
@@ -291,6 +290,40 @@ export function TokensStudio({
       </SharedStyleToOpen.Provider>
     </VariablesStudio.Provider>
   );
+}
+
+/**
+ * The two tiers of variables the studio works with, both resolved as the
+ * canvas resolves them (see {@link TokensStudio}): the set it shows and edits,
+ * absent while the site style is unread, and the baseline its overrides are
+ * stored against.
+ */
+function resolvedTiers(
+  merged: SiteTokenSet | undefined,
+  supplied: SiteTokenSet | undefined
+): { editable: SiteTokenSet | undefined; baseline: SiteTokenSet } {
+  return {
+    editable: merged === undefined ? undefined : resolveSiteTokens(merged),
+    baseline: resolveSiteTokens(supplied),
+  };
+}
+
+/** The panel's conflict notice, as an optional prop: present only when said. */
+function optionalNotice(
+  notice: TokensPanelProps["notice"]
+): Pick<TokensPanelProps, "notice"> {
+  return notice === undefined ? {} : { notice };
+}
+
+/** `children` drawn into the Design header's slot, once the header has one. */
+function InHeaderSlot({
+  slot,
+  children,
+}: {
+  slot: Element | null;
+  children: React.ReactNode;
+}): React.JSX.Element | null {
+  return slot === null ? null : createPortal(children, slot);
 }
 
 /**
