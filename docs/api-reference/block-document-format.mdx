@@ -228,7 +228,9 @@ one warning per report, naming the page.
 
 An image prop (`media` or `upload`) binds to a media field or a URL field:
 
-- **A media field** fills the prop with the record's id, populated or not, and
+- **A media field** fills the prop with the record's id, populated or not
+  (and through the `{ relationTo, value }` an upload field to several
+  collections holds), and
   the image draws exactly as one whose media was picked: the record's address,
   alternative text and size. The block's own alternative text wins over the
   record's.
@@ -237,8 +239,10 @@ An image prop (`media` or `upload`) binds to a media field or a URL field:
   a relative path and `//host` are not image addresses, so they render the
   fallback. The address keeps the block's own alternative text, and has no
   size.
-- **The fallback** is a media id or an image address. Any other value is
-  refused when the document is saved and ignored when it renders.
+- **The fallback** is an image address. Any other value, a media id
+  included, is refused when the document is saved and ignored when it
+  renders. With no value to draw and no fallback, the prop keeps its own
+  value, as any bound prop does.
 - **What draws.** An address goes through the same scheme and host checks as
   a typed one, so a host outside the site's `remotePatterns` is not loaded. A
   value that can't be drawn, a record the host can't find included, shows the
@@ -248,8 +252,10 @@ An image prop (`media` or `upload`) binds to a media field or a URL field:
   height, as a picked one does: there is no `srcset` or size variant yet.
 
 A block receives `bound.<prop>` as
-`{ kind: "image", holds: "media" | "address", fromFallback, fallback? }`, so a
-contributed block can tell an id to look up from an address to draw.
+`{ kind: "image", holds: "media" | "address", from: "value" | "fallback" | "own", fallback? }`,
+so a contributed block can tell an id to look up from an address to draw.
+Its `seo` receives the same values as `seo(props, { bound })`, so the page's
+metadata offers the picture the page draws.
 
 #### The document's own metadata
 

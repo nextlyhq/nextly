@@ -153,6 +153,11 @@ describe("an address an image may be drawn from", () => {
       "/\\elsewhere.example/a.png",
       "a.png",
       "https:///a.png",
+      // Written like an address but naming no host the parser can read.
+      "https://?version=1",
+      "https://#fragment",
+      "https:// user.example/a.png",
+      "https:a.png",
       "java\tscript:alert(1)",
       "/media/\u0001a.png",
       "",

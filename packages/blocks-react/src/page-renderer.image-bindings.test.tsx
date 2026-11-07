@@ -19,6 +19,7 @@ import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
+import { image } from "./blocks/image";
 import {
   createStandaloneContext,
   type PageBindings,
@@ -209,13 +210,17 @@ describe("an image bound to a field", () => {
     expect(bare).not.toContain("elsewhere.example");
     const fallen = images(
       await render(
-        page(boundImage("photoUrl", { fallback: "m1" })),
+        page(
+          boundImage("photoUrl", {
+            fallback: "https://cdn.example/fallback.jpg",
+          })
+        ),
         outside,
         listed
       )
     );
     expect(fallen.map(tag => attribute(tag, "src"))).toEqual([
-      "https://cdn.example/m1.jpg",
+      "https://cdn.example/fallback.jpg",
     ]);
     // CONTROL: a listed host is drawn.
     const inside = images(
@@ -248,12 +253,76 @@ describe("an image bound to a field", () => {
 
   it("shows the fallback when the field is empty, as any binding does", async () => {
     const fallen = images(
-      await render(page(boundImage("cover", { fallback: "m1" })), {
+      await render(page(boundImage("cover", { fallback: "/media/f.jpg" })), {
         cover: null,
       })
     );
-    expect(fallen.map(tag => attribute(tag, "src"))).toEqual([
+    expect(fallen.map(tag => attribute(tag, "src"))).toEqual(["/media/f.jpg"]);
+  });
+
+  it("shows the image's own picked media when the binding gives nothing and has no fallback", async () => {
+    // As any prop shows its own value then: the picked media, never the
+    // typed address beside it.
+    const own: BlockNode = {
+      ...boundImage("photoUrl"),
+      props: { mediaId: "m1", src: "https://cdn.example/own.jpg" },
+    };
+    const tags = images(
+      await render(page(own), { photoUrl: "javascript:alert(1)" })
+    );
+    expect(tags.map(tag => attribute(tag, "src"))).toEqual([
       "https://cdn.example/m1.jpg",
     ]);
+  });
+
+  it("draws an upload field that may point at several collections by the media it holds", async () => {
+    // Stored and populated as `{ relationTo, value }`.
+    for (const cover of [
+      { relationTo: "media", value: "m1" },
+      { relationTo: "media", value: { id: "m1", filename: "m1.jpg" } },
+    ]) {
+      const tags = images(await render(page(boundImage("cover")), { cover }));
+      expect(tags.map(tag => attribute(tag, "src"))).toEqual([
+        "https://cdn.example/m1.jpg",
+      ]);
+    }
+  });
+});
+
+describe("what a bound image offers the page's metadata", () => {
+  it("offers what the page draws: a bound address as an address, then its fallback, never the typed one", () => {
+    const offered = image.seo?.(
+      {
+        mediaId: "https://cdn.example/photo.jpg",
+        src: "https://cdn.example/own.jpg",
+      },
+      {
+        bound: {
+          mediaId: {
+            kind: "image",
+            holds: "address",
+            from: "value",
+            fallback: { holds: "address", value: "/media/fallback.jpg" },
+          },
+        },
+      }
+    );
+    expect(offered?.image).toEqual([
+      { url: "https://cdn.example/photo.jpg" },
+      { url: "/media/fallback.jpg" },
+    ]);
+  });
+
+  it("offers a bound media id as media, and an unbound image as before", () => {
+    expect(
+      image.seo?.(
+        { mediaId: "m1", src: "https://cdn.example/own.jpg" },
+        { bound: { mediaId: { kind: "image", holds: "media", from: "value" } } }
+      )?.image
+    ).toEqual([{ media: "m1" }]);
+    // CONTROL: unbound, the picked media and then the typed address.
+    expect(
+      image.seo?.({ mediaId: "m1", src: "https://cdn.example/own.jpg" })?.image
+    ).toEqual([{ media: "m1" }, { url: "https://cdn.example/own.jpg" }]);
   });
 });

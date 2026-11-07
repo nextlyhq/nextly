@@ -673,6 +673,7 @@ export type {
   BlockIsland,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoRead,
   BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,

@@ -116,7 +116,7 @@ describe("validating bindings against the sources' schema", () => {
     expect(bindingCodes(shapeOnly)).toEqual([[], [], []]);
   });
 
-  it("refuses an image bound to plain text, and an image fallback no image is drawn from", () => {
+  it("refuses an image bound to plain text, and an image fallback that is not an image address", () => {
     const imageFields: BindingSchemaSource = {
       fieldsOf: ref =>
         "collection" in ref && ref.collection === "posts"
@@ -147,8 +147,10 @@ describe("validating bindings against the sources' schema", () => {
         imageBoundTo("script", "cover", "javascript:alert(1)"),
         imageBoundTo("data", "photoUrl", "data:image/png;base64,AAAA"),
         imageBoundTo("other-host", "cover", "//elsewhere.example/a.png"),
-        // CONTROLS: a media id and an image address are image fallbacks.
+        // A media id is not one yet: a page's export and import would not
+        // carry the media a binding's fallback names.
         imageBoundTo("media-id", "cover", "media-1"),
+        // CONTROLS: an image address is an image fallback.
         imageBoundTo("address", "photoUrl", "https://cdn.example/a.png"),
         imageBoundTo("site-path", "cover", "/media/a.png"),
       ],
@@ -173,7 +175,7 @@ describe("validating bindings against the sources' schema", () => {
       ["binding-fallback-invalid"],
       ["binding-fallback-invalid"],
       ["binding-fallback-invalid"],
-      [],
+      ["binding-fallback-invalid"],
       [],
       [],
     ]);

@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-An image block can be bound to a media field or a URL field. A media field's record draws exactly as a picked one does, with its address, alternative text and size. A URL field draws its address only when it is an image address the site may load: `https://`, `http://` or a path on the site. `javascript:`, `data:`, another host outside the site's list, and a record the host can't find show the binding's fallback, then nothing. A binding's image fallback must be a media id or an image address.
+An image block can be bound to a media field or a URL field. A media field's record draws exactly as a picked one does, with its address, alternative text and size. A URL field draws its address only when it is an image address the site may load: `https://`, `http://` or a path on the site. `javascript:`, `data:`, another host outside the site's list, and a record the host can't find show the binding's fallback, then nothing. A binding's image fallback must be an image address, and a block's `seo` hook now receives the bound values, so metadata offers the picture the page draws.

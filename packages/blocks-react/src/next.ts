@@ -38,6 +38,7 @@ import {
   type ConditionDemand,
   type SourceDemand,
   type BlockSeoContribution,
+  type BoundValues,
   type DefinitionsById,
   type DocumentLimits,
   type LayoutRegion,
@@ -146,6 +147,7 @@ import {
   readingViewOf,
   readStagesFor,
   regateDocument,
+  type DocumentReadStages,
   type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
@@ -1059,6 +1061,13 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
   canonical?: string;
 }
 
+/** What each node's bound props hold, by node id, from a page's read. */
+function boundValuesOf(
+  stages: DocumentReadStages | null
+): (nodeId: string) => BoundValues | undefined {
+  return nodeId => stages?.boundValues.get(nodeId);
+}
+
 /**
  * The document's own metadata, with any media id resolved to a URL.
  *
@@ -1161,7 +1170,10 @@ async function derivePageSeo(
   const { image: blockImages, ...derived } = deriveSeoFromDocument(
     prepared,
     type => resolver.get(type),
-    node => conditionAllows(node, {}, { held })
+    node => conditionAllows(node, {}, { held }),
+    // What each bound prop holds, as the render is given it, so a bound
+    // image offers the picture the page draws.
+    boundValuesOf(stages)
   );
   // What the document states for the page as a whole wins over what its
   // blocks offer, field by field; its image is tried first, and a block's

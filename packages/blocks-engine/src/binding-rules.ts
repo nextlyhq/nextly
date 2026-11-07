@@ -438,11 +438,11 @@ export function isValidPropValue(
     case "reference":
       return isReferenceValue(value);
     case "image":
-      // Narrower than a placement's image value, which is only a non-empty
-      // string: a binding may also fill an image from a URL field, so its
-      // value and its fallback are a media id or an image address, and an
-      // address no image is drawn from (`javascript:`, `data:`) is neither.
-      return imageValueOf(value) !== undefined;
+      // Only bindings ask this of an image, and only of a fallback, which is
+      // an image address: never `javascript:` or `data:`, and not a media id,
+      // which a page's export, import and media index do not follow into a
+      // binding, so the picture would be lost on the way.
+      return isImageAddress(value);
     default:
       // The sentinel that clears an override is not a value of any prop.
       if (isUnsetOverride(value)) return false;
@@ -888,7 +888,9 @@ function checkedFallback(
       input,
       stored.path,
       "binding-fallback-invalid",
-      `This binding's fallback is not a valid ${prop.kind} value, so the prop's own value is shown instead.`
+      prop.kind === "image"
+        ? "This image binding's fallback is not an image address (https://, http:// or a path on the site), so the prop's own value is shown instead. A media id can't be a fallback."
+        : `This binding's fallback is not a valid ${prop.kind} value, so the prop's own value is shown instead.`
     )
   );
   return undefined;

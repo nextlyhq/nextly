@@ -183,7 +183,7 @@ function pictureCandidates(
   if (image === undefined) {
     return [
       ...(mediaId === "" ? [] : [{ holds: "media" as const, value: mediaId }]),
-      ...(typeof typed === "string"
+      ...(typeof typed === "string" && typed !== ""
         ? [{ holds: "address" as const, value: typed }]
         : []),
     ];
@@ -487,16 +487,19 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   // id came from `mediaId` and the address from `src`, and no inspection of the
   // text can tell them apart — a UUID is a valid relative URL and a bare word
   // is a valid src.
-  seo: props => {
-    const mediaId = text(props.mediaId);
-    const src = url(props.src) ?? "";
-    return {
-      image: [
-        ...(mediaId === "" ? [] : [{ media: mediaId }]),
-        ...(src === "" ? [] : [{ url: src }]),
-      ],
-    };
-  },
+  // A bound image offers what the page draws for it, from the same
+  // candidates, so metadata never names a picture the page does not show.
+  seo: (props, read) => ({
+    image: pictureCandidates(
+      text(props.mediaId),
+      url(props.src),
+      boundImage(read?.bound?.mediaId)
+    ).map(candidate =>
+      candidate.holds === "media"
+        ? { media: candidate.value }
+        : { url: candidate.value }
+    ),
+  }),
   // The address only, for the same reason: blocks are placed with their
   // example, and an example alt would be stored as the page's own words in
   // place of the library's.

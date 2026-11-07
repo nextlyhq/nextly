@@ -166,9 +166,11 @@ export function createBindingRun(input: BindingRunInput): BindingRun {
  * - `fallback`: the binding's fallback, because the value was empty or the
  *   binding could not be used.
  * - `image`: an image prop's value, which `holds` a media id the host
- *   resolves or an image address drawn as it is; `fromFallback` says it is
- *   the binding's fallback. A source's media id carries the fallback beside
- *   it, for a host that finds no record for the id.
+ *   resolves or an image address drawn as it is. `from` says whether it is
+ *   the source's value, the binding's fallback, or the prop's own value,
+ *   shown when the binding gave nothing to draw. A source's value carries the
+ *   fallback beside it, an image address, for a host that can't draw the
+ *   value: a record it can't find, or a host outside the site's list.
  *
  * A prop showing its own value has no entry.
  *
@@ -185,7 +187,7 @@ export type BoundValue =
   | {
       readonly kind: "image";
       readonly holds: ImageValue["holds"];
-      readonly fromFallback: boolean;
+      readonly from: "value" | "fallback" | "own";
       readonly fallback?: ImageValue;
     };
 
@@ -384,23 +386,45 @@ function fallbackFill(fallback: { readonly value: unknown } | undefined): Fill {
 }
 
 /**
- * A binding's fallback as its fill. An image's says what it holds, so the
- * renderer draws an address as one and looks a media id up as it looks up a
- * stored one.
+ * A binding's fallback as its fill. An image's is an image address, and says
+ * so, so the renderer draws it as one.
  */
 function fallbackFillOf(
   kind: BindablePropKind | undefined,
   fallback: { readonly value: unknown } | undefined
 ): Fill {
   if (kind !== "image") return fallbackFill(fallback);
-  const image =
-    fallback === undefined ? undefined : imageValueOf(fallback.value);
+  const image = imageFallbackOf(fallback);
   return image === undefined
     ? undefined
     : {
         value: image.value,
-        bound: { kind: "image", holds: image.holds, fromFallback: true },
+        bound: { kind: "image", holds: image.holds, from: "fallback" },
       };
+}
+
+/** An image binding's fallback, which is only ever an image address. */
+function imageFallbackOf(
+  fallback: { readonly value: unknown } | undefined
+): ImageValue | undefined {
+  return fallback !== undefined && isImageAddress(fallback.value)
+    ? { holds: "address", value: fallback.value.trim() }
+    : undefined;
+}
+
+/**
+ * An image binding that gave nothing to draw, nor a fallback: the prop keeps
+ * its own value, as any prop does, and is still marked bound, so the block
+ * draws that value alone and never another prop's in its place.
+ */
+function ownImageFill(node: BlockNode, prop: string): Fill {
+  const own = isPlainRecord(node.props)
+    ? ownEntry(node.props, prop)
+    : undefined;
+  return {
+    value: own,
+    bound: { kind: "image", holds: "media", from: "own" },
+  };
 }
 
 /**
@@ -415,17 +439,14 @@ function fallbackFillOf(
 function shapeImage(binding: CheckedBinding, value: unknown): Shaped {
   const image = boundImageOf(value, binding.field);
   if (image === undefined) return misfitValue("image");
-  const fallback =
-    binding.fallback === undefined
-      ? undefined
-      : imageValueOf(binding.fallback.value);
+  const fallback = imageFallbackOf(binding.fallback);
   return {
     ok: true,
     value: image.value,
     bound: {
       kind: "image",
       holds: image.holds,
-      fromFallback: false,
+      from: "value",
       ...(fallback === undefined ? {} : { fallback }),
     },
   };
@@ -444,11 +465,7 @@ function boundImageOf(
       : undefined;
   }
   if (isPlainRecord(value)) return recordImageOf(value);
-  return kind === "media"
-    ? typeof value === "string" && value.trim() !== ""
-      ? { holds: "media", value: value.trim() }
-      : undefined
-    : imageValueOf(value);
+  return kind === "media" ? mediaIdImage(value) : imageValueOf(value);
 }
 
 /**
@@ -459,16 +476,30 @@ function boundImageOf(
 function recordImageOf(
   record: Readonly<Record<string, unknown>>
 ): ImageValue | undefined {
-  const id = ownEntry(record, "id");
-  if (typeof id === "string" && id.trim() !== "") {
-    return { holds: "media", value: id.trim() };
+  // An upload field that may point at several collections stores, and
+  // populates, `{ relationTo, value }`: the media is its value.
+  if (
+    typeof ownEntry(record, "relationTo") === "string" &&
+    Object.hasOwn(record, "value")
+  ) {
+    const value = ownEntry(record, "value");
+    return isPlainRecord(value) ? recordImageOf(value) : mediaIdImage(value);
   }
-  if (typeof id === "number" && Number.isFinite(id)) {
-    return { holds: "media", value: String(id) };
-  }
+  const id = mediaIdImage(ownEntry(record, "id"));
+  if (id !== undefined) return id;
   const url = ownEntry(record, "url");
   return isImageAddress(url)
     ? { holds: "address", value: url.trim() }
+    : undefined;
+}
+
+/** A media id as stored: a non-empty string, or a number written as one. */
+function mediaIdImage(value: unknown): ImageValue | undefined {
+  if (typeof value === "string" && value.trim() !== "") {
+    return { holds: "media", value: value.trim() };
+  }
+  return typeof value === "number" && Number.isFinite(value)
+    ? { holds: "media", value: String(value) }
     : undefined;
 }
 
@@ -546,17 +577,18 @@ function fillBinding(
   });
   issues.push(...check.issues);
   if (check.outcome === "ignore") return undefined;
+  const kind = bindablePropKind(
+    Object.hasOwn(at.props, at.prop) ? at.props[at.prop] : undefined
+  );
   // A binding that cannot be read still shows its fallback, judged by the
-  // prop it fills, so an image's says whether it is an address or a media id.
-  if (check.outcome === "fallback") {
-    return fallbackFillOf(
-      bindablePropKind(
-        Object.hasOwn(at.props, at.prop) ? at.props[at.prop] : undefined
-      ),
-      check.fallback
-    );
-  }
-  return fillOf(check.binding, run, scope, at.node.id, issues);
+  // prop it fills, so an image's says it is an address.
+  const fill =
+    check.outcome === "fallback"
+      ? fallbackFillOf(kind, check.fallback)
+      : fillOf(check.binding, run, scope, at.node.id, issues);
+  return fill === undefined && kind === "image"
+    ? ownImageFill(at.node, at.prop)
+    : fill;
 }
 
 /** The props a node's definition declares, or nothing when it cannot be read. */
