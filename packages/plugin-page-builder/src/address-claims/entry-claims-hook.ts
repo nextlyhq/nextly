@@ -186,12 +186,15 @@ export function registerEntryAddressClaims(
 }
 
 /**
- * An entry's claims in a collection not given an address in code. A
- * collection that may not have a template holds no address and takes no
- * lock. One that may takes its lock before it reads whether it has a
- * template, so a template created, published or given an address while the
- * entry is saved is either seen by this save or sees the entry in its own
- * walk, and the entry is judged at the address its template stores.
+ * An entry's claims in a collection not given an address in code. One that
+ * may have a template takes its lock before it reads whether it has one, so
+ * a template created, published or given an address while the entry is
+ * saved is either seen by this save or sees the entry in its own walk, and
+ * the entry is judged at the address its template stores. One that may not
+ * takes no lock, unless it has a template still, from before it lost its
+ * `slug` field or became localized: its entries are then served nowhere, and
+ * each save gives its address up. No template can be made for it meanwhile,
+ * so that read needs no lock.
  */
 async function holdRuntimeEntryClaims(
   write: HostWrite,
@@ -207,8 +210,9 @@ async function holdRuntimeEntryClaims(
   ) {
     return;
   }
-  if (!(await deps.mayHaveTemplate(collection))) return;
-  await holdEntryClaims(collection, write, deps);
+  const eligible = await deps.mayHaveTemplate(collection);
+  if (!eligible && (await deps.templateOf(collection)) === null) return;
+  await holdEntryClaims(collection, write, deps, eligible);
 }
 
 /** Whether two addresses, as segments, are one, or both none. */
@@ -241,7 +245,9 @@ function recordOf(value: unknown): Row | null {
 async function holdEntryClaims(
   collection: string,
   write: HostWrite,
-  deps: EntryClaimsDeps
+  deps: EntryClaimsDeps,
+  /** False for a collection that may no longer have a template: served nowhere. */
+  eligible = true
 ): Promise<void> {
   if (typeof write.id !== "string" && typeof write.id !== "number") return;
   const holder: Holder = { collection, id: String(write.id) };
@@ -268,7 +274,7 @@ async function holdEntryClaims(
   if (template === null && !deps.addresses.has(collection)) return;
   const address = deps.addresses.get(collection) ?? template?.address ?? null;
   const wanted =
-    template?.published === true && address !== null
+    eligible && template?.published === true && address !== null
       ? entryAddresses(data, address, locales, await deps.lifecycle(collection))
       : [];
   if (wanted === NO_ADDRESS) {
@@ -547,8 +553,18 @@ export async function settleEntryClaimsAtStart(
         // An unpublished template's entries hold nothing already: its
         // unpublish gave their addresses up, and no save claims one since.
         const template = await deps.templateOf(collection);
-        const address =
-          deps.addresses.get(collection) ?? template?.address ?? null;
+        const declared = deps.addresses.get(collection);
+        // A collection served only at a stored address that may no longer
+        // have a template (its `slug` field removed, or made localized) is
+        // served nowhere: its entries give their addresses up.
+        if (
+          declared === undefined &&
+          !(await deps.mayHaveTemplate(collection))
+        ) {
+          await releaseCollection(deps, tx, collection);
+          return;
+        }
+        const address = declared ?? template?.address ?? null;
         if (template?.published !== true || address === null) return;
         await settleEntries(deps, tx, collection, address);
       });

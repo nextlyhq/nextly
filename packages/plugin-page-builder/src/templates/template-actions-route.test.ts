@@ -23,14 +23,20 @@ import type { TemplateGuardSetup } from "./template-guard";
 const stored = vi.hoisted(() => ({
   row: null as Record<string, unknown> | null,
   reads: 0,
+  asked: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk")>()),
   getCachedNextly: async () => ({
-    findByID: async () => {
+    findByID: async (args: Record<string, unknown>) => {
       stored.reads += 1;
-      return stored.row;
+      stored.asked.push(args);
+      // The working draft only where it was asked for, as the Direct API
+      // overlays it.
+      return args.draft === true || stored.row?._isWorkingDraft !== true
+        ? stored.row
+        : { ...stored.row, _isWorkingDraft: undefined };
     },
   }),
 }));
@@ -44,6 +50,7 @@ beforeEach(() => {
     address: null,
   };
   stored.reads = 0;
+  stored.asked = [];
 });
 
 /** A caller holding exactly `granted`, each as `<action>-<resource>`. */

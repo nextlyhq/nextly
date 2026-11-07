@@ -36,7 +36,10 @@ const GONE_CLAIM = {
  * Every step taken, in order: a lock row written, a template read, a claim
  * deleted.
  */
-function harness(options: { mayHaveTemplate: boolean }) {
+function harness(options: {
+  mayHaveTemplate: boolean;
+  template?: { published: boolean; address: readonly string[] | null };
+}) {
   const steps: string[] = [];
   const lockKey = storedKey(collectionLockKey("events"));
   const claims = {
@@ -81,7 +84,7 @@ function harness(options: { mayHaveTemplate: boolean }) {
     locales: () => ["en"],
     templateOf: async collection => {
       steps.push(`read template of ${collection}`);
-      return null;
+      return options.template ?? null;
     },
     storedAddresses: async () => new Map(),
     neverServed: collection => collection === "pages",
@@ -127,6 +130,19 @@ describe("an entry's save in a collection not given an address in code", () => {
     const { steps, save } = harness({ mayHaveTemplate: false });
     await save("events");
     expect(steps).toEqual([]);
+  });
+
+  it("locks and gives addresses up in a collection that lost the means to have a template but still has one", async () => {
+    const { steps, save } = harness({
+      mayHaveTemplate: false,
+      template: { published: true, address: ["events"] },
+    });
+    await save("events");
+    expect(steps).toEqual([
+      "read template of events",
+      "lock events",
+      "read template of events",
+    ]);
   });
 
   it("leaves the page builder's own collections alone", async () => {

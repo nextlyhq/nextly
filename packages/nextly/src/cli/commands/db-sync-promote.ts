@@ -11,6 +11,7 @@ import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-changed-after-consent";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { exitWithError } from "../errors";
@@ -109,6 +110,18 @@ export async function promoteCollection(
           command: "nextly db:sync --promote",
           confirmed,
           current,
+        });
+      }
+      // The address the printed declaration names, read again too: one
+      // changed in the admin since the preview would be declared stale, and
+      // the collection moved back to it at the next start.
+      const addressNow = (await args.templateAddress?.(slug)) ?? null;
+      if (addressNow !== address) {
+        throw planChangedAfterConsent({
+          command: "nextly db:sync --promote",
+          message: `${slug}'s template address changed after you confirmed; nothing was changed; run the command again`,
+          agreed: address === null ? [] : [address],
+          current: addressNow === null ? [] : [addressNow],
         });
       }
 

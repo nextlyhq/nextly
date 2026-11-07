@@ -16,6 +16,8 @@ import { JUDGEMENT_CONTEXT } from "../judged-writes";
 import {
   addressHolderProblem,
   guardAddress,
+  guardWrite,
+  storedAddressesReader,
   type TemplateGuardSetup,
 } from "./template-guard";
 import {
@@ -213,5 +215,55 @@ describe("the address guard", () => {
       context: { [JUDGEMENT_CONTEXT]: true },
     });
     expect(addressHolderOf).not.toHaveBeenCalled();
+  });
+});
+
+describe("pointing an addressed template at another collection", () => {
+  it("is refused while the template stores an address", async () => {
+    const readCollection = vi.fn(async () => null);
+    const words = await refusalOf(() =>
+      guardWrite(setup({ readCollection }), {
+        operation: "update",
+        data: { collection: "events" },
+        originalData: { id: "t1", collection: "gone", address: "/gone" },
+      })
+    );
+    expect(words).toBe(
+      "This template serves its collection's entries at /gone. Remove its address before pointing it at another collection."
+    );
+    expect(readCollection).not.toHaveBeenCalled();
+  });
+
+  it("is judged as before once the same write removes the address", async () => {
+    const words = await refusalOf(() =>
+      guardWrite(setup(), {
+        operation: "update",
+        data: { collection: "events", address: null },
+        originalData: { id: "t1", collection: "gone", address: "/gone" },
+      })
+    );
+    expect(words).not.toMatch(/Remove its address/);
+  });
+});
+
+describe("every stored address", () => {
+  it("is read in a unique order, so no template moves between pages", async () => {
+    const asked: Record<string, unknown>[] = [];
+    const read = storedAddressesReader(
+      {
+        listEntries: async (_slug, options) => {
+          asked.push(options);
+          return {
+            data: [
+              { id: "t1", collection: "events", address: "/events" },
+              { id: "t2", collection: "news", address: null },
+            ],
+          };
+        },
+      },
+      "templates"
+    );
+    expect([...(await read()).entries()]).toEqual([["events", "/events"]]);
+    expect(asked[0]?.sort).toEqual({ field: "id", direction: "asc" });
   });
 });

@@ -52,6 +52,7 @@ export interface OwnTemplateReads {
     options: {
       where: Record<string, unknown>;
       pagination: { limit: number; page?: number };
+      sort?: { field: string; direction: "asc" | "desc" };
       depth: number;
     }
   ): Promise<{ data: readonly unknown[] }>;
@@ -127,6 +128,8 @@ export function storedAddressesReader(
       const found = await own.listEntries(templatesCollection, {
         where: {},
         pagination: { limit: ADDRESS_READ_PAGE, page },
+        // A unique order, so no template moves between pages of the walk.
+        sort: { field: "id", direction: "asc" },
         depth: 0,
       });
       for (const entry of found.data) {
@@ -412,6 +415,19 @@ export async function guardWrite(
       collection === before
     ) {
       return;
+    }
+    // An addressed template moves live addresses wherever it draws, so it
+    // is pointed elsewhere only once its address is removed, which needs the
+    // routing permission.
+    const addressed = storedAddressOf(
+      Object.prototype.hasOwnProperty.call(data, TEMPLATE_ADDRESS_FIELD)
+        ? data[TEMPLATE_ADDRESS_FIELD]
+        : original?.[TEMPLATE_ADDRESS_FIELD]
+    );
+    if (addressed !== null) {
+      throw addressRefusal(
+        `This template serves its collection's entries at ${addressed}. Remove its address before pointing it at another collection.`
+      );
     }
     if (skipsReads(context)) return;
     // A template keeps the collection it draws. The one exception is a

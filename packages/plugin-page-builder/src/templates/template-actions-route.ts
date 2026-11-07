@@ -366,12 +366,16 @@ async function setTemplateAddress(
   );
   // An emptied address is none, as the guard reads one.
   const address = action.address === "" ? null : action.address;
+  // With its working draft, which a caller who may update templates is
+  // shown: the read says whether the template holds unpublished changes,
+  // which the write below would otherwise put live.
   const stored = await readOrNull(async () =>
     (await getCachedNextly()).findByID({
       collection: templates,
       id: action.id,
       ...(await readingAsUser(ctx)),
       status: "all",
+      draft: true,
       depth: 0,
     })
   );

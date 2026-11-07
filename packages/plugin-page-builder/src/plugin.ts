@@ -2491,8 +2491,12 @@ export const pageBuilder = (
           ...templateAddresses.keys(),
         ],
         holders: [pagesSlug, ...templateAddresses.keys()],
+        // Served while its template stores an address and it may still have
+        // a template: one that lost its `slug` field or became localized
+        // is served nowhere, whatever claims its entries still hold.
         storesAddress: async collection =>
-          ((await claimsDeps.templateOf(collection))?.address ?? null) !== null,
+          ((await claimsDeps.templateOf(collection))?.address ?? null) !==
+            null && (await claimsDeps.mayHaveTemplate(collection)),
       });
       // A page published naming a Layout that is not: it is served inside the
       // site's default until its own is published, and the author is told.
