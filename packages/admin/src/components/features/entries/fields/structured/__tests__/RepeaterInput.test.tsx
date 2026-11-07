@@ -136,10 +136,31 @@ describe("RepeaterInput", () => {
 
     const values = JSON.parse(
       screen.getByTestId("form-values").textContent || "{}"
-    ) as { testimonials: Array<{ id?: unknown; fieldKey?: unknown }> };
+    ) as { testimonials: Array<Record<string, unknown>> };
     expect(values.testimonials[0]?.id).toBe("row-a");
-    expect(values.testimonials[0]?.fieldKey).toBeUndefined();
+    expect(values.testimonials[0]?.["nx.renderKey"]).toBeUndefined();
     expect(values.testimonials[1]?.id).not.toBe("row-a");
+  });
+
+  it("gives no saved id to a row whose schema declares its own id field", () => {
+    // Declared through a layout container: the value is the author's, so an
+    // added row holds the field's own default, never a generated id.
+    const authored = {
+      ...baseRepeater,
+      fields: [
+        { type: "row", fields: [{ name: "id", type: "number" }] },
+        ...baseRepeater.fields,
+      ],
+    } as typeof baseRepeater;
+    render(
+      <RepeaterHarness field={authored} defaultValues={{ testimonials: [] }} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Add Testimonial/i }));
+
+    const values = JSON.parse(
+      screen.getByTestId("form-values").textContent || "{}"
+    ) as { testimonials: Array<Record<string, unknown>> };
+    expect(typeof values.testimonials[0]?.id).not.toBe("string");
   });
 
   it("displays min-rows warning when row count is less than minRows", () => {

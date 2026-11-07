@@ -47,7 +47,7 @@ import {
   type FieldGroupReach,
   type NamedField,
 } from "./password-fields";
-import { sameApartFromIds } from "./same-apart-from-ids";
+import { declaresOwnId, sameApartFromIds } from "./same-apart-from-ids";
 
 /** What one walk carries through every level. */
 interface RowIdWalk {
@@ -172,18 +172,6 @@ function assignHeld(
 }
 
 /**
- * Whether a repeater's rows declare a field named `id`, on the row itself or
- * through a layout container, which keeps its fields on the row.
- */
-function declaresOwnId(fields: readonly NamedField[]): boolean {
-  return fields.some(field =>
-    field.name === undefined || field.name === ""
-      ? declaresOwnId(field.fields ?? [])
-      : field.name === "id"
-  );
-}
-
-/**
  * The fields of rows given no id, each walked with the stored row at its
  * place: what that row holds is matched again by its own rules, which ask
  * for an unchanged row before any stored id passes on, so nothing moves.
@@ -227,6 +215,7 @@ function assignRows(
   rows.forEach((row, index) => {
     if (!isPlainRecord(row)) return;
     const { id, partner } = rowIdentity(row, index, previous, {
+      fields,
       carried,
       used,
       storedById,
@@ -247,6 +236,7 @@ function rowIdentity(
   index: number,
   previous: readonly unknown[],
   list: {
+    fields: readonly NamedField[];
     carried: ReadonlySet<string>;
     used: ReadonlySet<string>;
     storedById: ReadonlyMap<string, Record<string, unknown>>;
@@ -267,7 +257,7 @@ function rowIdentity(
     isPlainRecord(atIndex) &&
     !list.carried.has(storedId) &&
     !list.used.has(storedId) &&
-    sameApartFromIds(row, atIndex)
+    sameApartFromIds(row, atIndex, list.fields)
   ) {
     return { id: storedId, partner: atIndex };
   }

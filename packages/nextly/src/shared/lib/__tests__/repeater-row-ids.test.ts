@@ -69,6 +69,38 @@ describe("assignRepeaterRowIds", () => {
     expect((codes[0]?.lines as Row[])[0]?.id).toBe("new-1");
   });
 
+  it("tells rows apart by an authored id inside a group, as by any value", () => {
+    // Only the system's row ids are set aside: two rows told apart only by
+    // a group's own `id` field are different rows, and swapping them gives
+    // neither the other's stored id.
+    const tagged = [
+      {
+        name: "lines",
+        type: "repeater",
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [{ name: "id", type: "text" }],
+          },
+        ],
+      },
+    ];
+    const stored = {
+      lines: [
+        { id: "a", meta: { id: "x" } },
+        { id: "b", meta: { id: "y" } },
+      ],
+    };
+    const data = { lines: [{ meta: { id: "y" } }, { meta: { id: "x" } }] };
+    assignRepeaterRowIds(data, stored, tagged, NO_FIELD_GROUPS, counter());
+    expect(rowsOf(data).map(row => row.id)).toEqual(["new-1", "new-2"]);
+    // Unswapped, each keeps its own.
+    const same = { lines: [{ meta: { id: "x" } }, { meta: { id: "y" } }] };
+    assignRepeaterRowIds(same, stored, tagged, NO_FIELD_GROUPS, counter());
+    expect(rowsOf(same).map(row => row.id)).toEqual(["a", "b"]);
+  });
+
   it("gives a fresh id to every row without one on a create", () => {
     const data = { lines: [{ label: "x" }, { label: "y" }] };
     assignRepeaterRowIds(data, undefined, LINES, NO_FIELD_GROUPS, counter());

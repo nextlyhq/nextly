@@ -185,6 +185,28 @@ function RepeaterAddButton({
 }
 
 /**
+ * Where the field array keeps each row's render key. A dot splits a form
+ * path, so no field that works in a form can be named this, and the key can
+ * never hide an authored value. The row's own `id` is its saved identity,
+ * which the default key name, `id`, would hide.
+ */
+const RENDER_KEY = "nx.renderKey";
+
+/**
+ * Whether a repeater's rows declare a field named `id`, on the row or through
+ * a layout container, which keeps its fields on the row: the server's own
+ * rule (`declaresOwnId` in core), read the same way here.
+ */
+function declaresOwnId(fields: readonly FieldConfig[]): boolean {
+  return fields.some(field => {
+    const named = "name" in field ? field.name : undefined;
+    if (typeof named === "string" && named !== "") return named === "id";
+    const inner = "fields" in field ? field.fields : undefined;
+    return Array.isArray(inner) && declaresOwnId(inner as FieldConfig[]);
+  });
+}
+
+/**
  * A repeater's rows as a field array: their render keys, drag-and-drop, and
  * adding a row, which carries its saved id from the start, so the server
  * keeps it rather than matching the row against stored ones.
@@ -194,9 +216,6 @@ function useRepeaterRows<TFieldValues extends FieldValues>(
   name: FieldArrayPath<TFieldValues>,
   fields: FieldConfig[]
 ) {
-  // A row's own `id` is its saved identity, so the field array keeps its
-  // render key under another name: under the default, `id`, each item would
-  // show the generated key in place of the row's id.
   const {
     fields: items,
     append,
@@ -205,24 +224,32 @@ function useRepeaterRows<TFieldValues extends FieldValues>(
   } = useFieldArray({
     control,
     name,
-    keyName: "fieldKey",
+    keyName: RENDER_KEY,
   });
 
   // The drag-and-drop list identifies rows by their render key, which every
   // row has, where a row's saved id is absent until it is first saved.
   const sortableItems = useMemo(
-    () => items.map(item => ({ id: item.fieldKey })),
+    () => items.map(item => ({ id: item[RENDER_KEY] })),
     [items]
   );
 
   const { sensors, handleDragEnd } = useSortableFieldArray(sortableItems, move);
 
+  // Rows whose schema declares its own `id` field hold the author's value
+  // there, so they are given none, as the server gives them none.
+  const ownId = useMemo(() => declaresOwnId(fields), [fields]);
   const handleAdd = useCallback(() => {
-    append({
-      id: freshId("row"),
-      ...createDefaultFieldValues(fields),
-    } as TFieldValues[FieldArrayPath<TFieldValues>][number]);
-  }, [append, fields]);
+    const defaults = createDefaultFieldValues(fields);
+    append(
+      (ownId
+        ? defaults
+        : {
+            id: freshId("row"),
+            ...defaults,
+          }) as TFieldValues[FieldArrayPath<TFieldValues>][number]
+    );
+  }, [append, fields, ownId]);
 
   return { items, remove, sortableItems, sensors, handleDragEnd, handleAdd };
 }
@@ -328,8 +355,8 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
             >
               {items.map((item, index) => (
                 <RepeaterRow
-                  key={item.fieldKey}
-                  id={item.fieldKey}
+                  key={item[RENDER_KEY]}
+                  id={item[RENDER_KEY]}
                   index={index}
                   field={field}
                   basePath={`${name}.${index}`}

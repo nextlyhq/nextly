@@ -333,6 +333,77 @@ describe("carryStoredPasswords", () => {
       });
     });
 
+    it("names a nested row by its whole path when it refuses it", () => {
+      const nested = [
+        {
+          name: "lines",
+          type: "repeater",
+          fields: [
+            {
+              name: "items",
+              type: "repeater",
+              fields: [
+                { name: "label", type: "text" },
+                { name: "pw", type: "password" },
+              ],
+            },
+          ],
+        },
+      ];
+      const stored = {
+        lines: [{ id: "a", items: [{ id: "i", label: "i", pw: HASH_A }] }],
+      };
+      const data: Record<string, unknown> = {
+        lines: [{ id: "a", items: [{ label: "edited" }] }],
+      };
+      let refused: unknown;
+      try {
+        carryStoredPasswords(data, stored, nested, NO_FIELD_GROUPS);
+      } catch (error) {
+        refused = error;
+      }
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "lines.0.items.0",
+              message: expect.stringContaining("Row 1 of 'lines.0.items'"),
+            },
+          ],
+        },
+      });
+    });
+
+    it("tells rows apart by an authored id inside a group before keeping a password", () => {
+      const tagged = [
+        {
+          name: "creds",
+          type: "repeater",
+          fields: [
+            {
+              name: "meta",
+              type: "group",
+              fields: [{ name: "id", type: "text" }],
+            },
+            { name: "pw", type: "password" },
+          ],
+        },
+      ];
+      const stored = {
+        creds: [
+          { id: "a", meta: { id: "x" }, pw: HASH_A },
+          { id: "b", meta: { id: "y" }, pw: HASH_B },
+        ],
+      };
+      // Swapped by a writer sending no ids: by position, x would get y's.
+      const data: Record<string, unknown> = {
+        creds: [{ meta: { id: "y" } }, { meta: { id: "x" } }],
+      };
+      expect(() =>
+        carryStoredPasswords(data, stored, tagged, NO_FIELD_GROUPS)
+      ).toThrow();
+    });
+
     it("keeps everything else working without ids", () => {
       // A row sending its own password keeps no stored one: nothing to guess.
       expect(carried([{ label: "x", pw: "new-secret" }]).rows[0]?.pw).toBe(

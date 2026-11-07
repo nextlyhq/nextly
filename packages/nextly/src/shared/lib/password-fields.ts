@@ -569,10 +569,13 @@ function carryLevel(
   fields: readonly NamedField[],
   reach: FieldGroupReach,
   atEntry: boolean,
-  kept: Set<string>
+  kept: Set<string>,
+  // Where `level` sits in the document, as a path prefix ("lines.1."), so a
+  // refusal names the row it means.
+  at = ""
 ): void {
   for (const field of fields) {
-    carryField(level, stored, field, reach, atEntry, kept);
+    carryField(level, stored, field, reach, atEntry, kept, at);
   }
 }
 
@@ -583,12 +586,13 @@ function carryField(
   field: NamedField,
   reach: FieldGroupReach,
   atEntry: boolean,
-  kept: Set<string>
+  kept: Set<string>,
+  at: string
 ): void {
   if (!field.name) {
     // A layout container keeps its fields on this level.
     if (field.fields) {
-      carryLevel(level, stored, field.fields, reach, atEntry, kept);
+      carryLevel(level, stored, field.fields, reach, atEntry, kept, at);
     }
     return;
   }
@@ -600,7 +604,7 @@ function carryField(
   }
   // Own keys only: a field may be named like a member every object inherits.
   if (Object.hasOwn(level, field.name)) {
-    carryHeld(level, stored, field.name, field, reach, atEntry, kept);
+    carryHeld(level, stored, field.name, field, reach, atEntry, kept, at);
   }
 }
 
@@ -612,13 +616,15 @@ function carryHeld(
   field: NamedField,
   reach: FieldGroupReach,
   atEntry: boolean,
-  kept: Set<string>
+  kept: Set<string>,
+  at: string
 ): void {
   const previous = parsedValue(stored[name]);
   const held = field.fields;
+  const path = `${at}${name}`;
   if (held && (field.type === "group" || field.type === "repeater")) {
     rewriteValue(level, name, value => {
-      carryContainer(value, previous, field, held, reach, kept);
+      carryContainer(value, previous, field, held, reach, kept, path);
       return value;
     });
     return;
@@ -630,7 +636,7 @@ function carryHeld(
   // One placed directly on the entry is stored, and kept, in its own table.
   if (atEntry && reach.direct !== true) return;
   rewriteValue(level, name, value => {
-    carryInstances(value, previous, references, reach, kept);
+    carryInstances(value, previous, references, reach, kept, path);
     return value;
   });
 }
@@ -660,21 +666,23 @@ function carryContainer(
   container: NamedField,
   fields: readonly NamedField[],
   reach: FieldGroupReach,
-  kept: Set<string>
+  kept: Set<string>,
+  path: string
 ): void {
   if (container.type === "group") {
     if (isPlainRecord(value) && isPlainRecord(previous)) {
-      carryLevel(value, previous, fields, reach, false, kept);
+      carryLevel(value, previous, fields, reach, false, kept, `${path}.`);
     }
     return;
   }
   const rows = Array.isArray(value) ? value : [];
   forEachPairedRow(value, previous, "sent", (row, storedRow) => {
+    const index = rows.indexOf(row);
     const carried = kept.size;
-    carryLevel(row, storedRow, fields, reach, false, kept);
-    refuseAmbiguousCarry(row, storedRow, kept.size > carried, {
-      name: container.name ?? "",
-      index: rows.indexOf(row),
+    carryLevel(row, storedRow, fields, reach, false, kept, `${path}.${index}.`);
+    refuseAmbiguousCarry(row, storedRow, fields, kept.size > carried, {
+      path,
+      index,
     });
   });
 }
@@ -691,19 +699,20 @@ function carryContainer(
 function refuseAmbiguousCarry(
   row: Record<string, unknown>,
   storedRow: Record<string, unknown>,
+  fields: readonly NamedField[],
   carriedAPassword: boolean,
-  where: { name: string; index: number }
+  where: { path: string; index: number }
 ): void {
   if (!carriedAPassword || hasRowId(row) || !hasRowId(storedRow)) return;
   // Compared with the carried passwords in place, so only the row's other
   // values can tell it apart from the stored row.
-  if (sameApartFromIds(row, storedRow)) return;
+  if (sameApartFromIds(row, storedRow, fields)) return;
   throw NextlyError.validation({
     errors: [
       {
-        path: `${where.name}.${where.index}`,
+        path: `${where.path}.${where.index}`,
         code: "ROW_ID_REQUIRED",
-        message: `Row ${where.index + 1} of '${where.name}' changed without its id, so its saved password can't be kept safely. Send each row's id (from the last read), or send the password again.`,
+        message: `Row ${where.index + 1} of '${where.path}' changed without its id, so its saved password can't be kept safely. Send each row's id (from the last read), or send the password again.`,
       },
     ],
   });
@@ -715,8 +724,10 @@ function carryInstances(
   previous: unknown,
   references: { single?: string; many?: string[] },
   reach: FieldGroupReach,
-  kept: Set<string>
+  kept: Set<string>,
+  path: string
 ): void {
+  const list = Array.isArray(value) ? value : undefined;
   const carryInstance = (
     instance: Record<string, unknown>,
     storedInstance: Record<string, unknown>
@@ -726,10 +737,12 @@ function carryInstances(
     const fields = instanceFields(instance, references, lookup);
     if (fields === undefined) return;
     if (instanceFields(storedInstance, references, lookup) !== fields) return;
-    carryLevel(instance, storedInstance, fields, reach, false, kept);
+    const at =
+      list === undefined ? `${path}.` : `${path}.${list.indexOf(instance)}.`;
+    carryLevel(instance, storedInstance, fields, reach, false, kept, at);
   };
-  if (Array.isArray(value)) {
-    forEachPairedRow(value, previous, "both", carryInstance);
+  if (list !== undefined) {
+    forEachPairedRow(list, previous, "both", carryInstance);
   } else if (
     isPlainRecord(value) &&
     isPlainRecord(previous) &&
