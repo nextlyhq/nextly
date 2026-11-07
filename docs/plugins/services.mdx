@@ -493,6 +493,33 @@ the content's read hooks, for that one collection or Single and that one call; a
 row keeps its own hooks. The same warning applies: never return what they read to a
 person.
 
+To find that content without naming it first, `listHostTypesInTransaction(tx)`
+(`@experimental`) answers `{ collections, singles }`: each collection and Single holding a
+field of a type your plugin registered, as `services.collections.listCollections` and
+`services.singles.list` list them, judged by the same rule, so a host read of any slug it
+lists is not refused on the same transaction. Your own collections and Singles are judged
+like any other. Those two listings take a pooled connection, which inside a transaction on
+a pool of one waits for the connection the transaction holds; this one reads on the
+transaction's connection, in a few statements whatever the number of collections and
+Singles: the collections, the Singles, and every component's fields when a schema names a
+component. Each collection and Single is judged by the schema read in the same statement
+as itself. A plugin that registered no field type gets both lists empty.
+
+```ts
+await ctx.services.collections.withTransaction(async tx => {
+  const { collections, singles } =
+    await ctx.services.ownCollections.listHostTypesInTransaction(tx);
+  for (const collection of collections) {
+    const page = await ctx.services.ownCollections.listHostEntriesInTransaction(
+      tx,
+      collection.name,
+      { pagination: { limit: 50 } }
+    );
+    // ...
+  }
+});
+```
+
 ## When to drop to `ctx.db`
 
 `ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses
