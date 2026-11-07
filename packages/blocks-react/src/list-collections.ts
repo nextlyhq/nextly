@@ -52,7 +52,7 @@ export function listCollectionsWhere(
  * a list item is filled only as an item is drawn, so it leaves its prop as
  * stored here.
  */
-function listPropsAsBound(
+export function listPropsAsBound(
   list: BlockNode,
   run: BindingRun | undefined
 ): Record<string, unknown> {

@@ -122,7 +122,11 @@ import type {
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
-import { listCollections, listCollectionsWhere } from "./list-collections";
+import {
+  listCollections,
+  listCollectionsWhere,
+  listPropsAsBound,
+} from "./list-collections";
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -536,7 +540,9 @@ function listPageSlug(slug: string, page: number | undefined): string {
 function pagedListOf(
   document: BlockDocument,
   page: DrawnDocument,
-  maxNodes: number
+  maxNodes: number,
+  /** The page's binding pass, so a bound query prop is read as drawn. */
+  run: BindingRun | undefined
 ): PaginatedList | undefined {
   // The page's own: the list its stored nodes split into pages, an
   // instance's exposed slot included, never one a component's definition
@@ -546,7 +552,14 @@ function pagedListOf(
   if (owned === undefined || page.prepared === null) return undefined;
   // That very list, found by its id in the page as drawn, so a component's
   // own list ahead of it cannot stand in for it.
-  return listNamed(page.prepared.presented.nodes, owned.id, maxNodes);
+  const node = listNamed(page.prepared.presented.nodes, owned.id, maxNodes);
+  if (node === undefined) return undefined;
+  // Its props as the page's binding pass fills them, the ones the list is
+  // drawn with: a limit, offset, collection or split bound to the entry is
+  // counted as the page shows it, so the route serves exactly the pages the
+  // list's links name.
+  const bound = { ...node, props: listPropsAsBound(node, run) };
+  return paginatedList([bound], 1);
 }
 
 /**
@@ -558,16 +571,13 @@ function listNamed(
   nodes: readonly BlockNode[],
   id: string,
   maxNodes: number
-): PaginatedList | undefined {
+): BlockNode | undefined {
   const stack: BlockNode[] = [...nodes].reverse();
   let left = maxNodes;
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     if (left <= 0) return undefined;
     left -= 1;
-    if (node.id === id) {
-      // Asked of this one node: a paginated list here is the page's own.
-      return paginatedList([node], 1);
-    }
+    if (node.id === id) return node;
     for (const children of Object.values(node.slots ?? {}).reverse()) {
       for (let at = children.length - 1; at >= 0; at -= 1) {
         const child = children[at];
@@ -2979,7 +2989,10 @@ function blocksRouteConfig(
       const list = pagedListOf(
         document,
         page,
-        effectiveLimits(config).maxNodes
+        effectiveLimits(config).maxNodes,
+        bindings === undefined
+          ? undefined
+          : pageBindingRun(bindings, context.locale, resolver)
       );
       if (list === undefined) return null;
       // A list that makes no read shows one page, and claims nothing.
@@ -3133,7 +3146,10 @@ function blocksRouteConfig(
       const pagedList = pagedListOf(
         document,
         page,
-        effectiveLimits(config).maxNodes
+        effectiveLimits(config).maxNodes,
+        bindings === undefined
+          ? undefined
+          : pageBindingRun(bindings, context.locale, resolver)
       );
       // Claimed only for a list that reads: one with no collection yet, or
       // a stored query it cannot run, spends nothing another list needs.
