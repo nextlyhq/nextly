@@ -224,8 +224,32 @@ Each one is reported to `onBindingIssues` with a code from
 `BINDING_ISSUE_CODES`, never with the value its source holds. The routes log
 one warning per report, naming the page.
 
-Image bindings are checked but not filled yet: a bound image keeps its own
-value.
+#### Image bindings
+
+An image prop (`media` or `upload`) binds to a media field or a URL field:
+
+- **A media field** fills the prop with the record's id, populated or not, and
+  the image draws exactly as one whose media was picked: the record's address,
+  alternative text and size. The block's own alternative text wins over the
+  record's.
+- **A URL field** fills it only with an image address: `https://`, `http://`
+  or a path on the site (`/media/a.png`). `javascript:`, `data:`, `mailto:`,
+  a relative path and `//host` are not image addresses, so they render the
+  fallback. The address keeps the block's own alternative text, and has no
+  size.
+- **The fallback** is a media id or an image address. Any other value is
+  refused when the document is saved and ignored when it renders.
+- **What draws.** An address goes through the same scheme and host checks as
+  a typed one, so a host outside the site's `remotePatterns` is not loaded. A
+  value that can't be drawn, a record the host can't find included, shows the
+  fallback, then nothing; never the block's own typed address and never an
+  empty image.
+- **No responsive sizes.** An image draws one address with its width and
+  height, as a picked one does: there is no `srcset` or size variant yet.
+
+A block receives `bound.<prop>` as
+`{ kind: "image", holds: "media" | "address", fromFallback, fallback? }`, so a
+contributed block can tell an id to look up from an address to draw.
 
 #### The document's own metadata
 

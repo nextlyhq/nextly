@@ -1,0 +1,259 @@
+/**
+ * An image bound to a media field draws exactly as one whose media was picked,
+ * and one bound to a URL field draws the address only when it is an image
+ * address the site may load: never `javascript:` or `data:`, never a host
+ * outside the site's list, and never a broken element. A record the host
+ * can't find shows the binding's fallback, then nothing.
+ *
+ * Every fixture keeps the record's, the address's and the fallback's values
+ * distinct, so an assertion can only pass on the one that should show.
+ */
+import {
+  DOCUMENT_FORMAT_VERSION,
+  type BindingFieldShape,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+import type { ReactElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+
+import { coreBlocks } from "./blocks";
+import {
+  createStandaloneContext,
+  type PageBindings,
+  type ResolvedMedia,
+} from "./context";
+import { PageRenderer } from "./page-renderer";
+import { createBlockResolver } from "./resolver";
+
+async function renderToHtml(element: ReactElement): Promise<string> {
+  const stream = await renderToReadableStream(element, {
+    onError(error) {
+      throw error;
+    },
+  });
+  await stream.allReady;
+  return await new Response(stream).text();
+}
+
+const resolver = createBlockResolver(coreBlocks);
+
+const POSTS: readonly BindingFieldShape[] = [
+  { name: "cover", type: "upload", relationTo: "media" },
+  { name: "photoUrl", type: "url" },
+];
+
+/** The host's media library: one record, and nothing for any other id. */
+const LIBRARY: Readonly<Record<string, ResolvedMedia>> = {
+  m1: {
+    url: "https://cdn.example/m1.jpg",
+    alt: "Record alt",
+    width: 800,
+    height: 600,
+  },
+};
+
+function page(...nodes: BlockNode[]): BlockDocument {
+  return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes };
+}
+
+/** An image whose `mediaId` is bound to `path`, typing an address of its own. */
+function boundImage(
+  path: string,
+  extra: { fallback?: string; alt?: string } = {}
+): BlockNode {
+  return {
+    id: "picture",
+    type: "core/image",
+    version: 1,
+    props: {
+      src: "https://cdn.example/own.jpg",
+      ...(extra.alt === undefined ? {} : { alt: extra.alt }),
+    },
+    bindings: {
+      mediaId: {
+        $bind: path,
+        ...(extra.fallback === undefined ? {} : { fallback: extra.fallback }),
+      },
+    },
+  };
+}
+
+async function render(
+  document: BlockDocument,
+  entry: Readonly<Record<string, unknown>>,
+  remotePatterns?: readonly URL[]
+): Promise<string> {
+  const bindings: PageBindings = {
+    entry,
+    entryRef: { collection: "posts" },
+    fieldShapes: {
+      fieldsOf: ref =>
+        "collection" in ref && ref.collection === "posts" ? POSTS : undefined,
+    },
+  };
+  return await renderToHtml(
+    <PageRenderer
+      document={document}
+      blocks={resolver}
+      siteStyles={false}
+      bindings={bindings}
+      context={createStandaloneContext({
+        resolveMedia: id => Promise.resolve(LIBRARY[id] ?? null),
+      })}
+      {...(remotePatterns === undefined
+        ? {}
+        : { hostPolicy: { remotePatterns: [...remotePatterns] } })}
+    />
+  );
+}
+
+/** Every `<img>` the page drew, as written. */
+function images(html: string): string[] {
+  return [...html.matchAll(/<img[^>]*>/g)].map(match => match[0]);
+}
+
+/** One attribute of an `<img>`, or nothing when it has none. */
+function attribute(tag: string | undefined, name: string): string | undefined {
+  return tag === undefined
+    ? undefined
+    : new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+}
+
+describe("an image bound to a field", () => {
+  it("draws a media field's record as a picked one is drawn: its address, alt text and size", async () => {
+    const bound = images(
+      await render(page(boundImage("cover")), {
+        cover: { id: "m1", filename: "m1.jpg" },
+      })
+    );
+    expect(bound).toHaveLength(1);
+    expect(attribute(bound[0], "src")).toBe("https://cdn.example/m1.jpg");
+    expect(attribute(bound[0], "alt")).toBe("Record alt");
+    expect(attribute(bound[0], "width")).toBe("800");
+    expect(attribute(bound[0], "height")).toBe("600");
+    // The same element an author picking the record gets, attribute for
+    // attribute.
+    const picked = images(
+      await render(
+        page({
+          id: "picture",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "m1", src: "https://cdn.example/own.jpg" },
+        }),
+        {}
+      )
+    );
+    expect(bound).toEqual(picked);
+  });
+
+  it("keeps the block's own alt text over the record's", async () => {
+    const tag = images(
+      await render(page(boundImage("cover", { alt: "Own alt" })), {
+        cover: "m1",
+      })
+    )[0];
+    expect(attribute(tag, "src")).toBe("https://cdn.example/m1.jpg");
+    expect(attribute(tag, "alt")).toBe("Own alt");
+  });
+
+  it("draws a URL field's image address with the block's alt text and no size of its own", async () => {
+    const tag = images(
+      await render(page(boundImage("photoUrl", { alt: "Own alt" })), {
+        photoUrl: "https://cdn.example/photo.jpg",
+      })
+    )[0];
+    expect(attribute(tag, "src")).toBe("https://cdn.example/photo.jpg");
+    expect(attribute(tag, "alt")).toBe("Own alt");
+    expect(attribute(tag, "width")).toBeUndefined();
+    // Without alt text of its own, an address has none to offer: empty.
+    const bare = images(
+      await render(page(boundImage("photoUrl")), {
+        photoUrl: "/media/photo.jpg",
+      })
+    )[0];
+    expect(attribute(bare, "src")).toBe("/media/photo.jpg");
+    expect(attribute(bare, "alt")).toBe("");
+  });
+
+  it("never draws javascript: or data: from a URL field: the fallback, or nothing", async () => {
+    for (const photoUrl of [
+      "javascript:alert(1)",
+      "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    ]) {
+      const bare = await render(page(boundImage("photoUrl")), { photoUrl });
+      expect(images(bare), photoUrl).toEqual([]);
+      // Nor the block's own typed address: the binding names its fallback.
+      expect(bare).not.toContain("own.jpg");
+      expect(bare).not.toContain(photoUrl);
+      const fallen = images(
+        await render(
+          page(boundImage("photoUrl", { fallback: "/media/fallback.jpg" })),
+          { photoUrl }
+        )
+      );
+      expect(
+        fallen.map(tag => attribute(tag, "src")),
+        photoUrl
+      ).toEqual(["/media/fallback.jpg"]);
+    }
+  });
+
+  it("draws no address from a host outside the site's list, and falls back past it", async () => {
+    const listed = [new URL("https://cdn.example/**")];
+    const outside = { photoUrl: "https://elsewhere.example/photo.jpg" };
+    const bare = await render(page(boundImage("photoUrl")), outside, listed);
+    expect(images(bare)).toEqual([]);
+    expect(bare).not.toContain("elsewhere.example");
+    const fallen = images(
+      await render(
+        page(boundImage("photoUrl", { fallback: "m1" })),
+        outside,
+        listed
+      )
+    );
+    expect(fallen.map(tag => attribute(tag, "src"))).toEqual([
+      "https://cdn.example/m1.jpg",
+    ]);
+    // CONTROL: a listed host is drawn.
+    const inside = images(
+      await render(
+        page(boundImage("photoUrl")),
+        { photoUrl: "https://cdn.example/photo.jpg" },
+        listed
+      )
+    );
+    expect(inside.map(tag => attribute(tag, "src"))).toEqual([
+      "https://cdn.example/photo.jpg",
+    ]);
+  });
+
+  it("shows the fallback for a record the host can't find, then nothing, never a broken image", async () => {
+    const gone = { cover: "deleted-record" };
+    const bare = await render(page(boundImage("cover")), gone);
+    expect(images(bare)).toEqual([]);
+    expect(bare).not.toContain("own.jpg");
+    const fallen = images(
+      await render(
+        page(boundImage("cover", { fallback: "/media/fallback.jpg" })),
+        gone
+      )
+    );
+    expect(fallen.map(tag => attribute(tag, "src"))).toEqual([
+      "/media/fallback.jpg",
+    ]);
+  });
+
+  it("shows the fallback when the field is empty, as any binding does", async () => {
+    const fallen = images(
+      await render(page(boundImage("cover", { fallback: "m1" })), {
+        cover: null,
+      })
+    );
+    expect(fallen.map(tag => attribute(tag, "src"))).toEqual([
+      "https://cdn.example/m1.jpg",
+    ]);
+  });
+});

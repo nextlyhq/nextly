@@ -50,6 +50,11 @@ import { exposedValueFits } from "./placement-values";
 import { isPlainRecord } from "./plain-record";
 import { isRichTextNode, isRichTextValue } from "./rich-text";
 import { ownEntry } from "./safe-record";
+import {
+  hasControlCharacter,
+  isImageAddress,
+  normalizeUrl,
+} from "./url-policy";
 
 /**
  * A binding path: a dot-joined chain of field identifiers, such as "title" or
@@ -364,6 +369,42 @@ function isReferenceValue(value: unknown): boolean {
 }
 
 /**
+ * What an image prop's value names: a media record's id, which the host
+ * resolves to its address, alternative text and size, or an image address.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface ImageValue {
+  readonly holds: "media" | "address";
+  readonly value: string;
+}
+
+/** Any leading `scheme:`, as the URL parser reads one. */
+const ANY_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * An image prop's value read by its shape: an image address, else a media id.
+ * A value written like an address that is not an image address (another
+ * scheme, a host-relative `//host`, a control character) is neither, so it is
+ * never handed to a host's media lookup as an id.
+ */
+export function imageValueOf(value: unknown): ImageValue | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  if (isImageAddress(trimmed)) return { holds: "address", value: trimmed };
+  const normalized = normalizeUrl(trimmed);
+  if (
+    hasControlCharacter(normalized) ||
+    ANY_SCHEME.test(normalized) ||
+    normalized.startsWith("/")
+  ) {
+    return undefined;
+  }
+  return { holds: "media", value: trimmed };
+}
+
+/**
  * Whether a value is one a prop of this kind can hold, judged as the prop's
  * own value would be.
  *
@@ -396,6 +437,12 @@ export function isValidPropValue(
       );
     case "reference":
       return isReferenceValue(value);
+    case "image":
+      // Narrower than a placement's image value, which is only a non-empty
+      // string: a binding may also fill an image from a URL field, so its
+      // value and its fallback are a media id or an image address, and an
+      // address no image is drawn from (`javascript:`, `data:`) is neither.
+      return imageValueOf(value) !== undefined;
     default:
       // The sentinel that clears an override is not a value of any prop.
       if (isUnsetOverride(value)) return false;

@@ -138,6 +138,31 @@ export function isLinkableUrl(value: unknown): boolean {
   return LINKABLE_SCHEMES.includes(name.toLowerCase());
 }
 
+/** An absolute address over HTTP or HTTPS, naming a host. */
+const HTTP_ADDRESS = /^https?:\/\/[^/]/i;
+
+/**
+ * Whether a value is an address an image may be drawn from: absolute over
+ * HTTP or HTTPS, or a path on this site (`/media/a.png`).
+ *
+ * Narrower than {@link isLinkableUrl} on purpose. `mailto:` and `tel:` are
+ * links but never pictures, a relative `a.png` resolves against whichever
+ * page draws it, and `//host/x` reaches another host while naming no scheme.
+ * Read as the browser's parser reads it, so a backslash or a hidden control
+ * character cannot turn a site path into another host. Which hosts a block
+ * may load from is a separate question, asked of the host policy.
+ *
+ * @param value - anything a field or a binding's fallback might hold
+ * @returns whether an image may be drawn from it
+ */
+export function isImageAddress(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const normalized = normalizeUrl(value);
+  if (normalized === "" || hasControlCharacter(normalized)) return false;
+  if (HTTP_ADDRESS.test(normalized)) return true;
+  return normalized.startsWith("/") && !normalized.startsWith("//");
+}
+
 export function isRemoteUrl(value: string): boolean {
   const normalized = normalizeUrl(value);
   if (URL_SCHEME.test(normalized)) return true;

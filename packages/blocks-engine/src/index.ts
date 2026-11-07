@@ -1283,6 +1283,7 @@ export type {
   BindingSchemaRef,
   BindingSchemaSource,
   CheckedBinding,
+  ImageValue,
 } from "./binding-rules";
 export {
   checkFormat,
