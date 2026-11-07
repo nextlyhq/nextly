@@ -66,24 +66,41 @@ interface BindingFinding {
   readonly code: BindingIssueCode;
   readonly message: string;
   /**
-   * The prop, the source and the stored path: the same problem wherever it is
-   * placed, and another one once the binding reads another source.
+   * The prop and the binding as stored: the same problem wherever it is
+   * placed, and another one once the binding is changed in any way.
    */
   readonly identity: string;
 }
 
-/** What a binding reads: its source, and the Single it names. */
-function sourceIdentity(binding: unknown): string {
-  if (!isPlainRecord(binding)) return "";
-  const source = ownEntry(binding, "source") ?? DEFAULT_BINDING_SOURCE;
-  const key = ownEntry(binding, "sourceKey");
-  return `${typeof source === "string" ? source : ""}\u0000${typeof key === "string" ? key : ""}`;
+/**
+ * A value as text with every object's keys in order, so the same value reads
+ * the same however it was stored: PostgreSQL's `jsonb` keeps keys in an order
+ * of its own.
+ */
+function canonicalText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(item => canonicalText(item)).join(",")}]`;
+  }
+  if (isPlainRecord(value)) {
+    return `{${ownKeys(value)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${canonicalText(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
-/** A node still to judge, and where it sits. */
-interface Visit {
-  readonly node: unknown;
-  readonly path: string;
+/**
+ * The binding as stored, its source spelled out: the same binding however it
+ * was written, and another one once anything it reads or falls back to
+ * changes, so only an unchanged break is held.
+ */
+function bindingIdentity(binding: unknown): string {
+  if (!isPlainRecord(binding)) return "";
+  return canonicalText({
+    ...binding,
+    source: ownEntry(binding, "source") ?? DEFAULT_BINDING_SOURCE,
+  });
 }
 
 /** A node's bound props' problems, against the judgement's schema. */
@@ -154,35 +171,50 @@ function propFindings(
         nodeId: bound.id,
         code: issue.code,
         message: issue.message,
-        identity: `${bound.prop}\u0000${sourceIdentity(bound.binding)}\u0000${issue.path}`,
+        identity: `${bound.prop}\u0000${bindingIdentity(bound.binding)}`,
       }))
   );
 }
 
-/** A node's children to judge, in document order once popped. */
-function childVisits(
+/**
+ * A list of nodes still being walked: its nodes, the next one to visit, and
+ * the path each sits at. Read one node at a time, so a list of any width
+ * costs nothing past the nodes judged.
+ */
+interface Frame {
+  readonly nodes: readonly unknown[];
+  next: number;
+  readonly at: (index: number) => string;
+}
+
+/**
+ * A node's slots, as lists to walk, the last slot first: the stack pops the
+ * first slot first, so the walk keeps document order.
+ */
+function slotFrames(
   node: Readonly<Record<string, unknown>>,
   path: string
-): Visit[] {
+): Frame[] {
   const slots = node.slots;
   if (!isPlainRecord(slots)) return [];
-  const visits: Visit[] = [];
+  const frames: Frame[] = [];
   for (const name of Object.keys(slots).reverse()) {
     const children = slots[name];
     if (!Array.isArray(children)) continue;
-    for (let index = children.length - 1; index >= 0; index -= 1) {
-      visits.push({
-        node: children[index],
-        path: pointer(pointer(`${path}/slots`, name), index),
-      });
-    }
+    const slotPath = pointer(`${path}/slots`, name);
+    frames.push({
+      nodes: children,
+      next: 0,
+      at: index => pointer(slotPath, index),
+    });
   }
-  return visits;
+  return frames;
 }
 
 /**
  * Every binding problem in a forest, in document order. Iterative, so no depth
- * exhausts the stack, and capped at `maxNodes` as the validator's survey is.
+ * exhausts the stack, and capped at `maxNodes` as the validator's survey is:
+ * no node past the cap is visited, nor any list read past it.
  */
 function walkBindingFindings(
   nodes: readonly unknown[],
@@ -190,20 +222,24 @@ function walkBindingFindings(
 ): BindingFinding[] {
   const findings: BindingFinding[] = [];
   let left = judgement.maxNodes ?? Number.MAX_SAFE_INTEGER;
-  const stack: Visit[] = [];
-  for (let index = nodes.length - 1; index >= 0; index -= 1) {
-    stack.push({ node: nodes[index], path: pointer("/nodes", index) });
-  }
-  for (
-    let visit = stack.pop();
-    visit !== undefined && left > 0;
-    visit = stack.pop()
-  ) {
+  const stack: Frame[] = [
+    { nodes, next: 0, at: index => pointer("/nodes", index) },
+  ];
+  while (left > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame === undefined) break;
+    if (frame.next >= frame.nodes.length) {
+      stack.pop();
+      continue;
+    }
+    const index = frame.next;
+    frame.next += 1;
     left -= 1;
-    const { node, path } = visit;
+    const node: unknown = frame.nodes[index];
     if (!isPlainRecord(node)) continue;
+    const path = frame.at(index);
     findings.push(...nodeFindings(node, path, judgement));
-    stack.push(...childVisits(node, path));
+    for (const slot of slotFrames(node, path)) stack.push(slot);
   }
   return findings;
 }
@@ -236,7 +272,7 @@ function seoBindingFindings(
       nodeId: "",
       code: issue.code,
       message: issue.message,
-      identity: `seo:${field}\u0000${sourceIdentity(binding)}\u0000${issue.path}`,
+      identity: `seo:${field}\u0000${bindingIdentity(binding)}`,
     }));
 }
 

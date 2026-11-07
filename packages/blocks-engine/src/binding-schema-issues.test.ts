@@ -151,4 +151,65 @@ describe("bindings judged against the schema at save", () => {
       []
     );
   });
+
+  it("refuses a held binding whose fallback was changed", () => {
+    const stored = [
+      {
+        nodes: [
+          {
+            ...heading("h", "headline"),
+            bindings: { text: { $bind: "headline", fallback: "A" } },
+          },
+        ],
+      },
+    ];
+    const issues = judged(
+      [
+        {
+          ...heading("h", "headline"),
+          bindings: { text: { $bind: "headline", fallback: "B" } },
+        },
+      ],
+      stored
+    );
+    expect(issues.map(issue => issue.severity)).toEqual(["error"]);
+  });
+
+  it("holds a binding however its keys were ordered when stored", () => {
+    // PostgreSQL's jsonb keeps keys in an order of its own, and the default
+    // source may be spelled out or left implied.
+    const stored = [
+      {
+        nodes: [
+          {
+            ...heading("h", "headline"),
+            bindings: { text: { fallback: "A", $bind: "headline" } },
+          },
+        ],
+      },
+    ];
+    const issues = judged(
+      [
+        {
+          ...heading("h", "headline"),
+          bindings: {
+            text: { $bind: "headline", source: "entry", fallback: "A" },
+          },
+        },
+      ],
+      stored
+    );
+    expect(issues.map(issue => issue.severity)).toEqual(["warning"]);
+  });
+
+  it("judges no node past the cap, however wide the list", () => {
+    const wide = Array.from({ length: 50_000 }, (_unused, index) =>
+      heading(`h${String(index)}`, "headline")
+    );
+    const issues = bindingSchemaIssues(
+      { nodes: wide },
+      { schema, entry: { collection: "posts" }, maxNodes: 3 }
+    );
+    expect(issues.map(issue => issue.nodeId)).toEqual(["h0", "h1", "h2"]);
+  });
 });

@@ -226,4 +226,30 @@ describe("a write's bindings judged against the declared schema", () => {
     expect(issues).toEqual([]);
     expect(kept).toHaveBeenCalledWith(1);
   });
+
+  it("refuses a binding to a Single that does not exist", async () => {
+    const issues = await newBindingIssues(
+      page(
+        heading("h", { $bind: "tagline", source: "single", sourceKey: "gone" })
+      ),
+      args(),
+      "Content",
+      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+    );
+    expect(issues.map(issue => issue.code)).toEqual(["binding-field-missing"]);
+  });
+
+  it("judges nothing in a write made inside a transaction", async () => {
+    // Its schema would be read on another connection, which can wait behind
+    // the one the transaction holds.
+    const read = vi.fn(shapesOf);
+    const issues = await newBindingIssues(
+      page(heading("h", { $bind: "headline" })),
+      args({ inTransaction: true }),
+      "Content",
+      { shapesOf: read }
+    );
+    expect(issues).toEqual([]);
+    expect(read).not.toHaveBeenCalled();
+  });
 });

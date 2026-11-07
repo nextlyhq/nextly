@@ -246,7 +246,9 @@ renders it as the list above says. The same binding added to another block is
 refused, since that one is the save's own.
 
 Not checked at save: a binding to a list item, whose fields depend on the list
-around it, and a binding to the site settings, whose fields are a fixed set. A
+around it; a binding to the site settings, whose fields are a fixed set; and
+any binding in a write made inside a transaction (a batch or an import), whose
+schema read could wait behind the transaction's own connection. A
 component's own document has no entry, so its bindings to the entry are checked
 on each page that places it, when that page renders.
 

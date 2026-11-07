@@ -37,7 +37,10 @@ import type {
 import type { StoredForms } from "./added-undefined-ids";
 import { asFieldIssues, nodesOf } from "./list-query-judgement";
 
-/** The declared fields of one source, or `undefined` for no such source. */
+/**
+ * The declared fields of one source, or `undefined` for no such source; a
+ * read that fails throws, and leaves the source unknown.
+ */
 export type DeclaredShapesReader = (
   ref: { readonly collection: string } | { readonly single: string }
 ) => Promise<readonly BindingFieldShape[] | undefined>;
@@ -142,9 +145,12 @@ async function readSources(
     [...wanted].map(async ([key, ref]) => {
       let shapes: readonly BindingFieldShape[] | undefined;
       try {
-        shapes = await reads.shapesOf(ref);
+        // A source that does not exist has no fields, so a path into it is
+        // missing, not unknown.
+        shapes = (await reads.shapesOf(ref)) ?? [];
       } catch {
-        // Unknown, so nothing is judged against it.
+        // A read that failed leaves it unknown, so nothing is judged
+        // against it.
         shapes = undefined;
       }
       reads.known.set(key, shapes);
@@ -194,9 +200,16 @@ export async function newBindingIssues(
 ): Promise<PluginFieldIssue[]> {
   const nodes = nodesOf(value);
   const shapesOf = site.shapesOf;
+  // The schema is read through the pool, which inside a transaction is
+  // another connection: it can wait behind the one the transaction holds,
+  // and nothing a validation is handed reads the registry on the
+  // transaction's own. So a write in a transaction (an action route, a
+  // batch, an import) is not judged here, as its breakpoints are not; the
+  // page still falls back by the same rule where it renders.
   if (
     nodes === undefined ||
     args.write === undefined ||
+    args.write.inTransaction ||
     shapesOf === undefined
   ) {
     return [];
