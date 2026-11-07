@@ -4,7 +4,9 @@
  *
  * For the writes that change what reads return without going through an entry
  * or Single service: deleting a collection or a Single, or a plugin writing to
- * columns it added to one. Each passes the intent its builder made, which is
+ * columns it added to one. And for the changes that write no content at all
+ * yet change what every read may return: the site's languages, and what a
+ * role grants. Each passes the intent its builder made, which is
  * `undefined` when the collection or Single opts out of revalidation, so an
  * opted-out one is skipped here exactly as on every other write.
  *
@@ -19,6 +21,8 @@ import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../revalidation/types";
+
+import type { LanguageChangeContentCache } from "./i18n/services/language-settings-service";
 
 /** Where a failed flush is reported. */
 interface FlushLogger {
@@ -74,4 +78,32 @@ function parsed(stored: unknown): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Flushes the cache tags of every collection and Single, as one intent: the
+ * tags their writes flush, the configured `revalidate.tags` included, through
+ * the same intent builders, and none for one whose `revalidate.disable` opts it
+ * out. Nothing where `cache` names no revalidator, so a process that caches
+ * nothing reads no registry. Rejects when the registries or the flush fail;
+ * each caller says what it could not refresh.
+ */
+export async function flushEveryContentScope(
+  cache: LanguageChangeContentCache
+): Promise<void> {
+  const revalidator = cache.revalidator();
+  if (!revalidator) return;
+  const { collections, singles } = await cache.content();
+  const intents = [
+    ...collections.map(c =>
+      buildCollectionRevalidationIntent(c.slug, readRevalidateConfig(c))
+    ),
+    ...singles.map(s =>
+      buildSingleRevalidationIntent(s.slug, readRevalidateConfig(s))
+    ),
+  ];
+  const tags = new Set(intents.flatMap(intent => intent?.tags ?? []));
+  // A site with nothing to flush issues no revalidation, which some backends log as an error.
+  if (tags.size === 0) return;
+  await revalidator.flush([{ tags: [...tags] }]);
 }

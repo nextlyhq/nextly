@@ -63,7 +63,9 @@ import {
   createPublicReader,
   createPublicSingleRoute,
   createSingleRoute,
+  deferToRequest,
   entryIdTag,
+  isReadRefusal,
   requireNextly,
   nextlyTags,
   releaseBoundedRevalidate,
@@ -722,8 +724,11 @@ function readerFor(config: BlocksPageConfig): NextlyContentReader {
  * scope, the page's language and the whole read, and tagged with its
  * collection or Single so a write there refreshes the page. The read is the
  * same for every visitor (anonymous, published), so one entry serves them all.
- * A change to an access rule is not a write and refreshes nothing until the
- * entry revalidates.
+ * A change to what a role grants expires every content tag, so taking a read
+ * away from the public refreshes the entry too, and a read the public is
+ * refused is kept as the refusal (`cachedFind`), so once refused it stays
+ * refused until the entry is read again. A change to a rule in code ships with
+ * a deploy.
  *
  * The cache holds the public reader's whole answer, not the instance's row:
  * the reader then judges which fields the public may see inside the cached
@@ -4970,7 +4975,12 @@ function buildContentRoute(
   /** Who holds `path`: read per request, or cached on a public route. */
   async function holderOf(path: string): Promise<ContentAddressHolder | null> {
     const read = () => config.resolveAddress(pages.locale, path);
-    if (!isPublic) return await read();
+    if (!isPublic) {
+      // Read at request time, after the request: under Cache Components a
+      // prerender refuses an uncached read, which takes the current time.
+      await deferToRequest();
+      return await read();
+    }
     // `null` stands for "nobody" inside the cache, which keeps values as JSON.
     return await cachedFind(async () => (await read()) ?? null, {
       tags: await addressTags(),
@@ -5056,7 +5066,16 @@ function buildContentRoute(
     if (holder.kind === "space") return null;
     const template = await templateOf(holder.collection);
     if (template === null) return null;
-    const entry = await publicRead(holder.collection, holder.id);
+    // An entry the public may not read answers not found, as an unpublished
+    // one does, so the answer never tells a visitor what access hides. Any
+    // other failure throws: answered as not found, a fault would be cached as
+    // a missing page.
+    const entry = await publicRead(holder.collection, holder.id).catch(
+      (error: unknown) => {
+        if (isReadRefusal(error)) return null;
+        throw error;
+      }
+    );
     if (entry === null) return null;
     return {
       kind: "entry",

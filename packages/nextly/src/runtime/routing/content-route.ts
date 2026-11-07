@@ -34,6 +34,7 @@ import type { UserContext } from "../../domains/collections/services/collection-
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
 
+import { isReadRefusal } from "./miss-or-denied";
 import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
 import { isReservedPath } from "./reserved-paths";
 import {
@@ -798,11 +799,7 @@ function buildRoute<TNode>(
           // than fail the build. The refusal is a 403, or AUTH_REQUIRED where
           // the anonymous reader is asked to sign in; any other 401, such as an
           // invalid credential, and any non-access error still surface.
-          // `NextlyError.is` matches across bundled package copies.
-          if (
-            (NextlyError.is(error) && error.statusCode === 403) ||
-            NextlyError.isCode(error, "AUTH_REQUIRED")
-          ) {
+          if (isReadRefusal(error)) {
             break;
           }
           throw error;
