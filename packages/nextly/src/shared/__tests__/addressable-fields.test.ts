@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { addressableFields } from "../addressable-fields";
+import { addressableFields, storedAtThisLevel } from "../addressable-fields";
 
 /** A field config, as loosely as the walk actually reads one. */
 const f = (over: Record<string, unknown>): never => over as never;
@@ -188,5 +188,22 @@ describe("addressableFields - a caller that must not descend everything", () => 
     });
     expect(namesOf(out)).toEqual(["meta"]);
     expect(asked).toEqual([]);
+  });
+});
+
+describe("storedAtThisLevel - where a level's values are stored", () => {
+  it("descends every presentation-only container, and no container stored per row", () => {
+    const fields = [
+      f({ type: "group", fields: [f({ name: "inGroup" })] }),
+      f({ type: "row", fields: [f({ name: "inRow" })] }),
+      f({ type: "tabs", fields: [f({ name: "inTabs" })] }),
+      f({ type: "collapsible", fields: [f({ name: "inCollapsible" })] }),
+      // Stored per row: a field inside is no field of this level.
+      f({ type: "repeater", fields: [f({ name: "inRepeater" })] }),
+      f({ type: "array", fields: [f({ name: "inArray" })] }),
+    ];
+    expect(
+      namesOf(addressableFields(fields, { descendInto: storedAtThisLevel }))
+    ).toEqual(["inGroup", "inRow", "inTabs", "inCollapsible"]);
   });
 });

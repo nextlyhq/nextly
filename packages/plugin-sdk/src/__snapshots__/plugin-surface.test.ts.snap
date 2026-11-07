@@ -722,6 +722,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "secret (value)",
   "setting (value)",
   "standardWebhooks (value)",
+  "storedAtThisLevel (value)",
   "storedValueHash (value)",
   "text (value)",
   "textarea (value)",

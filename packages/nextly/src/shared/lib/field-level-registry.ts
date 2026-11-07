@@ -52,7 +52,9 @@ import {
   listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
-import { addressableFields } from "../addressable-fields";
+// An unnamed container's children are filed at the level it sits in unless it
+// stores them per row (`storedAtThisLevel`), the rule every such walk takes.
+import { addressableFields, storedAtThisLevel } from "../addressable-fields";
 import { FIELD_ACCESS_KEYS } from "../base-validator";
 import { consoleLogger } from "../types";
 import type { AccessRuleContext, AccessRuleTarget } from "../types/access";
@@ -292,21 +294,6 @@ function extractFieldFunctions(
   }
 
   return hasAny ? out : undefined;
-}
-
-/**
- * An unnamed GROUP is layout: its children are stored at the level the group
- * sits in, which is the level this map is keyed by. An unnamed REPEATER is not:
- * its children are stored PER ROW, so flattening them here would file a row's
- * field under the parent's name and hand its rules the wrong object.
- *
- * The same distinction `collection-sources` draws, and it has to be made DURING
- * the walk: the walk emits the children themselves, so by the time a predicate
- * could read the result, a field reached through an unnamed repeater is
- * indistinguishable from one reached through an unnamed group.
- */
-function storedAtThisLevel(container: { type?: unknown }): boolean {
-  return container.type === "group";
 }
 
 /**
