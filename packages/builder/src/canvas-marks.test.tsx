@@ -345,7 +345,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     const badges = () =>
       Array.from(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       );
     // Two badges, none for the plain block, and nothing selected: the badge
     // is always on, unlike the selection ring.
@@ -381,7 +381,7 @@ describe("selection marks", () => {
     await act(async () => undefined);
     await waitFor(() =>
       expect(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       ).toHaveLength(1)
     );
   });
@@ -421,15 +421,16 @@ describe("selection marks", () => {
     const badges = () =>
       Array.from(
         container.querySelectorAll<HTMLElement>(
-          '.nx-canvas-mark[data-mark="conditioned"]'
+          '.nx-canvas-mark[data-mark="at-rest"]'
         )
       );
     await waitFor(() => expect(badges()).toHaveLength(2));
     // Selected, its name takes the top corner, so the tab goes below; the
     // unselected one, CONTROL, keeps the top.
-    expect(
-      badges().map(badge => badge.getAttribute("data-condition-tag"))
-    ).toEqual(["below", "above"]);
+    expect(badges().map(badge => badge.getAttribute("data-tab-at"))).toEqual([
+      "below",
+      "above",
+    ]);
     // The wide one's tab moves in by what the screen cuts off its right.
     expect(badges()[1]?.style.getPropertyValue("--nx-tag-inset-side")).toBe(
       "500px"
@@ -475,12 +476,13 @@ describe("selection marks", () => {
     await act(async () => undefined);
     const badges = () =>
       Array.from(
-        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+        container.querySelectorAll('.nx-canvas-mark[data-mark="at-rest"]')
       );
     await waitFor(() => expect(badges()).toHaveLength(2));
-    expect(
-      badges().map(badge => badge.getAttribute("data-condition-tag"))
-    ).toEqual(["inside", "above"]);
+    expect(badges().map(badge => badge.getAttribute("data-tab-at"))).toEqual([
+      "inside",
+      "above",
+    ]);
   });
 
   it("draws a dashed reach mark on each block a look edit reaches, and clears it", async () => {

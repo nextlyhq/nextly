@@ -112,6 +112,8 @@ describe("the page action schema", () => {
         conditions: [[{ field: "title", op: "exists" }]],
       },
       { kind: "set-layout", layout: null },
+      { kind: "place-entry-content", field: "body", at: { index: 2 } },
+      { kind: "set-entry-content-field", nodeId: "n", field: "sidebar" },
     ];
     expect(accepted.map(action => action.kind)).toEqual(PAGE_ACTION_KINDS);
     for (const action of accepted) {

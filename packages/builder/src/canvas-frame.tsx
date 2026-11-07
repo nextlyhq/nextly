@@ -43,6 +43,7 @@
  * @module canvas-frame
  */
 
+import { ENTRY_CONTENT_NOTE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
@@ -1090,6 +1091,19 @@ const PAGE_CHROME_TOKENS: readonly {
       "--nx-builder-danger",
       "--nx-builder-surface-raised",
       "--nx-builder-text",
+      "--nx-builder-scheme",
+      "--font-sans",
+      "--radius-sm",
+    ],
+  },
+  {
+    // An Entry content block's note to its author holds the admin's words
+    // alone, so it takes the admin's face, and its red one the admin's
+    // colours.
+    selector: `[${ENTRY_CONTENT_NOTE_ATTRIBUTE}]`,
+    tokens: [
+      "--nx-builder-danger",
+      "--nx-builder-surface-raised",
       "--nx-builder-scheme",
       "--font-sans",
       "--radius-sm",

@@ -403,9 +403,14 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
 export {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,
+  usePreviewedCollection,
   usePreviewedEntry,
 } from "./previewed-entry";
-export type { PreviewedEntry } from "./previewed-entry";
+export type {
+  PreviewedBlocksField,
+  PreviewedCollection,
+  PreviewedEntry,
+} from "./previewed-entry";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";
 

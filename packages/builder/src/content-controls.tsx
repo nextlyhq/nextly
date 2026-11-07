@@ -52,6 +52,7 @@ import {
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
+import { EntryFieldControl } from "./entry-field-control";
 import { propLabel, type EditableProp } from "./inspector";
 import type { QueryField } from "./list-query-model";
 import { loadLucideIcons } from "./lucide-icon-source";
@@ -1516,6 +1517,7 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   richText: RichTextControl,
   array: ArrayControl,
   relation: RelationControl,
+  entryField: EntryFieldControl,
 };
 
 /**

@@ -107,6 +107,11 @@ import {
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
 import {
+  entryContentRefusal,
+  offeredIn,
+  withEntryContentField,
+} from "./entry-content-rules";
+import {
   blockLabel,
   blockSourceFor,
   catalogFrom,
@@ -137,6 +142,7 @@ import { layerLabel } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
+import { usePreviewedCollection } from "./previewed-entry";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.
@@ -824,8 +830,20 @@ export function beginEntryDrag(
     definitions: Parameters<typeof nodeForEntry>[1];
     nesting: NestingSource | undefined;
     onInserted: InsertPanelProps["onInsert"];
+    /**
+     * The field an Entry content block draws once placed, as a click
+     * places it.
+     */
+    entryField?: string | undefined;
+    /**
+     * Why the entry cannot go anywhere in this document, which no drop can
+     * change: a template's one Entry content block, already placed. Such an
+     * entry is not dragged.
+     */
+    refusedEverywhere?: boolean;
   }
 ): void {
+  if (drag.refusedEverywhere === true) return;
   if (entry.kind === "component") {
     drag.begin?.(event, {
       blockName: COMPONENT_INSTANCE_TYPE,
@@ -837,7 +855,11 @@ export function beginEntryDrag(
   if (entry.kind !== "block") return;
   drag.begin?.(event, {
     blockName: entry.blockName,
-    makeNode: () => nodeForEntry(entry, drag.definitions, drag.nesting),
+    makeNode: () =>
+      withEntryContentField(
+        nodeForEntry(entry, drag.definitions, drag.nesting),
+        drag.entryField
+      ),
     // The same notification the click path sends, so a host cannot see one
     // kind of insert and miss the other.
     onInserted: drag.onInserted,
@@ -948,18 +970,26 @@ export function useInsertOffers({
   );
   // Blocks, then whatever saved patterns and components the host supplied.
   // One list rather than three, because the offer, the tokens and the filter
-  // all run across every tier; the tabs then show their share of it.
+  // all run across every tier; the tabs then show their share of it. A block
+  // only a template may hold is offered only while one is open.
+  const documentKind = editor.document.kind;
   const catalog = React.useMemo<InsertEntry[]>(
     () => [
-      ...catalogFrom(palette),
+      ...catalogFrom(palette).filter(entry =>
+        offeredIn(documentKind, entry.blockName)
+      ),
       ...patternEntriesFrom(patterns ?? [], source, componentDefinitions),
       ...componentEntriesFrom(
         components ?? [],
         componentDefinitions ?? NO_DEFINITIONS
       ),
     ],
-    [palette, patterns, components, componentDefinitions, source]
+    [palette, patterns, components, componentDefinitions, source, documentKind]
   );
+  // The field an Entry content block draws once placed: the template's
+  // collection's first top-level blocks field, so the stored choice is
+  // explicit from the start.
+  const firstBlocksField = usePreviewedCollection()?.blocksFields?.[0]?.name;
 
   // Inside a list the canvas shows empty, a block goes to its empty state.
   const showingEmpty = editor.listsShowingEmpty;
@@ -1028,7 +1058,10 @@ export function useInsertOffers({
     // `expandSlotDefaults`, which derives the rules from these same
     // definitions — the only source that can see a supplied block's `parent`
     // and its slots' `allow`.
-    const node = nodeForEntry(entry, blockSource, nesting);
+    const node = withEntryContentField(
+      nodeForEntry(entry, blockSource, nesting),
+      firstBlocksField
+    );
     // `apply` is the only path a document changes by, so undo covers this
     // insert for free. It answers null when the op is refused, and a refusal
     // must not be reported as an insert — the panel offers only placements the
@@ -1159,6 +1192,8 @@ export function InsertPanel({
     inside,
     onInsert,
   });
+  // The field a dragged Entry content block draws, as a click places it.
+  const firstBlocksField = usePreviewedCollection()?.blocksFields?.[0]?.name;
   // The tab's share of the catalog, then the query. Refused entries stay, so
   // an empty list means the query matched nothing, or the tab holds nothing.
   const groups = paletteGroups(
@@ -1367,6 +1402,13 @@ export function InsertPanel({
                       definitions: blockSource,
                       nesting,
                       onInserted: onInsert,
+                      entryField: firstBlocksField,
+                      refusedEverywhere:
+                        entry.kind === "block" &&
+                        entryContentRefusal(
+                          editor.document,
+                          entry.blockName
+                        ) !== undefined,
                     });
                   }}
                 >
@@ -1556,6 +1598,16 @@ function offersFor(inputs: OfferInputs): ReadonlyMap<string, EntryOffer> {
   );
   const offers = new Map<string, EntryOffer>();
   for (const entry of inputs.catalog) {
+    // A rule about the whole document refuses the entry wherever it goes: a
+    // template's one Entry content block, already placed.
+    const anywhere =
+      entry.kind === "block"
+        ? entryContentRefusal(inputs.document, entry.blockName)
+        : undefined;
+    if (anywhere !== undefined) {
+      offers.set(entry.id, { entry, refusal: anywhere });
+      continue;
+    }
     const first: { refusal: string | undefined } = { refusal: undefined };
     const taken = insertionFor(inputs.candidates, candidate => {
       const context = places.get(candidate);

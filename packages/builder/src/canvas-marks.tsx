@@ -32,6 +32,7 @@ import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
+  ENTRY_CONTENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
   isOutermostForAddress,
   LOCKED_ATTRIBUTE,
@@ -90,7 +91,7 @@ interface Mark {
     | "look-reach"
     | "drop-parent"
     | "drop-refused"
-    | "conditioned";
+    | "at-rest";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
   readonly secondary: boolean;
   /** A component placement, drawn in the component colour. */
@@ -148,12 +149,20 @@ interface Mark {
    * too close to the top of what is on screen for a tag above it to show.
    */
   readonly hoverTagInside?: boolean;
-  /** A conditioned block's badge: conditional, or conditions it can't check. */
+  /**
+   * An at-rest mark's condition tab: a conditioned block's, conditional or
+   * with conditions it can't check.
+   */
   readonly condition?: "conditional" | "unchecked";
-  /** Where its badge goes: above the block, below it, or inside its top. */
-  readonly conditionTag?: "above" | "below" | "inside";
+  /**
+   * An at-rest mark's Entry content tab, by its words: an Entry content
+   * block's, naming the field it draws ("Entry content · Body").
+   */
+  readonly entryContent?: string;
+  /** Where an at-rest mark's tabs go: above the block, below it, or inside its top. */
+  readonly tabsAt?: "above" | "below" | "inside";
   /** Whether the block is selected, so its ring stands for the outline. */
-  readonly conditionSelected?: boolean;
+  readonly atRestSelected?: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -239,8 +248,9 @@ function markKey(mark: Mark): string {
     hoveredAddress,
     hoverTagInside,
     condition,
-    conditionTag,
-    conditionSelected,
+    entryContent,
+    tabsAt,
+    atRestSelected,
     radius,
     rect,
   } = mark;
@@ -263,8 +273,9 @@ function markKey(mark: Mark): string {
     hoveredAddress,
     hoverTagInside,
     condition,
-    conditionTag,
-    conditionSelected === true,
+    entryContent,
+    tabsAt,
+    atRestSelected === true,
     radius,
     rect.x,
     rect.y,
@@ -294,9 +305,9 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
-  if (mark.kind === "hovered" || mark.kind === "conditioned") {
-    // The hovered block's name tag, and a conditioned block's tab, move in
-    // from the side the screen cuts.
+  if (mark.kind === "hovered" || mark.kind === "at-rest") {
+    // The hovered block's name tag, and an at-rest mark's tabs, move in from
+    // the side the screen cuts.
     return {
       ...box,
       "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
@@ -723,90 +734,119 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  found.push(...conditionedMarks(root, space, onScreen));
+  found.push(...atRestMarks(root, space, onScreen));
   return dimmedBesideEditing(found);
 }
 
+/** What an element asks an at-rest mark to say, read off its attributes. */
+interface AtRestTabs {
+  readonly condition?: "conditional" | "unchecked";
+  readonly entryContent?: string;
+}
+
 /**
- * A badge on every conditioned block, whether or not it is selected: the
- * canvas draws such a block whoever the page would show it to, so the badge
- * is what says it isn't shown to everyone. Placed outside the block, above it
- * where there's room and below it where there isn't, so it never covers what
+ * The at-rest tabs an element asks for: a conditioned block's condition, and
+ * an Entry content block's words. Nothing where it asks for neither.
+ */
+function atRestTabsOf(element: Element): AtRestTabs | undefined {
+  const condition = element.getAttribute(CONDITIONED_ATTRIBUTE);
+  const entry = element.getAttribute(ENTRY_CONTENT_ATTRIBUTE);
+  const tabs: AtRestTabs = {
+    ...(condition === "conditional" || condition === "unchecked"
+      ? { condition }
+      : {}),
+    ...(entry !== null && entry !== "" ? { entryContent: entry } : {}),
+  };
+  return tabs.condition === undefined && tabs.entryContent === undefined
+    ? undefined
+    : tabs;
+}
+
+/**
+ * The at-rest mark on every block the canvas says something about whether or
+ * not it is selected: a conditioned block, which the canvas draws whoever the
+ * page would show it to, and an Entry content block, which draws the entry's
+ * own content rather than the template's. One faint dashed outline round the
+ * block with its tabs on the outline's edge, a block that is both carrying
+ * both tabs on the one outline. Placed outside the block, above it where
+ * there's room and below it where there isn't, so the tabs never cover what
  * the block draws.
  */
-function conditionedMarks(
+function atRestMarks(
   root: HTMLElement,
   space: OverlaySpace,
   onScreen: Rect
 ): Mark[] {
-  const badges = new Map<
+  const marks = new Map<
     string,
     {
-      condition: "conditional" | "unchecked";
+      tabs: AtRestTabs;
       parts: Outline[];
       selected: boolean;
       placement: boolean;
     }
   >();
   const copies = new Map<Element | null, number>();
-  root.querySelectorAll(`[${CONDITIONED_ATTRIBUTE}]`).forEach(element => {
-    if (element.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
-    const condition = element.getAttribute(CONDITIONED_ATTRIBUTE);
-    if (condition !== "conditional" && condition !== "unchecked") return;
-    const outline = outlineOf(element, root, space);
-    if (outline === null) return;
-    // One badge per copy of a placement, as one frame is drawn round a
-    // selected one: each of a definition's roots is outermost for the
-    // placement's address, and they are one block on the page.
-    const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
-    const key =
-      placement === ""
-        ? `block\u0000${String(badges.size)}`
-        : `${String(copyOf(copies, element))}\u0000${placement}`;
-    const selected = element.hasAttribute(SELECTED_ATTRIBUTE);
-    const gathered = badges.get(key);
-    if (gathered === undefined) {
-      badges.set(key, {
-        condition,
-        parts: [outline],
-        selected,
-        placement: placement !== "",
-      });
-    } else {
-      gathered.parts.push(outline);
-      gathered.selected ||= selected;
-    }
+  root
+    .querySelectorAll(
+      `[${CONDITIONED_ATTRIBUTE}], [${ENTRY_CONTENT_ATTRIBUTE}]`
+    )
+    .forEach(element => {
+      if (element.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
+      const tabs = atRestTabsOf(element);
+      if (tabs === undefined) return;
+      const outline = outlineOf(element, root, space);
+      if (outline === null) return;
+      // One mark per copy of a placement, as one frame is drawn round a
+      // selected one: each of a definition's roots is outermost for the
+      // placement's address, and they are one block on the page.
+      const placement = element.getAttribute(INSTANCE_ATTRIBUTE) ?? "";
+      const key =
+        placement === ""
+          ? `block\u0000${String(marks.size)}`
+          : `${String(copyOf(copies, element))}\u0000${placement}`;
+      const selected = element.hasAttribute(SELECTED_ATTRIBUTE);
+      const gathered = marks.get(key);
+      if (gathered === undefined) {
+        marks.set(key, {
+          tabs,
+          parts: [outline],
+          selected,
+          placement: placement !== "",
+        });
+      } else {
+        gathered.parts.push(outline);
+        gathered.selected ||= selected;
+      }
+    });
+  return [...marks.values()].map(({ tabs, parts, selected, placement }) => {
+    const outline = placementOutline(parts);
+    // A selected placement's frame names it in a tab on the same corner, so
+    // the at-rest tabs take the bottom edge instead of covering the name.
+    const at = tabsAtOf(outline.rect, onScreen, selected && placement);
+    return {
+      ...outline,
+      kind: "at-rest",
+      secondary: false,
+      component: false,
+      locked: false,
+      hidden: false,
+      tag: "below",
+      tagEdge: "right",
+      // Moved in from the right when the screen cuts the block's right edge,
+      // so the tabs stay on what's seen.
+      tagInset: {
+        bottom: 0,
+        side: Math.max(
+          0,
+          outline.rect.x + outline.rect.width - (onScreen.x + onScreen.width)
+        ),
+      },
+      ...tabs,
+      tabsAt: at,
+      ...(selected ? { atRestSelected: true } : {}),
+    };
   });
-  return [...badges.values()].map(
-    ({ condition, parts, selected, placement }) => {
-      const outline = placementOutline(parts);
-      // A selected placement's frame names it in a tab on the same corner, so
-      // the condition tab takes the bottom edge instead of covering the name.
-      const tag = conditionTagOf(outline.rect, onScreen, selected && placement);
-      return {
-        ...outline,
-        kind: "conditioned",
-        secondary: false,
-        component: false,
-        locked: false,
-        hidden: false,
-        tag: "below",
-        tagEdge: "right",
-        // Moved in from the right when the screen cuts the block's right edge,
-        // so the tab stays on what's seen.
-        tagInset: {
-          bottom: 0,
-          side: Math.max(
-            0,
-            outline.rect.x + outline.rect.width - (onScreen.x + onScreen.width)
-          ),
-        },
-        condition,
-        conditionTag: tag,
-        ...(selected ? { conditionSelected: true } : {}),
-      };
-    }
-  );
 }
 
 /** Which copy of a placement an element is part of: its parent, numbered. */
@@ -821,12 +861,12 @@ function copyOf(copies: Map<Element | null, number>, element: Element): number {
 }
 
 /**
- * Where a conditioned block's badge goes: above it where there's room on
+ * Where an at-rest mark's tabs go: above the block where there's room on
  * screen and nothing else takes that corner, else below it, else, for a
- * block taller than what's on screen, inside its top edge, so the badge is
+ * block taller than what's on screen, inside its top edge, so the tabs are
  * always seen.
  */
-function conditionTagOf(
+function tabsAtOf(
   rect: Rect,
   onScreen: Rect,
   topTaken: boolean
@@ -838,33 +878,41 @@ function conditionTagOf(
   return "inside";
 }
 
-/** A conditioned block's badge: what the canvas says about who sees it. */
-function ConditionBadge({
-  condition,
-}: {
-  condition: "conditional" | "unchecked";
-}): React.JSX.Element {
-  const Icon = condition === "unchecked" ? AlertCircle : Split;
+/**
+ * An at-rest mark's tabs, side by side on the outline's edge: what the canvas
+ * says about the block, the Entry content block's words before a condition's.
+ */
+function AtRestTabsView({ mark }: { mark: Mark }): React.JSX.Element {
+  const { condition, entryContent } = mark;
   return (
-    <span className="nx-canvas-mark__condition">
-      <Icon aria-hidden="true" size={12} />
-      {condition === "unchecked" ? "Can’t be checked" : "Conditional"}
+    <span className="nx-canvas-mark__tabs">
+      {entryContent === undefined ? null : (
+        <span className="nx-canvas-mark__tab" data-tab="entry-content">
+          {entryContent}
+        </span>
+      )}
+      {condition === undefined ? null : (
+        <span className="nx-canvas-mark__tab" data-tab={condition}>
+          {condition === "unchecked" ? (
+            <AlertCircle aria-hidden="true" size={12} />
+          ) : (
+            <Split aria-hidden="true" size={12} />
+          )}
+          {condition === "unchecked" ? "Can’t be checked" : "Conditional"}
+        </span>
+      )}
     </span>
   );
 }
 
-/** A conditioned block's badge state, as the stylesheet reads it. */
-function conditionAttributes(mark: Mark): Record<string, string> {
+/** An at-rest mark's state, as the stylesheet reads it. */
+function atRestAttributes(mark: Mark): Record<string, string> {
   return {
     ...(mark.condition === undefined
       ? {}
       : { "data-condition": mark.condition }),
-    ...(mark.conditionTag === undefined
-      ? {}
-      : { "data-condition-tag": mark.conditionTag }),
-    ...(mark.conditionSelected === true
-      ? { "data-condition-selected": "" }
-      : {}),
+    ...(mark.tabsAt === undefined ? {} : { "data-tab-at": mark.tabsAt }),
+    ...(mark.atRestSelected === true ? { "data-at-rest-selected": "" } : {}),
   };
 }
 
@@ -1000,12 +1048,10 @@ export function CanvasMarks({
               : nameOf?.(mark.hoveredAddress)?.trim() || undefined
           }
           data-hover-tag-inside={mark.hoverTagInside === true ? "" : undefined}
-          {...conditionAttributes(mark)}
+          {...atRestAttributes(mark)}
           style={markStyle(mark)}
         >
-          {mark.condition === undefined ? null : (
-            <ConditionBadge condition={mark.condition} />
-          )}
+          {mark.kind === "at-rest" ? <AtRestTabsView mark={mark} /> : null}
         </div>
       ))}
     </div>

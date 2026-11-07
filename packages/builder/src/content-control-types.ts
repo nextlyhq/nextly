@@ -22,6 +22,9 @@ export const CONTENT_CONTROL_TYPES = [
   "richText",
   "array",
   "relation",
+  // The blocks field an Entry content block draws, among its template's
+  // collection's.
+  "entryField",
 ] as const;
 
 export type ContentControlType = (typeof CONTENT_CONTROL_TYPES)[number];

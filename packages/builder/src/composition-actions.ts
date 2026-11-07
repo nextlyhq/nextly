@@ -122,6 +122,32 @@ export type PageAction =
       readonly kind: "set-layout";
       readonly layout: string | null;
       readonly noHeaderFooter?: boolean;
+    }
+  /**
+   * Place an Entry content block on a template, where the entry's own blocks
+   * content is drawn: `field` names the top-level blocks field of the
+   * template's collection it draws. Absent, the collection's one blocks
+   * field where it has one; where it has several the write is refused
+   * until one is named. A second one, one on any document but a template,
+   * and a field the collection lacks are refused as an editor save is.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  | {
+      readonly kind: "place-entry-content";
+      readonly field?: string;
+      readonly at?: OpPosition;
+    }
+  /**
+   * Choose the blocks field the template's Entry content block draws,
+   * judged as an editor save is.
+   *
+   * @experimental Settles when collection templates ship.
+   */
+  | {
+      readonly kind: "set-entry-content-field";
+      readonly nodeId: string;
+      readonly field: string;
     };
 
 /**
@@ -323,6 +349,18 @@ const pageActionOptions = [
     kind: z.literal("set-layout"),
     layout: id.nullable(),
     noHeaderFooter: z.boolean().optional(),
+  }),
+  // A field is named by its name; whether the template's collection has it
+  // as a top-level blocks field is the blocks field's to judge on the write.
+  z.strictObject({
+    kind: z.literal("place-entry-content"),
+    field: id.optional(),
+    at: position.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("set-entry-content-field"),
+    nodeId: id,
+    field: id,
   }),
 ] as const;
 
