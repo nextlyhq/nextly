@@ -725,6 +725,25 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental Whether a person may delete one entry, asked of the delete's
+ *   own gate without deleting it. Graduates with the stored reads above.
+ *
+ * `ctx.caller.can(action, resource, { anyEntry: true })` answers yes for a
+ *   rule that lets a person delete only some entries, so a plugin that does
+ *   work before a delete cannot rely on it. `mayDeleteEntry` runs the very
+ *   gate the collection delete runs before its hooks: the person's grant, and
+ *   a rule's row filter matched against this entry, in every language it
+ *   holds. No hook runs, nothing is written, and an entry that does not exist
+ *   answers `false`, as one the person may not delete. `mayWriteEntry` asks
+ *   the same of a write: the update gate, the lifecycle gate only where the
+ *   status the write names moves the document into or out of published (as
+ *   core's update decides it), and each named field's update rule, for an
+ *   entry or a Single.
+ */
+export { mayDeleteEntry, mayWriteEntry } from "nextly";
+export type { PluginDeleteCheck, PluginWriteCheck } from "nextly";
+
+/**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.
  *

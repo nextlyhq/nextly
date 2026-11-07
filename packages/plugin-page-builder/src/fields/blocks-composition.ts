@@ -225,11 +225,13 @@ export interface CompositionSetup {
    */
   readonly composesDocuments: boolean;
   /**
-   * The components being deleted. A write adding a reference to one is
-   * refused, judged against what the document stores now; absent where no
-   * fence is installed.
+   * The components being deleted, or deleted: among the ones named, when
+   * they are. A write adding a reference to one is refused, judged against
+   * what the document stores now; absent where no fence is installed.
    */
-  readonly fencedComponents?: () => Promise<FencedComponents>;
+  readonly fencedComponents?: (
+    among?: readonly string[]
+  ) => Promise<FencedComponents>;
   /**
    * The breakpoint removal that is open, if any: while one is, a Layers or
    * `contentOnly` lock accepts exactly the stored value with the removed
