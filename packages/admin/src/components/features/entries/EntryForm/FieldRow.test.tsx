@@ -17,7 +17,7 @@
  * jsdom does no track sizing — with the field mounted so the selector has
  * the real child it addresses.
  */
-import { render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { FormProvider, useForm } from "react-hook-form";
 import { describe, expect, it } from "vitest";
 
@@ -31,18 +31,26 @@ const codeField: CodeFieldConfig = {
   label: "Snippet",
 };
 
+/** A field the form never draws. */
+const hiddenField: CodeFieldConfig = {
+  type: "code",
+  name: "bookkeeping",
+  label: "Bookkeeping",
+  admin: { hidden: true },
+};
+
 /** Mounts the row inside a real form context, as the entry form does. */
-function RowHarness() {
+function RowHarness({ fields = [codeField] }: { fields?: CodeFieldConfig[] }) {
   const form = useForm();
   return (
     <FormProvider {...form}>
-      <FieldRow fields={[codeField]} />
+      <FieldRow fields={fields} />
     </FormProvider>
   );
 }
 
-function row() {
-  return render(<RowHarness />);
+function row(fields?: CodeFieldConfig[]) {
+  return render(<RowHarness fields={fields} />);
 }
 
 describe("FieldRow", () => {
@@ -56,5 +64,21 @@ describe("FieldRow", () => {
     // second is what keeps a long code line inside the field's border.
     expect(grid.className).toContain("[&>*]:!w-full");
     expect(grid.className).toContain("[&>*]:min-w-0");
+  });
+
+  it("takes a row whose fields all draw nothing out of the layout", () => {
+    // A hidden field draws nothing, so its row is empty, and `empty:hidden`
+    // drops it rather than leaving the form's row gap behind it.
+    const hidden = row([hiddenField]).container.querySelector<HTMLElement>(
+      ".grid"
+    );
+    if (!hidden) throw new Error("field row grid not found");
+    expect(hidden.childElementCount).toBe(0);
+    expect(hidden.matches(":empty")).toBe(true);
+    expect(hidden.className).toContain("empty:hidden");
+    cleanup();
+    // The control: a row with a field drawn is not empty, so it stays.
+    const shown = row().container.querySelector<HTMLElement>(".grid");
+    expect(shown?.matches(":empty")).toBe(false);
   });
 });
