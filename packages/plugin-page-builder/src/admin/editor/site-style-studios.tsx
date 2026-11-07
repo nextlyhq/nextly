@@ -58,10 +58,14 @@ import { createPortal } from "react-dom";
 import { catalogueFileUrl } from "../../site-fonts/contract";
 import {
   classOverrideOf,
+  resolveSiteStyle,
   tokenOverrideOf,
   tokenSaveOutcome,
   type SiteStyleData,
 } from "../../site-style";
+import { readSiteStyleRecord } from "../../site-style-record";
+import { sameStoredValue } from "../../stored-json";
+import { conflictWords } from "../conflict-words";
 import { useSharedStylesClient } from "../shared-styles-client";
 import {
   useFontCatalogueClient,
@@ -74,6 +78,7 @@ import { useShown } from "../use-shown";
 import { useVariablesClient } from "../variables-client";
 
 import { rebasedOnCode } from "./class-override-rebase";
+import { toastSaveConflicts } from "./conflict-toast";
 import { useDesignHeaderSlot } from "./design-panel";
 import { StyleRevisionContext } from "./site-style-history";
 import { PLUGIN_SOURCE } from "./stored-document";
@@ -238,8 +243,11 @@ export function TokensStudio({
    */
   const editable = merged === undefined ? undefined : resolveSiteTokens(merged);
   const baseline = resolveSiteTokens(supplied);
-  const { edits, shownNow, issue, setIssue, commit } =
-    useTokenCommits(baseline);
+  const { edits, shownNow, issue, setIssue, notice, commit } = useTokenCommits(
+    baseline,
+    editable,
+    supplied
+  );
   // The spacing choice reports a refusal on the same line an edit does.
   const spacing = useSpacingModeChoice(spacingMode, setIssue);
 
@@ -260,6 +268,7 @@ export function TokensStudio({
     tokens: edits ?? editable,
     supplied: baseline,
     issue,
+    ...(notice === undefined ? {} : { notice }),
     absence: absenceOf(pending),
     readOnly: !mayChange,
     onChange: commit,
@@ -295,16 +304,29 @@ export function TokensStudio({
  * first. Nothing would report it: the mutation serialises the payloads and
  * neither fails. Composing against this means every edit builds on the last.
  */
-function useTokenCommits(baseline: SiteTokenSet): {
+function useTokenCommits(
+  baseline: SiteTokenSet,
+  /** The set shown before any edit: what the first edit is made from. */
+  editable: SiteTokenSet | undefined,
+  /** The site's code tier, which a stored merge is shown over. */
+  supplied: SiteTokenSet | undefined
+): {
   edits: SiteTokenSet | null;
   shownNow: () => SiteTokenSet | null;
   issue: string | undefined;
   setIssue: (issue: string | undefined) => void;
+  /** What the last save met of someone else's, with the way to read again. */
+  notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
 } {
-  const { save } = useSaveSiteStyle();
+  const { save, reread } = useSaveSiteStyle();
   const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
   const [issue, setIssue] = useState<string | undefined>(undefined);
+  /*
+   * The words for a save that was stored but met someone else's change to
+   * the same variables. Cleared by the next edit and by Reload.
+   */
+  const [conflict, setConflict] = useState<string | undefined>(undefined);
   /*
    * The last set a save is KNOWN to have stored, and what a refused edit falls
    * back to — not "whatever was on screen before it", which after an earlier
@@ -316,23 +338,61 @@ function useTokenCommits(baseline: SiteTokenSet): {
   const latest = useRef<SiteTokenSet | null>(null);
 
   const commit = (next: SiteTokenSet): void => {
+    /*
+     * What this edit was made from, taken before it is shown: the set on
+     * screen, as the stored tier holds it. The save is merged onto the
+     * section as stored now from this base, so a token someone else saved
+     * meanwhile is kept rather than dropped by a copy that never saw it.
+     */
+    const shownBefore = shownNow() ?? editable;
+    const base =
+      shownBefore === undefined
+        ? undefined
+        : tokenOverrideOf(baseline, shownBefore);
     show(next);
     setIssue(undefined);
+    setConflict(undefined);
     latest.current = next;
-    void save(
-      "tokens",
-      /*
-       * Only what DIFFERS from the site's own defaults. `merged` is what the
-       * canvas compiles, so saving it whole would copy every config token into
-       * the database on the first edit and mask the site's code from then on.
-       */
-      tokenOverrideOf(baseline, next),
-      { hold: true }
-    ).then(result =>
-      settleTokenSave(result, next, { latest, persisted }, show, setIssue)
-    );
+    /*
+     * Only what DIFFERS from the site's own defaults. `merged` is what the
+     * canvas compiles, so saving it whole would copy every config token into
+     * the database on the first edit and mask the site's code from then on.
+     */
+    const sent = tokenOverrideOf(baseline, next);
+    void save("tokens", sent, {
+      hold: true,
+      ...(base === undefined ? {} : { base }),
+    }).then(result => {
+      settleTokenSave(result, next, { latest, persisted }, show, setIssue);
+      adoptMergedTokens(
+        result,
+        sent,
+        next,
+        supplied,
+        { latest, persisted },
+        show
+      );
+      // Said whichever edit it answers: a true conflict is never silent.
+      const words = result.saved
+        ? conflictWords("tokens", result.conflicts)
+        : undefined;
+      if (words !== undefined) setConflict(words);
+    });
   };
-  return { edits, shownNow, issue, setIssue, commit };
+  /*
+   * Reload: the studio's own copy is dropped, so it shows the read again,
+   * and the read is asked for again, carrying both changes as stored.
+   */
+  const reload = (): void => {
+    setConflict(undefined);
+    latest.current = null;
+    persisted.current = null;
+    show(null);
+    reread();
+  };
+  const notice =
+    conflict === undefined ? undefined : { text: conflict, onReload: reload };
+  return { edits, shownNow, issue, setIssue, notice, commit };
 }
 
 /**
@@ -497,6 +557,79 @@ function settleTokenSave(
   if (result.saved) refs.persisted.current = next;
   if (outcome.tokens !== undefined) show(outcome.tokens);
   if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
+}
+
+/**
+ * After a save merged onto a newer stored copy, the studio shows what was
+ * stored: the author's edit with what someone else saved kept, so their
+ * change appears and the next edit builds on it. Only for the latest edit,
+ * and only where the merge stored something other than what was sent.
+ */
+function adoptMergedTokens(
+  result: { readonly saved: boolean; readonly stored?: unknown },
+  sent: SiteTokenSet,
+  next: SiteTokenSet,
+  supplied: SiteTokenSet | undefined,
+  refs: {
+    readonly latest: { current: SiteTokenSet | null };
+    readonly persisted: { current: SiteTokenSet | null };
+  },
+  show: (tokens: SiteTokenSet | null) => void
+): void {
+  if (!result.saved || result.stored === undefined) return;
+  if (refs.latest.current !== next || sameStoredValue(result.stored, sent)) {
+    return;
+  }
+  const adopted = tokensFromStored(supplied, result.stored);
+  refs.latest.current = adopted;
+  refs.persisted.current = adopted;
+  show(adopted);
+}
+
+/**
+ * A stored token section as the studio shows it: read as the editor reads
+ * the document, over the site's code and the engine's defaults.
+ */
+function tokensFromStored(
+  supplied: SiteTokenSet | undefined,
+  stored: unknown
+): SiteTokenSet {
+  return resolveSiteTokens(
+    resolveSiteStyle(
+      supplied === undefined ? {} : { tokens: supplied },
+      readSiteStyleRecord({ tokens: stored })
+    ).tokens
+  );
+}
+
+/**
+ * A stored class section as the class surface holds it: read as the editor
+ * reads the document, over the site's config classes.
+ */
+function classesFromStored(
+  configured: readonly NamedClass[] | undefined,
+  stored: unknown
+): readonly NamedClass[] {
+  return (
+    resolveSiteStyle(
+      configured === undefined ? {} : { classes: configured },
+      readSiteStyleRecord({ classes: stored })
+    ).classes ?? NO_CLASSES
+  );
+}
+
+/**
+ * The class list a stored save leaves: the merge as stored, when the save
+ * was merged onto a newer copy, else the list composed for it.
+ */
+function classesAfterSave(
+  result: { readonly stored?: unknown },
+  composed: readonly NamedClass[],
+  configured: readonly NamedClass[] | undefined
+): readonly NamedClass[] {
+  return result.stored === undefined
+    ? composed
+    : classesFromStored(configured, result.stored);
 }
 
 /**
@@ -854,6 +987,34 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
   );
 }
 
+/** An undo's answer when what it takes back was kept over another's removal. */
+const REMOVED_BY_THEM = Symbol("removed-by-them");
+
+/**
+ * The stored classes as a replay finds them, with one style taken out: the
+ * undo of an edit that kept a style another author had removed meanwhile.
+ * Nothing to write once the style is no longer stored.
+ */
+function classRemovedFrom(
+  held: unknown,
+  configured: readonly NamedClass[] | undefined,
+  classId: string
+): SiteStyleReplayed {
+  const entries = (Array.isArray(held) ? held : []).filter(
+    (entry): entry is NamedClass => typeof entry === "object" && entry !== null
+  );
+  if (!entries.some(entry => entry.id === classId)) {
+    return { kind: "unchanged" };
+  }
+  return {
+    kind: "write",
+    value: classOverrideOf(
+      configured,
+      entries.filter(entry => entry.id !== classId)
+    ),
+  };
+}
+
 /**
  * One style's change applied to the stored classes as a replay finds them:
  * the stored tier with that style changed, nothing to write, or nothing it
@@ -946,7 +1107,7 @@ function useAddClass(
   writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
-  const { save: saveSection } = useSaveSiteStyle();
+  const { save: saveSection, reread } = useSaveSiteStyle();
   return useCallback(
     async (entry: NamedClass): Promise<string | undefined> =>
       writes.run<string | undefined>(async existing => {
@@ -974,21 +1135,30 @@ function useAddClass(
          * MERGED set the canvas compiles, so saving it whole would copy every
          * config class into the database and mask the site's code from then on.
          */
+        // Merged from the list it was composed against, so a style saved
+        // elsewhere meanwhile is kept.
         const result = await saveSection(
           "classes",
-          classOverrideOf(configured, next)
+          classOverrideOf(configured, next),
+          { base: classOverrideOf(configured, existing) }
         );
+        // Stored over someone else's change to a style: said, with Reload.
+        toastSaveConflicts("classes", result, reread);
         // `next` is returned ONLY on success, so a refused write never becomes
-        // the base the following edit builds on.
+        // the base the following edit builds on; the merge as stored, where
+        // the save met a newer one.
         const refused = refusalOf(
           result,
           "This shared style could not be saved."
         );
         return refused === undefined
-          ? { result: undefined, next }
+          ? {
+              result: undefined,
+              next: classesAfterSave(result, next, configured),
+            }
           : { result: refused };
       }),
-    [writes, configured, saveSection]
+    [writes, configured, saveSection, reread]
   );
 }
 
@@ -1001,7 +1171,7 @@ function useWriteClassStyles(
   writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
-  const { reserve } = useSaveSiteStyle();
+  const { reserve, reread } = useSaveSiteStyle();
   // The code's styles as they are when a step is undone or redone, not when
   // it was made: the code may change while the step waits in the history.
   const configuredNow = useRef(configured);
@@ -1054,6 +1224,25 @@ function useWriteClassStyles(
          */
         const undo = change.invert(entry.styles);
         /*
+         * Where the write was merged onto another author's newer save, the
+         * styles it replaced are theirs, not the ones this edit started from:
+         * Undo inverts against those, so it puts their value back rather than
+         * the value from before both edits.
+         */
+        const undoOf = (
+          replaced: unknown
+        ): SharedStyleChange | typeof REMOVED_BY_THEM => {
+          if (replaced === undefined) return undo;
+          const theirs = classesFromStored(configured, replaced).find(
+            each => each.id === classId
+          );
+          // Gone from what the write replaced: another author removed the
+          // style, and this edit kept it. Undo removes it again.
+          return theirs === undefined
+            ? REMOVED_BY_THEM
+            : change.invert(theirs.styles);
+        };
+        /*
          * The code the stored entry was last rebased onto: the code this
          * edit was made against, then whatever each replay rebased it onto,
          * so a second change to the code between undo and redo is told
@@ -1068,20 +1257,33 @@ function useWriteClassStyles(
             if (out.kind !== "gone") baseline = now;
             return out;
           };
-        const result = await slot.save(classOverrideOf(configured, next), {
-          undo: replay(undo),
-          redo: replay(change),
-        });
+        const result = await slot.save(
+          classOverrideOf(configured, next),
+          {
+            undo: (held, replaced) => {
+              const step = undoOf(replaced);
+              return step === REMOVED_BY_THEM
+                ? classRemovedFrom(held, configuredNow.current, classId)
+                : replay(step)(held);
+            },
+            redo: replay(change),
+          },
+          { base: classOverrideOf(configured, existing) }
+        );
+        toastSaveConflicts("classes", result, reread);
         const refused = refusalOf(
           result,
           "This shared style could not be changed."
         );
         return refused === undefined
-          ? { result: undefined, next }
+          ? {
+              result: undefined,
+              next: classesAfterSave(result, next, configured),
+            }
           : { result: refused };
       });
     },
-    [writes, configured, reserve]
+    [writes, configured, reserve, reread]
   );
 }
 
@@ -1109,7 +1311,7 @@ function useRenameClass(
   /** Release the pending name, but only if this attempt is still the live one. */
   endRename: (classId: string, attempt: number) => void
 ) {
-  const { reserve } = useSaveSiteStyle();
+  const { reserve, reread } = useSaveSiteStyle();
   return useCallback(
     async (
       classId: string,
@@ -1141,9 +1343,20 @@ function useRenameClass(
               ? { ...entry, label: name.label, slug: name.slug }
               : entry
           );
-          // A refused save withdraws its place itself.
-          const result = await slot.save(classOverrideOf(configured, next));
-          if (result.saved) return { result: { ok: true as const }, next };
+          // A refused save withdraws its place itself. Merged from the list
+          // it was composed against, the next edit builds on what was stored.
+          const result = await slot.save(
+            classOverrideOf(configured, next),
+            undefined,
+            { base: classOverrideOf(configured, existing) }
+          );
+          toastSaveConflicts("classes", result, reread);
+          if (result.saved) {
+            return {
+              result: { ok: true as const },
+              next: classesAfterSave(result, next, configured),
+            };
+          }
           const reasons = Object.values(result.issues);
           return {
             result: {
@@ -1170,7 +1383,7 @@ function useRenameClass(
         endRename(classId, mine);
       }
     },
-    [writes, configured, reserve, beginRename, endRename]
+    [writes, configured, reserve, reread, beginRename, endRename]
   );
 }
 
@@ -1208,7 +1421,7 @@ function useFontFaceWriter(
   add: (request: FontFaceUpload) => Promise<string | undefined>;
   remove: (family: SiteFamily) => Promise<string | undefined>;
 } {
-  const { save: saveSiteStyle } = useSaveSiteStyle();
+  const { save: saveSiteStyle, reread } = useSaveSiteStyle();
   const { mutateAsync: uploadMedia } = useUploadMedia();
   /*
    * Every face this writer has saved, kept until the read reports it back.
@@ -1239,6 +1452,14 @@ function useFontFaceWriter(
    * and which changes exactly when the author chooses a different file.
    */
   const uploaded = useRef<{ file: File; media: UploadedMedia } | null>(null);
+  /*
+   * Reload after a save met someone else's change: what this writer saved
+   * ahead of the read is dropped, and the read is asked for again.
+   */
+  const reload = useCallback(() => {
+    written.current = [];
+    reread();
+  }, [reread]);
 
   const add = useCallback(
     async (request: FontFaceUpload): Promise<string | undefined> => {
@@ -1337,13 +1558,17 @@ function useFontFaceWriter(
         source: { kind: "upload" },
       };
 
-      const next = [...appendBase(stored, written.current), face];
-      const result = await saveSiteStyle("fonts", next);
+      // The faces this add was made from, which the save is merged onto
+      // the stored ones from: a face added elsewhere meanwhile is kept.
+      const base = appendBase(stored, written.current);
+      const next = [...base, face];
+      const result = await saveSiteStyle("fonts", next, { base });
+      toastSaveConflicts("fonts", result, reload);
       if (result.saved) {
         // Stored and referenced, so the next add starts clean rather than
         // pointing a second face at the first face's bytes.
         uploaded.current = null;
-        written.current = next;
+        written.current = facesAfterSave(result, next);
         return undefined;
       }
       /*
@@ -1356,7 +1581,7 @@ function useFontFaceWriter(
         ? reasons.join(" ")
         : "That font could not be saved.";
     },
-    [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia]
+    [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia, reload]
   );
 
   /*
@@ -1372,14 +1597,17 @@ function useFontFaceWriter(
       if (unreadableFonts.length > 0) {
         return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and removing one would replace it. Repair or remove that entry first.`;
       }
-      const next = withoutFamily(
-        appendBase(stored, written.current),
-        family.key
-      );
-      const result = await saveSiteStyle("fonts", next);
+      const base = appendBase(stored, written.current);
+      const next = withoutFamily(base, family.key);
+      const result = await saveSiteStyle("fonts", next, { base });
+      toastSaveConflicts("fonts", result, reload);
       if (result.saved) {
-        // Forgotten here too, or the next upload would put it back.
-        written.current = withoutFamily(written.current, family.key);
+        // Forgotten here too, or the next upload would put it back; the
+        // merge as stored, where the save met a newer one.
+        written.current =
+          result.stored === undefined
+            ? withoutFamily(written.current, family.key)
+            : facesAfterSave(result, next);
         return undefined;
       }
       const reasons = Object.values(result.issues);
@@ -1387,10 +1615,24 @@ function useFontFaceWriter(
         ? reasons.join(" ")
         : `${family.family} could not be removed.`;
     },
-    [saveSiteStyle, stored, storedPending, unreadableFonts]
+    [saveSiteStyle, stored, storedPending, unreadableFonts, reload]
   );
 
   return { add, remove };
+}
+
+/**
+ * The faces a stored save leaves: the merge as stored, read as the editor
+ * reads the document, when the save was merged onto a newer copy, else the
+ * faces sent.
+ */
+function facesAfterSave(
+  result: { readonly stored?: unknown },
+  sent: readonly FontFaceDef[]
+): readonly FontFaceDef[] {
+  return result.stored === undefined
+    ? sent
+    : (readSiteStyleRecord({ fonts: result.stored }).fonts ?? []);
 }
 
 /**

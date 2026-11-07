@@ -19,6 +19,7 @@ import type {
   BeforeOperationArgs,
   BeforeOperationContext,
   BeforeOperationHandler,
+  CollectionDeleteRunner,
   HookContext,
   HookContextPhase,
   HookHandler,
@@ -241,6 +242,13 @@ export class HookRegistry {
     string,
     RegisteredHook<InTransactionRunner>[]
   > = new Map();
+
+  /**
+   * Collection-delete handlers, in registration order. Not keyed by
+   * collection: a plugin's handler is asked about every collection deleted,
+   * since what it holds for one is its own to know.
+   */
+  private collectionDeleteHooks: RegisteredHook<CollectionDeleteRunner>[] = [];
 
   /**
    * Owners whose handlers stay registered but do not run.
@@ -602,6 +610,45 @@ export class HookRegistry {
   }
 
   /**
+   * @experimental Register a plugin's collection-delete handlers: asked what
+   * deleting a collection takes with it, and run inside the delete's
+   * transaction before the collection is removed.
+   */
+  registerCollectionDelete(
+    runner: CollectionDeleteRunner,
+    owner: HookOwner = "app"
+  ): void {
+    this.collectionDeleteHooks.push({ handler: runner, owner });
+  }
+
+  /**
+   * @experimental Unregister collection-delete handlers, the counterpart to
+   * {@link registerCollectionDelete}: only the caller's own registration.
+   */
+  unregisterCollectionDelete(
+    runner: CollectionDeleteRunner,
+    owner: HookOwner = "app"
+  ): void {
+    const index = this.collectionDeleteHooks.findIndex(
+      e => e.handler === runner && e.owner === owner
+    );
+    if (index > -1) this.collectionDeleteHooks.splice(index, 1);
+  }
+
+  /**
+   * @experimental The collection-delete handlers to ask and run, in
+   * registration order, with the owner of each, without a suspended owner's.
+   *
+   * @internal
+   */
+  collectionDeleteEntries(): ReadonlyArray<{
+    handler: CollectionDeleteRunner;
+    owner: HookOwner;
+  }> {
+    return this.runnableEntries(this.collectionDeleteHooks);
+  }
+
+  /**
    * Remove only the handlers a given owner registered for a collection.
    *
    * A config reload has to replace the app's own handlers while leaving a
@@ -764,6 +811,9 @@ export class HookRegistry {
     for (const entries of this.inTransactionHooks.values()) {
       for (const entry of entries) owners.add(entry.owner);
     }
+    // And one that registered only collection-delete handlers, for the same
+    // reason: a deleted plugin's handler would otherwise go on running.
+    for (const entry of this.collectionDeleteHooks) owners.add(entry.owner);
     return [...owners];
   }
 
@@ -852,6 +902,7 @@ export class HookRegistry {
     this.hooks.clear();
     this.beforeOperationHooks.clear();
     this.inTransactionHooks.clear();
+    this.collectionDeleteHooks = [];
     // Suspension describes handlers, so it cannot outlive them. A registry
     // cleared at shutdown and registered into again would otherwise filter out
     // the fresh handlers of a plugin that is now enabled, leaving it inert

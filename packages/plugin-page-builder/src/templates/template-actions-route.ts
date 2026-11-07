@@ -7,6 +7,12 @@
  *   cannot have one, or already has one, naming it.
  * - **publish-template** publishes a template, its working draft included,
  *   as the editor's Publish does.
+ * - **set-template-address** sets, changes or removes the address a
+ *   collection's entries are served at, stored on its template. The routing
+ *   permission is asked before anything else; the address is then judged in
+ *   the guard's own words. A published template's entries move as the write
+ *   commits, and the answer says how many wait for an address another
+ *   document holds.
  *
  * Each is checked and written as the caller. Nothing here decides what the
  * site accepts that its own write path decides already: the write is judged
@@ -44,7 +50,6 @@ import {
   TEMPLATE_ENTRY_ID_FIELD,
   TEMPLATE_FORKED_FROM_FIELD,
 } from "../collections/templates";
-import { titleFieldIn } from "../entries-route";
 import {
   actingCaller,
   asCaller,
@@ -60,24 +65,37 @@ import {
   documentVersionOf,
   withVersionFrom,
 } from "../document-version";
+import { titleFieldIn } from "../entries-route";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
 import { readingAsUser } from "../library-route";
 
 import {
   TEMPLATE_ACTIONS_ROUTE_PATH,
+  TEMPLATE_ROUTING_ROUTE_PATH,
   type TemplateAction,
   type TemplateActionRequest,
   type TemplateActionResult,
+  type TemplateRoutingAccess,
   type TemplateSummary,
 } from "./template-actions-contract";
 import {
+  addressCollectionProblem,
+  addressHolderProblem,
   ASKED_BEFORE_CONTEXT,
   secondTemplateRefusal,
   templateCollectionProblem,
   type MayReadTemplate,
   type TemplateGuardSetup,
 } from "./template-guard";
+import {
+  addressRefusal,
+  heldAddressMessage,
+  storedAddressOf,
+  storedAddressProblem,
+  TEMPLATE_ADDRESS_FIELD,
+  TEMPLATE_ROUTING_ASK,
+} from "./template-routing";
 
 /**
  * The request around the action. The action itself is parsed by the
@@ -111,7 +129,7 @@ export type TemplateActionsContext = CompositionRouteContext & {
   services: {
     collections: Pick<
       PluginRouteContext["services"]["collections"],
-      "getCollection"
+      "getCollection" | "deleteEntry" | "deleteEntryInTransaction"
     >;
   };
 };
@@ -123,6 +141,11 @@ export type TemplateActionsContext = CompositionRouteContext & {
  */
 export interface TemplateActionsSetup {
   readonly guard: () => TemplateGuardSetup;
+  /**
+   * How many of `collection`'s entries wait for an address another document
+   * holds, as last committed.
+   */
+  readonly waitingEntries: (collection: string) => Promise<number>;
 }
 
 /** Run one template action, for the route and the service alike. */
@@ -143,13 +166,23 @@ export async function runTemplateAction(
       return giveEntryDesign(ctx, action, dryRun, guard);
     case "remove-entry-design":
       return removeEntryDesign(ctx, action, dryRun, guard);
+    case "set-template-address":
+      return setTemplateAddress(ctx, action, dryRun, guard, setup);
   }
 }
+
+/**
+ * The where filter the Direct API's `find` takes, read off the plugin SDK's
+ * own handle to it, so the plugin names no core query type.
+ */
+type FindWhere = NonNullable<
+  Parameters<Awaited<ReturnType<typeof getCachedNextly>>["find"]>[0]["where"]
+>;
 
 /** One stored template found as the system, in any state, or `null`. */
 async function templateWhere(
   templates: string,
-  where: Record<string, unknown>,
+  where: FindWhere,
   status: "all" | "published"
 ): Promise<Record<string, unknown> | null> {
   const found = await (
@@ -314,7 +347,9 @@ async function createDesign(
 ): Promise<unknown> {
   const templates = guard.templatesCollection;
   const collections = ctx.services.collections;
-  let created: { item: unknown };
+  // An in-transaction write answers the stored entry itself, not the
+  // mutation envelope a write outside a transaction answers.
+  let created: unknown;
   try {
     created = await collections.withTransaction(async tx => {
       await guard.lockEntry(tx, action.collection, action.entry);
@@ -334,7 +369,7 @@ async function createDesign(
     throw alreadyHasDesign(winner);
   }
   if (!(await guard.entryExists(action.collection, action.entry))) {
-    const id = idOf(created.item);
+    const id = idOf(created);
     if (id !== undefined) {
       await collections.deleteEntry(templates, id, { as: "system" });
     }
@@ -342,8 +377,8 @@ async function createDesign(
       logContext: { reason: "entry-design-entry-deleted" },
     });
   }
-  await unlinkIfSourceGone(ctx, data, created.item, guard);
-  return created.item;
+  await unlinkIfSourceGone(ctx, data, created, guard);
+  return created;
 }
 
 /**
@@ -698,6 +733,211 @@ async function publishTemplate(
   };
 }
 
+/** `set-template-address`, as the module docblock describes. */
+async function setTemplateAddress(
+  ctx: TemplateActionsContext,
+  action: Extract<TemplateAction, { kind: "set-template-address" }>,
+  dryRun: boolean,
+  guard: TemplateGuardSetup,
+  setup: TemplateActionsSetup
+): Promise<ActionAnswer<TemplateActionResult>> {
+  const templates = guard.templatesCollection;
+  // The routing permission before anything is read: a caller who may not
+  // change routing learns nothing about templates or addresses here. Then
+  // the template rights, asked of any template, since the write made as the
+  // caller decides whether this one may be changed.
+  await actingCaller(ctx, [TEMPLATE_ROUTING_ASK]);
+  const by = await actingCaller(
+    ctx,
+    [
+      ["read", templates],
+      ["update", templates],
+    ],
+    { anyEntry: true }
+  );
+  // An emptied address is none, as the guard reads one.
+  const address = action.address === "" ? null : action.address;
+  const row = await templateWithDraft(ctx, templates, action.id);
+  const collection = row[TEMPLATE_COLLECTION_FIELD];
+  const asked: TemplateSummary = {
+    ...summaryOf(row, { title: "", collection: "", status: "draft" }),
+    address,
+  };
+  const refusals = await addressRefusals(guard, row, address);
+  if (refusals.length > 0) {
+    if (!dryRun) throw addressRefusal(refusals[0] ?? "");
+    return dryRunAnswer("set-template-address", asked, refusals, by);
+  }
+
+  // Written to the live template: a status-less save of a published one
+  // would be held as a working draft, serving nothing until a publish. It
+  // carries the version it was read at, so a save someone made since is
+  // refused rather than overwritten.
+  const data = withVersionFrom(
+    {
+      [TEMPLATE_ADDRESS_FIELD]: address,
+      ...(row.status === "published" ? { status: "published" } : {}),
+    },
+    documentVersionOf(row)
+  );
+  if (dryRun) {
+    return dryRunAddress(ctx, templates, action.id, data, asked, by);
+  }
+  const written = await writeAddress(ctx, guard, action.id, data, address);
+  return {
+    message:
+      address === null
+        ? "The template's address was removed."
+        : "The template's address was set.",
+    item: {
+      dryRun: false,
+      kind: "set-template-address",
+      template: summaryOf(written, asked),
+      refusals: [],
+      by,
+      waiting:
+        typeof collection === "string"
+          ? await setup.waitingEntries(collection)
+          : 0,
+    },
+  };
+}
+
+/**
+ * Template `id` as the caller reads it, with its working draft, which a
+ * caller who may update templates is shown: the read says whether the
+ * template holds unpublished changes, which writing its address would
+ * otherwise put live.
+ */
+async function templateWithDraft(
+  ctx: TemplateActionsContext,
+  templates: string,
+  id: string
+): Promise<Record<string, unknown>> {
+  const stored = await readOrNull(async () =>
+    (await getCachedNextly()).findByID({
+      collection: templates,
+      id,
+      ...(await readingAsUser(ctx)),
+      status: "all",
+      draft: true,
+      depth: 0,
+    })
+  );
+  const row = recordOf(stored);
+  if (row === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "template-action-missing-template" },
+    });
+  }
+  return row;
+}
+
+/**
+ * Why `row` cannot be given `address`, in the guard's own words, asked up
+ * front so an apply refuses before writing and a dry run answers them as
+ * refusals; empty when nothing refuses it.
+ */
+async function addressRefusals(
+  guard: TemplateGuardSetup,
+  row: Record<string, unknown>,
+  address: string | null
+): Promise<string[]> {
+  const refusals: string[] = [];
+  if (address !== null) {
+    const problem = await addressProblem(guard, row, address);
+    if (problem !== null) refusals.push(problem);
+  }
+  // A published template's address goes live by publishing the template,
+  // which would also put its unpublished design changes live unseen.
+  if (row.status === "published" && row._isWorkingDraft === true) {
+    refusals.push(
+      "This template has unpublished changes. Publish or discard them first, so changing its address puts nothing else live."
+    );
+  }
+  return refusals;
+}
+
+/** The first of the guard's refusals of `address` on `row`, or null. */
+async function addressProblem(
+  guard: TemplateGuardSetup,
+  row: Record<string, unknown>,
+  address: string
+): Promise<string | null> {
+  const collection = row[TEMPLATE_COLLECTION_FIELD];
+  const problem =
+    addressHolderProblem(row) ??
+    storedAddressProblem(address, collection, {
+      declared: guard.declaredAddresses,
+    }) ??
+    (await addressCollectionProblem(guard, collection));
+  if (problem !== null) return problem;
+  const holder = await guard.addressHolderOf(address);
+  return holder !== null && holder.id !== idOf(row)
+    ? heldAddressMessage(address, holder)
+    : null;
+}
+
+/** A dry run of the address's write: made as the caller, then rolled back. */
+async function dryRunAddress(
+  ctx: TemplateActionsContext,
+  templates: string,
+  id: string,
+  data: Record<string, unknown>,
+  asked: TemplateSummary,
+  by: TemplateActionResult["by"]
+): Promise<ActionAnswer<TemplateActionResult>> {
+  const collections = ctx.services.collections;
+  const judged = await judgeInTransaction(
+    run => collections.withTransaction(run),
+    (tx: PluginCollectionTransaction) =>
+      collections.updateEntryInTransaction(tx, templates, id, data, {
+        ...asCaller(ctx),
+        context: { [JUDGEMENT_CONTEXT]: true },
+      })
+  );
+  return judged.refusal === null
+    ? dryRunAnswer(
+        "set-template-address",
+        summaryOf(judged.written.item, asked),
+        [],
+        by
+      )
+    : dryRunAnswer("set-template-address", asked, judged.refusal.messages, by);
+}
+
+/**
+ * Write the address as the caller, answering the template as stored. Two
+ * templates given one address at once both pass the reads before it and meet
+ * at the unique index, which names nobody; the winner has committed by then,
+ * so it is read and named.
+ */
+async function writeAddress(
+  ctx: TemplateActionsContext,
+  guard: TemplateGuardSetup,
+  id: string,
+  data: Record<string, unknown>,
+  address: string | null
+): Promise<unknown> {
+  try {
+    return (
+      await ctx.services.collections.updateEntry(
+        guard.templatesCollection,
+        id,
+        data,
+        asCaller(ctx)
+      )
+    ).item;
+  } catch (error) {
+    if (address === null || !NextlyError.isCode(error, "DUPLICATE")) {
+      throw error;
+    }
+    const winner = await guard.addressHolderOf(address);
+    if (winner === null) throw error;
+    throw addressRefusal(heldAddressMessage(address, winner));
+  }
+}
+
 /** A dry run's answer: the template as it would be stored, or why not. */
 function dryRunAnswer(
   kind: TemplateAction["kind"],
@@ -725,6 +965,16 @@ function refusalMessages(error: NextlyError): string[] {
   return messages.length > 0 ? messages : [error.publicMessage];
 }
 
+/** A template's address as stored, or as asked where the row holds none. */
+function summaryAddress(
+  stored: Record<string, unknown> | null,
+  asked: TemplateSummary
+): string | null | undefined {
+  return stored !== null && TEMPLATE_ADDRESS_FIELD in stored
+    ? storedAddressOf(stored[TEMPLATE_ADDRESS_FIELD])
+    : asked.address;
+}
+
 /**
  * A template as the write stored it, or would have: its row's own values
  * where it has them, after every hook, and what was asked where it has not.
@@ -739,6 +989,7 @@ function summaryOf(row: unknown, asked: TemplateSummary): TemplateSummary {
     stored?.[TEMPLATE_ENTRY_COLLECTION_FIELD];
   const entry = stored?.[TEMPLATE_ENTRY_ID_FIELD];
   const status = stored?.status;
+  const address = summaryAddress(stored, asked);
   return {
     ...(id === undefined
       ? asked.id === undefined
@@ -754,6 +1005,7 @@ function summaryOf(row: unknown, asked: TemplateSummary): TemplateSummary {
         : { entry: asked.entry }),
     status:
       status === "published" || status === "draft" ? status : asked.status,
+    ...(address === undefined ? {} : { address }),
   };
 }
 
@@ -861,5 +1113,41 @@ export function templateActionsRoute(setup: TemplateActionsSetup): {
         answered.item
       );
     },
+  };
+}
+
+/**
+ * Whether the caller may set or change a template address. A `null` caller
+ * cannot be anybody, so it may not.
+ */
+export async function readTemplateRoutingAccess(ctx: {
+  readonly caller: {
+    can(action: string, resource: string): Promise<boolean>;
+  } | null;
+}): Promise<TemplateRoutingAccess> {
+  return {
+    mayManageRouting:
+      ctx.caller === null
+        ? false
+        : await ctx.caller.can(...TEMPLATE_ROUTING_ASK),
+  };
+}
+
+/**
+ * The routing question's route: what the template form asks before it offers
+ * the address for editing. Authenticated, with no `requiredPermission`, since
+ * the permission it reports on is the one asked about. It decides nothing:
+ * the address field's rules and the template action do.
+ */
+export function templateRoutingRoute(): {
+  method: "GET";
+  path: string;
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "GET",
+    path: TEMPLATE_ROUTING_ROUTE_PATH,
+    handler: async (_req, ctx) =>
+      Response.json(await readTemplateRoutingAccess(ctx)),
   };
 }

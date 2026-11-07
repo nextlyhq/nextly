@@ -54,9 +54,11 @@ export interface ContentAddressService {
     id: string
   ): Promise<string | null>;
   /**
-   * Up to `limit` of the addresses held in `locale`, as path segments, from
-   * `page` (1 first), with how many there are in all, once any start-up pass
-   * over the store still running has finished.
+   * Up to `limit` of the addresses collections' entries hold in `locale`,
+   * as path segments, from `page` (1 first), with how many there are in all,
+   * once any start-up pass over the store still running has finished. Pages'
+   * addresses are not among them: the pages route lists its own, with its
+   * lists' later pages, so they never take a share of the entries' limit.
    */
   addresses(
     locale: string | undefined,
@@ -64,8 +66,10 @@ export interface ContentAddressService {
   ): Promise<{ paths: string[][]; total: number }>;
   /**
    * The collections whose writes change who holds an address: the pages,
-   * the templates and every collection served under a template address. A
-   * cached lookup is refreshed by a write to any of them.
+   * the templates, the address store itself and every collection given a
+   * template address in code. A cached lookup is refreshed by a write to any
+   * of them. A collection served at an address set in the admin needs no
+   * name here: every write that moves one of its entries writes the store.
    */
   collections(): readonly string[];
 }
@@ -77,11 +81,23 @@ export interface ContentAddressSetup {
   readonly defaultLocale: () => string;
   readonly collections: readonly string[];
   /**
-   * The collections whose documents the site serves: the pages and every
-   * collection given a template address now. A claim held by any other (a
-   * collection whose address was removed, not yet swept) serves nothing.
+   * The collections whose documents the site serves whatever their
+   * templates store: the pages and every collection given a template address
+   * in code.
    */
   readonly holders: readonly string[];
+  /**
+   * Whether `collection`'s template stores an address now, as last
+   * committed: asked of a holder not among {@link holders}. A claim held by a
+   * collection with no address (one removed from code, not yet swept) serves
+   * nothing.
+   */
+  readonly storesAddress: (collection: string) => Promise<boolean>;
+  /**
+   * The collections served under a template address now, in code or set in
+   * the admin: the holders whose addresses are listed for pre-rendering.
+   */
+  readonly entryHolders: () => Promise<readonly string[]>;
   /**
    * The start-up passes over the store while they run, or null. The listing
    * of addresses joins it, so what is pre-rendered is the store the passes
@@ -95,12 +111,15 @@ export interface ContentAddressSetup {
 export function contentAddressService(
   setup: ContentAddressSetup
 ): ContentAddressService {
+  const served = async (collection: string): Promise<boolean> =>
+    setup.holders.includes(collection) ||
+    (await setup.storesAddress(collection));
   return {
     holderAt: async (locale, path) => {
       const address = servedAddress(locale ?? setup.defaultLocale(), path);
       if (address === null) return null;
       const held = await committedHolderAt(setup.claims, address);
-      return held === null || !setup.holders.includes(held.holder.collection)
+      return held === null || !(await served(held.holder.collection))
         ? null
         : {
             collection: held.holder.collection,
@@ -109,7 +128,7 @@ export function contentAddressService(
           };
     },
     pathHeldBy: async (locale, collection, id) => {
-      if (!setup.holders.includes(collection)) return null;
+      if (!(await served(collection))) return null;
       const language = locale ?? setup.defaultLocale();
       const { rows } = await committedClaims(
         setup.claims,
@@ -137,7 +156,7 @@ export function contentAddressService(
       const { addresses, total } = await committedAddresses(
         setup.claims,
         locale ?? setup.defaultLocale(),
-        { limit, page }
+        { limit, page, holders: await setup.entryHolders() }
       );
       return { paths: addresses.map(at => [...at.segments]), total };
     },

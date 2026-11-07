@@ -41,6 +41,7 @@ import {
   type ConditionDemand,
   type SourceDemand,
   type BlockSeoContribution,
+  type BoundValues,
   type DefinitionsById,
   type DocumentLimits,
   type LayoutRegion,
@@ -160,6 +161,7 @@ import {
   readingViewOf,
   readStagesFor,
   regateDocument,
+  type DocumentReadStages,
   type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks } from "./resolver";
@@ -1141,6 +1143,13 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
   canonical?: string;
 }
 
+/** What each node's bound props hold, by node id, from a page's read. */
+function boundValuesOf(
+  stages: DocumentReadStages | null
+): (nodeId: string) => BoundValues | undefined {
+  return nodeId => stages?.boundValues.get(nodeId);
+}
+
 /**
  * The document's own metadata, with any media id resolved to a URL.
  *
@@ -1243,7 +1252,10 @@ async function derivePageSeo(
   const { image: blockImages, ...derived } = deriveSeoFromDocument(
     prepared,
     type => resolver.get(type),
-    node => conditionAllows(node, {}, { held })
+    node => conditionAllows(node, {}, { held }),
+    // What each bound prop holds, as the render is given it, so a bound
+    // image offers the picture the page draws.
+    boundValuesOf(stages)
   );
   // What the document states for the page as a whole wins over what its
   // blocks offer, field by field; its image is tried first, and a block's
@@ -2831,6 +2843,16 @@ export interface BindingSourcesArgs {
   readonly conditions?: ConditionDemand;
 }
 
+/** A page's bindings, told which collection the route reads media from. */
+function withMediaCollection(
+  bindings: PageBindings | undefined,
+  mediaCollection: string | undefined
+): PageBindings | undefined {
+  return bindings === undefined || mediaCollection === undefined
+    ? bindings
+    : { ...bindings, mediaCollection };
+}
+
 /**
  * What a page's bindings read, through `args.reader`, or nothing when the
  * documents it draws hold no binding.
@@ -3114,7 +3136,7 @@ async function readPageInputs(args: {
       )
     : parts;
   const readingDocs = presentedOf(reading);
-  const bindings = await readBindingSources({
+  const read = await readBindingSources({
     documents: readingDocs,
     entrySource: args.entrySource,
     slug: context.collection,
@@ -3137,6 +3159,9 @@ async function readPageInputs(args: {
       ? { conditions: conditionDemand(readingDocs.flatMap(doc => doc.nodes)) }
       : {}),
   });
+  // The collection the route reads media from, so a bound image is filled
+  // only from an upload field pointing there.
+  const bindings = withMediaCollection(read, config.mediaCollection);
   const decided = conditioned
     ? decideConditions(parts, bindings, bindingIssueLog(context))
     : parts;
@@ -4177,11 +4202,12 @@ export interface ContentPageConfig {
     ) => Promise<ContentTemplate | null>;
   };
   /**
-   * The addresses held in `locale` under the path `under` (the route's
-   * mount, as segments; none for the site's root), as path segments, at
-   * most `limit` of them: what {@link createPublicContentPage} pre-renders.
-   * Absent, it pre-renders nothing and renders each path on its first
-   * request.
+   * The addresses collections' entries hold in `locale` under the path
+   * `under` (the route's mount, as segments; none for the site's root), as
+   * path segments, at most `limit` of them: what
+   * {@link createPublicContentPage} pre-renders beside the pages, which the
+   * pages route lists itself. Absent, it pre-renders the pages alone and
+   * renders each entry on its first request.
    */
   readonly addresses?: (
     locale: string | undefined,
@@ -4250,15 +4276,47 @@ function buildContentRoute(
     ];
     return [...new Set(collections)].flatMap(slug => nextlyTags(slug));
   };
+  /**
+   * The entry `id` of `collection` as a visitor reads it: published, with
+   * the fields the public may read, or null where the public may read none.
+   * The one read that decides whether an entry is served, and whether a link
+   * to it is drawn.
+   */
+  const publicRead = async (
+    collection: string,
+    id: string,
+    select?: readonly string[]
+  ): Promise<ContentEntry | null> => {
+    const { items } = await publicReaderFor(
+      config.pages,
+      config.pages.locale,
+      config.pages.revalidate
+    ).find({
+      collection,
+      filters: [{ field: "id", op: "equals", value: id }],
+      limit: 1,
+      ...(select === undefined ? {} : { select }),
+    });
+    return items[0] ?? null;
+  };
   // A link to a page or an entry names the address it is served at, from the
   // same store that routes, so a post's link to another post carries its
   // collection's address. Cached on a public route, under the store's tags.
+  // Drawn only to a target the public may read, as the route serves it: a
+  // restricted entry's address is never published in a link.
   const pages: BlocksPageConfig =
     config.pages.resolveEntryPath !== undefined || entryPath === undefined
       ? config.pages
       : {
           ...config.pages,
           resolveEntryPath: async (collection, id) => {
+            // A read the public is refused outright (a collection it may not
+            // read at all, or one that no longer exists) is no target either:
+            // a link resolver answers null where there is no path to draw.
+            const target = await publicRead(collection, id, ["id"]).catch(
+              () => null
+            );
+            if (target === null) return null;
             const locale = config.pages.locale;
             const read = () => entryPath(collection, id, locale);
             if (!isPublic) return await read();
@@ -4348,22 +4406,6 @@ function buildContentRoute(
   }
 
   /**
-   * The entry as a visitor reads it: published, with the fields the public
-   * may read, through the reader the page's bindings read it with.
-   */
-  async function publicEntry(
-    collection: string,
-    id: string
-  ): Promise<ContentEntry | null> {
-    const { items } = await publicReaderFor(pages, pages.locale, window).find({
-      collection,
-      filters: [{ field: "id", op: "equals", value: id }],
-      limit: 1,
-    });
-    return items[0] ?? null;
-  }
-
-  /**
    * Whether the pages route's draft gate grants this path to the request: a
    * page's working draft holds no address, so a preview of one reaches the
    * pages route only through its gate.
@@ -4416,7 +4458,7 @@ function buildContentRoute(
     if (holder.kind === "space") return null;
     const template = await templateOf(holder.collection);
     if (template === null) return null;
-    const entry = await publicEntry(holder.collection, holder.id);
+    const entry = await publicRead(holder.collection, holder.id);
     if (entry === null) return null;
     return {
       kind: "entry",
@@ -4466,8 +4508,8 @@ function buildContentRoute(
     const limit = pages.staticParamsLimit ?? 1000;
     if (config.addresses === undefined || limit <= 0) return own;
     const held = await config.addresses(pages.locale, limit, mountSegments);
-    // Then every other address under this route's mount, as the route
-    // serves it: the entries'. A page's own address is listed once.
+    // Then the entries' addresses under this route's mount, as the route
+    // serves them, each listed once.
     const listed = new Set(own.map(param => param.slug.join("/")));
     const entries = held.flatMap(segments => {
       if (!mountSegments.every((part, at) => segments[at] === part)) return [];

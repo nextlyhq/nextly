@@ -63,6 +63,20 @@ export type TemplateAction =
       readonly kind: "remove-entry-design";
       readonly collection: string;
       readonly entry: string;
+    }
+  /**
+   * Set, change or (with `null`) remove the address a collection's entries
+   * are served at, stored on its template: for a collection created at
+   * runtime, whose address is not declared in code. Needs the routing
+   * permission (`manage-template-routing`) beside updating templates. A
+   * published template's entries move at once: their old addresses are
+   * freed, and each waits where its new one is held.
+   */
+  | {
+      readonly kind: "set-template-address";
+      readonly id: string;
+      /** A path such as `/blog`, in its one spelling, or `null` for none. */
+      readonly address: string | null;
     };
 
 const id = z.string().min(1).max(512);
@@ -92,6 +106,13 @@ const templateActionOptions = [
     kind: z.literal("remove-entry-design"),
     collection: id,
     entry: id,
+  }),
+  z.strictObject({
+    kind: z.literal("set-template-address"),
+    id,
+    // The address's form is the server's to judge, in its own words; the
+    // schema bounds its length only.
+    address: z.string().max(255).nullable(),
   }),
 ] as const;
 

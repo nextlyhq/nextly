@@ -531,6 +531,28 @@ describe("states", () => {
     );
   });
 
+  it("says what a stored save met as a status, with a Reload, and no alert", () => {
+    // Nothing failed, so it is not an alert; the words are the host's.
+    const onReload = vi.fn();
+    const text =
+      "Sam changed Primary while you were editing. Your value was kept. Undo puts theirs back.";
+    render(<Hosted tokens={SITE} notice={{ text, onReload }} />);
+    const status = screen
+      .getAllByRole("status")
+      .find(each => each.textContent?.includes(text));
+    expect(status).toBeDefined();
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(
+      within(status as HTMLElement).getByRole("button", { name: "Reload" })
+    );
+    expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws no notice when the host gives none", () => {
+    render(<Hosted tokens={SITE} />);
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
+
   it("says when a search matches nothing", () => {
     render(<Hosted tokens={SITE} />);
     fireEvent.change(

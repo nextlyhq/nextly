@@ -5264,6 +5264,34 @@
   border-radius: var(--radius-sm);
 }
 
+/* A save that was stored but met someone else's change: a warning-tinted
+   plate and edge, as a removed variant's line uses, with the words in the
+   admin's own text colour so they read in both themes, and the Reload
+   beside them. */
+.nx-vars__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--nx-warning) 10%, transparent);
+}
+
+.nx-vars__notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--nx-foreground);
+}
+
+.nx-vars__notice-reload {
+  flex: none;
+}
+
 .nx-vars__group {
   display: flex;
   flex-direction: column;
@@ -10407,4 +10435,251 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-inspector__visitor-unreadable-lines > p {
   margin: 0;
+}
+
+/*
+ * The Previewing strip, pinned along the top of a template's canvas: the
+ * entry the template is drawn with, chosen from a chip. Drawn as a header on
+ * the page it sits over (the editor's surface, its border below), outside
+ * the region that scrolls, so it stays while the page scrolls under it.
+ *
+ * Only the chip's title gives way to a narrow canvas: "Previewing" never
+ * does, since it keeps the template's own status and the entry's apart, and
+ * the room after the chip is left for what else the strip comes to hold.
+ */
+.nx-preview-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+}
+
+.nx-preview-strip > * {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The chip holds the full title; only past the strip's width does it cut. */
+.nx-preview-strip > .nx-preview-strip__chip {
+  flex: 0 1 auto;
+}
+
+.nx-preview-strip__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  max-width: 100%;
+  height: 1.5rem;
+  padding: 0 0.375rem 0 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nx-preview-strip__chip:hover {
+  background: var(--nx-muted);
+}
+
+/* An own design's one entry: named, not chosen, so not drawn as pressable. */
+.nx-preview-strip__chip[data-fixed] {
+  cursor: default;
+}
+
+.nx-preview-strip__chip[data-fixed]:hover {
+  background: var(--nx-background);
+}
+
+.nx-preview-strip__chip:focus-visible,
+.nx-preview-strip__chip[data-state="open"] {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-preview-strip__chip > * {
+  flex: none;
+}
+
+.nx-preview-strip__title {
+  flex: 0 1 auto;
+  min-width: 2.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-preview-strip__none {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-strip__chevron {
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The strip's second row, while there is no entry to preview or the one
+ * chosen could not be read: editor chrome, so drawn on the strip's own
+ * surface below its hairline, in its muted words, never as a band of colour
+ * over the page. Pinned with the strip.
+ */
+.nx-preview-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.45;
+}
+
+.nx-preview-notice > svg {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-preview-notice > p {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+/* Its action, a small outline button: New, or Try again. */
+.nx-preview-notice__action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.nx-preview-notice__action:hover {
+  background: var(--nx-muted);
+}
+
+.nx-preview-notice__action:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* The chip's mark for an entry that could not be read: words, not colour. */
+.nx-preview-strip__unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The picker under the chip: a search, the entries newest first, and the
+ * keys and New along its foot.
+ */
+.nx-preview-picker {
+  display: flex;
+  flex-direction: column;
+  width: min(26.25rem, calc(100vw - 2rem));
+  max-height: 28.75rem;
+  padding: 0;
+  overflow: hidden;
+}
+
+.nx-preview-picker__list {
+  max-height: 20rem;
+  padding: 0.25rem;
+  overflow-y: auto;
+}
+
+.nx-preview-picker__row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto 4.75rem;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.nx-preview-picker__row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-preview-picker__row[data-current] .nx-preview-picker__row-title {
+  font-weight: 500;
+}
+
+.nx-preview-picker__when {
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.nx-preview-picker__empty {
+  padding: 1rem 0.75rem;
+  color: var(--nx-muted-foreground);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.nx-preview-picker__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.75rem;
+  border-top: 1px solid var(--nx-border);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs, 0.75rem);
+}
+
+.nx-preview-picker__keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-preview-picker__new {
+  margin-inline-start: auto;
+}
+
+/*
+ * The keys in the picker's foot, drawn as keycaps. The modifier glyphs are
+ * not in the editor's mono face, so the system face draws them at size.
+ */
+.nx-preview-picker__keys kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 1.25rem;
+  padding: 0 0.3125rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
 }

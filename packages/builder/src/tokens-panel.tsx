@@ -39,6 +39,7 @@ import {
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import {
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -92,6 +93,12 @@ import {
 } from "./variable-usage-view";
 import { useVariablesTransfer } from "./variables-transfer";
 
+/** A save's note to the author, and the way to read the variables again. */
+export interface TokensPanelNotice {
+  readonly text: string;
+  readonly onReload: () => void;
+}
+
 export interface TokensPanelProps {
   /**
    * The site's variables, or `undefined` while the host has not read them.
@@ -126,6 +133,14 @@ export interface TokensPanelProps {
   supplied?: SiteTokenSet;
   /** What the last save said, when it failed. */
   issue?: string;
+  /**
+   * What the last save has to tell the author although it was stored: that
+   * it met someone else's change to the same variables. Drawn beside
+   * `issue` as a status rather than an alert, since nothing failed, with a
+   * Reload that reads the variables again and drops the host's own copy.
+   * The host clears it on the next edit and on Reload.
+   */
+  notice?: TokensPanelNotice;
   /**
    * Which mode the preview opens on.
    *
@@ -348,7 +363,7 @@ function VariablesView({
         />
       </div>
       <div className="nx-vars__body">
-        <PanelNotes readOnly={readOnly} issue={issue} />
+        <PanelNotes readOnly={readOnly} issue={issue} notice={hosted.notice} />
         {placed ? header.overlays : null}
         <VariableGroups
           shown={shown}
@@ -616,13 +631,15 @@ function HeaderControls({
   return <div className="nx-vars__head">{children}</div>;
 }
 
-/** The read-only line, and a save that failed. */
+/** The read-only line, a save that failed, and a save that met another. */
 function PanelNotes({
   readOnly,
   issue,
+  notice,
 }: {
   readOnly: boolean;
   issue: string | undefined;
+  notice: TokensPanelNotice | undefined;
 }): React.JSX.Element {
   return (
     <>
@@ -635,6 +652,22 @@ function PanelNotes({
         <p className="nx-vars__alert" role="alert">
           {issue}
         </p>
+      )}
+      {notice === undefined ? null : (
+        // A status, not an alert: the save was stored, and this says what
+        // it met on the way.
+        <div className="nx-vars__notice" role="status">
+          <p className="nx-vars__notice-text">{notice.text}</p>
+          <Button
+            className="nx-vars__notice-reload"
+            onClick={notice.onReload}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Reload
+          </Button>
+        </div>
       )}
     </>
   );

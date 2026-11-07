@@ -399,6 +399,17 @@ export type { EmptyContainerAppendersProps } from "./empty-container-appender";
 export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
 export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
 export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
+/**
+ * @experimental The entry a template is previewed with: the host provides it
+ * around a template's editor, and anything inside reads it. `undefined`
+ * outside a template.
+ */
+export {
+  PREVIEWED_ENTRY_KEYS,
+  PreviewedEntryProvider,
+  usePreviewedEntry,
+} from "./previewed-entry";
+export type { PreviewedEntry } from "./previewed-entry";
 export { PageInserters } from "./page-inserters";
 export type { PageInsertersProps } from "./page-inserters";
 
