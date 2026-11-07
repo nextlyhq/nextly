@@ -1800,7 +1800,7 @@ interface AppliedConditionsSwitch {
  * it, so the canvas hides what the published page would.
  */
 function useAppliedConditionsSwitch(
-  { composed, held }: ConditionedPage,
+  { entry, composed, held }: ConditionedPage,
   preview: ReturnType<typeof useTemplatePreviewState>,
   pageSource: PageConditionsSource | undefined,
   options: Omit<AppliedConditionsOptions, "noun">
@@ -1826,8 +1826,9 @@ function useAppliedConditionsSwitch(
       : pageSource !== undefined
         ? pageRead.noun
         : "entry";
-  const previewed =
-    preview !== undefined ? preview.previewed : pageRead.previewed;
+  // A template's entry as the page settles on it, so a refresh of that same
+  // entry keeps the subject its conditions were judged by.
+  const previewed = preview !== undefined ? entry : pageRead.previewed;
   // The entry is handed over only while the switch is on: the canvas then
   // draws the page as a visitor reading that entry would get it.
   const applied = useAppliedConditions(
