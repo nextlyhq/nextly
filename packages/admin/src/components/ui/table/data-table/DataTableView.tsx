@@ -44,6 +44,7 @@ import {
   useContext,
   useMemo,
   useSyncExternalStore,
+  type Context,
   type KeyboardEvent,
   type JSX,
 } from "react";
@@ -166,9 +167,9 @@ const DEFAULT_GET_ROW_ID = (row: object): string => {
  * registers while the list is on screen. Internal: not part of the view's
  * props, so it is no surface a plugin could hand a stale value through.
  */
-export const HeldPluginRegistrations = createContext<
+export const HeldPluginRegistrations: Context<
   DataTablePluginRegistrations | undefined
->(undefined);
+> = createContext<DataTablePluginRegistrations | undefined>(undefined);
 
 /** A subscription that is never told anything, for a snapshot held above. */
 function noSubscription(): () => void {

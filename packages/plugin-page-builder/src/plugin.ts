@@ -47,12 +47,7 @@ import {
   publishedPages,
   type PagesReader,
 } from "./address-claims/backfill";
-import {
-  committedClaims,
-  lockHolder,
-  releaseHolderLock,
-  type Tx,
-} from "./address-claims/claim-store";
+import { committedClaims, type Tx } from "./address-claims/claim-store";
 import {
   CONTENT_ADDRESS_SERVICE,
   contentAddressService,
@@ -149,12 +144,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
-import {
-  TEMPLATE_ENTRY_COLLECTION_FIELD,
-  TEMPLATE_FORKED_FROM_FIELD,
-  templatesCollection,
-  TEMPLATES_SLUG,
-} from "./collections/templates";
+import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -199,7 +189,6 @@ import {
 } from "./default-layout/settings-single";
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
-import { asOverwrite } from "./document-version";
 import { entriesRoute, titleFieldIn } from "./entries-route";
 import type {
   CompositionSetup,
@@ -355,6 +344,7 @@ import {
   designUnderWhere,
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
+import { judgeTemplateInTransaction } from "./templates/entry-design-write";
 import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
@@ -384,6 +374,7 @@ import {
   storedAddressProblem,
   TEMPLATE_ADDRESS_FIELD,
 } from "./templates/template-routing";
+import { unlinkCopies } from "./templates/unlink-copies";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
@@ -2358,8 +2349,7 @@ export const pageBuilder = (
       // place and names the template already holding it. RESOLVED slugs, for
       // the reason the guard above takes them.
       const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
-      // The address store's collection, as the address claims and the lock an
-      // entry's own design is given and deleted under both reach it.
+      // The address store's collection, as the address claims reach it.
       const addressClaims = {
         services: ctx.services,
         slug: ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
@@ -2380,8 +2370,8 @@ export const pageBuilder = (
           }
         },
         holderOf: templateHolderReader(ctx.services.ownCollections, templates),
-        lockEntry: (tx, collection, id) =>
-          lockHolder(addressClaims, tx, { collection, id }),
+        holdEntry: (tx, collection, id) =>
+          ctx.services.collections.holdEntryInTransaction(tx, collection, id),
         // Read as the system and in any state: whether the entry exists is
         // the question, and who may see it is the action's to ask.
         entryExists: async (collection, id) => {
@@ -2412,95 +2402,57 @@ export const pageBuilder = (
       };
       registerTemplateGuard(ctx, templateGuard);
       // An entry's own design is deleted with its entry, in the delete's
-      // transaction.
-      // The id of the own design held under `key`, read on the transaction
-      // `tx` stands for, with the lock asked for.
-      const designIdUnder = async (
-        tx: PluginCollectionTransaction,
-        key: string,
-        lock: "share" | "update"
-      ): Promise<string | null> => {
-        const found =
-          await ctx.services.ownCollections.listEntriesInTransaction(
-            tx,
-            templates,
-            {
-              where: designUnderWhere(key),
-              pagination: { limit: 1 },
-              depth: 0,
-            },
-            { lock }
-          );
-        const id = (found.data[0] as { id?: unknown } | undefined)?.id;
-        return typeof id === "string" || typeof id === "number"
-          ? String(id)
-          : null;
-      };
+      // transaction, and a deleted template's copies lose their link to it.
       registerEntryDesignCascade(ctx.hooks, {
         templates,
         ownCollections: () => new Set(Object.values(ctx.self.collections)),
-        hasDesigns: async (tx, collection) => {
+        // On the delete's own transaction, for update: the design is deleted
+        // next, and no second pooled connection is taken while the delete
+        // holds one.
+        designUnder: async (tx, key) => {
           const found =
             await ctx.services.ownCollections.listEntriesInTransaction(
               tx,
               templates,
               {
-                where: {
-                  [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
-                },
+                where: designUnderWhere(key),
                 pagination: { limit: 1 },
                 depth: 0,
-              }
+              },
+              { lock: "update" }
             );
-          return found.data.length > 0;
+          const id = (found.data[0] as { id?: unknown } | undefined)?.id;
+          return typeof id === "string" || typeof id === "number"
+            ? String(id)
+            : null;
         },
-        designAt: (tx, key) => designIdUnder(tx, key, "share"),
-        lockEntry: (tx, entry) => lockHolder(addressClaims, tx, entry),
-        releaseEntryLock: (tx, entry) =>
-          releaseHolderLock(addressClaims, tx, entry),
-        // On the delete's own transaction, for update: the design is deleted
-        // next, and no second pooled connection is taken while the delete
-        // holds one.
-        designUnder: (tx, key) => designIdUnder(tx, key, "update"),
-        unlinkCopiesOf: async (tx, id) => {
-          // The first page again after each is emptied, so a copy made or
-          // removed meanwhile cannot shift one past a page number. A copy
-          // read twice (its link not emptied) ends the walk rather than
-          // looping on it.
-          const emptied = new Set<string>();
-          for (;;) {
-            const found =
-              await ctx.services.ownCollections.listEntriesInTransaction(
-                tx,
-                templates,
-                {
-                  where: { [TEMPLATE_FORKED_FROM_FIELD]: { equals: id } },
-                  pagination: { limit: 100 },
-                  depth: 0,
-                },
-                { lock: "update" }
-              );
-            const copies = (found.data as { id?: unknown }[])
-              .map(row => row.id)
-              .filter(
-                (copy): copy is string | number =>
-                  typeof copy === "string" || typeof copy === "number"
-              )
-              .map(String)
-              .filter(copy => !emptied.has(copy));
-            if (copies.length === 0) return;
-            for (const copy of copies) {
-              await ctx.services.collections.updateEntryInTransaction(
-                tx,
-                templates,
-                copy,
-                asOverwrite({ [TEMPLATE_FORKED_FROM_FIELD]: null })
-              );
-              emptied.add(copy);
-            }
-            if (found.data.length < 100) return;
-          }
-        },
+        unlinkCopiesOf: (tx, id) =>
+          unlinkCopies<PluginCollectionTransaction>(
+            {
+              listForUpdate: (transaction, options) =>
+                ctx.services.ownCollections.listEntriesInTransaction(
+                  transaction,
+                  templates,
+                  options,
+                  { lock: "update" }
+                ),
+              list: (transaction, options) =>
+                ctx.services.ownCollections.listEntriesInTransaction(
+                  transaction,
+                  templates,
+                  options
+                ),
+              update: (transaction, copy, data) =>
+                ctx.services.collections.updateEntryInTransaction(
+                  transaction,
+                  templates,
+                  copy,
+                  data
+                ),
+            },
+            tx,
+            id
+          ),
         deleteInTransaction: (tx, slug, id) =>
           ctx.services.collections.deleteEntryInTransaction(tx, slug, id),
       });
@@ -2514,6 +2466,21 @@ export const pageBuilder = (
             ctx.services.collections.holdCollectionInTransaction(
               transaction,
               collection
+            )
+        )
+      );
+      // After the collection is held: the row a template write commits is
+      // judged again on its transaction, and a new own design holds its
+      // entry, so one written while the entry is deleted is refused or
+      // deleted with it, whichever path wrote it: see `entry-design-write`.
+      ctx.hooks.onInTransaction(
+        templates,
+        judgeTemplateInTransaction<PluginCollectionTransaction>(
+          (transaction, collection, id) =>
+            ctx.services.collections.holdEntryInTransaction(
+              transaction,
+              collection,
+              id
             )
         )
       );
@@ -2917,15 +2884,20 @@ export const pageBuilder = (
       // Named as a page's save names the document in its way.
       const describeHolder = (tx: Tx) =>
         describeFor({ pages: pagesSlug, readPage }, tx);
-      // A collection's record as the registry answers it, or null.
+      // A collection's record as the registry answers it, or null. Given a
+      // write's transaction, read on that transaction's own connection, so
+      // a save holding the pool's last connection never waits for another.
       const collectionRecord = async (
-        slug: string
+        slug: string,
+        tx?: Tx
       ): Promise<Record<string, unknown> | null> => {
         try {
-          return (await ctx.services.collections.getCollection(
-            slug,
-            undefined as never
-          )) as unknown as Record<string, unknown>;
+          return (await (tx === undefined
+            ? ctx.services.collections.getCollection(slug, undefined as never)
+            : ctx.services.collections.getCollectionInTransaction(
+                tx,
+                slug
+              ))) as unknown as Record<string, unknown>;
         } catch (error) {
           if (NextlyError.isNotFound(error)) return null;
           throw error;
@@ -2969,8 +2941,9 @@ export const pageBuilder = (
         pagesBackfilled: () => pageClaimsBackfilled,
         // The registry's record says whether the collection's entries carry
         // a Draft/Published status, which a field named `status` does not.
-        lifecycle: async collection =>
-          (await collectionRecord(collection))?.status === true,
+        // Asked inside a write's transaction, so read on it.
+        lifecycle: async (collection, tx) =>
+          (await collectionRecord(collection, tx))?.status === true,
         pagesWithSlugs: async slugs => {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;

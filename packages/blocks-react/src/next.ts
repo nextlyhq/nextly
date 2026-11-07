@@ -22,8 +22,10 @@ import {
   conditionFieldKind,
   DEFAULT_LIMITS,
   LIST_ENTRY_SLOT,
+  mapForest,
   deriveSeoFromDocument,
   hashId,
+  hasItemBindings,
   isFetchableUrl,
   isListDay,
   isPlainRecord,
@@ -92,7 +94,11 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
-import { itemFollowsIn } from "./blocks/list-batch";
+import {
+  fillItemBindings,
+  itemFollowsIn,
+  type ItemPlacement,
+} from "./blocks/list-batch";
 import {
   conditionDayStart,
   listEntryCount,
@@ -1155,6 +1161,46 @@ function boundValuesOf(
   return nodeId => stages?.boundValues.get(nodeId);
 }
 
+/** A node outside every list: no item to draw it for. */
+const OUTSIDE_ANY_LIST: ItemPlacement = {};
+
+/**
+ * The document the metadata walk reads, and what each node's bound props
+ * hold, as the page draws the blocks that walk asks about.
+ *
+ * The walk never enters a list's per-entry slot (a list declares it
+ * conditional), so every block it asks that holds a list-item binding is
+ * drawn outside any list: through the same item fill the renderer runs, with
+ * no item, which gives the binding's fallback or the prop's own value. Read
+ * from the page's pass alone, such a block would offer its stored value, a
+ * picture the page never draws. Blocks inside a list are filled the same way
+ * and never read. The fill's issues are the render's to report, so none are
+ * reported twice.
+ */
+function metadataReadOf(
+  prepared: BlockDocument,
+  run: BindingRun | undefined,
+  stages: DocumentReadStages | null
+): {
+  document: BlockDocument;
+  boundOf: (nodeId: string) => BoundValues | undefined;
+} {
+  const fromPage = boundValuesOf(stages);
+  if (run === undefined) return { document: prepared, boundOf: fromPage };
+  const filled = new Map<string, BoundValues>();
+  const nodes = mapForest(prepared.nodes, node => {
+    if (!hasItemBindings(node)) return node;
+    const fill = fillItemBindings(node, OUTSIDE_ANY_LIST, run);
+    if (fill.bound === undefined) return node;
+    filled.set(node.id, { ...fromPage(node.id), ...fill.bound });
+    return { ...node, props: fill.props };
+  });
+  return {
+    document: nodes === prepared.nodes ? prepared : { ...prepared, nodes },
+    boundOf: nodeId => filled.get(nodeId) ?? fromPage(nodeId),
+  };
+}
+
 /**
  * The document's own metadata, with any media id resolved to a URL.
  *
@@ -1254,13 +1300,15 @@ async function derivePageSeo(
   // whose conditions held for the entry describes the page, one a list's item
   // decides does not, since no one item speaks for the page.
   const held = heldConditionsOf(preparation);
+  // What each bound prop holds, as the render is given it, so a bound image
+  // offers the picture the page draws, a list item's binding outside a list
+  // included.
+  const read = metadataReadOf(prepared, run, stages);
   const { image: blockImages, ...derived } = deriveSeoFromDocument(
-    prepared,
+    read.document,
     type => resolver.get(type),
     node => conditionAllows(node, {}, { held }),
-    // What each bound prop holds, as the render is given it, so a bound
-    // image offers the picture the page draws.
-    boundValuesOf(stages)
+    read.boundOf
   );
   // What the document states for the page as a whole wins over what its
   // blocks offer, field by field; its image is tried first, and a block's

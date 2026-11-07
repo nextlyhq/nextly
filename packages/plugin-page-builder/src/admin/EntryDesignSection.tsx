@@ -18,7 +18,10 @@
  * - **Uses the template**: the template's title, and an offer to give the
  *   entry its own design, a copy of the published template.
  * - **Own design, not published**: visitors still see the template, said
- *   plainly; Edit design, and Remove own design… behind a confirmation.
+ *   plainly; Edit design, and Remove own design… behind a confirmation. The
+ *   confirmation runs the removal as a dry run as it opens, so a removal the
+ *   site would refuse is said before it is offered; the confirmed removal is
+ *   judged again by the server.
  * - **Own design, published**: visitors see it; the same two actions.
  * - **No published template yet**: the entry is not a page on the site;
  *   the template to open, or one to create where the author may.
@@ -47,8 +50,11 @@ import {
   toast,
 } from "@nextlyhq/ui";
 import { Brush, Info, LayoutTemplate, Plus, TriangleAlert } from "lucide-react";
-import { useState, type JSX, type ReactNode } from "react";
+import { useMemo, useState, type JSX, type ReactNode } from "react";
 
+import type { TemplateAction } from "../templates/template-actions-contract";
+
+import { DryRunVerdictWords, useDryRunVerdict } from "./dry-run-verdict";
 import {
   builderHref,
   designOf,
@@ -299,22 +305,38 @@ function OwnDesign({
   const published = design.status === "published";
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // A new value each time the confirmation opens, so each opening asks the
+  // site afresh, and none while it is closed, so nothing is asked unseen.
+  const removal = useMemo<TemplateAction | null>(
+    () =>
+      confirming
+        ? { kind: "remove-entry-design", collection, entry: entryId }
+        : null,
+    [confirming, collection, entryId]
+  );
+  const verdict = useDryRunVerdict(removal, attempt, WORDS.removeJudgeFailed);
+
+  const openConfirm = (): void => {
+    setRefusal(null);
+    setConfirming(true);
+  };
 
   const remove = (): void => {
+    if (removal === null) return;
     setRemoving(true);
-    runTemplateAction({
-      kind: "remove-entry-design",
-      collection,
-      entry: entryId,
-    })
+    setRefusal(null);
+    runTemplateAction(removal)
       .then(
         () => {
           toast.success(WORDS.removedToast(template));
           setConfirming(false);
           onChanged();
         },
-        (error: unknown) =>
-          toast.error(reasonOf(error, "The own design couldn't be removed."))
+        // The server judges the removal again: a refusal that appeared
+        // after the dry run is said in the dialog, which stays open.
+        (error: unknown) => setRefusal(reasonOf(error, WORDS.removeFailed))
       )
       .finally(() => setRemoving(false));
   };
@@ -360,7 +382,7 @@ function OwnDesign({
         className="h-auto self-start px-0 text-xs text-destructive-700 dark:text-destructive"
         disabled={held}
         {...(held ? { title: HELD_REASON } : {})}
-        onClick={() => setConfirming(true)}
+        onClick={openConfirm}
       >
         {WORDS.remove}
       </Button>
@@ -382,6 +404,29 @@ function OwnDesign({
               {WORDS.removeSays(design.title, template, meta.names.plural)}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <DryRunVerdictWords
+            verdict={verdict}
+            words={{
+              judging: WORDS.removeJudging,
+              refused: WORDS.removeRefused,
+            }}
+          />
+          {verdict.kind === "failed" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="self-start"
+              onClick={() => setAttempt(attempt + 1)}
+            >
+              {WORDS.retry}
+            </Button>
+          ) : null}
+          {refusal === null ? null : (
+            <Alert variant="destructive">
+              <AlertDescription>{refusal}</AlertDescription>
+            </Alert>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removing}>
               {WORDS.keep}
@@ -389,7 +434,9 @@ function OwnDesign({
             <Button
               type="button"
               variant="destructive"
-              disabled={removing}
+              // Offered only once the dry run says the site would accept it,
+              // and never while the document's changes are held.
+              disabled={removing || held || verdict.kind !== "allowed"}
               onClick={remove}
             >
               {removing ? WORDS.removing : WORDS.removeConfirm}

@@ -6,7 +6,10 @@
  * collection's entries, newest edit first, in the list envelope, capped at
  * {@link ENTRY_DESIGNS_MAX}. With `&entry=<id>` it answers that one entry's
  * own design, or none: the lookup a surface asks whether an entry has one,
- * since a capped list cannot say so. Asked with `?template=<id>` instead, it
+ * since a capped list cannot say so. With `&entries=<id>,<id>` it answers the
+ * own designs of those entries alone, at most {@link ENTRY_DESIGNS_ENTRIES_MAX}
+ * of them: the lookup a list asks for the rows on its screen, whose designs
+ * may lie past the capped list. Asked with `?template=<id>` instead, it
  * answers for the collection that template draws or, for an entry's own
  * design, for that design's entry alone.
  *
@@ -32,6 +35,7 @@ export const ENTRY_DESIGNS_ROUTE_PATH = "/templates/entry-designs";
 export const ENTRY_DESIGNS_PARAMS = {
   collection: "collection",
   entry: "entry",
+  entries: "entries",
   template: "template",
 } as const;
 
@@ -43,6 +47,14 @@ export const ENTRY_DESIGNS_PARAMS = {
  * `meta.hasNext` says the list may not be the whole.
  */
 export const ENTRY_DESIGNS_MAX = 500;
+
+/**
+ * The most entries one `entries` lookup names: a page of an entry list with
+ * room to spare, since the largest page a list offers is 50 rows. A lookup
+ * naming more is refused rather than cut, because a cut list answers for
+ * entries other than the ones asked about.
+ */
+export const ENTRY_DESIGNS_ENTRIES_MAX = 100;
 
 /** A template's state, as stored. */
 export type TemplateState = "draft" | "published";
@@ -113,6 +125,20 @@ export function entryDesignsPath(collection: string): string {
 /** The read's path for one entry's own design, or none. */
 export function entryDesignPath(collection: string, entry: string): string {
   return `${entryDesignsPath(collection)}&${ENTRY_DESIGNS_PARAMS.entry}=${encodeURIComponent(entry)}`;
+}
+
+/**
+ * The read's path for the own designs of some of a collection's entries,
+ * named by id in one comma-separated parameter. Each id is encoded on its
+ * own, and the caller names none that holds a comma, which the route would
+ * read as two.
+ */
+export function entryDesignsForEntriesPath(
+  collection: string,
+  entries: readonly string[]
+): string {
+  const ids = entries.map(id => encodeURIComponent(id)).join(",");
+  return `${entryDesignsPath(collection)}&${ENTRY_DESIGNS_PARAMS.entries}=${ids}`;
 }
 
 /** The read's path for the collection a template draws, or serves an entry of. */

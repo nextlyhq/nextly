@@ -6,6 +6,7 @@ import type {
   BatchOperationResult,
   ServiceOpts,
 } from "@nextlyhq/plugin-sdk";
+import { expectTypeOf } from "vitest";
 
 // QueryOptions carries the rich-query options the facade now threads (D56):
 // filters, sort, pagination, relation depth, and field projection.
@@ -73,6 +74,15 @@ const hostTypes: Promise<{
   collections: readonly { name: string }[];
   singles: readonly { slug: string }[];
 }> = own.listHostTypesInTransaction(tx);
+
+// A collection's record on a transaction the plugin holds: the token first,
+// then the slug, answered as `getCollection` answers it.
+expectTypeOf<
+  PluginCollectionService["getCollectionInTransaction"]
+>().parameters.toEqualTypeOf<[typeof tx, string]>();
+expectTypeOf<
+  ReturnType<PluginCollectionService["getCollectionInTransaction"]>
+>().toEqualTypeOf<ReturnType<PluginCollectionService["getCollection"]>>();
 
 // Exported so eslint does not flag the assertions as unused.
 export const __d56TypeCheck = {

@@ -399,22 +399,6 @@ export async function lockHolder(
 }
 
 /**
- * Remove `holder`'s own lock row, in `tx`, once nothing will contend for it
- * again (its document is deleted), so a lock row does not outlive it. A
- * transaction still waiting on the row reads none once this one commits,
- * and makes a new one.
- */
-export async function releaseHolderLock(
-  claims: Claims,
-  tx: Tx,
-  holder: Holder
-): Promise<void> {
-  if (claims.dialect === "sqlite") return;
-  const [row] = await keyed(claims, tx, [holderLockKey(holder)], "update");
-  if (row !== undefined) await remove(claims, tx, row);
-}
-
-/**
  * Hold `collection`'s own lock row until this transaction ends (see
  * {@link collectionLockKey}): taken by an entry's save before it reads where
  * its collection is served, and by whatever changes that, so neither commits
