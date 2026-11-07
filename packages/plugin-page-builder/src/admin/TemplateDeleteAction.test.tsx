@@ -168,6 +168,20 @@ describe("deleting a template", () => {
     ]);
   });
 
+  it("confirms in the page builder's confirming red, the deeper shade in light", async () => {
+    designs = answer();
+    open("t1");
+    const classes = (await confirmButton("Delete template")).className.split(
+      /\s+/
+    );
+    // The class the page builder's other confirmations take: the solid red
+    // holds under 4.5:1 under the white label in light, so light takes the
+    // deeper shade, and dark keeps the solid red with its dark label.
+    expect(classes).toContain("bg-destructive-700");
+    expect(classes).toContain("dark:bg-destructive-solid");
+    expect(classes).toContain("dark:hover:bg-destructive-600");
+  });
+
   it("says a draft template's entries stay unshown, never that they stop being shown", () => {
     // A draft template shows no entry today, so its delete stops nothing.
     designs = answer({ status: "draft" });

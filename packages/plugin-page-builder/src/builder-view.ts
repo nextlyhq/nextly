@@ -42,6 +42,13 @@ export const ENTRY_DESIGN_SECTION_COMPONENT =
 export const TEMPLATE_OWN_DESIGNS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#TemplateOwnDesigns";
 
+/**
+ * The "Own design" section of an own design's document panel: the entry it
+ * serves and the template it was copied from, read-only.
+ */
+export const TEMPLATE_DESIGN_DETAILS_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#TemplateDesignDetails";
+
 /** The delete on a template's document screen, which says what it means. */
 export const TEMPLATE_DELETE_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction";

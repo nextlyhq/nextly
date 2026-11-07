@@ -88,6 +88,42 @@ the menu's button shows its name and width. The buttons never change places.
 
 When the bar is narrow, the device buttons drop their label first and keep their icons.
 
+## A field inside a group or a repeater's row
+
+A page's blocks field doesn't have to sit at the top of the entry. One inside a group
+opens at its path, `?field=hero.body`. One inside a repeater's row opens for that row,
+and the address names the row by its saved id rather than its place in the list,
+`?field=sections.<rowId>.body`, so it opens the same row after the rows are reordered.
+
+The top bar names where the field sits beside the page's title, such as
+**Sections · Hero banner · Body**, and so does the start of the bottom bar. A row is
+named by its title, as the entry's row header shows it, and by its place only when it
+has no title. While the editor is open, the entry's fields panel leaves out the repeater
+holding the row, so its rows can't be reordered or removed under the editor. Leaving
+returns you to the entry with that row's **Open Page Builder** focused.
+
+- **Save the entry once first.** A row gets its id when it is saved. The button of a row
+  added since the last save is greyed out and says "Save the entry once to design this
+  row."
+- **Rows open in the default language.** The Page Builder edits the default language's
+  rows, and a translated repeater can hold different rows in each language. So while the
+  entry shows another language, a row's button is greyed out and asks you to switch to
+  the default language.
+- **A row that's gone opens nothing.** An address naming a row that has since been
+  removed, or naming a row by its position (`sections.1.body`), isn't opened on
+  another row: the editor says the row can't be opened and offers the way back.
+- **Saving goes to that row.** The save writes into the row with that id, wherever it
+  now stands, and leaves the other rows as they are. If the row is no longer in the
+  entry when you save, the save is refused and nothing is written into another row.
+- **A repeater whose rows set their own `id` field** gives its rows no saved id, so its
+  rows don't open in the editor. Their button says why, and the server log names each
+  such field at startup.
+- **Some locks aren't enforced on save inside a row yet.** The server can't read a
+  row's saved layout to compare against. So a save of a row's layout isn't checked
+  against Layers locks or variant locks, and a content-only slot is compared with its
+  starting blocks alone. The server log notes each save whose Layers locks it couldn't
+  check. Layers locks inside a group aren't checked on save either.
+
 ## Search
 
 **Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   builderAddress,
+  fieldBuilderAddress,
   openAtFromSearch,
   sectionAddress,
   sectionFromSearch,
@@ -40,19 +41,96 @@ describe("builderAddress", () => {
     });
   });
 
-  it.each([
-    ["a repeater's row", "sections.0.body"],
-    ["a group inside a repeater's row", "sections.12.hero.body"],
-  ])("is withheld from a field inside %s", (_case, path) => {
+  it("names a field inside a repeater's row by the row's saved id", () => {
+    // The address the form gives the field (`useFieldAddress`), carried as
+    // it is: the view finds the row by this id wherever the row has moved.
     expect(
-      builderAddress(
+      fieldBuilderAddress(
         { kind: "collection", slug: "pages", documentId: "p1" },
-        path
+        { address: "sections.row-b.body", throughRow: true }
       )
     ).toEqual({
-      unavailable:
-        "The Page Builder doesn't open for a field inside a repeater. Move this field out of the repeater to edit it visually.",
+      href: "/admin/collections/pages/p1/builder?field=sections.row-b.body",
     });
+  });
+
+  it("withholds a row's way in while another language is on screen", () => {
+    // The builder edits the default language's rows; this language's row id
+    // may name a row the default language does not have, or another one.
+    const another = { documentLocalized: true, isDefaultLocale: false };
+    const page = {
+      kind: "collection",
+      slug: "pages",
+      documentId: "p1",
+    } as const;
+    const refusal = {
+      unavailable:
+        "Switch to the default language to design this row: the Page Builder edits the default language's rows.",
+    };
+    expect(
+      fieldBuilderAddress(
+        page,
+        { address: "sections.row-b.body", throughRow: true },
+        another
+      )
+    ).toEqual(refusal);
+    // A row whose saved id is its position spells its address like its form
+    // path: still a row, which the form says outright.
+    expect(
+      fieldBuilderAddress(
+        page,
+        { address: "sections.0.body", throughRow: true },
+        another
+      )
+    ).toEqual(refusal);
+    // A field outside any row still opens, saying it opens the default.
+    expect(
+      fieldBuilderAddress(page, { address: "hero.body" }, another)
+    ).toMatchObject({
+      href: "/admin/collections/pages/p1/builder?field=hero.body",
+    });
+    // In the default language the row opens as usual.
+    expect(
+      fieldBuilderAddress(
+        page,
+        { address: "sections.row-b.body", throughRow: true },
+        { documentLocalized: true, isDefaultLocale: true }
+      )
+    ).toEqual({
+      href: "/admin/collections/pages/p1/builder?field=sections.row-b.body",
+    });
+  });
+
+  it("says to save once for a row that has no saved id yet, on the same button", () => {
+    // `unavailable` is drawn beneath the card's way in, which is then
+    // disabled: the same control, never a different-looking one.
+    expect(
+      fieldBuilderAddress(
+        { kind: "collection", slug: "pages", documentId: "p1" },
+        { unavailable: "unsavedRow" }
+      )
+    ).toEqual({ unavailable: "Save the entry once to design this row." });
+  });
+
+  it("says why a repeater whose rows set their own id has no way in", () => {
+    const address = fieldBuilderAddress(
+      { kind: "collection", slug: "pages", documentId: "p1" },
+      { unavailable: "ownIds" }
+    );
+    expect("unavailable" in address ? address.unavailable : "").toContain(
+      "set their own id field"
+    );
+  });
+
+  it("asks for the page to be saved first on an entry never saved, before the row", () => {
+    // Every row of an unsaved entry is unsaved too; saving the page is the
+    // one step that answers both.
+    expect(
+      fieldBuilderAddress(
+        { kind: "collection", slug: "pages" },
+        { unavailable: "unsavedRow" }
+      )
+    ).toEqual({ unavailable: "Save this page to open the Page Builder." });
   });
 
   it("says it opens the default language when another one is on screen", () => {
