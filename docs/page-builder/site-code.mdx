@@ -93,6 +93,34 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
 `<SiteCode>` is a server component. It reads the stored code through Nextly's cache,
 so pages stay static and a save refreshes every page.
 
+### With Cache Components
+
+Nextly runs with Cache Components on, and an app made by `create-nextly-app` has it.
+There, `<SiteCode>` reads through your app's own `"use cache"` function, kept in
+`src/nextly/cached-read.ts`: an app made by `create-nextly-app` has the file and imports
+it from its root layout. Add both if your app doesn't have them:
+
+1. Create `src/nextly/cached-read.ts` with the file the caching guide gives under
+   [Cache Components](/docs/guides/isr-caching#cache-components).
+2. Import it from the layout that renders `<SiteCode>`. That one import both registers
+   the cached read and starts Nextly, on every page that layout serves, before
+   `<SiteCode>` reads. Both matter during `next build`, where nothing else starts
+   Nextly for a page such as `/_not-found` that only the root layout renders:
+
+```tsx title="app/(frontend)/layout.tsx"
+import "@/nextly/cached-read";
+import { SiteCode } from "@nextlyhq/plugin-page-builder/site";
+```
+
+Use a relative path where your app has no `@/` alias.
+
+Without the function, the read would fall back to `unstable_cache`, whose first read
+is a database query that can still be running when Next.js finishes prerendering a
+page, so a build would fail some of the time. `<SiteCode>` refuses that read instead:
+the build stops with an error naming the file and the line to add. With Cache
+Components off, nothing changes, and the file is not needed. A `read` you pass to
+`<SiteCode>` yourself is used as given.
+
 ### It keeps itself out of the admin
 
 The admin, the editor's canvas and the preview pane are all served from your site's

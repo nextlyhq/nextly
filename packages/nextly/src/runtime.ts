@@ -50,6 +50,10 @@ export {
   nextlySiteSettingsTags,
   entryIdTag,
   cachedFind,
+  // Whether the app registered its `"use cache"` read function, for a
+  // component that must refuse to read through `unstable_cache` under Cache
+  // Components, where a miss fails the prerender.
+  cachedReadRegistered,
   registerCachedRead,
   runRegisteredRead,
   type CachedRead,

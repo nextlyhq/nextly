@@ -4,6 +4,11 @@ import "@fontsource-variable/jetbrains-mono";
 
 import "./globals.css";
 import { SITE_URL } from "@/lib/site-url";
+// Registers the app's "use cache" read function and starts Nextly, for every
+// route before any of them reads, during `next build` too: under Cache
+// Components Nextly's cached reads go through that function, and
+// `<SiteCode>` refuses to read without it.
+import "@/nextly/cached-read";
 
 /**
  * The faces are imported as STYLESHEETS from packages in `node_modules`, rather

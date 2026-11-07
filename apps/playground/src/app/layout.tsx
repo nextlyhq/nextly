@@ -3,6 +3,12 @@ import { SiteCode } from "@nextlyhq/plugin-page-builder/site";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
+// Registers the app's "use cache" read function and starts Nextly, for every
+// route before any of them reads, `/_not-found` during `next build` included:
+// `<SiteCode>` below refuses to read under Cache Components without the
+// function, and its read needs Nextly started. With Cache Components off,
+// `next.config.ts` resolves this to a variant that only starts Nextly.
+import "@/nextly/cached-read";
 
 /**
  * The document shell, and nothing else.
@@ -44,6 +50,8 @@ import "./globals.css";
  * page builder's docs tell a site not to do: this harness carries it in the
  * worst place on purpose, so the browser tests prove its own guard keeps the
  * code out of the admin, the canvas and the preview wherever it is mounted.
+ * Its read goes through the `"use cache"` function imported above, as the
+ * page builder's docs tell a site under Cache Components to do.
  *
  * @module app/layout
  */

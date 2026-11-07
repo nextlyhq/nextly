@@ -5,15 +5,25 @@
  * Components is on, and the directive works only in code Next.js compiles, so
  * Nextly reads through this function of the app's own. It receives the read's
  * key, its tags and its lifetime, and runs the reader Nextly registered for
- * that key. The query modules import this file, so it is registered wherever
- * content is read.
+ * that key. The root layout imports this file, so it is registered on every
+ * route before anything is read (`<SiteCode>` refuses to read without it),
+ * and the query modules import it too, so a module read on its own has it.
+ *
+ * The same import also starts Nextly with the app's config, so the root
+ * layout's import both registers the cached read and starts Nextly for every
+ * route, during `next build` too.
  *
  * It works with `cacheComponents: true` and Nextly's cache handlers in
  * `next.config.ts`, as this app ships:
  * https://nextlyhq.com/docs/guides/isr-caching#cache-components
  */
+import "server-only";
+
 import { cacheLife, cacheTag } from "next/cache";
+import { getNextly } from "nextly";
 import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
+
+import config from "@nextly-config";
 
 export async function cachedRead(
   key: string,
@@ -35,3 +45,11 @@ export async function cachedRead(
 }
 
 registerCachedRead(cachedRead, process.env.__NEXT_CACHE_COMPONENTS);
+
+// Starts Nextly as the root layout loads, so a read made before any page has
+// started it, such as the root layout's `<SiteCode>` on `/_not-found` while
+// `next build` prerenders, finds it starting and waits for it: nothing else
+// starts Nextly in a build's prerender workers. A failed start (the database
+// down, say) is caught here so it is not an unhandled rejection; the next
+// read waits for or retries the start, and reports it.
+void getNextly({ config }).catch(() => undefined);
