@@ -54,6 +54,14 @@ const ownBuckets: Promise<{
   truncated: boolean;
 }> = own.group("ledger", { groupBy: "kind" });
 
+// The same reads on a transaction the plugin holds take its token first, with
+// the same options after it and the same answer.
+declare const tx: Parameters<Parameters<typeof svc.withTransaction>[0]>[0];
+const ownTxList: Promise<PaginatedResult<unknown>> =
+  own.listEntriesInTransaction(tx, "ledger", q, { locale: "fr" });
+const ownTxSingle: Promise<Record<string, unknown>> =
+  own.getSingleInTransaction(tx, "settings");
+
 // Exported so eslint does not flag the assertions as unused.
 export const __d56TypeCheck = {
   q,
@@ -63,4 +71,6 @@ export const __d56TypeCheck = {
   ownList,
   ownTotal,
   ownBuckets,
+  ownTxList,
+  ownTxSingle,
 };

@@ -2317,13 +2317,24 @@ export abstract class DrizzleAdapter {
             undefined
           );
         }
+        // The shared lock is refused on the pool for the same reason.
+        if (options?.forShare && !executor) {
+          throw this.createDatabaseError(
+            "query",
+            "forShare requires a transaction executor: a lock request on the pooled connection takes no durable lock and cannot prevent a concurrent write.",
+            undefined
+          );
+        }
 
         // Row-lock the selected rows for the rest of the transaction and read the
         // latest committed values (not the transaction's snapshot). SQLite has no
         // FOR UPDATE and needs none (BEGIN IMMEDIATE serializes its writers), so
-        // it is skipped there.
+        // it is skipped there. A shared lock is the same read with a lock other
+        // readers may also hold; the exclusive one wins when both are asked.
         if (options?.forUpdate && this.dialect !== "sqlite") {
           query = query.for("update");
+        } else if (options?.forShare && this.dialect !== "sqlite") {
+          query = query.for("share");
         }
 
         return (await query) as T[];
