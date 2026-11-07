@@ -25,9 +25,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ENTRY_DESIGN_SECTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
+  TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
-import { TEMPLATE_ADDRESS_FIELD_COMPONENT } from "../collections/templates";
+import {
+  TEMPLATE_ADDRESS_FIELD_COMPONENT,
+  TEMPLATE_COLLECTION_FIELD_COMPONENT,
+} from "../collections/templates";
 import { BLOCKS_FIELD_COMPONENT } from "../fields/blocksField";
 
 // Captured rather than reconstructed. The assertion is about what this module
@@ -90,6 +94,7 @@ describe("the admin entry's component registration", () => {
       for (const path of [
         ENTRY_DESIGN_SECTION_COMPONENT,
         TEMPLATE_OWN_DESIGNS_COMPONENT,
+        TEMPLATE_DESIGN_DETAILS_COMPONENT,
         TEMPLATE_DELETE_COMPONENT,
       ]) {
         expect(registered[path], path).toBeTypeOf("function");
@@ -99,10 +104,13 @@ describe("the admin entry's component registration", () => {
   );
 
   it(
-    "registers the exact specifier the template address field declares",
+    "registers the exact specifiers the template address and collection fields declare",
     async () => {
       await import("./index");
       expect(registered[TEMPLATE_ADDRESS_FIELD_COMPONENT]).toBeTypeOf(
+        "function"
+      );
+      expect(registered[TEMPLATE_COLLECTION_FIELD_COMPONENT]).toBeTypeOf(
         "function"
       );
     },
