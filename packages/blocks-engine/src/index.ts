@@ -1333,6 +1333,11 @@ export type {
 // The bound props a visitor will not see: the page's own binding check, asked
 // with the field shapes a visitor may read, for an editor to say so.
 export { visitorUnreadableBindings } from "./visitor-unreadable-bindings";
+export {
+  SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_FIELD_TYPES,
+  type SiteSettingName,
+} from "./site-setting-fields";
 export type {
   VisitorUnreadableBinding,
   VisitorUnreadableInput,

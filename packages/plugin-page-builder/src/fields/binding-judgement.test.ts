@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   composedBindingIssues,
+  currentBindingProblems,
   newBindingIssues,
   type DeclaredShapesReader,
 } from "./binding-judgement";
@@ -283,6 +284,55 @@ describe("a write's bindings judged against the declared schema", () => {
       { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
     );
     expect(issues).toEqual([]);
+  });
+});
+
+describe("a binding to the site settings", () => {
+  const site = (name: string) => heading(name, { $bind: name, source: "site" });
+
+  it("refuses a setting a page is never handed, and reads no source for it", async () => {
+    const read = vi.fn(shapesOf);
+    const issues = await newBindingIssues(
+      page(site("applicationName"), site("adminEmail")),
+      args(),
+      "Content",
+      {
+        shapesOf: read,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
+    );
+    // The settings are the engine's fixed table, never a registry read.
+    expect(read).not.toHaveBeenCalled();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ code: "binding-field-missing" });
+    expect(issues[0]?.message).toContain("/nodes/1/bindings/text");
+  });
+
+  it("lets every setting the renderer hands a page through", async () => {
+    const issues = await newBindingIssues(
+      page(...["applicationName", "siteUrl", "logoUrl", "timezone"].map(site)),
+      args(),
+      "Content",
+      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+    );
+    expect(issues).toEqual([]);
+  });
+
+  it("keeps one the stored page already held, and the report lists it", async () => {
+    const value = page(site("adminEmail"));
+    expect(
+      await newBindingIssues(value, args(), "Content", {
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [value as never] }),
+      })
+    ).toEqual([]);
+    const now = await currentBindingProblems(
+      value as never,
+      { collection: "posts" },
+      { shapesOf }
+    );
+    expect(now.found).toHaveLength(1);
+    expect(now.found[0]).toMatchObject({ code: "binding-field-missing" });
   });
 });
 
