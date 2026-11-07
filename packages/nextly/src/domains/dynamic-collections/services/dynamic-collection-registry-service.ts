@@ -670,7 +670,10 @@ export class DynamicCollectionRegistryService extends BaseService {
 
   /**
    * Lock the registry rows of `slugs` inside `tx`, and answer the slugs whose
-   * row is there, with how to end the hold early (`release`).
+   * row is there, the id of each row held (`ids`, by slug), and how to end the
+   * hold early (`release`). The ids tell a caller that loaded the rows before
+   * taking the hold whether the row it now holds is the one it loaded: a slug
+   * deleted and created again between the two holds a new row.
    *
    * `"update"` is a collection delete's: taken before it removes anything, so
    * a write holding a row for `"share"` (one that must not outlive the
@@ -694,30 +697,40 @@ export class DynamicCollectionRegistryService extends BaseService {
     tx: TransactionContext,
     slugs: readonly string[],
     strength: "share" | "update"
-  ): Promise<{ existing: string[]; release: () => Promise<void> }> {
+  ): Promise<{
+    existing: string[];
+    ids: ReadonlyMap<string, string>;
+    release: () => Promise<void>;
+  }> {
     const none = async (): Promise<void> => undefined;
-    if (slugs.length === 0) return { existing: [], release: none };
+    if (slugs.length === 0) {
+      return { existing: [], ids: new Map(), release: none };
+    }
     const named =
       this.dialect === "mysql"
         ? await takeNamedCollectionLocks(tx, slugs)
         : { release: none };
-    let rows: { slug: string }[];
+    let rows: { slug: string; id: unknown }[];
     try {
-      rows = await tx.select<{ slug: string }>("dynamic_collections", {
-        columns: ["slug"],
-        where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
-        ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
-      });
+      rows = await tx.select<{ slug: string; id: unknown }>(
+        "dynamic_collections",
+        {
+          columns: ["slug", "id"],
+          where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
+          ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
+        }
+      );
     } catch (error) {
       await named.release();
       throw error;
     }
     const existing = rows.map(row => row.slug);
+    const ids = new Map(rows.map(row => [row.slug, String(row.id)]));
     if (strength === "share") {
       await named.release();
-      return { existing, release: none };
+      return { existing, ids, release: none };
     }
-    return { existing, release: named.release };
+    return { existing, ids, release: named.release };
   }
 
   /**

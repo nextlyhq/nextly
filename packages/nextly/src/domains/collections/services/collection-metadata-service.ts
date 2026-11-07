@@ -39,6 +39,8 @@ import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
 
 /** The parts of a collection's registry row its delete reads. */
 interface DeletedCollectionRow {
+  /** The registry row's id: a slug deleted and created again names a new one. */
+  id?: unknown;
   tableName: string;
   fields?: FieldDefinition[];
   /** Set on a code-first collection's row: its definition is the code's. */
@@ -1357,6 +1359,10 @@ export class CollectionMetadataService extends BaseService {
         // it, and it belongs to this connection, which the transaction hands
         // back next.
         try {
+          // The rows held must be the rows loaded: a slug deleted and created
+          // again since names a new collection, which this delete must not
+          // touch. Refused here, before anything is removed.
+          assertHeldAsLoaded(ordered, hold.ids);
           // The plugins' handlers next: what they remove is plain rows, so
           // here, before any DDL, a handler that throws rolls the whole
           // delete back on every dialect, MySQL included, whose table drops
@@ -1490,6 +1496,41 @@ export class CollectionMetadataService extends BaseService {
 
 /** A statement that changes the schema: on MySQL it commits what ran before it. */
 const DDL_STATEMENT = /^\s*(drop|alter|create|truncate|rename)\b/i;
+
+/**
+ * Refuse a delete whose held registry rows are not the rows it loaded.
+ *
+ * The rows are loaded before the delete takes its hold, so another delete can
+ * remove one in between, and a create can register the slug again. The row
+ * the hold then finds is a different collection, or none, and the delete,
+ * working from what it loaded, would remove that collection's plugin rows and
+ * registry row. A row loaded without an id is compared by its presence alone.
+ */
+function assertHeldAsLoaded(
+  ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
+  held: ReadonlyMap<string, string>
+): void {
+  const changed = ordered
+    .filter(({ slug, collection }) => {
+      const id = held.get(slug);
+      if (id === undefined) return true;
+      return (
+        collection.id !== undefined &&
+        collection.id !== null &&
+        String(collection.id) !== id
+      );
+    })
+    .map(({ slug }) => slug);
+  if (changed.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `${changed.map(slug => `"${slug}"`).join(", ")} changed while it was being deleted. Nothing was removed: refresh and delete it again.`,
+    logContext: {
+      reason: "collection-delete-row-replaced",
+      collections: changed,
+    },
+  });
+}
 
 /**
  * `adapter`, telling `onDdl` before each schema-changing statement its

@@ -2023,7 +2023,7 @@ export class DynamicCollectionService extends BaseService {
     tx: TransactionContext,
     slugs: readonly string[],
     strength: "share" | "update"
-  ): Promise<{ existing: string[]; release: () => Promise<void> }> {
+  ): ReturnType<DynamicCollectionRegistryService["holdCollectionsIn"]> {
     return this.registryService.holdCollectionsIn(tx, slugs, strength);
   }
 
