@@ -6,6 +6,9 @@
  * with `&entry=<id>` beside the collection, it answers that entry's own
  * design alone, which is how a surface asks whether an entry has one: the
  * list is capped, so its absence from the list says nothing. Asked with
+ * `&entries=<id>,<id>`, it answers the own designs of those entries alone,
+ * which is how the entry list's Design column marks the rows on its screen
+ * whose designs lie past the capped list. Asked with
  * `?template=<id>` instead, it answers for the collection that template is
  * about, or, for an entry's own design, for that entry alone, which is how a
  * template's own screens find it.
@@ -41,9 +44,9 @@
  * The collection's template is the one row naming the collection; its own
  * designs are the rows naming it as their entry's collection, an indexed
  * field, newest edit first, a page of {@link ENTRY_DESIGNS_MAX} at a time, or
- * the one row holding an entry's unique key; and, for each page, the entries
- * those name that the caller may read, by id. Each selects only the columns
- * it needs.
+ * the rows holding the unique keys of the entries asked about, in one read;
+ * and, for each page, the entries those name that the caller may read, by
+ * id. Each selects only the columns it needs.
  *
  * @experimental Settles when collection templates ship.
  * @module templates/entry-designs-route
@@ -68,6 +71,7 @@ import { readingAsUser } from "../library-route";
 import { parseRouteQuery } from "../route-query";
 
 import {
+  ENTRY_DESIGNS_ENTRIES_MAX,
   ENTRY_DESIGNS_MAX,
   ENTRY_DESIGNS_PARAMS,
   ENTRY_DESIGNS_ROUTE_PATH,
@@ -94,15 +98,34 @@ export const ENTRY_DESIGNS_SCAN_PAGES = 10;
 const QUERY_ID = z.string().trim().min(1).max(512);
 
 /**
+ * Entry ids as a query carries them: comma-separated, each trimmed, blanks
+ * dropped and repeats folded, so `a,,a, b` names two entries. At least one
+ * and at most {@link ENTRY_DESIGNS_ENTRIES_MAX}: more is refused rather than
+ * cut, since a cut list answers for entries other than the ones asked about.
+ */
+const QUERY_IDS = z
+  .string()
+  .transform(value => [
+    ...new Set(
+      value
+        .split(",")
+        .map(id => id.trim())
+        .filter(id => id !== "")
+    ),
+  ])
+  .pipe(z.array(QUERY_ID).min(1).max(ENTRY_DESIGNS_ENTRIES_MAX));
+
+/**
  * The route's query: the collection whose own designs are listed, with one
- * of its entries to answer for alone, or a template whose collection is
- * meant. A collection or a template, never both; an entry only with a
- * collection.
+ * of its entries, or some of them, to answer for alone, or a template whose
+ * collection is meant. A collection or a template, never both; an entry or
+ * entries only with a collection, and never both.
  */
 const ENTRY_DESIGNS_QUERY = z
   .object({
     [ENTRY_DESIGNS_PARAMS.collection]: QUERY_ID.optional(),
     [ENTRY_DESIGNS_PARAMS.entry]: QUERY_ID.optional(),
+    [ENTRY_DESIGNS_PARAMS.entries]: QUERY_IDS.optional(),
     [ENTRY_DESIGNS_PARAMS.template]: QUERY_ID.optional(),
   })
   .refine(
@@ -116,7 +139,26 @@ const ENTRY_DESIGNS_QUERY = z
       query[ENTRY_DESIGNS_PARAMS.entry] === undefined ||
       query[ENTRY_DESIGNS_PARAMS.collection] !== undefined,
     { message: "Name an entry only with its collection." }
+  )
+  .refine(
+    query =>
+      query[ENTRY_DESIGNS_PARAMS.entries] === undefined ||
+      (query[ENTRY_DESIGNS_PARAMS.collection] !== undefined &&
+        query[ENTRY_DESIGNS_PARAMS.entry] === undefined),
+    { message: "Name entries only with their collection, and not an entry." }
   );
+
+/** The route's query, read from `url`, or a validation error naming it. */
+export function parseEntryDesignsQuery(
+  url: string | URL
+): z.output<typeof ENTRY_DESIGNS_QUERY> {
+  return parseRouteQuery(
+    url,
+    Object.values(ENTRY_DESIGNS_PARAMS),
+    ENTRY_DESIGNS_QUERY,
+    "entry designs route"
+  );
+}
 
 /** What the read is built with: the template guard's own lookups. */
 export interface EntryDesignsSetup {
@@ -126,11 +168,16 @@ export interface EntryDesignsSetup {
 /** The slice of the route context the read uses. */
 type EntryDesignsContext = Pick<PluginRouteContext, "caller">;
 
-/** What one read is about: a collection, and perhaps one entry of it. */
+/** What one read is about: a collection, and perhaps some entries of it. */
 export interface EntryDesignsAsk {
   readonly collection: string;
   /** One entry to answer for alone; the collection's list when absent. */
   readonly entry?: string;
+  /**
+   * Entries to answer for alone, at most {@link ENTRY_DESIGNS_ENTRIES_MAX};
+   * never beside `entry`. The collection's list when absent.
+   */
+  readonly entries?: readonly string[];
 }
 
 /** What the read needs to find templates, injected so it is tested alone. */
@@ -254,7 +301,11 @@ export async function askOfTemplate(
     : { collection: "" };
 }
 
-/** The own design rows `ask` is about, from the indexed field or the key. */
+/**
+ * The own design rows `ask` is about, from the indexed field or the unique
+ * keys of the entries asked about. Each entry has at most one own design, so
+ * a read of the keys holds them all in one page.
+ */
 function designsQuery(
   ask: EntryDesignsAsk
 ): Parameters<EntryDesignsReads["templates"]>[0] {
@@ -265,6 +316,18 @@ function designsQuery(
     updatedAt: true,
     [TEMPLATE_ENTRY_ID_FIELD]: true,
   };
+  if (ask.entries !== undefined) {
+    return {
+      where: {
+        [TEMPLATE_ENTRY_FIELD]: {
+          in: ask.entries.map(id => entryDesignKey(ask.collection, id)),
+        },
+      },
+      limit: ask.entries.length,
+      select,
+      sort: ["-updatedAt", "id"],
+    };
+  }
   return ask.entry === undefined
     ? {
         where: {
@@ -530,20 +593,20 @@ export function entryDesignsRoute(setup: EntryDesignsSetup): {
     method: "GET",
     path: ENTRY_DESIGNS_ROUTE_PATH,
     handler: async (req, ctx) => {
-      const query = parseRouteQuery(
-        req.url,
-        Object.values(ENTRY_DESIGNS_PARAMS),
-        ENTRY_DESIGNS_QUERY,
-        "entry designs route"
-      );
+      const query = parseEntryDesignsQuery(req.url);
       const guard = setup.guard();
       const reads = directEntryDesignsReads(ctx, guard.templatesCollection);
       const collection = query[ENTRY_DESIGNS_PARAMS.collection];
       const entry = query[ENTRY_DESIGNS_PARAMS.entry];
+      const entries = query[ENTRY_DESIGNS_PARAMS.entries];
       const template = query[ENTRY_DESIGNS_PARAMS.template];
       const ask: EntryDesignsAsk =
         collection !== undefined
-          ? { collection, ...(entry === undefined ? {} : { entry }) }
+          ? {
+              collection,
+              ...(entry === undefined ? {} : { entry }),
+              ...(entries === undefined ? {} : { entries }),
+            }
           : template === undefined
             ? { collection: "" }
             : await askOfTemplate(template, reads);

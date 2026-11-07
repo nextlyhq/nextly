@@ -52,6 +52,8 @@ function harness(options: {
   } | null)[];
 }) {
   const steps: string[] = [];
+  // The transaction each lifecycle read was asked on.
+  const lifecycleReads: { collection: string; tx: unknown }[] = [];
   let read = 0;
   // The claims the store holds: one for an entry of a collection renamed away.
   const storedClaims = (read: {
@@ -126,7 +128,10 @@ function harness(options: {
       return options.mayHaveTemplate;
     },
     storedAddressProblem: () => null,
-    lifecycle: async () => true,
+    lifecycle: async (collection, tx) => {
+      lifecycleReads.push({ collection, tx });
+      return true;
+    },
     pages: "pages",
     pagesBackfilled: () => true,
     pagesWithSlugs: async () => [],
@@ -142,6 +147,9 @@ function harness(options: {
     },
     deps
   );
+  // The transaction every write below runs in, so a read can be told
+  // apart as one made on it.
+  const transaction = {};
   const save = (
     collection: string,
     data: Record<string, unknown> = {
@@ -155,11 +163,11 @@ function harness(options: {
       operation: "update",
       id: "e1",
       data,
-      transaction: {},
+      transaction,
     });
   const writeTemplate = (write: Record<string, unknown>) =>
-    handlers.get("templates")?.({ transaction: {}, ...write });
-  return { steps, save, writeTemplate };
+    handlers.get("templates")?.({ transaction, ...write });
+  return { steps, lifecycleReads, transaction, save, writeTemplate };
 }
 
 describe("an entry's save in a collection not given an address in code", () => {
@@ -185,6 +193,16 @@ describe("an entry's save in a collection not given an address in code", () => {
       "read template of events",
       "claim /events/launch",
     ]);
+  });
+
+  it("asks whether the collection has a Draft/Published lifecycle on the save's transaction", async () => {
+    const { steps, lifecycleReads, transaction, save } = harness({
+      mayHaveTemplate: true,
+      template: { published: true, address: ["events"] },
+    });
+    await save("events");
+    expect(steps).toContain("claim /events/launch");
+    expect(lifecycleReads).toEqual([{ collection: "events", tx: transaction }]);
   });
 
   it("holds an existing template's row before the collection's lock, as a template's own write does", async () => {
@@ -233,5 +251,30 @@ describe("a template pointed at another collection", () => {
       data: { id: "t1", collection: "events", status: "draft", address: null },
     });
     expect(steps).toContain("delete c1");
+  });
+});
+
+describe("a template's publish", () => {
+  it("asks whether its collection has a Draft/Published lifecycle on the publish's transaction", async () => {
+    const { lifecycleReads, transaction, writeTemplate } = harness({
+      mayHaveTemplate: true,
+    });
+    await writeTemplate({
+      operation: "update",
+      id: "t1",
+      originalData: {
+        id: "t1",
+        collection: "events",
+        status: "draft",
+        address: "/events",
+      },
+      data: {
+        id: "t1",
+        collection: "events",
+        status: "published",
+        address: "/events",
+      },
+    });
+    expect(lifecycleReads).toEqual([{ collection: "events", tx: transaction }]);
   });
 });
