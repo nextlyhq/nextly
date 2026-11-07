@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   builderAddress,
   fieldBuilderAddress,
+  openAtFromSearch,
   sectionAddress,
   sectionFromSearch,
 } from "./builder-address";
@@ -168,5 +169,22 @@ describe("sectionFromSearch", () => {
     expect(sectionFromSearch("?field=body")).toBeUndefined();
     expect(sectionFromSearch("?field=body&section=")).toBeUndefined();
     expect(sectionFromSearch("")).toBeUndefined();
+  });
+});
+
+describe("openAtFromSearch", () => {
+  it("opens at the section an address names, before any block", () => {
+    expect(openAtFromSearch("?section=plans&block=nested")).toEqual({
+      sectionId: "plans",
+    });
+  });
+
+  it("opens at a block when the address names no section", () => {
+    expect(openAtFromSearch("?block=nested")).toEqual({ blockId: "nested" });
+  });
+
+  it("opens at neither when the address names neither, or names them empty", () => {
+    expect(openAtFromSearch("")).toEqual({});
+    expect(openAtFromSearch("?section=&block=")).toEqual({});
   });
 });

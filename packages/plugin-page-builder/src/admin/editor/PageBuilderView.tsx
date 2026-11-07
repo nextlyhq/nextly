@@ -26,7 +26,7 @@ import { PageBuilderCard } from "../PageBuilderCard";
 import { useRestingPageRender } from "../use-resting-page-render";
 
 import { BlocksEditor } from "./BlocksEditor";
-import { sectionFromSearch } from "./builder-address";
+import { openAtFromSearch } from "./builder-address";
 import { rememberBuilderReturn } from "./builder-return";
 import { rowGuardedWrite } from "./row-commit";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
@@ -73,7 +73,7 @@ function BoundEditor({
   const [openAt] = useState(() =>
     typeof window === "undefined"
       ? undefined
-      : sectionFromSearch(window.location.search)
+      : openAtFromSearch(window.location.search)
   );
   return (
     <BlocksEditor

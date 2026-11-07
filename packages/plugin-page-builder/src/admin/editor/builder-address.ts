@@ -140,6 +140,15 @@ export function documentBuilderPath(collection: string, id: string): string {
 }
 
 /**
+ * The admin's screen for a new entry of `collection`, as its own route
+ * table spells it (`/admin/collections/<slug>/create`): where the template
+ * preview's New opens.
+ */
+export function entryCreatePath(collection: string): string {
+  return `/admin/collections/${encodeURIComponent(collection)}/create`;
+}
+
+/**
  * The query key naming the section the builder opens at.
  *
  * The admin keeps the same key in its list of a view's own address keys, so
@@ -169,6 +178,39 @@ export function addressWithoutSection(href: string): string {
   params.delete(SECTION_PARAM);
   const rest = params.toString();
   return rest === "" ? path : `${path}?${rest}`;
+}
+
+/**
+ * The query key naming a block, at any depth, the builder opens at: what a
+ * report of a page's broken bindings links each binding's block by.
+ */
+const BLOCK_PARAM = "block";
+
+/** The builder's address `href`, opened at the block `blockId`. */
+export function blockAddress(href: string, blockId: string): string {
+  const [path = "", query = ""] = href.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.set(BLOCK_PARAM, blockId);
+  return `${path}?${params.toString()}`;
+}
+
+/** Where an address opens the builder: a section of the page, or a block. */
+export interface OpenAt {
+  /** A top-level block, as the entry screen links each section. */
+  readonly sectionId?: string;
+  /** A block at any depth, as the bindings report links each binding. */
+  readonly blockId?: string;
+}
+
+/**
+ * Where an address opens the builder: the section it names, else the block;
+ * neither where it names neither.
+ */
+export function openAtFromSearch(search: string): OpenAt {
+  const section = sectionFromSearch(search);
+  if (section !== undefined) return { sectionId: section };
+  const block = new URLSearchParams(search).get(BLOCK_PARAM);
+  return block === null || block === "" ? {} : { blockId: block };
 }
 
 /**

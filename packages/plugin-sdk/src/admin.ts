@@ -638,6 +638,9 @@ export type { AdminChromeLayer } from "@nextlyhq/admin";
  * admin's lists, and contribute cell renderers, columns, column transforms, and
  * row/bulk actions to any list. Contributions are keyed by a list `target`: a
  * collection slug, a fixed key like `"users"`/`"media"`, or `"*"` for all lists.
+ * Each registration returns the function that takes it back; a list on screen
+ * follows both, so a contribution that depends on something the admin can
+ * change while open need not wait for the list to be opened again.
  */
 export {
   DataTable,

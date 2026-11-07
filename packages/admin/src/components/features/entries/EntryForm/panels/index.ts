@@ -1,2 +1,2 @@
-export { DocumentPanel } from "./DocumentPanel";
+export { DocumentPanel, PanelSectionsAboveForm } from "./DocumentPanel";
 export type { DocumentPanelProps } from "./DocumentPanel";
