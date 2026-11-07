@@ -39,14 +39,31 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
-const readTransaction = new AsyncLocalStorage<TransactionContext>();
+/**
+ * The transaction a scope's reads run on, and whether the scope's own work
+ * is still running. Work that outlives it (an effect registered inside it
+ * and run after its transaction commits, which may open a transaction of
+ * its own on the same adapter) inherits the record, finds it closed, and
+ * reads on the pool, never on the finished transaction.
+ */
+interface ReadScope {
+  readonly tx: TransactionContext;
+  live: boolean;
+}
+
+const readTransaction = new AsyncLocalStorage<ReadScope>();
 
 /** Run `work` with every read its services make routed to `tx`. */
-export function runReadsInTransaction<T>(
+export async function runReadsInTransaction<T>(
   tx: TransactionContext,
   work: () => Promise<T>
 ): Promise<T> {
-  return readTransaction.run(tx, work);
+  const scope: ReadScope = { tx, live: true };
+  try {
+    return await readTransaction.run(scope, work);
+  } finally {
+    scope.live = false;
+  }
 }
 
 /** What the scope asks of an adapter. */
@@ -64,8 +81,10 @@ export type ReadingAdapter = Pick<
 function readTransactionOf(
   adapter: Pick<DrizzleAdapter, "transactionOpenInFlow">
 ): TransactionContext | undefined {
-  const tx = readTransaction.getStore();
-  return tx !== undefined && adapter.transactionOpenInFlow() ? tx : undefined;
+  const scope = readTransaction.getStore();
+  return scope !== undefined && scope.live && adapter.transactionOpenInFlow()
+    ? scope.tx
+    : undefined;
 }
 
 /** The views handed out, per adapter and transaction, so each is built once. */
@@ -85,6 +104,21 @@ const viewed = new WeakMap<object, DrizzleAdapter>();
  */
 export function pooledAdapterOf(adapter: DrizzleAdapter): DrizzleAdapter {
   return viewed.get(adapter) ?? adapter;
+}
+
+/**
+ * The database connection `value` stands for, as a cache keyed by
+ * connection should key it: the adapter behind a view, or `value` itself. A
+ * verdict observed through the pool then serves a read routed to a
+ * transaction, and the other way round.
+ */
+export function connectionOf(value: object): object {
+  return viewed.get(value) ?? value;
+}
+
+/** Whether `value` is a view reading on a transaction (see {@link adapterForReads}). */
+export function readsOnTransaction(value: object): boolean {
+  return viewed.has(value);
 }
 
 /**

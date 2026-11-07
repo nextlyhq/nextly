@@ -17,9 +17,11 @@ import { BaseService } from "../../base-service";
 import { consoleLogger } from "../../types";
 import {
   adapterForReads,
+  connectionOf,
   lockedForRead,
   pooledAdapterOf,
   readLocksRows,
+  readsOnTransaction,
   runReadsInTransaction,
 } from "../read-transaction-scope";
 
@@ -119,6 +121,41 @@ describe("a read routed to a transaction", () => {
     // A service built from the view holds the adapter itself.
     expect(pooledAdapterOf(view)).toBe(adapter);
     expect(new Reader(view, consoleLogger).handle()).toBe(POOL);
+  });
+
+  it("reads on the pool from work that outlives the scope, even with another transaction open in its flow", async () => {
+    // Open in the flow throughout, as for an effect that runs after the
+    // scope's transaction commits and opens one of its own.
+    const { adapter } = standInAdapter("postgresql", true);
+    let release = (): void => {};
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let seen: unknown;
+    let after: Promise<void> = Promise.resolve();
+    await runReadsInTransaction(standInTransaction(), async () => {
+      // The control: inside the scope a service reads on the transaction.
+      expect(new Reader(adapter, consoleLogger).handle()).toBe(
+        TX_WITH_RELATIONS
+      );
+      after = gate.then(() => {
+        seen = new Reader(adapter, consoleLogger).handle();
+      });
+    });
+    release();
+    await after;
+    expect(seen).toBe(POOL);
+  });
+
+  it("keys a view as the connection behind it, and says it reads on a transaction", async () => {
+    const { adapter } = standInAdapter("postgresql");
+    await runReadsInTransaction(standInTransaction(), async () => {
+      const view = adapterForReads(adapter);
+      expect(connectionOf(view)).toBe(adapter);
+      expect(readsOnTransaction(view)).toBe(true);
+    });
+    expect(connectionOf(adapter)).toBe(adapter);
+    expect(readsOnTransaction(adapter)).toBe(false);
   });
 
   it("reads on the pool once the transaction is no longer open in the flow", async () => {
