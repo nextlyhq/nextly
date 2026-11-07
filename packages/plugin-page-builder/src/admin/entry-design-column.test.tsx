@@ -4,16 +4,19 @@
  * The entry list's Design column: offered only on the lists of collections
  * with a template or own designs, decided by one read per collection rather
  * than one per list draw, taken back when a later settled read says the
- * collection has neither, and each cell marking an own design with the one
- * pill.
+ * collection has neither, each cell marking an own design with the one
+ * pill, and, where the collection's answer is capped, the rows on screen
+ * looked up by their ids in one request for the page.
  *
  * The property separating this from a plausible broken column is that the
  * provider on every list adds NOTHING itself: a provider that returned the
  * column for every list would put "Design" on the users list too. And a
  * column kept for good once given would go on calling every entry
- * "Template" after its template was deleted.
+ * "Template" after its template was deleted. And a column that looked up
+ * each row on its own would ask the server once per row.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntryDesignsResponse } from "../templates/entry-designs-contract";
@@ -29,6 +32,12 @@ let cellRead: {
   error: Error | null;
   fetching?: boolean;
 } = { data: undefined, error: null };
+/** The lookup of the rows on screen: what it answers, and each path asked. */
+let lookupRead: {
+  data: EntryDesignsResponse | undefined;
+  error: Error | null;
+} = { data: undefined, error: null };
+const lookups: string[] = [];
 
 /** `entry` added to `list`, with the removal the registry hands back. */
 function listed<T>(list: T[], entry: T): () => void {
@@ -51,12 +60,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     );
     return Promise.resolve(answers[collection ?? ""]);
   },
-  usePluginRoute: () => ({
-    pending: false,
-    fetching: false,
-    refetch: () => {},
-    ...cellRead,
-  }),
+  usePluginRoute: ({ path, enabled }: { path: string; enabled?: boolean }) => {
+    const settled = { pending: false, fetching: false, refetch: () => {} };
+    if (!path.includes("&entries=")) return { ...settled, ...cellRead };
+    // A held read asks nothing and has nothing.
+    if (enabled === false) return { ...settled, data: undefined, error: null };
+    lookups.push(path);
+    return { ...settled, ...lookupRead };
+  },
 }));
 
 const { DesignCell, designAfterStatus, registerEntryDesignColumn } =
@@ -102,7 +113,37 @@ function columnsOf(target: string): { name?: string; header?: unknown }[] {
 afterEach(() => {
   cleanup();
   cellRead = { data: undefined, error: null };
+  lookupRead = { data: undefined, error: null };
+  lookups.length = 0;
 });
+
+const BLOG_POST = {
+  id: "t1",
+  title: "Blog post",
+  status: "published",
+} as const;
+
+/** An own design of `entryId`, as the read lists it. */
+function ownDesign(entryId: string): EntryDesignsResponse["items"][number] {
+  return {
+    id: `d-${entryId}`,
+    entryId,
+    title: entryId,
+    status: "published",
+    updatedAt: null,
+  };
+}
+
+/** One cell for each of `ids`, as a list page draws them. */
+function page(ids: string[]) {
+  return (
+    <>
+      {ids.map(id => (
+        <DesignCell key={id} collection="posts" row={{ id }} />
+      ))}
+    </>
+  );
+}
 
 describe("the Design column", () => {
   it("is added only to a collection with a template, after one read of it", async () => {
@@ -276,19 +317,22 @@ describe("the Design column", () => {
     expect(screen.getByText("Template")).toBeTruthy();
   });
 
-  it("says nothing of an entry past a list cut at its bound", () => {
-    cellRead = {
-      data: answer(
-        { id: "t1", title: "Blog post", status: "published" },
-        [],
-        true
-      ),
-      error: null,
-    };
-    const { container } = render(
-      <DesignCell collection="posts" row={{ id: "p9" }} />
+  it("draws on the server, before any row on screen is known", () => {
+    // React asks a store its server snapshot here, and refuses to render a
+    // store that has none, so a list loaded directly would fail to draw.
+    cellRead = { data: answer(BLOG_POST, [ownDesign("p1")]), error: null };
+    const html = renderToString(
+      <DesignCell collection="posts" row={{ id: "p1" }} />
     );
-    expect(container.innerHTML).toBe("");
+    expect(html).toContain("Own design");
+  });
+
+  it("asks no lookup of the rows when the collection's answer is whole", () => {
+    cellRead = { data: answer(BLOG_POST, [ownDesign("p1")]), error: null };
+    render(page(["p1", "p2"]));
+    expect(screen.getByText("Own design")).toBeTruthy();
+    expect(screen.getByText("Template")).toBeTruthy();
+    expect(lookups).toEqual([]);
   });
 
   it("holds the pill's place while the read is out", () => {
@@ -297,6 +341,56 @@ describe("the Design column", () => {
     );
     expect(container.querySelector("[aria-hidden='true']")).not.toBeNull();
     expect(container.textContent).toBe("");
+  });
+});
+
+describe("the rows on screen, past a capped answer", () => {
+  it("marks a row whose own design lies past the cap, from one lookup for the page", async () => {
+    // The collection's answer is cut at its bound and lists none of these
+    // rows; the lookup by id finds p9's own design.
+    cellRead = { data: answer(BLOG_POST, [], true), error: null };
+    lookupRead = { data: answer(BLOG_POST, [ownDesign("p9")]), error: null };
+    render(page(["p2", "p9", "p1"]));
+
+    await waitFor(() => expect(screen.getByText("Own design")).toBeTruthy());
+    // The rows it finds none for are drawn with the template, which only the
+    // lookup can say.
+    expect(screen.getAllByText("Template")).toHaveLength(2);
+    // One path for the whole page, never one per row.
+    expect([...new Set(lookups)]).toEqual([
+      "/templates/entry-designs?collection=posts&entries=p1,p2,p9",
+    ]);
+  });
+
+  it("asks again for the next page's rows alone", async () => {
+    cellRead = { data: answer(BLOG_POST, [], true), error: null };
+    lookupRead = { data: answer(BLOG_POST, [ownDesign("p4")]), error: null };
+    const { rerender } = render(page(["p1", "p2"]));
+    await waitFor(() => expect(lookups.length).toBeGreaterThan(0));
+
+    lookups.length = 0;
+    rerender(page(["p3", "p4"]));
+    await waitFor(() => expect(screen.getByText("Own design")).toBeTruthy());
+    expect([...new Set(lookups)]).toEqual([
+      "/templates/entry-designs?collection=posts&entries=p3,p4",
+    ]);
+  });
+
+  it("holds the pill's place while the lookup is out, and claims nothing if it fails", async () => {
+    cellRead = { data: answer(BLOG_POST, [], true), error: null };
+    const { container } = render(page(["p1"]));
+    await waitFor(() => expect(lookups.length).toBeGreaterThan(0));
+    expect(container.querySelector("[aria-hidden='true']")).not.toBeNull();
+    expect(container.textContent).toBe("");
+    cleanup();
+
+    // A capped answer cannot say a row has none, so a failed lookup leaves
+    // the cell empty rather than calling it "Template".
+    lookupRead = { data: undefined, error: new Error("offline") };
+    lookups.length = 0;
+    const failed = render(page(["p1"]));
+    await waitFor(() => expect(lookups.length).toBeGreaterThan(0));
+    expect(failed.container.innerHTML).toBe("");
   });
 });
 

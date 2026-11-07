@@ -29,6 +29,7 @@ import {
   type PluginCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
+  type PluginRouteIdentity,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
@@ -69,10 +70,15 @@ import {
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
+import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
 import { layoutRegionsOf } from "./bindings-report/layout-regions";
-import { readableAsCaller } from "./bindings-report/readable";
+import {
+  readableAsCaller,
+  readableSingles,
+  visibleBindings,
+} from "./bindings-report/readable";
 import { bindingsToFixRoute } from "./bindings-report/route";
 import {
   registerBindingReportOnWrite,
@@ -80,6 +86,11 @@ import {
   type BindingReportDeps,
 } from "./bindings-report/scan";
 import { bindingReportStore } from "./bindings-report/store";
+import {
+  bindingsToFixAttention,
+  bindingsToFixWidget,
+  EDIT_PAGES_PERMISSION,
+} from "./bindings-report/widget";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -100,6 +111,7 @@ import {
   nameDocumentsOnSite,
 } from "./breakpoint-removal/site-counter";
 import {
+  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
@@ -1901,6 +1913,24 @@ export const pageBuilder = (
     },
   };
   let bindingsKickedAt = 0;
+  /**
+   * How many broken bindings a person may see, read as them by the report
+   * route's own read, for the dashboard's card and attention line.
+   */
+  const bindingsVisibleTo = async (
+    user: PluginRouteIdentity["user"]
+  ): Promise<number> => {
+    const ctx = bindingReportCtx;
+    const store = bindingReportDeps.store();
+    if (ctx === null || store === null) return 0;
+    return visibleBindings(
+      {
+        caller: { identity: () => Promise.resolve({ user }) },
+        services: ctx.services,
+      },
+      await store.list()
+    );
+  };
   /** The latest save among the documents named, for the fingerprint. */
   const latestSave = async (collections: readonly string[]) => {
     const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
@@ -2887,15 +2917,20 @@ export const pageBuilder = (
       // Named as a page's save names the document in its way.
       const describeHolder = (tx: Tx) =>
         describeFor({ pages: pagesSlug, readPage }, tx);
-      // A collection's record as the registry answers it, or null.
+      // A collection's record as the registry answers it, or null. Given a
+      // write's transaction, read on that transaction's own connection, so
+      // a save holding the pool's last connection never waits for another.
       const collectionRecord = async (
-        slug: string
+        slug: string,
+        tx?: Tx
       ): Promise<Record<string, unknown> | null> => {
         try {
-          return (await ctx.services.collections.getCollection(
-            slug,
-            undefined as never
-          )) as unknown as Record<string, unknown>;
+          return (await (tx === undefined
+            ? ctx.services.collections.getCollection(slug, undefined as never)
+            : ctx.services.collections.getCollectionInTransaction(
+                tx,
+                slug
+              ))) as unknown as Record<string, unknown>;
         } catch (error) {
           if (NextlyError.isNotFound(error)) return null;
           throw error;
@@ -2939,8 +2974,9 @@ export const pageBuilder = (
         pagesBackfilled: () => pageClaimsBackfilled,
         // The registry's record says whether the collection's entries carry
         // a Draft/Published status, which a field named `status` does not.
-        lifecycle: async collection =>
-          (await collectionRecord(collection))?.status === true,
+        // Asked inside a write's transaction, so read on it.
+        lifecycle: async (collection, tx) =>
+          (await collectionRecord(collection, tx))?.status === true,
         pagesWithSlugs: async slugs => {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;
@@ -2968,23 +3004,33 @@ export const pageBuilder = (
         },
         // Hook-free and as the system, as the template guard reads it, so a
         // read hook cannot hide a template that serves entries.
-        templateOf: async collection => {
-          const found = await ctx.services.ownCollections.listEntries(
-            templatesSlug,
-            {
-              where: { collection: { equals: collection } },
-              pagination: { limit: 1 },
-              // Asked on every save of a templated collection: the routing
-              // columns alone, never the template's design.
-              select: {
-                id: true,
-                collection: true,
-                status: true,
-                [TEMPLATE_ADDRESS_FIELD]: true,
-              },
-              depth: 0,
-            }
-          );
+        templateOf: async (collection, tx) => {
+          const read = {
+            where: { collection: { equals: collection } },
+            pagination: { limit: 1 },
+            // Asked on every save of a collection with a slug: the routing
+            // columns alone, never the template's design.
+            select: {
+              id: true,
+              collection: true,
+              status: true,
+              [TEMPLATE_ADDRESS_FIELD]: true,
+            },
+            depth: 0,
+          };
+          // On a save's transaction, its own connection: a save holding the
+          // pool's last connection never waits for a second one.
+          const found =
+            tx === undefined
+              ? await ctx.services.ownCollections.listEntries(
+                  templatesSlug,
+                  read
+                )
+              : await ctx.services.ownCollections.listEntriesInTransaction(
+                  tx,
+                  templatesSlug,
+                  read
+                );
           const row = found.data[0] as Record<string, unknown> | undefined;
           if (row === undefined || row.collection !== collection) return null;
           const address = storedAddressOf(row[TEMPLATE_ADDRESS_FIELD]);
@@ -2993,46 +3039,57 @@ export const pageBuilder = (
             address: address === null ? null : addressSegments(address),
           };
         },
-        // Hook-free and as the system, as the template is read: the routing
-        // columns of the entry's own design alone.
-        ownDesignPublished: async (collection, id) => {
+        // Hook-free and as the system, as the template is read, and on the
+        // write's own transaction: the routing columns of the entry's own
+        // design alone.
+        ownDesignPublished: async (collection, id, tx) => {
           const key = entryDesignKey(collection, id);
-          const found = await ctx.services.ownCollections.listEntries(
-            templatesSlug,
-            {
-              where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
-              pagination: { limit: 1 },
-              select: { id: true, [TEMPLATE_ENTRY_FIELD]: true, status: true },
-              depth: 0,
-            }
-          );
+          const found =
+            await ctx.services.ownCollections.listEntriesInTransaction(
+              tx,
+              templatesSlug,
+              {
+                where: { [TEMPLATE_ENTRY_FIELD]: { equals: key } },
+                pagination: { limit: 1 },
+                select: {
+                  id: true,
+                  [TEMPLATE_ENTRY_FIELD]: true,
+                  status: true,
+                },
+                depth: 0,
+              }
+            );
           const row = found.data[0] as Record<string, unknown> | undefined;
           // Compared again exactly: a database may compare text loosely.
           return (
             row?.[TEMPLATE_ENTRY_FIELD] === key && row.status === "published"
           );
         },
-        publishedDesigns: async collection => {
+        // On the write's own transaction, a page at a time, stopping on a
+        // short page: the total beside a page is an unlocked count.
+        publishedDesigns: async (collection, tx) => {
           const ids = new Set<string>();
           for (let page = 1; ; page += 1) {
-            const found = await ctx.services.ownCollections.listEntries(
-              templatesSlug,
-              {
-                where: {
-                  [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
-                },
-                pagination: { limit: 500, page },
-                // A unique order, so no design moves between pages.
-                sort: { field: "id", direction: "asc" },
-                select: {
-                  id: true,
-                  [TEMPLATE_ENTRY_FIELD]: true,
-                  [TEMPLATE_ENTRY_ID_FIELD]: true,
-                  status: true,
-                },
-                depth: 0,
-              }
-            );
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
+                tx,
+                templatesSlug,
+                {
+                  where: {
+                    [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
+                  },
+                  pagination: { limit: 500, page },
+                  // A unique order, so no design moves between pages.
+                  sort: { field: "id", direction: "asc" },
+                  select: {
+                    id: true,
+                    [TEMPLATE_ENTRY_FIELD]: true,
+                    [TEMPLATE_ENTRY_ID_FIELD]: true,
+                    status: true,
+                  },
+                  depth: 0,
+                }
+              );
             for (const value of found.data) {
               const row = value as Record<string, unknown>;
               const id = row[TEMPLATE_ENTRY_ID_FIELD];
@@ -3049,6 +3106,10 @@ export const pageBuilder = (
             if (found.data.length < 500) return ids;
           }
         },
+        // Read as `publishedEntries` reads a template's walk, through the
+        // Direct API: the entry's collection is the host's, which the
+        // plugin can read on a transaction only when it holds one of the
+        // plugin's field types.
         publishedEntry: async (collection, id) => {
           const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
           const nextly = (await getCachedNextly()) as unknown as PagesReader;
@@ -3829,6 +3890,16 @@ export const pageBuilder = (
                 )
               );
           },
+          // Where a Layout region's binding is edited, and the language the
+          // builder edits, for each row's way into the editor.
+          componentStore: () =>
+            rewriteInstall?.store.collection ??
+            bindingReportCtx?.self.collections[COMPONENTS_SLUG] ??
+            COMPONENTS_SLUG,
+          defaultLocale: () =>
+            bindingReportCtx?.config.localization?.defaultLocale,
+          readableSingles: (routeCtx, slugs) =>
+            readableSingles(routeCtx, slugs),
         }),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
@@ -3999,6 +4070,13 @@ export const pageBuilder = (
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
+      // The "Bindings to fix" card, for those who edit pages, hidden while
+      // they may see no broken binding.
+      dashboard: {
+        widgets: [bindingsToFixWidget(bindingsVisibleTo)],
+        // And a line on the Needs your attention card every dashboard shows.
+        attention: [bindingsToFixAttention(bindingsVisibleTo)],
+      },
       admin: {
         // What the editor in the browser needs of the options: see
         // `adminClientConfig`.
@@ -4007,6 +4085,16 @@ export const pageBuilder = (
           canvasPath,
           fontsOff: fonts.off,
         }),
+        // The "Bindings to fix" page, at
+        // `/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`,
+        // reached from its dashboard card and the editor's notice.
+        pages: [
+          {
+            path: "/bindings-to-fix",
+            component: BINDINGS_TO_FIX_PAGE_COMPONENT,
+            requiredPermission: EDIT_PAGES_PERMISSION,
+          },
+        ],
         // The three LIBRARIES, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
@@ -4137,6 +4225,14 @@ export const pageBuilder = (
             collection: TEMPLATES_SLUG,
             to: `/admin/collections/${TEMPLATES_SLUG}`,
             icon: "LayoutDashboard",
+          },
+          // The site-wide report of bindings that no longer fit, for those
+          // who edit pages, as its page asks.
+          {
+            label: "Bindings to fix",
+            to: BINDINGS_TO_FIX_PAGE_HREF,
+            icon: "AlertTriangle",
+            requiredPermission: EDIT_PAGES_PERMISSION,
           },
         ],
         // No `schemaBuilderSlot`. It named a component this package no longer

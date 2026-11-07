@@ -18,7 +18,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { Fragment, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+import { afterOverrunLines } from "./__tests__/overrun-quiet";
 
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
@@ -986,3 +988,6 @@ describe("the layouts option at boot", () => {
     expect(layoutReads(r.calls)).toEqual([]);
   });
 });
+
+// Pages here outrun their caps, and a route logs that after a short quiet.
+afterAll(afterOverrunLines);

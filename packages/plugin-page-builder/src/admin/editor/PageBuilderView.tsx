@@ -23,7 +23,7 @@ import { PageBuilderCard } from "../PageBuilderCard";
 import { useRestingPageRender } from "../use-resting-page-render";
 
 import { BlocksEditor } from "./BlocksEditor";
-import { sectionFromSearch } from "./builder-address";
+import { openAtFromSearch } from "./builder-address";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 
 type BoundProps = Pick<DocumentViewProps, "control" | "exit"> & {
@@ -41,7 +41,7 @@ function BoundEditor({ control, exit, field: declaration, name }: BoundProps) {
   const [openAt] = useState(() =>
     typeof window === "undefined"
       ? undefined
-      : sectionFromSearch(window.location.search)
+      : openAtFromSearch(window.location.search)
   );
   return (
     <BlocksEditor

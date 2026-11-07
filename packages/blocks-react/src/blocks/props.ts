@@ -19,6 +19,8 @@ import {
 import type { BoundValue, RemotePatternInput } from "@nextlyhq/blocks-engine";
 import { createElement, type ReactNode } from "react";
 
+import type { ReadClaim } from "../context";
+
 /**
  * Whether a stored value is text an author actually put there.
  *
@@ -224,6 +226,26 @@ export const LINK_PROPS = {
   },
   rel: { label: "Link relationship", type: "text" },
 } as const;
+
+/**
+ * The claim a block's own reads are made with, naming it, so a page past its
+ * allowance names the block among those drawn without their data. Nothing
+ * for a block drawn outside a page (a host or a test calling its render
+ * directly), whose reads are then claimed unnamed.
+ */
+export function readClaimOf(
+  node: { readonly id: string } | undefined
+): ReadClaim | undefined {
+  return node === undefined ? undefined : { nodeId: node.id };
+}
+
+/** Whether a block's prop holds text, for its draw checks. */
+export function isPresent(props: object, prop: string): boolean {
+  const value: unknown = Object.hasOwn(props, prop)
+    ? Reflect.get(props, prop)
+    : undefined;
+  return text(value) !== "";
+}
 
 /** A link's attributes, ready to spread onto an `<a>`. */
 export interface LinkAttributes {

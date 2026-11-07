@@ -343,6 +343,25 @@ caller's roles are looked up. They return the row itself
 (`deleteEntryInTransaction` returns nothing) rather than the
 `{ message, item, warnings? }` envelope.
 
+`getCollection` reads a collection's record through the pool, so inside a transaction on a
+pool of one connection, the usual serverless setting, it waits for the connection the
+transaction holds until the pool gives up. `getCollectionInTransaction(tx, slug)`
+(`@experimental`) answers the same record on the transaction's own connection, from the
+work's `tx` or an in-transaction handler's `transaction`. Like `getCollection`, it asks
+nothing of the caller's access and is refused with `NOT_FOUND` for a collection there is no
+record of. It takes no lock: use `holdCollectionInTransaction` where a write must not
+outlive the collection.
+
+```ts
+ctx.hooks.onInTransaction("*", async write => {
+  const record = await ctx.services.collections.getCollectionInTransaction(
+    write.transaction,
+    write.collection
+  );
+  // ...
+});
+```
+
 `ctx.services.users` may create and update accounts, but not decide who administers the
 site. It refuses, with `NextlyError` code `FORBIDDEN`, to create an install's first
 account (core makes that one super-admin), to give a role that reaches `super-admin`
