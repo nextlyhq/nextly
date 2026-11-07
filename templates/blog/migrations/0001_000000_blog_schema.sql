@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "excerpt" text,
   "featured_image" text,
   "author" text,
+  "byline" text,
   "categories" jsonb,
   "tags" jsonb,
   "published_at" timestamp with time zone,
@@ -55,6 +56,22 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "name" text NOT NULL,
   "slug" text NOT NULL UNIQUE,
   "description" text,
+  "status" text NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" timestamp with time zone,
+  "created_at" timestamp with time zone DEFAULT now(),
+  "updated_at" timestamp with time zone DEFAULT now(),
+  "created_by" text
+);
+
+-- Authors collection: the public profiles a post's byline credits. A post's
+-- "author" is the account that owns it; its "byline" is one of these.
+CREATE TABLE IF NOT EXISTS "dc_authors" (
+  "id" text PRIMARY KEY DEFAULT (gen_random_uuid()::text),
+  "title" text NOT NULL,
+  "name" text NOT NULL,
+  "slug" text NOT NULL UNIQUE,
+  "bio" text,
+  "account" text,
   "status" text NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   "first_published_at" timestamp with time zone,
   "created_at" timestamp with time zone DEFAULT now(),
@@ -185,12 +202,17 @@ CREATE INDEX IF NOT EXISTS "idx_posts_status" ON "dc_posts"("status");
 CREATE INDEX IF NOT EXISTS "idx_posts_published" ON "dc_posts"("published_at" DESC);
 CREATE INDEX IF NOT EXISTS "idx_posts_featured" ON "dc_posts"("featured") WHERE "featured" = true;
 CREATE INDEX IF NOT EXISTS "idx_posts_author" ON "dc_posts"("author");
+CREATE INDEX IF NOT EXISTS "idx_posts_byline" ON "dc_posts"("byline");
 
 -- Categories indexes
 CREATE INDEX IF NOT EXISTS "idx_categories_slug" ON "dc_categories"("slug");
 
 -- Tags indexes
 CREATE INDEX IF NOT EXISTS "idx_tags_slug" ON "dc_tags"("slug");
+
+-- Authors indexes
+CREATE INDEX IF NOT EXISTS "idx_authors_slug" ON "dc_authors"("slug");
+CREATE INDEX IF NOT EXISTS "idx_authors_account" ON "dc_authors"("account");
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX IF NOT EXISTS "idx_posts_categories_category" ON "dc_posts_categories"("category_id");
@@ -248,6 +270,9 @@ DROP INDEX IF EXISTS "idx_posts_status";
 DROP INDEX IF EXISTS "idx_posts_published";
 DROP INDEX IF EXISTS "idx_posts_featured";
 DROP INDEX IF EXISTS "idx_posts_author";
+DROP INDEX IF EXISTS "idx_posts_byline";
+DROP INDEX IF EXISTS "idx_authors_slug";
+DROP INDEX IF EXISTS "idx_authors_account";
 DROP INDEX IF EXISTS "idx_categories_slug";
 DROP INDEX IF EXISTS "idx_tags_slug";
 DROP INDEX IF EXISTS "idx_posts_categories_category";
@@ -270,5 +295,6 @@ DROP TABLE IF EXISTS "single_homepage" CASCADE;
 DROP TABLE IF EXISTS "single_navigation" CASCADE;
 DROP TABLE IF EXISTS "single_site_settings" CASCADE;
 DROP TABLE IF EXISTS "dc_tags" CASCADE;
+DROP TABLE IF EXISTS "dc_authors" CASCADE;
 DROP TABLE IF EXISTS "dc_categories" CASCADE;
 DROP TABLE IF EXISTS "dc_posts" CASCADE;

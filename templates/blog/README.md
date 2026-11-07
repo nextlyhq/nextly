@@ -28,15 +28,16 @@ A production-quality blog starter for Nextly. Ships with:
 - **Navigation** - Header link list + footer "Read" link list + UI toggles (show theme toggle, show search icon).
 - **Homepage** - Hero title/subtitle + section-visibility toggles (featured post, latest grid, category strip, newsletter CTA) + newsletter heading/subheading.
 
-### Users as authors
+### Authors and bylines
 
-The template uses the built-in `users` collection as the author identity: posts relate directly to users via the `author` relationship field. Each user has additional scalar fields defined in `configs/codefirst.config.ts`:
+A post has two people fields, kept apart on purpose:
 
-- `bio` (textarea): short author bio shown on post footers and `/authors/[slug]`.
-- `avatarUrl` (text): URL of an avatar image. Plain text (not an uploaded media record) because user-extension fields support only scalar types today.
-- `slug` (text): URL slug for `/authors/[slug]`. Unique per user.
+- `author` (relationship to `users`): the account that owns the post. The Author role may edit only the posts whose `author` is them, and a new post's `author` is the account that creates it.
+- `byline` (relationship to `authors`, labelled **Byline**): the public author a reader is shown, with their name, page at `/authors/[slug]` and bio. A new post is credited to the profile of the account that writes it, when that account has one.
 
-No separate `authors` collection; no duplicated profile data.
+The **Authors** collection holds those public profiles: `name`, `slug` (unique, used by `/authors/[slug]`), `bio`, and `account`, the account the profile belongs to. Accounts stay private; profiles are readable by anyone, which is what lets a page show them.
+
+The demo seed creates one author profile per seeded user, in order, and credits each post to its author's profile. The users keep their `bio`, `avatarUrl` and `slug` fields, which no page reads.
 
 ### Roles
 

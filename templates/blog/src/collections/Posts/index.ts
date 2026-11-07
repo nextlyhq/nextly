@@ -33,6 +33,7 @@ import { autoSlug } from "../../hooks/auto-slug";
 import { refuseReservedSlug } from "../../lib/static-params";
 
 import { authorIsCreator } from "./hooks/author-is-creator";
+import { bylineFromCreator } from "./hooks/byline-from-creator";
 import { computeReadingTime } from "./hooks/reading-time";
 import { requireFeaturedAlt } from "./hooks/require-featured-alt";
 
@@ -60,6 +61,14 @@ export const Posts = defineCollection({
       name: "author",
       relationTo: "users",
       access: { create: mayPublishPosts, update: mayPublishPosts },
+    }),
+    // The public author a reader is shown: a profile in `authors`. Separate
+    // from `author`, the account that owns the post, which access reads.
+    relationship({
+      name: "byline",
+      label: "Byline",
+      relationTo: "authors",
+      admin: { description: "The public author shown on the post." },
     }),
     relationship({
       name: "categories",
@@ -119,7 +128,7 @@ export const Posts = defineCollection({
     delete: ownPostsUnlessPublisher,
   },
   hooks: {
-    beforeValidate: [autoSlug, requireFeaturedAlt],
+    beforeValidate: [autoSlug, requireFeaturedAlt, bylineFromCreator],
     beforeChange: [authorIsCreator, computeReadingTime],
   },
 });

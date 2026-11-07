@@ -69,7 +69,7 @@ const TEMPLATE_ROLES = [
     slug: "editor",
     name: "Editor",
     description:
-      "Can create, edit, and publish any post. Manages categories, tags, and media.",
+      "Can create, edit, and publish any post. Manages authors, categories, tags, and media.",
     level: 50,
   },
   {
@@ -196,6 +196,7 @@ export async function pickPermissionIdsForRoles(
         const resource = (p as { resource?: string }).resource;
         return (
           resource === "posts" ||
+          resource === "authors" ||
           resource === "categories" ||
           resource === "tags" ||
           resource === "media" ||
@@ -215,7 +216,9 @@ export async function pickPermissionIdsForRoles(
           );
         }
         if (
-          (resource === "categories" || resource === "tags") &&
+          (resource === "authors" ||
+            resource === "categories" ||
+            resource === "tags") &&
           action === "read"
         ) {
           return true;
@@ -746,6 +749,39 @@ export async function seed({
     userIdMap[user.slug] = userId;
   }
 
+  // Step 2c: one public author profile per seeded user, in the order the
+  // users are listed, linked to that account. A post's byline credits the
+  // profile; its `author` stays the account that owns it.
+  console.log("  Creating authors...");
+  const authorIdMap: Record<string, string> = {};
+  for (const user of seedData.users) {
+    try {
+      const existing = await nextly.find({
+        collection: "authors",
+        where: { slug: { equals: user.slug } },
+        limit: 1,
+      });
+      if (existing.meta.total > 0) {
+        authorIdMap[user.slug] = existing.items[0].id as string;
+        continue;
+      }
+      const createdAuthor = await nextly.create({
+        collection: "authors",
+        data: {
+          title: user.name,
+          name: user.name,
+          slug: user.slug,
+          bio: user.bio,
+          ...(userIdMap[user.slug] ? { account: userIdMap[user.slug] } : {}),
+        },
+      });
+      authorIdMap[user.slug] = createdAuthor.item.id as string;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`author "${user.slug}": ${msg}`);
+    }
+  }
+
   console.log("  Creating categories...");
   const categoryIdMap: Record<string, string> = {};
   for (const category of seedData.categories) {
@@ -817,6 +853,7 @@ export async function seed({
       });
 
       const authorId = userIdMap[post.author];
+      const bylineId = authorIdMap[post.author];
       const categoryIds = post.categories
         .map(slug => categoryIdMap[slug])
         .filter(Boolean);
@@ -851,6 +888,7 @@ export async function seed({
           excerpt: post.excerpt,
           content: post.content,
           author: authorId || undefined,
+          byline: bylineId || undefined,
           categories: categoryIds.length > 0 ? categoryIds : undefined,
           tags: tagIds.length > 0 ? tagIds : undefined,
           featured: post.featured ?? false,

@@ -153,9 +153,10 @@ async function templateExport(file: string, name: string): Promise<unknown> {
 }
 
 async function blogEntities() {
-  const [Posts, Categories, Tags, SiteSettings, Navigation, Homepage] =
+  const [Posts, Authors, Categories, Tags, SiteSettings, Navigation, Homepage] =
     await Promise.all([
       templateExport("src/collections/Posts/index.ts", "Posts"),
+      templateExport("src/collections/Authors.ts", "Authors"),
       templateExport("src/collections/Categories.ts", "Categories"),
       templateExport("src/collections/Tags.ts", "Tags"),
       templateExport("src/singles/SiteSettings/index.ts", "SiteSettings"),
@@ -163,7 +164,7 @@ async function blogEntities() {
       templateExport("src/singles/Homepage/index.ts", "Homepage"),
     ]);
   return {
-    collections: toMinimalEntities([Posts, Categories, Tags], e =>
+    collections: toMinimalEntities([Posts, Authors, Categories, Tags], e =>
       resolveCollectionTableName(e.slug, e.dbName)
     ),
     singles: toMinimalEntities([SiteSettings, Navigation, Homepage], e =>

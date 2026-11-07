@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `excerpt` text,
   `featured_image` varchar(36),
   `author` varchar(191),
+  `byline` varchar(36),
   `categories` json,
   `tags` json,
   `published_at` timestamp NULL DEFAULT NULL,
@@ -70,6 +71,23 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_tags_slug` (`slug`)
+) ENGINE=InnoDB;
+
+-- Authors collection: the public profiles a post's byline credits. A post's
+-- `author` is the account that owns it; its `byline` is one of these.
+CREATE TABLE IF NOT EXISTS `dc_authors` (
+  `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
+  `title` varchar(255) NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `slug` varchar(255) NOT NULL,
+  `bio` text,
+  `account` varchar(191),
+  `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  `first_published_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` text,
+  UNIQUE KEY `uq_authors_slug` (`slug`)
 ) ENGINE=InnoDB;
 
 -- ============ USER EXTENSION TABLE ============
@@ -184,12 +202,17 @@ CREATE INDEX `idx_posts_status` ON `dc_posts`(`status`);
 CREATE INDEX `idx_posts_published` ON `dc_posts`(`published_at` DESC);
 CREATE INDEX `idx_posts_featured` ON `dc_posts`(`featured`);
 CREATE INDEX `idx_posts_author` ON `dc_posts`(`author`);
+CREATE INDEX `idx_posts_byline` ON `dc_posts`(`byline`);
 
 -- Categories indexes
 CREATE INDEX `idx_categories_slug` ON `dc_categories`(`slug`);
 
 -- Tags indexes
 CREATE INDEX `idx_tags_slug` ON `dc_tags`(`slug`);
+
+-- Authors indexes
+CREATE INDEX `idx_authors_slug` ON `dc_authors`(`slug`);
+CREATE INDEX `idx_authors_account` ON `dc_authors`(`account`);
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX `idx_posts_categories_category` ON `dc_posts_categories`(`category_id`);
@@ -247,6 +270,10 @@ DROP INDEX IF EXISTS `idx_posts_status` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_published` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_featured` ON `dc_posts`;
 DROP INDEX IF EXISTS `idx_posts_author` ON `dc_posts`;
+DROP INDEX IF EXISTS `idx_posts_byline` ON `dc_posts`;
+DROP INDEX IF EXISTS `idx_authors_slug` ON `dc_authors`;
+DROP INDEX IF EXISTS `idx_authors_account` ON `dc_authors`;
+DROP INDEX IF EXISTS `uq_authors_slug` ON `dc_authors`;
 DROP INDEX IF EXISTS `idx_posts_categories_category` ON `dc_posts_categories`;
 DROP INDEX IF EXISTS `idx_posts_tags_tag` ON `dc_posts_tags`;
 DROP INDEX IF EXISTS `uq_user_ext_user_id` ON `user_ext`;
@@ -267,5 +294,6 @@ DROP TABLE IF EXISTS `single_homepage`;
 DROP TABLE IF EXISTS `single_navigation`;
 DROP TABLE IF EXISTS `single_site_settings`;
 DROP TABLE IF EXISTS `dc_tags`;
+DROP TABLE IF EXISTS `dc_authors`;
 DROP TABLE IF EXISTS `dc_categories`;
 DROP TABLE IF EXISTS `dc_posts`;

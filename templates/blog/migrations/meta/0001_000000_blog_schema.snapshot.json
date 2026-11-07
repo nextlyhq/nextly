@@ -49,6 +49,14 @@
           "columnTypeNote": "text to match users.id (core schema uses text PKs, not uuid)"
         },
         {
+          "name": "byline",
+          "type": "relationship",
+          "relationTo": "authors",
+          "index": true,
+          "label": "Byline",
+          "description": "The public author shown on the post. The post's author is the account that owns it."
+        },
+        {
           "name": "categories",
           "type": "relationship",
           "relationTo": "categories",
@@ -190,6 +198,47 @@
         {
           "name": "description",
           "type": "textarea"
+        }
+      ],
+      "timestamps": true
+    },
+    {
+      "slug": "authors",
+      "tableName": "dc_authors",
+      "labels": {
+        "singular": "Author",
+        "plural": "Authors"
+      },
+      "description": "Public author profiles a post's byline credits",
+      "fields": [
+        {
+          "name": "title",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "required": true,
+          "unique": true,
+          "index": true
+        },
+        {
+          "name": "bio",
+          "type": "textarea"
+        },
+        {
+          "name": "account",
+          "type": "relationship",
+          "relationTo": "users",
+          "index": true,
+          "columnType": "text",
+          "columnTypeNote": "text to match users.id (core schema uses text PKs, not uuid)"
         }
       ],
       "timestamps": true
@@ -391,6 +440,18 @@
     },
     {
       "from": "posts",
+      "to": "authors",
+      "type": "many-to-one",
+      "field": "byline"
+    },
+    {
+      "from": "authors",
+      "to": "users",
+      "type": "many-to-one",
+      "field": "account"
+    },
+    {
+      "from": "posts",
       "to": "categories",
       "type": "many-to-many",
       "field": "categories",
@@ -429,7 +490,11 @@
     "tableName": "user_ext",
     "description": "Extends the built-in users table with blog author profile fields. Structure matches what UserExtSchemaService.generateMigrationSQL() produces at runtime.",
     "baseColumns": [
-      { "name": "id", "type": "text", "primaryKey": true },
+      {
+        "name": "id",
+        "type": "text",
+        "primaryKey": true
+      },
       {
         "name": "user_id",
         "type": "text",
@@ -476,8 +541,16 @@
       }
     ],
     "indexes": [
-      { "name": "uq_user_ext_user_id", "columns": ["user_id"], "unique": true },
-      { "name": "uq_user_ext_slug", "columns": ["slug"], "unique": true }
+      {
+        "name": "uq_user_ext_user_id",
+        "columns": ["user_id"],
+        "unique": true
+      },
+      {
+        "name": "uq_user_ext_slug",
+        "columns": ["slug"],
+        "unique": true
+      }
     ]
   }
 }
