@@ -60,6 +60,7 @@ import {
   LIST_REF_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
+  registeredBlocks,
   sharedStyleInputs,
   type PagePart,
   type PageRendererProps,
@@ -80,6 +81,7 @@ import {
   useState,
 } from "react";
 
+import type { AppliedConditions } from "./applied-conditions";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { useCanvasFrame } from "./canvas-frame-context";
@@ -94,6 +96,7 @@ import {
   gatedAsDrawn,
   gatedAsStored,
 } from "./condition-gate";
+import { withConditionHiddenBlock } from "./condition-hidden-block";
 import { isElement } from "./dom-kind";
 import { refusalWording } from "./drag-refusal";
 import { useEntryContentDrawing } from "./entry-content-canvas";
@@ -191,8 +194,12 @@ export const CONDITIONED_ATTRIBUTE = "data-nx-conditioned";
  */
 export const CONDITIONED_OWN_ATTRIBUTE = "data-nx-conditioned-own";
 
-/** How a conditioned block is marked on the canvas. */
-type ConditionMark = "conditional" | "unchecked";
+/**
+ * How a conditioned block is marked on the canvas: conditional, or conditions
+ * the page can't check, or, while conditions are applied, shown for the
+ * previewed entry.
+ */
+type ConditionMark = "conditional" | "unchecked" | "shown";
 
 /**
  * Every conditioned block's mark, and for a composed block gated only by a
@@ -213,7 +220,8 @@ interface ConditionMarks {
 function conditionMarksOf(
   document: BlockDocument,
   unchecked: ReadonlySet<string> | undefined,
-  composed: { definitions?: DefinitionsById; limits?: DocumentLimits }
+  composed: { definitions?: DefinitionsById; limits?: DocumentLimits },
+  applied?: AppliedConditions
 ): ConditionMarks {
   const marks = new Map<string, ConditionMark>();
   const nested = new Map<string, string>();
@@ -267,6 +275,12 @@ function conditionMarksOf(
       },
       bound
     );
+  }
+  // While conditions are applied, a judged block a visitor would see says so,
+  // and one they would not is drawn as its marker, which says so itself.
+  if (applied !== undefined) {
+    for (const id of applied.shown) marks.set(id, "shown");
+    for (const block of applied.hidden) marks.delete(block.id);
   }
   return { marks, nested };
 }
@@ -1555,6 +1569,13 @@ export interface CanvasProps {
    * only as conditional.
    */
   conditionsUnchecked?: ReadonlySet<string>;
+  /**
+   * The page with its visibility conditions applied for the entry it is
+   * previewed with (`appliedConditionsOf`): a block hidden for that entry is
+   * drawn as a one-line marker in its place, and one shown is badged so.
+   * Absent, every conditioned block is drawn and marked as conditional.
+   */
+  conditionsApplied?: AppliedConditions;
 }
 
 /**
@@ -2201,6 +2222,30 @@ function useCanvasEnvironment(
 }
 
 /**
+ * What the canvas renders the page with: a placed component's definitions
+ * with their conditions lifted, and, while conditions are applied, the blocks
+ * with the hidden-block marker among them.
+ */
+function drawnRenderOf(
+  rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined,
+  document: BlockDocument,
+  applied: boolean
+): Omit<PageRendererProps, "document" | "siteStyles"> | undefined {
+  const definitions =
+    rendered?.definitions === undefined
+      ? undefined
+      : revealedDefinitions(document, rendered.definitions, rendered.limits);
+  if (!applied) {
+    return definitions === undefined ? rendered : { ...rendered, definitions };
+  }
+  return {
+    ...rendered,
+    ...(definitions === undefined ? {} : { definitions }),
+    blocks: withConditionHiddenBlock(rendered?.blocks ?? registeredBlocks()),
+  };
+}
+
+/**
  * The page, drawn, and the regions of its Layout around it.
  *
  * The parts in drawing order, each with how it treats the site sheet:
@@ -2213,32 +2258,30 @@ function useDrawnPage({
   sheet,
   document,
   environment,
+  applied,
 }: {
   regions: readonly CanvasRegion[] | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   sheet: NonNullable<PageRendererProps["siteStyles"]>;
   document: BlockDocument;
   environment: BlockEnvironment | undefined;
+  applied: AppliedConditions | undefined;
 }): { drawn: LayoutParts | undefined; page: React.JSX.Element } {
   const drawn = useLayoutParts(regions, rendered, sheet);
   // Every conditioned block drawn, whoever the page would show it to, so the
   // author can see and select it; the marks say it isn't shown to everyone.
-  const drawable = useMemo(() => revealConditioned(document), [document]);
+  // While conditions are applied, a block hidden for the previewed entry is
+  // drawn as its marker instead.
+  const drawable = useMemo(
+    () => applied?.document ?? revealConditioned(document),
+    [applied, document]
+  );
   // A placed component's definition too: its conditioned blocks are drawn,
-  // as the page's are.
+  // as the page's are. While conditions are applied, the renderer also knows
+  // the marker a hidden block is drawn as.
   const drawnRender = useMemo(
-    () =>
-      rendered?.definitions === undefined
-        ? rendered
-        : {
-            ...rendered,
-            definitions: revealedDefinitions(
-              document,
-              rendered.definitions,
-              rendered.limits
-            ),
-          },
-    [rendered, document]
+    () => drawnRenderOf(rendered, document, applied !== undefined),
+    [rendered, document, applied]
   );
   const page = useMemo(
     () => (
@@ -2281,6 +2324,7 @@ export function Canvas({
   overlay,
   regions,
   conditionsUnchecked,
+  conditionsApplied,
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
@@ -2314,6 +2358,7 @@ export function Canvas({
     sheet: siteStyles,
     document: entryDrawing.document,
     environment,
+    applied: conditionsApplied,
   });
 
   /*
@@ -2325,13 +2370,24 @@ export function Canvas({
   const lockedIds = useMemo(() => lockMarksOf(document), [document]);
   const conditionMarks = useMemo(
     () =>
-      conditionMarksOf(document, conditionsUnchecked, {
-        ...(render?.definitions === undefined
-          ? {}
-          : { definitions: render.definitions }),
-        ...(render?.limits === undefined ? {} : { limits: render.limits }),
-      }),
-    [document, conditionsUnchecked, render?.definitions, render?.limits]
+      conditionMarksOf(
+        document,
+        conditionsUnchecked,
+        {
+          ...(render?.definitions === undefined
+            ? {}
+            : { definitions: render.definitions }),
+          ...(render?.limits === undefined ? {} : { limits: render.limits }),
+        },
+        conditionsApplied
+      ),
+    [
+      document,
+      conditionsUnchecked,
+      render?.definitions,
+      render?.limits,
+      conditionsApplied,
+    ]
   );
 
   // Each Entry content block's words, named by the template's collection.

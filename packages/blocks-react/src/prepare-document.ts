@@ -60,9 +60,9 @@ import {
   isPlainRecord,
   migrateDocument,
   resolveComponentInstances,
+  SITE_SETTING_FIELD_SHAPES,
 } from "@nextlyhq/blocks-engine";
 import type {
-  BindingFieldShape,
   BindingIssue,
   BindingRun,
   BindingSchemaSource,
@@ -80,11 +80,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import { queryRowFields } from "./blocks/named-read";
-import type {
-  BlocksSiteSettings,
-  NamedQueryHost,
-  PageBindings,
-} from "./context";
+import type { NamedQueryHost, PageBindings } from "./context";
 import type { BlockResolver } from "./resolver";
 import { migrationSourceFor } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
@@ -124,22 +120,6 @@ export interface PrepareDocumentArgs {
 }
 
 /**
- * The type of each site setting a page may bind, keyed by the setting, so a
- * setting added to the allowlist cannot be left without a shape.
- */
-const SITE_FIELD_TYPES: { readonly [K in keyof BlocksSiteSettings]: string } = {
-  applicationName: "text",
-  siteUrl: "url",
-  logoUrl: "url",
-  timezone: "text",
-};
-
-/** The site settings' field shapes, derived from the table above. */
-const SITE_FIELD_SHAPES: readonly BindingFieldShape[] = Object.entries(
-  SITE_FIELD_TYPES
-).map(([name, type]) => ({ name, type }));
-
-/**
  * One render's binding pass over a page's bindings, in the page's language.
  *
  * Shared by every reader of one page, the renderer and the metadata alike,
@@ -158,7 +138,8 @@ export function pageBindingRun(
   const shapes = bindings.fieldShapes;
   const schema: BindingSchemaSource = {
     fieldsOf: ref => {
-      if ("site" in ref) return SITE_FIELD_SHAPES;
+      // The settings a page is handed, typed by the engine's one table.
+      if ("site" in ref) return SITE_SETTING_FIELD_SHAPES;
       // A named query's rows with their own field schema: the fields it
       // declares, as the process registry holds it.
       if ("query" in ref) {

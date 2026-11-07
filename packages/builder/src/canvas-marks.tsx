@@ -18,7 +18,7 @@
 
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { AlertCircle, Split } from "lucide-react";
+import { AlertCircle, CircleCheck, Split } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -151,10 +151,11 @@ interface Mark {
    */
   readonly hoverTagInside?: boolean;
   /**
-   * An at-rest mark's condition tab: a conditioned block's, conditional or
-   * with conditions it can't check.
+   * An at-rest mark's condition tab: a conditioned block's, conditional,
+   * with conditions it can't check, or, while conditions are applied, shown
+   * for the previewed entry.
    */
-  readonly condition?: "conditional" | "unchecked";
+  readonly condition?: ConditionMarkKind;
   /**
    * An at-rest mark's Entry content tab, by its words: an Entry content
    * block's, naming the field it draws ("Entry content · Body").
@@ -213,6 +214,11 @@ export interface CanvasMarksProps {
    * does not name is tagged as a component.
    */
   readonly nameOf?: (address: string) => string | undefined;
+  /**
+   * What a block shown for the previewed entry is badged with while
+   * conditions are applied: "Shown for this post".
+   */
+  readonly shownLabel?: string;
 }
 
 /**
@@ -558,6 +564,23 @@ function takesTheTop(side: "above" | "below" | "pinned"): boolean {
   return side !== "below";
 }
 
+/** What a conditioned block's badge says about who sees it. */
+type ConditionMarkKind = "conditional" | "unchecked" | "shown";
+
+/** Whether a conditioned block's attribute names a kind its tab can say. */
+function isConditionMarkKind(value: string | null): value is ConditionMarkKind {
+  return value === "conditional" || value === "unchecked" || value === "shown";
+}
+
+/** The words on a conditioned block's badge. */
+function conditionWords(
+  condition: ConditionMarkKind,
+  shownLabel: string
+): string {
+  if (condition === "unchecked") return "Can’t be checked";
+  return condition === "shown" ? shownLabel : "Conditional";
+}
+
 /** What the marks are drawn for besides what the canvas marks on the page. */
 interface MarkInputs {
   /** The block a Layers row points at, or `null`. */
@@ -569,6 +592,8 @@ interface MarkInputs {
   readonly revealed: ReadonlySet<string>;
   /** About how wide a hidden block's tag is drawn, in the chrome's pixels. */
   readonly tagWidth: number;
+  /** What a shown block's badge says while conditions are applied. */
+  readonly shownLabel: string;
 }
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
@@ -738,13 +763,15 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  found.push(...atRestMarks(root, space, onScreen, toolbarAbove));
+  found.push(
+    ...atRestMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel)
+  );
   return dimmedBesideEditing(found);
 }
 
 /** What an element asks an at-rest mark to say, read off its attributes. */
 interface AtRestTabs {
-  readonly condition?: "conditional" | "unchecked";
+  readonly condition?: ConditionMarkKind;
   readonly entryContent?: string;
 }
 
@@ -756,9 +783,7 @@ function atRestTabsOf(element: Element): AtRestTabs | undefined {
   const condition = element.getAttribute(CONDITIONED_ATTRIBUTE);
   const entry = element.getAttribute(ENTRY_CONTENT_ATTRIBUTE);
   const tabs: AtRestTabs = {
-    ...(condition === "conditional" || condition === "unchecked"
-      ? { condition }
-      : {}),
+    ...(isConditionMarkKind(condition) ? { condition } : {}),
     ...(entry !== null && entry !== "" ? { entryContent: entry } : {}),
   };
   return tabs.condition === undefined && tabs.entryContent === undefined
@@ -780,7 +805,8 @@ function atRestMarks(
   root: HTMLElement,
   space: OverlaySpace,
   onScreen: Rect,
-  toolbarAbove: (rect: Rect) => boolean
+  toolbarAbove: (rect: Rect) => boolean,
+  shownLabel: string
 ): Mark[] {
   const badges = new Map<string, ConditionBadge>();
   const copies = new Map<Element | null, number>();
@@ -812,7 +838,7 @@ function atRestMarks(
       }
     });
   return [...badges.values()].map(badge =>
-    atRestMark(badge, onScreen, toolbarAbove)
+    atRestMark(badge, onScreen, toolbarAbove, shownLabel)
   );
 }
 
@@ -858,7 +884,8 @@ function badgeKey(
 function atRestMark(
   badge: ConditionBadge,
   onScreen: Rect,
-  toolbarAbove: (rect: Rect) => boolean
+  toolbarAbove: (rect: Rect) => boolean,
+  shownLabel: string
 ): Mark {
   const outline = placementOutline(badge.parts);
   // The top is taken by a selected placement's name, or by the block
@@ -877,7 +904,7 @@ function atRestMark(
     tagEdge: "right",
     tagInset: {
       bottom: 0,
-      side: tabInset(outline.rect, onScreen, badge.tabs),
+      side: tabInset(outline.rect, onScreen, badge.tabs, shownLabel),
     },
     ...badge.tabs,
     tabsAt: tabsAtOf(outline.rect, onScreen, topTaken),
@@ -891,30 +918,33 @@ function atRestMark(
  * edge, a negative inset, when the screen cuts the block's left so little of
  * it shows that the tab would run off the left.
  */
-function tabInset(rect: Rect, onScreen: Rect, tabs: AtRestTabs): number {
+function tabInset(
+  rect: Rect,
+  onScreen: Rect,
+  tabs: AtRestTabs,
+  shownLabel: string
+): number {
   const right = rect.x + rect.width;
   // A block wholly off the screen to either side keeps its tab with it,
   // rather than leaving one stranded at the screen's edge.
   if (right <= onScreen.x || rect.x >= onScreen.x + onScreen.width) return 0;
   const cutRight = Math.max(0, right - (onScreen.x + onScreen.width));
-  const width = tabsWidthOf(tabs);
+  const width = tabsWidthOf(tabs, shownLabel);
   const fitsLeft = right - onScreen.x - width;
   return Math.min(cutRight, fitsLeft);
 }
 
 /** About how wide an at-rest mark's tabs are drawn, side by side. */
-function tabsWidthOf({ condition, entryContent }: AtRestTabs): number {
+function tabsWidthOf(
+  { condition, entryContent }: AtRestTabs,
+  shownLabel: string
+): number {
   const conditionWidth =
     condition === undefined
       ? 0
-      : tagWidthOf(conditionWords(condition)) + CONDITION_ICON_ROOM;
+      : tagWidthOf(conditionWords(condition, shownLabel)) + CONDITION_ICON_ROOM;
   const entryWidth = entryContent === undefined ? 0 : tagWidthOf(entryContent);
   return conditionWidth + entryWidth;
-}
-
-/** A condition tab's words. */
-function conditionWords(condition: "conditional" | "unchecked"): string {
-  return condition === "unchecked" ? "Can’t be checked" : "Conditional";
 }
 
 /** Which copy of a placement an element is part of: its parent, numbered. */
@@ -949,10 +979,23 @@ function tabsAtOf(
 /**
  * An at-rest mark's tabs, side by side on the outline's edge: what the canvas
  * says about the block, the Entry content block's words before a condition's.
+ * A block shown for the previewed entry while conditions are applied says so
+ * (`shownLabel`) with a tick.
  */
-function AtRestTabsView({ mark }: { mark: Mark }): React.JSX.Element {
+function AtRestTabsView({
+  mark,
+  shownLabel,
+}: {
+  mark: Mark;
+  shownLabel: string;
+}): React.JSX.Element {
   const { condition, entryContent } = mark;
-  const Icon = condition === "unchecked" ? AlertCircle : Split;
+  const Icon =
+    condition === "unchecked"
+      ? AlertCircle
+      : condition === "shown"
+        ? CircleCheck
+        : Split;
   return (
     <span className="nx-canvas-mark__tabs">
       {entryContent === undefined ? null : (
@@ -963,7 +1006,7 @@ function AtRestTabsView({ mark }: { mark: Mark }): React.JSX.Element {
       {condition === undefined ? null : (
         <span className="nx-canvas-mark__tab" data-tab={condition}>
           <Icon aria-hidden="true" size={12} />
-          {conditionWords(condition)}
+          {conditionWords(condition, shownLabel)}
         </span>
       )}
     </span>
@@ -1016,6 +1059,7 @@ export function CanvasMarks({
   revealed = NO_IDS,
   device,
   nameOf,
+  shownLabel = "Shown for this entry",
 }: CanvasMarksProps = {}): React.JSX.Element {
   const shownOn =
     device === undefined
@@ -1040,9 +1084,10 @@ export function CanvasMarks({
             hovered,
             revealed: new Set(JSON.parse(revealedKey) as string[]),
             tagWidth: tagWidthOf(hiddenLabel),
+            shownLabel,
           });
     setMarks(current => (sameMarks(current, next) ? current : next));
-  }, [hovered, revealedKey, hiddenLabel]);
+  }, [hovered, revealedKey, hiddenLabel, shownLabel]);
 
   React.useLayoutEffect(() => {
     measure();
@@ -1116,7 +1161,9 @@ export function CanvasMarks({
           {...atRestAttributes(mark)}
           style={markStyle(mark)}
         >
-          {mark.kind === "at-rest" ? <AtRestTabsView mark={mark} /> : null}
+          {mark.kind === "at-rest" ? (
+            <AtRestTabsView mark={mark} shownLabel={shownLabel} />
+          ) : null}
         </div>
       ))}
     </div>

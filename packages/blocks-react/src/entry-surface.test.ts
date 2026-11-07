@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 
 import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
+import * as listReadModule from "./blocks/list-read";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
@@ -36,6 +37,7 @@ import * as previewContainerModule from "./preview-container";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
+import * as sanitizeModule from "./sanitize";
 import * as sharedStyleInputsModule from "./shared-style-inputs";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
@@ -115,6 +117,24 @@ const SOURCE_MODULES: ReadonlyArray<{
       "MAX_DISCOVERED_COMPONENTS",
     ],
   },
+  {
+    name: "blocks/list-read",
+    module: listReadModule,
+    // `conditionDayStart` is public, for the editor's canvas to judge a
+    // condition's day as the published page does. The rest is how a list
+    // reads its entries and counts its pages, which the list block and the
+    // route drive; a consumer draws a list through the block.
+    internal: [
+      "dayStartIn",
+      "listEntryCount",
+      "listPageWindow",
+      "listPagesOf",
+      "listWillRead",
+      "namedListBase",
+      "readList",
+      "wholeCount",
+    ],
+  },
   { name: "context", module: contextModule, internal: [] },
   {
     name: "list-collections",
@@ -147,6 +167,14 @@ const SOURCE_MODULES: ReadonlyArray<{
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
   { name: "resolver", module: resolverModule, internal: [] },
+  {
+    name: "sanitize",
+    module: sanitizeModule,
+    // `sanitizeDocument` is public, so the editor's canvas judges a page's
+    // conditions on the tree the renderer draws, not a corrupt node it drops.
+    // Repairing duplicate ids is a step of the renderer's own preparation.
+    internal: ["dedupeNodeIds"],
+  },
   {
     name: "shared-style-inputs",
     module: sharedStyleInputsModule,
@@ -444,6 +472,10 @@ describe("the root entry", () => {
       // editor's canvas and read back there, by one pair of functions.
       "bindingsFromWire",
       "bindingsToWire",
+      // When a day starts for a visibility condition on a date, in the site's
+      // zone: public so the editor's canvas judges conditions with the rule
+      // the published page judges them with.
+      "conditionDayStart",
       "createBlockResolver",
       // The provider a route reads its lists through when given none, public
       // so a route's own `data` can narrow it rather than rewrite it.
@@ -489,6 +521,9 @@ describe("the root entry", () => {
       "repairingLookup",
       "resolvePageStyles",
       "resolvePageStylesWithTrace",
+      // A stored document made sound to walk, as the renderer makes it: public
+      // so the editor judges conditions on the tree the renderer draws.
+      "sanitizeDocument",
       "sharedStyleInputs",
       "styleTextForInjection",
       // The render's own discovery, asked from outside the render. Public so a

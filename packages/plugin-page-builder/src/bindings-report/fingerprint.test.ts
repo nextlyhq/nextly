@@ -3,6 +3,7 @@
  * anything a binding is judged against changes, a field group's fields
  * included, and stays put otherwise.
  */
+import { SITE_SETTING_FIELD_SHAPES } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { schemaFingerprint, type FingerprintSources } from "./fingerprint";
@@ -30,6 +31,22 @@ describe("the schema fingerprint", () => {
     // collections placing it keep theirs.
     expect(await schemaFingerprint(sources("g2"))).not.toBe(
       await schemaFingerprint(sources("g1"))
+    );
+  });
+
+  it("moves when the site settings a page may bind change", async () => {
+    const withSite = (names: string[]) =>
+      sources("g1", {
+        siteSettings: () => names.map(name => ({ name, type: "text" })),
+      });
+    expect(await schemaFingerprint(withSite(["applicationName"]))).not.toBe(
+      await schemaFingerprint(withSite(["applicationName", "timezone"]))
+    );
+    // Unnamed, the settings are the engine's table, the one the save reads.
+    expect(await schemaFingerprint(sources("g1"))).toBe(
+      await schemaFingerprint(
+        sources("g1", { siteSettings: () => SITE_SETTING_FIELD_SHAPES })
+      )
     );
   });
 

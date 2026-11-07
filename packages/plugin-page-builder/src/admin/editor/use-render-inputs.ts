@@ -1006,7 +1006,11 @@ export function useBoundCanvasRender(
   /** Whether the document is a component's own, which has no entry. */
   component: boolean
 ): {
-  readonly canvasRender: PageRenderInputs;
+  /**
+   * The canvas's render inputs with the sources its bindings read, the
+   * site's time zone among them, which the canvas's conditions judge days in.
+   */
+  readonly canvasRender: PageRenderInputs & { readonly bindings: PageBindings };
   /**
    * The bound props on the page a visitor will not see filled, by node id:
    * the published page's own binding check, asked with the field shapes a

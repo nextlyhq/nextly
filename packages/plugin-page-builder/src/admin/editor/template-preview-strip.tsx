@@ -95,6 +95,10 @@ import { listPreviewEntries } from "../template-preview-client";
 import { entryCreatePath, entryEditPath } from "./builder-address";
 import { CanvasEntryProvider, type CanvasEntryRead } from "./canvas-entry";
 import {
+  TemplateConditionsPart,
+  type TemplateConditions,
+} from "./conditions-strip";
+import {
   followingCanvas,
   useRefreshOnFocus,
   useTemplatePreview,
@@ -138,9 +142,14 @@ const EntryAsRead = createContext<PreviewedEntry | undefined>(undefined);
  */
 export function useDrawnTemplate(
   document: BlockDocument,
-  maxNodes?: number
+  /** The limits the canvas draws under; their node cap bounds the walk. */
+  limits?: { readonly maxNodes?: number }
 ): BlockDocument {
-  return useComposedEntryContent(document, useContext(EntryAsRead), maxNodes);
+  return useComposedEntryContent(
+    document,
+    useContext(EntryAsRead),
+    limits?.maxNodes
+  );
 }
 
 /**
@@ -373,8 +382,15 @@ function useSwitchKeys(preview: TemplatePreview): void {
 /** The strip, as the editor hands it to the shell's canvas strip slot. */
 export function TemplatePreviewStrip({
   preview,
+  conditions,
 }: {
   readonly preview: TemplatePreview;
+  /**
+   * The switch that applies the template's visibility conditions for the
+   * entry, after it; absent while the template holds no block whose
+   * conditions read the entry.
+   */
+  readonly conditions?: TemplateConditions;
 }): JSX.Element {
   return (
     <div data-template-preview="">
@@ -387,6 +403,9 @@ export function TemplatePreviewStrip({
           <FixedEntry preview={preview} />
         ) : (
           <EntryPicker preview={preview} />
+        )}
+        {conditions === undefined ? null : (
+          <TemplateConditionsPart conditions={conditions} />
         )}
       </div>
       <PreviewNotice preview={preview} />

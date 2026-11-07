@@ -302,6 +302,18 @@ export { prepareDocumentAsDrawn } from "./prepare-document";
  */
 export { repairingLookup } from "./prepare-document";
 /**
+ * @experimental When a day starts for a visibility condition on a date field,
+ * in the site's zone, for an editor surface judging conditions as the
+ * published page judges them.
+ */
+export { conditionDayStart } from "./blocks/list-read";
+/**
+ * @experimental A stored document made sound to walk, as the renderer makes
+ * it before drawing: for an editor surface that reads the tree the renderer
+ * draws, so a node the renderer drops is one it drops too.
+ */
+export { sanitizeDocument } from "./sanitize";
+/**
  * @experimental The collections a page's lists draw, whose field shapes judge
  * their items' bindings: one walk for the published route and the editor.
  */
