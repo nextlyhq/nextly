@@ -87,8 +87,17 @@ export interface TemplatePreview {
   readonly list: PreviewList;
   /** The entry being previewed, as the chip shows it; none while there is none. */
   readonly chip: PreviewChip | undefined;
-  /** The entry the editor reads, as the builder's seam carries it. */
+  /**
+   * The entry the editor reads, as the builder's seam carries it: named
+   * only once this refresh's read of it has answered.
+   */
   readonly previewed: PreviewedEntry;
+  /**
+   * The entry as its latest read has it, an earlier refresh's while this
+   * one's is on its way: what the canvas's own reads are asked of, so a
+   * refresh does not take the entry's blocks out of the page they read.
+   */
+  readonly latest: PreviewedEntry;
   /** Preview `entry`, a row of the list or of a search. */
   readonly choose: (entry: PreviewEntryItem) => void;
   /**
@@ -126,10 +135,15 @@ function labelsFromSlug(slug: string): PreviewCollectionLabels {
   return { singular: words, plural: words };
 }
 
-/** An entry's answer, or its failure, for the id it was read for. */
-type EntryRead =
+/**
+ * An entry's answer, or its failure, for the id it was read for, and the
+ * refresh round it answers (`round`): a read from an earlier round is the
+ * entry as it was, kept while this round's read is on its way.
+ */
+type EntryRead = (
   | { readonly id: string; readonly answer: PreviewEntryResponse }
-  | { readonly id: string; readonly failed: true };
+  | { readonly id: string; readonly failed: true }
+) & { readonly round: number };
 
 /** Where the next or previous entry of `items` is, from `id`, wrapping. */
 export function steppedEntry(
@@ -232,10 +246,10 @@ function useEntryRead(
       ...(locale === undefined ? {} : { locale }),
     }).then(
       answer => {
-        if (current) setRead({ key, id, answer });
+        if (current) setRead({ key, id, answer, round });
       },
       () => {
-        if (current) setRead({ key, id, failed: true });
+        if (current) setRead({ key, id, failed: true, round });
       }
     );
     return () => {
@@ -273,16 +287,23 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     memory,
     dropChosen,
   });
-  const previewed = useMemo(
+  // The entry as its latest read has it, and as the seam names it: only
+  // once this refresh's read has answered.
+  const latest = useMemo(
     () => previewedFrom(collection, list, selected, read),
     [collection, list, selected, read]
+  );
+  const previewed = roundPreviewed(
+    latest,
+    read !== undefined && read.round !== round
   );
   const labels = list.labels ?? labelsFromSlug(collection ?? "entries");
   const chip =
     chipFrom(
       chosenRow === undefined ? list.items : [chosenRow, ...list.items],
       selected,
-      read
+      read,
+      round
     ) ?? fixedChip(fixed, labels, read);
   const { choose, step } = useChoosing(fixed, list.items, selected, setChosen);
   return {
@@ -296,10 +317,28 @@ export function useTemplatePreview(args: TemplatePreviewArgs): TemplatePreview {
     list,
     chip,
     previewed,
+    latest,
     choose,
     step,
     refresh,
   };
+}
+
+/** What the seam says while this refresh's read of the entry is on its way. */
+const ROUND_LOADING: PreviewedEntry = { kind: "none", reason: "loading" };
+
+/**
+ * The entry the seam names, from the entry as its latest read has it. While
+ * a refresh's read is on its way (`stale`), the latest is the entry as it
+ * was, which the canvas's reads go on being asked of, and the seam names no
+ * entry: it names one only once this refresh's read has answered, so the
+ * strip never sets the canvas's fresh answer beside the entry's older one.
+ */
+function roundPreviewed(
+  latest: PreviewedEntry,
+  stale: boolean
+): PreviewedEntry {
+  return stale && latest.kind === "entry" ? ROUND_LOADING : latest;
 }
 
 /**
@@ -546,12 +585,21 @@ function fixedChip(
 function chipFrom(
   rows: readonly PreviewEntryItem[],
   selected: string | undefined,
-  read: EntryRead | undefined
+  read: EntryRead | undefined,
+  round: number
 ): PreviewChip | undefined {
   if (selected === undefined) return undefined;
   if (read !== undefined && "answer" in read && read.answer.id === selected) {
     const { id, title, status } = read.answer;
-    return { id, title, status, unavailable: false, loading: false };
+    // Named as last read, and said to be read again while a refresh's read
+    // of it is on its way.
+    return {
+      id,
+      title,
+      status,
+      unavailable: false,
+      loading: read.round !== round,
+    };
   }
   const row = rows.find(item => item.id === selected);
   // Named from its row while it is read; marked when that read failed.

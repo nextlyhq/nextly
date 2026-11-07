@@ -244,7 +244,7 @@ export function TemplatePreviewScope<TFieldValues extends FieldValues>({
   const previewedCollection = usePreviewedCollectionOf(collection, preview);
   return (
     <TemplatePreviewState.Provider value={preview}>
-      <EntryAsRead.Provider value={read.previewed}>
+      <EntryAsRead.Provider value={read.latest}>
         <CanvasEntryProvider
           identity={canvasIdentity}
           retry={retry}
