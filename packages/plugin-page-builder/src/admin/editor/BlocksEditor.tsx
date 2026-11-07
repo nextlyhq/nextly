@@ -40,8 +40,10 @@ import {
   SpacingOverlay,
   VisitorUnreadableBadges,
   VisitorUnreadableProvider,
+  useComposedEntryContent,
   type AppliedConditions,
   type AppliedConditionsOptions,
+  type PreviewedEntry,
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
@@ -196,6 +198,11 @@ type EditorView = EditorMount &
      * marker and badges a shown one so.
      */
     conditionsApplied: AppliedConditions | undefined;
+    /**
+     * The page as the canvas draws it, a template's previewed entry's own
+     * blocks composed in: the one composition the canvas draws.
+     */
+    composedDocument: BlockDocument;
     /** What a block shown for the previewed entry is badged with. */
     conditionsShownLabel: string;
     /** A stored media id's name, picture and alt text, for the image fields. */
@@ -957,6 +964,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               {...(view.conditionsApplied === undefined
                 ? {}
                 : { conditionsApplied: view.conditionsApplied })}
+              // The page as drawn, the previewed entry's blocks composed in
+              // once, here, with the conditions judged on it.
+              composed={view.composedDocument}
               // The same object those handlers came from, forwarded whole.
               // The canvas draws what the pointer currently means — which
               // block is in flight, which container is receiving it — and
@@ -1475,6 +1485,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     entryCollection,
     conditionsUnchecked,
     conditionsApplied: conditions.applied,
+    composedDocument: conditions.composed,
     conditionsShownLabel: `Shown for this ${conditions.noun}`,
   };
   useOpenAtSection({
@@ -1769,6 +1780,39 @@ interface AppliedConditionsSwitch {
   readonly held: boolean;
   /** What the previewed entry is called in words, lower case: "post". */
   readonly noun: string;
+  /**
+   * The document as the canvas draws it: a template's with the previewed
+   * entry's own blocks composed into its Entry content, which the conditions
+   * are judged on and the canvas draws, composing nothing of its own.
+   */
+  readonly composed: BlockDocument;
+}
+
+/**
+ * The page as the canvas draws it, the previewed entry's own blocks in a
+ * template's Entry content among its blocks, and which of its blocks are
+ * conditioned: the entry's are judged with the template's, counted, and
+ * offer the switch where only they are conditioned. The one composition the
+ * canvas draws.
+ */
+function useConditionedPage(
+  document: BlockDocument,
+  previewed: PreviewedEntry | undefined,
+  limits: AppliedConditionsOptions["limits"]
+): {
+  readonly composed: BlockDocument;
+  readonly held: ReturnType<typeof conditionedBlocksIn>;
+} {
+  const composed = useComposedEntryContent(
+    document,
+    previewed,
+    limits?.maxNodes
+  );
+  const held = useMemo(
+    () => conditionedBlocksIn(composed, limits),
+    [composed, limits]
+  );
+  return { composed, held };
 }
 
 /**
@@ -1791,10 +1835,10 @@ function useAppliedConditionsSwitch(
     if (!on) setAttempt(count => count + 1);
     setOn(!on);
   }, [on]);
-  const { limits } = options;
-  const held = useMemo(
-    () => conditionedBlocksIn(document, limits),
-    [document, limits]
+  const { composed, held } = useConditionedPage(
+    document,
+    preview?.previewed,
+    options.limits
   );
   // A page is read as a visitor reads it, and only once the author applies
   // its conditions.
@@ -1814,7 +1858,7 @@ function useAppliedConditionsSwitch(
   // The entry is handed over only while the switch is on: the canvas then
   // draws the page as a visitor reading that entry would get it.
   const applied = useAppliedConditions(
-    document,
+    composed,
     on && held.readingEntry ? previewed : undefined,
     { ...options, noun }
   );
@@ -1846,7 +1890,7 @@ function useAppliedConditionsSwitch(
           },
     [pageSource, held.readingEntry, on, toggle, applied, noun, pageRead.failed]
   );
-  return { template, page, applied, held: held.any, noun };
+  return { template, page, applied, held: held.any, noun, composed };
 }
 
 /**

@@ -17,13 +17,16 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   clearBlocks,
+  composeEntryContent,
   ENTRY_CONTENT_SLOT,
   ENTRY_CONTENT_TYPE,
+  entryBlocksDocumentOf,
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import { ENTRY_CONTENT_DRAWN_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { appliedConditionsOf } from "./applied-conditions";
+import { appliedConditionsOf, conditionedBlocksIn } from "./applied-conditions";
 import { Canvas } from "./canvas";
 import { conditionFieldsOfShapes } from "./condition-model";
 import {
@@ -71,7 +74,12 @@ beforeAll(() => {
           if (held.length > 0) {
             return createElement(
               "div",
-              { className },
+              {
+                className,
+                ...(ctx.entryContentCanvas === undefined
+                  ? {}
+                  : { [ENTRY_CONTENT_DRAWN_ATTRIBUTE]: "" }),
+              },
               renderSlot(ENTRY_CONTENT_SLOT)
             );
           }
@@ -97,6 +105,19 @@ beforeAll(() => {
           node: { props: { text?: string } };
           className: string;
         }) => createElement("p", { className }, node.props.text),
+      },
+      {
+        name: "acme/link",
+        version: 1,
+        description: "A link.",
+        example: { props: {} },
+        render: ({
+          node,
+          className,
+        }: {
+          node: { props: { text?: string } };
+          className: string;
+        }) => createElement("a", { className, href: "#top" }, node.props.text),
       },
     ] as never,
     { source: "canvas-entry-content-test" }
@@ -155,11 +176,32 @@ const ARTICLE: PreviewedEntry = {
   fields: [],
 };
 
-/** The conditions applied for an article whose tier is `tier`. */
-function appliedFor(tier: string) {
+/** `template` with `article`'s Body composed in, as the host draws it. */
+function composedFor(
+  template: BlockDocument,
+  article: PreviewedEntry = ARTICLE
+): BlockDocument {
+  return composeEntryContent(template, {
+    valueOf: field =>
+      article.kind === "entry"
+        ? (entryBlocksDocumentOf(article.editorValues[field]) ?? undefined)
+        : undefined,
+  });
+}
+
+/**
+ * The conditions applied for an article whose tier is `tier`, to the page as
+ * drawn: the template with the article's Body composed in, as the host
+ * applies them.
+ */
+function appliedFor(
+  tier: string,
+  template: BlockDocument = TEMPLATE,
+  article: PreviewedEntry = ARTICLE
+) {
   const fields = [{ name: "tier", type: "text" }] as const;
   return appliedConditionsOf(
-    TEMPLATE,
+    composedFor(template, article),
     {
       subject: {
         fields: { declared: new Set(["tier"]), readable: fields },
@@ -168,18 +210,25 @@ function appliedFor(tier: string) {
       noun: "article",
       fields: conditionFieldsOfShapes(fields),
     },
-    node => (node.id === "ec" ? "Entry content" : node.id)
+    node =>
+      node.id === "ec"
+        ? "Entry content"
+        : typeof node.props.text === "string"
+          ? node.props.text
+          : node.id
   );
 }
 
 /** The template drawn for the article, with conditions applied or not. */
 async function drawn(
-  applied?: ReturnType<typeof appliedFor>
+  applied?: ReturnType<typeof appliedFor>,
+  template: BlockDocument = TEMPLATE,
+  article: PreviewedEntry = ARTICLE
 ): Promise<HTMLElement> {
   const { container } = render(
-    <PreviewedEntryProvider value={ARTICLE} collection={ARTICLES}>
+    <PreviewedEntryProvider value={article} collection={ARTICLES}>
       <Canvas
-        document={TEMPLATE}
+        document={template}
         siteStyles={{ breakpoints: { viewport: [], container: [] } }}
         {...(applied === undefined ? {} : { conditionsApplied: applied })}
       />
@@ -212,5 +261,99 @@ describe("Entry content with conditions applied", () => {
       "Entry content · hidden for this article: tier is not vip"
     );
     expect(container.textContent).not.toContain(BODY_WORDS);
+  });
+});
+
+/** A template whose Entry content block carries no conditions of its own. */
+const PLAIN: BlockDocument = {
+  formatVersion: 1,
+  kind: "template",
+  nodes: [
+    { id: "own", type: "acme/link", version: 1, props: { text: "Own link" } },
+    {
+      id: "ec",
+      type: ENTRY_CONTENT_TYPE,
+      version: 1,
+      props: { field: "body" },
+    },
+  ],
+};
+
+/** An article whose Body holds a link, and a block for VIP articles only. */
+const GATED_ARTICLE: PreviewedEntry = {
+  ...ARTICLE,
+  editorValues: {
+    body: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "l1",
+          type: "acme/link",
+          version: 1,
+          props: { text: "Body link" },
+        },
+        {
+          id: "vip",
+          type: "acme/words",
+          version: 1,
+          props: { text: "Members' worksheet" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+          },
+        },
+      ],
+    },
+  },
+};
+
+describe("a conditioned block inside the entry's Body", () => {
+  it("is what offers the switch, where the template's own blocks have none", () => {
+    // The control: the template as stored holds no conditioned block.
+    expect(conditionedBlocksIn(PLAIN).readingEntry).toBe(false);
+    expect(conditionedBlocksIn(composedFor(PLAIN, GATED_ARTICLE))).toEqual({
+      any: true,
+      readingEntry: true,
+    });
+  });
+
+  it("is judged and counted, and drawn as its hidden line inside Entry content", async () => {
+    const applied = appliedFor("free", PLAIN, GATED_ARTICLE);
+    expect(applied.hidden.map(block => block.name)).toEqual([
+      "Members' worksheet",
+    ]);
+    const container = await drawn(applied, PLAIN, GATED_ARTICLE);
+    const marker = container.querySelector(".nx-condition-hidden");
+    // In the Entry content block's place for it, not the template's own.
+    expect(marker?.closest('[data-nx-node="ec"]')).not.toBeNull();
+    expect(marker?.textContent).toBe(
+      "Members' worksheet · hidden for this article: tier is not vip"
+    );
+    expect(container.textContent).toContain("Body link");
+  });
+
+  it("is drawn as itself when the entry meets its conditions (the control)", async () => {
+    const applied = appliedFor("vip", PLAIN, GATED_ARTICLE);
+    expect(applied.hidden).toEqual([]);
+    expect(applied.shown.size).toBe(1);
+    const container = await drawn(applied, PLAIN, GATED_ARTICLE);
+    expect(container.querySelector(".nx-condition-hidden")).toBeNull();
+    expect(container.textContent).toContain("Members' worksheet");
+  });
+});
+
+describe("the entry's blocks drawn on the canvas", () => {
+  it("are inert, so nothing inside takes focus, while the block's own element is not", async () => {
+    const container = await drawn(undefined, PLAIN, GATED_ARTICLE);
+    const links = Array.from(container.querySelectorAll("a"));
+    const inBody = links.find(link => link.textContent === "Body link");
+    const own = links.find(link => link.textContent === "Own link");
+    expect(inBody?.closest("[inert]")).not.toBeNull();
+    // The control: the template's own link, outside Entry content, is not.
+    expect(own?.closest("[inert]")).toBeNull();
+    // The Entry content block's own element is what a click lands on.
+    const block = container.querySelector('[data-nx-node="ec"]');
+    expect(block?.hasAttribute("inert")).toBe(false);
+    expect(block?.closest("[inert]")).toBeNull();
   });
 });

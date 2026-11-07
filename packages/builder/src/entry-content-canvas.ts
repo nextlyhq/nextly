@@ -99,7 +99,12 @@ function entryContentNote(
  */
 export function useEntryContentDrawing(
   document: BlockDocument,
-  render: CanvasRender | undefined
+  render: CanvasRender | undefined,
+  /**
+   * `document` as drawn, where the host composed it (and applied its
+   * conditions to it): drawn as it is, with nothing composed here.
+   */
+  composed?: BlockDocument
 ): {
   readonly document: BlockDocument;
   readonly render: CanvasRender | undefined;
@@ -109,8 +114,14 @@ export function useEntryContentDrawing(
   const maxNodes = render?.limits?.maxNodes;
   const holds = useHoldsEntryContent(document, maxNodes);
   // Drawn from the entry the seam names, which a host names only once the
-  // canvas's own read of it has answered, so bound values never blink in.
-  const drawn = useComposedEntryContent(document, previewed, maxNodes);
+  // canvas's own read of it has answered, so bound values never blink in;
+  // nothing is composed where the host hands the page as drawn.
+  const own = useComposedEntryContent(
+    document,
+    composed === undefined ? previewed : undefined,
+    maxNodes
+  );
+  const drawn = composed ?? own;
   const context = render?.context;
   const drawnRender = useMemo((): CanvasRender | undefined => {
     if (previewed === undefined || !holds) return render;
