@@ -29,7 +29,7 @@ import {
   type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
-import type { ListFieldsReader } from "./list-query-judgement";
+import type { ListFieldsReader, TemplateTargets } from "./list-query-judgement";
 
 const COMPONENTS = "nx_pb_components";
 const FIELD = "content";
@@ -210,6 +210,7 @@ function judge(
     composesDocuments?: boolean;
     localized?: boolean;
     listFields?: ListFieldsReader;
+    templates?: TemplateTargets;
   } = {}
 ) {
   const { status, limits, composesDocuments, localized, ...callbacks } =
@@ -1446,6 +1447,120 @@ describe("a component save judged inside the lists of the documents that use it"
       })
     ).toEqual([]);
     expect(logged).toEqual([]);
+  });
+});
+
+describe("a component save judged inside the templates that use it", () => {
+  /** Three templates placing the component, each of a collection it draws. */
+  const templateHost = (id: string): HostRef => ({
+    slug: "templates",
+    id,
+    field: FIELD,
+    localized: false,
+  });
+  const hosts = ["t1", "t2", "t3"].map(templateHost);
+  const finder = (): HostFinder => ({
+    whole: async () => true,
+    placing: async ids => ({
+      hosts: ids.includes("cards") ? hosts : [],
+      complete: true,
+    }),
+  });
+  const listFields: ListFieldsReader = async collection =>
+    collection === "posts"
+      ? {
+          declared: new Set(["id", "title", "secret"]),
+          readable: [
+            { name: "id", type: "text" },
+            { name: "title", type: "text" },
+          ],
+        }
+      : undefined;
+  const cards = (orderAt: "heading" | "list") =>
+    component(
+      [
+        node("h1", "acme/quote"),
+        {
+          id: "l1",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts" },
+          slots: { children: [] },
+        },
+      ],
+      {
+        exposed: [
+          {
+            id: "order",
+            label: "Order",
+            nodeId: orderAt === "heading" ? "h1" : "l1",
+            propPath: orderAt === "heading" ? "words" : "sort",
+            type: "text",
+          },
+        ],
+      }
+    );
+  /** A template placing the component with "Order" set to `order`. */
+  const template = (order: string) => ({
+    ...page([
+      {
+        ...placing("i1", "cards"),
+        props: { componentId: "cards", overrides: { order } },
+      },
+    ]),
+    kind: "template",
+  });
+  const stored = storeOf({
+    [COMPONENTS]: { cards: { published: cards("heading") } },
+    templates: {
+      t1: { published: template("secret") },
+      t2: { published: template("secret") },
+      t3: { published: template("secret") },
+    },
+  });
+  /** The templates collection, its stored targets read in one read. */
+  const targets = (known: Readonly<Record<string, string>>) => {
+    const storedTargetsOf = vi.fn(
+      async (ids: readonly string[]) =>
+        new Map(
+          ids.flatMap(id => (known[id] === undefined ? [] : [[id, known[id]]]))
+        )
+    );
+    return {
+      collection: "templates",
+      fields: ["collection", "entryCollection"],
+      storedTargetsOf,
+    } satisfies TemplateTargets;
+  };
+
+  it("reads the collections every template host draws in one read, and judges each against its own", async () => {
+    const templates = targets({ t1: "posts", t2: "posts", t3: "posts" });
+    const issues = await judge(
+      cards("list"),
+      write(stored.readStored, COMPONENTS, "cards"),
+      { hostsOf: finder(), listFields, status: "published", templates }
+    );
+    // One read for the three templates, never one per template.
+    expect(templates.storedTargetsOf).toHaveBeenCalledTimes(1);
+    expect(templates.storedTargetsOf).toHaveBeenCalledWith(["t1", "t2", "t3"]);
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("leaves a template whose collection cannot be read unjudged, and says so, rather than judging it by shape", async () => {
+    const templates = targets({ t1: "posts" });
+    const unjudged: UnjudgedHosts[] = [];
+    await judge(cards("list"), write(stored.readStored, COMPONENTS, "cards"), {
+      hostsOf: finder(),
+      listFields,
+      status: "published",
+      templates,
+      onUnjudged: found => unjudged.push(found),
+    });
+    expect(unjudged).toHaveLength(1);
+    expect(unjudged[0]?.count).toBe(2);
+    expect(unjudged[0]?.reasons.join(" ")).toMatch(
+      /template whose collection could not be read/
+    );
   });
 });
 

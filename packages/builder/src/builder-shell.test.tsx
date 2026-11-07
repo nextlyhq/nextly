@@ -464,6 +464,34 @@ describe("the regions the shell exposes", () => {
   });
 });
 
+describe("the strip pinned above the canvas", () => {
+  it("draws it outside the region that scrolls the page, so it stays while the page scrolls", () => {
+    renderShell({
+      children: <p>canvas content</p>,
+      canvasStrip: <p>strip content</p>,
+    });
+    const strip = screen.getByText("strip content");
+    const region = screen.getByRole("region", { name: "Canvas" });
+    // The region is what scrolls: a strip inside it would scroll away.
+    expect(region.contains(strip)).toBe(false);
+    expect(region.contains(screen.getByText("canvas content"))).toBe(true);
+    // Above the page, beside it in the canvas's panel.
+    expect(
+      strip.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // The page keeps its whole gutter under the strip, the top included, so
+    // what is drawn just above the first block is not cut off.
+    expect(region.style.padding).toBe("16px");
+  });
+
+  it("draws none where the host gives none, with the same gutter (the control)", () => {
+    renderShell({ children: <p>canvas content</p> });
+    const region = screen.getByRole("region", { name: "Canvas" });
+    expect(document.querySelector(".nx-canvas-strip-slot")).toBeNull();
+    expect(region.style.padding).toBe("16px");
+  });
+});
+
 describe("leaving the editor", () => {
   it("offers an exit with words on it", () => {
     // Deliberately asserted by NAME rather than by role alone. The author is one

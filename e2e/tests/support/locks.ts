@@ -78,6 +78,12 @@ export const LOCK = {
   /** The `landing-page` single's form, claimed as `siteSettings` is. */
   landingPage: "landing-page",
   /**
+   * The `posts` collection's one template: a collection has one, so the
+   * specs that create it, give it a design and preview it with posts take
+   * this.
+   */
+  postsTemplate: "posts-template",
+  /**
    * A second `next dev` of the playground, with the files it snapshots and
    * restores in the playground root.
    */
