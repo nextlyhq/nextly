@@ -1927,3 +1927,38 @@ describe("two lists sharing an image batch on its way", () => {
     expect(asked).toHaveLength(1);
   });
 });
+
+describe("two lists sharing part of an image batch on its way", () => {
+  it("the second waits for the first's batch before reading its own, and stops with it", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const image = (id: string, mediaId: string) => ({
+      id,
+      type: "core/image",
+      version: 1,
+      props: { alt: "", mediaId },
+    });
+    // The first list draws a shared image and one of its own; the second
+    // the shared one and another of its own.
+    const nextly = site(
+      3,
+      pageOf([
+        postsList("first", 1, [
+          image("first-shared", "image-1"),
+          image("first-own", "image-2"),
+        ]),
+        postsList("second", 1, [
+          image("second-shared", "image-1"),
+          image("second-own", "image-3"),
+        ]),
+      ]),
+      // A batch read by `id in` whose count the route cannot trust.
+      { distrustBatches: true }
+    );
+    // Both lists' entries, the one batch it could not use, and each of the
+    // three images' own reads: no second batch.
+    const { html } = await journal(nextly, { maxQueries: 2 + 1 + 3 });
+    expect(html.split("/media/1.jpg").length - 1).toBe(2);
+    expect(html).toContain("/media/2.jpg");
+    expect(html).toContain("/media/3.jpg");
+  });
+});

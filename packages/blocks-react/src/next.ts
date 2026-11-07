@@ -1982,18 +1982,19 @@ function mediaResolver(
       if (readMany === undefined) return false;
       let rest = usableIds(ids).filter(id => !known.has(id));
       for (;;) {
-        // Asked of the ids as they stand now, chunk by chunk, with nothing
-        // awaited between the asking and the batch's claim and reservation:
-        // one read or reserved meanwhile is not read again.
-        const chunk = rest
-          .filter(id => !known.has(id) && !inFlight.has(id))
-          .slice(0, AHEAD_BATCH_SIZE);
-        if (chunk.length === 0) {
-          // What is left is on its way in another list's batch, which
-          // answers it for this list too: awaited, and its outcome is this
-          // list's, so an unusable one stops the reads ahead here as well.
-          return await sharedBatchesHold(rest);
-        }
+        // Another list's batch on its way for any of these ids answers them
+        // for this list too: awaited before this list reads anything of its
+        // own, and its outcome is this list's, so an unusable one stops the
+        // reads ahead here as well, leaving each image its own read.
+        if (!(await sharedBatchesHold(rest))) return false;
+        rest = rest.filter(id => !known.has(id));
+        // A batch reserved while this list waited is awaited first too.
+        if (rest.some(id => inFlight.has(id))) continue;
+        // The ids as they stand now, none read and none reserved, with
+        // nothing awaited between the choosing and the batch's claim and
+        // reservation: one read or reserved meanwhile is not read again.
+        const chunk = rest.slice(0, AHEAD_BATCH_SIZE);
+        if (chunk.length === 0) return true;
         if (!(await readChunk(readMany, chunk, claim))) return false;
         rest = rest.filter(id => !known.has(id));
       }
