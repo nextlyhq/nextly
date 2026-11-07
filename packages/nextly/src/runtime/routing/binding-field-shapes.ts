@@ -302,6 +302,47 @@ export async function fieldShapesOf(
   return shapes;
 }
 
+/** A binding source's ref, read before anything else is. */
+function sourceOf(
+  ref: BindingSourceRef
+):
+  | { readonly kind: "collection"; readonly slug: string }
+  | { readonly kind: "single"; readonly slug: string } {
+  const parsed = REF.safeParse(ref);
+  if (!parsed.success) {
+    throw NextlyError.invalidInput({
+      message: "A binding's source names one collection or one Single.",
+      logContext: { reason: "binding-source-invalid" },
+    });
+  }
+  return "collection" in parsed.data
+    ? { kind: "collection", slug: parsed.data.collection }
+    : { kind: "single", slug: parsed.data.single };
+}
+
+/** Every field readable: the reader of an editor's view, not a visitor's. */
+const EVERY_FIELD: FieldReadable = () => Promise.resolve(true);
+
+/**
+ * The fields of a collection or a Single as they are declared, whoever may
+ * read them: what a document may bind, as a save judges it. `undefined` when
+ * there is no such source. A field the public may not read is in it, since
+ * binding one is allowed (the published page shows the binding's fallback);
+ * {@link bindingFieldShapes} is the visitor's narrower view of the same
+ * fields, built by the same walk.
+ *
+ * @experimental
+ */
+export async function declaredFieldShapes(
+  ref: BindingSourceRef
+): Promise<readonly BindingFieldShape[] | undefined> {
+  const source = sourceOf(ref);
+  const { declaredFields } = await import("./visitor-fields");
+  const fields = await declaredFields(source);
+  if (fields === undefined) return undefined;
+  return Object.freeze(await fieldShapesOf(fields, EVERY_FIELD));
+}
+
 /**
  * The fields of a collection or a Single that a binding on a published page
  * may read, as the anonymous visitor may read them; `undefined` when the
@@ -320,13 +361,7 @@ export async function bindingFieldShapes(
   ref: BindingSourceRef,
   options: BindingFieldShapesOptions = {}
 ): Promise<readonly BindingFieldShape[] | undefined> {
-  const parsed = REF.safeParse(ref);
-  if (!parsed.success) {
-    throw NextlyError.invalidInput({
-      message: "A binding's source names one collection or one Single.",
-      logContext: { reason: "binding-source-invalid" },
-    });
-  }
+  const source = sourceOf(ref);
   const asked = OPTIONS.safeParse(options);
   if (!asked.success) {
     throw NextlyError.invalidInput({
@@ -334,10 +369,6 @@ export async function bindingFieldShapes(
       logContext: { reason: "binding-shapes-options-invalid" },
     });
   }
-  const source =
-    "collection" in parsed.data
-      ? { kind: "collection" as const, slug: parsed.data.collection }
-      : { kind: "single" as const, slug: parsed.data.single };
   const { inReadLanguage, visitorFields } = await import("./visitor-fields");
   // The language is pinned inside the visitor frame, so the gate and every
   // field rule are told the page's language and nothing the caller set.

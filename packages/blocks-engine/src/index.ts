@@ -1283,6 +1283,10 @@ export type {
   BindingSchemaSource,
   CheckedBinding,
 } from "./binding-rules";
+// A document's bindings judged against the schema of what they read, as a
+// save judges them: one rule with the renderer, a held break a warning.
+export { bindingSchemaIssues } from "./binding-schema-issues";
+export type { BindingSchemaJudgement } from "./binding-schema-issues";
 export {
   checkFormat,
   createBindingFormatter,

@@ -11,11 +11,11 @@
  */
 import { BINDING_ISSUE_CODES, type BindingIssueCode } from "./binding-issues";
 import {
-  checkBinding,
   isBindPath,
   type BindingSchemaRef,
   type BindingSchemaSource,
 } from "./binding-rules";
+import { bindingSchemaIssues } from "./binding-schema-issues";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
   BINDING_SOURCES,
@@ -680,7 +680,23 @@ export function validateDocument(
       // Each block's visibility conditions, judged as its lists are: the
       // operator always, the field against the entry's or the list item's
       // schema when given, a problem a stored form held kept a warning.
-      ...conditionIssues(envelope.nodes, judgement).map(withoutNodeId)
+      ...conditionIssues(envelope.nodes, judgement).map(withoutNodeId),
+      // Each block's bindings against the schema of what they read, when the
+      // caller can answer for it: the same rule the renderer falls back by,
+      // a problem a stored form held kept a warning.
+      ...(ctx.bindingSchema === undefined
+        ? []
+        : bindingSchemaIssues(envelope.nodes, {
+            schema: ctx.bindingSchema,
+            ...(ctx.bindingEntry === undefined
+              ? {}
+              : { entry: ctx.bindingEntry }),
+            ...(ctx.definitions === undefined
+              ? {}
+              : { definitions: ctx.definitions }),
+            ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
+            maxNodes: survey.limits.maxNodes,
+          }).map(withoutNodeId))
     );
   }
 
@@ -1833,7 +1849,7 @@ function validateNode(
   validateAttributes(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
-  validateBindings(node, path, issues, state.ctx);
+  validateBindings(node, path, issues);
   validateComponentInstance(node, path, issues);
   validateDomIds(node, path, state, hidden);
 }
@@ -3204,14 +3220,14 @@ function checkVariantTargets(
  * A binding's shape: an object keyed by prop, each a dot-joined path of field
  * identifiers (`isBindPath`, so nothing evaluable is stored) with a known
  * source and the key a Single needs. The rules that need the schema, the one
- * relation a path may follow among them, are checked here only when the
- * context carries one, and always where bindings are resolved.
+ * relation a path may follow among them, are checked over the whole document
+ * when the context carries one (`bindingSchemaIssues`), and always where
+ * bindings are resolved.
  */
 function validateBindings(
   node: BlockNode,
   path: string,
-  issues: ValidationIssue[],
-  ctx: ValidationContext
+  issues: ValidationIssue[]
 ): void {
   if (node.bindings === undefined) return;
   if (!isPlainRecord(node.bindings)) {
@@ -3226,8 +3242,10 @@ function validateBindings(
   const bindingsPath = pointer(path, "bindings");
   for (const [prop, binding] of Object.entries(node.bindings)) {
     const bPath = pointer(bindingsPath, prop);
-    if (!validBindingShape(binding, bPath, issues)) continue;
-    validateBindingAgainstSchema(node, prop, binding, bPath, issues, ctx);
+    // The schema-aware checks run over the whole document once the walk is
+    // done (`bindingSchemaIssues`), so a problem a stored form already held
+    // stays a warning.
+    validBindingShape(binding, bPath, issues);
   }
 }
 
@@ -3430,48 +3448,6 @@ function validateSeoBinding(
       severity: "error",
       message:
         "A document's metadata is read once for the page, outside any list, so it cannot bind a list item.",
-    });
-  }
-}
-
-/**
- * The schema-aware checks for one binding, when the context carries a schema.
- *
- * The same `checkBinding` the renderer runs, so what a save refuses and what a
- * page falls back on are one rule. A binding whose shape is malformed was
- * reported above, and is not reported twice.
- */
-function validateBindingAgainstSchema(
-  node: BlockNode,
-  prop: string,
-  binding: unknown,
-  bPath: string,
-  issues: ValidationIssue[],
-  ctx: ValidationContext
-): void {
-  const schema = ctx.bindingSchema;
-  if (schema === undefined) return;
-  // A definition found with no `props` declares none, so every binding on it
-  // names a prop it lacks; only a definition not found leaves props unjudged.
-  const definition = ctx.definitions?.get(node.type);
-  const props = definition === undefined ? undefined : (definition.props ?? {});
-  const check = checkBinding({
-    nodeId: node.id,
-    prop,
-    binding,
-    ...(props === undefined ? {} : { props }),
-    schema,
-    ...(ctx.bindingEntry === undefined
-      ? {}
-      : { refs: { entry: ctx.bindingEntry } }),
-  });
-  for (const issue of check.issues) {
-    if (issue.code === "binding-malformed") continue;
-    issues.push({
-      path: bPath,
-      code: issue.code,
-      severity: "error",
-      message: issue.message,
     });
   }
 }

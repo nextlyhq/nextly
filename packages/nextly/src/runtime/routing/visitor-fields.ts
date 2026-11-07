@@ -148,6 +148,19 @@ function fieldReader(
 }
 
 /**
+ * The source's declared fields, expanded as a binding reads them (a group's
+ * own fields, a component field's component), whoever may read them; or
+ * `undefined` when there is no such source. What an editor may bind, as
+ * opposed to what a visitor may read ({@link visitorFields}).
+ */
+export async function declaredFields(
+  source: SourceEntity
+): Promise<VisitorFields["fields"] | undefined> {
+  await getCachedNextly();
+  return expandedFields(source);
+}
+
+/**
  * The source's fields and the visitor's reader for them, or `undefined` when
  * there is no such source or the visitor may read none of it.
  */
