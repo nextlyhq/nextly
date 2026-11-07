@@ -12,10 +12,10 @@ import {
   allBlocks,
   BASE_BREAKPOINT,
   registryNestingSource,
-  findNode,
   getBlock,
   paginatedList,
   visitorUnreadableBindings,
+  walkNodes,
   type BlockDocument,
   type BreakpointId,
   type StyleState,
@@ -939,15 +939,21 @@ function sourceHiddenFromVisitors(
 /**
  * `marks` kept for the blocks `held` holds: the editor's own, never a block
  * composed in for drawing. The same map, by identity, where every block is
- * held.
+ * held. Exported for its own test.
  */
-function heldOnly<Value>(
+export function heldOnly<Value>(
   held: BlockDocument,
+  drawn: BlockDocument,
   marks: ReadonlyMap<string, Value>
 ): ReadonlyMap<string, Value> {
-  const kept = new Map(
-    [...marks].filter(([id]) => findNode(held.nodes, id) !== undefined)
-  );
+  // Nothing was composed in, so every mark is on a block the editor holds.
+  if (held === drawn || marks.size === 0) return marks;
+  // One walk of the held blocks, then one lookup a mark.
+  const ids = new Set<string>();
+  walkNodes(held.nodes, node => {
+    ids.add(node.id);
+  });
+  const kept = new Map([...marks].filter(([id]) => ids.has(id)));
   return kept.size === marks.size ? marks : kept;
 }
 
@@ -1054,6 +1060,7 @@ export function useBoundCanvasRender(
     if (shapes === undefined || pageTree === null) return NONE_UNREADABLE;
     return heldOnly(
       marksOf,
+      document,
       visitorUnreadableBindings(pageTree, {
         schema: shapes,
         ...(bindings.entryRef === undefined
@@ -1064,7 +1071,7 @@ export function useBoundCanvasRender(
           sourceHiddenFromVisitors(bindings, shapes, ref),
       })
     );
-  }, [pageTree, bindings, marksOf]);
+  }, [pageTree, bindings, marksOf, document]);
   return { canvasRender: bound, visitorUnreadable };
 }
 
