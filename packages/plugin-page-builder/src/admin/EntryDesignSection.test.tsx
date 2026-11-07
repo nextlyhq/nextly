@@ -2,8 +2,10 @@
 
 /**
  * The Design section of an entry's side panel: what it says in each state
- * the read can answer, which template action each control runs, and that it
- * draws nothing where it does not apply, so the panel leaves no heading.
+ * the read can answer, which template action each control runs, that it
+ * draws nothing where it does not apply, so the panel leaves no heading, and
+ * that removing an own design is offered only once its dry run says the
+ * site would accept it.
  *
  * The read and the route are replaced by recorders; what the route answers
  * on a real site is the integration suite's.
@@ -14,6 +16,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,6 +28,17 @@ import type {
 const writes: { action: Record<string, unknown> }[] = [];
 let writeAnswer: () => Promise<unknown> = () =>
   Promise.resolve({ message: "", item: {} });
+/** The actions sent as dry runs, kept apart from the writes they precede. */
+const dryRuns: Record<string, unknown>[] = [];
+let dryRunAnswer: () => Promise<unknown> = () => judged([]);
+
+/** A dry run's answer, refusing in `refusals`' words or accepting. */
+function judged(refusals: string[]): Promise<unknown> {
+  return Promise.resolve({
+    message: "",
+    item: { dryRun: true, kind: "remove-entry-design", refusals },
+  });
+}
 let read: {
   data: EntryDesignsResponse | undefined;
   error: Error | null;
@@ -40,7 +54,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     asked.push(path);
     return { ...read, pending: false, fetching: false, refetch };
   },
-  writePluginRoute: (args: { body: { action: Record<string, unknown> } }) => {
+  writePluginRoute: (args: {
+    body: { action: Record<string, unknown>; dryRun?: boolean };
+  }) => {
+    if (args.body.dryRun === true) {
+      dryRuns.push(args.body.action);
+      return dryRunAnswer();
+    }
     writes.push(args.body);
     return writeAnswer();
   },
@@ -127,6 +147,8 @@ function section(actionsDisabled = false) {
 beforeEach(() => {
   asked.length = 0;
   writes.length = 0;
+  dryRuns.length = 0;
+  dryRunAnswer = () => judged([]);
   navigated.length = 0;
   refetch.mockReset();
   toasts.success.mockReset();
@@ -299,14 +321,14 @@ describe("the entry's Design section", () => {
       )
     ).toBeTruthy();
 
+    // Wait for the check, so Keep it is the only thing that stops it.
+    await confirmButton();
     fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(writes).toEqual([]);
 
     fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Remove own design" })
-    );
+    fireEvent.click(await confirmButton());
     await waitFor(() => expect(refetch).toHaveBeenCalled());
     expect(writes).toEqual([
       {
@@ -368,6 +390,112 @@ describe("the entry's Design section", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalled();
+  });
+});
+
+/** The confirming button, once the dry run has settled it. */
+async function confirmButton(): Promise<HTMLElement> {
+  const button = await screen.findByRole("button", {
+    name: "Remove own design",
+  });
+  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  return button;
+}
+
+/** The removal as the section sends it, dry run or not. */
+const REMOVAL = {
+  kind: "remove-entry-design",
+  collection: "posts",
+  entry: "p1",
+};
+
+describe("removing an own design, checked first", () => {
+  beforeEach(() => {
+    read = { data: answer({ items: [design("published")] }), error: null };
+  });
+
+  it("asks the site as the confirmation opens, and each time it opens", async () => {
+    section();
+    expect(dryRuns).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
+    await confirmButton();
+    expect(dryRuns).toEqual([REMOVAL]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
+    await confirmButton();
+    expect(dryRuns).toEqual([REMOVAL, REMOVAL]);
+    expect(writes).toEqual([]);
+  });
+
+  it("says the site's refusal before anything is confirmed, and offers no removal", async () => {
+    dryRunAnswer = () =>
+      judged(["An own design under review can't be removed."]);
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("This can't be removed.")).toBeTruthy();
+    expect(
+      within(alert).getByText("An own design under review can't be removed.")
+    ).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Remove own design" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    // Only the dry run was sent: the refused removal is never attempted.
+    expect(writes).toEqual([]);
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
+  it("says it is checking, and holds the removal, while the dry run is out", async () => {
+    dryRunAnswer = () => new Promise(() => {});
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Checking whether it can be removed…"
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Remove own design" })
+        .hasAttribute("disabled")
+    ).toBe(true);
+  });
+
+  it("offers a retry when the dry run fails, and the removal once it answers", async () => {
+    dryRunAnswer = () => Promise.reject(new Error(""));
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Whether it can be removed couldn't be checked."
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Remove own design" })
+        .hasAttribute("disabled")
+    ).toBe(true);
+
+    dryRunAnswer = () => judged([]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await confirmButton();
+    expect(dryRuns).toEqual([REMOVAL, REMOVAL]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a refusal the confirmed removal meets after its dry run, and stays open", async () => {
+    // The dry run accepted, then something changed before the removal: the
+    // server judges it again, and its refusal is said in the dialog.
+    writeAnswer = () => Promise.reject(new Error("Refused by a rule."));
+    section();
+    fireEvent.click(screen.getByRole("button", { name: "Remove own design…" }));
+    fireEvent.click(await confirmButton());
+
+    expect(await screen.findByText("Refused by a rule.")).toBeTruthy();
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(writes).toEqual([{ action: REMOVAL }]);
+    expect(refetch).not.toHaveBeenCalled();
+    expect(toasts.success).not.toHaveBeenCalled();
   });
 });
 

@@ -52,7 +52,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { TemplateDeleteAction } = await import("./TemplateDeleteAction");
 
 function answer(
-  options: { entry?: string | null; hasNext?: boolean; none?: boolean } = {}
+  options: {
+    entry?: string | null;
+    hasNext?: boolean;
+    none?: boolean;
+    status?: "draft" | "published";
+  } = {}
 ): EntryDesignsResponse {
   const listed: EntryDesignsResponse["items"] = [
     {
@@ -80,7 +85,11 @@ function answer(
       totalPages: 1,
       hasNext: options.hasNext ?? false,
       hasPrev: false,
-      template: { id: "t1", title: "Blog post", status: "published" },
+      template: {
+        id: "t1",
+        title: "Blog post",
+        status: options.status ?? "published",
+      },
       templateReadable: true,
       templateAllowed: true,
       mayCreateTemplate: false,
@@ -157,6 +166,25 @@ describe("deleting a template", () => {
       dryRunOf("t1"),
       { action: { kind: "delete-template", id: "t1" } },
     ]);
+  });
+
+  it("says a draft template's entries stay unshown, never that they stop being shown", () => {
+    // A draft template shows no entry today, so its delete stops nothing.
+    designs = answer({ status: "draft" });
+    open("t1");
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Delete the Blog post template?",
+    });
+    expect(
+      within(dialog).getByText(
+        "Posts without their own design aren't shown as pages now, since this template isn't published. They stay that way until Posts have a published template."
+      )
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/stop being shown/)).toBeNull();
+    // The own designs it keeps are listed as for a published one.
+    expect(
+      within(dialog).getByRole("list", { name: "Posts with their own design" })
+    ).toBeTruthy();
   });
 
   it("offers each kept entry's whole title where the list cuts it to one line", () => {

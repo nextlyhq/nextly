@@ -439,7 +439,7 @@ function linkRefs(
 }
 
 /** The schema the item being drawn binds against, where one is known. */
-function itemRefOf(context: PageContext): {
+function itemRefOf(context: Pick<PageContext, "itemSource" | "itemQuery">): {
   readonly itemRef?: { collection: string } | { query: string };
 } {
   const itemSource = context.itemSource;
@@ -451,6 +451,12 @@ function itemRefOf(context: PageContext): {
       : {};
 }
 
+/** The part of a page context that says which list item a node is drawn for. */
+export type ItemPlacement = Pick<
+  PageContext,
+  "item" | "itemFollowed" | "itemSource" | "itemQuery"
+>;
+
 /**
  * A node's list-item bindings filled, as `BlockBoundary` draws the node and
  * as a list reads ahead for it: one pass against the item as stored, unless
@@ -459,7 +465,9 @@ function itemRefOf(context: PageContext): {
  */
 export function fillItemBindings<N extends BlockNode>(
   node: N,
-  context: PageContext,
+  // Only what places a node in a list: an empty one is a node outside every
+  // list, which is how the metadata walk asks for the blocks it reads.
+  context: ItemPlacement,
   run: BindingRun
 ): {
   readonly props: N["props"];
